@@ -1,0 +1,24 @@
+# OS / editor cruft
+.DS_Store
+
+# Node / build
+node_modules/
+dist/
+
+# Cloudflare / Wrangler (workers-bus)
+.wrangler/
+worker-configuration.d.ts
+
+# Secrets — local only, never commit
+.dev.vars
+*.local
+ACCESS.env
+*.env
+
+# Scratch / logs / generated render artifacts
+tmp/
+*.log
+.gstack/
+
+# Deletable duplicate inputs (see AGENTS.md housekeeping)
+samples/_duplicates/

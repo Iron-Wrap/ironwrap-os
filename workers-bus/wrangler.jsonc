@@ -1,0 +1,68 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ironwrap-bus",
+  "account_id": "7ee5775bc1ba46f05c5a65235b60e939",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+
+  // Owned system of record. Create with: wrangler d1 create ironwrap-bus → paste database_id.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ironwrap-bus",
+      "database_id": "f0674848-13df-4422-9896-8ba2719663b8",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Raw inbound bodies (stored FIRST, before any processing). wrangler r2 bucket create ironwrap-bus-raw
+  "r2_buckets": [
+    { "binding": "RAW", "bucket_name": "ironwrap-bus-raw" }
+  ],
+
+  // JobNimbus push pipeline. Create with:
+  //   wrangler queues create ironwrap-jn-push
+  //   wrangler queues create ironwrap-jn-dlq
+  "queues": {
+    "producers": [{ "binding": "JN_QUEUE", "queue": "ironwrap-jn-push" }],
+    "consumers": [
+      {
+        "queue": "ironwrap-jn-push",
+        "max_retries": 5,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "dead_letter_queue": "ironwrap-jn-dlq"
+      },
+      { "queue": "ironwrap-jn-dlq", "max_retries": 1 }
+    ]
+  },
+
+  // */5 = retry sweep (re-drive stuck pushes); 0 14 * * * = daily reconciliation digest/heartbeat.
+  "triggers": { "crons": ["*/5 * * * *", "0 14 * * *"] },
+
+  // Non-secret config. Secrets go via `wrangler secret put` — see .dev.vars.example:
+  //   INGEST_TOKEN, ADMIN_TOKEN, JOBNIMBUS_API_KEY; email = MS_TENANT_ID / MS_CLIENT_ID /
+  //   MS_CLIENT_SECRET (MS365) or RESEND_API_KEY; SMS = TWILIO_ACCOUNT_SID / _AUTH_TOKEN / _FROM_NUMBER.
+  // JOBNIMBUS_ENABLED off until the API shape is verified; A2P_SMS_ENABLED off until A2P approves.
+  // OneDrive (Phase 3): set ONEDRIVE_DRIVE_ID to the target drive/library id; ONEDRIVE_ROOT is the
+  // top folder (must pre-exist). Empty drive id ⇒ /ingest/photo stores raw only (no Graph calls).
+  "vars": {
+    "OWNER_ALERT_EMAIL": "owner@ironwrapexteriors.com",
+    "BACKUP_ALERT_EMAIL": "backup@ironwrapexteriors.com",
+    "FROM_EMAIL": "ops@ironwrapexteriors.com",
+    "JOBNIMBUS_ENABLED": "true",
+    "JN_CONTACT_RECORD_TYPE": "Customer",
+    "JN_CONTACT_STATUS": "New",
+    "JN_JOB_RECORD_TYPE": "Retail",
+    "JN_JOB_STATUS": "Lead",
+    "A2P_SMS_ENABLED": "false",
+    "DEDUP_WINDOW_HOURS": "72",
+    "STUCK_THRESHOLD_MIN": "15",
+    "ONEDRIVE_DRIVE_ID": "",
+    "ONEDRIVE_ROOT": "IronWrap Jobs",
+    "DOCUSEAL_TEMPLATE_ID": "",
+    "DOCUSEAL_BASE_URL": ""
+  }
+}

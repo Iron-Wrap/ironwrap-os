@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<APPLICAD_EXPORT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="file:///c:/temp/applicad-export.xsd">
+<LOCATION ADDRESS=" " CITY="" STATE="2 June 2026" POSTAL="2 June 2026" LAT="" LONG="" />
+<REFERENCE FILE=""/>
+<DATABASE FILE="1013 Moville St.dab" MODEL="ROOF"/>
+<NOTES>
+</NOTES>
+<STRUCTURES NORTHORIENTATION="0.0">
+<ROOF ID="ROOF1">
+<VOLUME vol="3571.486086" uom="cuft"/>
+<FACES>
+<FACE id="F1">
+<POLYGON id="P1" path="L24,L12,L28,L11"  size = "957.64" sizeuom="sf" pitch="4.00" pitchuom="slope" orientation="0.00" type="Roof" mat="Shingles"/>
+</FACE>
+<FACE id="F2">
+<POLYGON id="P2" path="L30,L33,L16,L21,L26"  size = "5.53" sizeuom="sf" pitch="4.00" pitchuom="slope" orientation="270.00" type="Roof" mat="Shingles"/>
+</FACE>
+<FACE id="F3">
+<POLYGON id="P3" path="L22,L20,L31,L34,L9,L33"  size = "39.92" sizeuom="sf" pitch="4.00" pitchuom="slope" orientation="90.00" type="Roof" mat="Shingles"/>
+</FACE>
+<FACE id="F4">
+<POLYGON id="P4" path="L32,L27,L29,L19,L14"  size = "9.49" sizeuom="sf" pitch="4.00" pitchuom="slope" orientation="0.00" type="Roof" mat="Shingles"/>
+</FACE>
+<FACE id="F5">
+<POLYGON id="P5" path="L29,L17,L2,L3,L25,L35,L31,L23,L13,L28,L15"  size = "884.65" sizeuom="sf" pitch="4.00" pitchuom="slope" orientation="180.00" type="Roof" mat="Shingles"/>
+</FACE>
+<FACE id="F6">
+<POLYGON id="P6" path="L8,L4,L5,L18,L6"  size = "5.53" sizeuom="sf" pitch="4.00" pitchuom="slope" orientation="90.00" type="Roof" mat="Shingles"/>
+</FACE>
+<FACE id="F7">
+<POLYGON id="P7" path="L10,L5,L1,L34,L35,L7"  size = "39.92" sizeuom="sf" pitch="4.00" pitchuom="slope" orientation="270.00" type="Roof" mat="Shingles"/>
+</FACE>
+</FACES>
+<LINES>
+<LINE id="L1" path="C3,C20" type="GABLE" length="5.270463" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L2" path="C24,C18" type="FASCIA" length="0.500000" uom="lf" pitch="4.00,4.00" pitchuom="slope" soffit="0.000000" soffituom="lf"/>
+<LINE id="L3" path="C18,C10" type="GABLE" length="0.527046" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L4" path="C3,C2" type="TUCK-UNDER" length="1.000000" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L5" path="C16,C3" type="RIDGE" length="0.500000" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L6" path="C1,C29" type="FASCIA" length="1.500000" uom="lf" pitch="4.00,4.00" pitchuom="slope" soffit="0.000000" soffituom="lf"/>
+<LINE id="L7" path="C9,C28" type="FASCIA" length="0.500000" uom="lf" pitch="4.00,4.00" pitchuom="slope" soffit="0.000000" soffituom="lf"/>
+<LINE id="L8" path="C1,C2" type="STEP" length="3.689324" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L9" path="C21,C20" type="GABLE" length="5.270463" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L10" path="C9,C16" type="GABLE" length="3.689324" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L11" path="C4,C5" type="GABLE" length="12.122064" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L12" path="C6,C7" type="GABLE" length="12.122064" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L13" path="C8,C7" type="GABLE" length="12.122064" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L14" path="C14,C11" type="STEP" length="6.324555" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L15" path="C13,C5" type="GABLE" length="5.270463" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L16" path="C25,C21" type="TUCK-UNDER" length="1.000000" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L17" path="C24,C17" type="GABLE" length="6.324555" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L18" path="C16,C29" type="GABLE" length="3.689324" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L19" path="C11,C13" type="TUCK-UNDER" length="1.000000" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L20" path="C27,C26" type="FASCIA" length="0.500000" uom="lf" pitch="4.00,4.00" pitchuom="slope" soffit="0.000000" soffituom="lf"/>
+<LINE id="L21" path="C12,C25" type="STEP" length="3.689324" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L22" path="C23,C26" type="GABLE" length="3.689324" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L23" path="C27,C8" type="FASCIA" length="27.500000" uom="lf" pitch="4.00,4.00" pitchuom="slope" soffit="0.000000" soffituom="lf"/>
+<LINE id="L24" path="C4,C6" type="FASCIA" length="79.000000" uom="lf" pitch="4.00,4.00" pitchuom="slope" soffit="0.000000" soffituom="lf"/>
+<LINE id="L25" path="C10,C28" type="FASCIA" length="34.500000" uom="lf" pitch="4.00,4.00" pitchuom="slope" soffit="0.000000" soffituom="lf"/>
+<LINE id="L26" path="C15,C12" type="FASCIA" length="1.500000" uom="lf" pitch="4.00,4.00" pitchuom="slope" soffit="0.000000" soffituom="lf"/>
+<LINE id="L27" path="C22,C17" type="GABLE" length="6.324555" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L28" path="C5,C7" type="RIDGE" length="79.000000" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L29" path="C13,C17" type="RIDGE" length="0.500000" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L30" path="C15,C23" type="GABLE" length="3.689324" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L31" path="C27,C19" type="VALLEY" length="12.350214" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L32" path="C22,C14" type="FASCIA" length="1.500000" uom="lf" pitch="4.00,4.00" pitchuom="slope" soffit="0.000000" soffituom="lf"/>
+<LINE id="L33" path="C23,C21" type="RIDGE" length="0.500000" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L34" path="C20,C19" type="RIDGE" length="8.500000" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+<LINE id="L35" path="C28,C19" type="VALLEY" length="12.350214" uom="lf" pitch="4.00,4.00" pitchuom="slope"/>
+</LINES>
+<POINTS>
+<POINT id="C1" data="9.511042,-24.555638,-0.000000"/>
+<POINT id="C2" data="6.011042,-24.555638,1.166667"/>
+<POINT id="C3" data="6.011042,-25.555638,1.166667"/>
+<POINT id="C4" data="-31.988958,-2.555638,0.000000"/>
+<POINT id="C5" data="-31.988958,-14.055638,3.833333"/>
+<POINT id="C6" data="47.011042,-2.555638,0.000000"/>
+<POINT id="C7" data="47.011042,-14.055638,3.833333"/>
+<POINT id="C8" data="47.011042,-25.555638,0.000000"/>
+<POINT id="C9" data="2.511042,-26.055638,0.000000"/>
+<POINT id="C10" data="-31.988958,-25.555638,-0.000000"/>
+<POINT id="C11" data="-30.988958,-19.055638,2.166667"/>
+<POINT id="C12" data="12.511042,-24.555638,-0.000000"/>
+<POINT id="C13" data="-31.988958,-19.055638,2.166667"/>
+<POINT id="C14" data="-30.988958,-13.055638,0.166667"/>
+<POINT id="C15" data="12.511042,-26.055638,-0.000000"/>
+<POINT id="C16" data="6.011042,-26.055638,1.166667"/>
+<POINT id="C17" data="-32.488958,-19.055638,2.166667"/>
+<POINT id="C18" data="-31.988958,-25.055638,0.166667"/>
+<POINT id="C19" data="11.011042,-17.055638,2.833333"/>
+<POINT id="C20" data="11.011042,-25.555638,2.833333"/>
+<POINT id="C21" data="16.011042,-25.555638,1.166667"/>
+<POINT id="C22" data="-32.488958,-13.055638,0.166667"/>
+<POINT id="C23" data="16.011042,-26.055638,1.166667"/>
+<POINT id="C24" data="-32.488958,-25.055638,0.166667"/>
+<POINT id="C25" data="16.011042,-24.555638,1.166667"/>
+<POINT id="C26" data="19.511042,-26.055638,-0.000000"/>
+<POINT id="C27" data="19.511042,-25.555638,-0.000000"/>
+<POINT id="C28" data="2.511042,-25.555638,0.000000"/>
+<POINT id="C29" data="9.511042,-26.055638,-0.000000"/>
+</POINTS>
+</ROOF>
+</STRUCTURES>
+</APPLICAD_EXPORT>

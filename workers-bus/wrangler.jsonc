@@ -49,9 +49,9 @@
   // OneDrive (Phase 3): set ONEDRIVE_DRIVE_ID to the target drive/library id; ONEDRIVE_ROOT is the
   // top folder (must pre-exist). Empty drive id ⇒ /ingest/photo stores raw only (no Graph calls).
   "vars": {
-    "OWNER_ALERT_EMAIL": "owner@ironwrapexteriors.com",
-    "BACKUP_ALERT_EMAIL": "backup@ironwrapexteriors.com",
-    "FROM_EMAIL": "ops@ironwrapexteriors.com",
+    "OWNER_ALERT_EMAIL": "info@ironwrapexteriors.com",
+    "BACKUP_ALERT_EMAIL": "sales@ironwrapexteriors.com",
+    "FROM_EMAIL": "quote@ironwrapexteriors.com",
     "JOBNIMBUS_ENABLED": "true",
     "JN_CONTACT_RECORD_TYPE": "Customer",
     "JN_CONTACT_STATUS": "New",

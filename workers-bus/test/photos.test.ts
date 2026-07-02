@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parsePhotoSubmission, photoFileName } from "../src/photos.ts";
-import { jobFolderPath, safeSegment } from "../src/msgraph.ts";
+import { jobFolderName, safeSegment } from "../src/google.ts";
 
 test("parsePhotoSubmission: normalized shape", () => {
   const s = parsePhotoSubmission({
@@ -46,8 +46,9 @@ test("photoFileName: extension from URL, then content-type, then jpg default", (
   assert.equal(photoFileName("JN-1", 0, "https://x/no-ext", ""), "JN-1-photo-01.jpg");
 });
 
-test("safeSegment + jobFolderPath", () => {
-  assert.equal(safeSegment("JN/12:34?"), "JN_12_34_");     // path-breaking chars sanitized
-  assert.equal(jobFolderPath("IronWrap Jobs", "JN-1234"), "IronWrap Jobs/JN-1234");
-  assert.equal(jobFolderPath("", "JN-1"), "JN-1");         // empty root → top-level
+test("safeSegment + jobFolderName", () => {
+  assert.equal(safeSegment("JN/12\\34"), "JN_12_34");                     // slashes sanitized (Drive names)
+  assert.equal(jobFolderName("1008", "John Smith", "IW"), "1008 John Smith (IW)");
+  assert.equal(jobFolderName("1008"), "1008");                            // number-only fallback
+  assert.equal(jobFolderName("1008", null, "iroof"), "1008 (iroof)");     // brand without customer
 });

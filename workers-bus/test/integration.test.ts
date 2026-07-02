@@ -17,10 +17,9 @@ function fakeEnv() {
     BACKUP_ALERT_EMAIL: "backup@example.com",
     FROM_EMAIL: "ops@example.com",
     JOBNIMBUS_ENABLED: "false",
-    A2P_SMS_ENABLED: "false",
     DEDUP_WINDOW_HOURS: "72",
     STUCK_THRESHOLD_MIN: "15",
-    // RESEND_API_KEY intentionally absent → instant-ack throws and is swallowed by ctx.waitUntil.
+    // GOOGLE_SERVICE_ACCOUNT_JSON intentionally absent → instant-ack throws and is swallowed by ctx.waitUntil.
     RAW: { put: async (key: string, body: string) => { r2.push({ key, body }); } },
     JN_QUEUE: {
       send: async (m: { envelope_id: string }) => { queue.push(m); },

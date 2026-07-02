@@ -42,27 +42,24 @@
   // */5 = retry sweep (re-drive stuck pushes); 0 14 * * * = daily reconciliation digest/heartbeat.
   "triggers": { "crons": ["*/5 * * * *", "0 14 * * *"] },
 
-  // Non-secret config. Secrets go via `wrangler secret put` — see .dev.vars.example:
-  //   INGEST_TOKEN, ADMIN_TOKEN, JOBNIMBUS_API_KEY; email = MS_TENANT_ID / MS_CLIENT_ID /
-  //   MS_CLIENT_SECRET (MS365) or RESEND_API_KEY; SMS = TWILIO_ACCOUNT_SID / _AUTH_TOKEN / _FROM_NUMBER.
-  // JOBNIMBUS_ENABLED off until the API shape is verified; A2P_SMS_ENABLED off until A2P approves.
-  // OneDrive (Phase 3): set ONEDRIVE_DRIVE_ID to the target drive/library id; ONEDRIVE_ROOT is the
-  // top folder (must pre-exist). Empty drive id ⇒ /ingest/photo stores raw only (no Graph calls).
+  // Non-secret config. Secrets go via `wrangler secret put` (or scripts/apply-secrets.sh):
+  //   INGEST_TOKEN, ADMIN_TOKEN, JOBNIMBUS_API_KEY, GOOGLE_SERVICE_ACCOUNT_JSON, QB_WEBHOOK_TOKEN.
+  // Email/Drive = Google Workspace via service account + domain-wide delegation (live-verified
+  // 2026-07-02). FROM_EMAIL is the impersonated sender: sales@ for now — switch to quote@ once
+  // that mailbox migrates onto the Google Workspace. SMS is JobNimbus Engage's job (no Twilio send).
   "vars": {
     "OWNER_ALERT_EMAIL": "info@ironwrapexteriors.com",
     "BACKUP_ALERT_EMAIL": "sales@ironwrapexteriors.com",
-    "FROM_EMAIL": "quote@ironwrapexteriors.com",
+    "FROM_EMAIL": "sales@ironwrapexteriors.com",
     "JOBNIMBUS_ENABLED": "true",
     "JN_CONTACT_RECORD_TYPE": "Customer",
     "JN_CONTACT_STATUS": "New",
     "JN_JOB_RECORD_TYPE": "Retail",
     "JN_JOB_STATUS": "Lead",
-    "A2P_SMS_ENABLED": "false",
     "DEDUP_WINDOW_HOURS": "72",
     "STUCK_THRESHOLD_MIN": "15",
-    "ONEDRIVE_DRIVE_ID": "",
-    "ONEDRIVE_ROOT": "IronWrap Jobs",
-    "DOCUSEAL_TEMPLATE_ID": "",
-    "DOCUSEAL_BASE_URL": ""
+    "SHARED_DRIVE_ID_JOBS": "0AHqXhIQ3svySUk9PVA",
+    "SHARED_DRIVE_ID_RESTRICTED": "0AMufCVvWaztwUk9PVA",
+    "SHARED_DRIVE_ID_ARCHIVE": "0AFTfvKuo0_6uUk9PVA"
   }
 }

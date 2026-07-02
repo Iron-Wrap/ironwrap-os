@@ -1,31 +1,18 @@
 # Copy to `.dev.vars` for local `wrangler dev`. NEVER commit real secrets (.dev.vars is gitignored).
-# In production set these with: wrangler secret put <NAME>
+# In production set these with: wrangler secret put <NAME>  (or ../scripts/apply-secrets.sh)
 
 INGEST_TOKEN="dev-ingest-token-change-me"
 ADMIN_TOKEN="dev-admin-token-change-me"
 
-# Instant-ack email + owner/backup alerts + daily digest. Set EITHER Microsoft 365 Graph (preferred,
-# per spec) OR Resend. With neither, email is skipped and lead capture still works.
-# MS365: Azure app registration with Mail.Send application permission for FROM_EMAIL's mailbox.
-MS_TENANT_ID=""
-MS_CLIENT_ID=""
-MS_CLIENT_SECRET=""
-# Resend fallback (verify the brand domain in Resend first):
-RESEND_API_KEY="re_dev_xxx"
-
-# Twilio — prospect SMS leg of the instant-ack; only used once A2P_SMS_ENABLED="true".
-TWILIO_ACCOUNT_SID=""
-TWILIO_AUTH_TOKEN=""
-TWILIO_FROM_NUMBER=""
-
-# Phase 3 — proposals (DocuSeal) + QuickBooks webhook. DOCUSEAL_TEMPLATE_ID + DOCUSEAL_BASE_URL are
-# wrangler.jsonc vars (non-secret); these two are secrets:
-DOCUSEAL_API_KEY=""
-QB_WEBHOOK_TOKEN=""
-
-# JobNimbus — leave blank + JOBNIMBUS_ENABLED="false" until the API shape is verified.
+# JobNimbus (api1 Bearer key)
 JOBNIMBUS_API_KEY=""
+
+# Google Workspace service account (single-line JSON) — Gmail send + Drive job folders,
+# impersonating FROM_EMAIL via domain-wide delegation.
+GOOGLE_SERVICE_ACCOUNT_JSON=""
+
+# QuickBooks webhook verifier token (Intuit)
+QB_WEBHOOK_TOKEN=""
 
 # Local overrides of wrangler.jsonc vars (optional):
 # JOBNIMBUS_ENABLED="false"
-# A2P_SMS_ENABLED="false"

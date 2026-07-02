@@ -14,12 +14,12 @@ import { pushToJobNimbus } from "./jobnimbus.ts";
 import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
 import { handlePhotoIngest } from "./photos.ts";
 import { handleMeasurementIngest } from "./measurements.ts";
-import { handleProposalCreate } from "./docuseal.ts";
 import { handleQuickbooksWebhook } from "./quickbooks.ts";
-import { ensureJobFolder, oneDriveConfigured } from "./msgraph.ts";
+import { ensureJobFolder, googleConfigured } from "./google.ts";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
+const safeJson = (s: string): Record<string, unknown> => { try { return JSON.parse(s) as Record<string, unknown>; } catch { return {}; } };
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -54,13 +54,8 @@ export default {
         if (url.pathname === "/admin/source-count") return await handleSourceCount(req, env);
         if (url.pathname === "/admin/replay") return json(await replayDeadLetter(env));
       }
-      // Proposal e-sign (staff/automation action → ADMIN_TOKEN).
-      if (req.method === "POST" && url.pathname === "/proposal/create") {
-        if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN)) return json({ error: "unauthorized" }, 401);
-        const body = await readBounded(req);
-        if (body === null) return json({ error: "payload_too_large" }, 413);
-        return await handleProposalCreate(env, body, req.headers.get("content-type"));
-      }
+      // (Proposal e-sign route removed 2026-07-02: JobNimbus native e-sign is confirmed
+      // sufficient; DocuSeal stays benched as the escape hatch — see final-spec-pack/00.)
       // QuickBooks webhook — authenticity is the Intuit signature, not a bearer token.
       if (req.method === "POST" && url.pathname === "/webhook/quickbooks") {
         const body = await readBounded(req);
@@ -169,9 +164,11 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
   try {
     const r = await pushToJobNimbus(env, rec);
     await store.setStatus(env, envelopeId, "pushed", { jn_contact_id: r.contactId, jn_job_id: r.jobId ?? null });
-    // Fresh job → ensure its OneDrive folder now (best-effort, credential-gated; spec 02 §2B).
-    if (r.jobNumber && oneDriveConfigured(env)) {
-      await ensureJobFolder(env, r.jobNumber).catch((e) => log({ at: "job_folder", job: r.jobNumber, error: String(e) }));
+    // Fresh job → ensure its Drive folder (+01–06 template) now (best-effort, credential-gated).
+    if (r.jobNumber && googleConfigured(env)) {
+      const p = safeJson(rec.payload_json);
+      await ensureJobFolder(env, r.jobNumber, rec.contact_name, typeof p.brand === "string" ? p.brand : null)
+        .catch((e) => log({ at: "job_folder", job: r.jobNumber, error: String(e) }));
     }
     await store.recordAudit(env, {
       automation: "jn_push", trigger: "queue", envelope_id: envelopeId,

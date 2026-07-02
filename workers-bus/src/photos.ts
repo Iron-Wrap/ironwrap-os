@@ -6,7 +6,7 @@
 
 import { newEnvelopeId, parseBody } from "./core.ts";
 import * as store from "./store.ts";
-import { oneDriveConfigured, fileJobPhotos } from "./msgraph.ts";
+import { googleConfigured, fileToJobFolder } from "./google.ts";
 
 const JOB_KEYS = ["job_number", "jobnumber", "job", "job_no", "jn_job", "jobnimbus_job", "job_id", "jobid"];
 const PHOTO_KEYS = ["photos", "photo", "images", "image", "files", "file", "attachments", "upload", "uploads"];
@@ -77,14 +77,14 @@ export async function handlePhotoIngest(env: Env, rawText: string, contentType: 
     return jsonResp({ error: reason }, 400);
   }
 
-  if (!oneDriveConfigured(env)) {
+  if (!googleConfigured(env)) {
     await store.recordAudit(env, { automation: "jobsite_photo", trigger: "jotform", envelope_id: id,
-      job_number: sub.jobNumber, action: "received", result: "ok", error: "onedrive_not_configured" });
+      job_number: sub.jobNumber, action: "received", result: "ok", error: "drive_not_configured" });
     return jsonResp({ ok: true, job_number: sub.jobNumber, photos: sub.photos.length, uploaded: 0,
-      note: "onedrive_not_configured — raw stored; files sync once Graph creds are set" });
+      note: "drive_not_configured — raw stored; files sync once Google creds are set" });
   }
 
-  // Fetch each photo URL → bytes, then file the batch into the job's OneDrive folder.
+  // Fetch each photo URL → bytes, then file the batch into the job's Drive folder (03 Photos).
   const files: Array<{ name: string; bytes: ArrayBuffer; contentType: string }> = [];
   for (let i = 0; i < sub.photos.length; i++) {
     try {
@@ -95,7 +95,7 @@ export async function handlePhotoIngest(env: Env, rawText: string, contentType: 
     } catch (e) { log({ at: "photo_fetch", url: sub.photos[i], error: String(e) }); }
   }
 
-  const result = await fileJobPhotos(env, sub.jobNumber, files);
+  const result = await fileToJobFolder(env, sub.jobNumber, "03 Photos", files);
   const uploaded = result.files.filter((f) => f.webUrl).length;
   await store.recordAudit(env, { automation: "jobsite_photo", trigger: "jotform", envelope_id: id,
     job_number: sub.jobNumber, target_ids: result.folderUrl,

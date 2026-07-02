@@ -7,7 +7,7 @@
 
 import { newEnvelopeId, parseBody } from "./core.ts";
 import * as store from "./store.ts";
-import { oneDriveConfigured, fileJobPhotos } from "./msgraph.ts";
+import { googleConfigured, fileToJobFolder } from "./google.ts";
 
 const JOB_KEYS = ["job_number", "jobnumber", "job", "job_no", "jn_job", "jobnimbus_job", "job_id", "jobid"];
 const REPORT_KEYS = ["report_url", "report", "pdf", "pdf_url", "document", "document_url", "file", "url"];
@@ -75,12 +75,12 @@ export async function handleMeasurementIngest(env: Env, rawText: string, content
   }
 
   const haveMeasures = Object.keys(sub.measurements).length;
-  if (!oneDriveConfigured(env) || !sub.reportUrl) {
+  if (!googleConfigured(env) || !sub.reportUrl) {
     await store.recordAudit(env, { automation: "measurement", trigger: "roofruler", envelope_id: id,
       job_number: sub.jobNumber, target_ids: haveMeasures ? JSON.stringify(sub.measurements) : null,
-      action: "received", result: "ok", error: !sub.reportUrl ? "no_report_url" : "onedrive_not_configured" });
+      action: "received", result: "ok", error: !sub.reportUrl ? "no_report_url" : "drive_not_configured" });
     return jsonResp({ ok: true, job_number: sub.jobNumber, measurements: sub.measurements, filed: false,
-      note: !sub.reportUrl ? "no report_url — measurements captured only" : "onedrive_not_configured — raw stored" });
+      note: !sub.reportUrl ? "no report_url — measurements captured only" : "drive_not_configured — raw stored" });
   }
 
   let report: string | null = null, folder: string | null = null;
@@ -88,7 +88,7 @@ export async function handleMeasurementIngest(env: Env, rawText: string, content
     const r = await fetch(sub.reportUrl);
     if (r.ok) {
       const ct = r.headers.get("content-type") ?? "application/pdf";
-      const res = await fileJobPhotos(env, sub.jobNumber, [{
+      const res = await fileToJobFolder(env, sub.jobNumber, "02 Measurements & Reports", [{
         name: `${sub.jobNumber}-measurement-report.${reportExt(sub.reportUrl, ct)}`,
         bytes: await r.arrayBuffer(), contentType: ct,
       }]);

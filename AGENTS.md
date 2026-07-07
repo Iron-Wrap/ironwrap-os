@@ -35,16 +35,17 @@ materials → completion → invoice → review, on a portable owned-data spine.
   Make Core seat for native connectors + observability.
 - **Instant-ack / MCTB** is the headline: <60s touch, 24/7. Interim (pre-A2P) ack = email +
   owner alert; the prospect-SMS leg switches on at A2P approval.
-- **Storage = OneDrive (Microsoft 365)** for the human job-folder archive (R2 holds raw). **Not
-  Google Drive.**
-- **Email = Microsoft 365 brand mailboxes** (IronWrap `quote@ironwrapexteriors.com` via MS365;
-  iRoof `info@iroofalberta.ca` via Gmail), SPF/DKIM/DMARC. JobNimbus native email is unused
-  (unreliable). A dedicated transactional ESP (Resend) is **deferred** for bulk only.
+- **Storage = Google Drive Shared Drives** for the human job-folder archive (R2 holds raw).
+  OneDrive is a migration source / temporary legacy archive only.
+- **Email = Google Workspace brand mailboxes** for IronWrap (`sales@` with `info@`/`quote@`
+  aliases) plus the separate iRoof Google account. Microsoft 365 is only a mirror during
+  migration; see `docs/EMAIL-DUAL-DELIVERY.md`. JobNimbus native email stays unused.
 - **SMS** = JobNimbus Engage (needs fresh A2P 10DLC + Canadian carrier registration first).
 - **Phone AI** = JobNimbus AssistAI (behind a written eval gate) → managed Retell → managed-OSS
   (LiveKit/Pipecat) → voicemail floor. The 4-vendor DIY voice stack stays killed.
 - **Field photos/geo** = Jotform "Jobsite Photo" form (device GPS at submit, offline).
-- **e-sign** = JobNimbus native → **DocuSeal** (OSS) if it fails (retires PandaDoc/DocuSign).
+- **e-sign** = JobNimbus native first. DocuSeal is only a benched escape hatch; there is no
+  active `/proposal/create` Worker route.
 - **OCR** = deterministic XML/text → Cloudflare `toMarkdown()` (free) → Mistral OCR only for hard docs.
 - **Design** = free Canva + free Affinity. **Accounting** = QuickBooks. **QuoteLock feature: CUT.**
 
@@ -63,7 +64,7 @@ materials → completion → invoice → review, on a portable owned-data spine.
   `bus:<envelope_id>`/`external_id` search as the backstop. Write path live-tested 2026-06-28.
 - **Make** (MCP connected): org "IronWrap Exteriors" (id 6202921, **Core** plan, 10k ops/mo),
   team "My Team" (id 1742726). ~16 scenarios on the experimental GHL hub (RoofRuler intake via
-  AI Extract + OneDrive, OneDrive folder automation, GHL→JobNimbus import mid-cutover, inactive
+  AI Extract + legacy OneDrive, Drive folder automation, GHL→JobNimbus import mid-cutover, inactive
   Jotform completion + Facebook Lead Ads). JobNimbus + Jotform already connected in Make.
 
 ## Working with `workers-bus/`
@@ -80,7 +81,8 @@ npx wrangler deploy --dry-run    # validate config + bundle
   `JOBNIMBUS_ENABLED` is now `"true"`. Record types are configurable via `JN_CONTACT_RECORD_TYPE`
   (`Customer`) / `JN_JOB_RECORD_TYPE` (`Retail`) / `*_STATUS`.
 - Secrets go in `.dev.vars` (local, gitignored) or `wrangler secret put` (prod): `INGEST_TOKEN`,
-  `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY`, `RESEND_API_KEY`.
+  `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`, and `QB_WEBHOOK_TOKEN`
+  when QuickBooks is connected.
 
 ## Conventions & guardrails
 

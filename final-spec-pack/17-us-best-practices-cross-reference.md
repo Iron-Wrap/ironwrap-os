@@ -25,9 +25,9 @@ roofing/exteriors business:
   reconciliation.
 - Use the Jotform "Jobsite Photo" form as the sole jobsite-photo/geo tool
   (JobNimbus job picker + Geolocation widget capturing device GPS at submit,
-  coordinates-only, offline; webhook -> Make -> OneDrive + JobNimbus + owned
+  coordinates-only, offline; webhook -> Make -> Google Drive + JobNimbus + owned
   store). Add Jotform for any other workflow that needs a structured form.
-- Use OneDrive (Microsoft 365) as archive storage.
+- Use Google Drive (Google Workspace) as archive storage.
 - Use QuickBooks as accounting truth.
 - Start the phone AI with native JobNimbus AssistAI (eval-gated); fall back to
   managed Retell only if it fails the gate. Expand only after reviewed calls
@@ -54,7 +54,7 @@ runs on it.)
 | Local Services Ads are pay-per-lead, not pay-per-click | Google Local Services Ads in Canada include roofing and siding categories in the current Google pages, but eligibility must be checked by area/category. | Not a first-deliverable purchase | Add LSA readiness gate after attribution and response-time QA |
 | Call attribution should be solved before paid traffic | Attribution is deferred: UTM + manual Lead Source + one tracked number cover first-touch until spend starts; CallRail is the paid add-on once paid ads run. | Partially covered | Defer attribution to UTM + Lead Source + one tracked number; add CallRail only when paid ads start |
 | Reviews must be operational, not manual | Google/LSA trust and conversion depend heavily on current profile quality and review discipline. | Covered through the JobNimbus review flow | Add GBP review link/source routing to QA |
-| Field evidence should come from mobile forms | The Jotform "Jobsite Photo" form (JobNimbus job picker + Geolocation widget capturing device GPS at submit, coordinates-only, offline) captures photos/geo and syncs via webhook -> Make -> OneDrive + JobNimbus + owned store. | Covered | No change |
+| Field evidence should come from mobile forms | The Jotform "Jobsite Photo" form (JobNimbus job picker + Geolocation widget capturing device GPS at submit, coordinates-only, offline) captures photos/geo and syncs via webhook -> Make -> Google Drive + JobNimbus + owned store. | Covered | No change |
 | CRM replacement is not the first move | JobNimbus, ServiceTitan, AccuLynx, Housecall Pro, and Jobber all cover overlapping contractor workflows, but switching destroys momentum when JobNimbus already exists. | Covered | Keep switch-review as future-only, not Task 1 |
 | OCR should be gated by document type | Mistral OCR 4 is current and strong for structured OCR, but AppliCad XML and text PDFs are cheaper and more deterministic. | Covered | Keep OCR 4 as fallback, not default |
 
@@ -63,7 +63,7 @@ runs on it.)
 | Need | Best First Option | Cheap / Free Option | Paid Fallback | Decision |
 |---|---|---|---|---|
 | CRM/job truth | JobNimbus | Existing account | ServiceTitan, AccuLynx, Housecall Pro, Jobber | Keep JobNimbus |
-| Lead capture and nurture | JobNimbus + JobNimbus Engage (SMS) + Microsoft 365 brand mailboxes (SPF/DKIM/DMARC); dedicated ESP deferred | Existing account | Dedicated transactional ESP for bulk | Keep JobNimbus as the front door |
+| Lead capture and nurture | JobNimbus + JobNimbus Engage (SMS) + Google Workspace brand mailboxes (SPF/DKIM/DMARC); dedicated ESP deferred | Existing account | Dedicated transactional ESP for bulk | Keep JobNimbus as the front door |
 | Integration bus | Make (canonical envelope, dedup, dead-letter, reconciliation; dual-write owned D1+R2 FIRST, then JobNimbus) | Existing account (Make Core, no tier bump) | Custom middleware | Treat Make as critical infra |
 | Call tracking | UTM + manual Lead Source + one tracked number | Page/source fields and manual source checks | CallRail Lead Tracking | Defer; add CallRail only when paid ads start |
 | Phone AI | JobNimbus AssistAI (eval-gated) | Missed-call/after-hours only | Managed Retell, then managed-OSS (LiveKit Cloud / Pipecat Cloud) as "tier 2.5" if both fail the eval (4-vendor DIY stack stays killed) | AssistAI → managed Retell → managed-OSS tier 2.5; Google Voice is unusable (don't conflate with Gemini Live API) |
@@ -74,8 +74,8 @@ runs on it.)
 | Structured forms | Jotform when a workflow needs it | Existing Jotform subscription | JobNimbus native e-sign → DocuSeal (open-source) escape hatch for signing; Adobe dev API for structured capture | Add per workflow; DocuSeal retires PandaDoc/DocuSign |
 | Design tooling | Free Canva + free Affinity (Affinity went 100% free Oct 2025) | Existing subscription | Canva Pro (~CAD $18/mo) only if brand-kit/team features needed; full Adobe Creative Cloud rejected | Free Canva + free Affinity |
 | Document extraction | AppliCad XML + PDF text | Cloudflare `toMarkdown()` (Workers AI binding — free, on-stack, text PDFs/DOCX → clean Markdown) as the free first pass; manual review | Mistral OCR 4 (image-heavy/scanned only) | XML/text first → toMarkdown() free pass → LLM/OCR only when needed |
-| Archive storage | OneDrive (Microsoft 365) | Existing account | — | OneDrive (Microsoft 365) is the storage authority; owned raw store stays Cloudflare R2 |
-| Outbound email | Microsoft 365 brand mailboxes (SPF/DKIM/DMARC) | Existing account | Dedicated transactional ESP, deferred for bulk | Microsoft 365 brand mailboxes; dedicated ESP deferred |
+| Archive storage | Google Drive (Google Workspace) | Existing account | — | Google Drive (Google Workspace) is the storage authority; owned raw store stays Cloudflare R2 |
+| Outbound email | Google Workspace brand mailboxes (SPF/DKIM/DMARC) | Existing account | Dedicated transactional ESP, deferred for bulk | Google Workspace brand mailboxes; dedicated ESP deferred |
 | Dashboard | JobNimbus reports + exception sheet | Google Sheet/Looker Studio | Custom dashboard | Keep lean |
 
 ## Funnel Corrections

@@ -284,7 +284,7 @@ storage location, and status effect.
 | 6 | Materials Request | Sales / production | JobNimbus material status; Jotform (structured) if needed |
 | 7 | Safety Form | Field | Jotform, structured, ACTIVE (2026-07-01): job-start gate, see Workflow 5C |
 | 8 | Contract | Sales / office | JobNimbus native e-sign / approved signing path |
-| 9 | Invoice | Office/accounting | QuickBooks (Moneris payment processor) |
+| 9 | Invoice | Office/accounting | QuickBooks / QuickBooks Payments |
 | 10 | Receipt | Office/accounting | QuickBooks |
 | 11 | Material List | Sales / production | JobNimbus attachment/form; Jotform if structured; Paradigm after approval |
 | 12 | Proposal | Sales | JobNimbus e-sign / HTML+PDF proposal first |
@@ -312,7 +312,7 @@ SOP:
    contractor's jobsite photos attached.
 5. The contractor receives a confirmation copy back by email.
 6. Office reviews open issues.
-7. QuickBooks final invoice issued (Moneris payment processor).
+7. QuickBooks final invoice issued with QuickBooks Payments when online payment is needed.
 8. Payment status updates.
 9. If no complaint/dispute exists, a JobNimbus automation starts the review request (Google
    review link via Engage/Google Workspace email).

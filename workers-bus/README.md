@@ -49,8 +49,9 @@ inbound (website/phone/gbp/ad/referral/manual)
 ```
 src/core.ts        pure logic (envelope, dedup, routing, reconcile) — node-testable, no I/O
 src/store.ts       D1 + R2 adapters (the owned store)
-src/jobnimbus.ts   JobNimbus push adapter — GATED until API shape verified
-src/notify.ts      Resend email (ack/alerts/digest); Twilio SMS stub (post-A2P)
+src/jobnimbus.ts   JobNimbus push adapter (live-tested; enabled by config)
+src/google.ts      Gmail send + Google Drive Shared Drive filing
+src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
 src/index.ts       the Worker: fetch + queue + scheduled
 migrations/0001_init.sql   D1 schema
 test/core.test.ts  zero-dep self-test (`node --test`)
@@ -74,8 +75,9 @@ npm run typegen              # generate worker-configuration.d.ts (Env types)
 # secrets (never commit): see .dev.vars.example
 npx wrangler secret put INGEST_TOKEN
 npx wrangler secret put ADMIN_TOKEN
-npx wrangler secret put RESEND_API_KEY
 npx wrangler secret put JOBNIMBUS_API_KEY
+npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
+npx wrangler secret put QB_WEBHOOK_TOKEN   # when the QuickBooks webhook is connected
 
 npm test                     # pure-logic self-test
 npm run typecheck            # tsc --noEmit
@@ -87,10 +89,13 @@ npx wrangler deploy
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | POST | `/ingest/:source` | `Bearer INGEST_TOKEN` | ingest a lead (`source` ∈ website,phone,gbp,ad,referral,manual) |
+| POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos and file them to Google Drive |
+| POST | `/ingest/measurement` | `Bearer INGEST_TOKEN` | ingest RoofRuler/AppliCad measurement metadata/report files |
 | GET | `/health` | — | liveness |
 | POST | `/admin/reconcile` | `Bearer ADMIN_TOKEN` | run reconciliation now |
 | POST | `/admin/source-count` | `Bearer ADMIN_TOKEN` | record independent ground-truth count `{day?,channel,count}` |
 | POST | `/admin/replay` | `Bearer ADMIN_TOKEN` | re-drive dead-lettered envelopes |
+| POST | `/webhook/quickbooks` | `intuit-signature` | capture signed QuickBooks invoice/payment events |
 
 Point the website forms, GBP, and AssistAI call-completed webhook at `/ingest/:source`
 (website → `/ingest/website`, AssistAI/voicemail → `/ingest/phone`, etc.). Feed the daily
@@ -104,12 +109,14 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
    confirmed against the real account. Valid record types are `Customer` (contact) /
    `Retail` (job), set via the `JN_*` vars — `"Lead"` is rejected by this account (it's the
    exact 400 that broke the experimental Make import). Idempotency is by the `bus:<id>` tag.
-   The adapter stays **gated** (`JOBNIMBUS_ENABLED="false"`) only because the live **write**
-   path hasn't been exercised yet — flip to `"true"` after one approved test write. Until
-   then pushes fail loud into the dead-letter (never a fake success).
-2. **Resend** — verify your sending domain + SPF/DKIM/DMARC; set `FROM_EMAIL`.
-3. **Twilio / A2P** (`notify.sendProspectSms`) — wire after A2P 10DLC approves, then set
-   `A2P_SMS_ENABLED="true"`. Pre-A2P the instant-ack is email + owner alert (spec interim path).
+   `JOBNIMBUS_ENABLED` is now `"true"` in `wrangler.jsonc`.
+2. **Google Workspace/Drive** — Gmail send and Shared Drive filing use
+   `GOOGLE_SERVICE_ACCOUNT_JSON` with domain-wide delegation. `FROM_EMAIL` is currently
+   `sales@ironwrapexteriors.com`; switch it only after the mailbox/sender alias decision changes.
+3. **SMS / A2P** — the Worker does not send SMS. Prospect SMS belongs in JobNimbus Engage after
+   A2P/carrier registration. Pre-A2P instant-ack is Gmail email + owner alert.
+4. **QuickBooks webhook** — the receiver captures signed events now. Mirroring invoice/payment
+   status back to JobNimbus needs a later QB OAuth read path.
 
 ## Maintenance owner (don't skip — spec gap #3)
 

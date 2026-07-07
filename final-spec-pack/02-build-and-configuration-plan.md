@@ -20,7 +20,7 @@ flowchart TD
   P7 --> P8["Payments + Reviews + Exceptions"]
   P8 --> P9["End-to-End QA"]
   P9 --> P10["Final Security Hardening"]
-  P10 --> P11["Production Launch (end GHL trial, go live on JobNimbus spine)"]
+  P10 --> P11["Production Launch (retire GHL routes, go live on JobNimbus spine)"]
 ```
 
 ## Phase 0 - Preflight Containment
@@ -29,7 +29,7 @@ Goal: avoid making the current access situation worse before the final hardening
 
 Actions:
 
-- Inventory current Make, JobNimbus, QuickBooks, storage, website, and phone access. (GHL was trial-evaluated only and is being declined before any production use; nothing to migrate — end the trial.)
+- Inventory current Make, JobNimbus, QuickBooks, storage, website, and phone access. GHL is experimental/legacy scaffolding; retire live routes only after the bus replacement path is proven.
 - Identify live Make connections, API keys, webhooks, phone numbers, and folder automations.
 - Use test contacts/jobs wherever possible.
 - Pause or duplicate dangerous scenarios before editing.
@@ -53,14 +53,14 @@ Audit:
 - Website form destinations.
 - Website attribution fields, UTM handling, landing-page/source capture, and call source capture.
 - Google Business Profile settings, review link, service categories, service areas, phone, hours, website URL, and photos.
-- OneDrive naming and folder structure.
+- Google Drive naming and folder structure, plus OneDrive migration source inventory.
 - RoofRuler email source, sender pattern, mailbox rules, attachment naming, and current proposal packet examples.
 
 Current-state note (experimental Make setup being migrated to the JobNimbus spine):
 
 - As of 2026-06-28 the experimental GHL-based Make setup (org "IronWrap Exteriors",
   Make Core plan, team "My Team", ~16 scenarios) already contains, on the GHL hub:
-  a live RoofRuler report intake (Make AI Extract + OneDrive); OneDrive folder
+  a live RoofRuler report intake (Make AI Extract + legacy OneDrive); Google Drive folder
   automation keyed by lead/job number; GHL->JobNimbus import scenarios (the
   in-progress cutover — note `record_type_name` must be an account-valid value:
   contact `Customer`, job `Retail`; `"Lead"` is rejected 400); a Jotform "Completion
@@ -78,9 +78,8 @@ Output:
 
 ## Phase 0.5 - Identity And Foundations
 
-Blocks everything downstream. GHL was trial-evaluated only and is being declined
-before any production use; nothing to migrate — end the trial. These foundations
-are real and independent of GHL: they are fresh stand-ups on the JobNimbus spine.
+Blocks everything downstream. GHL is legacy experimental scaffolding; these foundations
+are real and independent of GHL, and remaining GHL routes retire after replacement proof.
 
 Actions:
 
@@ -90,15 +89,15 @@ Actions:
 - Start A2P 10DLC + Canadian carrier registration now for JobNimbus Engage SMS
   (a FRESH registration, prerequisite before any automated texting, ~1-3 weeks,
   runs in the background). Messaging cannot go live until this is approved.
-- Use the existing **Microsoft 365 brand mailboxes** for outbound email (IronWrap
-  `quote@ironwrapexteriors.com` via MS365; iRoof `info@iroofalberta.ca` via Gmail)
+- Use the existing **Google Workspace brand mailboxes** for outbound email (IronWrap
+  `sales@` with `info@`/`quote@` aliases; iRoof `info@iroofalberta.ca`)
   with SPF/DKIM/DMARC + a deliverability seed test. JN native email unused
-  (unreliable; do not rely on it). A dedicated transactional ESP (Resend) is
+  (unreliable; do not rely on it). A dedicated transactional ESP is
   DEFERRED for bulk nurture/review only.
 - Stand up the owned system of record: Cloudflare D1 + R2, plus the canonical
   lead envelope `{source, contact, job_ref, payload, ts}` that every Make scenario
   dual-writes to FIRST, before pushing to JobNimbus. Storage authority for the
-  human-facing job-folder archive is **OneDrive (Microsoft 365)** (Cloudflare R2
+  human-facing job-folder archive is **Google Drive (Google Workspace)** (Cloudflare R2
   remains the owned raw store).
 - Draft the privacy policy and the per-contact CASL consent ledger maintained in
   JobNimbus GOING FORWARD (system of record for consent provenance; no historical
@@ -108,8 +107,8 @@ Done when:
 
 - The business number is owned in Twilio.
 - A2P 10DLC + Canadian carrier registration is submitted (approval tracked).
-- Microsoft 365 brand mailboxes are live with SPF/DKIM/DMARC and a passing seed
-  test; dedicated ESP (Resend) deferred for bulk nurture/review only.
+- Google Workspace brand mailboxes are live with SPF/DKIM/DMARC and a passing seed
+  test; dedicated ESP deferred for bulk nurture/review only.
 - D1 + R2 are live and the canonical lead envelope schema is defined.
 - Privacy policy draft and consent ledger structure exist.
 
@@ -185,7 +184,7 @@ Jotform "Jobsite Photo" form (sole jobsite-photo/geo tool — $0 incremental, sh
   is preserved. Validate on a real device that the widget returns **device GPS (not
   IP)** in offline app mode.
 - Crew uses the Jotform Mobile App in Offline Mode (queues on-device, syncs on reconnect).
-- Output path: Jotform webhook -> Make -> OneDrive job folder + JobNimbus job +
+- Output path: Jotform webhook -> Make -> Google Drive job folder + JobNimbus job +
   dual-write to the owned store.
 - If per-submission job-picking friction hurts crew compliance, improve the Jotform flow
   (kiosk mode / auto job-picker) — do NOT introduce a separate photo vendor.
@@ -202,7 +201,7 @@ Jotform structured forms (deferred — introduce only when a specific structured
 Done when:
 
 - The Jotform "Jobsite Photo" form is live and photos + device-GPS geo route to the right
-  JobNimbus job and OneDrive job folder from day one, with offline capture verified.
+  JobNimbus job and Google Drive job folder from day one, with offline capture verified.
 - The Jotform structured-form trigger criteria are documented (which workflow, what pain signal).
 - When a structured Jotform form is introduced, one test form completes offline from
   mobile/tablet, archives to the job folder, lands in JobNimbus without duplicate jobs,
@@ -266,7 +265,7 @@ used for route-flagging + the owned-store dual-write, not necessarily the bookin
 - Buffers.
 - Territory/service area rules.
 - First-response tracking.
-- Confirmation SMS/email (Engage SMS + Microsoft 365 brand-mailbox email).
+- Confirmation SMS/email (Engage SMS + Google Workspace brand-mailbox email).
 - Reschedule/cancel path.
 - No-show follow-up.
 
@@ -319,7 +318,7 @@ Final decision:
 - JobNimbus owns canonical job number.
 - The owned-store record ID and any external lead ID can exist but are not the job number.
 - Folder name is derived from JobNimbus job number plus customer/property label.
-- Job folders live in **OneDrive (Microsoft 365)** (the storage authority for the
+- Job folders live in **Google Drive (Google Workspace)** (the storage authority for the
   human-facing job-folder archive).
 
 Folder pattern:
@@ -405,7 +404,7 @@ Done when:
 Build:
 
 - RoofRuler email intake for automatically delivered report PDFs. (Already
-  implemented in Make today via AI Extract + OneDrive; the deterministic-first ->
+  implemented in Make today via AI Extract + legacy OneDrive; the deterministic-first ->
   `toMarkdown()` -> Mistral OCR ladder below is the hardening target.)
 - Upload convention for manual reports/photos.
 - AppliCad XML parser (deterministic text-PDF / XML parse first).
@@ -441,7 +440,7 @@ Payments:
 - Validate accepted payment methods before customer-facing proposal launch:
   cash/cheque/draft/direct deposit, Interac e-Transfer, Interac debit, credit
   card, and FinanceIT.
-- Keep Moneris/FinanceIT details out of AI logs and broad CRM notes.
+- Keep payment/FinanceIT details out of AI logs and broad CRM notes.
 
 Reviews:
 
@@ -520,7 +519,7 @@ to migrate — end the trial. Launch is a clean go-live on the JobNimbus spine:
 3. Confirm website forms/tracking post through the Make bus.
 4. Run the launch smoke test (instant-ack fires — interim email/owner-alert pre-A2P,
    prospect SMS once approved; reconciliation green).
-5. End the GHL trial.
+5. Retire the remaining GHL routes after replacement proof.
 
 Launch only when:
 

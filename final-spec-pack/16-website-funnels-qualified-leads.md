@@ -62,7 +62,7 @@ website lead must carry:
    from nurture) — target <60s human-or-AI touch.
 5. Dedupe by phone, email, and normalized address.
 6. Push to JobNimbus; create/update the JobNimbus record after qualification.
-7. Create the OneDrive job folder only after the JobNimbus job number exists.
+7. Create the Google Drive job folder only after the JobNimbus job number exists.
 8. Trigger human or Phone AI follow-up when intent is high and the lead is not booked.
 
 The owned store (D1 + R2) is the system of record; JobNimbus is the operational CRM /

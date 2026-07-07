@@ -25,7 +25,7 @@ Official sources checked on 2026-06-27:
 | Safeguards | Protect personal information with reasonable security | Named users, MFA, least privilege, secret storage |
 | Access and correction | Customer information must be retrievable/correctable | Job/customer data map documented |
 | Service providers | IronWrap remains accountable for vendors | Vendor register and terms review |
-| Cross-border processing | Outside-Canada processors (Claude/OCR for measurement docs, the brand mailboxes — Microsoft 365 + Google/Gmail, Cloudflare, Jotform, Make) handle data — Cloudflare (D1/R2) and Make hold canonical PII, the brand mailboxes handle lead PII; requires disclosure + written agreements | Privacy notice names outside-Canada processors; signed DPAs/ZDR on file (incl. Cloudflare, Make, and the Microsoft 365 + Google mailboxes) |
+| Cross-border processing | Outside-Canada processors (Claude/OCR for measurement docs, Google Workspace/Drive, the temporary Microsoft 365 mirror, Cloudflare, Jotform, Make) handle data — Cloudflare (D1/R2) and Make hold canonical PII, the brand mailboxes handle lead PII; requires disclosure + written agreements | Privacy notice names outside-Canada processors; signed DPAs/ZDR on file (incl. Cloudflare, Make, Google Workspace, and Microsoft while the mirror remains active) |
 | Breach response | Record and report qualifying breaches | Breach playbook approved |
 | A2P 10DLC | SMS via Engage requires registered campaign/brand + Canadian carrier registration before any messaging. US framework; CA carriers (Rogers/Bell/Telus) filter unregistered A2P but don't run 10DLC per se; numbers bought before 2025-03-26 can send CA→CA unregistered; brand registration needs the CRA Business Number; ~$4 one-time low-volume registration | Fresh registration submitted early, approved before any automated texting (1-3 wks lead time) |
 | CASL | Commercial electronic messages require consent, identification, unsubscribe | Per-contact consent ledger live in JobNimbus; unsubscribe handling tested |
@@ -109,8 +109,8 @@ handling and should not become hidden marketing.
 JobNimbus holds the authoritative per-contact consent ledger maintained going
 forward; every consent state is dual-written through the Make bus to the owned
 data layer (D1/R2) like all other lead data, so consent provenance survives any
-future vendor change. (No historical export is needed — GHL was trial-evaluated
-only and is being declined before any production use; nothing to migrate.)
+future vendor change. GHL remains legacy scaffolding only; retire remaining routes
+after replacement proof.
 
 Each contact record must carry:
 
@@ -120,20 +120,19 @@ Each contact record must carry:
 - Channel scope (SMS, email, both) and message-type scope (transactional vs CEM).
 - Unsubscribe/opt-out status, date, and channel.
 
-GHL was trial-evaluated only and is being declined before any production use;
-nothing to migrate — end the trial. There is no GHL production data, business
-number, conversation/email history, or consent record to export. The consent
+GHL was experimental scaffolding, not the target system. The contact rescue has run; any
+remaining GHL lead routes are retired only after the replacement bus path is proven. The consent
 ledger is built and maintained in JobNimbus going forward.
 
 ## Cross-Border Processing And Vendor Agreements
 
 Several processors operate outside Canada (primarily the US): Claude (Anthropic)
-and the OCR provider (for measurement docs), the brand mailboxes (Microsoft 365
-for IronWrap and Google/Gmail for iRoof Alberta), Cloudflare (D1/R2/Pages),
-Jotform, and Make. The jobsite-photo path runs through Jotform (already listed
-above). The Microsoft 365 and Google mailboxes are also processors — they handle
-lead PII (prospect name/email/contact details in instant-ack, confirmation, and
-nurture mail) and belong on the DPA/vendor-register list. Cloudflare (D1/R2) and
+and the OCR provider (for measurement docs), Google Workspace/Drive, Microsoft 365
+while the migration mirror remains active, Cloudflare (D1/R2/Pages), Jotform, and
+Make. The jobsite-photo path runs through Jotform (already listed above). The Google
+and temporary Microsoft mailboxes are also processors — they handle lead PII
+(prospect name/email/contact details in instant-ack, confirmation, and nurture mail)
+and belong on the DPA/vendor-register list. Cloudflare (D1/R2) and
 Make hold the canonical lead/customer PII — the owned data layer and the
 integration bus — so they are not edge-only processors and require DPAs on the
 same footing as the rest. This requires:
@@ -143,10 +142,10 @@ same footing as the rest. This requires:
 - A written DPA (data processing agreement) with each outside-Canada processor,
   with zero-data-retention (ZDR) terms where the vendor offers it — required for the
   Claude/OCR path that reads customer measurement documents, and on file for
-  Cloudflare and Make, which store canonical PII, and for the Microsoft 365 and
-  Google mailboxes, which handle lead PII.
-- Vendor register entry per processor — incl. the Microsoft 365 and Google
-  mailboxes — (location, data handled, DPA/ZDR status).
+  Cloudflare and Make, which store canonical PII, and for Google Workspace plus
+  Microsoft 365 while the mirror remains active.
+- Vendor register entry per processor — incl. Google Workspace and the temporary
+  Microsoft mirror — (location, data handled, DPA/ZDR status).
 
 ## DNCL / Outbound Call Rules
 
@@ -180,7 +179,7 @@ Default:
 
 ## Payment Compliance Notes
 
-- Card data must stay inside approved processors such as Moneris or another approved payment provider.
+- Card data must stay inside QuickBooks Payments or another explicitly approved payment processor.
 - Bank/PAD/direct-deposit details must not enter AI logs, broad CRM notes, or Make logs unless explicitly required and approved.
 - FinanceIT applications and financing documents are sensitive and should stay in the approved financing/accounting flow.
 - AI and staff scripts must not imply financing approval, insurance approval, or guaranteed premium discounts.

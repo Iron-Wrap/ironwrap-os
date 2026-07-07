@@ -1,6 +1,6 @@
 // measurements.ts — RoofRuler/AppliCad measurement-report intake (Phase 3, spec 07).
 //
-// Files the report into the job's OneDrive folder (keyed by JobNimbus job number) and captures any
+// Files the report into the job's Google Drive folder (keyed by JobNimbus job number) and captures any
 // structured measurements an upstream AI-Extract already produced. The deterministic → toMarkdown()
 // → Mistral OCR ladder (spec 07) is a credential-gated follow-up; for now the report is filed and
 // provided measurements are recorded. Raw is stored FIRST, so nothing is lost.

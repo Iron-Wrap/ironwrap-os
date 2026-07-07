@@ -1,94 +1,103 @@
-# Activation Checklist — built → operating
+# Activation Checklist - Built -> Operating
 
-Everything in `workers-bus/` is **built, deployed, unit-verified** (26 tests pass). **Nothing captures
-live traffic yet** — each feature is gated on a credential or integration only you can provide. This is
-the ordered punch-list to light each one up. Each item says **what to do → what lights up → how to verify.**
+Everything in `workers-bus/` is buildable and locally verified. The bus is deployed, JobNimbus
+push is enabled, Gmail instant-ack uses Google Workspace domain-wide delegation, and job files go
+to Google Drive Shared Drives. The remaining work is account wiring and live-source cutover.
 
 - Bus base URL: `https://ironwrap-bus.yellow-rain-7498.workers.dev`
-- Set a secret (from `workers-bus/`): `printf '%s' '<value>' | CLOUDFLARE_API_TOKEN='<cf-token>' npx wrangler secret put <NAME>`
-- Companion docs: `SETUP-CHECKLIST.md` (per-tool detail), `WEBSITE-INTEGRATION.md` (forms), `DELIVERY-PLAN.md` (phases).
+- Set a secret from `workers-bus/`: `printf '%s' '<value>' | CLOUDFLARE_API_TOKEN='<cf-token>' npx wrangler secret put <NAME>`
+- Companion docs: `SETUP-CHECKLIST.md`, `WEBSITE-INTEGRATION.md`, `EMAIL-DUAL-DELIVERY.md`, `DELIVERY-PLAN.md`.
 
-> Legend: 🔴 hard blocker for go-live · 🟠 needed to operate a feature · ⚪ cleanup/optional.
+Legend: `[ ]` todo, `[x]` done/verified, `[~]` operating with a known temporary bridge.
 
----
+## 0. Current Operating Baseline
 
-## 0. ⚪ Make UI — re-save the lead pipeline (5 min) — DO FIRST
-Today's API edits left scenario **5489498 "GHL → JobNimbus Import"** reporting a stale `invalid/unlinked`
-state (it's still processing, but make it clean): open it in Make → click the **JobNimbus + GHL** modules
-to confirm their connections → **Save** → confirm it's **ON**. Also delete the unused webhook **"Bus →
-OneDrive Job Folder" (id 2520195)** I created. → *Restores a clean baseline; nothing of mine remains in it.*
+- [x] Cloudflare Worker, D1, R2, queues, cron, and secrets exist.
+- [x] `JOBNIMBUS_ENABLED=true`; JobNimbus API write path was live-tested.
+- [x] Gmail send path and Google Drive filing use `GOOGLE_SERVICE_ACCOUNT_JSON`.
+- [x] Shared Drives exist: IW Jobs, IW Restricted, IW Archive.
+- [x] Inbound `ironwrapexteriors.com` mail lands in Google Workspace.
+- [~] `info@` and `quote@` are mirrored to Microsoft 365 until migration is closed; `ilya@` routes Microsoft-only. See `EMAIL-DUAL-DELIVERY.md`.
+- [x] DocuSeal Worker route removed; JobNimbus native e-sign is first choice.
+- [x] SMS sending removed from the Worker; prospect SMS belongs in JobNimbus Engage after A2P approval.
 
-## 1. 🟠 Email — lights up instant-ack + owner alerts + daily heartbeat
-Pick ONE:
-- **M365 (per spec):** Azure app registration → application permission **Mail.Send** for
-  `quote@ironwrapexteriors.com` → admin consent → set `MS_TENANT_ID` / `MS_CLIENT_ID` / `MS_CLIENT_SECRET`.
-- **Resend (simpler):** verify the brand domain in Resend → set `RESEND_API_KEY`.
+## 1. Feed Real Leads Into The Bus - Hard Go-Live Gate
 
-**Verify:** `POST /admin/reconcile` (Bearer ADMIN_TOKEN) → the daily digest email arrives.
-**Lights up:** prospect "we got your request" email, owner new-lead alert, daily reconcile heartbeat.
+Today this is the keystone. Choose exactly one first feed:
 
-## 2. 🔴 Lead capture into the owned store — THE keystone
-Today nothing feeds the bus. Choose the path:
-- **(a) Website forms → bus** (cleanest): agency adds the server-side forward from `WEBSITE-INTEGRATION.md`;
-  set host env `IRONWRAP_BUS_INGEST_TOKEN = <INGEST_TOKEN>`.
-- **(b) Make UI forward** (no website change): in scenario 5489498, *after* the JobNimbus module, add one
-  HTTP **"Make a request"** module → `POST .../ingest/website`, header `Authorization: Bearer <INGEST_TOKEN>`,
-  Body type Raw / JSON = the GHL contact fields, and set its **error handler to "Ignore"**.
-  ⚠️ Do this **in the Make UI**, not the API — I tried the API and it destabilized the scenario.
+- [ ] Website forms -> server-side forward from `WEBSITE-INTEGRATION.md` to `POST /ingest/website`.
+- [ ] Or Make UI bridge -> append one HTTP module after the working lead sync and POST the same payload to `/ingest/website` with an Ignore error handler.
 
-**Verify:** submit a real test lead → it appears in the bus within seconds (`wrangler d1 execute ironwrap-bus
---remote --command "SELECT * FROM envelopes ORDER BY created_at DESC LIMIT 3"`).
-**Lights up:** the entire owned spine on live traffic — dedup, reconcile, instant-ack, brand tagging.
+Do Make edits in the UI, not via API.
 
-## 3. 🟠 OneDrive / Microsoft Graph — lights up photos + measurements + auto job folders
-Same Azure app as step 1 **+ add `Files.ReadWrite.All`** (or `Sites.ReadWrite.All` for a SharePoint library)
-+ consent. Set `wrangler.jsonc` vars **`ONEDRIVE_DRIVE_ID`** (target drive id) + **`ONEDRIVE_ROOT`**
-(default `IronWrap Jobs`, must pre-exist) → `npx wrangler deploy`. Then point your **Jotform "Jobsite Photo"**
-and **RoofRuler report** forms at `POST .../ingest/photo` and `.../ingest/measurement`
-(`Authorization: Bearer <INGEST_TOKEN>`, include the **JobNimbus job number** field).
+Verify:
 
-**Verify:** test photo → lands in the OneDrive job folder; bus returns `uploaded > 0`.
-**Lights up:** Phase 3 field ops — photos, measurement reports, per-job folders, folder-on-job-mint.
+```bash
+wrangler d1 execute ironwrap-bus --remote --command "SELECT envelope_id, source, status, created_at FROM envelopes ORDER BY created_at DESC LIMIT 5"
+```
 
-## 4. 🔴 A2P 10DLC — the long pole (START NOW; 1–3 weeks) — lights up SMS
-Submit brand (legal name, **CRA Business Number**, address) + campaign (customer care / lead follow-up) +
-sample messages + opt-in/STOP language. Provision a **Twilio business DID**. Then set `TWILIO_ACCOUNT_SID`
-/ `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` + `wrangler.jsonc` var `A2P_SMS_ENABLED="true"` → deploy.
-**Lights up:** the prospect-SMS leg of the instant-ack (MCTB).
+Expected: real test lead appears in D1, raw lands in R2, JobNimbus contact gets `brand:*` and `bus:*` tags, Gmail ack/owner alert sends.
 
-## 5. 🟠 Proposals (DocuSeal) — lights up `/proposal/create`
-DocuSeal account + a proposal template → set `DOCUSEAL_API_KEY` + `wrangler.jsonc` var
-`DOCUSEAL_TEMPLATE_ID` (+ `DOCUSEAL_BASE_URL` only if self-hosted) → deploy.
-**Lights up:** send proposals for e-signature.
+## 2. Email And DNS
 
-## 6. 🟠 QuickBooks — lights up `/webhook/quickbooks`
-Set `QB_WEBHOOK_TOKEN` (Intuit verifier token); point the QuickBooks Online webhook at
-`.../webhook/quickbooks`. (Full QB↔JobNimbus status sync also needs QB OAuth — a follow-up build.)
-**Lights up:** invoice/payment events captured + audited.
+- [x] Google Workspace is primary for IronWrap inbound.
+- [x] Bus sends from `sales@ironwrapexteriors.com` for now.
+- [ ] Confirm/finish Google DKIM and DMARC monitoring for `ironwrapexteriors.com`.
+- [ ] Keep Microsoft dual-delivery rules until owner confirms the M365 mirror can be disabled.
+- [ ] Later: switch `FROM_EMAIL` from `sales@` only if the desired sender alias is verified and tested.
 
-## 7. 🔴 Security — required before any real go-live
-- **Rotate the JobNimbus API key** (`mqalwrda6zbamv2x` was shared in chat) → issue a dedicated bus key →
-  `wrangler secret put JOBNIMBUS_API_KEY`.
-- **Rotate the Cloudflare API token** (also shared in chat).
-- Optionally rotate `INGEST_TOKEN` / `ADMIN_TOKEN` (regenerate → re-set → update the forwarder).
+Verify: `POST /admin/reconcile` with `ADMIN_TOKEN` and confirm the digest reaches owner + backup.
 
-## 8. 🟠 JobNimbus config (UI)
-- Add **Lead Sources**: `website, gbp, ad, referral, manual, phone` (then source becomes reportable).
-- Add custom fields: `brand` (ironwrap|iroof), `envelope_id` (optional).
-- **Hard-delete** the archived `ZZZ … DELETE ME` test contacts (api1 has no delete).
+## 3. Google Drive Job Files
 
-## 9. 🔴 Compliance gate (hard launch blocker) — lawyer review
-Get `docs/COMPLIANCE-NOTICES.md` reviewed/approved → publish privacy notice on both brand sites · web-form
-consent · AI/recording notice · CASL unsubscribe tested · DNCL policy. **Nothing texts/calls before this + A2P.**
+- [x] Worker can file photos and measurement reports to Google Drive Shared Drives.
+- [ ] Point Jotform Jobsite Photo form at `POST /ingest/photo`.
+- [ ] Point the measurement/report feed at `POST /ingest/measurement` only after deciding whether Make or the Worker owns that flow.
+- [ ] Migrate historical OneDrive files to Google Drive using `docs/DRIVE-STRUCTURE-AND-MIGRATION.md`.
 
-## 10. 🟠 Phone AI (AssistAI) — gated
-Configure AssistAI → run the scored eval (`docs/ASSISTAI-EVAL.md`, **≥85%, 0 catastrophic**) before production.
+Verify: photo/report test returns `uploaded > 0` and lands under the JobNimbus job-number folder.
 
----
+## 4. A2P / Engage SMS
 
-## Everything above is a blocker on *your* accounts / decisions / lawyer — not on code.
-**Already done (no action needed):** bus deployed (D1/R2/queues/cron/secrets) · all ingest/admin/proposal/
-webhook endpoints built + verified · brand tagging · GHL→JobNimbus rescue (103 contacts) · 26 tests passing.
+- [ ] Subscribe/configure JobNimbus Engage.
+- [ ] Submit A2P 10DLC / Canadian carrier registration with legal name, CRA Business Number, address, website, opt-in language, and samples.
+- [ ] Do not add Twilio SMS secrets to the Worker. Twilio is only for owning a portable voice DID if needed.
 
-**Fastest path to first real value:** Step 0 → Step 1 (email) → Step 2 (lead capture). That alone makes a
-real lead travel website → owned store → JobNimbus with an instant-ack — the spec's keystone, live.
+Verify: after approval, Engage can send/receive an opt-in transactional SMS and STOP is honored.
+
+## 5. QuickBooks
+
+- [ ] Set `QB_WEBHOOK_TOKEN`.
+- [ ] Point QuickBooks Online webhook to `POST /webhook/quickbooks`.
+- [ ] Enable QuickBooks Payments if that is the chosen invoice payment path.
+- [ ] Follow-up build only when needed: QB OAuth read path to mirror invoice/payment status back to JobNimbus.
+
+Verify: signed webhook returns `{ ok: true }`; wrong `intuit-signature` returns 401.
+
+## 6. JobNimbus Admin
+
+- [ ] Rotate the shared JobNimbus API key and store the dedicated bus key with `wrangler secret put JOBNIMBUS_API_KEY`.
+- [ ] Confirm plan limits: automation count, integration count, Engage availability.
+- [ ] Add/report Lead Sources: `website`, `gbp`, `ad`, `referral`, `manual`, `phone`.
+- [ ] Add optional custom fields: `brand`, `envelope_id`, consent basis/date/source.
+- [ ] Hard-delete archived `ZZZ ... DELETE ME` contacts in the UI.
+
+## 7. Security And Compliance
+
+- [ ] Confirm Cloudflare token rotation and old-token invalidation.
+- [ ] Publish lawyer-approved privacy and consent notices on both brand sites.
+- [ ] CASL unsubscribe/STOP tested before any automated SMS.
+- [ ] AI/call-recording notice approved before AssistAI.
+- [ ] Vendor register, DPAs/ZDR, retention schedule, breach playbook, and access hardening complete.
+
+## 8. Phone AI
+
+- [ ] Configure AssistAI only after lead capture and SMS/compliance basics are under control.
+- [ ] Run `docs/ASSISTAI-EVAL.md`; pass threshold is >=85% and zero catastrophic failures.
+
+## Fastest Path To First Real Value
+
+1. Feed one real website or Make lead into `/ingest/website`.
+2. Confirm D1/R2/JobNimbus/Gmail proof.
+3. Start A2P/Engage in parallel.
+4. Wire Jotform photos and QuickBooks webhook after the lead spine is visibly operating.

@@ -22,10 +22,11 @@ Shipping it? See **[DELIVERY-PLAN.md](./DELIVERY-PLAN.md)** — the phased roadm
 
 ## Status
 
-- **Spec:** complete and reality-aligned (JobNimbus spine; GHL declined/experimental; OneDrive +
-  Microsoft 365; two brands; QuoteLock removed).
-- **Bus:** builds + tests green; JobNimbus adapter verified against the live API; write path gated
-  until an approved test write.
+- **Spec:** mostly complete, with the current direction locked in `final-spec-pack/00`:
+  JobNimbus spine, Cloudflare owned store, Google Workspace/Drive, QuickBooks Payments,
+  two brands, QuoteLock removed.
+- **Bus:** deployed/buildable; tests green; JobNimbus write path enabled; Gmail instant-ack
+  and Google Drive filing are the current code path.
 
 ## Housekeeping
 

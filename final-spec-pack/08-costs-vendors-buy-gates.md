@@ -14,7 +14,7 @@ scenario dual-writes to first.
 
 | Scenario | Monthly Estimate | One-Time Estimate | Recommendation |
 |---|---:|---:|---|
-| Existing-subscription first deliverable | ~CAD $120-$220/mo incremental (loaded) | ~CAD $700-$2,100 setup (**"$0 new vendor setup" is false** — Cloudflare, the ESP, the owned Twilio number, and (if adopted) DocuSeal are new vendor lines) | Default first delivery (keystone: decline GHL trial, stand up JN spine + Make/Workers bus + owned store) |
+| Existing-subscription first deliverable | ~CAD $120-$220/mo incremental (loaded) | ~CAD $700-$2,100 setup (**"$0 new vendor setup" is false** — Cloudflare, owned voice number if needed, and any later DocuSeal line are real vendor lines) | Default first delivery (keystone: retire GHL routes after proof, stand up JN spine + Make/Workers bus + owned store) |
 | Low-volume operating spine | CAD $900-$1,900 all-in, or CAD $50-$350 incremental if current subscriptions are already paid | CAD $400-$1,500 (setup) | Best immediate target |
 | Lean build/test with AI pilot | CAD $1,100-$2,200 | CAD $400-$2,000 | Use during active build/config/test |
 | Expansion after volume proof | CAD $3,500-$5,000 | CAD $8,000-$12,000 | Only if Renoworks/report volume is justified |
@@ -27,10 +27,10 @@ scenario dual-writes to first.
 | JobNimbus (seats) | Already subscribed; USD ~$200-$300/mo headline at current seats; **budget ~1.8× headline all-in** with add-ons | Operational CRM / job-truth; keep and configure. **Audit the tier/seats:** if the shop fits the "Growing" tier (~USD $349/mo ≈ CAD ~$475 loaded) it is *below* the ~CAD $660 estimate; the real constraint is the 10-automation / 5-integration cap. Cheapest legitimate saving here is a tier/seat audit, NOT a CRM swap |
 | JobNimbus Engage (2-way SMS) | USD ~$49/mo + SMS usage | P0 for 2-way SMS; fresh A2P 10DLC + Canadian carrier registration required first (~1-3 wks lead time) |
 | JobNimbus AssistAI (phone AI) | USD ~$0.15/voice-min, metered ≈ $15-30/mo at low volume; **enforce a hard monthly minute cap / budget alert** (cap = owner-set, e.g. ~500 min/mo; verify AssistAI's native cap support — it bills pure-metered, so if there is no native cap, enforce via usage monitoring + an overage alert; keeps the spam/robocall buffer rationale) | P0 native receptionist behind a written scored eval gate |
-| Email — brand mailboxes (**Microsoft 365** for IronWrap `quote@ironwrapexteriors.com`; **Gmail** for iRoof `info@iroofalberta.ca`) | Already subscribed; **$0 incremental**; SPF/DKIM/DMARC + bounce monitoring on each domain | P0 — JN native email is unreliable; send transactional/instant-ack/notification email from the brand mailboxes. A dedicated transactional ESP (Resend ≈ $0 / Postmark ~$15) is **deferred** — add only for bulk nurture/review deliverability. Self-hosting the send path stays rejected |
+| Email — Google Workspace brand mailboxes | Already set up; **$0 incremental** beyond Workspace; SPF/DKIM/DMARC + bounce monitoring on each domain | P0 — JN native email is unreliable; send transactional/instant-ack/notification email from Google Workspace. Dedicated ESP is deferred; add only for bulk nurture/review deliverability. Microsoft 365 is a temporary mirror during migration |
 | Twilio Canadian DID (owned number) | USD ~$1/mo per number + per-minute/per-SMS usage | Own the DID so AssistAI↔Retell swaps are config-only |
 | Jotform (structured field forms) | USD ~$39/mo (paid tier for offline app / more submissions) | P0 host of the "Jobsite Photo" form (geo + photos); reuses already-paid Jotform — $0 incremental for jobsite photos |
-| Jotform "Jobsite Photo" form (jobsite photos/geo) | **$0 incremental** (reuses paid Jotform) | **P0 default** — JN job picker + Geolocation widget (device GPS at submit, offline-capable in Jotform Mobile App) + multi-photo upload + timestamp → Make → OneDrive/JN + owned store. EXIF-on-iOS is stripped on-device, so device-GPS-at-capture is the mechanism (not photo EXIF) |
+| Jotform "Jobsite Photo" form (jobsite photos/geo) | **$0 incremental** (reuses paid Jotform) | **P0 default** — JN job picker + Geolocation widget (device GPS at submit, offline-capable in Jotform Mobile App) + multi-photo upload + timestamp → Make → Google Drive/JN + owned store. EXIF-on-iOS is stripped on-device, so device-GPS-at-capture is the mechanism (not photo EXIF) |
 | Design tooling (free Canva + free Affinity) | CAD $0 | **Free Canva + free Affinity** (Designer/Photo/Publisher went 100% free Oct 2025, Canva-owned) covers a roofer's marketing/proposal graphics; Canva Pro (~CAD $18/mo) only if brand-kit/background-remover/team features are needed; reject full Adobe Creative Cloud (~CAD $92/mo) |
 | Cloudflare Pages / D1 / R2 (owned store) | ~USD $0 at this volume (free tiers) | Owned system of record; dual-write FIRST, then JN |
 | Cloudflare Workers (+ D1 + R2 + Queues + Cron bus option) | ~CAD $7/mo (Workers+D1+R2+Queues+Cron bus) | Relay/health-check beyond D1/R2/Pages; **can also host the integration bus** (Queues = native retry + dead-letter, Cron = daily reconcile, dual-write collapses to a single write) vs scaling Make on its credit model. **Hybrid:** Worker does the heavy lifting, keep a Make Core seat (~$9/mo) for native connectors + observability. Caveat: adds owned code a no-devops shop must maintain — name a build/maintenance owner |
@@ -38,7 +38,7 @@ scenario dual-writes to first.
 | Google Local Services Ads | Pay-per-lead, category/location dependent | Do not spend until intake QA passes |
 | Make (integration bus) | **Already on Core** (~$9/mo USD ≈ CAD ~$13; credit model, Aug 2025; 10,000 ops/mo ceiling) — **no tier bump needed** at this volume; watch the ops ceiling as scenarios grow | **Critical infra**, not plumbing — keep, clean, monitor. The bus can alternatively run on Cloudflare Workers (hybrid keeps the Make Core seat) — see the Cloudflare Workers row |
 | QuickBooks | Already subscribed; CAD $80-$200/mo planning value | Accounting truth |
-| Microsoft 365 (OneDrive + Outlook) | Already subscribed | **Storage authority** (OneDrive job-folder archive) + IronWrap email sender. A secondary Google Workspace account exists (agency / iRoof Gmail) but is not the storage authority |
+| Microsoft 365 (legacy mirror) | Already subscribed | Temporary mailbox mirror / OneDrive migration source only. Retire after Google Workspace/Drive migration proof and owner signoff |
 | RoofRuler | Already subscribed/used; otherwise CAD ~$40/report | Pay per qualified report only |
 | OCR ladder (Cloudflare `toMarkdown()` → Mistral OCR) | CAD $0 first pass (Cloudflare `toMarkdown()`, free Workers AI binding); Mistral OCR ~$2-$4 per 1,000 pages → cents/mo at this volume, only for image-heavy/scanned/handwritten/layout-sensitive docs | Free on-stack first pass; Mistral as the cheap paid fallback only (do NOT self-host an OCR engine — needs a GPU box) |
 
@@ -56,7 +56,7 @@ the GHL note below). The two numbers answer different questions.
 | JobNimbus seats (×1.8 model) | ~$250 | ~CAD $660 |
 | JobNimbus Engage + SMS usage | ~$49 + usage | ~CAD $90-$140 |
 | AssistAI minutes (+ spam buffer) | ~$15-30 | ~CAD $35-$70 |
-| Email — Microsoft 365 brand mailboxes (existing; dedicated ESP deferred) | existing | ~CAD $0 incremental |
+| Email — Google Workspace brand mailboxes (existing; dedicated ESP deferred) | existing | ~CAD $0 incremental |
 | Twilio Canadian DID + usage | ~$1 + usage | ~CAD $5-$30 |
 | Jotform (paid tier; hosts "Jobsite Photo" form — $0 incremental for photos/geo) | ~$39 | ~CAD $55 |
 | Jotform "Jobsite Photo" form (photos/geo) | $0 incremental | ~CAD $0 (reuses Jotform above) |
@@ -87,8 +87,8 @@ $135-$415/mo of GHL cost** entirely. The honest **first-deliverable incremental 
 ~CAD $120-$220/mo** (loaded, incl. ~1.40 FX + GST). The driver is **JobNimbus Engage
 (~CAD $90-$140 loaded with SMS usage)**; the rest is small — Twilio DID + usage
 (~CAD $5-$30), a Make Core seat or the bus on Cloudflare Workers (~CAD $20-$30), and
-the A2P monthly campaign fee (~CAD $5-$15). Cloudflare D1/R2/Workers ≈ $0, the ESP ≈
-$0 (Resend's free tier likely covers low volume), design = $0 (free Canva + free
+the A2P monthly campaign fee (~CAD $5-$15). Cloudflare D1/R2/Workers ≈ $0, dedicated ESP = deferred,
+design = $0 (free Canva + free
 Affinity). **AssistAI minutes are a Phase-2 (post-eval) cost (~CAD $35-$70 loaded when
 live), not part of the first-deliverable incremental.** This is distinct from the
 **~CAD $940-$1,310/mo all-in run-rate** above (existing subscriptions repriced from
@@ -131,7 +131,7 @@ Floor fallback always = voicemail → JobNimbus lead + human callback.
 | DocuSeal (OSS e-sign escape hatch) | Managed DocuSeal Cloud ~CAD $30/mo, or one self-hosted container | **Escape hatch if JobNimbus native e-sign / HTML+PDF fails the workflow** — open-source (AGPLv3), legally valid in Canada (audit-trail PDF; PIPEDA / Alberta ETA recognize ordinary commercial e-signatures), webhooks in the free edition fire completion back through Make → JobNimbus. **Permanently retires the PandaDoc/DocuSign line.** Caveat: AGPL — deploy stock and integrate via API/webhook (don't fork); signer page shows DocuSeal branding unless Pro |
 | Acrobat Pro (standalone) | future-maybe | Only if a real fillable-PDF gap remains (not a structured-capture tool) |
 | Affinity (Canva-owned, now free) | CAD $0 | Future-maybe for advanced design |
-| Moneris | Transaction-fee based; Interac debit ~CAD $0.10, credit-card % fees | Add only after accounting/payment policy is approved |
+| Moneris | Transaction-fee based | Not the default invoice path. Consider only for future in-person terminal/reconciliation needs |
 | FinanceIT | Dealer fee / financing economics vary by program | Add only after customer wording and dealer economics are approved |
 | WooCommerce/hosting | CAD ~$35/mo planning note | Deferred; not needed for Task 1 |
 
@@ -141,8 +141,8 @@ Floor fallback always = voicemail → JobNimbus lead + human callback.
 |---|---|---|
 | Cash / cheque / draft / direct deposit | Lowest processing cost | Allowed if office/accounting approves wording and tracking |
 | Interac e-Transfer | Low or no processing cost depending bank setup | Preferred low-cost customer payment path if operationally accepted |
-| Moneris Interac debit | Per-transaction fee based | Approval required; only if in-person/card terminal process is needed |
-| Moneris credit card | Percentage fee based | Offer only with approved fee policy and QuickBooks/payment reconciliation |
+| Moneris Interac debit | Per-transaction fee based | Deferred; only if in-person/card terminal process is needed |
+| Moneris credit card | Percentage fee based | Deferred; QBO Payments is the default invoice payment path |
 | FinanceIT | Financing/dealer economics | Offer only after approved program, scripts, and compliance wording |
 
 Payment methods should appear in customer-facing proposals only after the owner
@@ -153,7 +153,7 @@ and accounting confirm wording, fees, reconciliation, and staff handling.
 | Need | Free Or Minimum | Low-Cost Paid | Deferred Purchase |
 |---|---|---|---|
 | Owned data store | Cloudflare D1 + R2 + Pages free tier (~$0) | Cloudflare paid tiers at volume | Custom relational store |
-| Storage | Cloudflare R2 / existing OneDrive | Workspace/Microsoft paid storage if capacity requires | Custom object storage |
+| Storage | Cloudflare R2 raw + Google Drive Shared Drives | Workspace paid storage if capacity requires | Custom object storage |
 | OCR | AppliCad XML, PDF text extraction, Cloudflare `toMarkdown()` (free Workers AI binding, replaces standalone Tesseract for text PDFs) | Mistral OCR (~$2-$4 per 1,000 pages) only for image-heavy/scanned/handwritten/layout-sensitive docs | Google Document AI if preferred (do NOT self-host an OCR engine — needs a GPU box) |
 | LLM drafting | Manual templates or de-identified prompts | Cheap models for non-sensitive text; Claude when structured field extraction/reasoning is needed | Dedicated paid LLM/vendor with privacy review |
 | E-sign | JobNimbus native e-sign / HTML+PDF | DocuSeal (OSS; managed Cloud ~CAD $30/mo or one self-hosted container) | PandaDoc/DocuSign (retired — DocuSeal is the escape hatch) |

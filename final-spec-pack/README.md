@@ -1,6 +1,6 @@
 # IronWrap Internal OS Final Spec Pack
 
-Date: 2026-06-27 (re-architected 2026-06-28: GHL trial declined → JobNimbus spine).
+Date: 2026-06-27 (re-architected 2026-06-28; updated 2026-07-07 for Google Workspace/Drive).
 
 This pack is the final implementation specification for IronWrap's internal
 operating system. It is not the external metal-layout SaaS idea. It covers the
@@ -8,13 +8,13 @@ internal system we should set up, configure, build, test, and ship for IronWrap.
 
 ## Final Direction
 
-Consolidate onto JobNimbus and decline the GoHighLevel trial. Implement the
-operating spine first:
+Consolidate onto JobNimbus and the owned Cloudflare bus. Retire GoHighLevel as the
+front door after the experimental/import-rescue paths are replaced.
 
 - JobNimbus as the operational CRM, job-truth, and lead front door (customer,
-  property, job, stage, task, owner, job number). GHL was trial-evaluated only
-  and is being declined before any production use; nothing to migrate — end the
-  trial.
+  property, job, stage, task, owner, job number). GHL was experimental/import
+  scaffolding; the contact rescue has run, and remaining live routes should be
+  retired only after the bus replacement path is proven.
 - A thin owned data layer (Cloudflare D1 + R2) is the system of record: Make
   dual-writes every lead/event to it first, then to JobNimbus. JobNimbus is a
   consumer of IronWrap's data, not the owner.
@@ -23,57 +23,47 @@ operating spine first:
   so no lead is ever silently lost.
 - Instant-response / missed-call-text-back (MCTB) is the headline deliverable:
   every call or form gets a touch in under a minute, 24/7.
-- JobNimbus Engage for two-way SMS; email sends from each brand's own mailbox —
-  IronWrap via Microsoft 365 (`quote@ironwrapexteriors.com`), iRoof Alberta via
-  Google/Gmail (`info@iroofalberta.ca`) — both with SPF/DKIM/DMARC on their
-  domains. Microsoft 365 is the default sender for transactional, instant-ack,
-  RoofRuler, and notification email. JobNimbus native email stays unused
-  (unreliable). A dedicated transactional ESP (e.g., Resend) is DEFERRED — add
-  only if/when high-volume nurture or review-request sequences need bulk-grade
-  deliverability that mailbox email isn't built for.
+- JobNimbus Engage for two-way SMS after A2P/carrier approval; email sends from
+  Google Workspace brand mailboxes. IronWrap currently uses `sales@` with
+  `info@`/`quote@` aliases, mirrored to Microsoft 365 during migration. JobNimbus
+  native email stays unused. A dedicated transactional ESP is deferred.
 - Phone AI = native JobNimbus AssistAI, behind a written scored eval gate;
   voicemail-to-lead floor; managed Retell only if AssistAI fails the gate. No
   custom multi-vendor voice stack; Google Voice is not usable (no media API).
 - Field photos/geo = the Jotform "Jobsite Photo" form (JobNimbus job picker +
   Geolocation widget capturing device GPS at submit, coordinates-only, offline-capable
   in the Jotform Mobile App; multi-photo upload, auto timestamp, offline-queued →
-  webhook → Make → OneDrive + JobNimbus + owned store; $0 incremental). iOS
+  webhook → Make → Google Drive + JobNimbus + owned store; $0 incremental). iOS
   strips photo GPS by default, and direct camera-capture uploads lose metadata
   regardless — so capture device GPS at submit; don't depend on EXIF. Jotform for
   structured forms when a workflow needs it. NaturalForms dropped.
 - Free Canva + free Affinity for design/marketing graphics — not full Adobe
   Creative Cloud (Canva Pro only if brand-kit/team features are needed).
-- OneDrive (Microsoft 365) as the first storage authority; QuickBooks for accounting truth.
+- Google Drive (Google Workspace) as the first storage authority; QuickBooks for accounting truth.
 - Deterministic document extraction first, free OCR second, paid OCR only when
   needed.
-- No GHL migration: GHL was trial-only and is declined, so there is nothing to
-  migrate. Independent of GHL, complete before automated texting goes live: a
+- GHL retirement is a cutover, not a rewrite: keep the existing working routes
+  until `/ingest/website` is fed by website/server-side forwarding or one Make UI
+  bridge, then retire GHL paths. Complete before automated texting goes live: a
   fresh A2P 10DLC + Canadian carrier registration for JobNimbus Engage SMS (lead
-  time ~1–3 wks); provision/own the business phone number for AssistAI/Engage in
-  Twilio so it stays portable; maintain the CASL consent ledger in JobNimbus
-  going forward; and verify the existing website forms' current post destinations
-  and point them at the Make bus.
+  time ~1–3 wks); maintain the CASL consent ledger in JobNimbus going forward.
 - Security/access hardening last, after build/config/test, with basic access
   containment from day one.
 
-The first deliverable reuses Make (on Core, already subscribed), Microsoft 365,
-Google, RoofRuler, QuickBooks, JobNimbus, and Jotform, which IronWrap already
-pays for. The first-deliverable incremental is ~CAD $120–220/mo (loaded, incl.
+The first deliverable reuses Make (on Core, already subscribed), Google Workspace,
+RoofRuler, QuickBooks, JobNimbus, and Jotform, which IronWrap already pays for or
+has set up. The first-deliverable incremental is ~CAD $120–220/mo (loaded, incl.
 ~1.40 FX + GST), and is Engage-driven. The driver is JobNimbus Engage (~CAD
 $90–140 loaded with SMS usage); the rest is small — Twilio DID + usage (~CAD
-$5–30) and the A2P monthly campaign fee (~CAD $5–15). Email = existing Microsoft
-365 ($0 incremental) and storage = existing OneDrive ($0 incremental); Make is on
-the existing Core plan, and the bus can run on Cloudflare Workers (D1/R2/Workers ≈
-$0). A dedicated ESP is deferred (≈ $0 until adopted; Resend's free tier likely
-covers low volume if/when needed), design = $0 (free Canva + free Affinity). AssistAI minutes are a Phase-2 (post-eval) cost (~CAD $35–70
+$5–30) and the A2P monthly campaign fee (~CAD $5–15). Email = Google Workspace
+and storage = Google Drive Shared Drives; Make is on the existing Core plan, and
+the bus can run on Cloudflare Workers (D1/R2/Workers ≈ $0). A dedicated ESP is
+deferred, design = $0 (free Canva + free Affinity). AssistAI minutes are a Phase-2 (post-eval) cost (~CAD $35–70
 loaded when live), not part of the first-deliverable incremental. One-time setup
 ~CAD $700–2,100 (A2P registration, DID provisioning, Make/Workers bus build
-labor, ESP domain auth, form re-pointing, training). "$0 new vendor setup" is
-false — Cloudflare, the ESP, the owned Twilio number, and (if adopted) DocuSeal
-are new vendor lines. GHL was never adopted, so this still avoids ~CAD
-$135–415/mo of GHL cost; the honest pitch is "simpler, more portable, and avoids
-GHL's cost," not a dramatic saving. Renoworks, Paradigm, CallRail, paid OCR, and
-any custom voice stack remain gated until a tested workflow proves the need.
+labor, domain auth, form re-pointing, training). Renoworks, Paradigm, CallRail,
+paid OCR, DocuSeal, and any custom voice stack remain gated until a tested workflow
+proves the need.
 
 ## Pack Index
 
@@ -116,10 +106,9 @@ Task 1 is shipped only when:
   without manual retyping.
 - AssistAI (behind the eval gate) can qualify, book, update CRM records,
   summarize, trigger follow-up, and escalate; MCTB covers missed/after-hours calls.
-- GHL trial is ended (nothing to migrate); A2P 10DLC + Canadian carrier
-  registration is approved, the business number is provisioned and owned in
-  Twilio, the CASL consent ledger is live in JobNimbus, and website forms post to
-  the Make bus.
+- GHL lead routes are retired after replacement proof; A2P 10DLC + Canadian
+  carrier registration is approved, the CASL consent ledger is live in JobNimbus,
+  and website forms post to the bus.
 - Staff can run test jobs without developer support.
 - Every critical automation has an owner, test record, kill switch, failure alert,
   and dead-letter path.

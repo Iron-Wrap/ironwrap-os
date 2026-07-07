@@ -19,9 +19,9 @@ that "built" became "operating."
 | B1 | Same person twice within 72h | second = `duplicate` (`dup_of` set); **one** JN contact |
 | B2 | Replay same envelope | JN contact reused via bus tag; no duplicate |
 
-## C. Instant-ack (email now; SMS post-A2P)
+## C. Instant-ack (Gmail now; SMS in Engage post-A2P)
 | C1 | Lead with email | prospect "we got it" email + owner alert **<60s** |
-| C2 | Lead with phone (A2P on) | prospect SMS sent; **STOP** honored |
+| C2 | Lead with phone (A2P/Engage on) | prospect SMS sent from JobNimbus Engage; **STOP** honored |
 | C3 | Mailer misconfigured | lead still captured + pushed (email is best-effort, non-fatal) |
 
 ## D. Reconciliation & heartbeat
@@ -30,13 +30,13 @@ that "built" became "operating."
 | D3 | Force a JN failure | envelope → `dead`; owner alerted; `POST /admin/replay` recovers |
 
 ## E. Field & documents (Phase 3)
-| E1 | Jotform photo w/ job # | files into OneDrive job folder (keyed by JN job number) |
-| E2 | RoofRuler report w/ job # | report filed to OneDrive; measurements captured |
-| E3 | Create a routable lead | OneDrive job folder auto-created on job mint |
+| E1 | Jotform photo w/ job # | files into Google Drive job folder (keyed by JN job number) |
+| E2 | RoofRuler report w/ job # | report filed to Google Drive or current Make-owned report folder; measurements captured |
+| E3 | Create a routable lead | Google Drive job folder auto-created on job mint |
 | E4 | Unreachable photo URL | skipped + logged; raw retained; other photos still file |
 
 ## F. Proposals & finance
-| F1 | `POST /proposal/create` | DocuSeal submission sent; sign URL returned |
+| F1 | JobNimbus native e-sign proposal | proposal/signature flow works in JobNimbus; DocuSeal remains N/A unless adopted later |
 | F2 | QuickBooks invoice/payment event | `/webhook/quickbooks` verifies signature + records event |
 | F3 | Wrong `intuit-signature` | 401 |
 

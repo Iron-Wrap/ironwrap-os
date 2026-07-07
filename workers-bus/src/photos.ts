@@ -1,8 +1,8 @@
 // photos.ts — Jotform "Jobsite Photo" intake (Phase 3, spec 02 §2B / 07).
 //
 // A field tech submits photos against a JobNimbus job number → raw to R2 FIRST → each photo is
-// filed into that job's OneDrive folder (the file authority). OneDrive creds are optional: with
-// none, the raw submission is still stored + audited, and the photos sync once Graph is connected.
+// filed into that job's Google Drive folder (the file authority). Google creds are optional: with
+// none, the raw submission is still stored + audited, and the photos sync once Drive is connected.
 
 import { newEnvelopeId, parseBody } from "./core.ts";
 import * as store from "./store.ts";

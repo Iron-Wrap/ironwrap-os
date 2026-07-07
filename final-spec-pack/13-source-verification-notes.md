@@ -2,6 +2,9 @@
 
 Date checked: 2026-06-27
 
+> Historical research notes. Current stack decisions are in `00-final-decisions.md`;
+> do not treat older Moneris/ESP/OneDrive notes here as implementation instructions.
+
 These notes capture the source checks used while finalizing this pack. Pricing
 and vendor features change often, so re-check before purchase or production
 contracting.
@@ -43,7 +46,7 @@ The GHL and Vapi pricing rows are declined/excluded vendors, kept for provenance
 As of 2026-06-28 the experimental GHL-based Make setup (org "IronWrap
 Exteriors", Make Core plan, team "My Team", ~16 scenarios) already contains, on
 the experimental GHL hub: a live RoofRuler report intake (Make AI Extract +
-OneDrive), OneDrive folder automation keyed by lead/job number, GHL->JobNimbus
+OneDrive), Google Drive folder automation keyed by lead/job number, GHL->JobNimbus
 import scenarios (the in-progress cutover; note `record_type_name` must be an
 account-valid value — contact `Customer`, job `Retail`; `"Lead"` is rejected
 400), a Jotform "Completion Form" workflow (scaffolded, inactive), and inactive

@@ -34,8 +34,8 @@ proves staff can recover.
 | Cancel/reschedule | Calendar and task updated |  |
 | Job qualification | JobNimbus job updated and owner assigned |  |
 | Folder creation | One folder created after job number exists |  |
-| Email deliverability seed test | Seed/inbox-placement test passes via the Microsoft 365 brand mailboxes; SPF/DKIM/DMARC verified; bounce monitoring active |  |
-| Jobsite Photo form | Jotform "Jobsite Photo" form captures device GPS (Geolocation widget) offline, correct job picked, multi-photos + timestamp; webhooks Make -> lands in correct JobNimbus job + OneDrive folder; no duplicate job |  |
+| Email deliverability seed test | Seed/inbox-placement test passes via the Google Workspace brand mailboxes; SPF/DKIM/DMARC verified; bounce monitoring active |  |
+| Jobsite Photo form | Jotform "Jobsite Photo" form captures device GPS (Geolocation widget) offline, correct job picked, multi-photos + timestamp; webhooks Make -> lands in correct JobNimbus job + Google Drive folder; no duplicate job |  |
 | Jotform structured form (if active) | Completed structured form (photo/file, drawn signature, GPS) webhooks Make -> JobNimbus job; no duplicate job |  |
 | RoofRuler email intake | Incoming RoofRuler PDF is matched, archived, extracted or flagged |  |
 | Measurement upload | Extracted or review-needed flag |  |
@@ -108,12 +108,12 @@ Task 1 is accepted when:
 - Qualified leads reach JobNimbus.
 - JobNimbus owns job number and stage.
 - Folder creation is idempotent.
-- Jobsite photos: the Jotform "Jobsite Photo" form (sole jobsite-photo/geo tool, $0 incremental) captures device GPS offline + correct job and lands in the right JobNimbus job + OneDrive folder. Jotform structured forms (if active) webhook Make -> JobNimbus correctly.
+- Jobsite photos: the Jotform "Jobsite Photo" form (sole jobsite-photo/geo tool, $0 incremental) captures device GPS offline + correct job and lands in the right JobNimbus job + Google Drive folder. Jotform structured forms (if active) webhook Make -> JobNimbus correctly.
 - RoofRuler email reports are matched, archived, and reviewed.
 - Appointments work (JobNimbus calendar; native booking).
 - AssistAI passes the written scored eval gate (>=85% capture+routing, zero catastrophic failures); voicemail floor fallback verified.
-- Microsoft 365 brand-mailbox email passes the seed/inbox-placement test; SPF/DKIM/DMARC + bounce monitoring active.
-- GHL was trial-evaluated only and is being declined before any production use; nothing to migrate — end the trial. Fresh A2P 10DLC + Canadian carrier registration approved, business number owned in Twilio, "messaging is live" smoke test passes, CASL consent ledger maintained in JobNimbus going forward, and website form post destinations verified/pointed at the Make bus.
+- Google Workspace brand-mailbox email passes the seed/inbox-placement test; SPF/DKIM/DMARC + bounce monitoring active; temporary Microsoft mirror rules are either verified or disabled after migration close.
+- GHL lead routes are retired after replacement proof. Fresh A2P 10DLC + Canadian carrier registration approved, Engage "messaging is live" smoke test passes, CASL consent ledger maintained in JobNimbus going forward, and website form post destinations verified/pointed at the bus.
 - Proposal/PDF flow works.
 - Contract/signature path works.
 - Measurement extraction or review flag works.

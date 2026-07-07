@@ -1,5 +1,9 @@
 # IronWrap Final Clean Proposal - Operating System and Implementation Backlog
 
+> Historical proposal. The repo has since moved to the Google Workspace/Drive Worker path.
+> Use `final-spec-pack/00-final-decisions.md`, `docs/ACTIVATION-CHECKLIST.md`, and
+> `SETUP-CHECKLIST.md` for current implementation truth.
+
 Date: 2026-07-01
 
 Audience: Ivan, Ilia, implementation agents, and any vendor/operator helping IronWrap.

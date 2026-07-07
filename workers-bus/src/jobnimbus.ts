@@ -19,7 +19,7 @@ const JN_BASE = "https://app.jobnimbus.com/api1";
 export interface JnResult {
   contactId: string;
   jobId?: string;
-  jobNumber?: string; // JN human job number (for the OneDrive folder), set only on a fresh job
+  jobNumber?: string; // JN human job number (for the Google Drive folder), set only on a fresh job
   reused: boolean;
 }
 
@@ -100,7 +100,7 @@ export async function pushToJobNimbus(env: Env, rec: EnvelopeRecord): Promise<Jn
         tags: ["ironwrap-bus", busTag].concat(rec.intent_queue ? [`queue:${rec.intent_queue}`] : []),
       });
       jobId = String(job.jnid ?? "") || undefined;
-      jobNumber = job.number != null ? String(job.number) : undefined; // JN job number → OneDrive folder
+      jobNumber = job.number != null ? String(job.number) : undefined; // JN job number -> Google Drive folder
     }
   }
   return { contactId, jobId, jobNumber, reused };

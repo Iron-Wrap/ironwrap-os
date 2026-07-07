@@ -1,5 +1,8 @@
 # IronWrap End-To-End Summary And Plan
 
+> Historical planning reference. Use `final-spec-pack/00-final-decisions.md`,
+> `docs/ACTIVATION-CHECKLIST.md`, and `SETUP-CHECKLIST.md` for current operating truth.
+
 Date: 2026-06-27  
 Scope: notes from the Ilia discussion, local files in `/Users/ivan/Code/ironwrap`,
 and current public web/vendor research. No shared credentials were used.

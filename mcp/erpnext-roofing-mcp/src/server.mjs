@@ -14,6 +14,20 @@ const GATE_FIELDS = [
   "modified",
 ];
 
+const HERMES_RUN_FIELDS = [
+  "name",
+  "run_id",
+  "run_ts",
+  "agent_role",
+  "capability_level",
+  "tool_name",
+  "approval_status",
+  "result_status",
+  "roof_job",
+  "lead_envelope",
+  "modified",
+];
+
 export function configFromEnv(env = process.env) {
   const baseUrl = env.ERPNEXT_BASE_URL?.replace(/\/+$/, "");
   const apiKey = env.ERPNEXT_API_KEY;
@@ -96,6 +110,31 @@ export function buildServer(config) {
     async ({ limit = 25 }) => text(await erpGet(config, resourceListPath("Production Gate State", {
       fields: GATE_FIELDS,
       filters: [["Production Gate State", "state", "=", "Blocked"]],
+      limit,
+      orderBy: "modified desc",
+    }))),
+  );
+
+  server.registerTool(
+    "get_hermes_run",
+    {
+      title: "Get Hermes Run",
+      description: "Read one Hermes Run audit record by run_id/name.",
+      inputSchema: { run_id: z.string().min(1) },
+    },
+    async ({ run_id }) => text(await erpGet(config, resourcePath("Hermes Run", run_id))),
+  );
+
+  server.registerTool(
+    "list_hermes_runs_for_job",
+    {
+      title: "List Hermes Runs For Job",
+      description: "Read Hermes Run audit records linked to one Roof Job.",
+      inputSchema: { roof_job_id: z.string().min(1), limit: z.number().int().min(1).max(100).optional() },
+    },
+    async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath("Hermes Run", {
+      fields: HERMES_RUN_FIELDS,
+      filters: [["Hermes Run", "roof_job", "=", roof_job_id]],
       limit,
       orderBy: "modified desc",
     }))),

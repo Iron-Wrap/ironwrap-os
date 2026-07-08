@@ -55,4 +55,5 @@ test("resource paths encode Frappe DocTypes, names, fields, and filters", () => 
   const params = new URLSearchParams(path.split("?")[1]);
   assert.deepEqual(JSON.parse(params.get("fields")), ["name", "roof_job", "state"]);
   assert.deepEqual(JSON.parse(params.get("filters")), [["Production Gate State", "state", "=", "Blocked"]]);
+  assert.equal(resourcePath("Hermes Run", "hr_1"), "/api/resource/Hermes%20Run/hr_1");
 });

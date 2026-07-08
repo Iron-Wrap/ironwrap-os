@@ -12,6 +12,7 @@ events from the Cloudflare bus and model the first ERP operating core:
 - `Evidence Item`
 - `Proposal Evidence Pack`
 - `Production Gate State`
+- `Hermes Run`
 
 Install path once an ERPNext dev site exists:
 

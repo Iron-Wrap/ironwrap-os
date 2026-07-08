@@ -57,6 +57,20 @@ const MATERIAL_TAKEOFF_FIELDS = [
   "modified",
 ];
 
+const SUPPLIER_ORDER_FIELDS = [
+  "name",
+  "supplier_order_id",
+  "roof_job",
+  "material_takeoff",
+  "supplier",
+  "status",
+  "prepared_at",
+  "approved_by",
+  "approved_at",
+  "requested_delivery_date",
+  "modified",
+];
+
 const INSTANT_ESTIMATE_SESSION_FIELDS = [
   "name",
   "estimate_session_id",
@@ -224,6 +238,10 @@ export function materialTakeoffIdForRoofJob(roofJobId) {
   return `takeoff:${roofJobId}`;
 }
 
+export function supplierOrderIdForTakeoff(takeoffId) {
+  return `supplier:${takeoffId}`;
+}
+
 export function buildMaterialTakeoffDraft({
   roofJobId,
   takeoffId = materialTakeoffIdForRoofJob(roofJobId),
@@ -259,6 +277,49 @@ export function buildMaterialTakeoffDraft({
       "No material quantity is approved until the estimator marks the takeoff approved.",
     ].join("\n"),
     items: measurements.map(takeoffItemForMeasurement),
+  };
+}
+
+export function buildSupplierOrderDraft({
+  materialTakeoff = {},
+  supplierOrderId = supplierOrderIdForTakeoff(materialTakeoff.takeoff_id ?? materialTakeoff.name),
+  supplier,
+  requestedDeliveryDate,
+  nowIso,
+} = {}) {
+  if (!materialTakeoff.takeoff_id && !materialTakeoff.name) throw new Error("material_takeoff_id_required");
+  if (materialTakeoff.status !== "Approved") throw new Error("material_takeoff_approved_required");
+  const items = supplierOrderRowsFromTakeoff(materialTakeoff);
+  if (!items.length) throw new Error("material_takeoff_items_required");
+  const takeoffId = materialTakeoff.takeoff_id ?? materialTakeoff.name;
+  const summary = {
+    roof_job: materialTakeoff.roof_job ?? "",
+    material_takeoff: takeoffId,
+    takeoff_status: materialTakeoff.status ?? "",
+    generated_at: nowIso,
+    item_count: items.length,
+    items,
+  };
+
+  return {
+    supplier_order_id: supplierOrderId,
+    roof_job: materialTakeoff.roof_job,
+    material_takeoff: takeoffId,
+    ...(supplier ? { supplier } : {}),
+    status: "Needs Review",
+    ...(nowIso ? { prepared_at: nowIso } : {}),
+    ...(requestedDeliveryDate ? { requested_delivery_date: requestedDeliveryDate } : {}),
+    order_summary_json: JSON.stringify(summary, null, 2),
+    assumptions: [
+      "Supplier order draft is copied from an approved Material Takeoff for owner review.",
+      "Supplier, delivery date, substitutions, and availability must be confirmed before ordering.",
+    ].join("\n"),
+    exclusions: [
+      "This draft does not place an order, create a purchase order, reserve material, or contact a supplier.",
+      "Receiving, shortages, substitutions, and invoice/payment status require separate approved updates.",
+    ].join("\n"),
+    delivery_notes: "",
+    items: items.map(supplierOrderItemForTakeoffItem),
   };
 }
 
@@ -451,6 +512,31 @@ export function buildServer(config) {
     async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath("Material Takeoff", {
       fields: MATERIAL_TAKEOFF_FIELDS,
       filters: [["Material Takeoff", "roof_job", "=", roof_job_id]],
+      limit,
+      orderBy: "modified desc",
+    }))),
+  );
+
+  server.registerTool(
+    "get_supplier_order",
+    {
+      title: "Get Supplier Order",
+      description: "Read one ERPNext Supplier Order by supplier_order_id/name.",
+      inputSchema: { supplier_order_id: z.string().min(1) },
+    },
+    async ({ supplier_order_id }) => text(await erpGet(config, resourcePath("Supplier Order", supplier_order_id))),
+  );
+
+  server.registerTool(
+    "list_supplier_orders_for_job",
+    {
+      title: "List Supplier Orders For Job",
+      description: "Read Supplier Order rows linked to one Roof Job.",
+      inputSchema: { roof_job_id: z.string().min(1), limit: z.number().int().min(1).max(100).optional() },
+    },
+    async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath("Supplier Order", {
+      fields: SUPPLIER_ORDER_FIELDS,
+      filters: [["Supplier Order", "roof_job", "=", roof_job_id]],
       limit,
       orderBy: "modified desc",
     }))),
@@ -673,7 +759,7 @@ export function buildServer(config) {
           ? await erpPut(config, resourcePath("Material Takeoff", draft.takeoff_id), draft)
           : await erpPost(config, "/api/resource/Material%20Takeoff", draft);
         const after = { ...(before ?? {}), ...draft, name: draft.takeoff_id };
-        await erpPut(config, resourcePath("Hermes Run", runId), {
+        const auditError = await finalizeHermesRun(config, runId, {
           approval_status: "Executed",
           result_status: "OK",
           after_target_ids: JSON.stringify(summarizeMaterialTakeoff(after)),
@@ -684,6 +770,8 @@ export function buildServer(config) {
           upserted: true,
           operation,
           material_takeoff_id: draft.takeoff_id,
+          audit_finalized: auditError === null,
+          ...(auditError ? { audit_error: auditError } : {}),
           result,
         });
       } catch (err) {
@@ -769,13 +857,138 @@ export function buildServer(config) {
       try {
         const result = await erpPut(config, resourcePath("Material Takeoff", args.takeoff_id), patch);
         const after = { ...before, ...patch };
-        await erpPut(config, resourcePath("Hermes Run", runId), {
+        const auditError = await finalizeHermesRun(config, runId, {
           approval_status: "Executed",
           result_status: "OK",
           after_target_ids: JSON.stringify(summarizeMaterialTakeoff(after)),
           result_json: JSON.stringify(result),
         });
-        return text({ run_id: runId, updated: true, material_takeoff_id: args.takeoff_id, result });
+        return text({
+          run_id: runId,
+          updated: true,
+          material_takeoff_id: args.takeoff_id,
+          audit_finalized: auditError === null,
+          ...(auditError ? { audit_error: auditError } : {}),
+          result,
+        });
+      } catch (err) {
+        await erpPut(config, resourcePath("Hermes Run", runId), {
+          approval_status: "Failed",
+          result_status: "Error",
+          error: String(err).slice(0, 500),
+        }).catch(() => {});
+        throw err;
+      }
+    },
+  );
+
+  server.registerTool(
+    "dry_run_supplier_order",
+    {
+      title: "Dry Run Supplier Order",
+      description: "Preview a review-gated Supplier Order draft from an approved Material Takeoff without writing to ERPNext.",
+      inputSchema: {
+        material_takeoff_id: z.string().min(1),
+        supplier_order_id: z.string().min(1).optional(),
+        supplier: z.string().min(1).optional(),
+        requested_delivery_date: z.string().min(1).optional(),
+      },
+    },
+    async ({ material_takeoff_id, supplier_order_id, supplier, requested_delivery_date }) => {
+      const { draft, materialTakeoff } = await buildSupplierOrderDraftFromErp(config, material_takeoff_id, {
+        supplierOrderId: supplier_order_id,
+        supplier,
+        requestedDeliveryDate: requested_delivery_date,
+      });
+      return text({
+        would_write: false,
+        required_tool: "request_create_supplier_order",
+        target: { doctype: "Supplier Order", name: draft.supplier_order_id },
+        source: {
+          material_takeoff: materialTakeoff.takeoff_id ?? materialTakeoff.name,
+          item_count: draft.items.length,
+        },
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_create_supplier_order",
+    {
+      title: "Request Create Supplier Order",
+      description: "Approved-write: create or update one internal Supplier Order draft and record a Hermes Run audit row.",
+      inputSchema: {
+        material_takeoff_id: z.string().min(1),
+        supplier_order_id: z.string().min(1).optional(),
+        supplier: z.string().min(1).optional(),
+        requested_delivery_date: z.string().min(1).optional(),
+        request_text: z.string().min(1).max(4000),
+        approved_by: z.string().min(1),
+        approval_token: z.string().min(1),
+        run_id: z.string().min(1).optional(),
+      },
+    },
+    async (args) => {
+      assertWriteApproved(config, args.approval_token);
+      const now = new Date().toISOString();
+      const runId = args.run_id ?? newRunId();
+      const { draft, materialTakeoff } = await buildSupplierOrderDraftFromErp(config, args.material_takeoff_id, {
+        supplierOrderId: args.supplier_order_id,
+        supplier: args.supplier,
+        requestedDeliveryDate: args.requested_delivery_date,
+        nowIso: now,
+      });
+      const before = await readResourceOrNull(config, "Supplier Order", draft.supplier_order_id);
+      const operation = before ? "update" : "create";
+      const dryRun = {
+        target: { doctype: "Supplier Order", name: draft.supplier_order_id },
+        operation,
+        source: {
+          material_takeoff: materialTakeoff.takeoff_id ?? materialTakeoff.name,
+          item_count: draft.items.length,
+        },
+        draft,
+      };
+      await erpPost(config, "/api/resource/Hermes%20Run", {
+        run_id: runId,
+        run_ts: now,
+        agent_role: "Production Controller",
+        requested_by: args.approved_by,
+        request_text: args.request_text,
+        target_doctype: "Supplier Order",
+        target_name: draft.supplier_order_id,
+        roof_job: draft.roof_job,
+        capability_level: "Approved-write",
+        tool_name: "request_create_supplier_order",
+        tool_args_json: JSON.stringify(redactApprovalArgs(args)),
+        dry_run_json: JSON.stringify(dryRun),
+        approval_status: "Approved",
+        approved_by: args.approved_by,
+        approved_at: now,
+        before_target_ids: JSON.stringify(summarizeSupplierOrder(before)),
+      });
+
+      try {
+        const result = before
+          ? await erpPut(config, resourcePath("Supplier Order", draft.supplier_order_id), draft)
+          : await erpPost(config, "/api/resource/Supplier%20Order", draft);
+        const after = { ...(before ?? {}), ...draft, name: draft.supplier_order_id };
+        const auditError = await finalizeHermesRun(config, runId, {
+          approval_status: "Executed",
+          result_status: "OK",
+          after_target_ids: JSON.stringify(summarizeSupplierOrder(after)),
+          result_json: JSON.stringify(result),
+        });
+        return text({
+          run_id: runId,
+          upserted: true,
+          operation,
+          supplier_order_id: draft.supplier_order_id,
+          audit_finalized: auditError === null,
+          ...(auditError ? { audit_error: auditError } : {}),
+          result,
+        });
       } catch (err) {
         await erpPut(config, resourcePath("Hermes Run", runId), {
           approval_status: "Failed",
@@ -866,7 +1079,7 @@ export function buildServer(config) {
           ? await erpPut(config, resourcePath("Proposal Evidence Pack", draft.pack_id), draft)
           : await erpPost(config, "/api/resource/Proposal%20Evidence%20Pack", draft);
         const after = { ...(before ?? {}), ...draft, name: draft.pack_id };
-        await erpPut(config, resourcePath("Hermes Run", runId), {
+        const auditError = await finalizeHermesRun(config, runId, {
           approval_status: "Executed",
           result_status: "OK",
           after_target_ids: JSON.stringify(summarizeProposalPack(after)),
@@ -877,6 +1090,8 @@ export function buildServer(config) {
           upserted: true,
           operation,
           proposal_evidence_pack_id: draft.pack_id,
+          audit_finalized: auditError === null,
+          ...(auditError ? { audit_error: auditError } : {}),
           result,
         });
       } catch (err) {
@@ -964,13 +1179,20 @@ export function buildServer(config) {
       try {
         const result = await erpPut(config, resourcePath("Production Gate State", args.gate_id), patch);
         const after = { ...before, ...patch };
-        await erpPut(config, resourcePath("Hermes Run", runId), {
+        const auditError = await finalizeHermesRun(config, runId, {
           approval_status: "Executed",
           result_status: "OK",
           after_target_ids: JSON.stringify(summarizeGate(after)),
           result_json: JSON.stringify(result),
         });
-        return text({ run_id: runId, updated: true, gate_id: args.gate_id, result });
+        return text({
+          run_id: runId,
+          updated: true,
+          gate_id: args.gate_id,
+          audit_finalized: auditError === null,
+          ...(auditError ? { audit_error: auditError } : {}),
+          result,
+        });
       } catch (err) {
         await erpPut(config, resourcePath("Hermes Run", runId), {
           approval_status: "Failed",
@@ -1002,6 +1224,15 @@ async function readResourceOrNull(config, doctype, name) {
 async function listResources(config, doctype, options) {
   const res = await erpGet(config, resourceListPath(doctype, options));
   return Array.isArray(res.data) ? res.data : [];
+}
+
+async function finalizeHermesRun(config, runId, patch) {
+  try {
+    await erpPut(config, resourcePath("Hermes Run", runId), patch);
+    return null;
+  } catch (err) {
+    return String(err).slice(0, 500);
+  }
 }
 
 async function buildProposalDraftFromErp(config, roofJobId, { packId, limit = 25, nowIso } = {}) {
@@ -1036,6 +1267,7 @@ async function buildMaterialTakeoffDraftFromErp(config, roofJobId, {
   nowIso,
 } = {}) {
   let reportName = measurementReportId;
+  let measurementReport;
   if (!reportName) {
     const reports = await listResources(config, "Measurement Report", {
       fields: MEASUREMENT_REPORT_FIELDS,
@@ -1044,9 +1276,18 @@ async function buildMaterialTakeoffDraftFromErp(config, roofJobId, {
       orderBy: "parsed_at desc",
     });
     if (!reports.length) throw new Error("measurement_report_required");
-    reportName = reports[0].measurement_id ?? reports[0].name;
+    for (const row of reports) {
+      const candidateName = row.measurement_id ?? row.name;
+      if (!candidateName) continue;
+      const candidate = await readResource(config, "Measurement Report", candidateName);
+      if (measurementRowsFromReport(candidate).length) {
+        measurementReport = candidate;
+        break;
+      }
+    }
+    if (!measurementReport) throw new Error("measurement_values_required");
   }
-  const measurementReport = await readResource(config, "Measurement Report", reportName);
+  measurementReport ??= await readResource(config, "Measurement Report", reportName);
   const draft = buildMaterialTakeoffDraft({
     roofJobId,
     takeoffId,
@@ -1054,6 +1295,23 @@ async function buildMaterialTakeoffDraftFromErp(config, roofJobId, {
     nowIso,
   });
   return { draft, measurementReport };
+}
+
+async function buildSupplierOrderDraftFromErp(config, materialTakeoffId, {
+  supplierOrderId,
+  supplier,
+  requestedDeliveryDate,
+  nowIso,
+} = {}) {
+  const materialTakeoff = await readResource(config, "Material Takeoff", materialTakeoffId);
+  const draft = buildSupplierOrderDraft({
+    materialTakeoff,
+    supplierOrderId,
+    supplier,
+    requestedDeliveryDate,
+    nowIso,
+  });
+  return { draft, materialTakeoff };
 }
 
 function summarizeGate(gate) {
@@ -1083,6 +1341,19 @@ function summarizeMaterialTakeoff(takeoff) {
   };
 }
 
+function summarizeSupplierOrder(order) {
+  if (!order) return null;
+  return {
+    name: order.name,
+    supplier_order_id: order.supplier_order_id,
+    roof_job: order.roof_job,
+    material_takeoff: order.material_takeoff ?? "",
+    supplier: order.supplier ?? "",
+    status: order.status,
+    prepared_at: order.prepared_at ?? "",
+  };
+}
+
 function summarizeProposalPack(pack) {
   if (!pack) return null;
   return {
@@ -1092,6 +1363,37 @@ function summarizeProposalPack(pack) {
     quotation: pack.quotation ?? "",
     status: pack.status,
     prepared_at: pack.prepared_at ?? "",
+  };
+}
+
+function supplierOrderRowsFromTakeoff(takeoff) {
+  const rows = Array.isArray(takeoff.items) ? takeoff.items : [];
+  return rows
+    .map((raw) => {
+      const row = raw ?? {};
+      return {
+        category: String(row.category ?? "").trim(),
+        item_name: String(row.item_name ?? "").trim(),
+        quantity: Number(row.quantity),
+        unit: String(row.unit ?? "").trim(),
+        source_ref: String(row.source_ref ?? row.item_name ?? "").trim(),
+      };
+    })
+    .filter((row) => row.item_name && Number.isFinite(row.quantity));
+}
+
+function supplierOrderItemForTakeoffItem(row) {
+  return {
+    category: row.category,
+    item_name: row.item_name,
+    quantity: row.quantity,
+    unit: row.unit,
+    source_ref: row.source_ref || row.item_name,
+    status: "Draft",
+    received_qty: 0,
+    shortage_qty: 0,
+    substitution_notes: "",
+    needs_review: 1,
   };
 }
 

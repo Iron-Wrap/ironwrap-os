@@ -6,6 +6,7 @@ import {
   buildMaterialTakeoffDraft,
   buildMaterialTakeoffStatusPatch,
   buildProposalEvidencePackDraft,
+  buildSupplierOrderDraft,
   configFromEnv,
   erpGet,
   erpPut,
@@ -14,6 +15,7 @@ import {
   redactApprovalArgs,
   resourceListPath,
   resourcePath,
+  supplierOrderIdForTakeoff,
 } from "../src/server.mjs";
 
 test("configFromEnv requires ERPNext URL and token parts", () => {
@@ -98,6 +100,7 @@ test("resource paths encode Frappe DocTypes, names, fields, and filters", () => 
   assert.equal(resourcePath("Hermes Run", "hr_1"), "/api/resource/Hermes%20Run/hr_1");
   assert.equal(resourcePath("Measurement Report", "measurement:ow_1"), "/api/resource/Measurement%20Report/measurement%3Aow_1");
   assert.equal(resourcePath("Material Takeoff", "takeoff:job:ow_1"), "/api/resource/Material%20Takeoff/takeoff%3Ajob%3Aow_1");
+  assert.equal(resourcePath("Supplier Order", "supplier:takeoff:job:ow_1"), "/api/resource/Supplier%20Order/supplier%3Atakeoff%3Ajob%3Aow_1");
   assert.equal(resourcePath("Instant Estimate Session", "estimate:ow_1"), "/api/resource/Instant%20Estimate%20Session/estimate%3Aow_1");
   assert.equal(resourcePath("Evidence Item", "evidence:measurement:ow_1"), "/api/resource/Evidence%20Item/evidence%3Ameasurement%3Aow_1");
   assert.equal(resourcePath("Field Check-in", "field:ow_1"), "/api/resource/Field%20Check-in/field%3Aow_1");
@@ -188,6 +191,45 @@ test("material takeoff draft converts measurement values into review-gated line 
   assert.equal(source.measurement_report, "measurement:ow_1");
   assert.equal(source.provider, "RoofRuler");
   assert.equal(source.measurements.length, 2);
+});
+
+test("supplier order draft requires approved takeoff and keeps supplier action review-gated", () => {
+  assert.equal(supplierOrderIdForTakeoff("takeoff:job:ow_1"), "supplier:takeoff:job:ow_1");
+
+  const materialTakeoff = {
+    name: "takeoff:job:ow_1",
+    takeoff_id: "takeoff:job:ow_1",
+    roof_job: "job:ow_1",
+    status: "Approved",
+    items: [
+      { category: "Roof Surface", item_name: "Roof surface from area_sqft", quantity: 1200, unit: "sqft", source_ref: "raw#area" },
+      { category: "Linear Metal", item_name: "Linear metal from perimeter_ft", quantity: 140, unit: "ft", source_ref: "raw#perimeter" },
+    ],
+  };
+  const draft = buildSupplierOrderDraft({
+    materialTakeoff,
+    supplier: "Metal Supplier Ltd.",
+    requestedDeliveryDate: "2026-07-20",
+    nowIso: "2026-07-08T10:00:00.000Z",
+  });
+
+  assert.equal(draft.supplier_order_id, "supplier:takeoff:job:ow_1");
+  assert.equal(draft.roof_job, "job:ow_1");
+  assert.equal(draft.material_takeoff, "takeoff:job:ow_1");
+  assert.equal(draft.supplier, "Metal Supplier Ltd.");
+  assert.equal(draft.status, "Needs Review");
+  assert.equal(draft.prepared_at, "2026-07-08T10:00:00.000Z");
+  assert.equal(draft.requested_delivery_date, "2026-07-20");
+  assert.match(draft.assumptions, /owner review/);
+  assert.match(draft.exclusions, /does not place an order/);
+  assert.equal(draft.items.length, 2);
+  assert.ok(draft.items.every((item) => item.status === "Draft" && item.needs_review === 1));
+
+  const summary = JSON.parse(draft.order_summary_json);
+  assert.equal(summary.material_takeoff, "takeoff:job:ow_1");
+  assert.equal(summary.takeoff_status, "Approved");
+  assert.equal(summary.item_count, 2);
+  assert.throws(() => buildSupplierOrderDraft({ materialTakeoff: { ...materialTakeoff, status: "Needs Review" } }), /approved_required/);
 });
 
 test("proposal evidence pack draft links measurement and evidence proof", () => {

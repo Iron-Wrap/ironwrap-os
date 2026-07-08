@@ -6,9 +6,11 @@ import { z } from "zod";
 export function configFromEnv(env = process.env) {
   const baseUrl = env.IRONWRAP_BUS_BASE_URL?.replace(/\/+$/, "");
   const adminToken = env.IRONWRAP_ADMIN_TOKEN;
+  const writeEnabled = env.IRONWRAP_BUS_WRITE_ENABLED === "true";
+  const writeToken = env.IRONWRAP_BUS_WRITE_TOKEN ?? env.HERMES_WRITE_TOKEN;
   if (!baseUrl) throw new Error("IRONWRAP_BUS_BASE_URL is required");
   if (!adminToken) throw new Error("IRONWRAP_ADMIN_TOKEN is required");
-  return { baseUrl, adminToken };
+  return { baseUrl, adminToken, writeEnabled, writeToken };
 }
 
 export async function busGet(config, path) {
@@ -17,6 +19,21 @@ export async function busGet(config, path) {
   });
   if (!res.ok) throw new Error(`bus_http_${res.status}: ${(await res.text()).slice(0, 300)}`);
   return await res.json();
+}
+
+export async function busPost(config, path) {
+  const res = await fetch(config.baseUrl + path, {
+    method: "POST",
+    headers: { authorization: `Bearer ${config.adminToken}`, accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`bus_http_${res.status}: ${(await res.text()).slice(0, 300)}`);
+  return await res.json();
+}
+
+export function assertWriteApproved(config, approvalToken) {
+  if (!config.writeEnabled) throw new Error("bus_write_disabled");
+  if (!config.writeToken) throw new Error("bus_write_token_required");
+  if (approvalToken !== config.writeToken) throw new Error("approval_token_invalid");
 }
 
 export function buildServer(config) {
@@ -50,6 +67,36 @@ export function buildServer(config) {
       inputSchema: { limit: z.number().int().min(1).max(100).optional() },
     },
     async ({ limit = 25 }) => text(await busGet(config, `/admin/dead-letter?limit=${limit}`)),
+  );
+
+  server.registerTool(
+    "dry_run_replay",
+    {
+      title: "Dry Run Replay",
+      description: "Preview unrecovered dead-letter rows before re-driving them.",
+      inputSchema: { limit: z.number().int().min(1).max(100).optional() },
+    },
+    async ({ limit = 25 }) => {
+      const deadLetters = await busGet(config, `/admin/dead-letter?limit=${limit}`);
+      return text({ would_write: false, required_tool: "request_replay", dead_letters: deadLetters });
+    },
+  );
+
+  server.registerTool(
+    "request_replay",
+    {
+      title: "Request Replay",
+      description: "Approved-write: re-drive dead-lettered envelopes through the bus queue.",
+      inputSchema: {
+        request_text: z.string().min(1).max(4000),
+        approved_by: z.string().min(1),
+        approval_token: z.string().min(1),
+      },
+    },
+    async ({ approval_token }) => {
+      assertWriteApproved(config, approval_token);
+      return text(await busPost(config, "/admin/replay"));
+    },
   );
 
   return server;

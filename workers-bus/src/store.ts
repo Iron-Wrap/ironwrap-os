@@ -23,6 +23,12 @@ export interface DeadLetterEntry {
   payload_json: string;
 }
 
+export interface DeadLetterRecord extends DeadLetterEntry {
+  id: number;
+  ts: string;
+  recovered: number;
+}
+
 const nowIso = () => new Date().toISOString();
 
 /** Archive the raw inbound body to R2 FIRST, so nothing is lost if later steps fail. */
@@ -47,6 +53,13 @@ export async function insertEnvelope(env: Env, rec: EnvelopeRecord): Promise<voi
 export async function getEnvelope(env: Env, id: string): Promise<EnvelopeRecord | null> {
   return await env.DB.prepare(`SELECT * FROM envelopes WHERE envelope_id = ?`)
     .bind(id).first<EnvelopeRecord>();
+}
+
+export async function listRecentEnvelopes(env: Env, limit: number): Promise<EnvelopeRecord[]> {
+  const res = await env.DB.prepare(
+    `SELECT * FROM envelopes ORDER BY created_at DESC LIMIT ?`,
+  ).bind(limit).all<EnvelopeRecord>();
+  return res.results ?? [];
 }
 
 /**
@@ -157,6 +170,14 @@ export async function countOpenDeadLetter(env: Env): Promise<number> {
   const row = await env.DB.prepare(`SELECT COUNT(*) AS n FROM dead_letter WHERE recovered = 0`)
     .first<{ n: number }>();
   return row?.n ?? 0;
+}
+
+export async function listOpenDeadLetters(env: Env, limit: number): Promise<DeadLetterRecord[]> {
+  const res = await env.DB.prepare(
+    `SELECT id, ts, envelope_id, stage, error, payload_json, recovered
+     FROM dead_letter WHERE recovered = 0 ORDER BY ts ASC LIMIT ?`,
+  ).bind(limit).all<DeadLetterRecord>();
+  return res.results ?? [];
 }
 
 export async function writeHeartbeat(env: Env, day: string, reconciled: boolean, openDlq: number): Promise<void> {

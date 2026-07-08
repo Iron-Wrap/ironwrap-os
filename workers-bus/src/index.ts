@@ -49,11 +49,14 @@ export default {
         if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
         return await handleIngest(req, env, ctx, ingest[1]);
       }
-      if (req.method === "POST" && url.pathname.startsWith("/admin/")) {
+      if (url.pathname.startsWith("/admin/")) {
         if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN)) return json({ error: "unauthorized" }, 401);
-        if (url.pathname === "/admin/reconcile") return json(await runReconcile(env));
-        if (url.pathname === "/admin/source-count") return await handleSourceCount(req, env);
-        if (url.pathname === "/admin/replay") return json(await replayDeadLetter(env));
+        if (req.method === "GET" && url.pathname === "/admin/envelopes") return json(await handleListEnvelopes(env, url));
+        if (req.method === "GET" && url.pathname.startsWith("/admin/envelope/")) return json(await handleGetEnvelope(env, url));
+        if (req.method === "GET" && url.pathname === "/admin/dead-letter") return json(await handleListDeadLetters(env, url));
+        if (req.method === "POST" && url.pathname === "/admin/reconcile") return json(await runReconcile(env));
+        if (req.method === "POST" && url.pathname === "/admin/source-count") return await handleSourceCount(req, env);
+        if (req.method === "POST" && url.pathname === "/admin/replay") return json(await replayDeadLetter(env));
       }
       // (Proposal e-sign route removed 2026-07-02: JobNimbus native e-sign is confirmed
       // sufficient; DocuSeal stays benched as the escape hatch — see final-spec-pack/00.)
@@ -278,6 +281,33 @@ async function replayDeadLetter(env: Env): Promise<{ requeued: number }> {
   if (ids.length) await env.JN_QUEUE.sendBatch(ids.map((id) => ({ body: { envelope_id: id } })));
   await env.DB.prepare(`UPDATE dead_letter SET recovered = 1 WHERE recovered = 0`).run();
   return { requeued: ids.length };
+}
+
+async function handleListEnvelopes(env: Env, url: URL): Promise<{ envelopes: ReturnType<typeof adminEnvelope>[] }> {
+  const limit = clampLimit(url.searchParams.get("limit"), 50, 100);
+  const rows = await store.listRecentEnvelopes(env, limit);
+  return { envelopes: rows.map(adminEnvelope) };
+}
+
+async function handleGetEnvelope(env: Env, url: URL): Promise<{ envelope: ReturnType<typeof adminEnvelope> | null }> {
+  const id = decodeURIComponent(url.pathname.slice("/admin/envelope/".length));
+  const rec = id ? await store.getEnvelope(env, id) : null;
+  return { envelope: rec ? adminEnvelope(rec) : null };
+}
+
+async function handleListDeadLetters(env: Env, url: URL): Promise<{ dead_letters: Awaited<ReturnType<typeof store.listOpenDeadLetters>> }> {
+  const limit = clampLimit(url.searchParams.get("limit"), 50, 100);
+  return { dead_letters: await store.listOpenDeadLetters(env, limit) };
+}
+
+function adminEnvelope(rec: EnvelopeRecord): Omit<EnvelopeRecord, "payload_json"> & { payload: Record<string, unknown> } {
+  const { payload_json, ...rest } = rec;
+  return { ...rest, payload: safeJson(payload_json) };
+}
+
+function clampLimit(raw: string | null, fallback: number, max: number): number {
+  const n = Number(raw ?? fallback);
+  return Number.isInteger(n) && n > 0 ? Math.min(n, max) : fallback;
 }
 
 async function handleSourceCount(req: Request, env: Env): Promise<Response> {

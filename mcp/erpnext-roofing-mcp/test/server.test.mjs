@@ -97,6 +97,7 @@ test("resource paths encode Frappe DocTypes, names, fields, and filters", () => 
   assert.equal(resourcePath("Evidence Item", "evidence:measurement:ow_1"), "/api/resource/Evidence%20Item/evidence%3Ameasurement%3Aow_1");
   assert.equal(resourcePath("Field Check-in", "field:ow_1"), "/api/resource/Field%20Check-in/field%3Aow_1");
   assert.equal(resourcePath("Proposal Evidence Pack", "proposal:job:ow_1"), "/api/resource/Proposal%20Evidence%20Pack/proposal%3Ajob%3Aow_1");
+  assert.equal(resourcePath("Payment Milestone", "qb:R1:Invoice:42"), "/api/resource/Payment%20Milestone/qb%3AR1%3AInvoice%3A42");
 });
 
 test("write approval and gate patch helpers enforce narrow mutation rules", () => {

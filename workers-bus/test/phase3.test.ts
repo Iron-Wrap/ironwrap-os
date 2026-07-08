@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { handleMeasurementIngest, parseMeasurementSubmission, reportExt } from "../src/measurements.ts";
-import { parseQbEvents, verifyIntuitSignature } from "../src/quickbooks.ts";
+import { handleQuickbooksWebhook, parseQbEvents, verifyIntuitSignature } from "../src/quickbooks.ts";
 
 test("parseMeasurementSubmission: job + report + numeric measurements", () => {
   const m = parseMeasurementSubmission({
@@ -120,4 +120,76 @@ test("verifyIntuitSignature: accepts a correct HMAC, rejects wrong/empty", async
   assert.equal(await verifyIntuitSignature(token, body, sig), true);
   assert.equal(await verifyIntuitSignature(token, body, "wrong-signature"), false);
   assert.equal(await verifyIntuitSignature("", body, sig), false);
+});
+
+test("handleQuickbooksWebhook: signed event creates ERPNext Payment Milestone rows", async (t) => {
+  const fetches: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    fetches.push({ url, init: init ?? {} });
+    if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0001" }] });
+    if (url.includes("/api/resource/Payment%20Milestone?")) return json({ data: [] });
+    if (url.endsWith("/api/resource/Payment%20Milestone")) {
+      return json({ data: { name: `PM-000${fetches.filter((f) => f.url.endsWith("/api/resource/Payment%20Milestone")).length}` } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  const writes: Array<{ sql: string; args: unknown[] }> = [];
+  const rawWrites: Array<{ key: string; body: string }> = [];
+  const env = {
+    QB_WEBHOOK_TOKEN: "verifier-123",
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "erp-key",
+    ERPNEXT_API_SECRET: "erp-secret",
+    RAW: { put: async (key: string, body: string) => { rawWrites.push({ key, body }); } },
+    DB: {
+      prepare(sql: string) {
+        return {
+          bind(...args: unknown[]) {
+            return { run: async () => { writes.push({ sql, args }); return { success: true }; } };
+          },
+        };
+      },
+    },
+  };
+  const bodyText = JSON.stringify({
+    eventNotifications: [{
+      realmId: "R1",
+      dataChangeEvent: { entities: [
+        { name: "Invoice", id: "42", operation: "Update" },
+        { name: "Payment", id: "7", operation: "Create" },
+      ] },
+    }],
+  });
+  const sig = crypto.createHmac("sha256", env.QB_WEBHOOK_TOKEN).update(bodyText).digest("base64");
+
+  const res = await handleQuickbooksWebhook(env as never, bodyText, sig);
+  const result = await res.json() as {
+    events?: number;
+    erpnext_payment_milestone_ids?: string[];
+    erpnext_error?: string | null;
+  };
+
+  assert.equal(res.status, 200);
+  assert.equal(result.events, 2);
+  assert.deepEqual(result.erpnext_payment_milestone_ids, ["PM-0001", "PM-0002"]);
+  assert.equal(result.erpnext_error, null);
+  assert.equal(rawWrites.length, 1);
+  assert.match(rawWrites[0].key, /^raw\/quickbooks\/\d{4}-\d{2}-\d{2}\/ow_/);
+
+  const posted = fetches
+    .filter((f) => f.url.endsWith("/api/resource/Payment%20Milestone"))
+    .map((f) => JSON.parse(String(f.init.body)));
+  assert.equal(posted.length, 2);
+  assert.deepEqual(posted.map((p) => p.payment_milestone_id), ["qb:R1:Invoice:42", "qb:R1:Payment:7"]);
+  assert.equal(posted[0].roof_job, "RJ-0001");
+  assert.equal(posted[0].milestone_type, "Invoice");
+  assert.equal(posted[0].status, "Webhook Seen");
+  assert.equal(posted[0].raw_key, rawWrites[0].key);
+  assert.equal(posted[1].milestone_type, "Payment");
+  assert.equal(posted[1].roof_job, undefined);
+  assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") &&
+    w.args.includes("erpnext_quickbooks") && w.args.includes("payment_milestone:PM-0001")));
 });

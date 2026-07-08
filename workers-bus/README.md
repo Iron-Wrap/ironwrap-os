@@ -44,7 +44,7 @@ inbound (website/phone/gbp/ad/referral/manual)
 | Daily reconciliation w/ independent ground-truth + heartbeat | `index.ts:runReconcile` + `source_counts` table |
 | Idempotent record handoff, kill switch, logging | `external_id`=envelope_id; `JOBNIMBUS_ENABLED` flag; `audit_log` |
 | Intent → owner queue routing (spec 16) | `core.ts:classifyIntent` |
-| ERPNext bridge proof | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Measurement Report, Evidence Item, and Field Check-in rows when enabled |
+| ERPNext bridge proof | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
 
 ## Files
 
@@ -52,7 +52,7 @@ inbound (website/phone/gbp/ad/referral/manual)
 src/core.ts        pure logic (envelope, dedup, routing, reconcile) — node-testable, no I/O
 src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   JobNimbus push adapter (live-tested; enabled by config)
-src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, measurement, evidence, and field check-in rows
+src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, measurement, evidence, field check-in, and payment milestone rows
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
 src/index.ts       the Worker: fetch + queue + scheduled
@@ -123,17 +123,20 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
    `sales@ironwrapexteriors.com`; switch it only after the mailbox/sender alias decision changes.
 3. **SMS / A2P** — the Worker does not send SMS. Prospect SMS belongs in JobNimbus Engage after
    A2P/carrier registration. Pre-A2P instant-ack is Gmail email + owner alert.
-4. **QuickBooks webhook** — the receiver captures signed events now. Mirroring invoice/payment
-   status back to JobNimbus needs a later QB OAuth read path.
+4. **QuickBooks webhook** — the receiver captures signed events now and can mirror
+   Invoice/Payment webhook events into ERPNext Payment Milestone rows. Detailed
+   amount/status sync back to JobNimbus still needs a later QB OAuth read path.
 5. **ERPNext bridge** — disabled by default. Before setting `ERPNEXT_ENABLED=true`, apply
    migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,
    Roofing Property, Roof Job, Measurement Report, Measurement Value, Production Gate
-   State, Evidence Item, and Field Check-in DocTypes exist. The Worker upserts Lead Envelope by
+   State, Evidence Item, Field Check-in, and Payment Milestone DocTypes exist. The Worker upserts Lead Envelope by
    `envelope_id`, optional Roofing Property by `property_key`, Roof Job by `roof_job_id`,
    and measurement reports by `measurement_id`. Measurement sync creates a linked
    Evidence Item for the raw/report artifact. Photo sync creates one photo Evidence
    Item per submitted Jotform photo, links Drive file ids/URLs when available, and
-   creates a Field Check-in summary row for the submission.
+   creates a Field Check-in summary row for the submission. QuickBooks webhook
+   sync creates Payment Milestone event rows and links invoice events to Roof Job
+   when `qb_invoice_ref` matches.
    Roof Job sync also creates missing initial production gate rows without resetting
    existing gate state. ERPNext is still a consumer, not the raw intake source.
 

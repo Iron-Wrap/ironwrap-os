@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 const GateStateSchema = z.enum(["Blocked", "Ready", "Waived", "Done"]);
+const MaterialTakeoffStatusSchema = z.enum(["Needs Review", "Approved", "Rejected"]);
 
 const GATE_FIELDS = [
   "name",
@@ -51,6 +52,8 @@ const MATERIAL_TAKEOFF_FIELDS = [
   "status",
   "prepared_at",
   "approved_by",
+  "approved_at",
+  "approval_note",
   "modified",
 ];
 
@@ -189,6 +192,25 @@ export function buildGateUpdatePatch(nextState, reason, approvedBy, nowIso) {
     if (approvedBy) patch.waived_by = approvedBy;
     if (nowIso) patch.waived_at = nowIso;
   }
+  return patch;
+}
+
+export function buildMaterialTakeoffStatusPatch(nextStatus, reason, approvedBy, nowIso) {
+  const cleanReason = typeof reason === "string" ? reason.trim() : "";
+  if ((nextStatus === "Approved" || nextStatus === "Rejected") && !cleanReason) {
+    throw new Error("reason_required_for_takeoff_status");
+  }
+  const patch = {
+    status: nextStatus,
+    approval_note: cleanReason,
+  };
+  if (nextStatus === "Approved") {
+    if (approvedBy) patch.approved_by = approvedBy;
+    if (nowIso) patch.approved_at = nowIso;
+    return patch;
+  }
+  patch.approved_by = "";
+  patch.approved_at = "";
   return patch;
 }
 
@@ -674,6 +696,96 @@ export function buildServer(config) {
   );
 
   server.registerTool(
+    "dry_run_update_material_takeoff_status",
+    {
+      title: "Dry Run Update Material Takeoff Status",
+      description: "Preview a Material Takeoff review-status update without writing to ERPNext.",
+      inputSchema: {
+        takeoff_id: z.string().min(1),
+        next_status: MaterialTakeoffStatusSchema,
+        reason: z.string().max(2000).optional(),
+      },
+    },
+    async ({ takeoff_id, next_status, reason }) => {
+      const before = await readResource(config, "Material Takeoff", takeoff_id);
+      const patch = buildMaterialTakeoffStatusPatch(next_status, reason);
+      return text({
+        would_write: false,
+        required_tool: "request_update_material_takeoff_status",
+        target: { doctype: "Material Takeoff", name: takeoff_id },
+        before: summarizeMaterialTakeoff(before),
+        patch,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_update_material_takeoff_status",
+    {
+      title: "Request Update Material Takeoff Status",
+      description: "Approved-write: update one Material Takeoff review status and record a Hermes Run audit row.",
+      inputSchema: {
+        takeoff_id: z.string().min(1),
+        next_status: MaterialTakeoffStatusSchema,
+        reason: z.string().max(2000).optional(),
+        request_text: z.string().min(1).max(4000),
+        approved_by: z.string().min(1),
+        approval_token: z.string().min(1),
+        run_id: z.string().min(1).optional(),
+      },
+    },
+    async (args) => {
+      assertWriteApproved(config, args.approval_token);
+      const now = new Date().toISOString();
+      const runId = args.run_id ?? newRunId();
+      const before = await readResource(config, "Material Takeoff", args.takeoff_id);
+      const patch = buildMaterialTakeoffStatusPatch(args.next_status, args.reason, args.approved_by, now);
+      const dryRun = {
+        target: { doctype: "Material Takeoff", name: args.takeoff_id },
+        before: summarizeMaterialTakeoff(before),
+        patch,
+      };
+      await erpPost(config, "/api/resource/Hermes%20Run", {
+        run_id: runId,
+        run_ts: now,
+        agent_role: "Estimator Assistant",
+        requested_by: args.approved_by,
+        request_text: args.request_text,
+        target_doctype: "Material Takeoff",
+        target_name: args.takeoff_id,
+        roof_job: before.roof_job,
+        capability_level: "Approved-write",
+        tool_name: "request_update_material_takeoff_status",
+        tool_args_json: JSON.stringify(redactApprovalArgs(args)),
+        dry_run_json: JSON.stringify(dryRun),
+        approval_status: "Approved",
+        approved_by: args.approved_by,
+        approved_at: now,
+        before_target_ids: JSON.stringify(summarizeMaterialTakeoff(before)),
+      });
+
+      try {
+        const result = await erpPut(config, resourcePath("Material Takeoff", args.takeoff_id), patch);
+        const after = { ...before, ...patch };
+        await erpPut(config, resourcePath("Hermes Run", runId), {
+          approval_status: "Executed",
+          result_status: "OK",
+          after_target_ids: JSON.stringify(summarizeMaterialTakeoff(after)),
+          result_json: JSON.stringify(result),
+        });
+        return text({ run_id: runId, updated: true, material_takeoff_id: args.takeoff_id, result });
+      } catch (err) {
+        await erpPut(config, resourcePath("Hermes Run", runId), {
+          approval_status: "Failed",
+          result_status: "Error",
+          error: String(err).slice(0, 500),
+        }).catch(() => {});
+        throw err;
+      }
+    },
+  );
+
+  server.registerTool(
     "dry_run_proposal_evidence_pack",
     {
       title: "Dry Run Proposal Evidence Pack",
@@ -963,6 +1075,9 @@ function summarizeMaterialTakeoff(takeoff) {
     measurement_report: takeoff.measurement_report ?? "",
     status: takeoff.status,
     prepared_at: takeoff.prepared_at ?? "",
+    approved_by: takeoff.approved_by ?? "",
+    approved_at: takeoff.approved_at ?? "",
+    approval_note: takeoff.approval_note ?? "",
   };
 }
 

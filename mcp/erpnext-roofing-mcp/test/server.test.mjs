@@ -4,6 +4,7 @@ import {
   assertWriteApproved,
   buildGateUpdatePatch,
   buildMaterialTakeoffDraft,
+  buildMaterialTakeoffStatusPatch,
   buildProposalEvidencePackDraft,
   configFromEnv,
   erpGet,
@@ -121,6 +122,27 @@ test("write approval and gate patch helpers enforce narrow mutation rules", () =
   });
   assert.throws(() => buildGateUpdatePatch("Blocked", ""), /reason_required/);
   assert.throws(() => buildGateUpdatePatch("Waived", ""), /reason_required/);
+
+  assert.deepEqual(buildMaterialTakeoffStatusPatch("Needs Review", "more photos needed"), {
+    status: "Needs Review",
+    approval_note: "more photos needed",
+    approved_by: "",
+    approved_at: "",
+  });
+  assert.deepEqual(buildMaterialTakeoffStatusPatch("Approved", "matches RoofRuler report", "estimator@example.com", "2026-07-08T10:00:00.000Z"), {
+    status: "Approved",
+    approval_note: "matches RoofRuler report",
+    approved_by: "estimator@example.com",
+    approved_at: "2026-07-08T10:00:00.000Z",
+  });
+  assert.deepEqual(buildMaterialTakeoffStatusPatch("Rejected", "missing eave length", "estimator@example.com", "2026-07-08T10:00:00.000Z"), {
+    status: "Rejected",
+    approval_note: "missing eave length",
+    approved_by: "",
+    approved_at: "",
+  });
+  assert.throws(() => buildMaterialTakeoffStatusPatch("Approved", ""), /reason_required/);
+  assert.throws(() => buildMaterialTakeoffStatusPatch("Rejected", ""), /reason_required/);
 
   assert.deepEqual(redactApprovalArgs({
     gate_id: "gate_1",

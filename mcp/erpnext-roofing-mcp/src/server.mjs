@@ -43,6 +43,17 @@ const MEASUREMENT_REPORT_FIELDS = [
   "modified",
 ];
 
+const MATERIAL_TAKEOFF_FIELDS = [
+  "name",
+  "takeoff_id",
+  "roof_job",
+  "measurement_report",
+  "status",
+  "prepared_at",
+  "approved_by",
+  "modified",
+];
+
 const INSTANT_ESTIMATE_SESSION_FIELDS = [
   "name",
   "estimate_session_id",
@@ -183,6 +194,48 @@ export function buildGateUpdatePatch(nextState, reason, approvedBy, nowIso) {
 
 export function proposalPackIdForRoofJob(roofJobId) {
   return `proposal:${roofJobId}`;
+}
+
+export function materialTakeoffIdForRoofJob(roofJobId) {
+  return `takeoff:${roofJobId}`;
+}
+
+export function buildMaterialTakeoffDraft({
+  roofJobId,
+  takeoffId = materialTakeoffIdForRoofJob(roofJobId),
+  measurementReport = {},
+  nowIso,
+} = {}) {
+  if (!roofJobId) throw new Error("roof_job_id_required");
+  const measurements = measurementRowsFromReport(measurementReport);
+  if (!measurements.length) throw new Error("measurement_values_required");
+  const measurementReportId = measurementReport.measurement_id ?? measurementReport.name ?? "";
+  const source = {
+    roof_job: roofJobId,
+    measurement_report: measurementReportId,
+    provider: measurementReport.provider ?? "",
+    review_status: measurementReport.review_status ?? "",
+    generated_at: nowIso,
+    measurements,
+  };
+
+  return {
+    takeoff_id: takeoffId,
+    roof_job: roofJobId,
+    measurement_report: measurementReportId,
+    status: "Needs Review",
+    ...(nowIso ? { prepared_at: nowIso } : {}),
+    source_measurements_json: JSON.stringify(source, null, 2),
+    assumptions: [
+      "Draft takeoff rows are copied from parsed measurement evidence for estimator review.",
+      "Waste, accessories, substitutions, supplier availability, and install details require human approval.",
+    ].join("\n"),
+    exclusions: [
+      "This takeoff does not create a final quote, supplier order, purchase order, delivery request, or invoice.",
+      "No material quantity is approved until the estimator marks the takeoff approved.",
+    ].join("\n"),
+    items: measurements.map(takeoffItemForMeasurement),
+  };
 }
 
 export function buildProposalEvidencePackDraft({
@@ -355,6 +408,31 @@ export function buildServer(config) {
   );
 
   server.registerTool(
+    "get_material_takeoff",
+    {
+      title: "Get Material Takeoff",
+      description: "Read one ERPNext Material Takeoff by takeoff_id/name.",
+      inputSchema: { takeoff_id: z.string().min(1) },
+    },
+    async ({ takeoff_id }) => text(await erpGet(config, resourcePath("Material Takeoff", takeoff_id))),
+  );
+
+  server.registerTool(
+    "list_material_takeoffs_for_job",
+    {
+      title: "List Material Takeoffs For Job",
+      description: "Read Material Takeoff rows linked to one Roof Job.",
+      inputSchema: { roof_job_id: z.string().min(1), limit: z.number().int().min(1).max(100).optional() },
+    },
+    async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath("Material Takeoff", {
+      fields: MATERIAL_TAKEOFF_FIELDS,
+      filters: [["Material Takeoff", "roof_job", "=", roof_job_id]],
+      limit,
+      orderBy: "modified desc",
+    }))),
+  );
+
+  server.registerTool(
     "get_instant_estimate_session",
     {
       title: "Get Instant Estimate Session",
@@ -477,6 +555,122 @@ export function buildServer(config) {
       limit,
       orderBy: "event_ts desc",
     }))),
+  );
+
+  server.registerTool(
+    "dry_run_material_takeoff",
+    {
+      title: "Dry Run Material Takeoff",
+      description: "Preview a review-gated Material Takeoff from ERPNext Measurement Report values without writing to ERPNext.",
+      inputSchema: {
+        roof_job_id: z.string().min(1),
+        measurement_report_id: z.string().min(1).optional(),
+        takeoff_id: z.string().min(1).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ roof_job_id, measurement_report_id, takeoff_id, limit = 25 }) => {
+      const { draft, measurementReport } = await buildMaterialTakeoffDraftFromErp(config, roof_job_id, {
+        measurementReportId: measurement_report_id,
+        takeoffId: takeoff_id,
+        limit,
+      });
+      return text({
+        would_write: false,
+        required_tool: "request_create_material_takeoff",
+        target: { doctype: "Material Takeoff", name: draft.takeoff_id },
+        source: {
+          measurement_report: measurementReport.measurement_id ?? measurementReport.name,
+          item_count: draft.items.length,
+        },
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_create_material_takeoff",
+    {
+      title: "Request Create Material Takeoff",
+      description: "Approved-write: create or update one review-gated Material Takeoff and record a Hermes Run audit row.",
+      inputSchema: {
+        roof_job_id: z.string().min(1),
+        measurement_report_id: z.string().min(1).optional(),
+        takeoff_id: z.string().min(1).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+        request_text: z.string().min(1).max(4000),
+        approved_by: z.string().min(1),
+        approval_token: z.string().min(1),
+        run_id: z.string().min(1).optional(),
+      },
+    },
+    async (args) => {
+      assertWriteApproved(config, args.approval_token);
+      const now = new Date().toISOString();
+      const runId = args.run_id ?? newRunId();
+      const { draft, measurementReport } = await buildMaterialTakeoffDraftFromErp(config, args.roof_job_id, {
+        measurementReportId: args.measurement_report_id,
+        takeoffId: args.takeoff_id,
+        limit: args.limit ?? 25,
+        nowIso: now,
+      });
+      const before = await readResourceOrNull(config, "Material Takeoff", draft.takeoff_id);
+      const operation = before ? "update" : "create";
+      const dryRun = {
+        target: { doctype: "Material Takeoff", name: draft.takeoff_id },
+        operation,
+        source: {
+          measurement_report: measurementReport.measurement_id ?? measurementReport.name,
+          item_count: draft.items.length,
+        },
+        draft,
+      };
+      await erpPost(config, "/api/resource/Hermes%20Run", {
+        run_id: runId,
+        run_ts: now,
+        agent_role: "Estimator Assistant",
+        requested_by: args.approved_by,
+        request_text: args.request_text,
+        target_doctype: "Material Takeoff",
+        target_name: draft.takeoff_id,
+        roof_job: args.roof_job_id,
+        capability_level: "Approved-write",
+        tool_name: "request_create_material_takeoff",
+        tool_args_json: JSON.stringify(redactApprovalArgs(args)),
+        dry_run_json: JSON.stringify(dryRun),
+        approval_status: "Approved",
+        approved_by: args.approved_by,
+        approved_at: now,
+        before_target_ids: JSON.stringify(summarizeMaterialTakeoff(before)),
+      });
+
+      try {
+        const result = before
+          ? await erpPut(config, resourcePath("Material Takeoff", draft.takeoff_id), draft)
+          : await erpPost(config, "/api/resource/Material%20Takeoff", draft);
+        const after = { ...(before ?? {}), ...draft, name: draft.takeoff_id };
+        await erpPut(config, resourcePath("Hermes Run", runId), {
+          approval_status: "Executed",
+          result_status: "OK",
+          after_target_ids: JSON.stringify(summarizeMaterialTakeoff(after)),
+          result_json: JSON.stringify(result),
+        });
+        return text({
+          run_id: runId,
+          upserted: true,
+          operation,
+          material_takeoff_id: draft.takeoff_id,
+          result,
+        });
+      } catch (err) {
+        await erpPut(config, resourcePath("Hermes Run", runId), {
+          approval_status: "Failed",
+          result_status: "Error",
+          error: String(err).slice(0, 500),
+        }).catch(() => {});
+        throw err;
+      }
+    },
   );
 
   server.registerTool(
@@ -721,6 +915,33 @@ async function buildProposalDraftFromErp(config, roofJobId, { packId, limit = 25
   return { draft, measurements, evidence };
 }
 
+async function buildMaterialTakeoffDraftFromErp(config, roofJobId, {
+  measurementReportId,
+  takeoffId,
+  limit = 25,
+  nowIso,
+} = {}) {
+  let reportName = measurementReportId;
+  if (!reportName) {
+    const reports = await listResources(config, "Measurement Report", {
+      fields: MEASUREMENT_REPORT_FIELDS,
+      filters: [["Measurement Report", "roof_job", "=", roofJobId]],
+      limit,
+      orderBy: "parsed_at desc",
+    });
+    if (!reports.length) throw new Error("measurement_report_required");
+    reportName = reports[0].measurement_id ?? reports[0].name;
+  }
+  const measurementReport = await readResource(config, "Measurement Report", reportName);
+  const draft = buildMaterialTakeoffDraft({
+    roofJobId,
+    takeoffId,
+    measurementReport,
+    nowIso,
+  });
+  return { draft, measurementReport };
+}
+
 function summarizeGate(gate) {
   return {
     name: gate.name,
@@ -730,6 +951,18 @@ function summarizeGate(gate) {
     state: gate.state,
     blocker_reason: gate.blocker_reason ?? "",
     waiver_reason: gate.waiver_reason ?? "",
+  };
+}
+
+function summarizeMaterialTakeoff(takeoff) {
+  if (!takeoff) return null;
+  return {
+    name: takeoff.name,
+    takeoff_id: takeoff.takeoff_id,
+    roof_job: takeoff.roof_job,
+    measurement_report: takeoff.measurement_report ?? "",
+    status: takeoff.status,
+    prepared_at: takeoff.prepared_at ?? "",
   };
 }
 
@@ -743,6 +976,58 @@ function summarizeProposalPack(pack) {
     status: pack.status,
     prepared_at: pack.prepared_at ?? "",
   };
+}
+
+function measurementRowsFromReport(report) {
+  const rows = Array.isArray(report.measurements) ? report.measurements : [];
+  return rows
+    .map((raw) => {
+      const row = raw ?? {};
+      return {
+        metric: String(row.metric ?? "").trim(),
+        value: Number(row.value),
+        unit: String(row.unit ?? "").trim(),
+        confidence: String(row.confidence ?? "").trim(),
+        source_ref: String(row.source_ref ?? row.metric ?? "").trim(),
+        needs_review: Boolean(row.needs_review),
+      };
+    })
+    .filter((row) => row.metric && Number.isFinite(row.value));
+}
+
+function takeoffItemForMeasurement(row) {
+  const category = takeoffCategory(row.metric, row.unit);
+  return {
+    category,
+    item_name: takeoffItemName(row.metric, category),
+    quantity: row.value,
+    unit: row.unit,
+    waste_factor: takeoffWasteFactor(category),
+    source_ref: row.source_ref || row.metric,
+    confidence: row.confidence,
+    needs_review: 1,
+  };
+}
+
+function takeoffCategory(metric, unit) {
+  const text = `${metric} ${unit}`.toLowerCase();
+  if (text.includes("sqft") || text.includes("square") || text.includes("area")) return "Roof Surface";
+  if (text.includes("ft") || text.includes("perimeter") || text.includes("eave") || text.includes("rake") || text.includes("ridge") || text.includes("valley") || text.includes("edge")) {
+    return "Linear Metal";
+  }
+  return "Measurement";
+}
+
+function takeoffItemName(metric, category) {
+  if (category === "Roof Surface") return `Roof surface from ${metric}`;
+  if (category === "Linear Metal") return `Linear metal from ${metric}`;
+  return `Measurement input: ${metric}`;
+}
+
+function takeoffWasteFactor(category) {
+  if (category === "Roof Surface") return 10;
+  if (category === "Linear Metal") return 5;
+  return 0;
 }
 
 function newRunId() {

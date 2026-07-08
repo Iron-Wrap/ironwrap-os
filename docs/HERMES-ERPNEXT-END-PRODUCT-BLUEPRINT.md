@@ -286,7 +286,7 @@ Build narrow MCP servers, not one giant god tool.
 
 | MCP server | Example tools |
 | --- | --- |
-| `ironwrap-bus-mcp` | Current read-only: `list_recent_envelopes`, `get_envelope`, `list_dead_letters`; later approved-write: `dry_run_replay`, `request_replay` |
+| `ironwrap-bus-mcp` | Current read-only: `list_recent_envelopes`, `get_envelope`, `list_dead_letters`; current approved-write proof: `dry_run_replay`, `request_replay` |
 | `erpnext-roofing-mcp` | Current read-only: `get_roof_job`, `get_lead_envelope`, `list_job_gates`, `list_blocked_jobs`, `get_measurement_report`, `list_measurement_reports_for_job`, `get_evidence_item`, `list_evidence_for_job`, `get_field_check_in`, `list_field_check_ins_for_job`, `get_proposal_evidence_pack`, `list_proposal_evidence_packs_for_job`, `get_payment_milestone`, `list_payment_milestones_for_job`, `get_hermes_run`, `list_hermes_runs_for_job`; current approved-write proof: `dry_run_update_gate`, `request_update_gate`, `dry_run_proposal_evidence_pack`, `request_create_proposal_evidence_pack`; later: `draft_task` |
 | `evidence-mcp` | `find_assets`, `get_evidence_pack`, `attach_asset_to_job`, `draft_customer_packet` |
 | `measurement-mcp` | `parse_measurement_report`, `compare_takeoff_versions`, `flag_missing_values` |

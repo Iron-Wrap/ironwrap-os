@@ -29,12 +29,16 @@ test("pushToErpNext: disabled flag is a no-op", async () => {
   assert.equal(await pushToErpNext({ ERPNEXT_ENABLED: "false" } as never, rec), null);
 });
 
-test("pushToErpNext: creates Lead Envelope with token auth and JobNimbus refs", async (t) => {
+test("pushToErpNext: creates Lead Envelope, Roofing Property, and Roof Job", async (t) => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
-    calls.push({ url: String(input), init: init ?? {} });
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
     if ((init?.method ?? "GET") === "GET") return json({ data: [] });
-    return json({ data: { name: "LE-0001" } });
+    if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-0001" } });
+    if (url.endsWith("/api/resource/Roofing%20Property")) return json({ data: { name: "RP-0001" } });
+    if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-0001" } });
+    throw new Error(`unexpected fetch ${url}`);
   });
 
   const result = await pushToErpNext({
@@ -44,15 +48,35 @@ test("pushToErpNext: creates Lead Envelope with token auth and JobNimbus refs", 
     ERPNEXT_API_SECRET: "secret",
   } as never, rec, { contactId: "C-1", jobId: "J-1", reused: false });
 
-  assert.deepEqual(result, { name: "LE-0001", reused: false });
-  assert.equal(calls.length, 2);
+  assert.deepEqual(result, {
+    name: "LE-0001",
+    reused: false,
+    roofingPropertyName: "RP-0001",
+    roofJobName: "RJ-0001",
+  });
+  assert.equal(calls.length, 6);
   assert.match(calls[0].url, /^https:\/\/erp\.example\.com\/api\/resource\/Lead%20Envelope\?/);
   assert.equal(calls[0].init.headers?.["authorization" as never], "token key:secret");
-  assert.equal(calls[1].url, "https://erp.example.com/api/resource/Lead%20Envelope");
-  const body = JSON.parse(String(calls[1].init.body));
-  assert.equal(body.envelope_id, rec.envelope_id);
-  assert.equal(body.jobnimbus_contact_id, "C-1");
-  assert.equal(body.jobnimbus_job_id, "J-1");
+  const leadBody = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/resource/Lead%20Envelope"))?.init.body));
+  assert.equal(leadBody.envelope_id, rec.envelope_id);
+  assert.equal(leadBody.jobnimbus_contact_id, "C-1");
+  assert.equal(leadBody.jobnimbus_job_id, "J-1");
+
+  const propertyBody = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/resource/Roofing%20Property"))?.init.body));
+  assert.equal(propertyBody.property_key, "property:1 main st");
+  assert.equal(propertyBody.lead_envelope, "LE-0001");
+  assert.equal(propertyBody.address_line1, "1 Main St");
+  assert.equal(propertyBody.country, "Canada");
+
+  const jobBody = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/resource/Roof%20Job"))?.init.body));
+  assert.equal(jobBody.roof_job_id, `job:${rec.envelope_id}`);
+  assert.equal(jobBody.service_type, "Metal Roofing");
+  assert.equal(jobBody.job_status, "Qualified");
+  assert.equal(jobBody.lead_envelope, "LE-0001");
+  assert.equal(jobBody.roofing_property, "RP-0001");
+  assert.equal(jobBody.current_gate_state, "qualification");
+  assert.equal(jobBody.jobnimbus_contact_id, "C-1");
+  assert.equal(jobBody.jobnimbus_job_id, "J-1");
 });
 
 function json(body: unknown): Response {

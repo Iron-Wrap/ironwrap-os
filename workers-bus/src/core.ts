@@ -49,6 +49,8 @@ export interface EnvelopeRecord {
   jn_contact_id: string | null;
   jn_job_id: string | null;
   erpnext_lead_envelope_id?: string | null;
+  erpnext_roofing_property_id?: string | null;
+  erpnext_roof_job_id?: string | null;
   erpnext_synced_at?: string | null;
   erpnext_error?: string | null;
   intent_queue: string | null;

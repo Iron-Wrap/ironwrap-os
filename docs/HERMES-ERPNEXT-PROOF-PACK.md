@@ -63,7 +63,8 @@ consumer only after the current owned-store-first path is stable.
 Current implementation checkpoint:
 
 - Worker bridge: `workers-bus/src/erpnext.ts`.
-- D1 proof fields: `workers-bus/migrations/0002_erpnext_consumer.sql`.
+- D1 proof fields: `workers-bus/migrations/0002_erpnext_consumer.sql` and
+  `workers-bus/migrations/0003_erpnext_operating_core.sql`.
 - Frappe app contract: `frappe-apps/ironwrap_roofing` now covers the gate-2
   operating core: lead envelope, roofing property, roof job, measurement report/value,
   evidence item, proposal evidence pack, and production gate state.
@@ -76,8 +77,9 @@ Create/update order:
 
 1. Worker receives source payload and writes raw R2 plus D1 envelope.
 2. Worker/bridge maps the D1 envelope to ERPNext `Lead Envelope`.
-3. If contact data is valid, upsert ERPNext Lead/Contact/Customer.
-4. If address/site data exists, upsert `Roofing Property`.
+3. If address/site data exists, upsert `Roofing Property`.
+4. Always upsert a `Roof Job` wrapper tied back to the Lead Envelope, optional
+   property, JobNimbus contact/job refs, and current qualification gate.
 5. If measurement/report data exists, create `Measurement Report` and child
    `Measurement Value` rows.
 6. Record Worker envelope id and raw key on every ERPNext-linked record.

@@ -14,6 +14,8 @@ type ErpEnv = Env & {
 export interface ErpNextResult {
   name: string;
   reused: boolean;
+  roofingPropertyName?: string;
+  roofJobName?: string;
 }
 
 export async function pushToErpNext(
@@ -27,7 +29,8 @@ export async function pushToErpNext(
 
   const base = normalizeBaseUrl(cfg.ERPNEXT_BASE_URL);
   const doctype = cfg.ERPNEXT_LEAD_ENVELOPE_DOCTYPE || "Lead Envelope";
-  const doc = {
+  const p = safeJson(rec.payload_json);
+  const leadDoc = {
     envelope_id: rec.envelope_id,
     source: rec.source,
     contact_name: rec.contact_name ?? undefined,
@@ -43,21 +46,93 @@ export async function pushToErpNext(
     jobnimbus_job_id: jn?.jobId ?? rec.jn_job_id ?? undefined,
   };
 
-  const existing = await findByEnvelopeId(cfg, base, doctype, rec.envelope_id);
+  const lead = await upsertByField(cfg, base, doctype, "envelope_id", rec.envelope_id, leadDoc);
+  const property = await upsertProperty(cfg, base, rec, p, lead.name);
+  const roofJob = await upsertRoofJob(cfg, base, rec, p, lead.name, property?.name, jn);
+
+  return {
+    name: lead.name,
+    reused: lead.reused,
+    roofingPropertyName: property?.name,
+    roofJobName: roofJob?.name,
+  };
+}
+
+async function upsertProperty(
+  env: ErpEnv,
+  base: string,
+  rec: EnvelopeRecord,
+  p: Record<string, unknown>,
+  leadName: string,
+): Promise<ErpNextResult | null> {
+  const address = str(p.address ?? p.address1 ?? p.address_line1);
+  const city = str(p.city);
+  const postal = str(p.postal ?? p.postal_code ?? p.zip);
+  if (!address && !city && !postal) return null;
+
+  const propertyKey = ["property", address, city, postal].filter(Boolean).join(":").toLowerCase() || `property:${rec.envelope_id}`;
+  return await upsertByField(env, base, "Roofing Property", "property_key", propertyKey, {
+    property_key: propertyKey,
+    lead_envelope: leadName,
+    address_line1: address,
+    city,
+    province: str(p.province ?? p.state),
+    postal_code: postal,
+    country: str(p.country) ?? "Canada",
+    service_area: str(p.service_area),
+    structure_type: str(p.structure_type),
+    roof_notes: str(p.roof_notes ?? p.message),
+    hazard_notes: str(p.hazard_notes),
+  });
+}
+
+async function upsertRoofJob(
+  env: ErpEnv,
+  base: string,
+  rec: EnvelopeRecord,
+  p: Record<string, unknown>,
+  leadName: string,
+  propertyName: string | undefined,
+  jn?: JnResult,
+): Promise<ErpNextResult> {
+  const roofJobId = `job:${rec.envelope_id}`;
+  return await upsertByField(env, base, "Roof Job", "roof_job_id", roofJobId, {
+    roof_job_id: roofJobId,
+    brand: brand(p),
+    service_type: serviceType(p),
+    job_status: "Qualified",
+    lead_envelope: leadName,
+    roofing_property: propertyName,
+    current_gate_state: "qualification",
+    qb_invoice_ref: undefined,
+    jobnimbus_contact_id: jn?.contactId ?? rec.jn_contact_id ?? undefined,
+    jobnimbus_job_id: jn?.jobId ?? rec.jn_job_id ?? undefined,
+  });
+}
+
+async function upsertByField(
+  env: ErpEnv,
+  base: string,
+  doctype: string,
+  field: string,
+  value: string,
+  doc: Record<string, unknown>,
+): Promise<ErpNextResult> {
+  const existing = await findByTerm(env, base, doctype, field, value);
   if (existing) {
-    await erpFetch(cfg, base, "PUT", `/api/resource/${enc(doctype)}/${enc(existing)}`, doc);
+    await erpFetch(env, base, "PUT", `/api/resource/${enc(doctype)}/${enc(existing)}`, doc);
     return { name: existing, reused: true };
   }
 
-  const created = await erpFetch(cfg, base, "POST", `/api/resource/${enc(doctype)}`, doc);
+  const created = await erpFetch(env, base, "POST", `/api/resource/${enc(doctype)}`, doc);
   const name = readName(created);
-  if (!name) throw new Error("erpnext_create_no_name");
+  if (!name) throw new Error(`erpnext_create_no_name:${doctype}`);
   return { name, reused: false };
 }
 
-async function findByEnvelopeId(env: ErpEnv, base: string, doctype: string, envelopeId: string): Promise<string | null> {
+async function findByTerm(env: ErpEnv, base: string, doctype: string, field: string, value: string): Promise<string | null> {
   const fields = encodeURIComponent(JSON.stringify(["name"]));
-  const filters = encodeURIComponent(JSON.stringify([[doctype, "envelope_id", "=", envelopeId]]));
+  const filters = encodeURIComponent(JSON.stringify([[doctype, field, "=", value]]));
   const path = `/api/resource/${enc(doctype)}?fields=${fields}&filters=${filters}&limit_page_length=1`;
   const found = await erpFetch(env, base, "GET", path);
   const rows = Array.isArray(found.data) ? found.data as Array<{ name?: unknown }> : [];
@@ -95,6 +170,30 @@ function normalizeBaseUrl(raw: string | undefined): string {
 function readName(created: { data?: unknown }): string | null {
   const data = created.data as { name?: unknown } | undefined;
   return typeof data?.name === "string" && data.name ? data.name : null;
+}
+
+function brand(p: Record<string, unknown>): string | undefined {
+  const value = str(p.brand)?.toLowerCase();
+  return value === "ironwrap" || value === "iroof" ? value : undefined;
+}
+
+function serviceType(p: Record<string, unknown>): string {
+  const text = `${str(p.service) ?? ""} ${str(p.service_intent) ?? ""}`.toLowerCase();
+  if (text.includes("metal")) return "Metal Roofing";
+  if (text.includes("siding")) return "Siding";
+  if (text.includes("gutter")) return "Gutters";
+  if (text.includes("soffit") || text.includes("fascia")) return "Soffit/Fascia";
+  if (text.includes("commercial")) return "Commercial";
+  if (text.includes("roof")) return "Roofing";
+  return "Other";
+}
+
+function safeJson(s: string): Record<string, unknown> {
+  try { return JSON.parse(s) as Record<string, unknown>; } catch { return {}; }
+}
+
+function str(v: unknown): string | undefined {
+  return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
 const enc = encodeURIComponent;

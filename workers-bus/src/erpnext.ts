@@ -20,6 +20,11 @@ export interface ErpNextResult {
   evidenceItemName?: string;
 }
 
+export interface ErpNextPhotoEvidenceResult {
+  names: string[];
+  reused: boolean;
+}
+
 export interface ErpNextMeasurementInput {
   measurementId: string;
   jobNumber: string;
@@ -28,6 +33,22 @@ export interface ErpNextMeasurementInput {
   rawKey: string;
   parsedAt: string;
   measurements: Record<string, number>;
+}
+
+export interface ErpNextPhotoEvidenceInput {
+  submissionId: string;
+  jobNumber: string;
+  rawKey: string;
+  capturedAt: string;
+  caption: string | null;
+  photos: Array<{
+    index: number;
+    sourceUri: string;
+    fileName: string;
+    driveFileUrl?: string | null;
+    driveFileId?: string | null;
+    error?: string | null;
+  }>;
 }
 
 export async function pushToErpNext(
@@ -180,6 +201,37 @@ export async function pushMeasurementToErpNext(
   return { ...report, evidenceItemName: evidence.name };
 }
 
+export async function pushPhotoEvidenceToErpNext(
+  env: Env,
+  input: ErpNextPhotoEvidenceInput,
+): Promise<ErpNextPhotoEvidenceResult | null> {
+  const cfg = env as ErpEnv;
+  if (!isOn(cfg.ERPNEXT_ENABLED)) return null;
+  if (!cfg.ERPNEXT_API_KEY || !cfg.ERPNEXT_API_SECRET) throw new Error("erpnext_no_token");
+
+  const base = normalizeBaseUrl(cfg.ERPNEXT_BASE_URL);
+  const roofJob = await findByTerm(cfg, base, "Roof Job", "job_number", input.jobNumber);
+  const names: string[] = [];
+  let reused = false;
+  for (const photo of input.photos) {
+    const evidence = await upsertByField(cfg, base, "Evidence Item", "evidence_id", photoEvidenceId(input.submissionId, photo.index), {
+      evidence_id: photoEvidenceId(input.submissionId, photo.index),
+      roof_job: roofJob ?? undefined,
+      evidence_type: "Photo",
+      source_system: "Jotform",
+      source_uri: photo.driveFileUrl ?? photo.sourceUri,
+      r2_key: input.rawKey,
+      drive_file_id: photo.driveFileId ?? undefined,
+      captured_at: input.capturedAt,
+      customer_safe: 0,
+      summary: photoSummary(photo.index, photo.fileName, input.caption, photo.error),
+    });
+    names.push(evidence.name);
+    reused = reused || evidence.reused;
+  }
+  return { names, reused };
+}
+
 async function createIfMissingByField(
   env: ErpEnv,
   base: string,
@@ -281,6 +333,18 @@ function measurementUnit(metric: string): string | undefined {
   if (metric.includes("pitch")) return "pitch";
   if (metric.includes("factor")) return "ratio";
   return undefined;
+}
+
+function photoEvidenceId(submissionId: string, index: number): string {
+  return `evidence:photo:${submissionId}:${String(index + 1).padStart(2, "0")}`;
+}
+
+function photoSummary(index: number, fileName: string, caption: string | null, error?: string | null): string {
+  return [
+    `Jobsite photo ${index + 1}: ${fileName}`,
+    caption,
+    error ? `Upload issue: ${error}` : null,
+  ].filter(Boolean).join(" - ");
 }
 
 function gateId(roofJobName: string, gate: string): string {

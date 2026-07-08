@@ -9,7 +9,9 @@ New here? Read **[AGENTS.md](./AGENTS.md)** for the architecture, verified facts
 Shipping it? See **[DELIVERY-PLAN.md](./DELIVERY-PLAN.md)** — the phased roadmap from today to the spec's final state — and **[SETUP-CHECKLIST.md](./SETUP-CHECKLIST.md)** for the manual SaaS-side config.
 
 Exploring the next-generation ERPNext/Hermes product direction? See
-**[docs/HERMES-ERPNEXT-END-PRODUCT-BLUEPRINT.md](./docs/HERMES-ERPNEXT-END-PRODUCT-BLUEPRINT.md)**.
+**[docs/HERMES-ERPNEXT-END-PRODUCT-BLUEPRINT.md](./docs/HERMES-ERPNEXT-END-PRODUCT-BLUEPRINT.md)**
+and the blocker triage in
+**[docs/HERMES-ERPNEXT-BLOCKER-AUDIT.md](./docs/HERMES-ERPNEXT-BLOCKER-AUDIT.md)**.
 
 ## Layout
 

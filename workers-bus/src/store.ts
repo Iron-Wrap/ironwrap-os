@@ -75,6 +75,19 @@ export async function setStatus(
   ).run();
 }
 
+export async function setErpNextSync(env: Env, id: string, name: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE envelopes SET erpnext_lead_envelope_id = ?, erpnext_synced_at = ?,
+       erpnext_error = NULL, updated_at = ? WHERE envelope_id = ?`,
+  ).bind(name, nowIso(), nowIso(), id).run();
+}
+
+export async function setErpNextError(env: Env, id: string, error: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE envelopes SET erpnext_error = ?, updated_at = ? WHERE envelope_id = ?`,
+  ).bind(error, nowIso(), id).run();
+}
+
 /** Atomically bump attempts and stamp the error; returns the new attempt count. */
 export async function bumpAttempt(env: Env, id: string, error: string): Promise<number> {
   await env.DB.prepare(

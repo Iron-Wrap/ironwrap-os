@@ -14,5 +14,11 @@ GOOGLE_SERVICE_ACCOUNT_JSON=""
 # QuickBooks webhook verifier token (Intuit)
 QB_WEBHOOK_TOKEN=""
 
+# ERPNext/Frappe API token pair (optional; only used when ERPNEXT_ENABLED=true)
+ERPNEXT_API_KEY=""
+ERPNEXT_API_SECRET=""
+
 # Local overrides of wrangler.jsonc vars (optional):
 # JOBNIMBUS_ENABLED="false"
+# ERPNEXT_ENABLED="false"
+# ERPNEXT_BASE_URL="https://your-site.frappe.cloud"

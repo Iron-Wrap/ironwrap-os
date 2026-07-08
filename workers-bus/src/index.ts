@@ -11,6 +11,7 @@ import {
 } from "./core.ts";
 import * as store from "./store.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
+import { pushToErpNext } from "./erpnext.ts";
 import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
 import { handlePhotoIngest } from "./photos.ts";
 import { handleMeasurementIngest } from "./measurements.ts";
@@ -161,20 +162,20 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
   const rec = await store.getEnvelope(env, envelopeId);
   if (!rec) throw new Error("envelope_missing");
   if (rec.status === "pushed" || rec.status === "reconciled") return; // idempotent re-delivery
+  let r: Awaited<ReturnType<typeof pushToJobNimbus>>;
   try {
-    const r = await pushToJobNimbus(env, rec);
-    await store.setStatus(env, envelopeId, "pushed", { jn_contact_id: r.contactId, jn_job_id: r.jobId ?? null });
+    r = await pushToJobNimbus(env, rec);
+    await store.recordAudit(env, {
+      automation: "jn_push", trigger: "queue", envelope_id: envelopeId,
+      target_ids: `contact:${r.contactId}${r.jobId ? ",job:" + r.jobId : ""}`,
+      action: "push", result: "ok",
+    });
     // Fresh job → ensure its Drive folder (+01–06 template) now (best-effort, credential-gated).
     if (r.jobNumber && googleConfigured(env)) {
       const p = safeJson(rec.payload_json);
       await ensureJobFolder(env, r.jobNumber, rec.contact_name, typeof p.brand === "string" ? p.brand : null)
         .catch((e) => log({ at: "job_folder", job: r.jobNumber, error: String(e) }));
     }
-    await store.recordAudit(env, {
-      automation: "jn_push", trigger: "queue", envelope_id: envelopeId,
-      target_ids: `contact:${r.contactId}${r.jobId ? ",job:" + r.jobId : ""}`,
-      action: "push", result: "ok",
-    });
   } catch (err) {
     const n = await store.bumpAttempt(env, envelopeId, String(err));
     await store.recordAudit(env, {
@@ -184,19 +185,44 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     });
     throw err; // → queue retry; exhausted → DLQ
   }
+
+  try {
+    const erp = await pushToErpNext(env, rec, r);
+    if (erp) {
+      await store.setErpNextSync(env, envelopeId, erp.name);
+      await store.recordAudit(env, {
+        automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,
+        target_ids: `lead_envelope:${erp.name}`,
+        action: erp.reused ? "upsert_existing" : "create", result: "ok",
+      });
+    }
+  } catch (err) {
+    const error = `erpnext_push: ${String(err)}`;
+    await store.setErpNextError(env, envelopeId, error).catch(() => {});
+    const n = await store.bumpAttempt(env, envelopeId, error);
+    await store.recordAudit(env, {
+      automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,
+      action: `push_attempt_${n}`, result: "error", error,
+      recovery_owner: env.OWNER_ALERT_EMAIL,
+    });
+    throw err; // keep the envelope pending; queue retry preserves the ERPNext proof path
+  }
+
+  await store.setStatus(env, envelopeId, "pushed", { jn_contact_id: r.contactId, jn_job_id: r.jobId ?? null });
 }
 
 async function handleDead(env: Env, envelopeId: string): Promise<void> {
   const rec = await store.getEnvelope(env, envelopeId);
+  const stage = rec?.last_error?.includes("erpnext_") ? "erpnext_push" : "jn_push";
   await store.setStatus(env, envelopeId, "dead", { last_error: rec?.last_error ?? "dead_letter" });
   await store.recordDeadLetter(env, {
-    envelope_id: envelopeId, stage: "jn_push",
+    envelope_id: envelopeId, stage,
     error: rec?.last_error ?? "unknown", payload_json: rec?.payload_json ?? "{}",
   });
   // Best-effort: the dead_letter ROW (recorded above) is the source of truth; a failed alert email
   // must not throw, or the DLQ message would needlessly retry/drop.
-  await sendOwnerAlert(env, `DEAD-LETTER: lead ${envelopeId} failed to reach JobNimbus`,
-    `<p>Envelope <b>${envelopeId}</b> exhausted retries to JobNimbus.</p>
+  await sendOwnerAlert(env, `DEAD-LETTER: lead ${envelopeId} failed during ${stage}`,
+    `<p>Envelope <b>${envelopeId}</b> exhausted retries during <b>${stage}</b>.</p>
      <p>Last error: ${rec?.last_error ?? "unknown"}</p>
      <p>Recover with POST /admin/replay once the cause is fixed.</p>`)
     .catch((e) => log({ at: "deadletter_alert_failed", envelope_id: envelopeId, error: String(e) }));

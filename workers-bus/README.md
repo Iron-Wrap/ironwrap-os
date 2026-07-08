@@ -22,7 +22,8 @@ inbound (website/phone/gbp/ad/referral/manual)
 [4] enqueue → JN_QUEUE
         │
         ▼  queue consumer (idempotent, auto-retried)
-     push to JobNimbus → status=pushed
+     push to JobNimbus
+     optional push to ERPNext Lead Envelope → status=pushed
         │ fail ×5 → DLQ → dead_letter table + owner email
         ▼
   cron */5  → retry sweep (re-drive anything stuck in pending_jn_push)
@@ -43,6 +44,7 @@ inbound (website/phone/gbp/ad/referral/manual)
 | Daily reconciliation w/ independent ground-truth + heartbeat | `index.ts:runReconcile` + `source_counts` table |
 | Idempotent record handoff, kill switch, logging | `external_id`=envelope_id; `JOBNIMBUS_ENABLED` flag; `audit_log` |
 | Intent → owner queue routing (spec 16) | `core.ts:classifyIntent` |
+| ERPNext bridge proof | `erpnext.ts` creates/updates the configured Lead Envelope DocType when enabled |
 
 ## Files
 
@@ -50,6 +52,7 @@ inbound (website/phone/gbp/ad/referral/manual)
 src/core.ts        pure logic (envelope, dedup, routing, reconcile) — node-testable, no I/O
 src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   JobNimbus push adapter (live-tested; enabled by config)
+src/erpnext.ts     Optional ERPNext/Frappe Lead Envelope consumer
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
 src/index.ts       the Worker: fetch + queue + scheduled
@@ -78,6 +81,8 @@ npx wrangler secret put ADMIN_TOKEN
 npx wrangler secret put JOBNIMBUS_API_KEY
 npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
 npx wrangler secret put QB_WEBHOOK_TOKEN   # when the QuickBooks webhook is connected
+npx wrangler secret put ERPNEXT_API_KEY    # when ERPNext bridge is enabled
+npx wrangler secret put ERPNEXT_API_SECRET
 
 npm test                     # pure-logic self-test
 npm run typecheck            # tsc --noEmit
@@ -117,6 +122,10 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
    A2P/carrier registration. Pre-A2P instant-ack is Gmail email + owner alert.
 4. **QuickBooks webhook** — the receiver captures signed events now. Mirroring invoice/payment
    status back to JobNimbus needs a later QB OAuth read path.
+5. **ERPNext bridge** — disabled by default. Before setting `ERPNEXT_ENABLED=true`, apply
+   migrations and create a Frappe DocType matching `ERPNEXT_LEAD_ENVELOPE_DOCTYPE` with a unique
+   `envelope_id` field plus the fields written by `src/erpnext.ts`. The Worker upserts by
+   `envelope_id`; ERPNext is still a consumer, not the raw intake source.
 
 ## Maintenance owner (don't skip — spec gap #3)
 

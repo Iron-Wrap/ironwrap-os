@@ -28,6 +28,7 @@ The exhaustive first phase is
 | `output/` | Generated deliverables (Russian `.docx`, overview PDF, website audit). |
 | `task1-spec/` | Original source material (v9.1 docs, pricing, early PDFs). |
 | `tools/` | Build/proof scripts, including the AppliCad XML measurement proof. |
+| `mcp/ironwrap-bus-mcp/` | Read-only MCP wrapper for Hermes/operator diagnostics over the bus admin endpoints. |
 
 ## Status
 

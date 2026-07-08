@@ -1,6 +1,6 @@
-# IronWrap
+# IronWrap OS
 
-Internal operating system for **IronWrap Exteriors** (Alberta roofing & metal exteriors; two
+**IronWrap OS** for **IronWrap Exteriors** (Alberta roofing & metal exteriors; two
 brands — IronWrap Exteriors + iRoof Alberta). Goal: capture every lead, never lose one, and run
 jobs lead → proposal → deposit → materials → completion → invoice → review on a portable,
 owned-data spine (JobNimbus CRM + a Cloudflare owned data layer).

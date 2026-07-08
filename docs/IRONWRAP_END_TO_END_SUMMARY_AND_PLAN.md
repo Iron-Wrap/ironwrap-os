@@ -11,7 +11,7 @@ and current public web/vendor research. No shared credentials were used.
 
 There are two separate opportunities and they should stay separate.
 
-1. **Task 1: IronWrap internal operating system.** Build the operating spine for
+1. **Task 1: IronWrap OS.** Build the operating spine for
    IronWrap first: lead capture, booking, JobNimbus cleanup, Make automations,
    folders, proposals, payment/review follow-up, measurement intake, AI
    missed-call handling, and launch controls. The local `final-spec-pack` already
@@ -104,7 +104,7 @@ Caveats:
   available. Do not buy upgrades or REST/API access until native JobNimbus
   integration, web apps, or webhook output fail a real test.
 
-## Task 1 Plan: IronWrap Internal OS
+## Task 1 Plan: IronWrap OS
 
 ### Goal
 

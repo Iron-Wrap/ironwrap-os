@@ -1,4 +1,4 @@
-# IronWrap - Manual Setup Checklist
+# IronWrap OS - Manual Setup Checklist
 
 Human/UI configuration that happens in SaaS tools, not in repo code. This file tracks the current
 Google Workspace / Google Drive / JobNimbus spine direction.

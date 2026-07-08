@@ -1,10 +1,10 @@
-# IronWrap Internal OS Final Spec Pack
+# IronWrap OS Final Spec Pack
 
 Date: 2026-06-27 (re-architected 2026-06-28; updated 2026-07-08 for Google Workspace/Drive and Phase 1 source truth).
 
-This pack is the final implementation specification for IronWrap's internal
-operating system. It is not the external metal-layout SaaS idea. It covers the
-internal system we should set up, configure, build, test, and ship for IronWrap.
+This pack is the final implementation specification for **IronWrap OS**. It is
+not the external metal-layout SaaS idea. It covers the internal system we should
+set up, configure, build, test, and ship for IronWrap.
 
 ## Final Direction
 

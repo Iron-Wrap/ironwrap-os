@@ -29,6 +29,16 @@ export interface DeadLetterRecord extends DeadLetterEntry {
   recovered: number;
 }
 
+export interface QuickBooksWebhookReceipt {
+  payload_hash: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  envelope_id: string;
+  raw_key: string;
+  events_count: number;
+  replay_count: number;
+}
+
 const nowIso = () => new Date().toISOString();
 
 /** Archive the raw inbound body to R2 FIRST, so nothing is lost if later steps fail. */
@@ -156,6 +166,41 @@ export async function recordDeadLetter(env: Env, e: DeadLetterEntry): Promise<vo
     `INSERT INTO dead_letter (ts, envelope_id, stage, error, payload_json, recovered)
      VALUES (?,?,?,?,?,0)`,
   ).bind(nowIso(), e.envelope_id, e.stage, e.error, e.payload_json).run();
+}
+
+export async function getQuickBooksWebhookReceipt(
+  env: Env,
+  payloadHash: string,
+): Promise<QuickBooksWebhookReceipt | null> {
+  return await env.DB.prepare(
+    `SELECT * FROM quickbooks_webhook_receipts WHERE payload_hash = ?`,
+  ).bind(payloadHash).first<QuickBooksWebhookReceipt>();
+}
+
+export async function insertQuickBooksWebhookReceipt(
+  env: Env,
+  receipt: Omit<QuickBooksWebhookReceipt, "replay_count">,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO quickbooks_webhook_receipts
+       (payload_hash, first_seen_at, last_seen_at, envelope_id, raw_key, events_count, replay_count)
+     VALUES (?,?,?,?,?,?,0)`,
+  ).bind(
+    receipt.payload_hash,
+    receipt.first_seen_at,
+    receipt.last_seen_at,
+    receipt.envelope_id,
+    receipt.raw_key,
+    receipt.events_count,
+  ).run();
+}
+
+export async function recordQuickBooksWebhookReplay(env: Env, payloadHash: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE quickbooks_webhook_receipts
+     SET last_seen_at = ?, replay_count = replay_count + 1
+     WHERE payload_hash = ?`,
+  ).bind(nowIso(), payloadHash).run();
 }
 
 /** Envelopes still pending past the threshold — the retry sweep re-drives these. */

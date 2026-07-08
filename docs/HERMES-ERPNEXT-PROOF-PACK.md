@@ -290,7 +290,7 @@ These are not artificial and should stay visible:
 | Website form cutover | website host/CMS/agency access and real test lead |
 | Make scenario resave/retirement | Make UI and owner confirmation |
 | Jotform live forms/webhooks/mobile offline test | Jotform account and device test |
-| QuickBooks Payments/webhook/OAuth | QuickBooks admin/OAuth |
+| QuickBooks Payments/webhook/OAuth | Webhook receiver has signed-payload replay receipts; QuickBooks admin/OAuth still required for payment detail reads |
 | Google DKIM/DMARC and Microsoft mirror shutdown | Google/Microsoft admin plus owner signoff |
 | Cloudflare token rotation | Cloudflare account authority |
 | Historical OneDrive migration | Microsoft/Google access plus legacy mapping |

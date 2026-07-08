@@ -49,6 +49,10 @@ export async function handleQuickbooksWebhook(env: Env, rawText: string, signatu
   if (!signature || !(await verifyIntuitSignature(env.QB_WEBHOOK_TOKEN, rawText, signature))) {
     return jsonResp({ error: "bad_signature" }, 401);
   }
+  const payloadHash = await sha256Hex(rawText);
+  const existing = await store.getQuickBooksWebhookReceipt(env, payloadHash);
+  if (existing) return await replayResponse(env, existing);
+
   const id = newEnvelopeId();
   const now = new Date().toISOString();
   const rawKey = `raw/quickbooks/${now.slice(0, 10)}/${id}.json`;
@@ -57,6 +61,23 @@ export async function handleQuickbooksWebhook(env: Env, rawText: string, signatu
   let parsed: unknown = {};
   try { parsed = JSON.parse(rawText); } catch { /* keep {} — raw is already stored */ }
   const events = parseQbEvents(parsed);
+  try {
+    await store.insertQuickBooksWebhookReceipt(env, {
+      payload_hash: payloadHash,
+      first_seen_at: now,
+      last_seen_at: now,
+      envelope_id: id,
+      raw_key: rawKey,
+      events_count: events.length,
+    });
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      const raced = await store.getQuickBooksWebhookReceipt(env, payloadHash);
+      if (raced) return await replayResponse(env, raced);
+    }
+    throw err;
+  }
+
   const erpnextPaymentMilestoneIds: string[] = [];
   let erpnextError: string | null = null;
   for (const e of events) {
@@ -73,6 +94,33 @@ export async function handleQuickbooksWebhook(env: Env, rawText: string, signatu
 
 function jsonResp(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+async function replayResponse(env: Env, receipt: store.QuickBooksWebhookReceipt): Promise<Response> {
+  await store.recordQuickBooksWebhookReplay(env, receipt.payload_hash);
+  await store.recordAudit(env, {
+    automation: "quickbooks",
+    trigger: "webhook",
+    envelope_id: receipt.envelope_id,
+    source_ids: `payload:${receipt.payload_hash.slice(0, 16)}`,
+    action: "webhook_replay",
+    result: "ok",
+  });
+  return jsonResp({
+    ok: true,
+    replay: true,
+    envelope_id: receipt.envelope_id,
+    events: receipt.events_count,
+  });
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function isUniqueConstraintError(err: unknown): boolean {
+  return /unique|constraint/i.test(String(err));
 }
 
 async function syncQuickBooksEventToErpNext(

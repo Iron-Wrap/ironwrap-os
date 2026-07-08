@@ -137,6 +137,7 @@ test("handleQuickbooksWebhook: signed event creates ERPNext Payment Milestone ro
 
   const writes: Array<{ sql: string; args: unknown[] }> = [];
   const rawWrites: Array<{ key: string; body: string }> = [];
+  const receipts = new Map<string, Record<string, unknown>>();
   const env = {
     QB_WEBHOOK_TOKEN: "verifier-123",
     ERPNEXT_ENABLED: "true",
@@ -148,7 +149,36 @@ test("handleQuickbooksWebhook: signed event creates ERPNext Payment Milestone ro
       prepare(sql: string) {
         return {
           bind(...args: unknown[]) {
-            return { run: async () => { writes.push({ sql, args }); return { success: true }; } };
+            return {
+              first: async () => {
+                if (sql.includes("FROM quickbooks_webhook_receipts")) {
+                  return receipts.get(String(args[0])) ?? null;
+                }
+                return null;
+              },
+              run: async () => {
+                writes.push({ sql, args });
+                if (sql.includes("INSERT INTO quickbooks_webhook_receipts")) {
+                  receipts.set(String(args[0]), {
+                    payload_hash: args[0],
+                    first_seen_at: args[1],
+                    last_seen_at: args[2],
+                    envelope_id: args[3],
+                    raw_key: args[4],
+                    events_count: args[5],
+                    replay_count: 0,
+                  });
+                }
+                if (sql.includes("UPDATE quickbooks_webhook_receipts")) {
+                  const receipt = receipts.get(String(args[1]));
+                  if (receipt) {
+                    receipt.last_seen_at = args[0];
+                    receipt.replay_count = Number(receipt.replay_count ?? 0) + 1;
+                  }
+                }
+                return { success: true };
+              },
+            };
           },
         };
       },
@@ -192,4 +222,16 @@ test("handleQuickbooksWebhook: signed event creates ERPNext Payment Milestone ro
   assert.equal(posted[1].roof_job, undefined);
   assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") &&
     w.args.includes("erpnext_quickbooks") && w.args.includes("payment_milestone:PM-0001")));
+
+  const replay = await handleQuickbooksWebhook(env as never, bodyText, sig);
+  const replayBody = await replay.json() as { replay?: boolean; envelope_id?: string; events?: number };
+
+  assert.equal(replay.status, 200);
+  assert.equal(replayBody.replay, true);
+  assert.equal(replayBody.events, 2);
+  assert.equal(rawWrites.length, 1);
+  assert.equal(fetches.filter((f) => f.url.endsWith("/api/resource/Payment%20Milestone")).length, 2);
+  assert.ok(writes.some((w) => w.sql.includes("UPDATE quickbooks_webhook_receipts")));
+  assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") &&
+    w.args.includes("webhook_replay")));
 });

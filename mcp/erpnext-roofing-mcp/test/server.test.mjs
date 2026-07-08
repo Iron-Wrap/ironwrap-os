@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import {
   assertWriteApproved,
   buildGateUpdatePatch,
+  buildProposalEvidencePackDraft,
   configFromEnv,
   erpGet,
   erpPut,
+  proposalPackIdForRoofJob,
   redactApprovalArgs,
   resourceListPath,
   resourcePath,
@@ -93,6 +95,7 @@ test("resource paths encode Frappe DocTypes, names, fields, and filters", () => 
   assert.equal(resourcePath("Hermes Run", "hr_1"), "/api/resource/Hermes%20Run/hr_1");
   assert.equal(resourcePath("Measurement Report", "measurement:ow_1"), "/api/resource/Measurement%20Report/measurement%3Aow_1");
   assert.equal(resourcePath("Evidence Item", "evidence:measurement:ow_1"), "/api/resource/Evidence%20Item/evidence%3Ameasurement%3Aow_1");
+  assert.equal(resourcePath("Proposal Evidence Pack", "proposal:job:ow_1"), "/api/resource/Proposal%20Evidence%20Pack/proposal%3Ajob%3Aow_1");
 });
 
 test("write approval and gate patch helpers enforce narrow mutation rules", () => {
@@ -121,4 +124,44 @@ test("write approval and gate patch helpers enforce narrow mutation rules", () =
     gate_id: "gate_1",
     next_state: "Ready",
   });
+});
+
+test("proposal evidence pack draft links measurement and evidence proof", () => {
+  assert.equal(proposalPackIdForRoofJob("job:ow_1"), "proposal:job:ow_1");
+
+  const draft = buildProposalEvidencePackDraft({
+    roofJobId: "job:ow_1",
+    measurements: [{
+      name: "measurement:ow_1",
+      measurement_id: "measurement:ow_1",
+      provider: "RoofRuler",
+      source_file: "sample.pdf",
+      raw_key: "measurements/ow_1/sample.pdf",
+      review_status: "Parsed",
+    }],
+    evidence: [{
+      name: "evidence:measurement:ow_1",
+      evidence_id: "evidence:measurement:ow_1",
+      evidence_type: "Measurement Report",
+      source_system: "workers-bus",
+      r2_key: "measurements/ow_1/sample.pdf",
+      customer_safe: 1,
+      summary: "RoofRuler measurement report synced from R2.",
+    }],
+    nowIso: "2026-07-08T10:00:00.000Z",
+  });
+
+  assert.equal(draft.pack_id, "proposal:job:ow_1");
+  assert.equal(draft.roof_job, "job:ow_1");
+  assert.equal(draft.status, "Draft");
+  assert.equal(draft.prepared_at, "2026-07-08T10:00:00.000Z");
+  assert.match(draft.assumptions, /estimator review/);
+  assert.match(draft.exclusions, /binding quote/);
+  assert.match(draft.customer_message, /final proposal/);
+
+  const summary = JSON.parse(draft.evidence_summary_json);
+  assert.deepEqual(summary.counts, { measurement_reports: 1, evidence_items: 1 });
+  assert.equal(summary.measurement_reports[0].measurement_id, "measurement:ow_1");
+  assert.equal(summary.evidence_items[0].evidence_id, "evidence:measurement:ow_1");
+  assert.equal(summary.evidence_items[0].customer_safe, true);
 });

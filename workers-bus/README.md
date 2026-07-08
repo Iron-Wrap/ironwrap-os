@@ -44,7 +44,7 @@ inbound (website/phone/gbp/ad/referral/manual)
 | Daily reconciliation w/ independent ground-truth + heartbeat | `index.ts:runReconcile` + `source_counts` table |
 | Idempotent record handoff, kill switch, logging | `external_id`=envelope_id; `JOBNIMBUS_ENABLED` flag; `audit_log` |
 | Intent → owner queue routing (spec 16) | `core.ts:classifyIntent` |
-| ERPNext bridge proof | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
+| ERPNext bridge proof | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
 
 ## Files
 
@@ -52,7 +52,7 @@ inbound (website/phone/gbp/ad/referral/manual)
 src/core.ts        pure logic (envelope, dedup, routing, reconcile) — node-testable, no I/O
 src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   JobNimbus push adapter (live-tested; enabled by config)
-src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, measurement, evidence, field check-in, and payment milestone rows
+src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, estimate, measurement, evidence, field check-in, and payment milestone rows
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
 src/index.ts       the Worker: fetch + queue + scheduled
@@ -128,10 +128,12 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
    amount/status sync back to JobNimbus still needs a later QB OAuth read path.
 5. **ERPNext bridge** — disabled by default. Before setting `ERPNEXT_ENABLED=true`, apply
    migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,
-   Roofing Property, Roof Job, Measurement Report, Measurement Value, Production Gate
+   Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Measurement Value, Production Gate
    State, Evidence Item, Field Check-in, and Payment Milestone DocTypes exist. The Worker upserts Lead Envelope by
    `envelope_id`, optional Roofing Property by `property_key`, Roof Job by `roof_job_id`,
-   and measurement reports by `measurement_id`. Measurement sync creates a linked
+   instant estimate sessions by `estimate_session_id` when estimate/range fields are present,
+   and measurement reports by `measurement_id`. Estimate sessions are captured as
+   non-binding and review-required; the Worker does not generate final pricing. Measurement sync creates a linked
    Evidence Item for the raw/report artifact. Photo sync creates one photo Evidence
    Item per submitted Jotform photo, links Drive file ids/URLs when available, and
    creates a Field Check-in summary row for the submission. QuickBooks webhook

@@ -91,6 +91,55 @@ test("pushToErpNext: creates Lead Envelope, Roofing Property, and Roof Job", asy
   assert.ok(gateBodies.every((g) => typeof g.blocker_reason === "string" && g.blocker_reason.length > 0));
 });
 
+test("pushToErpNext: captures instant estimate sessions as review-gated ERPNext rows", async (t) => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    if ((init?.method ?? "GET") === "GET") return json({ data: [] });
+    if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-0002" } });
+    if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-0002" } });
+    if (url.endsWith("/api/resource/Production%20Gate%20State")) {
+      const body = JSON.parse(String(init?.body));
+      return json({ data: { name: body.gate_id } });
+    }
+    if (url.endsWith("/api/resource/Instant%20Estimate%20Session")) return json({ data: { name: "IES-0001" } });
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  const instantRec = {
+    ...rec,
+    envelope_id: "ow_22222222-2222-4222-8222-222222222222",
+    payload_json: JSON.stringify({
+      service: "metal roof",
+      instant_estimate: true,
+      estimate_low: "$12,000",
+      estimate_high: "18000",
+      estimate_confidence: "low",
+    }),
+  };
+
+  const result = await pushToErpNext({
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
+  } as never, instantRec);
+
+  assert.equal(result?.instantEstimateSessionName, "IES-0001");
+  const estimate = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/resource/Instant%20Estimate%20Session"))?.init.body));
+  assert.equal(estimate.estimate_session_id, `estimate:${instantRec.envelope_id}`);
+  assert.equal(estimate.lead_envelope, "LE-0002");
+  assert.equal(estimate.roof_job, "RJ-0002");
+  assert.equal(estimate.service_type, "Metal Roofing");
+  assert.equal(estimate.status, "Needs Review");
+  assert.equal(estimate.range_low, 12000);
+  assert.equal(estimate.range_high, 18000);
+  assert.equal(estimate.review_required, 1);
+  assert.match(estimate.assumptions, /estimator review/);
+  assert.match(estimate.exclusions, /Not a final quote/);
+});
+
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 }

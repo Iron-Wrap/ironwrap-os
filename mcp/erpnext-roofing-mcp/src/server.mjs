@@ -43,6 +43,19 @@ const MEASUREMENT_REPORT_FIELDS = [
   "modified",
 ];
 
+const INSTANT_ESTIMATE_SESSION_FIELDS = [
+  "name",
+  "estimate_session_id",
+  "lead_envelope",
+  "roof_job",
+  "service_type",
+  "status",
+  "range_low",
+  "range_high",
+  "review_required",
+  "modified",
+];
+
 const EVIDENCE_ITEM_FIELDS = [
   "name",
   "evidence_id",
@@ -336,6 +349,31 @@ export function buildServer(config) {
     async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath("Measurement Report", {
       fields: MEASUREMENT_REPORT_FIELDS,
       filters: [["Measurement Report", "roof_job", "=", roof_job_id]],
+      limit,
+      orderBy: "modified desc",
+    }))),
+  );
+
+  server.registerTool(
+    "get_instant_estimate_session",
+    {
+      title: "Get Instant Estimate Session",
+      description: "Read one ERPNext Instant Estimate Session by estimate_session_id/name.",
+      inputSchema: { estimate_session_id: z.string().min(1) },
+    },
+    async ({ estimate_session_id }) => text(await erpGet(config, resourcePath("Instant Estimate Session", estimate_session_id))),
+  );
+
+  server.registerTool(
+    "list_instant_estimate_sessions_for_job",
+    {
+      title: "List Instant Estimate Sessions For Job",
+      description: "Read Instant Estimate Session rows linked to one Roof Job.",
+      inputSchema: { roof_job_id: z.string().min(1), limit: z.number().int().min(1).max(100).optional() },
+    },
+    async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath("Instant Estimate Session", {
+      fields: INSTANT_ESTIMATE_SESSION_FIELDS,
+      filters: [["Instant Estimate Session", "roof_job", "=", roof_job_id]],
       limit,
       orderBy: "modified desc",
     }))),

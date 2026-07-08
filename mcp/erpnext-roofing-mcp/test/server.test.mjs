@@ -94,6 +94,7 @@ test("resource paths encode Frappe DocTypes, names, fields, and filters", () => 
   assert.deepEqual(JSON.parse(params.get("filters")), [["Production Gate State", "state", "=", "Blocked"]]);
   assert.equal(resourcePath("Hermes Run", "hr_1"), "/api/resource/Hermes%20Run/hr_1");
   assert.equal(resourcePath("Measurement Report", "measurement:ow_1"), "/api/resource/Measurement%20Report/measurement%3Aow_1");
+  assert.equal(resourcePath("Instant Estimate Session", "estimate:ow_1"), "/api/resource/Instant%20Estimate%20Session/estimate%3Aow_1");
   assert.equal(resourcePath("Evidence Item", "evidence:measurement:ow_1"), "/api/resource/Evidence%20Item/evidence%3Ameasurement%3Aow_1");
   assert.equal(resourcePath("Field Check-in", "field:ow_1"), "/api/resource/Field%20Check-in/field%3Aow_1");
   assert.equal(resourcePath("Proposal Evidence Pack", "proposal:job:ow_1"), "/api/resource/Proposal%20Evidence%20Pack/proposal%3Ajob%3Aow_1");

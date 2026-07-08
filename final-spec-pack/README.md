@@ -1,6 +1,6 @@
 # IronWrap OS Final Spec Pack
 
-Date: 2026-06-27 (re-architected 2026-06-28; updated 2026-07-08 for Google Workspace/Drive and Phase 1 source truth).
+Date: 2026-06-27 (re-architected 2026-06-28; updated 2026-07-08 for Google Workspace/Drive, Phase 1 source truth, and owned estimator/ERPNext direction).
 
 This pack is the final implementation specification for **IronWrap OS**. It is
 not the external metal-layout SaaS idea. It covers the internal system we should
@@ -8,18 +8,21 @@ set up, configure, build, test, and ship for IronWrap.
 
 ## Final Direction
 
-Consolidate onto JobNimbus and the owned Cloudflare bus. Retire GoHighLevel as the
-front door after the experimental/import-rescue paths are replaced. The exhaustive
-first-phase build contract is `18-phase-1-source-truth-and-build-contract.md`; it wins
-when older provenance docs disagree.
+Consolidate onto the owned Cloudflare bus and IronWrap OS operating core. JobNimbus and
+GoHighLevel remain temporary bridge systems only until the owned path covers their live
+work. The exhaustive first-phase build contract is `18-phase-1-source-truth-and-build-contract.md`;
+it wins when older provenance docs disagree.
 
-- JobNimbus as the operational CRM, job-truth, and lead front door (customer,
-  property, job, stage, task, owner, job number). GHL was experimental/import
-  scaffolding; the contact rescue has run, and remaining live routes should be
-  retired only after the bus replacement path is proven.
+- IronWrap OS / ERPNext as the target operating truth for customer, property,
+  job, estimate, stage, task, owner, evidence, and approval state. JobNimbus can
+  bridge existing job/CRM operations while owned replacements mature.
 - A thin owned data layer (Cloudflare D1 + R2) is the system of record: Make
-  dual-writes every lead/event to it first, then to JobNimbus. JobNimbus is a
-  consumer of IronWrap's data, not the owner.
+  dual-writes every lead/event to it first, then to bridge systems only when
+  still needed. JobNimbus/GHL are consumers of IronWrap's data, not owners.
+- The owned estimator/configurator path is first-class: public/internal
+  estimate payloads land at `POST /ingest/estimate`, save raw R2 + D1 truth,
+  and create review-gated ERPNext Instant Estimate Session rows. No generated
+  estimate is binding until a human approves scope, exclusions, and price.
 - Make as connector/visibility infrastructure and the Cloudflare Worker as the
   owned bus: canonical lead envelope, dedup, dead-letter, retry, and daily
   source-vs-landed reconciliation so no lead is ever silently lost.
@@ -52,20 +55,14 @@ when older provenance docs disagree.
 - Security/access hardening last, after build/config/test, with basic access
   containment from the first production use.
 
-The first deliverable reuses Make (on Core, already subscribed), Google Workspace,
-RoofRuler, QuickBooks, JobNimbus, and Jotform, which IronWrap already pays for or
-has set up. The first-deliverable incremental is ~CAD $120–220/mo (loaded, incl.
-~1.40 FX + GST), and is Engage-driven. The driver is JobNimbus Engage (~CAD
-$90–140 loaded with SMS usage); the rest is small — Twilio DID + usage (~CAD
-$5–30) and the A2P monthly campaign fee (~CAD $5–15). Email = Google Workspace
-and storage = Google Drive Shared Drives; Make is on the existing Core plan, and
-the bus can run on Cloudflare Workers (D1/R2/Workers ≈ $0). A dedicated ESP is
-deferred, design = $0 (free Canva + free Affinity). AssistAI minutes are a Phase-2 (post-eval) cost (~CAD $35–70
-loaded when live), not part of the first-deliverable incremental. One-time setup
-~CAD $700–2,100 (A2P registration, DID provisioning, Make/Workers bus build
-labor, domain auth, form re-pointing, training). Renoworks, Paradigm, CallRail,
-paid OCR, DocuSeal, and any custom voice stack remain gated until a tested workflow
-proves the need.
+The first deliverable reuses only what is already useful as a bridge: Make Core,
+Google Workspace, RoofRuler, QuickBooks, JobNimbus, GHL, and Jotform. Do not buy
+duplicate JobNimbus/GHL modules while the owned estimator/Hermes path is being
+proven. Incremental spend should stay limited to necessary delivery rails:
+Cloudflare, email/domain infrastructure, SMS/phone only if approved, and
+measurement/payment vendors when a real workflow requires them. Renoworks,
+Paradigm, CallRail, paid OCR, DocuSeal, and any custom voice stack remain gated
+until a tested workflow proves the need.
 
 ## Pack Index
 
@@ -100,7 +97,8 @@ Task 1 is shipped only when:
 - Website and service-page leads retain source page, service intent, location,
   attachment, and next-step data.
 - Qualified leads create/update JobNimbus without duplicates.
-- JobNimbus owns the canonical job number and job stage.
+- IronWrap OS owns job truth; JobNimbus may bridge job numbers/stages until owned production records
+  replace that slice.
 - Job folders are created once and linked back to JobNimbus and the owned store.
 - Appointment, proposal, deposit, material request, completion, invoice, and
   review paths work end to end.

@@ -2,13 +2,13 @@
 
 The IronWrap integration bus on Cloudflare Workers — the build that collapses the
 spec's **Make bus + owned D1/R2 store** into one serverless app (~CAD $7/mo vs Make's
-tier-bump). One Worker, three handlers: `fetch` (ingest + admin), `queue` (JobNimbus
-push + dead-letter), `scheduled` (retry sweep + daily reconciliation).
+tier-bump). One Worker, three handlers: `fetch` (ingest + admin), `queue` (temporary
+JobNimbus bridge + dead-letter), `scheduled` (retry sweep + daily reconciliation).
 
 > Implements `final-spec-pack/01,03,04,06`. The dual-write becomes a **single write**
 > (the owned store *is* the bus), which is what dissolves the spec's partial-write
-> problem: instant-ack fires off the owned-store write, and the JobNimbus push is a
-> separate retried queue job — JobNimbus being down can never lose or delay a lead.
+> problem: instant-ack fires off the owned-store write, and bridge pushes are separate
+> retried jobs — JobNimbus/GHL being down can never lose or delay owned intake.
 
 ## Flow
 
@@ -28,6 +28,14 @@ inbound (website/phone/gbp/ad/referral/manual)
         ▼
   cron */5  → retry sweep (re-drive anything stuck in pending_jn_push)
   cron 0 14 → reconcile: independent source counts vs landed; daily digest = heartbeat
+
+estimator/configurator
+  │  POST /ingest/estimate  (Bearer INGEST_TOKEN)
+  ▼
+[1] raw estimator payload → R2  ... FIRST
+[2] canonical envelope → D1 ...... status=received, no JobNimbus/GHL queue
+[3] ERPNext Lead Envelope + Roof Job + Instant Estimate Session when enabled
+[4] response returns ERPNext ids/errors to the estimator frontend
 ```
 
 ## How it maps to the spec's hard requirements
@@ -45,6 +53,7 @@ inbound (website/phone/gbp/ad/referral/manual)
 | Idempotent record handoff, kill switch, logging | `external_id`=envelope_id; `JOBNIMBUS_ENABLED` flag; `audit_log` |
 | Intent → owner queue routing (spec 16) | `core.ts:classifyIntent` |
 | ERPNext bridge proof | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
+| Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: raw R2 + D1 envelope + ERPNext Instant Estimate Session without JobNimbus/GHL dependency |
 
 ## Files
 
@@ -53,7 +62,7 @@ src/core.ts        pure logic (envelope, dedup, routing, reconcile) — node-tes
 src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   JobNimbus push adapter (live-tested; enabled by config)
 src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, estimate, measurement, evidence, field check-in, and payment milestone rows
-src/estimates.ts   Public estimator/configurator intake; captures owned lead/session before any CRM queue
+src/estimates.ts   Owned estimator/configurator intake; no JobNimbus/GHL queue
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
 src/index.ts       the Worker: fetch + queue + scheduled
@@ -133,10 +142,12 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
    Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Measurement Value, Production Gate
    State, Evidence Item, Field Check-in, and Payment Milestone DocTypes exist. The Worker upserts Lead Envelope by
    `envelope_id`, optional Roofing Property by `property_key`, Roof Job by `roof_job_id`,
-   instant estimate sessions by `estimate_session_id` when estimate/range fields are present
+   instant estimate sessions by `estimate_session_id` when estimate/range/total fields are present
    or `/ingest/estimate` receives a configurator payload,
    and measurement reports by `measurement_id`. Estimate sessions are captured as
-   non-binding and review-required; the Worker does not generate final pricing. Measurement sync creates a linked
+   non-binding and review-required; `/ingest/estimate` stores configurator totals, project links,
+   selected services, and material choices when present. The Worker does not generate final pricing.
+   Measurement sync creates a linked
    Evidence Item for the raw/report artifact. Photo sync creates one photo Evidence
    Item per submitted Jotform photo, links Drive file ids/URLs when available, and
    creates a Field Check-in summary row for the submission. QuickBooks webhook
@@ -149,6 +160,6 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
 
 This is owned code a no-devops shop must keep running. Name a build/maintenance owner (or
 a retainer) before going live, and keep the **hybrid**: a ~$9/mo Make Core seat for its
-native JobNimbus/QuickBooks connectors + visual observability until this custom JobNimbus
-integration is proven. The bus discipline (envelope, dedup, dead-letter, reconcile) is the
+native connectors + visual observability until the owned replacements are proven. The bus
+discipline (envelope, dedup, dead-letter, reconcile) is the
 same as the spec — this only changes *where the infra runs*.

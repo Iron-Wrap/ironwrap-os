@@ -88,11 +88,27 @@ export async function setStatus(
   ).run();
 }
 
-export async function setErpNextSync(env: Env, id: string, name: string): Promise<void> {
+export interface ErpNextSyncPatch {
+  leadEnvelopeId: string;
+  roofingPropertyId?: string | null;
+  roofJobId?: string | null;
+}
+
+export async function setErpNextSync(env: Env, id: string, patch: ErpNextSyncPatch): Promise<void> {
   await env.DB.prepare(
-    `UPDATE envelopes SET erpnext_lead_envelope_id = ?, erpnext_synced_at = ?,
+    `UPDATE envelopes SET erpnext_lead_envelope_id = ?,
+       erpnext_roofing_property_id = COALESCE(?, erpnext_roofing_property_id),
+       erpnext_roof_job_id = COALESCE(?, erpnext_roof_job_id),
+       erpnext_synced_at = ?,
        erpnext_error = NULL, updated_at = ? WHERE envelope_id = ?`,
-  ).bind(name, nowIso(), nowIso(), id).run();
+  ).bind(
+    patch.leadEnvelopeId,
+    patch.roofingPropertyId ?? null,
+    patch.roofJobId ?? null,
+    nowIso(),
+    nowIso(),
+    id,
+  ).run();
 }
 
 export async function setErpNextError(env: Env, id: string, error: string): Promise<void> {

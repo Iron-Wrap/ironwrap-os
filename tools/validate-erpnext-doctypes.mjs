@@ -58,6 +58,8 @@ const specs = [
       "quotation",
       "project",
       "current_gate_state",
+      "jobnimbus_contact_id",
+      "jobnimbus_job_id",
       "qb_invoice_ref",
     ],
   },

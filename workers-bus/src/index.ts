@@ -192,10 +192,19 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
   try {
     const erp = await pushToErpNext(env, rec, r);
     if (erp) {
-      await store.setErpNextSync(env, envelopeId, erp.name);
+      await store.setErpNextSync(env, envelopeId, {
+        leadEnvelopeId: erp.name,
+        roofingPropertyId: erp.roofingPropertyName ?? null,
+        roofJobId: erp.roofJobName ?? null,
+      });
+      const targetIds = [
+        `lead_envelope:${erp.name}`,
+        erp.roofingPropertyName ? `roofing_property:${erp.roofingPropertyName}` : null,
+        erp.roofJobName ? `roof_job:${erp.roofJobName}` : null,
+      ].filter(Boolean).join(",");
       await store.recordAudit(env, {
         automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,
-        target_ids: `lead_envelope:${erp.name}`,
+        target_ids: targetIds,
         action: erp.reused ? "upsert_existing" : "create", result: "ok",
       });
     }

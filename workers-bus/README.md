@@ -23,7 +23,7 @@ inbound (website/phone/gbp/ad/referral/manual)
         │
         ▼  queue consumer (idempotent, auto-retried)
      push to JobNimbus
-     optional push to ERPNext Lead Envelope → status=pushed
+     optional push to ERPNext Lead Envelope + Roof Job → status=pushed
         │ fail ×5 → DLQ → dead_letter table + owner email
         ▼
   cron */5  → retry sweep (re-drive anything stuck in pending_jn_push)
@@ -44,7 +44,7 @@ inbound (website/phone/gbp/ad/referral/manual)
 | Daily reconciliation w/ independent ground-truth + heartbeat | `index.ts:runReconcile` + `source_counts` table |
 | Idempotent record handoff, kill switch, logging | `external_id`=envelope_id; `JOBNIMBUS_ENABLED` flag; `audit_log` |
 | Intent → owner queue routing (spec 16) | `core.ts:classifyIntent` |
-| ERPNext bridge proof | `erpnext.ts` creates/updates the configured Lead Envelope DocType when enabled |
+| ERPNext bridge proof | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, and Roof Job DocTypes when enabled |
 
 ## Files
 
@@ -52,11 +52,11 @@ inbound (website/phone/gbp/ad/referral/manual)
 src/core.ts        pure logic (envelope, dedup, routing, reconcile) — node-testable, no I/O
 src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   JobNimbus push adapter (live-tested; enabled by config)
-src/erpnext.ts     Optional ERPNext/Frappe Lead Envelope consumer
+src/erpnext.ts     Optional ERPNext/Frappe consumer for Lead Envelope, Roofing Property, and Roof Job
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
 src/index.ts       the Worker: fetch + queue + scheduled
-migrations/0001_init.sql   D1 schema
+migrations/0001_init.sql   D1 schema; 0002/0003 add ERPNext proof fields
 test/core.test.ts  zero-dep self-test (`node --test`)
 ```
 
@@ -126,9 +126,10 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
 4. **QuickBooks webhook** — the receiver captures signed events now. Mirroring invoice/payment
    status back to JobNimbus needs a later QB OAuth read path.
 5. **ERPNext bridge** — disabled by default. Before setting `ERPNEXT_ENABLED=true`, apply
-   migrations and create a Frappe DocType matching `ERPNEXT_LEAD_ENVELOPE_DOCTYPE` with a unique
-   `envelope_id` field plus the fields written by `src/erpnext.ts`. The Worker upserts by
-   `envelope_id`; ERPNext is still a consumer, not the raw intake source.
+   migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,
+   Roofing Property, and Roof Job DocTypes exist. The Worker upserts Lead Envelope by
+   `envelope_id`, optional Roofing Property by `property_key`, and Roof Job by
+   `roof_job_id`; ERPNext is still a consumer, not the raw intake source.
 
 ## Maintenance owner (don't skip — spec gap #3)
 

@@ -1,0 +1,6 @@
+app_name = "ironwrap_roofing"
+app_title = "IronWrap Roofing"
+app_publisher = "IronWrap Exteriors"
+app_description = "Roofing operating DocTypes for IronWrap OS"
+app_email = "sales@ironwrapexteriors.com"
+app_license = "MIT"

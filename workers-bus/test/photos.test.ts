@@ -60,9 +60,11 @@ test("handlePhotoIngest: raw capture plus ERPNext photo Evidence Item sync witho
     fetches.push({ url, init: init ?? {} });
     if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0001" }] });
     if (url.includes("/api/resource/Evidence%20Item?")) return json({ data: [] });
+    if (url.includes("/api/resource/Field%20Check-in?")) return json({ data: [] });
     if (url.endsWith("/api/resource/Evidence%20Item")) {
       return json({ data: { name: `EV-000${fetches.filter((f) => f.url.endsWith("/api/resource/Evidence%20Item")).length}` } });
     }
+    if (url.endsWith("/api/resource/Field%20Check-in")) return json({ data: { name: "FCI-0001" } });
     throw new Error(`unexpected fetch ${url}`);
   });
 
@@ -92,6 +94,7 @@ test("handlePhotoIngest: raw capture plus ERPNext photo Evidence Item sync witho
   }), "application/json");
   const body = await res.json() as {
     erpnext_evidence_ids?: string[];
+    erpnext_field_check_in_id?: string;
     erpnext_error?: string | null;
     uploaded?: number;
     note?: string;
@@ -101,6 +104,7 @@ test("handlePhotoIngest: raw capture plus ERPNext photo Evidence Item sync witho
   assert.equal(body.uploaded, 0);
   assert.equal(body.erpnext_error, null);
   assert.deepEqual(body.erpnext_evidence_ids, ["EV-0001", "EV-0002"]);
+  assert.equal(body.erpnext_field_check_in_id, "FCI-0001");
   assert.match(body.note ?? "", /drive_not_configured/);
   assert.equal(rawWrites.length, 1);
   assert.match(rawWrites[0].key, /^raw\/photos\/\d{4}-\d{2}-\d{2}\/ow_/);
@@ -116,8 +120,20 @@ test("handlePhotoIngest: raw capture plus ERPNext photo Evidence Item sync witho
   assert.ok(evidenceBodies[0].evidence_id.startsWith("evidence:photo:ow_"));
   assert.equal(evidenceBodies[0].source_uri, "https://jotform.example/uploads/a.jpg");
   assert.equal(evidenceBodies[0].summary.includes("north wall progress"), true);
+
+  const checkIn = JSON.parse(String(fetches.find((f) => f.url.endsWith("/api/resource/Field%20Check-in"))?.init.body));
+  assert.ok(checkIn.checkin_id.startsWith("field:ow_"));
+  assert.equal(checkIn.roof_job, "RJ-0001");
+  assert.equal(checkIn.job_number, "26-0001");
+  assert.equal(checkIn.source_system, "Jotform");
+  assert.equal(checkIn.status, "Received");
+  assert.equal(checkIn.photo_count, 2);
+  assert.deepEqual(JSON.parse(checkIn.evidence_ids_json), ["EV-0001", "EV-0002"]);
+  assert.equal(checkIn.notes, "north wall progress");
+  assert.match(checkIn.raw_key, /^raw\/photos\/\d{4}-\d{2}-\d{2}\/ow_/);
   assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") &&
-    w.args.includes("erpnext_photo") && w.args.includes("evidence_item:EV-0001,evidence_item:EV-0002")));
+    w.args.includes("erpnext_photo") &&
+    w.args.includes("evidence_item:EV-0001,evidence_item:EV-0002,field_check_in:FCI-0001")));
 });
 
 function json(body: unknown): Response {

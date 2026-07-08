@@ -57,6 +57,18 @@ const EVIDENCE_ITEM_FIELDS = [
   "modified",
 ];
 
+const FIELD_CHECK_IN_FIELDS = [
+  "name",
+  "checkin_id",
+  "roof_job",
+  "job_number",
+  "source_system",
+  "submitted_at",
+  "status",
+  "photo_count",
+  "modified",
+];
+
 const PROPOSAL_EVIDENCE_PACK_FIELDS = [
   "name",
   "pack_id",
@@ -339,6 +351,31 @@ export function buildServer(config) {
       filters: [["Evidence Item", "roof_job", "=", roof_job_id]],
       limit,
       orderBy: "modified desc",
+    }))),
+  );
+
+  server.registerTool(
+    "get_field_check_in",
+    {
+      title: "Get Field Check-in",
+      description: "Read one ERPNext Field Check-in by checkin_id/name.",
+      inputSchema: { checkin_id: z.string().min(1) },
+    },
+    async ({ checkin_id }) => text(await erpGet(config, resourcePath("Field Check-in", checkin_id))),
+  );
+
+  server.registerTool(
+    "list_field_check_ins_for_job",
+    {
+      title: "List Field Check-ins For Job",
+      description: "Read Field Check-in rows linked to one Roof Job.",
+      inputSchema: { roof_job_id: z.string().min(1), limit: z.number().int().min(1).max(100).optional() },
+    },
+    async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath("Field Check-in", {
+      fields: FIELD_CHECK_IN_FIELDS,
+      filters: [["Field Check-in", "roof_job", "=", roof_job_id]],
+      limit,
+      orderBy: "submitted_at desc",
     }))),
   );
 

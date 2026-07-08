@@ -93,6 +93,7 @@ export async function handlePhotoIngest(env: Env, rawText: string, contentType: 
       job_number: sub.jobNumber, action: "received", result: "ok", error: "drive_not_configured" });
     return jsonResp({ ok: true, job_number: sub.jobNumber, photos: sub.photos.length, uploaded: 0,
       erpnext_evidence_ids: erp.names,
+      erpnext_field_check_in_id: erp.fieldCheckInName,
       erpnext_error: erp.error,
       note: "drive_not_configured — raw stored; files sync once Google creds are set" });
   }
@@ -127,12 +128,12 @@ export async function handlePhotoIngest(env: Env, rawText: string, contentType: 
     if (uploadedFile?.error) ref.error = uploadedFile.error.slice(0, 120);
   }
   const uploaded = result.files.filter((f) => f.webUrl).length;
-  const erp = await syncPhotoEvidenceToErpNext(env, id, sub, rawKey, now, refs);
+  const erp = await syncPhotoEvidenceToErpNext(env, id, sub, rawKey, now, refs, result.folderUrl);
   await store.recordAudit(env, { automation: "jobsite_photo", trigger: "jotform", envelope_id: id,
     job_number: sub.jobNumber, target_ids: result.folderUrl,
     action: "filed", result: uploaded ? "ok" : "error", error: uploaded ? null : "no_files_uploaded" });
   return jsonResp({ ok: true, job_number: sub.jobNumber, uploaded, folder: result.folderUrl, files: result.files,
-    erpnext_evidence_ids: erp.names, erpnext_error: erp.error });
+    erpnext_evidence_ids: erp.names, erpnext_field_check_in_id: erp.fieldCheckInName, erpnext_error: erp.error });
 }
 
 function jsonResp(body: unknown, status = 200): Response {
@@ -154,7 +155,8 @@ async function syncPhotoEvidenceToErpNext(
   rawKey: string,
   capturedAt: string,
   photos: PhotoEvidenceRef[],
-): Promise<{ names: string[]; error: string | null }> {
+  driveFolderUrl?: string | null,
+): Promise<{ names: string[]; fieldCheckInName?: string; error: string | null }> {
   try {
     const erp = await pushPhotoEvidenceToErpNext(env, {
       submissionId: id,
@@ -162,15 +164,19 @@ async function syncPhotoEvidenceToErpNext(
       rawKey,
       capturedAt,
       caption: sub.caption,
+      driveFolderUrl,
       photos,
     });
     if (erp) {
       await store.recordAudit(env, { automation: "erpnext_photo", trigger: "jotform",
         envelope_id: id, job_number: sub.jobNumber,
-        target_ids: erp.names.map((name) => `evidence_item:${name}`).join(","),
+        target_ids: [
+          ...erp.names.map((name) => `evidence_item:${name}`),
+          erp.fieldCheckInName ? `field_check_in:${erp.fieldCheckInName}` : null,
+        ].filter(Boolean).join(","),
         action: erp.reused ? "upsert_existing" : "create", result: "ok" });
     }
-    return { names: erp?.names ?? [], error: null };
+    return { names: erp?.names ?? [], fieldCheckInName: erp?.fieldCheckInName, error: null };
   } catch (err) {
     const error = `erpnext_photo: ${String(err)}`;
     await store.recordAudit(env, { automation: "erpnext_photo", trigger: "jotform",

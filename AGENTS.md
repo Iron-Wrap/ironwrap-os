@@ -24,12 +24,15 @@ materials → completion → invoice → review, on a portable owned-data spine.
 
 ## The architecture in one screen (target = the spec)
 
-- **JobNimbus** = operational CRM / job truth. **GoHighLevel (GHL) is experimental and being
-  retired** — do **NOT** re-introduce GHL as a keeper. The live GHL-based Make scenarios are
-  throwaway scaffolding being migrated to the JobNimbus spine.
+- **JobNimbus and GoHighLevel are temporary bridges, not the final system.** Keep them only where
+  they still keep operations running. Do not buy or build new keeper workflows around either one.
+  New work moves toward the owned IronWrap OS path.
 - **Owned data layer = Cloudflare D1 + R2** (the system of record). Every lead is written here
   FIRST as a canonical envelope `{source, brand, contact, job_ref, payload, ts}`, then pushed
-  to JobNimbus. JobNimbus is a *consumer*, not the owner.
+  only to needed bridge systems. JobNimbus/GHL are consumers, not owners.
+- **Estimator/configurator** = owned path first. `POST /ingest/estimate` stores raw estimator
+  payloads, creates/updates ERPNext Lead Envelope / Roof Job / Instant Estimate Session when
+  enabled, and keeps all pricing non-binding until human review.
 - **Integration bus** = Make (on the **Core** plan, ~$9/mo, already subscribed) **or** the
   `workers-bus/` Cloudflare Worker. Recommended hybrid: Worker does the heavy lifting; keep the
   Make Core seat for native connectors + observability.
@@ -44,7 +47,8 @@ materials → completion → invoice → review, on a portable owned-data spine.
 - **Phone AI** = JobNimbus AssistAI (behind a written eval gate) → managed Retell → managed-OSS
   (LiveKit/Pipecat) → voicemail floor. The 4-vendor DIY voice stack stays killed.
 - **Field photos/geo** = Jotform "Jobsite Photo" form (device GPS at submit, offline).
-- **e-sign** = JobNimbus native first. DocuSeal is only a benched escape hatch; there is no
+- **e-sign** = owned proposal evidence pack first as it matures; JobNimbus native can bridge while
+  the owned proposal flow is incomplete. DocuSeal is only a benched escape hatch; there is no
   active `/proposal/create` Worker route.
 - **OCR** = deterministic XML/text → Cloudflare `toMarkdown()` (free) → Mistral OCR only for hard docs.
 - **Design** = free Canva + free Affinity. **Accounting** = QuickBooks. **QuoteLock feature: CUT.**
@@ -88,8 +92,8 @@ npx wrangler deploy --dry-run    # validate config + bundle
 
 - **Maintainer = Ilia (owner) via Claude Code** — CC is the dev/ops capacity; run changes through
   CC sessions. This is why owning custom code (the bus) is viable for a no-devops shop.
-- **The spec is the target; current GHL/Make is experimental.** Don't "fix the spec" to match
-  experimental GHL — migrate toward the spec.
+- **The owned IronWrap OS path is the target.** Don't "fix the spec" to match temporary
+  JobNimbus/GHL behavior; migrate toward the bus + ERPNext/Hermes estimator/proof spine.
 - **Never commit secrets.** The JobNimbus API key was shared in chat during setup — **rotate it**
   and issue a dedicated key for the bus.
 - Spec house style: terse, declarative, tables + mermaid; heavy cross-referencing is intentional.

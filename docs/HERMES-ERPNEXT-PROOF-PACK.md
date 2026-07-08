@@ -4,8 +4,8 @@ Status: local/source proof packet.
 Date: 2026-07-08.
 
 This collapses the artificial blockers from the Hermes/ERPNext blocker audit.
-It does not replace the current JobNimbus/Worker bus operating path. It defines
-what can be built and tested without waiting for account access.
+It defines the owned path that gradually replaces JobNimbus/GHL bridge duties as each proof gate
+passes. It also records what can be built and tested without waiting for account access.
 
 ## Source Proof
 
@@ -33,8 +33,10 @@ Custom DocTypes:
 | Roofing Property | Roof/site-specific property facts | Customer, Address, Lead Envelope |
 | Measurement Report | Report metadata, vendor, source file, normalized values | Roofing Property, Project, Quotation |
 | Measurement Value | Child rows for slope, area, eave, ridge, valley, perimeter, waste, confidence | Measurement Report |
+| Instant Estimate Session | Estimator/configurator submission, non-binding total/range, project link, selected services/materials, review gate | Lead Envelope, Roof Job |
 | Evidence Item | Photo/report/document/source reference used in proposal or gate | Project, Quotation, Task, Measurement Report |
-| Proposal Option | Good/better/best or roof/siding/gutter option with assumptions and exclusions | Quotation |
+| Material Takeoff | Review-gated material rows generated from measurement evidence | Measurement Report, Roof Job |
+| Proposal Evidence Pack | Draft customer proof pack from measurements/evidence/takeoff state | Roof Job, Quotation |
 | Production Gate State | Deposit/material/safety/completion gate state and override history | Project, Task, Sales Order |
 | Supplier Quote | Supplier, valid-until, material lines, substitutions, delivery readiness | Material Request, Supplier |
 | Market Watch Item | Competitor/product gap and response decision | none required |
@@ -67,7 +69,8 @@ Current implementation checkpoint:
   `workers-bus/migrations/0003_erpnext_operating_core.sql`.
 - Frappe app contract: `frappe-apps/ironwrap_roofing` now covers the gate-2
   operating core: lead envelope, roofing property, roof job, measurement report/value,
-  evidence item, proposal evidence pack, production gate state, and Hermes run audit.
+  instant estimate session, material takeoff/item, evidence item, proposal evidence pack,
+  payment milestone, production gate state, and Hermes run audit.
 - Contract validator: `node tools/validate-erpnext-doctypes.mjs`.
 - Read-only bus truth endpoints for Hermes/operator diagnostics:
   `GET /admin/envelopes`, `GET /admin/envelope/:id`, and `GET /admin/dead-letter`.
@@ -76,6 +79,11 @@ Current implementation checkpoint:
 - Measurement bridge: `/ingest/measurement` now stores raw input first, then
   mirrors parsed report metadata and child measurement values into ERPNext
   `Measurement Report` plus a linked `Evidence Item` when `ERPNEXT_ENABLED=true`.
+- Estimator bridge: `/ingest/estimate` stores raw estimator/configurator payloads first,
+  writes a D1 envelope with no JobNimbus/GHL queue dependency, then mirrors Lead Envelope,
+  Roof Job, and review-gated `Instant Estimate Session` rows when `ERPNEXT_ENABLED=true`.
+  It carries project ids, configurator/share URLs, totals, selected services, and material
+  choices when present.
 - Production gate bootstrap: Roof Job sync creates missing `Production Gate State`
   rows for Deposit, Materials, Safety, Access, Weather, Crew, and Completion.
   Existing rows are not overwritten on retry.
@@ -89,12 +97,13 @@ Create/update order:
    property, JobNimbus contact/job refs, JobNimbus job number, and current
    qualification gate.
 5. Create missing initial `Production Gate State` rows for deterministic gatekeeping.
-6. If measurement/report data exists, create `Measurement Report`, child
+6. If estimator/configurator data exists, create or update `Instant Estimate Session`.
+7. If measurement/report data exists, create `Measurement Report`, child
    `Measurement Value` rows linked to the Roof Job by JobNimbus job number when
    that ERPNext job record exists, and an `Evidence Item` pointing at the raw R2
    key plus report URI/file.
-7. Record Worker envelope id and raw key on every ERPNext-linked record.
-8. Reconcile D1 count, ERPNext count, and failed sync rows.
+8. Record Worker envelope id and raw key on every ERPNext-linked record.
+9. Reconcile D1 count, ERPNext count, and failed sync rows.
 
 Minimum payload:
 
@@ -199,6 +208,36 @@ No second parser stack is needed. The current proof emits:
 
 Proof gate: values used in a proposal link back to source file and source ref.
 
+## Estimator Proof
+
+The Worker has an owned estimator intake route:
+
+- `POST /ingest/estimate`
+- stores normalized estimator payload under `raw/estimates/...`
+- writes a D1 envelope with `status=received`
+- does not enqueue JobNimbus/GHL
+- mirrors Lead Envelope, Roof Job, and Instant Estimate Session when ERPNext is enabled
+- keeps `review_required=1` and non-binding assumptions/exclusions
+
+Minimum frontend/server payload:
+
+```json
+{
+  "project_id": "26-180-ER",
+  "job_number": "26-180-ER",
+  "customer": "Jim Rakievich",
+  "email": "jim@example.com",
+  "address": "Gunn, AB",
+  "selected_services": ["Roof", "Wall", "Soffit", "Fascia"],
+  "materials": { "roof": "SnapLock Metal Roofing", "roof_color": "Wrinkle RAL 7024" },
+  "total_estimate": "$216,269.58",
+  "project_url": "https://estimator.example/projects/26-180-ER"
+}
+```
+
+Proof gate: the 3D estimator submit/save action returns ERPNext Lead Envelope, Roof Job, and
+Instant Estimate Session ids without any JobNimbus/GHL queue dependency.
+
 ## Activepieces Decision
 
 Decision: keep Make for current live connectors and owner visibility; bench
@@ -224,9 +263,9 @@ mock Worker/ERPNext endpoint, and shows retries/failures clearly enough for ops.
 
 Decision: keep DocuSeal benched, not primary.
 
-Use JobNimbus native e-sign first because it is already the operational CRM
-surface. Use DocuSeal only if JobNimbus native e-sign fails a real proposal
-workflow.
+Use the owned Proposal Evidence Pack as the target. JobNimbus native e-sign can bridge while that
+owned proposal/signature path is incomplete. Use DocuSeal only if a real proposal workflow cannot
+be handled by the owned path or the temporary JobNimbus bridge.
 
 DocuSeal is viable as a fallback because it has Docker deployment, API,
 webhooks, embedded signing, and PDF/template tooling. It is not "free to

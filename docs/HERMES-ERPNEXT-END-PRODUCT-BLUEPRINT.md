@@ -2,9 +2,10 @@
 
 Status: strategy blueprint, not current implementation truth.
 
-Current repo truth remains the Worker/Make owned bus, JobNimbus, Google Workspace/Drive,
-and QuickBooks path described in `README.md`, `AGENTS.md`, `DELIVERY-PLAN.md`, and the
-`final-spec-pack/`. This document defines the candidate end product: IronWrap first, then
+Current repo truth is the Worker-owned bus plus temporary JobNimbus/GHL bridges, Google
+Workspace/Drive, QuickBooks, and the ERPNext/Hermes proof path described in `README.md`,
+`AGENTS.md`, `DELIVERY-PLAN.md`, and the `final-spec-pack/`. This document defines the
+candidate end product: IronWrap first, then
 a white-label operating system for similar roofing and exterior companies.
 The exhaustive first-phase bridge from current stack to ERPNext/Hermes is
 `final-spec-pack/18-phase-1-source-truth-and-build-contract.md`.
@@ -22,9 +23,15 @@ evidence-first roofing operating system where:
 - Hermes owns agentic operation through narrow, auditable tools.
 - QuickBooks owns accounting truth.
 - Drive/R2 own human and raw evidence archives.
+- JobNimbus/GHL remain temporary bridge systems only until owned slices replace them.
 
 The wedge is narrower than JobNimbus, Roofr, AccuLynx, CompanyCam, and GoHighLevel:
-IronWrap OS should prove every job from lead to warranty, not merely track it.
+IronWrap OS should prove every job from estimate to warranty, not merely track it.
+
+Current implementation checkpoint: the Worker exposes `POST /ingest/estimate` for the 3D
+estimator/configurator. It stores raw estimator payloads in R2, creates a D1 envelope, and mirrors
+ERPNext Lead Envelope / Roof Job / Instant Estimate Session rows when enabled. This is the owned
+handoff that lets JobNimbus/GHL stay bridges instead of product dependencies.
 
 ## Research Basis
 

@@ -4,10 +4,10 @@ Use this as the final acceptance checklist with IronWrap.
 
 ## Business Decisions
 
-- [ ] Remaining GHL routes retired after replacement proof; JobNimbus is the operational CRM / job-truth / lead front door (fronted by the Worker/Make bus + instant-ack branch).
-- [ ] Owned Cloudflare D1+R2 data layer is the system of record; JobNimbus is a consumer (dual-write FIRST, then push to JobNimbus).
-- [ ] JobNimbus owns canonical job number.
-- [ ] Make is treated as critical infrastructure, not plumbing (dead-letter, dedup, daily reconciliation, named weekly owner).
+- [ ] Remaining GHL routes retired after replacement proof; JobNimbus remains only a temporary bridge where owned IronWrap OS slices are not ready.
+- [ ] Owned Cloudflare D1+R2 data layer is the system of record; JobNimbus/GHL are consumers only when still needed.
+- [ ] IronWrap OS owns job truth; JobNimbus job number/stage can bridge until owned production records replace that slice.
+- [ ] Worker bus is primary infrastructure; Make is bridge/observability only where useful (dead-letter, dedup, daily reconciliation, named owner remain mandatory).
 - [ ] Instant-response / missed-call-text-back (MCTB) accepted as the headline deliverable (<60s touch, 24/7).
 - [ ] QuickBooks owns accounting truth.
 - [ ] Google Drive (Google Workspace) selected as storage authority, unless owner explicitly overrides.
@@ -17,24 +17,24 @@ Use this as the final acceptance checklist with IronWrap.
 - [ ] Paradigm deferred until material request flow is stable.
 - [ ] Phone AI = JobNimbus AssistAI (P0) behind eval gate; managed Retell only on eval failure; 4-vendor custom voice stack killed.
 - [ ] Call attribution deferred (UTM + manual Lead Source + one tracked number); CallRail only when paid ads start.
-- [ ] GHL is declined as keeper; import-rescue/legacy routes are disabled only after replacement proof through the bus.
+- [ ] GHL and JobNimbus are declined as keepers for new work; import-rescue/legacy routes are disabled only after replacement proof through the owned bus/ERPNext path.
 - [ ] WooCommerce/B2C store deferred from Task 1.
 - [ ] Calgary expansion structure deferred unless owner explicitly adds it to Task 1.
 
 ## Configuration
 
-- [ ] JobNimbus boards/stages/fields configured.
-- [ ] Make bus configured (canonical lead envelope {source, contact, job_ref, payload, ts}, dual-write to owned store FIRST, then JobNimbus).
+- [ ] JobNimbus bridge boards/stages/fields configured only for the slices still running there.
+- [ ] Worker bus configured (canonical lead envelope {source, contact, job_ref, payload, ts}, write to owned store FIRST, then bridge systems only when needed).
 - [ ] Owned Cloudflare D1+R2 store stood up; dual-write live and verified.
 - [ ] Make error-handler → dead-letter (Google Sheet + email) and phone/email-keyed dedup configured.
 - [ ] Daily reconciliation (source-event counts vs records landed) running; named weekly owner assigned.
-- [ ] JobNimbus Engage configured for 2-way SMS; Google Workspace brand mailboxes (SPF/DKIM/DMARC) for outbound email + bounce monitoring; dedicated ESP deferred; JobNimbus native email unused.
+- [ ] JobNimbus Engage configured for 2-way SMS only if it remains the temporary SMS bridge; Google Workspace brand mailboxes (SPF/DKIM/DMARC) for outbound email + bounce monitoring; dedicated ESP deferred; JobNimbus native email unused.
 - [ ] Make scenarios audited and cleaned.
 - [ ] Jotform "Jobsite Photo" form live as default (JobNimbus job picker + Geolocation widget for device GPS + multi-photo upload + auto timestamp) → webhook → Make → Google Drive job folder + JobNimbus + owned store; crew on Jotform Mobile App offline mode.
 - [ ] Folder naming and subfolders approved.
 - [ ] QuickBooks status visibility tested.
 - [ ] Proposal template approved.
-- [ ] Contract/signature platform decision approved: JobNimbus native e-sign / HTML+PDF first; DocuSeal stays benched unless native e-sign fails in practice.
+- [ ] Contract/signature platform decision approved: owned Proposal Evidence Pack first as it matures; JobNimbus native e-sign / HTML+PDF can bridge; DocuSeal stays benched unless needed.
 - [ ] Material list design approved.
 - [ ] Measurement/document upload convention approved.
 
@@ -107,11 +107,11 @@ Use this as the final acceptance checklist with IronWrap.
 - [ ] Completion/review test passed.
 - [ ] Automation failure test passed.
 
-## Build-Out (GHL Keeper Declined)
+## Build-Out (Bridge Spend Controlled)
 
 - [ ] Remaining GHL routes retired after replacement proof.
-- [ ] Written JobNimbus all-in quote obtained.
-- [ ] All-in CAD TCO table reviewed. First-deliverable incremental ≈ CAD $120-220/mo loaded (incl. ~1.40 FX + GST) — driver is JobNimbus Engage (~CAD $90-140 with SMS usage); Twilio DID + usage ~CAD $5-30, Make is the existing Core seat (~CAD $13, already subscribed) or the bus on Cloudflare Workers ~CAD $20-30, A2P monthly campaign fee ~CAD $5-15; Cloudflare D1/R2/Workers ≈ $0, email = existing Google Workspace brand mailboxes ($0 incremental; dedicated ESP deferred), storage = existing Google Drive (Google Workspace) ($0 incremental), design = $0 (free Canva + free Affinity). AssistAI minutes are a Phase-2 (post-eval) cost (~CAD $35-70 loaded when live), not part of the first-deliverable incremental. One-time setup ~CAD $700-2,100. "$0 new vendor setup" is false (Cloudflare, the owned Twilio number, and — if adopted — DocuSeal are new vendor lines). GHL is declined as keeper, so this avoids ~CAD $135-415/mo of GHL cost; frame as "simpler, more portable, avoids GHL's cost," not a dramatic saving.
+- [ ] Written JobNimbus/GHL all-in bridge cost obtained before renewing or expanding either service.
+- [ ] TCO table reviewed with the current rule: pay only for delivery rails and temporary bridges that are cheaper than owning the risk now. Do not buy duplicate JobNimbus/GHL modules while the owned estimator/Hermes/ERPNext path is being proven.
 - [ ] Engage A2P 10DLC + Canadian carrier registration filed first and approved before any automated texting.
 - [ ] Business phone number provisioned/owned in Twilio for AssistAI/Engage (portable by design).
 - [ ] CASL consent ledger maintained in JobNimbus going forward.

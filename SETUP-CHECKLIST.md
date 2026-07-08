@@ -1,7 +1,8 @@
 # IronWrap OS - Manual Setup Checklist
 
 Human/UI configuration that happens in SaaS tools, not in repo code. This file tracks the current
-Google Workspace / Google Drive / JobNimbus spine direction.
+Google Workspace / Google Drive / owned bus + ERPNext direction. JobNimbus and GoHighLevel are
+temporary bridges until the owned path covers the same work.
 
 Legend: `[ ]` todo, `[x]` done/verified, `[~]` temporary bridge.
 
@@ -9,6 +10,9 @@ Legend: `[ ]` todo, `[x]` done/verified, `[~]` temporary bridge.
 
 Grounded in the live API check: valid contact record type is `Customer`, job record type is
 `Retail`, contact status `New` exists, and `Lead` was rejected by this account.
+
+Bridge rule: keep JobNimbus only where it still keeps operations running; do not buy or build new
+keeper workflows around it.
 
 - [x] JobNimbus API works on the current account.
 - [x] Bus write path live-tested; `JOBNIMBUS_ENABLED=true`.
@@ -51,7 +55,9 @@ Worker: `https://ironwrap-bus.yellow-rain-7498.workers.dev`
 - [x] R2 `ironwrap-bus-raw` stores raw inbound bodies first.
 - [x] Queues `ironwrap-jn-push` and `ironwrap-jn-dlq` configured.
 - [x] Cron retry/reconcile configured.
+- [x] Estimator intake route exists: `POST /ingest/estimate` stores raw R2 + D1 and syncs ERPNext Instant Estimate Session when enabled.
 - [x] Secrets set for current code path: `INGEST_TOKEN`, `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`.
+- [ ] Set `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`, `ERPNEXT_BASE_URL`, and `ERPNEXT_ENABLED=true` after the Frappe app is installed.
 - [ ] Switch/refresh Wrangler auth for the configured IronWrap account `7ee5775bc1ba46f05c5a65235b60e939`; current local login reads Mindburn Labs and cannot inventory this account.
 - [ ] Set `QB_WEBHOOK_TOKEN` when QuickBooks webhook is connected.
 - [ ] Confirm old Cloudflare API tokens are revoked.
@@ -61,6 +67,7 @@ Worker: `https://ironwrap-bus.yellow-rain-7498.workers.dev`
 - [ ] Identify current post destination of each lead form on both brand sites.
 - [ ] Best path: agency/server adds the server-side forward in `docs/WEBSITE-INTEGRATION.md`.
 - [ ] Backup path: Make UI appends one HTTP forwarder to `/ingest/website` after the working lead sync.
+- [ ] Estimator path: 3D configurator backend/server action posts finalized/save payloads to `POST /ingest/estimate`; never expose `INGEST_TOKEN` in browser code.
 - [ ] Do not edit live Make scenarios via API.
 
 Verify with D1:
@@ -73,6 +80,7 @@ wrangler d1 execute ironwrap-bus --remote --command "SELECT envelope_id, source,
 
 - [x] Existing GHL -> JobNimbus imports were fixed to use `Customer` / `New` and omit invalid `source_name`.
 - [x] Bulk rescue completed: JobNimbus went from 6 to 103 contacts; duplicates skipped.
+- [~] GHL remains a temporary bridge only; no new keeper flows should be added there.
 - [~] RoofRuler currently sends directly to the Make mailhook; do not add a second Google routing feed unless the scenario gets dedup.
 - [ ] Export/record the current scenario map from the Make UI and tag each scenario keep/bridge/retire.
 - [ ] Re-save any stale/unlinked live scenario in the Make UI if the UI still shows a warning.
@@ -116,6 +124,7 @@ Moneris is not the current invoice-payment path.
 Retire only after replacement proof exists:
 
 - Microsoft 365 / OneDrive mirror and archive.
-- GoHighLevel live lead routes.
+- GoHighLevel live lead routes and AI/marketing workflows.
+- JobNimbus marketing/AI/proposal pieces that the owned estimator/Hermes path replaces.
 - BookIPI, Stripe, MileIQ.
 - One-time Make rescue scenarios.

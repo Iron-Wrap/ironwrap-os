@@ -34,6 +34,10 @@ Frappe token auth and exposes read tools plus token-gated approved-write tools:
 - `dry_run_proposal_evidence_pack`
 - `request_create_proposal_evidence_pack`
 
+Estimator intake enters ERPNext through the Worker `POST /ingest/estimate` route first. This MCP
+server reads the resulting `Instant Estimate Session` rows and can draft downstream takeoff/proposal
+work, but it does not accept raw public estimator submissions itself.
+
 Write tools are disabled unless `ERPNEXT_WRITE_ENABLED=true` and
 `HERMES_WRITE_TOKEN` are set. The caller must provide the approval token, and
 the token is redacted from the `Hermes Run` audit payload.

@@ -217,7 +217,23 @@ export async function recordDeadLetter(env: Env, e: DeadLetterEntry): Promise<vo
   await env.DB.prepare(
     `INSERT INTO dead_letter (ts, envelope_id, stage, error, payload_json, recovered)
      VALUES (?,?,?,?,?,0)`,
-  ).bind(nowIso(), e.envelope_id, e.stage, e.error, e.payload_json).run();
+  ).bind(nowIso(), e.envelope_id, e.stage, e.error, redactedDeadLetterPayload(e)).run();
+}
+
+function redactedDeadLetterPayload(e: DeadLetterEntry): string {
+  let keys: string[] = [];
+  try {
+    const parsed = JSON.parse(e.payload_json) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) keys = Object.keys(parsed).slice(0, 25);
+  } catch {
+    keys = [];
+  }
+  return JSON.stringify({
+    redacted: true,
+    envelope_id: e.envelope_id,
+    payload_keys: keys,
+    recovery: "Use /admin/envelope/:id for the canonical payload.",
+  });
 }
 
 export async function getQuickBooksWebhookReceipt(

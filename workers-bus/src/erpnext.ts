@@ -17,6 +17,7 @@ export interface ErpNextResult {
   roofingPropertyName?: string;
   roofJobName?: string;
   productionGateCount?: number;
+  evidenceItemName?: string;
 }
 
 export interface ErpNextMeasurementInput {
@@ -147,7 +148,7 @@ export async function pushMeasurementToErpNext(
 
   const base = normalizeBaseUrl(cfg.ERPNEXT_BASE_URL);
   const roofJob = await findByTerm(cfg, base, "Roof Job", "job_number", input.jobNumber);
-  return await upsertByField(cfg, base, "Measurement Report", "measurement_id", input.measurementId, {
+  const report = await upsertByField(cfg, base, "Measurement Report", "measurement_id", input.measurementId, {
     measurement_id: input.measurementId,
     roof_job: roofJob ?? undefined,
     provider: "RoofRuler",
@@ -165,6 +166,18 @@ export async function pushMeasurementToErpNext(
       needs_review: 0,
     })),
   });
+  const evidence = await upsertByField(cfg, base, "Evidence Item", "evidence_id", `evidence:${input.measurementId}`, {
+    evidence_id: `evidence:${input.measurementId}`,
+    roof_job: roofJob ?? undefined,
+    evidence_type: "Measurement Report",
+    source_system: "RoofRuler",
+    source_uri: input.reportFileUrl ?? input.reportUrl ?? undefined,
+    r2_key: input.rawKey,
+    captured_at: input.parsedAt,
+    customer_safe: 1,
+    summary: `Measurement report ${report.name}`,
+  });
+  return { ...report, evidenceItemName: evidence.name };
 }
 
 async function createIfMissingByField(

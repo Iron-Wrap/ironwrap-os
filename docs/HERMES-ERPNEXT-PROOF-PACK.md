@@ -75,7 +75,7 @@ Current implementation checkpoint:
   `mcp/erpnext-roofing-mcp`.
 - Measurement bridge: `/ingest/measurement` now stores raw input first, then
   mirrors parsed report metadata and child measurement values into ERPNext
-  `Measurement Report` when `ERPNEXT_ENABLED=true`.
+  `Measurement Report` plus a linked `Evidence Item` when `ERPNEXT_ENABLED=true`.
 - Production gate bootstrap: Roof Job sync creates missing `Production Gate State`
   rows for Deposit, Materials, Safety, Access, Weather, Crew, and Completion.
   Existing rows are not overwritten on retry.
@@ -89,9 +89,10 @@ Create/update order:
    property, JobNimbus contact/job refs, JobNimbus job number, and current
    qualification gate.
 5. Create missing initial `Production Gate State` rows for deterministic gatekeeping.
-6. If measurement/report data exists, create `Measurement Report` and child
+6. If measurement/report data exists, create `Measurement Report`, child
    `Measurement Value` rows linked to the Roof Job by JobNimbus job number when
-   that ERPNext job record exists.
+   that ERPNext job record exists, and an `Evidence Item` pointing at the raw R2
+   key plus report URI/file.
 7. Record Worker envelope id and raw key on every ERPNext-linked record.
 8. Reconcile D1 count, ERPNext count, and failed sync rows.
 
@@ -126,7 +127,7 @@ QuickBooks. Give it narrow tools with explicit capability levels.
 
 | Level | Tool Type | Allowed Examples |
 |---|---|---|
-| Read-only | Query system truth | `get_envelope`, `list_recent_envelopes`, `get_lead_envelope`, `get_roof_job`, `list_job_gates`, `list_blocked_jobs`, `get_measurement_report`, `list_measurement_reports_for_job`, `get_hermes_run`, `list_hermes_runs_for_job` |
+| Read-only | Query system truth | `get_envelope`, `list_recent_envelopes`, `get_lead_envelope`, `get_roof_job`, `list_job_gates`, `list_blocked_jobs`, `get_measurement_report`, `list_measurement_reports_for_job`, `get_evidence_item`, `list_evidence_for_job`, `get_hermes_run`, `list_hermes_runs_for_job` |
 | Draft | Produce proposed changes | `draft_customer_reply`, `draft_proposal_scope`, `draft_gate_exception`, `draft_material_request` |
 | Approved-write | One audited mutation after human approval | Current proof: `dry_run_update_gate`, `request_update_gate`; later: `create_job_note`, `create_followup_task` |
 | Denied | Never expose | raw SQL, arbitrary HTTP, unrestricted file deletion, accounting writes, payment capture, SMS send before A2P/consent |

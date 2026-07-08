@@ -11,6 +11,8 @@ Frappe token auth and exposes narrow read tools only:
 - `list_blocked_jobs`
 - `get_measurement_report`
 - `list_measurement_reports_for_job`
+- `get_evidence_item`
+- `list_evidence_for_job`
 - `get_hermes_run`
 - `list_hermes_runs_for_job`
 - `dry_run_update_gate`

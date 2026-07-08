@@ -38,6 +38,10 @@ test("pushToErpNext: creates Lead Envelope, Roofing Property, and Roof Job", asy
     if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-0001" } });
     if (url.endsWith("/api/resource/Roofing%20Property")) return json({ data: { name: "RP-0001" } });
     if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-0001" } });
+    if (url.endsWith("/api/resource/Production%20Gate%20State")) {
+      const body = JSON.parse(String(init?.body));
+      return json({ data: { name: body.gate_id } });
+    }
     throw new Error(`unexpected fetch ${url}`);
   });
 
@@ -53,8 +57,9 @@ test("pushToErpNext: creates Lead Envelope, Roofing Property, and Roof Job", asy
     reused: false,
     roofingPropertyName: "RP-0001",
     roofJobName: "RJ-0001",
+    productionGateCount: 7,
   });
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 20);
   assert.match(calls[0].url, /^https:\/\/erp\.example\.com\/api\/resource\/Lead%20Envelope\?/);
   assert.equal(calls[0].init.headers?.["authorization" as never], "token key:secret");
   const leadBody = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/resource/Lead%20Envelope"))?.init.body));
@@ -77,6 +82,13 @@ test("pushToErpNext: creates Lead Envelope, Roofing Property, and Roof Job", asy
   assert.equal(jobBody.current_gate_state, "qualification");
   assert.equal(jobBody.jobnimbus_contact_id, "C-1");
   assert.equal(jobBody.jobnimbus_job_id, "J-1");
+
+  const gateBodies = calls
+    .filter((c) => c.url.endsWith("/api/resource/Production%20Gate%20State"))
+    .map((c) => JSON.parse(String(c.init.body)));
+  assert.deepEqual(gateBodies.map((g) => g.gate), ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"]);
+  assert.ok(gateBodies.every((g) => g.roof_job === "RJ-0001" && g.state === "Blocked"));
+  assert.ok(gateBodies.every((g) => typeof g.blocker_reason === "string" && g.blocker_reason.length > 0));
 });
 
 function json(body: unknown): Response {

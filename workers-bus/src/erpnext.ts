@@ -16,6 +16,7 @@ export interface ErpNextResult {
   reused: boolean;
   roofingPropertyName?: string;
   roofJobName?: string;
+  productionGateCount?: number;
 }
 
 export interface ErpNextMeasurementInput {
@@ -59,12 +60,14 @@ export async function pushToErpNext(
   const lead = await upsertByField(cfg, base, doctype, "envelope_id", rec.envelope_id, leadDoc);
   const property = await upsertProperty(cfg, base, rec, p, lead.name);
   const roofJob = await upsertRoofJob(cfg, base, rec, p, lead.name, property?.name, jn);
+  const productionGateCount = await ensureInitialProductionGates(cfg, base, roofJob.name);
 
   return {
     name: lead.name,
     reused: lead.reused,
     roofingPropertyName: property?.name,
     roofJobName: roofJob?.name,
+    productionGateCount,
   };
 }
 
@@ -121,6 +124,19 @@ async function upsertRoofJob(
   });
 }
 
+async function ensureInitialProductionGates(env: ErpEnv, base: string, roofJobName: string): Promise<number> {
+  for (const gate of PRODUCTION_GATES) {
+    await createIfMissingByField(env, base, "Production Gate State", "gate_id", gateId(roofJobName, gate), {
+      gate_id: gateId(roofJobName, gate),
+      roof_job: roofJobName,
+      gate,
+      state: "Blocked",
+      blocker_reason: `Awaiting ${gate.toLowerCase()} readiness proof.`,
+    });
+  }
+  return PRODUCTION_GATES.length;
+}
+
 export async function pushMeasurementToErpNext(
   env: Env,
   input: ErpNextMeasurementInput,
@@ -149,6 +165,22 @@ export async function pushMeasurementToErpNext(
       needs_review: 0,
     })),
   });
+}
+
+async function createIfMissingByField(
+  env: ErpEnv,
+  base: string,
+  doctype: string,
+  field: string,
+  value: string,
+  doc: Record<string, unknown>,
+): Promise<ErpNextResult> {
+  const existing = await findByTerm(env, base, doctype, field, value);
+  if (existing) return { name: existing, reused: true };
+  const created = await erpFetch(env, base, "POST", `/api/resource/${enc(doctype)}`, doc);
+  const name = readName(created);
+  if (!name) throw new Error(`erpnext_create_no_name:${doctype}`);
+  return { name, reused: false };
 }
 
 async function upsertByField(
@@ -238,6 +270,10 @@ function measurementUnit(metric: string): string | undefined {
   return undefined;
 }
 
+function gateId(roofJobName: string, gate: string): string {
+  return `${roofJobName}:${gate.toLowerCase()}`;
+}
+
 function safeJson(s: string): Record<string, unknown> {
   try { return JSON.parse(s) as Record<string, unknown>; } catch { return {}; }
 }
@@ -247,3 +283,4 @@ function str(v: unknown): string | undefined {
 }
 
 const enc = encodeURIComponent;
+const PRODUCTION_GATES = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"] as const;

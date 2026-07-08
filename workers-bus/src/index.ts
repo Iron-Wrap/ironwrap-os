@@ -201,6 +201,7 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
         `lead_envelope:${erp.name}`,
         erp.roofingPropertyName ? `roofing_property:${erp.roofingPropertyName}` : null,
         erp.roofJobName ? `roof_job:${erp.roofJobName}` : null,
+        erp.productionGateCount ? `production_gates:${erp.productionGateCount}` : null,
       ].filter(Boolean).join(",");
       await store.recordAudit(env, {
         automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,

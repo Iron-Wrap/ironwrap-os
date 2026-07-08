@@ -76,6 +76,9 @@ Current implementation checkpoint:
 - Measurement bridge: `/ingest/measurement` now stores raw input first, then
   mirrors parsed report metadata and child measurement values into ERPNext
   `Measurement Report` when `ERPNEXT_ENABLED=true`.
+- Production gate bootstrap: Roof Job sync creates missing `Production Gate State`
+  rows for Deposit, Materials, Safety, Access, Weather, Crew, and Completion.
+  Existing rows are not overwritten on retry.
 
 Create/update order:
 
@@ -85,11 +88,12 @@ Create/update order:
 4. Always upsert a `Roof Job` wrapper tied back to the Lead Envelope, optional
    property, JobNimbus contact/job refs, JobNimbus job number, and current
    qualification gate.
-5. If measurement/report data exists, create `Measurement Report` and child
+5. Create missing initial `Production Gate State` rows for deterministic gatekeeping.
+6. If measurement/report data exists, create `Measurement Report` and child
    `Measurement Value` rows linked to the Roof Job by JobNimbus job number when
    that ERPNext job record exists.
-6. Record Worker envelope id and raw key on every ERPNext-linked record.
-7. Reconcile D1 count, ERPNext count, and failed sync rows.
+7. Record Worker envelope id and raw key on every ERPNext-linked record.
+8. Reconcile D1 count, ERPNext count, and failed sync rows.
 
 Minimum payload:
 

@@ -92,7 +92,7 @@ const specs = [
     name: "Instant Estimate Session",
     dir: "instant_estimate_session",
     idField: "estimate_session_id",
-    requiredFields: ["estimate_session_id", "lead_envelope", "roof_job", "source", "service_type", "status", "range_low", "range_high", "confidence", "review_required", "assumptions", "exclusions", "payload_json"],
+    requiredFields: ["estimate_session_id", "lead_envelope", "roof_job", "source", "service_type", "status", "range_low", "range_high", "estimate_total", "configurator_url", "confidence", "review_required", "assumptions", "exclusions", "selected_services_json", "material_choices_json", "payload_json"],
   },
   {
     name: "Evidence Item",

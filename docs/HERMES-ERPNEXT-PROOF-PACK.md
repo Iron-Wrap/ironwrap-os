@@ -71,7 +71,8 @@ Current implementation checkpoint:
 - Contract validator: `node tools/validate-erpnext-doctypes.mjs`.
 - Read-only bus truth endpoints for Hermes/operator diagnostics:
   `GET /admin/envelopes`, `GET /admin/envelope/:id`, and `GET /admin/dead-letter`.
-- Read-only MCP wrapper: `mcp/ironwrap-bus-mcp`.
+- Read-only MCP wrappers: `mcp/ironwrap-bus-mcp` and
+  `mcp/erpnext-roofing-mcp`.
 
 Create/update order:
 
@@ -116,7 +117,7 @@ QuickBooks. Give it narrow tools with explicit capability levels.
 
 | Level | Tool Type | Allowed Examples |
 |---|---|---|
-| Read-only | Query system truth | `get_lead_envelope`, `get_job_gate_state`, `get_measurement_report`, `search_evidence` |
+| Read-only | Query system truth | `get_envelope`, `list_recent_envelopes`, `get_lead_envelope`, `get_roof_job`, `list_job_gates`, `list_blocked_jobs` |
 | Draft | Produce proposed changes | `draft_customer_reply`, `draft_proposal_scope`, `draft_gate_exception`, `draft_material_request` |
 | Approved-write | One audited mutation after human approval | `create_job_note`, `mark_gate_waived`, `create_followup_task` |
 | Denied | Never expose | raw SQL, arbitrary HTTP, unrestricted file deletion, accounting writes, payment capture, SMS send before A2P/consent |

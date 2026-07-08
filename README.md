@@ -30,6 +30,7 @@ The exhaustive first phase is
 | `tools/` | Build/proof scripts, including AppliCad XML and ERPNext DocType contract checks. |
 | `frappe-apps/ironwrap_roofing/` | Frappe app contract for the ERPNext roofing operating core. |
 | `mcp/ironwrap-bus-mcp/` | Read-only MCP wrapper for Hermes/operator diagnostics over the bus admin endpoints. |
+| `mcp/erpnext-roofing-mcp/` | Read-only MCP wrapper for Hermes/operator diagnostics over ERPNext Roof Job and gate state. |
 
 ## Status
 

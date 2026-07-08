@@ -122,7 +122,7 @@ QuickBooks. Give it narrow tools with explicit capability levels.
 
 | Level | Tool Type | Allowed Examples |
 |---|---|---|
-| Read-only | Query system truth | `get_envelope`, `list_recent_envelopes`, `get_lead_envelope`, `get_roof_job`, `list_job_gates`, `list_blocked_jobs`, `get_hermes_run`, `list_hermes_runs_for_job` |
+| Read-only | Query system truth | `get_envelope`, `list_recent_envelopes`, `get_lead_envelope`, `get_roof_job`, `list_job_gates`, `list_blocked_jobs`, `get_measurement_report`, `list_measurement_reports_for_job`, `get_hermes_run`, `list_hermes_runs_for_job` |
 | Draft | Produce proposed changes | `draft_customer_reply`, `draft_proposal_scope`, `draft_gate_exception`, `draft_material_request` |
 | Approved-write | One audited mutation after human approval | Current proof: `dry_run_update_gate`, `request_update_gate`; later: `create_job_note`, `create_followup_task` |
 | Denied | Never expose | raw SQL, arbitrary HTTP, unrestricted file deletion, accounting writes, payment capture, SMS send before A2P/consent |

@@ -30,6 +30,19 @@ const HERMES_RUN_FIELDS = [
   "modified",
 ];
 
+const MEASUREMENT_REPORT_FIELDS = [
+  "name",
+  "measurement_id",
+  "roof_job",
+  "provider",
+  "source_file",
+  "report_url",
+  "raw_key",
+  "parsed_at",
+  "review_status",
+  "modified",
+];
+
 export function configFromEnv(env = process.env) {
   const baseUrl = env.ERPNEXT_BASE_URL?.replace(/\/+$/, "");
   const apiKey = env.ERPNEXT_API_KEY;
@@ -184,6 +197,31 @@ export function buildServer(config) {
     async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath("Hermes Run", {
       fields: HERMES_RUN_FIELDS,
       filters: [["Hermes Run", "roof_job", "=", roof_job_id]],
+      limit,
+      orderBy: "modified desc",
+    }))),
+  );
+
+  server.registerTool(
+    "get_measurement_report",
+    {
+      title: "Get Measurement Report",
+      description: "Read one ERPNext Measurement Report by measurement_id/name.",
+      inputSchema: { measurement_id: z.string().min(1) },
+    },
+    async ({ measurement_id }) => text(await erpGet(config, resourcePath("Measurement Report", measurement_id))),
+  );
+
+  server.registerTool(
+    "list_measurement_reports_for_job",
+    {
+      title: "List Measurement Reports For Job",
+      description: "Read Measurement Report rows linked to one Roof Job.",
+      inputSchema: { roof_job_id: z.string().min(1), limit: z.number().int().min(1).max(100).optional() },
+    },
+    async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath("Measurement Report", {
+      fields: MEASUREMENT_REPORT_FIELDS,
+      filters: [["Measurement Report", "roof_job", "=", roof_job_id]],
       limit,
       orderBy: "modified desc",
     }))),

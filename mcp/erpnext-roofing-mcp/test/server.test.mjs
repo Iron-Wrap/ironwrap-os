@@ -91,6 +91,7 @@ test("resource paths encode Frappe DocTypes, names, fields, and filters", () => 
   assert.deepEqual(JSON.parse(params.get("fields")), ["name", "roof_job", "state"]);
   assert.deepEqual(JSON.parse(params.get("filters")), [["Production Gate State", "state", "=", "Blocked"]]);
   assert.equal(resourcePath("Hermes Run", "hr_1"), "/api/resource/Hermes%20Run/hr_1");
+  assert.equal(resourcePath("Measurement Report", "measurement:ow_1"), "/api/resource/Measurement%20Report/measurement%3Aow_1");
 });
 
 test("write approval and gate patch helpers enforce narrow mutation rules", () => {

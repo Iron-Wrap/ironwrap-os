@@ -287,7 +287,7 @@ Build narrow MCP servers, not one giant god tool.
 | MCP server | Example tools |
 | --- | --- |
 | `ironwrap-bus-mcp` | Current read-only: `list_recent_envelopes`, `get_envelope`, `list_dead_letters`; later approved-write: `dry_run_replay`, `request_replay` |
-| `erpnext-roofing-mcp` | Current read-only: `get_roof_job`, `get_lead_envelope`, `list_job_gates`, `list_blocked_jobs`, `get_hermes_run`, `list_hermes_runs_for_job`; current approved-write proof: `dry_run_update_gate`, `request_update_gate`; later: `draft_task` |
+| `erpnext-roofing-mcp` | Current read-only: `get_roof_job`, `get_lead_envelope`, `list_job_gates`, `list_blocked_jobs`, `get_measurement_report`, `list_measurement_reports_for_job`, `get_hermes_run`, `list_hermes_runs_for_job`; current approved-write proof: `dry_run_update_gate`, `request_update_gate`; later: `draft_task` |
 | `evidence-mcp` | `find_assets`, `get_evidence_pack`, `attach_asset_to_job`, `draft_customer_packet` |
 | `measurement-mcp` | `parse_measurement_report`, `compare_takeoff_versions`, `flag_missing_values` |
 | `instant-estimate-mcp` | `score_estimate_session`, `draft_range`, `flag_price_risk`, `request_quote_review` |

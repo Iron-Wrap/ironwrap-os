@@ -73,6 +73,9 @@ Current implementation checkpoint:
   `GET /admin/envelopes`, `GET /admin/envelope/:id`, and `GET /admin/dead-letter`.
 - Read-only MCP wrappers: `mcp/ironwrap-bus-mcp` and
   `mcp/erpnext-roofing-mcp`.
+- Measurement bridge: `/ingest/measurement` now stores raw input first, then
+  mirrors parsed report metadata and child measurement values into ERPNext
+  `Measurement Report` when `ERPNEXT_ENABLED=true`.
 
 Create/update order:
 
@@ -80,9 +83,11 @@ Create/update order:
 2. Worker/bridge maps the D1 envelope to ERPNext `Lead Envelope`.
 3. If address/site data exists, upsert `Roofing Property`.
 4. Always upsert a `Roof Job` wrapper tied back to the Lead Envelope, optional
-   property, JobNimbus contact/job refs, and current qualification gate.
+   property, JobNimbus contact/job refs, JobNimbus job number, and current
+   qualification gate.
 5. If measurement/report data exists, create `Measurement Report` and child
-   `Measurement Value` rows.
+   `Measurement Value` rows linked to the Roof Job by JobNimbus job number when
+   that ERPNext job record exists.
 6. Record Worker envelope id and raw key on every ERPNext-linked record.
 7. Reconcile D1 count, ERPNext count, and failed sync rows.
 

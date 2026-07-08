@@ -79,11 +79,12 @@ export async function setStatus(
   env: Env, id: string, status: Status, patch: Partial<EnvelopeRecord> = {},
 ): Promise<void> {
   await env.DB.prepare(
-    `UPDATE envelopes SET status = ?, jn_contact_id = COALESCE(?, jn_contact_id),
+    `UPDATE envelopes SET status = ?, job_ref = COALESCE(?, job_ref),
+       jn_contact_id = COALESCE(?, jn_contact_id),
        jn_job_id = COALESCE(?, jn_job_id), dup_of = COALESCE(?, dup_of),
        last_error = ?, updated_at = ? WHERE envelope_id = ?`,
   ).bind(
-    status, patch.jn_contact_id ?? null, patch.jn_job_id ?? null, patch.dup_of ?? null,
+    status, patch.job_ref ?? null, patch.jn_contact_id ?? null, patch.jn_job_id ?? null, patch.dup_of ?? null,
     patch.last_error ?? null, nowIso(), id,
   ).run();
 }

@@ -127,9 +127,10 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
    status back to JobNimbus needs a later QB OAuth read path.
 5. **ERPNext bridge** — disabled by default. Before setting `ERPNEXT_ENABLED=true`, apply
    migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,
-   Roofing Property, and Roof Job DocTypes exist. The Worker upserts Lead Envelope by
-   `envelope_id`, optional Roofing Property by `property_key`, and Roof Job by
-   `roof_job_id`; ERPNext is still a consumer, not the raw intake source.
+   Roofing Property, Roof Job, Measurement Report, and Measurement Value DocTypes
+   exist. The Worker upserts Lead Envelope by `envelope_id`, optional Roofing
+   Property by `property_key`, Roof Job by `roof_job_id`, and measurement reports
+   by `measurement_id`; ERPNext is still a consumer, not the raw intake source.
 
 ## Maintenance owner (don't skip — spec gap #3)
 

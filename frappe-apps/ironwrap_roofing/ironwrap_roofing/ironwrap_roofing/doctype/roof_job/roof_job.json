@@ -8,6 +8,7 @@
   "engine": "InnoDB",
   "field_order": [
     "roof_job_id",
+    "job_number",
     "brand",
     "service_type",
     "job_status",
@@ -26,6 +27,7 @@
   ],
   "fields": [
     { "fieldname": "roof_job_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Roof Job ID", "reqd": 1, "unique": 1 },
+    { "fieldname": "job_number", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Job Number" },
     { "fieldname": "brand", "fieldtype": "Select", "in_standard_filter": 1, "label": "Brand", "options": "ironwrap\niroof" },
     { "fieldname": "service_type", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Service Type", "options": "Metal Roofing\nRoofing\nSiding\nGutters\nSoffit/Fascia\nCommercial\nOther" },
     { "fieldname": "job_status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Job Status", "options": "Qualified\nMeasurement\nProposal\nWon\nIn Production\nCompleted\nClosed\nLost", "reqd": 1 },

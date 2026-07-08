@@ -47,6 +47,7 @@ const specs = [
     idField: "roof_job_id",
     requiredFields: [
       "roof_job_id",
+      "job_number",
       "brand",
       "service_type",
       "job_status",

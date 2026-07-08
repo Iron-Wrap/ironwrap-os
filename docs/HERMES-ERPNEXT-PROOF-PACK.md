@@ -119,7 +119,7 @@ QuickBooks. Give it narrow tools with explicit capability levels.
 |---|---|---|
 | Read-only | Query system truth | `get_envelope`, `list_recent_envelopes`, `get_lead_envelope`, `get_roof_job`, `list_job_gates`, `list_blocked_jobs`, `get_hermes_run`, `list_hermes_runs_for_job` |
 | Draft | Produce proposed changes | `draft_customer_reply`, `draft_proposal_scope`, `draft_gate_exception`, `draft_material_request` |
-| Approved-write | One audited mutation after human approval | `create_job_note`, `mark_gate_waived`, `create_followup_task` |
+| Approved-write | One audited mutation after human approval | Current proof: `dry_run_update_gate`, `request_update_gate`; later: `create_job_note`, `create_followup_task` |
 | Denied | Never expose | raw SQL, arbitrary HTTP, unrestricted file deletion, accounting writes, payment capture, SMS send before A2P/consent |
 
 Every approved write creates a `Hermes Run` row with:
@@ -131,8 +131,10 @@ Every approved write creates a `Hermes Run` row with:
 - result/error
 - linked evidence
 
-Proof gate: run Hermes against fixture-backed MCP tools first; add one local
-approved-write only after read-only answers are accurate.
+Proof gate: run Hermes against fixture-backed MCP tools first. The first
+approved-write proof is `request_update_gate`, guarded by
+`ERPNEXT_WRITE_ENABLED=true` plus `HERMES_WRITE_TOKEN`, and audited through a
+`Hermes Run` record before and after the ERPNext mutation.
 
 ## Measurement Proof
 

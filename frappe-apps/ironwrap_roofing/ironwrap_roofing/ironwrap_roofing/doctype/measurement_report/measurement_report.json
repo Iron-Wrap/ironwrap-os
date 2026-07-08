@@ -1,0 +1,49 @@
+{
+  "actions": [],
+  "allow_rename": 0,
+  "autoname": "field:measurement_id",
+  "creation": "2026-07-08 00:00:00.000000",
+  "custom": 0,
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "measurement_id",
+    "roof_job",
+    "roofing_property",
+    "provider",
+    "source_file",
+    "report_url",
+    "raw_key",
+    "parsed_at",
+    "review_status",
+    "measurements"
+  ],
+  "fields": [
+    { "fieldname": "measurement_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Measurement ID", "reqd": 1, "unique": 1 },
+    { "fieldname": "roof_job", "fieldtype": "Link", "in_standard_filter": 1, "label": "Roof Job", "options": "Roof Job" },
+    { "fieldname": "roofing_property", "fieldtype": "Link", "label": "Roofing Property", "options": "Roofing Property" },
+    { "fieldname": "provider", "fieldtype": "Select", "in_standard_filter": 1, "label": "Provider", "options": "AppliCad\nRoofRuler\nEagleView\nHover\nManual\nOther" },
+    { "fieldname": "source_file", "fieldtype": "Data", "label": "Source File" },
+    { "fieldname": "report_url", "fieldtype": "Data", "label": "Report URL" },
+    { "fieldname": "raw_key", "fieldtype": "Data", "label": "R2 Raw Key", "read_only": 1 },
+    { "fieldname": "parsed_at", "fieldtype": "Datetime", "label": "Parsed At" },
+    { "fieldname": "review_status", "fieldtype": "Select", "in_list_view": 1, "label": "Review Status", "options": "Parsed\nNeeds Review\nApproved\nRejected" },
+    { "fieldname": "measurements", "fieldtype": "Table", "label": "Measurements", "options": "Measurement Value" }
+  ],
+  "index_web_pages_for_search": 0,
+  "istable": 0,
+  "links": [],
+  "modified": "2026-07-08 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "IronWrap Roofing",
+  "name": "Measurement Report",
+  "naming_rule": "By fieldname",
+  "owner": "Administrator",
+  "permissions": [
+    { "create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1 }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 1
+}

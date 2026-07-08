@@ -27,7 +27,8 @@ The exhaustive first phase is
 | `docs/` | Summaries & plans (incl. Russian deliverables). |
 | `output/` | Generated deliverables (Russian `.docx`, overview PDF, website audit). |
 | `task1-spec/` | Original source material (v9.1 docs, pricing, early PDFs). |
-| `tools/` | Build/proof scripts, including the AppliCad XML measurement proof. |
+| `tools/` | Build/proof scripts, including AppliCad XML and ERPNext DocType contract checks. |
+| `frappe-apps/ironwrap_roofing/` | Frappe app contract for the ERPNext roofing operating core. |
 | `mcp/ironwrap-bus-mcp/` | Read-only MCP wrapper for Hermes/operator diagnostics over the bus admin endpoints. |
 
 ## Status

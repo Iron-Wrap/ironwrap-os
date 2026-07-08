@@ -3,8 +3,15 @@
 Minimal Frappe/ERPNext app contract for IronWrap OS.
 
 This is not an ERPNext fork. It adds app-level DocTypes that receive canonical
-events from the Cloudflare bus. The first committed proof is `Lead Envelope`,
-matching `workers-bus/src/erpnext.ts`.
+events from the Cloudflare bus and model the first ERP operating core:
+
+- `Lead Envelope`
+- `Roofing Property`
+- `Roof Job`
+- `Measurement Report` with child `Measurement Value`
+- `Evidence Item`
+- `Proposal Evidence Pack`
+- `Production Gate State`
 
 Install path once an ERPNext dev site exists:
 

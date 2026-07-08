@@ -64,7 +64,9 @@ Current implementation checkpoint:
 
 - Worker bridge: `workers-bus/src/erpnext.ts`.
 - D1 proof fields: `workers-bus/migrations/0002_erpnext_consumer.sql`.
-- Frappe app contract: `frappe-apps/ironwrap_roofing`.
+- Frappe app contract: `frappe-apps/ironwrap_roofing` now covers the gate-2
+  operating core: lead envelope, roofing property, roof job, measurement report/value,
+  evidence item, proposal evidence pack, and production gate state.
 - Contract validator: `node tools/validate-erpnext-doctypes.mjs`.
 - Read-only bus truth endpoints for Hermes/operator diagnostics:
   `GET /admin/envelopes`, `GET /admin/envelope/:id`, and `GET /admin/dead-letter`.

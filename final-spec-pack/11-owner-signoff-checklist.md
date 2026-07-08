@@ -17,7 +17,7 @@ Use this as the final acceptance checklist with IronWrap.
 - [ ] Paradigm deferred until material request flow is stable.
 - [ ] Phone AI = JobNimbus AssistAI (P0) behind eval gate; managed Retell only on eval failure; 4-vendor custom voice stack killed.
 - [ ] Call attribution deferred (UTM + manual Lead Source + one tracked number); CallRail only when paid ads start.
-- [ ] No GHL migration needed — GHL was trial-evaluated only and is being declined before any production use; end the trial.
+- [ ] GHL is declined as keeper; import-rescue/legacy routes are disabled only after replacement proof through the bus.
 - [ ] WooCommerce/B2C store deferred from Task 1.
 - [ ] Calgary expansion structure deferred unless owner explicitly adds it to Task 1.
 
@@ -107,14 +107,14 @@ Use this as the final acceptance checklist with IronWrap.
 - [ ] Completion/review test passed.
 - [ ] Automation failure test passed.
 
-## Build-Out (No Migration — GHL Trial Declined)
+## Build-Out (GHL Keeper Declined)
 
 - [ ] Remaining GHL routes retired after replacement proof.
 - [ ] Written JobNimbus all-in quote obtained.
-- [ ] All-in CAD TCO table reviewed. First-deliverable incremental ≈ CAD $120-220/mo loaded (incl. ~1.40 FX + GST) — driver is JobNimbus Engage (~CAD $90-140 with SMS usage); Twilio DID + usage ~CAD $5-30, Make is the existing Core seat (~CAD $13, already subscribed) or the bus on Cloudflare Workers ~CAD $20-30, A2P monthly campaign fee ~CAD $5-15; Cloudflare D1/R2/Workers ≈ $0, email = existing Google Workspace brand mailboxes ($0 incremental; dedicated ESP deferred), storage = existing Google Drive (Google Workspace) ($0 incremental), design = $0 (free Canva + free Affinity). AssistAI minutes are a Phase-2 (post-eval) cost (~CAD $35-70 loaded when live), not part of the first-deliverable incremental. One-time setup ~CAD $700-2,100. "$0 new vendor setup" is false (Cloudflare, the owned Twilio number, and — if adopted — DocuSeal are new vendor lines). GHL was never adopted, so this avoids ~CAD $135-415/mo of GHL cost; frame as "simpler, more portable, avoids GHL's cost," not a dramatic saving.
+- [ ] All-in CAD TCO table reviewed. First-deliverable incremental ≈ CAD $120-220/mo loaded (incl. ~1.40 FX + GST) — driver is JobNimbus Engage (~CAD $90-140 with SMS usage); Twilio DID + usage ~CAD $5-30, Make is the existing Core seat (~CAD $13, already subscribed) or the bus on Cloudflare Workers ~CAD $20-30, A2P monthly campaign fee ~CAD $5-15; Cloudflare D1/R2/Workers ≈ $0, email = existing Google Workspace brand mailboxes ($0 incremental; dedicated ESP deferred), storage = existing Google Drive (Google Workspace) ($0 incremental), design = $0 (free Canva + free Affinity). AssistAI minutes are a Phase-2 (post-eval) cost (~CAD $35-70 loaded when live), not part of the first-deliverable incremental. One-time setup ~CAD $700-2,100. "$0 new vendor setup" is false (Cloudflare, the owned Twilio number, and — if adopted — DocuSeal are new vendor lines). GHL is declined as keeper, so this avoids ~CAD $135-415/mo of GHL cost; frame as "simpler, more portable, avoids GHL's cost," not a dramatic saving.
 - [ ] Engage A2P 10DLC + Canadian carrier registration filed first and approved before any automated texting.
 - [ ] Business phone number provisioned/owned in Twilio for AssistAI/Engage (portable by design).
-- [ ] CASL consent ledger maintained in JobNimbus going forward (no historical export needed).
+- [ ] CASL consent ledger maintained in JobNimbus going forward.
 - [ ] Existing website forms' current post destinations verified and pointed at the Make bus.
 - [ ] "Messaging is live" smoke test passed.
 

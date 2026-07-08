@@ -7,12 +7,14 @@ to Google Drive Shared Drives. The remaining work is account wiring and live-sou
 - Bus base URL: `https://ironwrap-bus.yellow-rain-7498.workers.dev`
 - Set a secret from `workers-bus/`: `printf '%s' '<value>' | CLOUDFLARE_API_TOKEN='<cf-token>' npx wrangler secret put <NAME>`
 - Companion docs: `SETUP-CHECKLIST.md`, `WEBSITE-INTEGRATION.md`, `EMAIL-DUAL-DELIVERY.md`, `DELIVERY-PLAN.md`.
+- Exhaustive Phase 1 contract: `final-spec-pack/18-phase-1-source-truth-and-build-contract.md`.
 
 Legend: `[ ]` todo, `[x]` done/verified, `[~]` operating with a known temporary bridge.
 
 ## 0. Current Operating Baseline
 
 - [x] Cloudflare Worker, D1, R2, queues, cron, and secrets exist.
+- [~] Local Wrangler auth currently points at Mindburn Labs, not the configured IronWrap Cloudflare account; live resource inventory/deploy needs the IronWrap account token/login.
 - [x] `JOBNIMBUS_ENABLED=true`; JobNimbus API write path was live-tested.
 - [x] Gmail send path and Google Drive filing use `GOOGLE_SERVICE_ACCOUNT_JSON`.
 - [x] Shared Drives exist: IW Jobs, IW Restricted, IW Archive.

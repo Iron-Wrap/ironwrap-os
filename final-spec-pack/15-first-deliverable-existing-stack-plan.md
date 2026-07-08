@@ -10,8 +10,8 @@ immediately after cutover. GHL is experimental/legacy scaffolding; retire it aft
 path is proven.
 
 Assumption from current discovery: IronWrap already has subscriptions or active
-access for Make, Google, RoofRuler, QuickBooks, and JobNimbus. GHL was trial-evaluated
-only (never in production) and is being declined. NaturalForms is dropped.
+access for Make, Google, RoofRuler, QuickBooks, and JobNimbus. GHL is declined as
+the keeper after experimental/import-rescue routes are replaced. NaturalForms is dropped.
 
 Current state (2026-07-07): several key automations are already built experimentally
 in the GHL-based Make setup (Make Core plan, ~16 scenarios — e.g., RoofRuler report

@@ -15,8 +15,8 @@
 | System | Needed Surface | Direction | Priority |
 |---|---|---|---|
 | JobNimbus | Contacts, jobs, tasks, notes, attachments, boards/statuses, API keys, automations; lead records from every inbound path | In/out | P0 |
-| Make (integration bus) | Canonical lead envelope, scenario triggers, webhooks, error-handler -> dead-letter, idempotency/dedup, schedules, data stores, daily reconciliation | In/out | P0 |
-| Owned data layer (Cloudflare D1 + R2) | Dual-write target for every lead envelope FIRST (before JobNimbus); raw submission store; reconciliation source | In/out | P0 |
+| Make (connector/visibility layer) | Existing scenario triggers, native SaaS connectors, owner-visible runs, Make UI bridge/retire actions | In/out | P0 |
+| Owned Worker bus (Cloudflare Workers + D1 + R2 + Queues + Cron) | Canonical lead envelope, raw submission store, idempotency/dedup, retry/dead-letter, source counts, reconciliation heartbeat | In/out | P0 |
 | JobNimbus AssistAI | Inbound/missed/after-hours calls, transcripts, summaries, capture+book+route-flag, books natively into the JobNimbus calendar (Make used for route-flagging + the owned-store dual-write, not necessarily the booking call), lead-record creation | In/out | P0 |
 | JobNimbus Engage | Two-way SMS, MCTB / instant-ack send, nurture, review-request sequences | In/out | P0 |
 | Google Workspace email (brand mailboxes); JN native email unused; dedicated ESP deferred for bulk deliverability | All outbound email from brand mailboxes (JN native email unreliable); SPF/DKIM/DMARC, bounce monitoring, message IDs | Out | P0 |
@@ -109,6 +109,12 @@ Make's bus role may instead run on Cloudflare Workers (Workers + D1 + R2 + Queue
 is kept for native connectors + observability until the custom JobNimbus
 integration is proven; this adds owned code, so name a build/maintenance owner
 before committing (see 01).
+
+Current implementation note: this hybrid is already the active direction. The
+Worker owns `/ingest/:source`, `/ingest/photo`, `/ingest/measurement`,
+`/webhook/quickbooks`, queue push, DLQ, retry sweep, and reconcile. Make remains
+the safe UI-controlled bridge for existing RoofRuler/GHL/Jotform routes until
+replacement proof exists.
 
 ## Logging Standard (Mandatory)
 

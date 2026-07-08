@@ -5,10 +5,13 @@ completed with evidence, not just marked done.
 
 ## Epic 1 - Audit And Containment
 
+Active first-phase detail lives in `18-phase-1-source-truth-and-build-contract.md`.
+Do not expand this epic from older GHL-first notes.
+
 | ID | Task | Output | Acceptance |
 |---|---|---|---|
-| A1 | Inventory accounts and roles | Access inventory | JobNimbus, Make, Cloudflare, ESP, Jotform, QuickBooks, storage, website, AI/phone listed |
-| A2 | Inventory Make scenarios | Scenario map | Each scenario tagged keep/fix/pause/delete |
+| A1 | Inventory accounts and roles | Access inventory | JobNimbus, Make, Cloudflare, Jotform, QuickBooks, Google Workspace/Drive, website, AI/phone listed; Cloudflare account mismatch cleared or explicitly recorded |
+| A2 | Inventory Make scenarios | Scenario map | Each scenario tagged keep/bridge/retire; edits made in Make UI only |
 | A3 | Identify live webhooks/API keys | Integration register | Owner and purpose known for each connection |
 | A4 | Create safe test records | Test data list | Staff can tell test records from real jobs |
 | A5 | Pause dangerous duplicates | Disabled/paused list | No two automations mutate same folder/action |
@@ -101,6 +104,7 @@ committing.
 | M7 | Rebuild folder flow | Folder automation | One job creates one folder after job number exists |
 | M8 | Add automation run log | Log table/sheet/Make log discipline | Critical mutations are traceable |
 | M9 | Build dual-write partial-write repair | Idempotent JN push + retry sweep | JobNimbus push is an idempotent, auto-retried job keyed on `envelope_id` carrying a status field (`pending_jn_push` -> `pushed` -> `reconciled`); a continuous retry sweep (not the once-daily count) re-drives any envelope stuck in `pending_jn_push`; instant-ack/MCTB fires off the owned-store write, never off the JN push, so an ack still goes out when JobNimbus is unavailable; the daily source-vs-landed count detects gaps, the retry sweep repairs them |
+| M10 | Execute Phase 1 contract | Source-truth proof pack | `18-phase-1-source-truth-and-build-contract.md` definition of Phase 1 done is satisfied |
 
 ## Epic 5 - Phone AI (JobNimbus AssistAI)
 

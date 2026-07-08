@@ -4,15 +4,18 @@ How we get from the **current Worker/Make/JobNimbus stack** to the **spec's fina
 This is the execution overlay: sequencing, dependencies, owners, and exit gates. Chapter
 references (e.g. `02 §Phase 3`) point at the spec for detail. No calendar estimates are used;
 progress is tracked by proof gates, live account gates, and production evidence.
+For the exhaustive first phase, use `final-spec-pack/18-phase-1-source-truth-and-build-contract.md`.
 
 ## Current status vs spec — snapshot (2026-07-08)
 
-Honest two-layer view: **Built** = code deployed + unit-verified · **Operating** = running on live
-traffic/data in production. The Worker bus is real and current: D1/R2/queues/cron, Gmail instant-ack,
+Honest two-layer view: **Built** = code/config present + unit-verified · **Operating** = running on live
+traffic/data in production. The Worker bus is real and current in code/config: D1/R2/queues/cron, Gmail instant-ack,
 Google Drive filing, JobNimbus push, photo intake, measurement intake, and signed QuickBooks webhook
 capture are implemented. The operating gap is live-source cutover: website/Make still must feed
 `/ingest/website`, and A2P/Engage, compliance, QuickBooks Payments/webhook configuration,
-JobNimbus admin config, Jotform live forms, and AssistAI remain account/owner gates.
+JobNimbus admin config, Jotform live forms, and AssistAI remain account/owner gates. A 2026-07-08
+Wrangler check found the local Cloudflare login is for Mindburn Labs, not the configured
+IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap account token/login first.
 
 | Phase | Built | Operating (live) |
 |---|---|---|
@@ -31,7 +34,7 @@ JobNimbus admin config, Jotform live forms, and AssistAI remain account/owner ga
 
 | Area | Today (experimental) | Target (spec final) |
 |---|---|---|
-| Lead front door | Website/FB → **GHL** (10 live Make scenarios) | All sources → **Make/Workers bus → owned D1/R2 FIRST → JobNimbus** |
+| Lead front door | Website/FB → **GHL** via ~16 experimental Make scenarios | All sources → **Make/Workers bus → owned D1/R2 FIRST → JobNimbus** |
 | System of record | None (GHL holds it) | **Cloudflare D1 + R2** (owned), JobNimbus = consumer |
 | CRM / job truth | GHL + partial JobNimbus | **JobNimbus** (spine) |
 | Instant response | none | **Instant-ack / MCTB <60s, 24/7** |
@@ -75,11 +78,13 @@ JobNimbus admin config, Jotform live forms, and AssistAI remain account/owner ga
 - *Exit:* bus deployed + healthy; A2P submitted (tracking); DID owned; owners named.
 
 ### Phase 1 — Lead spine + instant-ack interim
-- Repoint website/GBP/manual leads → bus → **D1/R2 first** → JobNimbus, with **dedup, dead-letter (Sheet+email), daily reconciliation + heartbeat, partial-write repair** (`01`,`04 §WF1/§WF8`,`06`).
-- **Instant-ack / MCTB interim** live: prospect **email** + owner alert <60s, off the owned-store write (`04 §WF7`).
+- Execute `final-spec-pack/18-phase-1-source-truth-and-build-contract.md` as the exhaustive source-truth/build contract.
+- Repoint one real website/GBP/manual/Make lead source → bus → **D1/R2 first** → JobNimbus, with **dedup, dead-letter, retry sweep, daily reconciliation + heartbeat, partial-write repair** (`01`,`04 §WF1/§WF8`,`06`).
+- **Instant-ack / MCTB interim** live: prospect **email** + owner alert, off the owned-store write (`04 §WF7`).
 - **Brand tagging** on the envelope (`03`).
-- **Rescue GHL data:** fix the Make import `record_type_name` (`"Lead"`→`Customer`), run the one-time GHL→JobNimbus import, verify; stop routing *new* leads to GHL.
-- *Exit:* every test lead (both brands) lands in D1/R2 + JN, deduped, with a <60s email ack; reconciliation green; GHL no longer the front door.
+- **GHL cutover:** the bulk rescue is already complete; freeze new GHL work, keep only bridge/retire actions, and disable old routes after replacement proof.
+- **ERPNext/Hermes first contract:** define ERPNext sync objects and Hermes tool boundary, but keep live intake fronted by the Worker until the first source is operating.
+- *Exit:* every test lead (both brands) lands in D1/R2 + JN, deduped, with email ack; reconciliation green; GHL no longer the front door; ERPNext/Hermes skeleton cannot mutate live customer/job truth outside approved tools.
 
 ### Phase 2 — Messaging + retire GHL
 - A2P approved → **Engage 2-way SMS** live → MCTB **prospect-SMS leg** switches on.
@@ -164,11 +169,12 @@ JobNimbus admin config, Jotform live forms, and AssistAI remain account/owner ga
 ## Current Next Actions
 
 1. ✅ Maintainer named (Ilia via Claude Code). ✅ JobNimbus write path validated + gate on. ✅ Google Workspace/Drive path built.
-2. **Wire one real lead source to `/ingest/website`** — website server-side forward or one Make UI HTTP module.
-3. **Submit A2P 10DLC + Canadian carrier registration** for JobNimbus Engage — biggest remaining SMS unblock.
-4. **Rotate the JobNimbus API key** (it was shared in chat) + issue a dedicated bus key.
-5. Connect Jotform photo intake and QuickBooks webhook after the first live lead path is proven.
-6. Retire/disable one-time GHL rescue and old routes only after replacement proof exists.
+2. **Switch/refresh Cloudflare auth for the IronWrap account** so `wrangler d1 list` and `wrangler queues list` can read the configured account.
+3. **Wire one real lead source to `/ingest/website`** — website server-side forward or one Make UI HTTP module.
+4. **Submit A2P 10DLC + Canadian carrier registration** for JobNimbus Engage — biggest remaining SMS unblock.
+5. **Rotate the JobNimbus API key** (it was shared in chat) + issue a dedicated bus key.
+6. Connect Jotform photo intake, RoofRuler measurement bridge, and QuickBooks webhook after the first live lead path is proven.
+7. Retire/disable one-time GHL rescue and old routes only after replacement proof exists.
 
 ## Definition of done
 The plan is delivered when `final-spec-pack/README.md` "What Counts As Shipped" is fully true:

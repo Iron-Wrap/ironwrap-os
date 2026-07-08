@@ -31,6 +31,7 @@ Actions:
 
 - Inventory current Make, JobNimbus, QuickBooks, storage, website, and phone access. GHL is experimental/legacy scaffolding; retire live routes only after the bus replacement path is proven.
 - Identify live Make connections, API keys, webhooks, phone numbers, and folder automations.
+- Use `18-phase-1-source-truth-and-build-contract.md` as the current inventory/build contract.
 - Use test contacts/jobs wherever possible.
 - Pause or duplicate dangerous scenarios before editing.
 - Do not create new broad admin/API keys unless required for testing.
@@ -68,6 +69,11 @@ Current-state note (experimental Make setup being migrated to the JobNimbus spin
   JobNimbus and Jotform are already connected in Make. These are experimental on GHL;
   Task 1 migrates/rebuilds the keep-worthy ones onto the JobNimbus spine + owned bus,
   then retires GHL.
+
+2026-07-08 auth note: local Wrangler is logged into Mindburn Labs, while the
+Worker config points at the IronWrap Cloudflare account. Do not treat local
+Wrangler read failures as missing resources; switch/refresh account auth before
+Cloudflare inventory or deploy work.
 
 Output:
 
@@ -507,8 +513,8 @@ Actions:
 
 ## Phase 11 - Production Launch
 
-GHL was trial-evaluated only and is being declined before any production use; nothing
-to migrate — end the trial. Launch is a clean go-live on the JobNimbus spine:
+GHL is declined as the keeper. Launch is a clean go-live on the JobNimbus spine
+after experimental GHL/Make routes are replaced and retired:
 
 1. A2P 10DLC + Canadian carrier registration approved (wait for approval). The
    email/owner-alert form of instant-ack ships before this; the prospect-SMS leg of

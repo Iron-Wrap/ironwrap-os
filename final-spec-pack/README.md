@@ -1,6 +1,6 @@
 # IronWrap Internal OS Final Spec Pack
 
-Date: 2026-06-27 (re-architected 2026-06-28; updated 2026-07-07 for Google Workspace/Drive).
+Date: 2026-06-27 (re-architected 2026-06-28; updated 2026-07-08 for Google Workspace/Drive and Phase 1 source truth).
 
 This pack is the final implementation specification for IronWrap's internal
 operating system. It is not the external metal-layout SaaS idea. It covers the
@@ -9,7 +9,9 @@ internal system we should set up, configure, build, test, and ship for IronWrap.
 ## Final Direction
 
 Consolidate onto JobNimbus and the owned Cloudflare bus. Retire GoHighLevel as the
-front door after the experimental/import-rescue paths are replaced.
+front door after the experimental/import-rescue paths are replaced. The exhaustive
+first-phase build contract is `18-phase-1-source-truth-and-build-contract.md`; it wins
+when older provenance docs disagree.
 
 - JobNimbus as the operational CRM, job-truth, and lead front door (customer,
   property, job, stage, task, owner, job number). GHL was experimental/import
@@ -18,9 +20,9 @@ front door after the experimental/import-rescue paths are replaced.
 - A thin owned data layer (Cloudflare D1 + R2) is the system of record: Make
   dual-writes every lead/event to it first, then to JobNimbus. JobNimbus is a
   consumer of IronWrap's data, not the owner.
-- Make as the critical integration bus, not plumbing: canonical lead envelope,
-  dedup, error-handler → dead-letter, and a daily source-vs-landed reconciliation
-  so no lead is ever silently lost.
+- Make as connector/visibility infrastructure and the Cloudflare Worker as the
+  owned bus: canonical lead envelope, dedup, dead-letter, retry, and daily
+  source-vs-landed reconciliation so no lead is ever silently lost.
 - Instant-response / missed-call-text-back (MCTB) is the headline deliverable:
   every call or form gets a touch in under a minute, 24/7.
 - JobNimbus Engage for two-way SMS after A2P/carrier approval; email sends from
@@ -85,6 +87,7 @@ proves the need.
 16. [First Deliverable Existing-Stack Plan](./15-first-deliverable-existing-stack-plan.md)
 17. [Website Funnels & Qualified-Lead Capture](./16-website-funnels-qualified-leads.md)
 18. [US Best-Practice Cross-Reference](./17-us-best-practices-cross-reference.md)
+19. [Phase 1 Source Truth And Build Contract](./18-phase-1-source-truth-and-build-contract.md)
 
 ## What Counts As Shipped
 

@@ -220,7 +220,11 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     throw err; // keep the envelope pending; queue retry preserves the ERPNext proof path
   }
 
-  await store.setStatus(env, envelopeId, "pushed", { jn_contact_id: r.contactId, jn_job_id: r.jobId ?? null });
+  await store.setStatus(env, envelopeId, "pushed", {
+    job_ref: r.jobNumber ?? rec.job_ref,
+    jn_contact_id: r.contactId,
+    jn_job_id: r.jobId ?? null,
+  });
 }
 
 async function handleDead(env: Env, envelopeId: string): Promise<void> {

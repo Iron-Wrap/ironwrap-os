@@ -18,6 +18,16 @@ export interface ErpNextResult {
   roofJobName?: string;
 }
 
+export interface ErpNextMeasurementInput {
+  measurementId: string;
+  jobNumber: string;
+  reportUrl: string | null;
+  reportFileUrl?: string | null;
+  rawKey: string;
+  parsedAt: string;
+  measurements: Record<string, number>;
+}
+
 export async function pushToErpNext(
   env: Env,
   rec: EnvelopeRecord,
@@ -99,6 +109,7 @@ async function upsertRoofJob(
   return await upsertByField(env, base, "Roof Job", "roof_job_id", roofJobId, {
     roof_job_id: roofJobId,
     brand: brand(p),
+    job_number: jn?.jobNumber ?? rec.job_ref ?? undefined,
     service_type: serviceType(p),
     job_status: "Qualified",
     lead_envelope: leadName,
@@ -107,6 +118,36 @@ async function upsertRoofJob(
     qb_invoice_ref: undefined,
     jobnimbus_contact_id: jn?.contactId ?? rec.jn_contact_id ?? undefined,
     jobnimbus_job_id: jn?.jobId ?? rec.jn_job_id ?? undefined,
+  });
+}
+
+export async function pushMeasurementToErpNext(
+  env: Env,
+  input: ErpNextMeasurementInput,
+): Promise<ErpNextResult | null> {
+  const cfg = env as ErpEnv;
+  if (!isOn(cfg.ERPNEXT_ENABLED)) return null;
+  if (!cfg.ERPNEXT_API_KEY || !cfg.ERPNEXT_API_SECRET) throw new Error("erpnext_no_token");
+
+  const base = normalizeBaseUrl(cfg.ERPNEXT_BASE_URL);
+  const roofJob = await findByTerm(cfg, base, "Roof Job", "job_number", input.jobNumber);
+  return await upsertByField(cfg, base, "Measurement Report", "measurement_id", input.measurementId, {
+    measurement_id: input.measurementId,
+    roof_job: roofJob ?? undefined,
+    provider: "RoofRuler",
+    source_file: input.reportFileUrl ?? input.reportUrl ?? undefined,
+    report_url: input.reportUrl ?? undefined,
+    raw_key: input.rawKey,
+    parsed_at: input.parsedAt,
+    review_status: Object.keys(input.measurements).length ? "Parsed" : "Needs Review",
+    measurements: Object.entries(input.measurements).map(([metric, value]) => ({
+      metric,
+      value,
+      unit: measurementUnit(metric),
+      confidence: "parsed",
+      source_ref: input.rawKey,
+      needs_review: 0,
+    })),
   });
 }
 
@@ -186,6 +227,15 @@ function serviceType(p: Record<string, unknown>): string {
   if (text.includes("commercial")) return "Commercial";
   if (text.includes("roof")) return "Roofing";
   return "Other";
+}
+
+function measurementUnit(metric: string): string | undefined {
+  if (metric.endsWith("_ft") || metric.includes("perimeter")) return "ft";
+  if (metric.includes("sqft") || metric === "area") return "sqft";
+  if (metric === "squares") return "sq";
+  if (metric.includes("pitch")) return "pitch";
+  if (metric.includes("factor")) return "ratio";
+  return undefined;
 }
 
 function safeJson(s: string): Record<string, unknown> {

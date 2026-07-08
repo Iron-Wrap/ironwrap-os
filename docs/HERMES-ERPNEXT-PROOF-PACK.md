@@ -60,6 +60,13 @@ core fork.
 The current Worker remains the front door. ERPNext becomes an additional
 consumer only after the current owned-store-first path is stable.
 
+Current implementation checkpoint:
+
+- Worker bridge: `workers-bus/src/erpnext.ts`.
+- D1 proof fields: `workers-bus/migrations/0002_erpnext_consumer.sql`.
+- Frappe app contract: `frappe-apps/ironwrap_roofing`.
+- Contract validator: `node tools/validate-erpnext-doctypes.mjs`.
+
 Create/update order:
 
 1. Worker receives source payload and writes raw R2 plus D1 envelope.

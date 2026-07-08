@@ -100,6 +100,9 @@ npx wrangler deploy
 | POST | `/admin/reconcile` | `Bearer ADMIN_TOKEN` | run reconciliation now |
 | POST | `/admin/source-count` | `Bearer ADMIN_TOKEN` | record independent ground-truth count `{day?,channel,count}` |
 | POST | `/admin/replay` | `Bearer ADMIN_TOKEN` | re-drive dead-lettered envelopes |
+| GET | `/admin/envelopes?limit=50` | `Bearer ADMIN_TOKEN` | read recent bus envelopes for owner/Hermes diagnostics |
+| GET | `/admin/envelope/:id` | `Bearer ADMIN_TOKEN` | read one canonical bus envelope |
+| GET | `/admin/dead-letter?limit=50` | `Bearer ADMIN_TOKEN` | read unrecovered dead-letter rows |
 | POST | `/webhook/quickbooks` | `intuit-signature` | capture signed QuickBooks invoice/payment events |
 
 Point the website forms, GBP, and AssistAI call-completed webhook at `/ingest/:source`

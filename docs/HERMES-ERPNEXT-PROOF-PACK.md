@@ -66,6 +66,8 @@ Current implementation checkpoint:
 - D1 proof fields: `workers-bus/migrations/0002_erpnext_consumer.sql`.
 - Frappe app contract: `frappe-apps/ironwrap_roofing`.
 - Contract validator: `node tools/validate-erpnext-doctypes.mjs`.
+- Read-only bus truth endpoints for Hermes/operator diagnostics:
+  `GET /admin/envelopes`, `GET /admin/envelope/:id`, and `GET /admin/dead-letter`.
 
 Create/update order:
 

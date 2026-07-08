@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import {
   assertWriteApproved,
   buildGateUpdatePatch,
+  buildMaterialTakeoffDraft,
   buildProposalEvidencePackDraft,
   configFromEnv,
   erpGet,
   erpPut,
+  materialTakeoffIdForRoofJob,
   proposalPackIdForRoofJob,
   redactApprovalArgs,
   resourceListPath,
@@ -94,6 +96,7 @@ test("resource paths encode Frappe DocTypes, names, fields, and filters", () => 
   assert.deepEqual(JSON.parse(params.get("filters")), [["Production Gate State", "state", "=", "Blocked"]]);
   assert.equal(resourcePath("Hermes Run", "hr_1"), "/api/resource/Hermes%20Run/hr_1");
   assert.equal(resourcePath("Measurement Report", "measurement:ow_1"), "/api/resource/Measurement%20Report/measurement%3Aow_1");
+  assert.equal(resourcePath("Material Takeoff", "takeoff:job:ow_1"), "/api/resource/Material%20Takeoff/takeoff%3Ajob%3Aow_1");
   assert.equal(resourcePath("Instant Estimate Session", "estimate:ow_1"), "/api/resource/Instant%20Estimate%20Session/estimate%3Aow_1");
   assert.equal(resourcePath("Evidence Item", "evidence:measurement:ow_1"), "/api/resource/Evidence%20Item/evidence%3Ameasurement%3Aow_1");
   assert.equal(resourcePath("Field Check-in", "field:ow_1"), "/api/resource/Field%20Check-in/field%3Aow_1");
@@ -127,6 +130,42 @@ test("write approval and gate patch helpers enforce narrow mutation rules", () =
     gate_id: "gate_1",
     next_state: "Ready",
   });
+});
+
+test("material takeoff draft converts measurement values into review-gated line items", () => {
+  assert.equal(materialTakeoffIdForRoofJob("job:ow_1"), "takeoff:job:ow_1");
+
+  const draft = buildMaterialTakeoffDraft({
+    roofJobId: "job:ow_1",
+    measurementReport: {
+      name: "measurement:ow_1",
+      measurement_id: "measurement:ow_1",
+      provider: "RoofRuler",
+      review_status: "Parsed",
+      measurements: [
+        { metric: "area_sqft", value: 1200, unit: "sqft", confidence: "parsed", source_ref: "raw#area", needs_review: 0 },
+        { metric: "perimeter_ft", value: 140, unit: "ft", confidence: "parsed", source_ref: "raw#perimeter", needs_review: 0 },
+      ],
+    },
+    nowIso: "2026-07-08T10:00:00.000Z",
+  });
+
+  assert.equal(draft.takeoff_id, "takeoff:job:ow_1");
+  assert.equal(draft.roof_job, "job:ow_1");
+  assert.equal(draft.measurement_report, "measurement:ow_1");
+  assert.equal(draft.status, "Needs Review");
+  assert.equal(draft.prepared_at, "2026-07-08T10:00:00.000Z");
+  assert.match(draft.assumptions, /estimator review/);
+  assert.match(draft.exclusions, /supplier order/);
+  assert.equal(draft.items.length, 2);
+  assert.deepEqual(draft.items.map((item) => item.category), ["Roof Surface", "Linear Metal"]);
+  assert.deepEqual(draft.items.map((item) => item.waste_factor), [10, 5]);
+  assert.ok(draft.items.every((item) => item.needs_review === 1));
+
+  const source = JSON.parse(draft.source_measurements_json);
+  assert.equal(source.measurement_report, "measurement:ow_1");
+  assert.equal(source.provider, "RoofRuler");
+  assert.equal(source.measurements.length, 2);
 });
 
 test("proposal evidence pack draft links measurement and evidence proof", () => {

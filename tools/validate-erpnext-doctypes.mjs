@@ -77,6 +77,18 @@ const specs = [
     requiredFields: ["measurement_id", "roof_job", "roofing_property", "provider", "source_file", "raw_key", "review_status", "measurements"],
   },
   {
+    name: "Material Takeoff Item",
+    dir: "material_takeoff_item",
+    child: true,
+    requiredFields: ["category", "item_name", "quantity", "unit", "waste_factor", "source_ref", "confidence", "needs_review"],
+  },
+  {
+    name: "Material Takeoff",
+    dir: "material_takeoff",
+    idField: "takeoff_id",
+    requiredFields: ["takeoff_id", "roof_job", "measurement_report", "status", "prepared_at", "approved_by", "source_measurements_json", "assumptions", "exclusions", "items"],
+  },
+  {
     name: "Instant Estimate Session",
     dir: "instant_estimate_session",
     idField: "estimate_session_id",

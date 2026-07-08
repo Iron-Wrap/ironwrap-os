@@ -84,6 +84,7 @@ export async function handleMeasurementIngest(env: Env, rawText: string, content
       action: "received", result: "ok", error: !sub.reportUrl ? "no_report_url" : "drive_not_configured" });
     return jsonResp({ ok: true, job_number: sub.jobNumber, measurements: sub.measurements, filed: false,
       erpnext_measurement_id: erp.name,
+      erpnext_evidence_id: erp.evidenceItemName,
       erpnext_error: erp.error,
       note: !sub.reportUrl ? "no report_url — measurements captured only" : "drive_not_configured — raw stored" });
   }
@@ -106,7 +107,7 @@ export async function handleMeasurementIngest(env: Env, rawText: string, content
     action: "filed", result: report ? "ok" : "error", error: report ? null : "report_not_filed" });
   const erp = await syncMeasurementToErpNext(env, id, sub, rawKey, now, report);
   return jsonResp({ ok: true, job_number: sub.jobNumber, measurements: sub.measurements, report, folder,
-    erpnext_measurement_id: erp.name, erpnext_error: erp.error });
+    erpnext_measurement_id: erp.name, erpnext_evidence_id: erp.evidenceItemName, erpnext_error: erp.error });
 }
 
 function jsonResp(body: unknown, status = 200): Response {
@@ -120,7 +121,7 @@ async function syncMeasurementToErpNext(
   rawKey: string,
   parsedAt: string,
   reportFileUrl: string | null,
-): Promise<{ name: string | null; error: string | null }> {
+): Promise<{ name: string | null; evidenceItemName: string | null; error: string | null }> {
   try {
     const erp = await pushMeasurementToErpNext(env, {
       measurementId: `measurement:${id}`,
@@ -133,14 +134,15 @@ async function syncMeasurementToErpNext(
     });
     if (erp) {
       await store.recordAudit(env, { automation: "erpnext_measurement", trigger: "roofruler",
-        envelope_id: id, job_number: sub.jobNumber, target_ids: `measurement_report:${erp.name}`,
+        envelope_id: id, job_number: sub.jobNumber,
+        target_ids: `measurement_report:${erp.name}${erp.evidenceItemName ? ",evidence_item:" + erp.evidenceItemName : ""}`,
         action: erp.reused ? "upsert_existing" : "create", result: "ok" });
     }
-    return { name: erp?.name ?? null, error: null };
+    return { name: erp?.name ?? null, evidenceItemName: erp?.evidenceItemName ?? null, error: null };
   } catch (err) {
     const error = `erpnext_measurement: ${String(err)}`;
     await store.recordAudit(env, { automation: "erpnext_measurement", trigger: "roofruler",
       envelope_id: id, job_number: sub.jobNumber, action: "sync", result: "error", error });
-    return { name: null, error };
+    return { name: null, evidenceItemName: null, error };
   }
 }

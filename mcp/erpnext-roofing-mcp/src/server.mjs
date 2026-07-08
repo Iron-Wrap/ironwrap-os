@@ -43,6 +43,20 @@ const MEASUREMENT_REPORT_FIELDS = [
   "modified",
 ];
 
+const EVIDENCE_ITEM_FIELDS = [
+  "name",
+  "evidence_id",
+  "roof_job",
+  "lead_envelope",
+  "evidence_type",
+  "source_system",
+  "source_uri",
+  "r2_key",
+  "customer_safe",
+  "captured_at",
+  "modified",
+];
+
 export function configFromEnv(env = process.env) {
   const baseUrl = env.ERPNEXT_BASE_URL?.replace(/\/+$/, "");
   const apiKey = env.ERPNEXT_API_KEY;
@@ -222,6 +236,31 @@ export function buildServer(config) {
     async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath("Measurement Report", {
       fields: MEASUREMENT_REPORT_FIELDS,
       filters: [["Measurement Report", "roof_job", "=", roof_job_id]],
+      limit,
+      orderBy: "modified desc",
+    }))),
+  );
+
+  server.registerTool(
+    "get_evidence_item",
+    {
+      title: "Get Evidence Item",
+      description: "Read one ERPNext Evidence Item by evidence_id/name.",
+      inputSchema: { evidence_id: z.string().min(1) },
+    },
+    async ({ evidence_id }) => text(await erpGet(config, resourcePath("Evidence Item", evidence_id))),
+  );
+
+  server.registerTool(
+    "list_evidence_for_job",
+    {
+      title: "List Evidence For Job",
+      description: "Read Evidence Item rows linked to one Roof Job.",
+      inputSchema: { roof_job_id: z.string().min(1), limit: z.number().int().min(1).max(100).optional() },
+    },
+    async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath("Evidence Item", {
+      fields: EVIDENCE_ITEM_FIELDS,
+      filters: [["Evidence Item", "roof_job", "=", roof_job_id]],
       limit,
       orderBy: "modified desc",
     }))),

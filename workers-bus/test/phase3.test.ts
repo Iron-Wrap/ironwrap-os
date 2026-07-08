@@ -34,6 +34,8 @@ test("handleMeasurementIngest: raw capture plus ERPNext Measurement Report sync"
     if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0001" }] });
     if (url.includes("/api/resource/Measurement%20Report?")) return json({ data: [] });
     if (url.endsWith("/api/resource/Measurement%20Report")) return json({ data: { name: "MR-0001" } });
+    if (url.includes("/api/resource/Evidence%20Item?")) return json({ data: [] });
+    if (url.endsWith("/api/resource/Evidence%20Item")) return json({ data: { name: "EV-0001" } });
     throw new Error(`unexpected fetch ${url}`);
   });
 
@@ -62,10 +64,15 @@ test("handleMeasurementIngest: raw capture plus ERPNext Measurement Report sync"
     squares: 24,
     ridge_ft: 100,
   }), "application/json");
-  const body = await res.json() as { erpnext_measurement_id?: string; erpnext_error?: string | null };
+  const body = await res.json() as {
+    erpnext_measurement_id?: string;
+    erpnext_evidence_id?: string;
+    erpnext_error?: string | null;
+  };
 
   assert.equal(res.status, 200);
   assert.equal(body.erpnext_measurement_id, "MR-0001");
+  assert.equal(body.erpnext_evidence_id, "EV-0001");
   assert.equal(body.erpnext_error, null);
   assert.equal(rawWrites.length, 1);
   assert.match(rawWrites[0].key, /^raw\/measurements\/\d{4}-\d{2}-\d{2}\/ow_/);
@@ -77,7 +84,14 @@ test("handleMeasurementIngest: raw capture plus ERPNext Measurement Report sync"
     ["squares", "sq"],
     ["ridge_ft", "ft"],
   ]);
-  assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") && w.args.includes("erpnext_measurement")));
+  const evidence = JSON.parse(String(fetches.find((f) => f.url.endsWith("/api/resource/Evidence%20Item"))?.init.body));
+  assert.equal(evidence.roof_job, "RJ-0001");
+  assert.equal(evidence.evidence_id.startsWith("evidence:measurement:ow_"), true);
+  assert.equal(evidence.evidence_type, "Measurement Report");
+  assert.equal(evidence.source_system, "RoofRuler");
+  assert.match(evidence.r2_key, /^raw\/measurements\/\d{4}-\d{2}-\d{2}\/ow_/);
+  assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") &&
+    w.args.includes("measurement_report:MR-0001,evidence_item:EV-0001")));
 });
 
 test("parseQbEvents: flattens entity changes; tolerates junk", () => {

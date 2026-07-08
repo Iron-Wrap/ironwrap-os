@@ -130,7 +130,8 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
    Roofing Property, Roof Job, Measurement Report, and Measurement Value DocTypes
    exist. The Worker upserts Lead Envelope by `envelope_id`, optional Roofing
    Property by `property_key`, Roof Job by `roof_job_id`, and measurement reports
-   by `measurement_id`. Roof Job sync also creates missing initial production
+   by `measurement_id`. Measurement sync also creates a linked Evidence Item for
+   the raw/report artifact. Roof Job sync also creates missing initial production
    gate rows without resetting existing gate state. ERPNext is still a consumer,
    not the raw intake source.
 

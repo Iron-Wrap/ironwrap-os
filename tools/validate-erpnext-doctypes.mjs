@@ -77,6 +77,12 @@ const specs = [
     requiredFields: ["measurement_id", "roof_job", "roofing_property", "provider", "source_file", "raw_key", "review_status", "measurements"],
   },
   {
+    name: "Instant Estimate Session",
+    dir: "instant_estimate_session",
+    idField: "estimate_session_id",
+    requiredFields: ["estimate_session_id", "lead_envelope", "roof_job", "source", "service_type", "status", "range_low", "range_high", "confidence", "review_required", "assumptions", "exclusions", "payload_json"],
+  },
+  {
     name: "Evidence Item",
     dir: "evidence_item",
     idField: "evidence_id",

@@ -18,6 +18,7 @@ export interface ErpNextResult {
   roofJobName?: string;
   productionGateCount?: number;
   evidenceItemName?: string;
+  instantEstimateSessionName?: string;
 }
 
 export interface ErpNextPhotoEvidenceResult {
@@ -94,6 +95,7 @@ export async function pushToErpNext(
   const property = await upsertProperty(cfg, base, rec, p, lead.name);
   const roofJob = await upsertRoofJob(cfg, base, rec, p, lead.name, property?.name, jn);
   const productionGateCount = await ensureInitialProductionGates(cfg, base, roofJob.name);
+  const instantEstimate = await upsertInstantEstimateSession(cfg, base, rec, p, lead.name, roofJob.name);
 
   return {
     name: lead.name,
@@ -101,6 +103,7 @@ export async function pushToErpNext(
     roofingPropertyName: property?.name,
     roofJobName: roofJob?.name,
     productionGateCount,
+    ...(instantEstimate ? { instantEstimateSessionName: instantEstimate.name } : {}),
   };
 }
 
@@ -168,6 +171,35 @@ async function ensureInitialProductionGates(env: ErpEnv, base: string, roofJobNa
     });
   }
   return PRODUCTION_GATES.length;
+}
+
+async function upsertInstantEstimateSession(
+  env: ErpEnv,
+  base: string,
+  rec: EnvelopeRecord,
+  p: Record<string, unknown>,
+  leadName: string,
+  roofJobName: string,
+): Promise<ErpNextResult | null> {
+  const low = money(p.range_low ?? p.estimate_low ?? p.low_estimate ?? p.min_price);
+  const high = money(p.range_high ?? p.estimate_high ?? p.high_estimate ?? p.max_price);
+  if (!hasInstantEstimateSignal(p, low, high)) return null;
+
+  return await upsertByField(env, base, "Instant Estimate Session", "estimate_session_id", `estimate:${rec.envelope_id}`, {
+    estimate_session_id: `estimate:${rec.envelope_id}`,
+    lead_envelope: leadName,
+    roof_job: roofJobName,
+    source: rec.source,
+    service_type: serviceType(p),
+    status: "Needs Review",
+    range_low: low,
+    range_high: high,
+    confidence: str(p.confidence ?? p.estimate_confidence),
+    review_required: 1,
+    assumptions: str(p.assumptions ?? p.estimate_assumptions) ?? "Non-binding range; estimator review required.",
+    exclusions: str(p.exclusions ?? p.estimate_exclusions) ?? "Not a final quote, contract, material order, or payment request.",
+    payload_json: rec.payload_json,
+  });
 }
 
 export async function pushMeasurementToErpNext(
@@ -376,6 +408,17 @@ function serviceType(p: Record<string, unknown>): string {
   if (text.includes("commercial")) return "Commercial";
   if (text.includes("roof")) return "Roofing";
   return "Other";
+}
+
+function hasInstantEstimateSignal(p: Record<string, unknown>, low?: number, high?: number): boolean {
+  return p.instant_estimate === true || str(p.estimate_type)?.toLowerCase() === "instant" || low !== undefined || high !== undefined;
+}
+
+function money(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v !== "string") return undefined;
+  const n = Number(v.replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function measurementUnit(metric: string): string | undefined {

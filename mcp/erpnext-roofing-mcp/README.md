@@ -29,6 +29,8 @@ Frappe token auth and exposes read tools plus token-gated approved-write tools:
 - `request_update_gate`
 - `dry_run_material_takeoff`
 - `request_create_material_takeoff`
+- `dry_run_update_material_takeoff_status`
+- `request_update_material_takeoff_status`
 - `dry_run_proposal_evidence_pack`
 - `request_create_proposal_evidence_pack`
 
@@ -42,6 +44,9 @@ Current approved-write tools:
 - `request_create_material_takeoff` creates or updates one review-gated
   `Material Takeoff` from linked Measurement Report values. It does not approve
   quantities, create supplier orders, create purchase orders, or mutate invoices.
+- `request_update_material_takeoff_status` updates one `Material Takeoff`
+  review status with an approval note and Hermes Run audit row. It does not
+  create supplier orders, purchase orders, invoices, or customer-facing scope.
 - `request_create_proposal_evidence_pack` creates or updates one draft
   `Proposal Evidence Pack` from linked Measurement Report and Evidence Item
   rows. It does not approve pricing, scope, payment terms, material orders, or

@@ -86,7 +86,7 @@ const specs = [
     name: "Material Takeoff",
     dir: "material_takeoff",
     idField: "takeoff_id",
-    requiredFields: ["takeoff_id", "roof_job", "measurement_report", "status", "prepared_at", "approved_by", "source_measurements_json", "assumptions", "exclusions", "items"],
+    requiredFields: ["takeoff_id", "roof_job", "measurement_report", "status", "prepared_at", "approved_by", "approved_at", "approval_note", "source_measurements_json", "assumptions", "exclusions", "items"],
   },
   {
     name: "Instant Estimate Session",

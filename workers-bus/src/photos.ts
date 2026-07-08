@@ -10,8 +10,8 @@ import { googleConfigured, fileToJobFolder } from "./google.ts";
 import { pushPhotoEvidenceToErpNext } from "./erpnext.ts";
 
 const JOB_KEYS = ["job_number", "jobnumber", "job", "job_no", "jn_job", "jobnimbus_job", "job_id", "jobid"];
-const PHOTO_KEYS = ["photos", "photo", "images", "image", "files", "file", "attachments", "upload", "uploads"];
-const CAPTION_KEYS = ["caption", "notes", "note", "description", "message", "comments", "comment"];
+const PHOTO_KEYS = ["photos", "photo", "images", "image", "files", "file", "attachments", "upload", "uploads", "audio", "voice", "voice_note", "voice_notes", "recordings"];
+const CAPTION_KEYS = ["caption", "notes", "note", "description", "message", "comments", "comment", "transcript", "voice_transcript", "voice_note_text"];
 
 export interface PhotoSubmission { jobNumber: string | null; photos: string[]; caption: string | null }
 interface PhotoEvidenceRef {
@@ -47,9 +47,9 @@ export function parsePhotoSubmission(raw: Record<string, unknown>): PhotoSubmiss
 
   let photos: string[] = [];
   for (const k of PHOTO_KEYS) { const v = pick(raw, [k]); if (v != null) photos.push(...urlsIn(v)); }
-  if (photos.length === 0) { // fallback: any upload/image URL anywhere in the payload
+  if (photos.length === 0) { // fallback: any upload/image/voice URL anywhere in the payload
     for (const v of Object.values(raw)) {
-      for (const u of urlsIn(v)) if (/\/uploads?\/|\.(jpe?g|png|heic|webp|gif|pdf)(\?|$)/i.test(u)) photos.push(u);
+      for (const u of urlsIn(v)) if (/\/uploads?\/|\.(jpe?g|png|heic|webp|gif|pdf|m4a|mp3|wav|ogg|amr|aac)(\?|$)/i.test(u)) photos.push(u);
     }
   }
   photos = [...new Set(photos)];

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { handlePhotoIngest, parsePhotoSubmission, photoFileName } from "../src/photos.ts";
 import { jobFolderName, safeSegment } from "../src/google.ts";
+import { isVoiceNoteUri } from "../src/core.ts";
 
 test("parsePhotoSubmission: normalized shape", () => {
   const s = parsePhotoSubmission({
@@ -38,6 +39,23 @@ test("parsePhotoSubmission: keyed photos win; no stray non-file URLs; deduped", 
 test("parsePhotoSubmission: missing job number / no photos", () => {
   assert.equal(parsePhotoSubmission({ photos: ["https://x/a.jpg"] }).jobNumber, null);
   assert.deepEqual(parsePhotoSubmission({ job_number: "J1" }).photos, []);
+});
+
+test("parsePhotoSubmission: field voice notes and transcripts (gate 9)", () => {
+  const s = parsePhotoSubmission({
+    job_number: "J9",
+    voice_note: "https://www.jotform.com/uploads/u/f/s/note.m4a",
+    transcript: "valley flashing installed, need more screws tomorrow",
+  });
+  assert.deepEqual(s.photos, ["https://www.jotform.com/uploads/u/f/s/note.m4a"]);
+  assert.equal(s.caption, "valley flashing installed, need more screws tomorrow");
+
+  // Audio URL found by the fallback scan when no keyed match exists.
+  const fallback = parsePhotoSubmission({ job: "J9", q9_misc: "https://x/files/memo.mp3" });
+  assert.deepEqual(fallback.photos, ["https://x/files/memo.mp3"]);
+
+  assert.equal(isVoiceNoteUri("https://x/uploads/note.m4a?t=1"), true);
+  assert.equal(isVoiceNoteUri("https://x/uploads/roof.jpg"), false);
 });
 
 test("photoFileName: extension from URL, then content-type, then jpg default", () => {

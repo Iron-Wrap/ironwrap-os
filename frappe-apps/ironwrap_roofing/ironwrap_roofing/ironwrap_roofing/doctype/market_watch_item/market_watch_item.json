@@ -1,0 +1,51 @@
+{
+  "actions": [],
+  "allow_rename": 0,
+  "autoname": "field:watch_id",
+  "creation": "2026-07-08 00:00:00.000000",
+  "custom": 0,
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "watch_id",
+    "competitor",
+    "title",
+    "source_url",
+    "risk_level",
+    "status",
+    "observed_at",
+    "product_gate",
+    "required_response",
+    "decision_notes",
+    "created_by_ref"
+  ],
+  "fields": [
+    { "fieldname": "watch_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Watch ID", "reqd": 1, "unique": 1 },
+    { "fieldname": "competitor", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Competitor", "reqd": 1 },
+    { "fieldname": "title", "fieldtype": "Data", "label": "Title", "reqd": 1 },
+    { "fieldname": "source_url", "fieldtype": "Data", "label": "Source URL" },
+    { "fieldname": "risk_level", "fieldtype": "Select", "label": "Risk Level", "options": "Low\nMedium\nHigh", "reqd": 1 },
+    { "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Status", "options": "Open\nCovered\nExceeded\nResponding\nDismissed", "reqd": 1 },
+    { "fieldname": "observed_at", "fieldtype": "Datetime", "in_list_view": 1, "in_standard_filter": 1, "label": "Observed At" },
+    { "fieldname": "product_gate", "fieldtype": "Data", "label": "Product Gate" },
+    { "fieldname": "required_response", "fieldtype": "Small Text", "label": "Required Response" },
+    { "fieldname": "decision_notes", "fieldtype": "Small Text", "label": "Decision Notes" },
+    { "fieldname": "created_by_ref", "fieldtype": "Data", "label": "Created By Ref" }
+  ],
+  "index_web_pages_for_search": 0,
+  "istable": 0,
+  "links": [],
+  "modified": "2026-07-08 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "IronWrap Roofing",
+  "name": "Market Watch Item",
+  "naming_rule": "By fieldname",
+  "owner": "Administrator",
+  "permissions": [
+    { "create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1 }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 1
+}

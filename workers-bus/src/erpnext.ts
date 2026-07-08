@@ -1,6 +1,6 @@
 // erpnext.ts - optional Frappe/ERPNext consumer for canonical bus envelopes.
 
-import { isOn, type EnvelopeRecord } from "./core.ts";
+import { isOn, isVoiceNoteUri, type EnvelopeRecord } from "./core.ts";
 import type { JnResult } from "./jobnimbus.ts";
 
 type ErpEnv = Env & {
@@ -262,17 +262,18 @@ export async function pushPhotoEvidenceToErpNext(
   const names: string[] = [];
   let reused = false;
   for (const photo of input.photos) {
+    const isVoice = isVoiceNoteUri(photo.sourceUri);
     const evidence = await upsertByField(cfg, base, "Evidence Item", "evidence_id", photoEvidenceId(input.submissionId, photo.index), {
       evidence_id: photoEvidenceId(input.submissionId, photo.index),
       roof_job: roofJob ?? undefined,
-      evidence_type: "Photo",
+      evidence_type: isVoice ? "Voice Note" : "Photo",
       source_system: "Jotform",
       source_uri: photo.driveFileUrl ?? photo.sourceUri,
       r2_key: input.rawKey,
       drive_file_id: photo.driveFileId ?? undefined,
       captured_at: input.capturedAt,
       customer_safe: 0,
-      summary: photoSummary(photo.index, photo.fileName, input.caption, photo.error),
+      summary: photoSummary(photo.index, photo.fileName, input.caption, photo.error, isVoice),
     });
     names.push(evidence.name);
     reused = reused || evidence.reused;
@@ -453,9 +454,9 @@ function milestoneType(type: string): string {
   return "Other";
 }
 
-function photoSummary(index: number, fileName: string, caption: string | null, error?: string | null): string {
+function photoSummary(index: number, fileName: string, caption: string | null, error?: string | null, isVoice = false): string {
   return [
-    `Jobsite photo ${index + 1}: ${fileName}`,
+    `${isVoice ? "Field voice note" : "Jobsite photo"} ${index + 1}: ${fileName}`,
     caption,
     error ? `Upload issue: ${error}` : null,
   ].filter(Boolean).join(" - ");

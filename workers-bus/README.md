@@ -46,7 +46,7 @@ estimator/configurator
 | Canonical lead envelope `{source,contact,job_ref,payload,ts}` | `core.ts:normalizeEnvelope` |
 | Raw submission stored FIRST | `index.ts:handleIngest` step 1 → `store.putRaw` (R2) |
 | Owned store is system of record (single write) | `store.insertEnvelope` (D1) before any JN push |
-| Dedup/idempotency on phone/email, all paths | `core.ts:dedupKey` + `store.findDuplicate` |
+| Dedup/idempotency on phone/email, all paths | `core.ts:dedupKey` + `store.claimDedup` backed by D1 `dedup_claims` |
 | Instant-ack/MCTB off the owned-store write (interim email pre-A2P) | `index.ts` step 5 → `notify.sendInstantAck` |
 | Partial-write repair (pending_jn_push→pushed, retry sweep) | `queue` handler + `scheduled` retry sweep |
 | Dead-letter on a redundant channel (email, not SMS-only) | DLQ consumer → `notify.sendOwnerAlert` |
@@ -67,7 +67,7 @@ src/estimates.ts   Owned estimator/configurator intake; idempotent by project/ke
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
 src/index.ts       the Worker: fetch + queue + scheduled
-migrations/0001_init.sql   D1 schema; 0002/0003 add ERPNext proof fields; 0004 adds estimator idempotency; 0005 adds QuickBooks webhook replay receipts
+migrations/0001_init.sql   D1 schema; 0002/0003 add ERPNext proof fields; 0004 adds estimator idempotency; 0005 adds QuickBooks webhook replay receipts; 0006 adds generic lead dedup claims
 test/core.test.ts  zero-dep self-test (`node --test`)
 ```
 

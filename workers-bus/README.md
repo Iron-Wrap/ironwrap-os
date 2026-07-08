@@ -67,7 +67,7 @@ src/estimates.ts   Owned estimator/configurator intake; idempotent by project/ke
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
 src/index.ts       the Worker: fetch + queue + scheduled
-migrations/0001_init.sql   D1 schema; 0002/0003 add ERPNext proof fields; 0004 adds estimator idempotency
+migrations/0001_init.sql   D1 schema; 0002/0003 add ERPNext proof fields; 0004 adds estimator idempotency; 0005 adds QuickBooks webhook replay receipts
 test/core.test.ts  zero-dep self-test (`node --test`)
 ```
 
@@ -115,7 +115,7 @@ npx wrangler deploy
 | GET | `/admin/envelopes?limit=50` | `Bearer ADMIN_TOKEN` | read recent bus envelopes for owner/Hermes diagnostics |
 | GET | `/admin/envelope/:id` | `Bearer ADMIN_TOKEN` | read one canonical bus envelope |
 | GET | `/admin/dead-letter?limit=50` | `Bearer ADMIN_TOKEN` | read unrecovered dead-letter rows |
-| POST | `/webhook/quickbooks` | `intuit-signature` | capture signed QuickBooks invoice/payment events |
+| POST | `/webhook/quickbooks` | `intuit-signature` | capture signed QuickBooks invoice/payment events with payload-hash replay protection |
 
 Point the website forms, GBP, and AssistAI call-completed webhook at `/ingest/:source`
 (website → `/ingest/website`, AssistAI/voicemail → `/ingest/phone`, etc.). Feed the daily
@@ -135,9 +135,10 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
    `sales@ironwrapexteriors.com`; switch it only after the mailbox/sender alias decision changes.
 3. **SMS / A2P** — the Worker does not send SMS. Prospect SMS belongs in JobNimbus Engage after
    A2P/carrier registration. Pre-A2P instant-ack is Gmail email + owner alert.
-4. **QuickBooks webhook** — the receiver captures signed events now and can mirror
-   Invoice/Payment webhook events into ERPNext Payment Milestone rows. Detailed
-   amount/status sync back to JobNimbus still needs a later QB OAuth read path.
+4. **QuickBooks webhook** — the receiver captures signed events now, records a
+   payload-hash receipt to block replay side effects, and can mirror Invoice/Payment
+   webhook events into ERPNext Payment Milestone rows. Detailed amount/status sync
+   back to JobNimbus still needs a later QB OAuth read path.
 5. **ERPNext bridge** — disabled by default. Before setting `ERPNEXT_ENABLED=true`, apply
    migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,
    Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Measurement Value,

@@ -9,6 +9,8 @@ Frappe token auth and exposes narrow read tools only:
 - `get_lead_envelope`
 - `list_job_gates`
 - `list_blocked_jobs`
+- `get_hermes_run`
+- `list_hermes_runs_for_job`
 
 Required environment:
 

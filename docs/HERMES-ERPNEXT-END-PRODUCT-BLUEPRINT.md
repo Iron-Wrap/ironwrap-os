@@ -216,7 +216,7 @@ Custom DocTypes:
 | Communication Event | SMS/email/call/portal action, consent basis, template, status, and audit result |
 | Supplier Quote | Supplier, requested materials, price, validity, substitutions, delivery terms |
 | Supplier Order | Approved material order, delivery status, shortages, substitutions, received proof |
-| Agent Run | Hermes prompt, tools, inputs, dry-run output, approval, write result, audit link |
+| Hermes Run / Agent Run | Hermes prompt, tools, inputs, dry-run output, approval, write result, audit link |
 | Automation Incident | Failed automation, stuck envelope, bad parse, policy block |
 | Market Watch Item | Competitor/product change, source link, risk level, required response |
 | White-Label Tenant | Customer/company config for future productization |
@@ -287,7 +287,7 @@ Build narrow MCP servers, not one giant god tool.
 | MCP server | Example tools |
 | --- | --- |
 | `ironwrap-bus-mcp` | Current read-only: `list_recent_envelopes`, `get_envelope`, `list_dead_letters`; later approved-write: `dry_run_replay`, `request_replay` |
-| `erpnext-roofing-mcp` | Current read-only: `get_roof_job`, `get_lead_envelope`, `list_job_gates`, `list_blocked_jobs`; later approved-write: `draft_task`, `dry_run_update_gate`, `request_update_gate` |
+| `erpnext-roofing-mcp` | Current read-only: `get_roof_job`, `get_lead_envelope`, `list_job_gates`, `list_blocked_jobs`, `get_hermes_run`, `list_hermes_runs_for_job`; later approved-write: `draft_task`, `dry_run_update_gate`, `request_update_gate` |
 | `evidence-mcp` | `find_assets`, `get_evidence_pack`, `attach_asset_to_job`, `draft_customer_packet` |
 | `measurement-mcp` | `parse_measurement_report`, `compare_takeoff_versions`, `flag_missing_values` |
 | `instant-estimate-mcp` | `score_estimate_session`, `draft_range`, `flag_price_risk`, `request_quote_review` |

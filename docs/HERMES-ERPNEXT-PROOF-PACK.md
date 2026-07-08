@@ -67,7 +67,7 @@ Current implementation checkpoint:
   `workers-bus/migrations/0003_erpnext_operating_core.sql`.
 - Frappe app contract: `frappe-apps/ironwrap_roofing` now covers the gate-2
   operating core: lead envelope, roofing property, roof job, measurement report/value,
-  evidence item, proposal evidence pack, and production gate state.
+  evidence item, proposal evidence pack, production gate state, and Hermes run audit.
 - Contract validator: `node tools/validate-erpnext-doctypes.mjs`.
 - Read-only bus truth endpoints for Hermes/operator diagnostics:
   `GET /admin/envelopes`, `GET /admin/envelope/:id`, and `GET /admin/dead-letter`.
@@ -117,7 +117,7 @@ QuickBooks. Give it narrow tools with explicit capability levels.
 
 | Level | Tool Type | Allowed Examples |
 |---|---|---|
-| Read-only | Query system truth | `get_envelope`, `list_recent_envelopes`, `get_lead_envelope`, `get_roof_job`, `list_job_gates`, `list_blocked_jobs` |
+| Read-only | Query system truth | `get_envelope`, `list_recent_envelopes`, `get_lead_envelope`, `get_roof_job`, `list_job_gates`, `list_blocked_jobs`, `get_hermes_run`, `list_hermes_runs_for_job` |
 | Draft | Produce proposed changes | `draft_customer_reply`, `draft_proposal_scope`, `draft_gate_exception`, `draft_material_request` |
 | Approved-write | One audited mutation after human approval | `create_job_note`, `mark_gate_waived`, `create_followup_task` |
 | Denied | Never expose | raw SQL, arbitrary HTTP, unrestricted file deletion, accounting writes, payment capture, SMS send before A2P/consent |

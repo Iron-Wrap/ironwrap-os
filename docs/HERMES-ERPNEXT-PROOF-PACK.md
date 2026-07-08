@@ -68,6 +68,7 @@ Current implementation checkpoint:
 - Contract validator: `node tools/validate-erpnext-doctypes.mjs`.
 - Read-only bus truth endpoints for Hermes/operator diagnostics:
   `GET /admin/envelopes`, `GET /admin/envelope/:id`, and `GET /admin/dead-letter`.
+- Read-only MCP wrapper: `mcp/ironwrap-bus-mcp`.
 
 Create/update order:
 

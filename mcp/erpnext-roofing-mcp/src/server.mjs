@@ -66,6 +66,8 @@ const INSTANT_ESTIMATE_SESSION_FIELDS = [
   "status",
   "range_low",
   "range_high",
+  "estimate_total",
+  "configurator_url",
   "review_required",
   "modified",
 ];

@@ -53,6 +53,7 @@ src/core.ts        pure logic (envelope, dedup, routing, reconcile) — node-tes
 src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   JobNimbus push adapter (live-tested; enabled by config)
 src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, estimate, measurement, evidence, field check-in, and payment milestone rows
+src/estimates.ts   Public estimator/configurator intake; captures owned lead/session before any CRM queue
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
 src/index.ts       the Worker: fetch + queue + scheduled
@@ -94,6 +95,7 @@ npx wrangler deploy
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | POST | `/ingest/:source` | `Bearer INGEST_TOKEN` | ingest a lead (`source` ∈ website,phone,gbp,ad,referral,manual) |
+| POST | `/ingest/estimate` | `Bearer INGEST_TOKEN` | ingest public estimator/configurator payloads into owned R2/D1 and ERPNext without a JobNimbus/GHL queue dependency |
 | POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos, file them to Google Drive, and optionally sync ERPNext Evidence Items |
 | POST | `/ingest/measurement` | `Bearer INGEST_TOKEN` | ingest RoofRuler/AppliCad measurement metadata/report files |
 | GET | `/health` | — | liveness |
@@ -131,7 +133,8 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
    Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Measurement Value, Production Gate
    State, Evidence Item, Field Check-in, and Payment Milestone DocTypes exist. The Worker upserts Lead Envelope by
    `envelope_id`, optional Roofing Property by `property_key`, Roof Job by `roof_job_id`,
-   instant estimate sessions by `estimate_session_id` when estimate/range fields are present,
+   instant estimate sessions by `estimate_session_id` when estimate/range fields are present
+   or `/ingest/estimate` receives a configurator payload,
    and measurement reports by `measurement_id`. Estimate sessions are captured as
    non-binding and review-required; the Worker does not generate final pricing. Measurement sync creates a linked
    Evidence Item for the raw/report artifact. Photo sync creates one photo Evidence

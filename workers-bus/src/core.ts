@@ -13,7 +13,7 @@ export interface Contact {
   email?: string;
 }
 
-/** The canonical lead envelope (spec 03). job_ref is null at intake; JobNimbus mints it later. */
+/** The canonical lead envelope (spec 03). job_ref is optional; some owned estimate flows provide it before JobNimbus. */
 export interface Envelope {
   source: Source;
   contact: Contact;
@@ -93,7 +93,7 @@ export function normalizeEmail(raw: unknown): string | null {
 }
 
 const FIELD_ALIASES: Record<keyof Contact, string[]> = {
-  name: ["name", "full_name", "fullname", "contact_name"],
+  name: ["name", "full_name", "fullname", "contact_name", "customer", "customer_name"],
   phone: ["phone", "phone_number", "tel", "telephone", "mobile", "cell"],
   email: ["email", "email_address", "e-mail"],
 };
@@ -128,7 +128,8 @@ export function normalizeEnvelope(
   raw: Record<string, unknown>,
   nowIso: string,
 ): Envelope {
-  const job_ref = typeof raw["job_ref"] === "string" ? (raw["job_ref"] as string) : null;
+  const jobRef = raw["job_ref"] ?? raw["job_number"] ?? raw["jobNumber"];
+  const job_ref = typeof jobRef === "string" && jobRef.trim() ? jobRef.trim() : null;
   return {
     source,
     contact: extractContact(raw),

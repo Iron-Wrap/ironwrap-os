@@ -144,7 +144,7 @@ async function upsertRoofJob(
   propertyName: string | undefined,
   jn?: JnResult,
 ): Promise<ErpNextResult> {
-  const roofJobId = `job:${rec.envelope_id}`;
+  const roofJobId = stableId("job", instantEstimateProjectRef(p), rec.envelope_id);
   return await upsertByField(env, base, "Roof Job", "roof_job_id", roofJobId, {
     roof_job_id: roofJobId,
     brand: brand(p),
@@ -183,10 +183,11 @@ async function upsertInstantEstimateSession(
 ): Promise<ErpNextResult | null> {
   const low = money(p.range_low ?? p.estimate_low ?? p.low_estimate ?? p.min_price);
   const high = money(p.range_high ?? p.estimate_high ?? p.high_estimate ?? p.max_price);
-  if (!hasInstantEstimateSignal(p, low, high)) return null;
+  const total = money(p.estimate_total ?? p.total_estimate ?? p.totalEstimate ?? p.total);
+  if (!hasInstantEstimateSignal(p, low, high, total)) return null;
 
-  return await upsertByField(env, base, "Instant Estimate Session", "estimate_session_id", `estimate:${rec.envelope_id}`, {
-    estimate_session_id: `estimate:${rec.envelope_id}`,
+  return await upsertByField(env, base, "Instant Estimate Session", "estimate_session_id", stableId("estimate", estimateProjectRef(p), rec.envelope_id), {
+    estimate_session_id: stableId("estimate", estimateProjectRef(p), rec.envelope_id),
     lead_envelope: leadName,
     roof_job: roofJobName,
     source: rec.source,
@@ -194,10 +195,14 @@ async function upsertInstantEstimateSession(
     status: "Needs Review",
     range_low: low,
     range_high: high,
+    estimate_total: total,
+    configurator_url: str(p.configurator_url ?? p.project_url ?? p.projectUrl ?? p.share_url ?? p.shareUrl),
     confidence: str(p.confidence ?? p.estimate_confidence),
     review_required: 1,
     assumptions: str(p.assumptions ?? p.estimate_assumptions) ?? "Non-binding range; estimator review required.",
     exclusions: str(p.exclusions ?? p.estimate_exclusions) ?? "Not a final quote, contract, material order, or payment request.",
+    selected_services_json: jsonMaybe(p.selected_services ?? p.services ?? p.line_items ?? p.lineItems),
+    material_choices_json: jsonMaybe(p.material_choices ?? p.materials ?? p.colors),
     payload_json: rec.payload_json,
   });
 }
@@ -410,8 +415,8 @@ function serviceType(p: Record<string, unknown>): string {
   return "Other";
 }
 
-function hasInstantEstimateSignal(p: Record<string, unknown>, low?: number, high?: number): boolean {
-  return p.instant_estimate === true || str(p.estimate_type)?.toLowerCase() === "instant" || low !== undefined || high !== undefined;
+function hasInstantEstimateSignal(p: Record<string, unknown>, low?: number, high?: number, total?: number): boolean {
+  return p.instant_estimate === true || str(p.estimate_type)?.toLowerCase() === "instant" || low !== undefined || high !== undefined || total !== undefined;
 }
 
 function money(v: unknown): number | undefined {
@@ -466,6 +471,34 @@ function safeJson(s: string): Record<string, unknown> {
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
+}
+
+function estimateProjectRef(p: Record<string, unknown>): string | undefined {
+  return str(p.estimate_project_id ?? p.project_id ?? p.projectId ?? p.configurator_project_id);
+}
+
+function instantEstimateProjectRef(p: Record<string, unknown>): string | undefined {
+  if (p.instant_estimate !== true && str(p.estimate_type)?.toLowerCase() !== "instant") return undefined;
+  return estimateProjectRef(p);
+}
+
+function stableId(prefix: string, value: string | undefined, fallback: string): string {
+  const raw = value || fallback;
+  const clean = raw.replace(/[^a-zA-Z0-9_.:-]/g, "_").slice(0, 120);
+  return `${prefix}:${clean || fallback}`;
+}
+
+function jsonMaybe(v: unknown): string | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v === "string") {
+    try {
+      JSON.parse(v);
+      return v;
+    } catch {
+      return JSON.stringify(v);
+    }
+  }
+  return JSON.stringify(v);
 }
 
 const enc = encodeURIComponent;

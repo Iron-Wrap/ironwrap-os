@@ -13,6 +13,8 @@ Frappe token auth and exposes read tools plus token-gated approved-write tools:
 - `list_measurement_reports_for_job`
 - `get_material_takeoff`
 - `list_material_takeoffs_for_job`
+- `get_supplier_order`
+- `list_supplier_orders_for_job`
 - `get_instant_estimate_session`
 - `list_instant_estimate_sessions_for_job`
 - `get_evidence_item`
@@ -31,6 +33,8 @@ Frappe token auth and exposes read tools plus token-gated approved-write tools:
 - `request_create_material_takeoff`
 - `dry_run_update_material_takeoff_status`
 - `request_update_material_takeoff_status`
+- `dry_run_supplier_order`
+- `request_create_supplier_order`
 - `dry_run_proposal_evidence_pack`
 - `request_create_proposal_evidence_pack`
 
@@ -51,6 +55,9 @@ Current approved-write tools:
 - `request_update_material_takeoff_status` updates one `Material Takeoff`
   review status with an approval note and Hermes Run audit row. It does not
   create supplier orders, purchase orders, invoices, or customer-facing scope.
+- `request_create_supplier_order` creates or updates one internal, review-gated
+  `Supplier Order` draft from an approved `Material Takeoff`. It does not place
+  orders, reserve material, contact suppliers, or mutate accounting.
 - `request_create_proposal_evidence_pack` creates or updates one draft
   `Proposal Evidence Pack` from linked Measurement Report and Evidence Item
   rows. It does not approve pricing, scope, payment terms, material orders, or

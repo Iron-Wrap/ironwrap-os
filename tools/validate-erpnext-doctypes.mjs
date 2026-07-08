@@ -11,6 +11,7 @@ const existingErpNextTargets = new Set([
   "Opportunity",
   "Project",
   "Quotation",
+  "Supplier",
   "User",
 ]);
 
@@ -87,6 +88,18 @@ const specs = [
     dir: "material_takeoff",
     idField: "takeoff_id",
     requiredFields: ["takeoff_id", "roof_job", "measurement_report", "status", "prepared_at", "approved_by", "approved_at", "approval_note", "source_measurements_json", "assumptions", "exclusions", "items"],
+  },
+  {
+    name: "Supplier Order Item",
+    dir: "supplier_order_item",
+    child: true,
+    requiredFields: ["category", "item_name", "quantity", "unit", "source_ref", "status", "received_qty", "shortage_qty", "substitution_notes", "needs_review"],
+  },
+  {
+    name: "Supplier Order",
+    dir: "supplier_order",
+    idField: "supplier_order_id",
+    requiredFields: ["supplier_order_id", "roof_job", "material_takeoff", "supplier", "status", "prepared_at", "approved_by", "approved_at", "requested_delivery_date", "order_summary_json", "assumptions", "exclusions", "delivery_notes", "items"],
   },
   {
     name: "Instant Estimate Session",

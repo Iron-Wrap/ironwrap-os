@@ -36,6 +36,7 @@ Custom DocTypes:
 | Instant Estimate Session | Estimator/configurator submission, non-binding total/range, project link, selected services/materials, review gate | Lead Envelope, Roof Job |
 | Evidence Item | Photo/report/document/source reference used in proposal or gate | Project, Quotation, Task, Measurement Report |
 | Material Takeoff | Review-gated material rows generated from measurement evidence | Measurement Report, Roof Job |
+| Supplier Order | Internal supplier-order draft, delivery status, shortages, substitutions, received proof | Material Takeoff, Roof Job, Supplier |
 | Proposal Evidence Pack | Draft customer proof pack from measurements/evidence/takeoff state | Roof Job, Quotation |
 | Production Gate State | Deposit/material/safety/completion gate state and override history | Project, Task, Sales Order |
 | Supplier Quote | Supplier, valid-until, material lines, substitutions, delivery readiness | Material Request, Supplier |

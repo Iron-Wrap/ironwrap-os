@@ -139,8 +139,9 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
    amount/status sync back to JobNimbus still needs a later QB OAuth read path.
 5. **ERPNext bridge** — disabled by default. Before setting `ERPNEXT_ENABLED=true`, apply
    migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,
-   Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Measurement Value, Production Gate
-   State, Evidence Item, Field Check-in, and Payment Milestone DocTypes exist. The Worker upserts Lead Envelope by
+   Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Measurement Value,
+   Material Takeoff, Supplier Order, Production Gate State, Evidence Item, Field Check-in, and
+   Payment Milestone DocTypes exist. The Worker upserts Lead Envelope by
    `envelope_id`, optional Roofing Property by `property_key`, Roof Job by `roof_job_id`,
    instant estimate sessions by `estimate_session_id` when estimate/range/total fields are present
    or `/ingest/estimate` receives a configurator payload,

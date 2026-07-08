@@ -11,6 +11,7 @@ events from the Cloudflare bus and model the first ERP operating core:
 - `Instant Estimate Session`
 - `Measurement Report` with child `Measurement Value`
 - `Material Takeoff` with child `Material Takeoff Item`
+- `Supplier Order` with child `Supplier Order Item`
 - `Evidence Item`
 - `Proposal Evidence Pack`
 - `Payment Milestone`

@@ -50,7 +50,12 @@ export default {
         if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
         const body = await readBounded(req);
         if (body === null) return json({ error: "payload_too_large" }, 413);
-        return await handleEstimateIngest(env, body, req.headers.get("content-type"));
+        return await handleEstimateIngest(
+          env,
+          body,
+          req.headers.get("content-type"),
+          req.headers.get("idempotency-key") ?? req.headers.get("x-idempotency-key"),
+        );
       }
       const ingest = url.pathname.match(/^\/ingest\/([a-z]+)$/);
       if (req.method === "POST" && ingest) {

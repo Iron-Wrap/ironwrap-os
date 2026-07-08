@@ -214,7 +214,8 @@ Proof gate: values used in a proposal link back to source file and source ref.
 The Worker has an owned estimator intake route:
 
 - `POST /ingest/estimate`
-- stores normalized estimator payload under `raw/estimates/...`
+- uses `project_id`, `Idempotency-Key`, or project URL to return the original envelope on retry
+- stores the accepted normalized estimator payload under `raw/estimates/...`
 - writes a D1 envelope with `status=received`
 - does not enqueue JobNimbus/GHL
 - mirrors Lead Envelope, Roof Job, and Instant Estimate Session when ERPNext is enabled
@@ -237,7 +238,9 @@ Minimum frontend/server payload:
 ```
 
 Proof gate: the 3D estimator submit/save action returns ERPNext Lead Envelope, Roof Job, and
-Instant Estimate Session ids without any JobNimbus/GHL queue dependency.
+Instant Estimate Session ids without any JobNimbus/GHL queue dependency; replaying the same
+project/idempotency key returns those original ids without a second raw write, envelope insert, or
+ERPNext drive.
 
 ## Activepieces Decision
 

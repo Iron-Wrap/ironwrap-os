@@ -37,6 +37,8 @@ test("queue: JobNimbus success then ERPNext Lead Envelope sync marks envelope pu
     if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-0001" } });
     if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [] });
     if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-0001" } });
+    if (url.includes("/api/resource/Production%20Gate%20State?")) return json({ data: [] });
+    if (url.endsWith("/api/resource/Production%20Gate%20State")) return json({ data: { name: "gate" } });
     throw new Error(`unexpected fetch ${url}`);
   });
 
@@ -87,10 +89,11 @@ test("queue: JobNimbus success then ERPNext Lead Envelope sync marks envelope pu
   assert.equal(retried, 0);
   assert.ok(fetches.some((f) => f.url.endsWith("/api/resource/Lead%20Envelope")));
   assert.ok(fetches.some((f) => f.url.endsWith("/api/resource/Roof%20Job")));
+  assert.equal(fetches.filter((f) => f.url.endsWith("/api/resource/Production%20Gate%20State")).length, 7);
   assert.ok(writes.some((w) => w.sql.includes("erpnext_roof_job_id") && w.args.includes("LE-0001") && w.args.includes("RJ-0001")));
   assert.ok(writes.some((w) => w.sql.includes("UPDATE envelopes SET status") && w.args.includes("pushed")));
   assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") && w.args.includes("erpnext_push")));
-  assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") && w.args.includes("lead_envelope:LE-0001,roof_job:RJ-0001")));
+  assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") && w.args.includes("lead_envelope:LE-0001,roof_job:RJ-0001,production_gates:7")));
 });
 
 function json(body: unknown): Response {

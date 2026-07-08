@@ -53,6 +53,15 @@ export interface ErpNextPhotoEvidenceInput {
   }>;
 }
 
+export interface ErpNextQuickBooksEventInput {
+  realmId: string;
+  type: string;
+  id: string;
+  operation: string;
+  rawKey: string;
+  eventTs: string;
+}
+
 export async function pushToErpNext(
   env: Env,
   rec: EnvelopeRecord,
@@ -247,6 +256,34 @@ export async function pushPhotoEvidenceToErpNext(
   return { names, reused: reused || checkIn.reused, fieldCheckInName: checkIn.name };
 }
 
+export async function pushQuickBooksEventToErpNext(
+  env: Env,
+  input: ErpNextQuickBooksEventInput,
+): Promise<ErpNextResult | null> {
+  const cfg = env as ErpEnv;
+  if (!isOn(cfg.ERPNEXT_ENABLED)) return null;
+  if (!cfg.ERPNEXT_API_KEY || !cfg.ERPNEXT_API_SECRET) throw new Error("erpnext_no_token");
+
+  const base = normalizeBaseUrl(cfg.ERPNEXT_BASE_URL);
+  const entityType = input.type || "Other";
+  const roofJob = entityType === "Invoice"
+    ? await findByTerm(cfg, base, "Roof Job", "qb_invoice_ref", input.id)
+    : null;
+  return await upsertByField(cfg, base, "Payment Milestone", "payment_milestone_id", paymentMilestoneId(input), {
+    payment_milestone_id: paymentMilestoneId(input),
+    roof_job: roofJob ?? undefined,
+    milestone_type: milestoneType(entityType),
+    status: input.operation === "Delete" ? "Needs Review" : "Webhook Seen",
+    qb_entity_type: entityType,
+    qb_entity_id: input.id,
+    qb_operation: input.operation,
+    realm_id: input.realmId,
+    event_ts: input.eventTs,
+    raw_key: input.rawKey,
+    notes: "QuickBooks webhook event captured. Amount/status detail requires QuickBooks OAuth read.",
+  });
+}
+
 async function createIfMissingByField(
   env: ErpEnv,
   base: string,
@@ -356,6 +393,16 @@ function photoEvidenceId(submissionId: string, index: number): string {
 
 function fieldCheckInId(submissionId: string): string {
   return `field:${submissionId}`;
+}
+
+function paymentMilestoneId(input: ErpNextQuickBooksEventInput): string {
+  return `qb:${input.realmId || "unknown"}:${input.type || "Other"}:${input.id || "unknown"}`;
+}
+
+function milestoneType(type: string): string {
+  if (type === "Invoice") return "Invoice";
+  if (type === "Payment") return "Payment";
+  return "Other";
 }
 
 function photoSummary(index: number, fileName: string, caption: string | null, error?: string | null): string {

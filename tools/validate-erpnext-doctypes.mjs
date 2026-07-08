@@ -95,6 +95,12 @@ const specs = [
     requiredFields: ["pack_id", "roof_job", "quotation", "status", "evidence_summary_json", "assumptions", "exclusions", "customer_message"],
   },
   {
+    name: "Payment Milestone",
+    dir: "payment_milestone",
+    idField: "payment_milestone_id",
+    requiredFields: ["payment_milestone_id", "roof_job", "milestone_type", "status", "qb_entity_type", "qb_entity_id", "qb_operation", "realm_id", "event_ts", "raw_key", "notes"],
+  },
+  {
     name: "Production Gate State",
     dir: "production_gate_state",
     idField: "gate_id",

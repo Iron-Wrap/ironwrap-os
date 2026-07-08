@@ -6,6 +6,7 @@
 // QB_WEBHOOK_TOKEN (the Intuit "verifier token"). Raw is stored FIRST.
 
 import { newEnvelopeId } from "./core.ts";
+import { pushQuickBooksEventToErpNext } from "./erpnext.ts";
 import * as store from "./store.ts";
 
 export interface QbEntityEvent { realmId: string; type: string; id: string; operation: string }
@@ -50,19 +51,57 @@ export async function handleQuickbooksWebhook(env: Env, rawText: string, signatu
   }
   const id = newEnvelopeId();
   const now = new Date().toISOString();
-  await store.putRaw(env, `raw/quickbooks/${now.slice(0, 10)}/${id}.json`, rawText, "application/json");
+  const rawKey = `raw/quickbooks/${now.slice(0, 10)}/${id}.json`;
+  await store.putRaw(env, rawKey, rawText, "application/json");
 
   let parsed: unknown = {};
   try { parsed = JSON.parse(rawText); } catch { /* keep {} — raw is already stored */ }
   const events = parseQbEvents(parsed);
+  const erpnextPaymentMilestoneIds: string[] = [];
+  let erpnextError: string | null = null;
   for (const e of events) {
+    const erp = await syncQuickBooksEventToErpNext(env, id, e, rawKey, now);
+    if (erp.name) erpnextPaymentMilestoneIds.push(erp.name);
+    if (erp.error) erpnextError = erp.error;
     await store.recordAudit(env, { automation: "quickbooks", trigger: "webhook", envelope_id: id,
-      source_ids: `${e.type}:${e.id}`, action: `qb_${e.operation}`.toLowerCase(),
-      result: "ok", error: "jn_sync_pending_oauth" }); // status mirror lands once QB OAuth is wired
+      source_ids: `${e.type}:${e.id}`, target_ids: erp.name ? `payment_milestone:${erp.name}` : undefined,
+      action: `qb_${e.operation}`.toLowerCase(),
+      result: "ok", error: "jn_sync_pending_oauth" }); // JobNimbus status mirror waits for QB OAuth detail reads.
   }
-  return jsonResp({ ok: true, events: events.length });
+  return jsonResp({ ok: true, events: events.length, erpnext_payment_milestone_ids: erpnextPaymentMilestoneIds, erpnext_error: erpnextError });
 }
 
 function jsonResp(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+async function syncQuickBooksEventToErpNext(
+  env: Env,
+  envelopeId: string,
+  event: QbEntityEvent,
+  rawKey: string,
+  eventTs: string,
+): Promise<{ name: string | null; error: string | null }> {
+  try {
+    const erp = await pushQuickBooksEventToErpNext(env, {
+      realmId: event.realmId,
+      type: event.type,
+      id: event.id,
+      operation: event.operation,
+      rawKey,
+      eventTs,
+    });
+    if (erp) {
+      await store.recordAudit(env, { automation: "erpnext_quickbooks", trigger: "webhook",
+        envelope_id: envelopeId, source_ids: `${event.type}:${event.id}`,
+        target_ids: `payment_milestone:${erp.name}`,
+        action: erp.reused ? "upsert_existing" : "create", result: "ok" });
+    }
+    return { name: erp?.name ?? null, error: null };
+  } catch (err) {
+    const error = `erpnext_quickbooks: ${String(err)}`;
+    await store.recordAudit(env, { automation: "erpnext_quickbooks", trigger: "webhook",
+      envelope_id: envelopeId, source_ids: `${event.type}:${event.id}`, action: "sync", result: "error", error });
+    return { name: null, error };
+  }
 }

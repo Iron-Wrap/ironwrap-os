@@ -17,6 +17,8 @@ Frappe token auth and exposes read tools plus token-gated approved-write tools:
 - `list_field_check_ins_for_job`
 - `get_proposal_evidence_pack`
 - `list_proposal_evidence_packs_for_job`
+- `get_payment_milestone`
+- `list_payment_milestones_for_job`
 - `get_hermes_run`
 - `list_hermes_runs_for_job`
 - `dry_run_update_gate`

@@ -80,6 +80,18 @@ const PROPOSAL_EVIDENCE_PACK_FIELDS = [
   "modified",
 ];
 
+const PAYMENT_MILESTONE_FIELDS = [
+  "name",
+  "payment_milestone_id",
+  "roof_job",
+  "milestone_type",
+  "status",
+  "qb_entity_type",
+  "qb_entity_id",
+  "event_ts",
+  "modified",
+];
+
 export function configFromEnv(env = process.env) {
   const baseUrl = env.ERPNEXT_BASE_URL?.replace(/\/+$/, "");
   const apiKey = env.ERPNEXT_API_KEY;
@@ -401,6 +413,31 @@ export function buildServer(config) {
       filters: [["Proposal Evidence Pack", "roof_job", "=", roof_job_id]],
       limit,
       orderBy: "modified desc",
+    }))),
+  );
+
+  server.registerTool(
+    "get_payment_milestone",
+    {
+      title: "Get Payment Milestone",
+      description: "Read one ERPNext Payment Milestone by payment_milestone_id/name.",
+      inputSchema: { payment_milestone_id: z.string().min(1) },
+    },
+    async ({ payment_milestone_id }) => text(await erpGet(config, resourcePath("Payment Milestone", payment_milestone_id))),
+  );
+
+  server.registerTool(
+    "list_payment_milestones_for_job",
+    {
+      title: "List Payment Milestones For Job",
+      description: "Read Payment Milestone rows linked to one Roof Job.",
+      inputSchema: { roof_job_id: z.string().min(1), limit: z.number().int().min(1).max(100).optional() },
+    },
+    async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath("Payment Milestone", {
+      fields: PAYMENT_MILESTONE_FIELDS,
+      filters: [["Payment Milestone", "roof_job", "=", roof_job_id]],
+      limit,
+      orderBy: "event_ts desc",
     }))),
   );
 

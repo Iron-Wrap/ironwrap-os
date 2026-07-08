@@ -1,4 +1,4 @@
-# IronWrap Hermes + ERPNext End-Product Blueprint
+# IronWrap OS Hermes + ERPNext End-Product Blueprint
 
 Status: strategy blueprint, not current implementation truth.
 

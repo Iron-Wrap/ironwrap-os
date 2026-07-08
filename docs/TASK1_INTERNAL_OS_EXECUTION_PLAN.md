@@ -9,7 +9,7 @@ Scope: IronWrap internal business system only. This is not the external metal-la
 
 ## Goal
 
-Build and ship IronWrap's internal operating system for leads, calls, booking,
+Build and ship IronWrap OS for leads, calls, booking,
 CRM, proposals, visualization, field work, materials, finance, reviews,
 documents, reporting, and automation.
 

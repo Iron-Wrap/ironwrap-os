@@ -1,4 +1,4 @@
-# IronWrap — End-to-End Delivery Plan
+# IronWrap OS - End-to-End Delivery Plan
 
 How we get from the **current Worker/Make/JobNimbus stack** to the **spec's final state** (`final-spec-pack/`).
 This is the execution overlay: sequencing, dependencies, owners, and exit gates. Chapter

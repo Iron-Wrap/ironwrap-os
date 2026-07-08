@@ -1,4 +1,4 @@
-# IronWrap Internal OS
+# IronWrap OS
 
 > Историческая справка. Актуальные решения по реализации находятся в
 > `final-spec-pack/00-final-decisions.md`, `docs/ACTIVATION-CHECKLIST.md` и

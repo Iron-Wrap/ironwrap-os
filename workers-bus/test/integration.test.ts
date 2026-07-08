@@ -12,6 +12,7 @@ function fakeEnv() {
   const db: Array<{ sql: string; args: unknown[] }> = [];
   const envelopesById = new Map<string, Record<string, unknown>>();
   const envelopesByEstimateKey = new Map<string, Record<string, unknown>>();
+  const dedupClaims = new Map<string, Record<string, unknown>>();
   const env = {
     INGEST_TOKEN: "test-token",
     ADMIN_TOKEN: "admin-token",
@@ -74,10 +75,31 @@ function fakeEnv() {
                     row.updated_at = args[5];
                   }
                 }
+                if (sql.includes("INSERT INTO dedup_claims")) {
+                  dedupClaims.set(String(args[0]), {
+                    dedup_key: args[0],
+                    first_envelope_id: args[1],
+                    first_seen_at: args[2],
+                    updated_at: args[3],
+                  });
+                }
+                if (sql.includes("UPDATE dedup_claims")) {
+                  const claim = dedupClaims.get(String(args[3]));
+                  if (claim && String(claim.first_seen_at) < String(args[4])) {
+                    claim.first_envelope_id = args[0];
+                    claim.first_seen_at = args[1];
+                    claim.updated_at = args[2];
+                    return { success: true, meta: { changes: 1 } };
+                  }
+                  return { success: true, meta: { changes: 0 } };
+                }
                 return { success: true };
               },
               first: async () => {
                 db.push({ sql, args });
+                if (sql.includes("FROM dedup_claims")) {
+                  return dedupClaims.get(String(args[0])) ?? null;
+                }
                 if (sql.includes("WHERE estimate_submission_key = ?")) {
                   return envelopesByEstimateKey.get(String(args[0])) ?? null;
                 }
@@ -120,6 +142,36 @@ test("POST /ingest/website: raw→R2, envelope→D1, enqueue JN, 200", async () 
   assert.ok(insert, "envelope inserted into D1");
   assert.ok(insert.args.includes("+15875551234"), "phone normalized to E.164 in the stored row");
   assert.ok(insert.args.includes("jane@example.com"), "email normalized");
+});
+
+test("POST /ingest/website: repeated contact claims duplicate and skips second JN enqueue", async () => {
+  const { env, r2, queue, db } = fakeEnv();
+  const makeReq = () => new Request("https://bus.example/ingest/website", {
+    method: "POST",
+    headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+    body: JSON.stringify({ name: "Jane Doe", phone: "(587) 555-1234", email: "Jane@Example.com", service: "metal roof quote" }),
+  });
+
+  const first = await worker.fetch(makeReq(), env as never, fakeCtx() as never);
+  const firstBody = (await first.json()) as { envelope_id: string; duplicate: boolean; status: string };
+  const second = await worker.fetch(makeReq(), env as never, fakeCtx() as never);
+  const secondBody = (await second.json()) as { envelope_id: string; duplicate: boolean; status: string };
+
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(firstBody.duplicate, false);
+  assert.equal(secondBody.duplicate, true);
+  assert.equal(secondBody.status, "duplicate");
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].envelope_id, firstBody.envelope_id);
+  assert.equal(r2.length, 2);
+  assert.equal(db.filter((c) => c.sql.includes("INSERT INTO dedup_claims")).length, 1);
+  const duplicateInsert = db
+    .filter((c) => c.sql.includes("INSERT INTO envelopes"))
+    .find((c) => c.args.includes(secondBody.envelope_id));
+  assert.ok(duplicateInsert);
+  assert.ok(duplicateInsert.args.includes("duplicate"));
+  assert.ok(duplicateInsert.args.includes(firstBody.envelope_id));
 });
 
 test("POST /ingest/estimate: configurator payload lands in owned store and ERPNext without JN/GHL queue", async (t) => {

@@ -39,6 +39,13 @@ export interface QuickBooksWebhookReceipt {
   replay_count: number;
 }
 
+export interface DedupClaim {
+  dedup_key: string;
+  first_envelope_id: string;
+  first_seen_at: string;
+  updated_at: string;
+}
+
 const nowIso = () => new Date().toISOString();
 
 /** Archive the raw inbound body to R2 FIRST, so nothing is lost if later steps fail. */
@@ -84,6 +91,51 @@ export async function findDuplicate(env: Env, key: string, sinceIso: string): Pr
      ORDER BY created_at ASC LIMIT 1`,
   ).bind(key, sinceIso).first<{ envelope_id: string }>();
   return row?.envelope_id ?? null;
+}
+
+export async function claimDedup(
+  env: Env,
+  key: string,
+  envelopeId: string,
+  nowIsoValue: string,
+  sinceIso: string,
+): Promise<string | null> {
+  const existing = await getDedupClaim(env, key);
+  if (existing && existing.first_seen_at >= sinceIso) return existing.first_envelope_id;
+
+  if (existing) {
+    const res = await env.DB.prepare(
+      `UPDATE dedup_claims
+       SET first_envelope_id = ?, first_seen_at = ?, updated_at = ?
+       WHERE dedup_key = ? AND first_seen_at < ?`,
+    ).bind(envelopeId, nowIsoValue, nowIsoValue, key, sinceIso).run();
+    if (Number((res as { meta?: { changes?: number } }).meta?.changes ?? 0) > 0) return null;
+
+    const raced = await getDedupClaim(env, key);
+    return raced && raced.first_seen_at >= sinceIso ? raced.first_envelope_id : null;
+  }
+
+  try {
+    await env.DB.prepare(
+      `INSERT INTO dedup_claims (dedup_key, first_envelope_id, first_seen_at, updated_at)
+       VALUES (?,?,?,?)`,
+    ).bind(key, envelopeId, nowIsoValue, nowIsoValue).run();
+    return null;
+  } catch (err) {
+    if (!isUniqueConstraintError(err)) throw err;
+    const raced = await getDedupClaim(env, key);
+    return raced && raced.first_seen_at >= sinceIso ? raced.first_envelope_id : null;
+  }
+}
+
+async function getDedupClaim(env: Env, key: string): Promise<DedupClaim | null> {
+  return await env.DB.prepare(
+    `SELECT * FROM dedup_claims WHERE dedup_key = ?`,
+  ).bind(key).first<DedupClaim>();
+}
+
+function isUniqueConstraintError(err: unknown): boolean {
+  return /unique|constraint/i.test(String(err));
 }
 
 export async function findEstimateSubmission(env: Env, key: string): Promise<EnvelopeRecord | null> {

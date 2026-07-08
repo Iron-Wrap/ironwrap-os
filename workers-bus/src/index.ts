@@ -134,7 +134,7 @@ async function handleIngest(req: Request, env: Env, ctx: ExecutionContext, sourc
   if (key) {
     const windowH = Number(env.DEDUP_WINDOW_HOURS ?? "72");
     const since = new Date(Date.now() - windowH * 3600_000).toISOString();
-    dupOf = await store.findDuplicate(env, key, since);
+    dupOf = await store.claimDedup(env, key, envelopeId, now, since);
   }
 
   const intentText = `${raw["service"] ?? ""} ${raw["service_intent"] ?? ""} ${raw["message"] ?? ""}`;

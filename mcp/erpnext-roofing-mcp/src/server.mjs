@@ -57,6 +57,17 @@ const EVIDENCE_ITEM_FIELDS = [
   "modified",
 ];
 
+const PROPOSAL_EVIDENCE_PACK_FIELDS = [
+  "name",
+  "pack_id",
+  "roof_job",
+  "quotation",
+  "status",
+  "prepared_at",
+  "approved_by",
+  "modified",
+];
+
 export function configFromEnv(env = process.env) {
   const baseUrl = env.ERPNEXT_BASE_URL?.replace(/\/+$/, "");
   const apiKey = env.ERPNEXT_API_KEY;
@@ -131,6 +142,71 @@ export function buildGateUpdatePatch(nextState, reason, approvedBy, nowIso) {
     if (nowIso) patch.waived_at = nowIso;
   }
   return patch;
+}
+
+export function proposalPackIdForRoofJob(roofJobId) {
+  return `proposal:${roofJobId}`;
+}
+
+export function buildProposalEvidencePackDraft({
+  roofJobId,
+  packId = proposalPackIdForRoofJob(roofJobId),
+  measurements = [],
+  evidence = [],
+  nowIso,
+} = {}) {
+  if (!roofJobId) throw new Error("roof_job_id_required");
+  const measurementReports = measurements.map((row) => ({
+    name: row.name,
+    measurement_id: row.measurement_id ?? row.name,
+    provider: row.provider ?? "",
+    source_file: row.source_file ?? "",
+    report_url: row.report_url ?? "",
+    raw_key: row.raw_key ?? "",
+    parsed_at: row.parsed_at ?? "",
+    review_status: row.review_status ?? "",
+  }));
+  const evidenceItems = evidence.map((row) => ({
+    name: row.name,
+    evidence_id: row.evidence_id ?? row.name,
+    evidence_type: row.evidence_type ?? "",
+    source_system: row.source_system ?? "",
+    source_uri: row.source_uri ?? "",
+    r2_key: row.r2_key ?? "",
+    customer_safe: Boolean(row.customer_safe),
+    captured_at: row.captured_at ?? "",
+    summary: row.summary ?? "",
+  }));
+  const summary = {
+    roof_job: roofJobId,
+    generated_at: nowIso,
+    counts: {
+      measurement_reports: measurementReports.length,
+      evidence_items: evidenceItems.length,
+    },
+    measurement_reports: measurementReports,
+    evidence_items: evidenceItems,
+  };
+
+  return {
+    pack_id: packId,
+    roof_job: roofJobId,
+    status: "Draft",
+    ...(nowIso ? { prepared_at: nowIso } : {}),
+    evidence_summary_json: JSON.stringify(summary, null, 2),
+    assumptions: [
+      "Measurement and evidence links are draft inputs for estimator review.",
+      "Customer-facing price, scope, options, and payment terms require human approval before send.",
+    ].join("\n"),
+    exclusions: [
+      "This pack does not create a binding quote, accepted scope, material order, or payment request.",
+      "Unsafe, missing, or ambiguous evidence must be resolved before proposal approval.",
+    ].join("\n"),
+    customer_message: [
+      "<p>We assembled the available measurement and project evidence for estimator review.</p>",
+      "<p>The final proposal will confirm scope, options, exclusions, warranty, and payment terms after approval.</p>",
+    ].join(""),
+  };
 }
 
 export function redactApprovalArgs(args) {
@@ -267,6 +343,134 @@ export function buildServer(config) {
   );
 
   server.registerTool(
+    "get_proposal_evidence_pack",
+    {
+      title: "Get Proposal Evidence Pack",
+      description: "Read one ERPNext Proposal Evidence Pack by pack_id/name.",
+      inputSchema: { pack_id: z.string().min(1) },
+    },
+    async ({ pack_id }) => text(await erpGet(config, resourcePath("Proposal Evidence Pack", pack_id))),
+  );
+
+  server.registerTool(
+    "list_proposal_evidence_packs_for_job",
+    {
+      title: "List Proposal Evidence Packs For Job",
+      description: "Read Proposal Evidence Pack rows linked to one Roof Job.",
+      inputSchema: { roof_job_id: z.string().min(1), limit: z.number().int().min(1).max(100).optional() },
+    },
+    async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath("Proposal Evidence Pack", {
+      fields: PROPOSAL_EVIDENCE_PACK_FIELDS,
+      filters: [["Proposal Evidence Pack", "roof_job", "=", roof_job_id]],
+      limit,
+      orderBy: "modified desc",
+    }))),
+  );
+
+  server.registerTool(
+    "dry_run_proposal_evidence_pack",
+    {
+      title: "Dry Run Proposal Evidence Pack",
+      description: "Preview the draft Proposal Evidence Pack assembled from job evidence without writing to ERPNext.",
+      inputSchema: {
+        roof_job_id: z.string().min(1),
+        pack_id: z.string().min(1).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ roof_job_id, pack_id, limit = 25 }) => {
+      const { draft, measurements, evidence } = await buildProposalDraftFromErp(config, roof_job_id, { packId: pack_id, limit });
+      return text({
+        would_write: false,
+        required_tool: "request_create_proposal_evidence_pack",
+        target: { doctype: "Proposal Evidence Pack", name: draft.pack_id },
+        source_counts: { measurement_reports: measurements.length, evidence_items: evidence.length },
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_create_proposal_evidence_pack",
+    {
+      title: "Request Create Proposal Evidence Pack",
+      description: "Approved-write: create or update one draft Proposal Evidence Pack and record a Hermes Run audit row.",
+      inputSchema: {
+        roof_job_id: z.string().min(1),
+        pack_id: z.string().min(1).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+        request_text: z.string().min(1).max(4000),
+        approved_by: z.string().min(1),
+        approval_token: z.string().min(1),
+        run_id: z.string().min(1).optional(),
+      },
+    },
+    async (args) => {
+      assertWriteApproved(config, args.approval_token);
+      const now = new Date().toISOString();
+      const runId = args.run_id ?? newRunId();
+      const { draft, measurements, evidence } = await buildProposalDraftFromErp(config, args.roof_job_id, {
+        packId: args.pack_id,
+        limit: args.limit ?? 25,
+        nowIso: now,
+      });
+      const before = await readResourceOrNull(config, "Proposal Evidence Pack", draft.pack_id);
+      const operation = before ? "update" : "create";
+      const dryRun = {
+        target: { doctype: "Proposal Evidence Pack", name: draft.pack_id },
+        operation,
+        source_counts: { measurement_reports: measurements.length, evidence_items: evidence.length },
+        draft,
+      };
+      await erpPost(config, "/api/resource/Hermes%20Run", {
+        run_id: runId,
+        run_ts: now,
+        agent_role: "Estimator Assistant",
+        requested_by: args.approved_by,
+        request_text: args.request_text,
+        target_doctype: "Proposal Evidence Pack",
+        target_name: draft.pack_id,
+        roof_job: args.roof_job_id,
+        capability_level: "Approved-write",
+        tool_name: "request_create_proposal_evidence_pack",
+        tool_args_json: JSON.stringify(redactApprovalArgs(args)),
+        dry_run_json: JSON.stringify(dryRun),
+        approval_status: "Approved",
+        approved_by: args.approved_by,
+        approved_at: now,
+        before_target_ids: JSON.stringify(summarizeProposalPack(before)),
+      });
+
+      try {
+        const result = before
+          ? await erpPut(config, resourcePath("Proposal Evidence Pack", draft.pack_id), draft)
+          : await erpPost(config, "/api/resource/Proposal%20Evidence%20Pack", draft);
+        const after = { ...(before ?? {}), ...draft, name: draft.pack_id };
+        await erpPut(config, resourcePath("Hermes Run", runId), {
+          approval_status: "Executed",
+          result_status: "OK",
+          after_target_ids: JSON.stringify(summarizeProposalPack(after)),
+          result_json: JSON.stringify(result),
+        });
+        return text({
+          run_id: runId,
+          upserted: true,
+          operation,
+          proposal_evidence_pack_id: draft.pack_id,
+          result,
+        });
+      } catch (err) {
+        await erpPut(config, resourcePath("Hermes Run", runId), {
+          approval_status: "Failed",
+          result_status: "Error",
+          error: String(err).slice(0, 500),
+        }).catch(() => {});
+        throw err;
+      }
+    },
+  );
+
+  server.registerTool(
     "dry_run_update_gate",
     {
       title: "Dry Run Update Gate",
@@ -366,6 +570,45 @@ async function readResource(config, doctype, name) {
   return res.data ?? {};
 }
 
+async function readResourceOrNull(config, doctype, name) {
+  try {
+    return await readResource(config, doctype, name);
+  } catch (err) {
+    if (String(err).startsWith("Error: erpnext_http_404:")) return null;
+    throw err;
+  }
+}
+
+async function listResources(config, doctype, options) {
+  const res = await erpGet(config, resourceListPath(doctype, options));
+  return Array.isArray(res.data) ? res.data : [];
+}
+
+async function buildProposalDraftFromErp(config, roofJobId, { packId, limit = 25, nowIso } = {}) {
+  const [measurements, evidence] = await Promise.all([
+    listResources(config, "Measurement Report", {
+      fields: MEASUREMENT_REPORT_FIELDS,
+      filters: [["Measurement Report", "roof_job", "=", roofJobId]],
+      limit,
+      orderBy: "modified desc",
+    }),
+    listResources(config, "Evidence Item", {
+      fields: EVIDENCE_ITEM_FIELDS,
+      filters: [["Evidence Item", "roof_job", "=", roofJobId]],
+      limit,
+      orderBy: "modified desc",
+    }),
+  ]);
+  const draft = buildProposalEvidencePackDraft({
+    roofJobId,
+    packId,
+    measurements,
+    evidence,
+    nowIso,
+  });
+  return { draft, measurements, evidence };
+}
+
 function summarizeGate(gate) {
   return {
     name: gate.name,
@@ -375,6 +618,18 @@ function summarizeGate(gate) {
     state: gate.state,
     blocker_reason: gate.blocker_reason ?? "",
     waiver_reason: gate.waiver_reason ?? "",
+  };
+}
+
+function summarizeProposalPack(pack) {
+  if (!pack) return null;
+  return {
+    name: pack.name,
+    pack_id: pack.pack_id,
+    roof_job: pack.roof_job,
+    quotation: pack.quotation ?? "",
+    status: pack.status,
+    prepared_at: pack.prepared_at ?? "",
   };
 }
 

@@ -40,6 +40,10 @@ Custom DocTypes:
 | Proposal Evidence Pack | Draft customer proof pack from measurements/evidence/takeoff state | Roof Job, Quotation |
 | Production Gate State | Deposit/material/safety/completion gate state and override history | Project, Task, Sales Order |
 | Supplier Quote | Supplier, valid-until, material lines, substitutions, delivery readiness | Material Request, Supplier |
+| Completion Packet | Review-gated completion proof: photos, deficiencies, signoff, warranty readiness | Roof Job, Field Check-in, Evidence Item |
+| Warranty Packet | Warranty draft allowed only from an approved, warranty-ready Completion Packet | Roof Job, Completion Packet |
+| Review Request | Review eligibility with deterministic stop conditions; never auto-sent | Roof Job, Completion Packet, Payment Milestone |
+| Communication Event | Policy-gated outbound/inbound comms record (consent, quiet hours); record-only | Roof Job, Lead Envelope |
 | Market Watch Item | Competitor/product gap and response decision | none required |
 | Hermes Run | Agent run metadata, tool calls, approvals, blocked writes | any linked business record |
 
@@ -88,6 +92,18 @@ Current implementation checkpoint:
 - Production gate bootstrap: Roof Job sync creates missing `Production Gate State`
   rows for Deposit, Materials, Safety, Access, Weather, Crew, and Completion.
   Existing rows are not overwritten on retry.
+- Closeout spine (2026-07-08): Completion Packet, Warranty Packet, Review Request,
+  Communication Event, Supplier Quote, and Market Watch Item DocTypes are committed
+  and validated (`node tools/validate-erpnext-doctypes.mjs`, 23 DocTypes).
+  `mcp/erpnext-roofing-mcp` exposes read plus dry-run/approved-write pairs for each,
+  through one shared audited-write helper. Review Requests apply deterministic stop
+  conditions; Communication Events apply CASL-style consent plus quiet hours and are
+  record-only. Field intake accepts voice-note attachments and transcripts, and
+  mirrors them as `Voice Note` Evidence Items.
+- White-label/ops (2026-07-08): tenant configs in `config/tenants/` validated by
+  `node tools/validate-tenant-config.mjs`; clone playbook in
+  `docs/WHITE-LABEL-CLONE-PLAYBOOK.md`; operations runbook in
+  `docs/OPERATIONS-RUNBOOK.md`.
 
 Create/update order:
 

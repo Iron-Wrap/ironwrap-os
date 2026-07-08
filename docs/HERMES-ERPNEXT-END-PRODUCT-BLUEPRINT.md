@@ -34,6 +34,18 @@ accepted estimator payload in R2, creates a D1 envelope, and mirrors ERPNext Lea
 Job / Instant Estimate Session rows when enabled. This is the owned handoff that lets JobNimbus/GHL
 stay bridges instead of product dependencies.
 
+Closeout/comms/market checkpoint (2026-07-08): the ERPNext app now carries the full closeout
+spine (Completion Packet, Warranty Packet, Review Request), policy-gated Communication Event,
+Supplier Quote with validity and per-line pricing, and Market Watch Item. The `erpnext-roofing-mcp`
+server exposes read plus dry-run/approved-write pairs for each, all funneled through one shared
+audited-write helper so the read -> dry_run -> approval -> write -> audit contract cannot drift.
+Review Requests are blocked by deterministic stop conditions (approved completion packet, payment
+evidence, consent); Communication Events enforce CASL-style consent and quiet hours and are
+record-only (no tool can send). Field intake now recognizes voice-note attachments and transcripts
+(gate 9). White-label tenant configs live in `config/tenants/` with a validator
+(`tools/validate-tenant-config.mjs`), a clone playbook (`docs/WHITE-LABEL-CLONE-PLAYBOOK.md`), and
+an operations runbook (`docs/OPERATIONS-RUNBOOK.md`) covering gates 11 and 13.
+
 ## Research Basis
 
 Primary sources reviewed:
@@ -295,7 +307,7 @@ Build narrow MCP servers, not one giant god tool.
 | MCP server | Example tools |
 | --- | --- |
 | `ironwrap-bus-mcp` | Current read-only: `list_recent_envelopes`, `get_envelope`, `list_dead_letters`; current approved-write proof: `dry_run_replay`, `request_replay` |
-| `erpnext-roofing-mcp` | Current read-only: `get_roof_job`, `get_lead_envelope`, `list_job_gates`, `list_blocked_jobs`, `get_measurement_report`, `list_measurement_reports_for_job`, `get_material_takeoff`, `list_material_takeoffs_for_job`, `get_supplier_order`, `list_supplier_orders_for_job`, `get_instant_estimate_session`, `list_instant_estimate_sessions_for_job`, `get_evidence_item`, `list_evidence_for_job`, `get_field_check_in`, `list_field_check_ins_for_job`, `get_proposal_evidence_pack`, `list_proposal_evidence_packs_for_job`, `get_payment_milestone`, `list_payment_milestones_for_job`, `get_hermes_run`, `list_hermes_runs_for_job`; current approved-write proof: `dry_run_update_gate`, `request_update_gate`, `dry_run_material_takeoff`, `request_create_material_takeoff`, `dry_run_update_material_takeoff_status`, `request_update_material_takeoff_status`, `dry_run_supplier_order`, `request_create_supplier_order`, `dry_run_proposal_evidence_pack`, `request_create_proposal_evidence_pack`; later: `draft_task` |
+| `erpnext-roofing-mcp` | Current read-only: `get_roof_job`, `get_lead_envelope`, `list_job_gates`, `list_blocked_jobs`, `get_measurement_report`, `list_measurement_reports_for_job`, `get_material_takeoff`, `list_material_takeoffs_for_job`, `get_supplier_order`, `list_supplier_orders_for_job`, `get_supplier_quote`, `list_supplier_quotes_for_job`, `get_instant_estimate_session`, `list_instant_estimate_sessions_for_job`, `get_evidence_item`, `list_evidence_for_job`, `get_field_check_in`, `list_field_check_ins_for_job`, `get_proposal_evidence_pack`, `list_proposal_evidence_packs_for_job`, `get_payment_milestone`, `list_payment_milestones_for_job`, `get_completion_packet`, `list_completion_packets_for_job`, `get_warranty_packet`, `list_warranty_packets_for_job`, `get_review_request`, `list_review_requests_for_job`, `get_communication_event`, `list_communication_events_for_job`, `list_market_watch_items`, `check_consent`, `check_quiet_hours`, `get_hermes_run`, `list_hermes_runs_for_job`; current approved-write proof: `dry_run_update_gate`, `request_update_gate`, `dry_run_material_takeoff`, `request_create_material_takeoff`, `dry_run_update_material_takeoff_status`, `request_update_material_takeoff_status`, `dry_run_supplier_order`, `request_create_supplier_order`, `dry_run_supplier_quote`, `request_create_supplier_quote`, `dry_run_proposal_evidence_pack`, `request_create_proposal_evidence_pack`, `dry_run_completion_packet`, `request_create_completion_packet`, `dry_run_warranty_packet`, `request_create_warranty_packet`, `dry_run_review_request`, `request_create_review_request`, `dry_run_communication_event`, `request_record_communication_event`, `dry_run_market_watch_item`, `request_add_market_watch_item`; later: `draft_task`. The comms-policy, supplier-quote, closeout, and market-watch tool families currently live here; split into the narrower servers below when tool count or tenant isolation demands it |
 | `evidence-mcp` | `find_assets`, `get_evidence_pack`, `attach_asset_to_job`, `draft_customer_packet` |
 | `measurement-mcp` | `parse_measurement_report`, `compare_takeoff_versions`, `flag_missing_values` |
 | `instant-estimate-mcp` | `score_estimate_session`, `draft_range`, `flag_price_risk`, `request_quote_review` |

@@ -14,8 +14,14 @@ events from the Cloudflare bus and model the first ERP operating core:
 - `Supplier Order` with child `Supplier Order Item`
 - `Evidence Item`
 - `Proposal Evidence Pack`
+- `Supplier Quote` with child `Supplier Quote Item`
 - `Payment Milestone`
 - `Production Gate State`
+- `Completion Packet`
+- `Warranty Packet`
+- `Review Request`
+- `Communication Event`
+- `Market Watch Item`
 - `Hermes Run`
 
 Install path once an ERPNext dev site exists:

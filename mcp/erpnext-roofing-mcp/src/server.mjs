@@ -135,6 +135,95 @@ const PAYMENT_MILESTONE_FIELDS = [
   "modified",
 ];
 
+const COMPLETION_PACKET_FIELDS = [
+  "name",
+  "completion_packet_id",
+  "roof_job",
+  "status",
+  "prepared_at",
+  "approved_by",
+  "approved_at",
+  "warranty_ready",
+  "customer_signoff_ref",
+  "modified",
+];
+
+const WARRANTY_PACKET_FIELDS = [
+  "name",
+  "warranty_packet_id",
+  "roof_job",
+  "completion_packet",
+  "status",
+  "prepared_at",
+  "approved_by",
+  "approved_at",
+  "material_system",
+  "coverage_start",
+  "coverage_years",
+  "modified",
+];
+
+const REVIEW_REQUEST_FIELDS = [
+  "name",
+  "review_request_id",
+  "roof_job",
+  "completion_packet",
+  "status",
+  "channel",
+  "prepared_at",
+  "approved_by",
+  "approved_at",
+  "consent_basis",
+  "review_link",
+  "modified",
+];
+
+const COMMUNICATION_EVENT_FIELDS = [
+  "name",
+  "communication_event_id",
+  "roof_job",
+  "lead_envelope",
+  "channel",
+  "direction",
+  "template",
+  "consent_basis",
+  "policy_result",
+  "quiet_hours_ok",
+  "status",
+  "recipient_ref",
+  "event_ts",
+  "modified",
+];
+
+const SUPPLIER_QUOTE_FIELDS = [
+  "name",
+  "supplier_quote_id",
+  "roof_job",
+  "material_takeoff",
+  "supplier",
+  "status",
+  "quoted_at",
+  "valid_until",
+  "prepared_at",
+  "approved_by",
+  "approved_at",
+  "quote_total",
+  "modified",
+];
+
+const MARKET_WATCH_ITEM_FIELDS = [
+  "name",
+  "watch_id",
+  "competitor",
+  "title",
+  "source_url",
+  "risk_level",
+  "status",
+  "observed_at",
+  "product_gate",
+  "modified",
+];
+
 export function configFromEnv(env = process.env) {
   const baseUrl = env.ERPNEXT_BASE_URL?.replace(/\/+$/, "");
   const apiKey = env.ERPNEXT_API_KEY;
@@ -382,6 +471,348 @@ export function buildProposalEvidencePackDraft({
       "<p>The final proposal will confirm scope, options, exclusions, warranty, and payment terms after approval.</p>",
     ].join(""),
   };
+}
+
+export function completionPacketIdForRoofJob(roofJobId) {
+  return `completion:${roofJobId}`;
+}
+
+export function warrantyPacketIdForRoofJob(roofJobId) {
+  return `warranty:${roofJobId}`;
+}
+
+export function reviewRequestIdForRoofJob(roofJobId) {
+  return `review:${roofJobId}`;
+}
+
+export function supplierQuoteIdForTakeoff(takeoffId) {
+  return `quote:${takeoffId}`;
+}
+
+export function marketWatchIdFor(competitor, title) {
+  return `watch:${slugify(`${competitor}:${title}`)}`;
+}
+
+export function buildCompletionPacketDraft({
+  roofJobId,
+  packetId = completionPacketIdForRoofJob(roofJobId),
+  checkIns = [],
+  evidence = [],
+  nowIso,
+} = {}) {
+  if (!roofJobId) throw new Error("roof_job_id_required");
+  const photoEvidence = evidence.filter((row) => (row?.evidence_type ?? "") === "Photo");
+  if (!photoEvidence.length) throw new Error("completion_photo_evidence_required");
+  const openCheckIns = checkIns.filter((row) => (row?.status ?? "") === "Needs Review");
+  const summary = {
+    roof_job: roofJobId,
+    generated_at: nowIso,
+    counts: {
+      field_check_ins: checkIns.length,
+      photo_evidence: photoEvidence.length,
+      open_check_ins: openCheckIns.length,
+    },
+    field_check_ins: checkIns.map((row) => ({
+      name: row.name,
+      checkin_id: row.checkin_id ?? row.name,
+      submitted_at: row.submitted_at ?? "",
+      status: row.status ?? "",
+      photo_count: row.photo_count ?? 0,
+    })),
+    photo_evidence: photoEvidence.map((row) => ({
+      name: row.name,
+      evidence_id: row.evidence_id ?? row.name,
+      source_uri: row.source_uri ?? "",
+      r2_key: row.r2_key ?? "",
+      captured_at: row.captured_at ?? "",
+    })),
+  };
+
+  return {
+    completion_packet_id: packetId,
+    roof_job: roofJobId,
+    status: "Needs Review",
+    ...(nowIso ? { prepared_at: nowIso } : {}),
+    photo_evidence_json: JSON.stringify(summary.photo_evidence, null, 2),
+    deficiency_list: openCheckIns.length
+      ? openCheckIns.map((row) => `Unresolved field check-in: ${row.checkin_id ?? row.name}`).join("\n")
+      : "",
+    customer_signoff_ref: "",
+    warranty_ready: 0,
+    evidence_summary_json: JSON.stringify(summary, null, 2),
+    assumptions: [
+      "Completion evidence is drafted from field check-ins and photo evidence for owner review.",
+      "Customer signoff, deficiency resolution, and warranty readiness require human approval.",
+    ].join("\n"),
+    exclusions: [
+      "This packet does not close the job, issue a warranty, send an invoice, or request a review.",
+      "Warranty readiness stays false until an owner approves the packet.",
+    ].join("\n"),
+    notes: "",
+  };
+}
+
+export function buildWarrantyPacketDraft({
+  completionPacket = {},
+  packetId,
+  materialSystem,
+  warrantyTerms,
+  coverageStart,
+  coverageYears,
+  nowIso,
+} = {}) {
+  const completionId = completionPacket.completion_packet_id ?? completionPacket.name;
+  if (!completionId) throw new Error("completion_packet_id_required");
+  if (completionPacket.status !== "Approved") throw new Error("completion_packet_approved_required");
+  if (!completionPacket.warranty_ready) throw new Error("warranty_readiness_required");
+  const roofJobId = completionPacket.roof_job;
+  if (!roofJobId) throw new Error("roof_job_id_required");
+
+  return {
+    warranty_packet_id: packetId ?? warrantyPacketIdForRoofJob(roofJobId),
+    roof_job: roofJobId,
+    completion_packet: completionId,
+    status: "Needs Review",
+    ...(nowIso ? { prepared_at: nowIso } : {}),
+    material_system: materialSystem ?? "",
+    warranty_terms: warrantyTerms ?? "Warranty terms require owner approval before issue.",
+    ...(coverageStart ? { coverage_start: coverageStart } : {}),
+    ...(coverageYears !== undefined ? { coverage_years: coverageYears } : {}),
+    exclusions: [
+      "This draft does not issue a warranty or notify the customer.",
+      "Coverage terms, dates, and material system require owner approval.",
+    ].join("\n"),
+    evidence_summary_json: JSON.stringify({
+      completion_packet: completionId,
+      roof_job: roofJobId,
+      generated_at: nowIso,
+      customer_signoff_ref: completionPacket.customer_signoff_ref ?? "",
+    }, null, 2),
+    notes: "",
+  };
+}
+
+export function evaluateReviewStopConditions({
+  completionPacket,
+  paymentMilestones = [],
+  consentBasis,
+} = {}) {
+  const reasons = [];
+  if (!completionPacket || completionPacket.status !== "Approved") reasons.push("completion_packet_not_approved");
+  if (!paymentMilestones.some((row) => (row?.milestone_type ?? "") === "Payment")) reasons.push("no_payment_evidence");
+  if (paymentMilestones.some((row) => (row?.status ?? "") === "Needs Review")) reasons.push("payment_milestone_needs_review");
+  if (!str(consentBasis)) reasons.push("no_customer_consent");
+  return { eligible: reasons.length === 0, reasons };
+}
+
+export function buildReviewRequestDraft({
+  roofJobId,
+  requestId = reviewRequestIdForRoofJob(roofJobId),
+  completionPacket,
+  paymentMilestones = [],
+  consentBasis,
+  channel = "Google",
+  reviewLink,
+  nowIso,
+} = {}) {
+  if (!roofJobId) throw new Error("roof_job_id_required");
+  const stop = evaluateReviewStopConditions({ completionPacket, paymentMilestones, consentBasis });
+
+  return {
+    review_request_id: requestId,
+    roof_job: roofJobId,
+    completion_packet: completionPacket?.completion_packet_id ?? completionPacket?.name ?? "",
+    status: stop.eligible ? "Eligible" : "Blocked",
+    channel,
+    ...(nowIso ? { prepared_at: nowIso } : {}),
+    stop_conditions_json: JSON.stringify({ evaluated_at: nowIso, ...stop }, null, 2),
+    eligibility_notes: stop.eligible
+      ? "All deterministic stop conditions are clear. Sending still requires human approval."
+      : `Blocked by: ${stop.reasons.join(", ")}.`,
+    consent_basis: str(consentBasis) ?? "",
+    review_link: reviewLink ?? "",
+    notes: "",
+  };
+}
+
+export function checkConsent({ channel, consentBasis } = {}) {
+  const basis = (consentBasis ?? "").trim().toLowerCase();
+  const express = basis === "express";
+  const ebr = basis === "existing_business_relationship" || basis === "ebr";
+  const reasons = [];
+  if (channel === "Portal") return { allowed: true, channel, consent_basis: basis, reasons };
+  if (!basis) reasons.push("consent_basis_missing");
+  else if (channel === "SMS" && !express) reasons.push("sms_requires_express_consent");
+  else if (!express && !ebr) reasons.push("consent_basis_insufficient");
+  return { allowed: reasons.length === 0, channel, consent_basis: basis, reasons };
+}
+
+export function checkQuietHours({
+  nowUtcIso,
+  timezoneOffsetMinutes = -360,
+  startHour = 9,
+  endHour = 20,
+} = {}) {
+  const ts = Date.parse(nowUtcIso ?? "");
+  if (!Number.isFinite(ts)) throw new Error("now_utc_iso_required");
+  const localHour = new Date(ts + timezoneOffsetMinutes * 60_000).getUTCHours();
+  return {
+    ok: localHour >= startHour && localHour < endHour,
+    local_hour: localHour,
+    start_hour: startHour,
+    end_hour: endHour,
+  };
+}
+
+export function buildCommunicationEventDraft({
+  eventId,
+  roofJobId,
+  leadEnvelopeId,
+  channel,
+  direction = "Outbound",
+  template,
+  consentBasis,
+  bodyPreview,
+  recipientRef,
+  nowUtcIso,
+  timezoneOffsetMinutes,
+  startHour,
+  endHour,
+} = {}) {
+  if (!channel) throw new Error("channel_required");
+  if (!roofJobId && !leadEnvelopeId) throw new Error("roof_job_or_lead_envelope_required");
+  if (!str(recipientRef)) throw new Error("recipient_ref_required");
+  const consent = checkConsent({ channel, consentBasis });
+  const quiet = direction === "Outbound"
+    ? checkQuietHours({ nowUtcIso, timezoneOffsetMinutes, startHour, endHour })
+    : { ok: true, local_hour: null };
+  const reasons = [...consent.reasons, ...(quiet.ok ? [] : ["quiet_hours_blocked"])];
+  const allowed = reasons.length === 0;
+
+  return {
+    communication_event_id: eventId ?? `comm:${slugify([channel, recipientRef, nowUtcIso].join(":"))}`,
+    ...(roofJobId ? { roof_job: roofJobId } : {}),
+    ...(leadEnvelopeId ? { lead_envelope: leadEnvelopeId } : {}),
+    channel,
+    direction,
+    template: template ?? "",
+    consent_basis: consent.consent_basis,
+    policy_result: allowed ? "Allowed" : "Blocked",
+    policy_reasons_json: JSON.stringify({ evaluated_at: nowUtcIso, allowed, reasons, quiet }, null, 2),
+    quiet_hours_ok: quiet.ok ? 1 : 0,
+    status: allowed ? "Draft" : "Blocked",
+    body_preview: bodyPreview ?? "",
+    recipient_ref: recipientRef,
+    event_ts: nowUtcIso,
+    notes: "Policy-gated draft record. No message is sent by this tool.",
+  };
+}
+
+export function buildSupplierQuoteDraft({
+  materialTakeoff = {},
+  supplierQuoteId = supplierQuoteIdForTakeoff(materialTakeoff.takeoff_id ?? materialTakeoff.name),
+  supplier,
+  quotedAt,
+  validUntil,
+  unitPrices = {},
+  nowIso,
+} = {}) {
+  if (!materialTakeoff.takeoff_id && !materialTakeoff.name) throw new Error("material_takeoff_id_required");
+  if (materialTakeoff.status !== "Approved") throw new Error("material_takeoff_approved_required");
+  if (!str(validUntil)) throw new Error("valid_until_required");
+  const rows = supplierOrderRowsFromTakeoff(materialTakeoff);
+  if (!rows.length) throw new Error("material_takeoff_items_required");
+  const takeoffId = materialTakeoff.takeoff_id ?? materialTakeoff.name;
+  const items = rows.map((row) => {
+    const unitPrice = Number(unitPrices[row.item_name]);
+    const price = Number.isFinite(unitPrice) && unitPrice >= 0 ? unitPrice : 0;
+    return {
+      category: row.category,
+      item_name: row.item_name,
+      quantity: row.quantity,
+      unit: row.unit,
+      unit_price: price,
+      line_total: Math.round(price * row.quantity * 100) / 100,
+      substitution: "",
+      source_ref: row.source_ref || row.item_name,
+      needs_review: 1,
+    };
+  });
+  const quoteTotal = Math.round(items.reduce((sum, row) => sum + row.line_total, 0) * 100) / 100;
+
+  return {
+    supplier_quote_id: supplierQuoteId,
+    roof_job: materialTakeoff.roof_job,
+    material_takeoff: takeoffId,
+    ...(supplier ? { supplier } : {}),
+    status: "Needs Review",
+    ...(quotedAt ? { quoted_at: quotedAt } : {}),
+    valid_until: validUntil,
+    ...(nowIso ? { prepared_at: nowIso } : {}),
+    quote_total: quoteTotal,
+    currency: "CAD",
+    substitution_notes: "",
+    quote_summary_json: JSON.stringify({
+      roof_job: materialTakeoff.roof_job ?? "",
+      material_takeoff: takeoffId,
+      generated_at: nowIso,
+      valid_until: validUntil,
+      item_count: items.length,
+      quote_total: quoteTotal,
+      items,
+    }, null, 2),
+    assumptions: [
+      "Quote lines are copied from an approved Material Takeoff; prices default to 0 until entered.",
+      "Supplier pricing, availability, substitutions, and validity require human confirmation.",
+    ].join("\n"),
+    exclusions: [
+      "This draft does not place an order, reserve material, or commit a price to the customer.",
+      "An expired valid_until date invalidates the quote for production readiness.",
+    ].join("\n"),
+    items,
+  };
+}
+
+export function buildMarketWatchItemDraft({
+  watchId,
+  competitor,
+  title,
+  sourceUrl,
+  riskLevel = "Medium",
+  productGate,
+  requiredResponse,
+  observedAt,
+  nowIso,
+} = {}) {
+  if (!str(competitor)) throw new Error("competitor_required");
+  if (!str(title)) throw new Error("title_required");
+  if (!["Low", "Medium", "High"].includes(riskLevel)) throw new Error("risk_level_invalid");
+
+  return {
+    watch_id: watchId ?? marketWatchIdFor(competitor, title),
+    competitor: competitor.trim(),
+    title: title.trim(),
+    source_url: sourceUrl ?? "",
+    risk_level: riskLevel,
+    status: "Open",
+    observed_at: observedAt ?? nowIso,
+    product_gate: productGate ?? "",
+    required_response: requiredResponse ?? "",
+    decision_notes: "",
+    created_by_ref: "",
+  };
+}
+
+function slugify(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 100);
+}
+
+function str(v) {
+  return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
 export function redactApprovalArgs(args) {
@@ -735,53 +1166,20 @@ export function buildServer(config) {
         },
         draft,
       };
-      await erpPost(config, "/api/resource/Hermes%20Run", {
-        run_id: runId,
-        run_ts: now,
-        agent_role: "Estimator Assistant",
-        requested_by: args.approved_by,
-        request_text: args.request_text,
-        target_doctype: "Material Takeoff",
-        target_name: draft.takeoff_id,
-        roof_job: args.roof_job_id,
-        capability_level: "Approved-write",
-        tool_name: "request_create_material_takeoff",
-        tool_args_json: JSON.stringify(redactApprovalArgs(args)),
-        dry_run_json: JSON.stringify(dryRun),
-        approval_status: "Approved",
-        approved_by: args.approved_by,
-        approved_at: now,
-        before_target_ids: JSON.stringify(summarizeMaterialTakeoff(before)),
-      });
-
-      try {
-        const result = before
-          ? await erpPut(config, resourcePath("Material Takeoff", draft.takeoff_id), draft)
-          : await erpPost(config, "/api/resource/Material%20Takeoff", draft);
-        const after = { ...(before ?? {}), ...draft, name: draft.takeoff_id };
-        const auditError = await finalizeHermesRun(config, runId, {
-          approval_status: "Executed",
-          result_status: "OK",
-          after_target_ids: JSON.stringify(summarizeMaterialTakeoff(after)),
-          result_json: JSON.stringify(result),
-        });
-        return text({
-          run_id: runId,
-          upserted: true,
-          operation,
-          material_takeoff_id: draft.takeoff_id,
-          audit_finalized: auditError === null,
-          ...(auditError ? { audit_error: auditError } : {}),
-          result,
-        });
-      } catch (err) {
-        await erpPut(config, resourcePath("Hermes Run", runId), {
-          approval_status: "Failed",
-          result_status: "Error",
-          error: String(err).slice(0, 500),
-        }).catch(() => {});
-        throw err;
-      }
+      return text(await executeAuditedWrite(config, {
+        runId,
+        now,
+        args,
+        agentRole: "Estimator Assistant",
+        toolName: "request_create_material_takeoff",
+        target: { doctype: "Material Takeoff", name: draft.takeoff_id },
+        roofJob: args.roof_job_id,
+        dryRun,
+        beforeSummary: summarizeMaterialTakeoff(before),
+        afterSummary: summarizeMaterialTakeoff({ ...(before ?? {}), ...draft, name: draft.takeoff_id }),
+        execute: upsertDraftExecutor(config, "Material Takeoff", draft.takeoff_id, draft, before),
+        responseExtra: { upserted: true, operation, material_takeoff_id: draft.takeoff_id },
+      }));
     },
   );
 
@@ -835,50 +1233,20 @@ export function buildServer(config) {
         before: summarizeMaterialTakeoff(before),
         patch,
       };
-      await erpPost(config, "/api/resource/Hermes%20Run", {
-        run_id: runId,
-        run_ts: now,
-        agent_role: "Estimator Assistant",
-        requested_by: args.approved_by,
-        request_text: args.request_text,
-        target_doctype: "Material Takeoff",
-        target_name: args.takeoff_id,
-        roof_job: before.roof_job,
-        capability_level: "Approved-write",
-        tool_name: "request_update_material_takeoff_status",
-        tool_args_json: JSON.stringify(redactApprovalArgs(args)),
-        dry_run_json: JSON.stringify(dryRun),
-        approval_status: "Approved",
-        approved_by: args.approved_by,
-        approved_at: now,
-        before_target_ids: JSON.stringify(summarizeMaterialTakeoff(before)),
-      });
-
-      try {
-        const result = await erpPut(config, resourcePath("Material Takeoff", args.takeoff_id), patch);
-        const after = { ...before, ...patch };
-        const auditError = await finalizeHermesRun(config, runId, {
-          approval_status: "Executed",
-          result_status: "OK",
-          after_target_ids: JSON.stringify(summarizeMaterialTakeoff(after)),
-          result_json: JSON.stringify(result),
-        });
-        return text({
-          run_id: runId,
-          updated: true,
-          material_takeoff_id: args.takeoff_id,
-          audit_finalized: auditError === null,
-          ...(auditError ? { audit_error: auditError } : {}),
-          result,
-        });
-      } catch (err) {
-        await erpPut(config, resourcePath("Hermes Run", runId), {
-          approval_status: "Failed",
-          result_status: "Error",
-          error: String(err).slice(0, 500),
-        }).catch(() => {});
-        throw err;
-      }
+      return text(await executeAuditedWrite(config, {
+        runId,
+        now,
+        args,
+        agentRole: "Estimator Assistant",
+        toolName: "request_update_material_takeoff_status",
+        target: { doctype: "Material Takeoff", name: args.takeoff_id },
+        roofJob: before.roof_job,
+        dryRun,
+        beforeSummary: summarizeMaterialTakeoff(before),
+        afterSummary: summarizeMaterialTakeoff({ ...before, ...patch }),
+        execute: () => erpPut(config, resourcePath("Material Takeoff", args.takeoff_id), patch),
+        responseExtra: { updated: true, material_takeoff_id: args.takeoff_id },
+      }));
     },
   );
 
@@ -950,53 +1318,20 @@ export function buildServer(config) {
         },
         draft,
       };
-      await erpPost(config, "/api/resource/Hermes%20Run", {
-        run_id: runId,
-        run_ts: now,
-        agent_role: "Production Controller",
-        requested_by: args.approved_by,
-        request_text: args.request_text,
-        target_doctype: "Supplier Order",
-        target_name: draft.supplier_order_id,
-        roof_job: draft.roof_job,
-        capability_level: "Approved-write",
-        tool_name: "request_create_supplier_order",
-        tool_args_json: JSON.stringify(redactApprovalArgs(args)),
-        dry_run_json: JSON.stringify(dryRun),
-        approval_status: "Approved",
-        approved_by: args.approved_by,
-        approved_at: now,
-        before_target_ids: JSON.stringify(summarizeSupplierOrder(before)),
-      });
-
-      try {
-        const result = before
-          ? await erpPut(config, resourcePath("Supplier Order", draft.supplier_order_id), draft)
-          : await erpPost(config, "/api/resource/Supplier%20Order", draft);
-        const after = { ...(before ?? {}), ...draft, name: draft.supplier_order_id };
-        const auditError = await finalizeHermesRun(config, runId, {
-          approval_status: "Executed",
-          result_status: "OK",
-          after_target_ids: JSON.stringify(summarizeSupplierOrder(after)),
-          result_json: JSON.stringify(result),
-        });
-        return text({
-          run_id: runId,
-          upserted: true,
-          operation,
-          supplier_order_id: draft.supplier_order_id,
-          audit_finalized: auditError === null,
-          ...(auditError ? { audit_error: auditError } : {}),
-          result,
-        });
-      } catch (err) {
-        await erpPut(config, resourcePath("Hermes Run", runId), {
-          approval_status: "Failed",
-          result_status: "Error",
-          error: String(err).slice(0, 500),
-        }).catch(() => {});
-        throw err;
-      }
+      return text(await executeAuditedWrite(config, {
+        runId,
+        now,
+        args,
+        agentRole: "Production Controller",
+        toolName: "request_create_supplier_order",
+        target: { doctype: "Supplier Order", name: draft.supplier_order_id },
+        roofJob: draft.roof_job,
+        dryRun,
+        beforeSummary: summarizeSupplierOrder(before),
+        afterSummary: summarizeSupplierOrder({ ...(before ?? {}), ...draft, name: draft.supplier_order_id }),
+        execute: upsertDraftExecutor(config, "Supplier Order", draft.supplier_order_id, draft, before),
+        responseExtra: { upserted: true, operation, supplier_order_id: draft.supplier_order_id },
+      }));
     },
   );
 
@@ -1055,53 +1390,20 @@ export function buildServer(config) {
         source_counts: { measurement_reports: measurements.length, evidence_items: evidence.length },
         draft,
       };
-      await erpPost(config, "/api/resource/Hermes%20Run", {
-        run_id: runId,
-        run_ts: now,
-        agent_role: "Estimator Assistant",
-        requested_by: args.approved_by,
-        request_text: args.request_text,
-        target_doctype: "Proposal Evidence Pack",
-        target_name: draft.pack_id,
-        roof_job: args.roof_job_id,
-        capability_level: "Approved-write",
-        tool_name: "request_create_proposal_evidence_pack",
-        tool_args_json: JSON.stringify(redactApprovalArgs(args)),
-        dry_run_json: JSON.stringify(dryRun),
-        approval_status: "Approved",
-        approved_by: args.approved_by,
-        approved_at: now,
-        before_target_ids: JSON.stringify(summarizeProposalPack(before)),
-      });
-
-      try {
-        const result = before
-          ? await erpPut(config, resourcePath("Proposal Evidence Pack", draft.pack_id), draft)
-          : await erpPost(config, "/api/resource/Proposal%20Evidence%20Pack", draft);
-        const after = { ...(before ?? {}), ...draft, name: draft.pack_id };
-        const auditError = await finalizeHermesRun(config, runId, {
-          approval_status: "Executed",
-          result_status: "OK",
-          after_target_ids: JSON.stringify(summarizeProposalPack(after)),
-          result_json: JSON.stringify(result),
-        });
-        return text({
-          run_id: runId,
-          upserted: true,
-          operation,
-          proposal_evidence_pack_id: draft.pack_id,
-          audit_finalized: auditError === null,
-          ...(auditError ? { audit_error: auditError } : {}),
-          result,
-        });
-      } catch (err) {
-        await erpPut(config, resourcePath("Hermes Run", runId), {
-          approval_status: "Failed",
-          result_status: "Error",
-          error: String(err).slice(0, 500),
-        }).catch(() => {});
-        throw err;
-      }
+      return text(await executeAuditedWrite(config, {
+        runId,
+        now,
+        args,
+        agentRole: "Estimator Assistant",
+        toolName: "request_create_proposal_evidence_pack",
+        target: { doctype: "Proposal Evidence Pack", name: draft.pack_id },
+        roofJob: args.roof_job_id,
+        dryRun,
+        beforeSummary: summarizeProposalPack(before),
+        afterSummary: summarizeProposalPack({ ...(before ?? {}), ...draft, name: draft.pack_id }),
+        execute: upsertDraftExecutor(config, "Proposal Evidence Pack", draft.pack_id, draft, before),
+        responseExtra: { upserted: true, operation, proposal_evidence_pack_id: draft.pack_id },
+      }));
     },
   );
 
@@ -1155,56 +1457,654 @@ export function buildServer(config) {
         before: summarizeGate(before),
         patch,
       };
-      await erpPost(config, "/api/resource/Hermes%20Run", {
-        run_id: runId,
-        run_ts: now,
-        agent_role: "Production Controller",
-        requested_by: args.approved_by,
-        request_text: args.request_text,
-        target_doctype: "Production Gate State",
-        target_name: args.gate_id,
-        lead_envelope: before.lead_envelope,
-        roof_job: before.roof_job,
-        linked_evidence: before.evidence_item,
-        capability_level: "Approved-write",
-        tool_name: "request_update_gate",
-        tool_args_json: JSON.stringify(redactApprovalArgs(args)),
-        dry_run_json: JSON.stringify(dryRun),
-        approval_status: "Approved",
-        approved_by: args.approved_by,
-        approved_at: now,
-        before_target_ids: JSON.stringify(summarizeGate(before)),
-      });
+      return text(await executeAuditedWrite(config, {
+        runId,
+        now,
+        args,
+        agentRole: "Production Controller",
+        toolName: "request_update_gate",
+        target: { doctype: "Production Gate State", name: args.gate_id },
+        roofJob: before.roof_job,
+        leadEnvelope: before.lead_envelope,
+        linkedEvidence: before.evidence_item,
+        dryRun,
+        beforeSummary: summarizeGate(before),
+        afterSummary: summarizeGate({ ...before, ...patch }),
+        execute: () => erpPut(config, resourcePath("Production Gate State", args.gate_id), patch),
+        responseExtra: { updated: true, gate_id: args.gate_id },
+      }));
+    },
+  );
 
-      try {
-        const result = await erpPut(config, resourcePath("Production Gate State", args.gate_id), patch);
-        const after = { ...before, ...patch };
-        const auditError = await finalizeHermesRun(config, runId, {
-          approval_status: "Executed",
-          result_status: "OK",
-          after_target_ids: JSON.stringify(summarizeGate(after)),
-          result_json: JSON.stringify(result),
-        });
-        return text({
-          run_id: runId,
-          updated: true,
-          gate_id: args.gate_id,
-          audit_finalized: auditError === null,
-          ...(auditError ? { audit_error: auditError } : {}),
-          result,
-        });
-      } catch (err) {
-        await erpPut(config, resourcePath("Hermes Run", runId), {
-          approval_status: "Failed",
-          result_status: "Error",
-          error: String(err).slice(0, 500),
-        }).catch(() => {});
-        throw err;
-      }
+  registerReadPair(server, config, {
+    doctype: "Completion Packet",
+    idArg: "completion_packet_id",
+    getName: "get_completion_packet",
+    listName: "list_completion_packets_for_job",
+    fields: COMPLETION_PACKET_FIELDS,
+  });
+  registerReadPair(server, config, {
+    doctype: "Warranty Packet",
+    idArg: "warranty_packet_id",
+    getName: "get_warranty_packet",
+    listName: "list_warranty_packets_for_job",
+    fields: WARRANTY_PACKET_FIELDS,
+  });
+  registerReadPair(server, config, {
+    doctype: "Review Request",
+    idArg: "review_request_id",
+    getName: "get_review_request",
+    listName: "list_review_requests_for_job",
+    fields: REVIEW_REQUEST_FIELDS,
+  });
+  registerReadPair(server, config, {
+    doctype: "Communication Event",
+    idArg: "communication_event_id",
+    getName: "get_communication_event",
+    listName: "list_communication_events_for_job",
+    fields: COMMUNICATION_EVENT_FIELDS,
+    orderBy: "event_ts desc",
+  });
+  registerReadPair(server, config, {
+    doctype: "Supplier Quote",
+    idArg: "supplier_quote_id",
+    getName: "get_supplier_quote",
+    listName: "list_supplier_quotes_for_job",
+    fields: SUPPLIER_QUOTE_FIELDS,
+  });
+
+  server.registerTool(
+    "list_market_watch_items",
+    {
+      title: "List Market Watch Items",
+      description: "Read Market Watch Item rows, optionally filtered by status.",
+      inputSchema: {
+        status: z.enum(["Open", "Covered", "Exceeded", "Responding", "Dismissed"]).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ status, limit = 25 }) => text(await erpGet(config, resourceListPath("Market Watch Item", {
+      fields: MARKET_WATCH_ITEM_FIELDS,
+      ...(status ? { filters: [["Market Watch Item", "status", "=", status]] } : {}),
+      limit,
+      orderBy: "modified desc",
+    }))),
+  );
+
+  server.registerTool(
+    "check_consent",
+    {
+      title: "Check Consent",
+      description: "Deterministic CASL-style consent check for one channel and consent basis. Read-only.",
+      inputSchema: {
+        channel: z.enum(["SMS", "Email", "Call", "Portal"]),
+        consent_basis: z.string().optional(),
+      },
+    },
+    async ({ channel, consent_basis }) => text(checkConsent({ channel, consentBasis: consent_basis })),
+  );
+
+  server.registerTool(
+    "check_quiet_hours",
+    {
+      title: "Check Quiet Hours",
+      description: "Deterministic quiet-hours check for an outbound customer communication. Read-only.",
+      inputSchema: {
+        now_utc_iso: z.string().min(1).optional(),
+        timezone_offset_minutes: z.number().int().min(-720).max(840).optional(),
+        start_hour: z.number().int().min(0).max(23).optional(),
+        end_hour: z.number().int().min(1).max(24).optional(),
+      },
+    },
+    async ({ now_utc_iso, timezone_offset_minutes, start_hour, end_hour }) => text(checkQuietHours({
+      nowUtcIso: now_utc_iso ?? new Date().toISOString(),
+      timezoneOffsetMinutes: timezone_offset_minutes,
+      startHour: start_hour,
+      endHour: end_hour,
+    })),
+  );
+
+  server.registerTool(
+    "dry_run_completion_packet",
+    {
+      title: "Dry Run Completion Packet",
+      description: "Preview a review-gated Completion Packet assembled from field check-ins and photo evidence without writing to ERPNext.",
+      inputSchema: {
+        roof_job_id: z.string().min(1),
+        completion_packet_id: z.string().min(1).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ roof_job_id, completion_packet_id, limit = 25 }) => {
+      const { draft, checkIns, evidence } = await buildCompletionPacketDraftFromErp(config, roof_job_id, {
+        packetId: completion_packet_id,
+        limit,
+      });
+      return text({
+        would_write: false,
+        required_tool: "request_create_completion_packet",
+        target: { doctype: "Completion Packet", name: draft.completion_packet_id },
+        source_counts: { field_check_ins: checkIns.length, evidence_items: evidence.length },
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_create_completion_packet",
+    {
+      title: "Request Create Completion Packet",
+      description: "Approved-write: create or update one review-gated Completion Packet and record a Hermes Run audit row.",
+      inputSchema: {
+        roof_job_id: z.string().min(1),
+        completion_packet_id: z.string().min(1).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+        request_text: z.string().min(1).max(4000),
+        approved_by: z.string().min(1),
+        approval_token: z.string().min(1),
+        run_id: z.string().min(1).optional(),
+      },
+    },
+    async (args) => {
+      assertWriteApproved(config, args.approval_token);
+      const now = new Date().toISOString();
+      const runId = args.run_id ?? newRunId();
+      const { draft, checkIns, evidence } = await buildCompletionPacketDraftFromErp(config, args.roof_job_id, {
+        packetId: args.completion_packet_id,
+        limit: args.limit ?? 25,
+        nowIso: now,
+      });
+      const before = await readResourceOrNull(config, "Completion Packet", draft.completion_packet_id);
+      const operation = before ? "update" : "create";
+      return text(await executeAuditedWrite(config, {
+        runId,
+        now,
+        args,
+        agentRole: "Field Companion",
+        toolName: "request_create_completion_packet",
+        target: { doctype: "Completion Packet", name: draft.completion_packet_id },
+        roofJob: args.roof_job_id,
+        dryRun: {
+          target: { doctype: "Completion Packet", name: draft.completion_packet_id },
+          operation,
+          source_counts: { field_check_ins: checkIns.length, evidence_items: evidence.length },
+          draft,
+        },
+        beforeSummary: summarizeCompletionPacket(before),
+        afterSummary: summarizeCompletionPacket({ ...(before ?? {}), ...draft, name: draft.completion_packet_id }),
+        execute: upsertDraftExecutor(config, "Completion Packet", draft.completion_packet_id, draft, before),
+        responseExtra: { upserted: true, operation, completion_packet_id: draft.completion_packet_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_warranty_packet",
+    {
+      title: "Dry Run Warranty Packet",
+      description: "Preview a Warranty Packet draft from an approved, warranty-ready Completion Packet without writing to ERPNext.",
+      inputSchema: {
+        completion_packet_id: z.string().min(1),
+        warranty_packet_id: z.string().min(1).optional(),
+        material_system: z.string().max(200).optional(),
+        warranty_terms: z.string().max(4000).optional(),
+        coverage_start: z.string().optional(),
+        coverage_years: z.number().int().min(0).max(100).optional(),
+      },
+    },
+    async ({ completion_packet_id, warranty_packet_id, material_system, warranty_terms, coverage_start, coverage_years }) => {
+      const completionPacket = await readResource(config, "Completion Packet", completion_packet_id);
+      const draft = buildWarrantyPacketDraft({
+        completionPacket,
+        packetId: warranty_packet_id,
+        materialSystem: material_system,
+        warrantyTerms: warranty_terms,
+        coverageStart: coverage_start,
+        coverageYears: coverage_years,
+      });
+      return text({
+        would_write: false,
+        required_tool: "request_create_warranty_packet",
+        target: { doctype: "Warranty Packet", name: draft.warranty_packet_id },
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_create_warranty_packet",
+    {
+      title: "Request Create Warranty Packet",
+      description: "Approved-write: create or update one Warranty Packet draft and record a Hermes Run audit row.",
+      inputSchema: {
+        completion_packet_id: z.string().min(1),
+        warranty_packet_id: z.string().min(1).optional(),
+        material_system: z.string().max(200).optional(),
+        warranty_terms: z.string().max(4000).optional(),
+        coverage_start: z.string().optional(),
+        coverage_years: z.number().int().min(0).max(100).optional(),
+        request_text: z.string().min(1).max(4000),
+        approved_by: z.string().min(1),
+        approval_token: z.string().min(1),
+        run_id: z.string().min(1).optional(),
+      },
+    },
+    async (args) => {
+      assertWriteApproved(config, args.approval_token);
+      const now = new Date().toISOString();
+      const runId = args.run_id ?? newRunId();
+      const completionPacket = await readResource(config, "Completion Packet", args.completion_packet_id);
+      const draft = buildWarrantyPacketDraft({
+        completionPacket,
+        packetId: args.warranty_packet_id,
+        materialSystem: args.material_system,
+        warrantyTerms: args.warranty_terms,
+        coverageStart: args.coverage_start,
+        coverageYears: args.coverage_years,
+        nowIso: now,
+      });
+      const before = await readResourceOrNull(config, "Warranty Packet", draft.warranty_packet_id);
+      const operation = before ? "update" : "create";
+      return text(await executeAuditedWrite(config, {
+        runId,
+        now,
+        args,
+        agentRole: "Closeout Agent",
+        toolName: "request_create_warranty_packet",
+        target: { doctype: "Warranty Packet", name: draft.warranty_packet_id },
+        roofJob: draft.roof_job,
+        dryRun: { target: { doctype: "Warranty Packet", name: draft.warranty_packet_id }, operation, draft },
+        beforeSummary: summarizeWarrantyPacket(before),
+        afterSummary: summarizeWarrantyPacket({ ...(before ?? {}), ...draft, name: draft.warranty_packet_id }),
+        execute: upsertDraftExecutor(config, "Warranty Packet", draft.warranty_packet_id, draft, before),
+        responseExtra: { upserted: true, operation, warranty_packet_id: draft.warranty_packet_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_review_request",
+    {
+      title: "Dry Run Review Request",
+      description: "Preview a Review Request with deterministic stop conditions (completion, payment evidence, consent) without writing to ERPNext.",
+      inputSchema: {
+        roof_job_id: z.string().min(1),
+        review_request_id: z.string().min(1).optional(),
+        consent_basis: z.string().optional(),
+        channel: z.enum(["Google", "Email", "SMS", "Other"]).optional(),
+        review_link: z.string().optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ roof_job_id, review_request_id, consent_basis, channel, review_link, limit = 25 }) => {
+      const { draft, completionPacket, paymentMilestones } = await buildReviewRequestDraftFromErp(config, roof_job_id, {
+        requestId: review_request_id,
+        consentBasis: consent_basis,
+        channel,
+        reviewLink: review_link,
+        limit,
+      });
+      return text({
+        would_write: false,
+        required_tool: "request_create_review_request",
+        target: { doctype: "Review Request", name: draft.review_request_id },
+        source: {
+          completion_packet: completionPacket?.completion_packet_id ?? completionPacket?.name ?? null,
+          payment_milestone_count: paymentMilestones.length,
+        },
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_create_review_request",
+    {
+      title: "Request Create Review Request",
+      description: "Approved-write: record one Review Request (Eligible or Blocked, never Sent) and record a Hermes Run audit row.",
+      inputSchema: {
+        roof_job_id: z.string().min(1),
+        review_request_id: z.string().min(1).optional(),
+        consent_basis: z.string().optional(),
+        channel: z.enum(["Google", "Email", "SMS", "Other"]).optional(),
+        review_link: z.string().optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+        request_text: z.string().min(1).max(4000),
+        approved_by: z.string().min(1),
+        approval_token: z.string().min(1),
+        run_id: z.string().min(1).optional(),
+      },
+    },
+    async (args) => {
+      assertWriteApproved(config, args.approval_token);
+      const now = new Date().toISOString();
+      const runId = args.run_id ?? newRunId();
+      const { draft, completionPacket, paymentMilestones } = await buildReviewRequestDraftFromErp(config, args.roof_job_id, {
+        requestId: args.review_request_id,
+        consentBasis: args.consent_basis,
+        channel: args.channel,
+        reviewLink: args.review_link,
+        limit: args.limit ?? 25,
+        nowIso: now,
+      });
+      const before = await readResourceOrNull(config, "Review Request", draft.review_request_id);
+      const operation = before ? "update" : "create";
+      return text(await executeAuditedWrite(config, {
+        runId,
+        now,
+        args,
+        agentRole: "Closeout Agent",
+        toolName: "request_create_review_request",
+        target: { doctype: "Review Request", name: draft.review_request_id },
+        roofJob: args.roof_job_id,
+        dryRun: {
+          target: { doctype: "Review Request", name: draft.review_request_id },
+          operation,
+          source: {
+            completion_packet: completionPacket?.completion_packet_id ?? completionPacket?.name ?? null,
+            payment_milestone_count: paymentMilestones.length,
+          },
+          draft,
+        },
+        beforeSummary: summarizeReviewRequest(before),
+        afterSummary: summarizeReviewRequest({ ...(before ?? {}), ...draft, name: draft.review_request_id }),
+        execute: upsertDraftExecutor(config, "Review Request", draft.review_request_id, draft, before),
+        responseExtra: { upserted: true, operation, review_request_id: draft.review_request_id, review_status: draft.status },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_communication_event",
+    {
+      title: "Dry Run Communication Event",
+      description: "Preview a policy-gated Communication Event record (consent plus quiet hours) without writing to ERPNext. Never sends anything.",
+      inputSchema: communicationEventInputSchema(),
+    },
+    async (args) => {
+      const draft = await buildCommunicationEventDraftFromArgs(args);
+      return text({
+        would_write: false,
+        required_tool: "request_record_communication_event",
+        target: { doctype: "Communication Event", name: draft.communication_event_id },
+        policy_result: draft.policy_result,
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_record_communication_event",
+    {
+      title: "Request Record Communication Event",
+      description: "Approved-write: record one policy-gated Communication Event (Draft or Blocked, never Sent) and record a Hermes Run audit row. Sending remains a human action.",
+      inputSchema: {
+        ...communicationEventInputSchema(),
+        request_text: z.string().min(1).max(4000),
+        approved_by: z.string().min(1),
+        approval_token: z.string().min(1),
+        run_id: z.string().min(1).optional(),
+      },
+    },
+    async (args) => {
+      assertWriteApproved(config, args.approval_token);
+      const now = new Date().toISOString();
+      const runId = args.run_id ?? newRunId();
+      const draft = await buildCommunicationEventDraftFromArgs(args, now);
+      const before = await readResourceOrNull(config, "Communication Event", draft.communication_event_id);
+      const operation = before ? "update" : "create";
+      return text(await executeAuditedWrite(config, {
+        runId,
+        now,
+        args,
+        agentRole: "Lead Concierge",
+        toolName: "request_record_communication_event",
+        target: { doctype: "Communication Event", name: draft.communication_event_id },
+        roofJob: draft.roof_job,
+        leadEnvelope: draft.lead_envelope,
+        dryRun: {
+          target: { doctype: "Communication Event", name: draft.communication_event_id },
+          operation,
+          policy_result: draft.policy_result,
+          draft,
+        },
+        beforeSummary: summarizeCommunicationEvent(before),
+        afterSummary: summarizeCommunicationEvent({ ...(before ?? {}), ...draft, name: draft.communication_event_id }),
+        execute: upsertDraftExecutor(config, "Communication Event", draft.communication_event_id, draft, before),
+        responseExtra: {
+          upserted: true,
+          operation,
+          communication_event_id: draft.communication_event_id,
+          policy_result: draft.policy_result,
+        },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_supplier_quote",
+    {
+      title: "Dry Run Supplier Quote",
+      description: "Preview a review-gated Supplier Quote draft from an approved Material Takeoff without writing to ERPNext.",
+      inputSchema: supplierQuoteInputSchema(),
+    },
+    async (args) => {
+      const { draft, materialTakeoff } = await buildSupplierQuoteDraftFromErp(config, args);
+      return text({
+        would_write: false,
+        required_tool: "request_create_supplier_quote",
+        target: { doctype: "Supplier Quote", name: draft.supplier_quote_id },
+        source: {
+          material_takeoff: materialTakeoff.takeoff_id ?? materialTakeoff.name,
+          item_count: draft.items.length,
+          quote_total: draft.quote_total,
+        },
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_create_supplier_quote",
+    {
+      title: "Request Create Supplier Quote",
+      description: "Approved-write: create or update one review-gated Supplier Quote and record a Hermes Run audit row.",
+      inputSchema: {
+        ...supplierQuoteInputSchema(),
+        request_text: z.string().min(1).max(4000),
+        approved_by: z.string().min(1),
+        approval_token: z.string().min(1),
+        run_id: z.string().min(1).optional(),
+      },
+    },
+    async (args) => {
+      assertWriteApproved(config, args.approval_token);
+      const now = new Date().toISOString();
+      const runId = args.run_id ?? newRunId();
+      const { draft, materialTakeoff } = await buildSupplierQuoteDraftFromErp(config, args, now);
+      const before = await readResourceOrNull(config, "Supplier Quote", draft.supplier_quote_id);
+      const operation = before ? "update" : "create";
+      return text(await executeAuditedWrite(config, {
+        runId,
+        now,
+        args,
+        agentRole: "Production Controller",
+        toolName: "request_create_supplier_quote",
+        target: { doctype: "Supplier Quote", name: draft.supplier_quote_id },
+        roofJob: draft.roof_job,
+        dryRun: {
+          target: { doctype: "Supplier Quote", name: draft.supplier_quote_id },
+          operation,
+          source: {
+            material_takeoff: materialTakeoff.takeoff_id ?? materialTakeoff.name,
+            item_count: draft.items.length,
+            quote_total: draft.quote_total,
+          },
+          draft,
+        },
+        beforeSummary: summarizeSupplierQuote(before),
+        afterSummary: summarizeSupplierQuote({ ...(before ?? {}), ...draft, name: draft.supplier_quote_id }),
+        execute: upsertDraftExecutor(config, "Supplier Quote", draft.supplier_quote_id, draft, before),
+        responseExtra: { upserted: true, operation, supplier_quote_id: draft.supplier_quote_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_market_watch_item",
+    {
+      title: "Dry Run Market Watch Item",
+      description: "Preview a Market Watch Item (competitor change and required response) without writing to ERPNext.",
+      inputSchema: marketWatchInputSchema(),
+    },
+    async (args) => {
+      const draft = buildMarketWatchItemDraft(marketWatchDraftArgs(args));
+      return text({
+        would_write: false,
+        required_tool: "request_add_market_watch_item",
+        target: { doctype: "Market Watch Item", name: draft.watch_id },
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_add_market_watch_item",
+    {
+      title: "Request Add Market Watch Item",
+      description: "Approved-write: create or update one Market Watch Item and record a Hermes Run audit row.",
+      inputSchema: {
+        ...marketWatchInputSchema(),
+        request_text: z.string().min(1).max(4000),
+        approved_by: z.string().min(1),
+        approval_token: z.string().min(1),
+        run_id: z.string().min(1).optional(),
+      },
+    },
+    async (args) => {
+      assertWriteApproved(config, args.approval_token);
+      const now = new Date().toISOString();
+      const runId = args.run_id ?? newRunId();
+      const draft = buildMarketWatchItemDraft({ ...marketWatchDraftArgs(args), nowIso: now });
+      const before = await readResourceOrNull(config, "Market Watch Item", draft.watch_id);
+      const operation = before ? "update" : "create";
+      return text(await executeAuditedWrite(config, {
+        runId,
+        now,
+        args,
+        agentRole: "Owner Operator",
+        toolName: "request_add_market_watch_item",
+        target: { doctype: "Market Watch Item", name: draft.watch_id },
+        dryRun: { target: { doctype: "Market Watch Item", name: draft.watch_id }, operation, draft },
+        beforeSummary: summarizeMarketWatchItem(before),
+        afterSummary: summarizeMarketWatchItem({ ...(before ?? {}), ...draft, name: draft.watch_id }),
+        execute: upsertDraftExecutor(config, "Market Watch Item", draft.watch_id, draft, before),
+        responseExtra: { upserted: true, operation, watch_id: draft.watch_id },
+      }));
     },
   );
 
   return server;
+}
+
+// Registers the standard get-by-id plus list-for-job read pair for one DocType.
+function registerReadPair(server, config, { doctype, idArg, getName, listName, fields, orderBy = "modified desc" }) {
+  server.registerTool(
+    getName,
+    {
+      title: `Get ${doctype}`,
+      description: `Read one ERPNext ${doctype} by ${idArg}/name.`,
+      inputSchema: { [idArg]: z.string().min(1) },
+    },
+    async (args) => text(await erpGet(config, resourcePath(doctype, args[idArg]))),
+  );
+  server.registerTool(
+    listName,
+    {
+      title: `List ${doctype}s For Job`,
+      description: `Read ${doctype} rows linked to one Roof Job.`,
+      inputSchema: { roof_job_id: z.string().min(1), limit: z.number().int().min(1).max(100).optional() },
+    },
+    async ({ roof_job_id, limit = 25 }) => text(await erpGet(config, resourceListPath(doctype, {
+      fields,
+      filters: [[doctype, "roof_job", "=", roof_job_id]],
+      limit,
+      orderBy,
+    }))),
+  );
+}
+
+function communicationEventInputSchema() {
+  return {
+    channel: z.enum(["SMS", "Email", "Call", "Portal"]),
+    direction: z.enum(["Outbound", "Inbound"]).optional(),
+    roof_job_id: z.string().min(1).optional(),
+    lead_envelope_id: z.string().min(1).optional(),
+    communication_event_id: z.string().min(1).optional(),
+    template: z.string().max(200).optional(),
+    consent_basis: z.string().max(100).optional(),
+    body_preview: z.string().max(4000).optional(),
+    recipient_ref: z.string().min(1),
+    now_utc_iso: z.string().min(1).optional(),
+    timezone_offset_minutes: z.number().int().min(-720).max(840).optional(),
+    quiet_start_hour: z.number().int().min(0).max(23).optional(),
+    quiet_end_hour: z.number().int().min(1).max(24).optional(),
+  };
+}
+
+async function buildCommunicationEventDraftFromArgs(args, nowIso) {
+  return buildCommunicationEventDraft({
+    eventId: args.communication_event_id,
+    roofJobId: args.roof_job_id,
+    leadEnvelopeId: args.lead_envelope_id,
+    channel: args.channel,
+    direction: args.direction,
+    template: args.template,
+    consentBasis: args.consent_basis,
+    bodyPreview: args.body_preview,
+    recipientRef: args.recipient_ref,
+    nowUtcIso: args.now_utc_iso ?? nowIso ?? new Date().toISOString(),
+    timezoneOffsetMinutes: args.timezone_offset_minutes,
+    startHour: args.quiet_start_hour,
+    endHour: args.quiet_end_hour,
+  });
+}
+
+function supplierQuoteInputSchema() {
+  return {
+    material_takeoff_id: z.string().min(1),
+    supplier_quote_id: z.string().min(1).optional(),
+    supplier: z.string().min(1).optional(),
+    quoted_at: z.string().optional(),
+    valid_until: z.string().min(1),
+    unit_prices: z.record(z.string(), z.number().min(0)).optional(),
+  };
+}
+
+function marketWatchInputSchema() {
+  return {
+    watch_id: z.string().min(1).optional(),
+    competitor: z.string().min(1),
+    title: z.string().min(1),
+    source_url: z.string().optional(),
+    risk_level: z.enum(["Low", "Medium", "High"]).optional(),
+    product_gate: z.string().max(200).optional(),
+    required_response: z.string().max(4000).optional(),
+    observed_at: z.string().optional(),
+  };
+}
+
+function marketWatchDraftArgs(args) {
+  return {
+    watchId: args.watch_id,
+    competitor: args.competitor,
+    title: args.title,
+    sourceUrl: args.source_url,
+    riskLevel: args.risk_level,
+    productGate: args.product_gate,
+    requiredResponse: args.required_response,
+    observedAt: args.observed_at,
+  };
 }
 
 async function readResource(config, doctype, name) {
@@ -1233,6 +2133,78 @@ async function finalizeHermesRun(config, runId, patch) {
   } catch (err) {
     return String(err).slice(0, 500);
   }
+}
+
+// Shared approved-write flow: audit row BEFORE the mutation, execute, finalize the audit,
+// mark the run failed on error. Every request_* tool funnels through here so the
+// read -> dry_run -> approval -> write -> audit contract cannot drift per tool.
+async function executeAuditedWrite(config, {
+  runId,
+  now,
+  args,
+  agentRole,
+  toolName,
+  target,
+  roofJob,
+  leadEnvelope,
+  linkedEvidence,
+  dryRun,
+  beforeSummary,
+  afterSummary,
+  execute,
+  responseExtra = {},
+}) {
+  await erpPost(config, "/api/resource/Hermes%20Run", {
+    run_id: runId,
+    run_ts: now,
+    agent_role: agentRole,
+    requested_by: args.approved_by,
+    request_text: args.request_text,
+    target_doctype: target.doctype,
+    target_name: target.name,
+    ...(roofJob ? { roof_job: roofJob } : {}),
+    ...(leadEnvelope ? { lead_envelope: leadEnvelope } : {}),
+    ...(linkedEvidence ? { linked_evidence: linkedEvidence } : {}),
+    capability_level: "Approved-write",
+    tool_name: toolName,
+    tool_args_json: JSON.stringify(redactApprovalArgs(args)),
+    dry_run_json: JSON.stringify(dryRun),
+    approval_status: "Approved",
+    approved_by: args.approved_by,
+    approved_at: now,
+    before_target_ids: JSON.stringify(beforeSummary),
+  });
+
+  try {
+    const result = await execute();
+    const auditError = await finalizeHermesRun(config, runId, {
+      approval_status: "Executed",
+      result_status: "OK",
+      after_target_ids: JSON.stringify(afterSummary),
+      result_json: JSON.stringify(result),
+    });
+    return {
+      run_id: runId,
+      ...responseExtra,
+      audit_finalized: auditError === null,
+      ...(auditError ? { audit_error: auditError } : {}),
+      result,
+    };
+  } catch (err) {
+    await erpPut(config, resourcePath("Hermes Run", runId), {
+      approval_status: "Failed",
+      result_status: "Error",
+      error: String(err).slice(0, 500),
+    }).catch(() => {});
+    throw err;
+  }
+}
+
+// Shared upsert executor for request_create_* tools that write a full draft document.
+function upsertDraftExecutor(config, doctype, name, draft, before) {
+  return before
+    ? () => erpPut(config, resourcePath(doctype, name), draft)
+    : () => erpPost(config, `/api/resource/${encodeURIComponent(doctype)}`, draft);
 }
 
 async function buildProposalDraftFromErp(config, roofJobId, { packId, limit = 25, nowIso } = {}) {
@@ -1314,6 +2286,75 @@ async function buildSupplierOrderDraftFromErp(config, materialTakeoffId, {
   return { draft, materialTakeoff };
 }
 
+async function buildSupplierQuoteDraftFromErp(config, args, nowIso) {
+  const materialTakeoff = await readResource(config, "Material Takeoff", args.material_takeoff_id);
+  const draft = buildSupplierQuoteDraft({
+    materialTakeoff,
+    supplierQuoteId: args.supplier_quote_id,
+    supplier: args.supplier,
+    quotedAt: args.quoted_at,
+    validUntil: args.valid_until,
+    unitPrices: args.unit_prices ?? {},
+    nowIso,
+  });
+  return { draft, materialTakeoff };
+}
+
+async function buildCompletionPacketDraftFromErp(config, roofJobId, { packetId, limit = 25, nowIso } = {}) {
+  const [checkIns, evidence] = await Promise.all([
+    listResources(config, "Field Check-in", {
+      fields: FIELD_CHECK_IN_FIELDS,
+      filters: [["Field Check-in", "roof_job", "=", roofJobId]],
+      limit,
+      orderBy: "submitted_at desc",
+    }),
+    listResources(config, "Evidence Item", {
+      fields: EVIDENCE_ITEM_FIELDS,
+      filters: [["Evidence Item", "roof_job", "=", roofJobId]],
+      limit,
+      orderBy: "modified desc",
+    }),
+  ]);
+  const draft = buildCompletionPacketDraft({ roofJobId, packetId, checkIns, evidence, nowIso });
+  return { draft, checkIns, evidence };
+}
+
+async function buildReviewRequestDraftFromErp(config, roofJobId, {
+  requestId,
+  consentBasis,
+  channel,
+  reviewLink,
+  limit = 25,
+  nowIso,
+} = {}) {
+  const [completionPackets, paymentMilestones] = await Promise.all([
+    listResources(config, "Completion Packet", {
+      fields: COMPLETION_PACKET_FIELDS,
+      filters: [["Completion Packet", "roof_job", "=", roofJobId]],
+      limit,
+      orderBy: "modified desc",
+    }),
+    listResources(config, "Payment Milestone", {
+      fields: PAYMENT_MILESTONE_FIELDS,
+      filters: [["Payment Milestone", "roof_job", "=", roofJobId]],
+      limit,
+      orderBy: "event_ts desc",
+    }),
+  ]);
+  const completionPacket = completionPackets.find((row) => row.status === "Approved") ?? completionPackets[0] ?? null;
+  const draft = buildReviewRequestDraft({
+    roofJobId,
+    requestId,
+    completionPacket,
+    paymentMilestones,
+    consentBasis,
+    channel,
+    reviewLink,
+    nowIso,
+  });
+  return { draft, completionPacket, paymentMilestones };
+}
+
 function summarizeGate(gate) {
   return {
     name: gate.name,
@@ -1363,6 +2404,89 @@ function summarizeProposalPack(pack) {
     quotation: pack.quotation ?? "",
     status: pack.status,
     prepared_at: pack.prepared_at ?? "",
+  };
+}
+
+function summarizeCompletionPacket(packet) {
+  if (!packet) return null;
+  return {
+    name: packet.name,
+    completion_packet_id: packet.completion_packet_id,
+    roof_job: packet.roof_job,
+    status: packet.status,
+    warranty_ready: packet.warranty_ready ?? 0,
+    customer_signoff_ref: packet.customer_signoff_ref ?? "",
+    prepared_at: packet.prepared_at ?? "",
+  };
+}
+
+function summarizeWarrantyPacket(packet) {
+  if (!packet) return null;
+  return {
+    name: packet.name,
+    warranty_packet_id: packet.warranty_packet_id,
+    roof_job: packet.roof_job,
+    completion_packet: packet.completion_packet ?? "",
+    status: packet.status,
+    material_system: packet.material_system ?? "",
+    coverage_years: packet.coverage_years ?? 0,
+    prepared_at: packet.prepared_at ?? "",
+  };
+}
+
+function summarizeReviewRequest(request) {
+  if (!request) return null;
+  return {
+    name: request.name,
+    review_request_id: request.review_request_id,
+    roof_job: request.roof_job,
+    completion_packet: request.completion_packet ?? "",
+    status: request.status,
+    channel: request.channel ?? "",
+    consent_basis: request.consent_basis ?? "",
+    prepared_at: request.prepared_at ?? "",
+  };
+}
+
+function summarizeCommunicationEvent(event) {
+  if (!event) return null;
+  return {
+    name: event.name,
+    communication_event_id: event.communication_event_id,
+    roof_job: event.roof_job ?? "",
+    lead_envelope: event.lead_envelope ?? "",
+    channel: event.channel,
+    direction: event.direction ?? "",
+    policy_result: event.policy_result,
+    status: event.status,
+    event_ts: event.event_ts ?? "",
+  };
+}
+
+function summarizeSupplierQuote(quote) {
+  if (!quote) return null;
+  return {
+    name: quote.name,
+    supplier_quote_id: quote.supplier_quote_id,
+    roof_job: quote.roof_job,
+    material_takeoff: quote.material_takeoff ?? "",
+    supplier: quote.supplier ?? "",
+    status: quote.status,
+    valid_until: quote.valid_until ?? "",
+    quote_total: quote.quote_total ?? 0,
+  };
+}
+
+function summarizeMarketWatchItem(item) {
+  if (!item) return null;
+  return {
+    name: item.name,
+    watch_id: item.watch_id,
+    competitor: item.competitor,
+    title: item.title,
+    risk_level: item.risk_level,
+    status: item.status,
+    product_gate: item.product_gate ?? "",
   };
 }
 

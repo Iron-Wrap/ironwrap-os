@@ -204,6 +204,11 @@ export function isOn(flag: string | undefined): boolean {
   return flag === "true";
 }
 
+/** Voice-note detection by attachment extension (gate 9: field voice/photo proof). Pure. */
+export function isVoiceNoteUri(uri: string): boolean {
+  return /\.(m4a|mp3|wav|ogg|amr|aac)(\?|$)/i.test(uri.split("#")[0]);
+}
+
 /** Parse an inbound body by content-type (JSON or form-urlencoded), best-effort. Pure. */
 export function parseBody(text: string, contentType: string | null): Record<string, unknown> {
   const ct = (contentType ?? "").toLowerCase();

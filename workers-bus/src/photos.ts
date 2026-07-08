@@ -7,12 +7,21 @@
 import { newEnvelopeId, parseBody } from "./core.ts";
 import * as store from "./store.ts";
 import { googleConfigured, fileToJobFolder } from "./google.ts";
+import { pushPhotoEvidenceToErpNext } from "./erpnext.ts";
 
 const JOB_KEYS = ["job_number", "jobnumber", "job", "job_no", "jn_job", "jobnimbus_job", "job_id", "jobid"];
 const PHOTO_KEYS = ["photos", "photo", "images", "image", "files", "file", "attachments", "upload", "uploads"];
 const CAPTION_KEYS = ["caption", "notes", "note", "description", "message", "comments", "comment"];
 
 export interface PhotoSubmission { jobNumber: string | null; photos: string[]; caption: string | null }
+interface PhotoEvidenceRef {
+  index: number;
+  sourceUri: string;
+  fileName: string;
+  driveFileUrl?: string | null;
+  driveFileId?: string | null;
+  error?: string | null;
+}
 
 function pick(raw: Record<string, unknown>, keys: string[]): unknown {
   for (const k of Object.keys(raw)) if (keys.includes(k.toLowerCase())) return raw[k];
@@ -66,9 +75,10 @@ export async function handlePhotoIngest(env: Env, rawText: string, contentType: 
   const sub = parsePhotoSubmission(raw);
   const id = newEnvelopeId();
   const now = new Date().toISOString();
+  const rawKey = `raw/photos/${now.slice(0, 10)}/${id}.json`;
 
   // Raw FIRST — nothing is lost even if Graph is down or unconfigured.
-  await store.putRaw(env, `raw/photos/${now.slice(0, 10)}/${id}.json`, rawText, "application/json");
+  await store.putRaw(env, rawKey, rawText, "application/json");
 
   if (!sub.jobNumber || sub.photos.length === 0) {
     const reason = !sub.jobNumber ? "no_job_number" : "no_photos";
@@ -78,31 +88,93 @@ export async function handlePhotoIngest(env: Env, rawText: string, contentType: 
   }
 
   if (!googleConfigured(env)) {
+    const erp = await syncPhotoEvidenceToErpNext(env, id, sub, rawKey, now, buildPhotoRefs(sub));
     await store.recordAudit(env, { automation: "jobsite_photo", trigger: "jotform", envelope_id: id,
       job_number: sub.jobNumber, action: "received", result: "ok", error: "drive_not_configured" });
     return jsonResp({ ok: true, job_number: sub.jobNumber, photos: sub.photos.length, uploaded: 0,
+      erpnext_evidence_ids: erp.names,
+      erpnext_error: erp.error,
       note: "drive_not_configured — raw stored; files sync once Google creds are set" });
   }
 
   // Fetch each photo URL → bytes, then file the batch into the job's Drive folder (03 Photos).
-  const files: Array<{ name: string; bytes: ArrayBuffer; contentType: string }> = [];
+  const refs = buildPhotoRefs(sub);
+  const files: Array<{ name: string; bytes: ArrayBuffer; contentType: string; refIndex: number }> = [];
   for (let i = 0; i < sub.photos.length; i++) {
     try {
       const r = await fetch(sub.photos[i]);
-      if (!r.ok) { log({ at: "photo_fetch", url: sub.photos[i], status: r.status }); continue; }
+      if (!r.ok) {
+        refs[i].error = `photo_fetch_${r.status}`;
+        log({ at: "photo_fetch", url: sub.photos[i], status: r.status });
+        continue;
+      }
       const ct = r.headers.get("content-type") ?? "application/octet-stream";
-      files.push({ name: photoFileName(sub.jobNumber, i, sub.photos[i], ct), bytes: await r.arrayBuffer(), contentType: ct });
-    } catch (e) { log({ at: "photo_fetch", url: sub.photos[i], error: String(e) }); }
+      const name = photoFileName(sub.jobNumber, i, sub.photos[i], ct);
+      refs[i].fileName = name;
+      files.push({ name, bytes: await r.arrayBuffer(), contentType: ct, refIndex: i });
+    } catch (e) {
+      refs[i].error = String(e).slice(0, 120);
+      log({ at: "photo_fetch", url: sub.photos[i], error: String(e) });
+    }
   }
 
   const result = await fileToJobFolder(env, sub.jobNumber, "03 Photos", files);
+  for (let i = 0; i < files.length; i++) {
+    const ref = refs[files[i].refIndex];
+    const uploadedFile = result.files[i];
+    ref.driveFileUrl = uploadedFile?.webUrl ?? null;
+    ref.driveFileId = uploadedFile?.driveFileId ?? null;
+    if (uploadedFile?.error) ref.error = uploadedFile.error.slice(0, 120);
+  }
   const uploaded = result.files.filter((f) => f.webUrl).length;
+  const erp = await syncPhotoEvidenceToErpNext(env, id, sub, rawKey, now, refs);
   await store.recordAudit(env, { automation: "jobsite_photo", trigger: "jotform", envelope_id: id,
     job_number: sub.jobNumber, target_ids: result.folderUrl,
     action: "filed", result: uploaded ? "ok" : "error", error: uploaded ? null : "no_files_uploaded" });
-  return jsonResp({ ok: true, job_number: sub.jobNumber, uploaded, folder: result.folderUrl, files: result.files });
+  return jsonResp({ ok: true, job_number: sub.jobNumber, uploaded, folder: result.folderUrl, files: result.files,
+    erpnext_evidence_ids: erp.names, erpnext_error: erp.error });
 }
 
 function jsonResp(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+function buildPhotoRefs(sub: PhotoSubmission): PhotoEvidenceRef[] {
+  return sub.photos.map((sourceUri, index) => ({
+    index,
+    sourceUri,
+    fileName: photoFileName(sub.jobNumber ?? "unknown", index, sourceUri, ""),
+  }));
+}
+
+async function syncPhotoEvidenceToErpNext(
+  env: Env,
+  id: string,
+  sub: PhotoSubmission,
+  rawKey: string,
+  capturedAt: string,
+  photos: PhotoEvidenceRef[],
+): Promise<{ names: string[]; error: string | null }> {
+  try {
+    const erp = await pushPhotoEvidenceToErpNext(env, {
+      submissionId: id,
+      jobNumber: sub.jobNumber ?? "",
+      rawKey,
+      capturedAt,
+      caption: sub.caption,
+      photos,
+    });
+    if (erp) {
+      await store.recordAudit(env, { automation: "erpnext_photo", trigger: "jotform",
+        envelope_id: id, job_number: sub.jobNumber,
+        target_ids: erp.names.map((name) => `evidence_item:${name}`).join(","),
+        action: erp.reused ? "upsert_existing" : "create", result: "ok" });
+    }
+    return { names: erp?.names ?? [], error: null };
+  } catch (err) {
+    const error = `erpnext_photo: ${String(err)}`;
+    await store.recordAudit(env, { automation: "erpnext_photo", trigger: "jotform",
+      envelope_id: id, job_number: sub.jobNumber, action: "sync", result: "error", error });
+    return { names: [], error };
+  }
 }

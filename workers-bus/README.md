@@ -44,7 +44,7 @@ inbound (website/phone/gbp/ad/referral/manual)
 | Daily reconciliation w/ independent ground-truth + heartbeat | `index.ts:runReconcile` + `source_counts` table |
 | Idempotent record handoff, kill switch, logging | `external_id`=envelope_id; `JOBNIMBUS_ENABLED` flag; `audit_log` |
 | Intent → owner queue routing (spec 16) | `core.ts:classifyIntent` |
-| ERPNext bridge proof | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, and Roof Job DocTypes when enabled |
+| ERPNext bridge proof | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Measurement Report, and Evidence Item rows when enabled |
 
 ## Files
 
@@ -52,7 +52,7 @@ inbound (website/phone/gbp/ad/referral/manual)
 src/core.ts        pure logic (envelope, dedup, routing, reconcile) — node-testable, no I/O
 src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   JobNimbus push adapter (live-tested; enabled by config)
-src/erpnext.ts     Optional ERPNext/Frappe consumer for Lead Envelope, Roofing Property, and Roof Job
+src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, measurement, and evidence rows
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
 src/index.ts       the Worker: fetch + queue + scheduled
@@ -94,7 +94,7 @@ npx wrangler deploy
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | POST | `/ingest/:source` | `Bearer INGEST_TOKEN` | ingest a lead (`source` ∈ website,phone,gbp,ad,referral,manual) |
-| POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos and file them to Google Drive |
+| POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos, file them to Google Drive, and optionally sync ERPNext Evidence Items |
 | POST | `/ingest/measurement` | `Bearer INGEST_TOKEN` | ingest RoofRuler/AppliCad measurement metadata/report files |
 | GET | `/health` | — | liveness |
 | POST | `/admin/reconcile` | `Bearer ADMIN_TOKEN` | run reconciliation now |
@@ -127,13 +127,14 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
    status back to JobNimbus needs a later QB OAuth read path.
 5. **ERPNext bridge** — disabled by default. Before setting `ERPNEXT_ENABLED=true`, apply
    migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,
-   Roofing Property, Roof Job, Measurement Report, and Measurement Value DocTypes
-   exist. The Worker upserts Lead Envelope by `envelope_id`, optional Roofing
-   Property by `property_key`, Roof Job by `roof_job_id`, and measurement reports
-   by `measurement_id`. Measurement sync also creates a linked Evidence Item for
-   the raw/report artifact. Roof Job sync also creates missing initial production
-   gate rows without resetting existing gate state. ERPNext is still a consumer,
-   not the raw intake source.
+   Roofing Property, Roof Job, Measurement Report, Measurement Value, Production Gate
+   State, and Evidence Item DocTypes exist. The Worker upserts Lead Envelope by
+   `envelope_id`, optional Roofing Property by `property_key`, Roof Job by `roof_job_id`,
+   and measurement reports by `measurement_id`. Measurement sync creates a linked
+   Evidence Item for the raw/report artifact. Photo sync creates one photo Evidence
+   Item per submitted Jotform photo and links Drive file ids/URLs when available.
+   Roof Job sync also creates missing initial production gate rows without resetting
+   existing gate state. ERPNext is still a consumer, not the raw intake source.
 
 ## Maintenance owner (don't skip — spec gap #3)
 

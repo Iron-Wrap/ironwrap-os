@@ -10,9 +10,20 @@ import {
 import { pushToErpNext } from "./erpnext.ts";
 import * as store from "./store.ts";
 
-export async function handleEstimateIngest(env: Env, rawText: string, contentType: string | null): Promise<Response> {
+export async function handleEstimateIngest(
+  env: Env,
+  rawText: string,
+  contentType: string | null,
+  requestIdempotencyKey?: string | null,
+): Promise<Response> {
   const raw = parseBody(rawText, contentType);
   const payload = normalizeEstimatorPayload(raw);
+  const estimateSubmissionKey = estimateIdempotencyKey(payload, requestIdempotencyKey);
+  if (estimateSubmissionKey) {
+    const existing = await store.findEstimateSubmission(env, estimateSubmissionKey);
+    if (existing) return await idempotentEstimateResponse(env, existing);
+  }
+
   const id = newEnvelopeId();
   const now = new Date().toISOString();
   const rawKey = `raw/estimates/${now.slice(0, 10)}/${id}.json`;
@@ -38,12 +49,21 @@ export async function handleEstimateIngest(env: Env, rawText: string, contentTyp
     last_error: valid.ok ? null : valid.reason ?? null,
     jn_contact_id: null,
     jn_job_id: null,
+    estimate_submission_key: estimateSubmissionKey,
     intent_queue: classifyIntent(`${payload.service ?? ""} ${payload.service_intent ?? ""}`),
     created_at: now,
     updated_at: now,
   };
 
-  await store.insertEnvelope(env, rec);
+  try {
+    await store.insertEnvelope(env, rec);
+  } catch (err) {
+    if (estimateSubmissionKey && isUniqueConstraintError(err)) {
+      const existing = await store.findEstimateSubmission(env, estimateSubmissionKey);
+      if (existing) return await idempotentEstimateResponse(env, existing);
+    }
+    throw err;
+  }
   await store.recordAudit(env, {
     automation: "estimate",
     trigger: "estimator",
@@ -62,6 +82,7 @@ export async function handleEstimateIngest(env: Env, rawText: string, contentTyp
         leadEnvelopeId: erp.name,
         roofingPropertyId: erp.roofingPropertyName ?? null,
         roofJobId: erp.roofJobName ?? null,
+        instantEstimateSessionId: erp.instantEstimateSessionName ?? null,
       });
       await store.recordAudit(env, {
         automation: "erpnext_estimate",
@@ -110,6 +131,50 @@ function normalizeEstimatorPayload(raw: Record<string, unknown>): Record<string,
     ...(raw.job_ref ?? raw.job_number ?? raw.jobNumber ? {} : typeof projectId === "string" && projectId.trim() ? { job_ref: projectId.trim() } : {}),
     service: raw.service ?? raw.service_type ?? serviceText(raw),
   };
+}
+
+function estimateIdempotencyKey(payload: Record<string, unknown>, requestKey?: string | null): string | null {
+  const projectKey = cleanKey(payload.estimate_project_id ?? payload.project_id ?? payload.projectId ?? payload.configurator_project_id);
+  if (projectKey) return `estimate:project:${projectKey}`;
+  const explicitKey = cleanKey(requestKey);
+  if (explicitKey) return `estimate:request:${explicitKey}`;
+  const urlKey = cleanKey(payload.project_url ?? payload.configurator_url ?? payload.url);
+  return urlKey ? `estimate:url:${urlKey}` : null;
+}
+
+function cleanKey(raw: unknown): string | null {
+  if (typeof raw !== "string" && typeof raw !== "number") return null;
+  const value = String(raw).trim().toLowerCase().replace(/\s+/g, " ");
+  return value ? value.slice(0, 160) : null;
+}
+
+async function idempotentEstimateResponse(env: Env, rec: EnvelopeRecord): Promise<Response> {
+  await store.recordAudit(env, {
+    automation: "estimate",
+    trigger: "estimator",
+    envelope_id: rec.envelope_id,
+    action: "idempotent_replay",
+    result: "ok",
+  });
+  if (rec.last_error) {
+    return json({
+      envelope_id: rec.envelope_id,
+      idempotent_replay: true,
+      error: rec.last_error,
+    }, 400);
+  }
+  return json({
+    ok: true,
+    envelope_id: rec.envelope_id,
+    idempotent_replay: true,
+    erpnext_lead_envelope_id: rec.erpnext_lead_envelope_id ?? null,
+    erpnext_roof_job_id: rec.erpnext_roof_job_id ?? null,
+    erpnext_instant_estimate_id: rec.erpnext_instant_estimate_session_id ?? null,
+  });
+}
+
+function isUniqueConstraintError(err: unknown): boolean {
+  return /unique|constraint/i.test(String(err));
 }
 
 function serviceText(raw: Record<string, unknown>): string {

@@ -32,10 +32,11 @@ inbound (website/phone/gbp/ad/referral/manual)
 estimator/configurator
   │  POST /ingest/estimate  (Bearer INGEST_TOKEN)
   ▼
-[1] raw estimator payload → R2  ... FIRST
+[0] idempotency check ............ project id, Idempotency-Key, or project URL
+[1] raw estimator payload → R2  ... FIRST for the accepted submission
 [2] canonical envelope → D1 ...... status=received, no JobNimbus/GHL queue
 [3] ERPNext Lead Envelope + Roof Job + Instant Estimate Session when enabled
-[4] response returns ERPNext ids/errors to the estimator frontend
+[4] response returns ERPNext ids/errors to the estimator frontend; retries return the original ids
 ```
 
 ## How it maps to the spec's hard requirements
@@ -53,7 +54,7 @@ estimator/configurator
 | Idempotent record handoff, kill switch, logging | `external_id`=envelope_id; `JOBNIMBUS_ENABLED` flag; `audit_log` |
 | Intent → owner queue routing (spec 16) | `core.ts:classifyIntent` |
 | ERPNext bridge proof | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
-| Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: raw R2 + D1 envelope + ERPNext Instant Estimate Session without JobNimbus/GHL dependency |
+| Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: retry-safe project/idempotency key + raw R2 + D1 envelope + ERPNext Instant Estimate Session without JobNimbus/GHL dependency |
 
 ## Files
 
@@ -62,11 +63,11 @@ src/core.ts        pure logic (envelope, dedup, routing, reconcile) — node-tes
 src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   JobNimbus push adapter (live-tested; enabled by config)
 src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, estimate, measurement, evidence, field check-in, and payment milestone rows
-src/estimates.ts   Owned estimator/configurator intake; no JobNimbus/GHL queue
+src/estimates.ts   Owned estimator/configurator intake; idempotent by project/key; no JobNimbus/GHL queue
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
 src/index.ts       the Worker: fetch + queue + scheduled
-migrations/0001_init.sql   D1 schema; 0002/0003 add ERPNext proof fields
+migrations/0001_init.sql   D1 schema; 0002/0003 add ERPNext proof fields; 0004 adds estimator idempotency
 test/core.test.ts  zero-dep self-test (`node --test`)
 ```
 
@@ -104,7 +105,7 @@ npx wrangler deploy
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | POST | `/ingest/:source` | `Bearer INGEST_TOKEN` | ingest a lead (`source` ∈ website,phone,gbp,ad,referral,manual) |
-| POST | `/ingest/estimate` | `Bearer INGEST_TOKEN` | ingest public estimator/configurator payloads into owned R2/D1 and ERPNext without a JobNimbus/GHL queue dependency |
+| POST | `/ingest/estimate` | `Bearer INGEST_TOKEN` | ingest public estimator/configurator payloads into owned R2/D1 and ERPNext without a JobNimbus/GHL queue dependency; accepts stable project ids or `Idempotency-Key`/`X-Idempotency-Key` for retry-safe replay |
 | POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos, file them to Google Drive, and optionally sync ERPNext Evidence Items |
 | POST | `/ingest/measurement` | `Bearer INGEST_TOKEN` | ingest RoofRuler/AppliCad measurement metadata/report files |
 | GET | `/health` | — | liveness |
@@ -147,7 +148,8 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
    or `/ingest/estimate` receives a configurator payload,
    and measurement reports by `measurement_id`. Estimate sessions are captured as
    non-binding and review-required; `/ingest/estimate` stores configurator totals, project links,
-   selected services, and material choices when present. The Worker does not generate final pricing.
+   selected services, material choices, the stable estimator submission key, and the ERPNext
+   Instant Estimate Session id when present. The Worker does not generate final pricing.
    Measurement sync creates a linked
    Evidence Item for the raw/report artifact. Photo sync creates one photo Evidence
    Item per submitted Jotform photo, links Drive file ids/URLs when available, and

@@ -20,9 +20,10 @@ it wins when older provenance docs disagree.
   dual-writes every lead/event to it first, then to bridge systems only when
   still needed. JobNimbus/GHL are consumers of IronWrap's data, not owners.
 - The owned estimator/configurator path is first-class: public/internal
-  estimate payloads land at `POST /ingest/estimate`, save raw R2 + D1 truth,
-  and create review-gated ERPNext Instant Estimate Session rows. No generated
-  estimate is binding until a human approves scope, exclusions, and price.
+  estimate payloads land at `POST /ingest/estimate`, use stable project/idempotency
+  keys for retry-safe replay, save raw R2 + D1 truth, and create review-gated
+  ERPNext Instant Estimate Session rows. No generated estimate is binding until
+  a human approves scope, exclusions, and price.
 - Make as connector/visibility infrastructure and the Cloudflare Worker as the
   owned bus: canonical lead envelope, dedup, dead-letter, retry, and daily
   source-vs-landed reconciliation so no lead is ever silently lost.

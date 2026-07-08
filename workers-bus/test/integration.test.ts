@@ -10,6 +10,8 @@ function fakeEnv() {
   const r2: Array<{ key: string; body: string }> = [];
   const queue: Array<{ envelope_id: string }> = [];
   const db: Array<{ sql: string; args: unknown[] }> = [];
+  const envelopesById = new Map<string, Record<string, unknown>>();
+  const envelopesByEstimateKey = new Map<string, Record<string, unknown>>();
   const env = {
     INGEST_TOKEN: "test-token",
     ADMIN_TOKEN: "admin-token",
@@ -30,8 +32,60 @@ function fakeEnv() {
         return {
           bind(...args: unknown[]) {
             return {
-              run: async () => { db.push({ sql, args }); return { success: true }; },
-              first: async () => { db.push({ sql, args }); return null; }, // findDuplicate → no dup
+              run: async () => {
+                db.push({ sql, args });
+                if (sql.includes("INSERT INTO envelopes")) {
+                  const row: Record<string, unknown> = {
+                    envelope_id: args[0],
+                    source: args[1],
+                    contact_name: args[2],
+                    contact_phone: args[3],
+                    contact_email: args[4],
+                    job_ref: args[5],
+                    payload_json: args[6],
+                    raw_key: args[7],
+                    ts: args[8],
+                    status: args[9],
+                    dedup_key: args[10],
+                    dup_of: args[11],
+                    attempts: args[12],
+                    last_error: args[13],
+                    jn_contact_id: args[14],
+                    jn_job_id: args[15],
+                    estimate_submission_key: args[16],
+                    intent_queue: args[17],
+                    created_at: args[18],
+                    updated_at: args[19],
+                  };
+                  envelopesById.set(String(row.envelope_id), row);
+                  if (row.estimate_submission_key) {
+                    envelopesByEstimateKey.set(String(row.estimate_submission_key), row);
+                  }
+                }
+                if (sql.includes("UPDATE envelopes SET erpnext_lead_envelope_id")) {
+                  const id = String(args[6]);
+                  const row = envelopesById.get(id);
+                  if (row) {
+                    row.erpnext_lead_envelope_id = args[0];
+                    row.erpnext_roofing_property_id = args[1];
+                    row.erpnext_roof_job_id = args[2];
+                    row.erpnext_instant_estimate_session_id = args[3];
+                    row.erpnext_synced_at = args[4];
+                    row.updated_at = args[5];
+                  }
+                }
+                return { success: true };
+              },
+              first: async () => {
+                db.push({ sql, args });
+                if (sql.includes("WHERE estimate_submission_key = ?")) {
+                  return envelopesByEstimateKey.get(String(args[0])) ?? null;
+                }
+                if (sql.includes("SELECT * FROM envelopes WHERE envelope_id = ?")) {
+                  return envelopesById.get(String(args[0])) ?? null;
+                }
+                return null;
+              },
               all: async () => { db.push({ sql, args }); return { results: [] }; },
             };
           },
@@ -148,6 +202,88 @@ test("POST /ingest/estimate: configurator payload lands in owned store and ERPNe
     siding: "Metal Siding",
     roof_color: "Wrinkle RAL 7024",
   });
+});
+
+test("POST /ingest/estimate: repeated project id is idempotent and does not re-drive side effects", async (t) => {
+  const { env, r2, queue, db } = fakeEnv();
+  const erpCalls: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    erpCalls.push({ url, init: init ?? {} });
+    if ((init?.method ?? "GET") === "GET") return json({ data: [] });
+    if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-EST-IDEMPOTENT" } });
+    if (url.endsWith("/api/resource/Roofing%20Property")) return json({ data: { name: "RP-EST-IDEMPOTENT" } });
+    if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-EST-IDEMPOTENT" } });
+    if (url.endsWith("/api/resource/Production%20Gate%20State")) {
+      const body = JSON.parse(String(init?.body));
+      return json({ data: { name: body.gate_id } });
+    }
+    if (url.endsWith("/api/resource/Instant%20Estimate%20Session")) {
+      return json({ data: { name: "IES-EST-IDEMPOTENT" } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  Object.assign(env, {
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "erp-key",
+    ERPNEXT_API_SECRET: "erp-secret",
+  });
+
+  const bodyText = JSON.stringify({
+    project_id: "26-180-ER",
+    customer: "Jim Rakievich",
+    email: "jim@example.com",
+    total_estimate: "$216,269.58",
+  });
+  const makeReq = () => new Request("https://bus.example/ingest/estimate", {
+    method: "POST",
+    headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+    body: bodyText,
+  });
+
+  const first = await worker.fetch(makeReq(), env as never, fakeCtx() as never);
+  const firstBody = await first.json() as { envelope_id: string; erpnext_instant_estimate_id?: string };
+  const second = await worker.fetch(makeReq(), env as never, fakeCtx() as never);
+  const secondBody = await second.json() as {
+    envelope_id: string;
+    idempotent_replay?: boolean;
+    erpnext_instant_estimate_id?: string;
+  };
+
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(secondBody.envelope_id, firstBody.envelope_id);
+  assert.equal(secondBody.idempotent_replay, true);
+  assert.equal(secondBody.erpnext_instant_estimate_id, "IES-EST-IDEMPOTENT");
+  assert.equal(queue.length, 0);
+  assert.equal(r2.length, 1);
+  assert.equal(db.filter((c) => c.sql.includes("INSERT INTO envelopes")).length, 1);
+  assert.equal(erpCalls.filter((c) => c.url.endsWith("/api/resource/Lead%20Envelope")).length, 1);
+  assert.equal(erpCalls.filter((c) => c.url.endsWith("/api/resource/Instant%20Estimate%20Session")).length, 1);
+});
+
+test("POST /ingest/estimate: replay of invalid project id returns original validation error", async () => {
+  const { env, r2, db } = fakeEnv();
+  const bodyText = JSON.stringify({ project_id: "invalid-no-contact", total_estimate: "$1,000" });
+  const makeReq = () => new Request("https://bus.example/ingest/estimate", {
+    method: "POST",
+    headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+    body: bodyText,
+  });
+
+  const first = await worker.fetch(makeReq(), env as never, fakeCtx() as never);
+  const firstBody = await first.json() as { envelope_id: string; error: string };
+  const second = await worker.fetch(makeReq(), env as never, fakeCtx() as never);
+  const secondBody = await second.json() as { envelope_id: string; idempotent_replay?: boolean; error: string };
+
+  assert.equal(first.status, 400);
+  assert.equal(second.status, 400);
+  assert.equal(secondBody.envelope_id, firstBody.envelope_id);
+  assert.equal(secondBody.idempotent_replay, true);
+  assert.equal(secondBody.error, "no_contact_handle");
+  assert.equal(r2.length, 1);
+  assert.equal(db.filter((c) => c.sql.includes("INSERT INTO envelopes")).length, 1);
 });
 
 test("auth: missing/wrong bearer token → 401, nothing written", async () => {

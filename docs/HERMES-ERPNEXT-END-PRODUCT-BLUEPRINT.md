@@ -29,9 +29,10 @@ The wedge is narrower than JobNimbus, Roofr, AccuLynx, CompanyCam, and GoHighLev
 IronWrap OS should prove every job from estimate to warranty, not merely track it.
 
 Current implementation checkpoint: the Worker exposes `POST /ingest/estimate` for the 3D
-estimator/configurator. It stores raw estimator payloads in R2, creates a D1 envelope, and mirrors
-ERPNext Lead Envelope / Roof Job / Instant Estimate Session rows when enabled. This is the owned
-handoff that lets JobNimbus/GHL stay bridges instead of product dependencies.
+estimator/configurator. It uses stable project/idempotency keys for retry-safe replay, stores the
+accepted estimator payload in R2, creates a D1 envelope, and mirrors ERPNext Lead Envelope / Roof
+Job / Instant Estimate Session rows when enabled. This is the owned handoff that lets JobNimbus/GHL
+stay bridges instead of product dependencies.
 
 ## Research Basis
 
@@ -555,7 +556,7 @@ The artificial blockers below are collapsed in
 2. Prove bus-to-ERPNext sync with real envelopes and idempotency.
 3. Prove read-only Hermes over live bus/ERPNext state.
 4. Prove one approved Hermes write with a full audit trail.
-5. Prove public instant estimate capture with a non-binding range and review gate.
+5. Prove public instant estimate capture with idempotent retry, a non-binding range, and review gate.
 6. Prove measurement/3D/model ingest to approved takeoff values.
 7. Prove supplier quote/order readiness and substitutions.
 8. Prove measurement-to-proposal evidence pack.

@@ -1,24 +1,25 @@
 # IronWrap — End-to-End Delivery Plan
 
-How we get from **today (experimental GHL stack)** to the **spec's final state** (`final-spec-pack/`).
+How we get from the **current Worker/Make/JobNimbus stack** to the **spec's final state** (`final-spec-pack/`).
 This is the execution overlay: sequencing, dependencies, owners, and exit gates. Chapter
-references (e.g. `02 §Phase 3`) point at the spec for detail. Dates are relative weeks; the
-A2P registration is the long pole, so it starts on day zero.
+references (e.g. `02 §Phase 3`) point at the spec for detail. No calendar estimates are used;
+progress is tracked by proof gates, live account gates, and production evidence.
 
-## Current status vs spec — snapshot (2026-07-07)
+## Current status vs spec — snapshot (2026-07-08)
 
 Honest two-layer view: **Built** = code deployed + unit-verified · **Operating** = running on live
 traffic/data in production. The Worker bus is real and current: D1/R2/queues/cron, Gmail instant-ack,
-Google Drive filing, JobNimbus push, and QuickBooks webhook capture are implemented. The operating gap
-is live-source cutover: website/Make still must feed `/ingest/website`, and A2P/Engage, compliance,
-QuickBooks Payments/webhook, JobNimbus config, and AssistAI remain account/owner gates.
+Google Drive filing, JobNimbus push, photo intake, measurement intake, and signed QuickBooks webhook
+capture are implemented. The operating gap is live-source cutover: website/Make still must feed
+`/ingest/website`, and A2P/Engage, compliance, QuickBooks Payments/webhook configuration,
+JobNimbus admin config, Jotform live forms, and AssistAI remain account/owner gates.
 
 | Phase | Built | Operating (live) |
 |---|---|---|
 | 0 · Foundations | 🟢 bus deployed (D1/R2/queues/cron/secrets); maintainer; Google decisions locked | 🟡 bus live; JobNimbus key rotation + A2P/Engage + compliance still owner gates |
 | 1 · Lead spine + instant-ack | 🟢 spine, dedup, reconcile+heartbeat, dead-letter, brand-tagging, Gmail ack, GHL rescue (103) — verified | 🔴 real lead feed not cut over; website/Make must POST to `/ingest/website` |
 | 2 · Messaging + retire GHL | 🟡 Gmail email path built; CASL drafts | 🔴 needs A2P + JobNimbus Engage; GHL still has live/legacy routes to retire |
-| 3 · Field · docs · proposals | 🟢 photo/measurement/QuickBooks endpoints + Drive folder-on-job-mint — verified; JobNimbus native e-sign is the proposal path | 🟡 Google Drive creds exist; Jotform/RoofRuler/QB live hooks still need cutover; OCR ladder + QB↔JN sync + JN fields unbuilt |
+| 3 · Field · docs · proposals | 🟢 photo/measurement/QuickBooks endpoints + Drive folder-on-job-mint — verified; JobNimbus native e-sign is the proposal path | 🟡 Google Drive creds exist; Jotform/RoofRuler/QB live hooks still need cutover; QB OAuth status mirror is intentionally deferred; JN fields are account config |
 | 4 · Phone AI (AssistAI) | 🟡 eval framework doc | 🔴 not configured |
 | 5 · QA · security · compliance · launch | 🟡 compliance drafts + QA matrix (`docs/QA-TEST-MATRIX.md`) | 🔴 not started; keys not rotated; no sign-off |
 
@@ -44,8 +45,8 @@ QuickBooks Payments/webhook, JobNimbus config, and AssistAI remain account/owner
 
 ## Sequencing principles
 
-1. **A2P on day zero** — it gates Engage SMS (1–3 wks, not a config flip). Everything else routes around it.
-2. **Instant-ack ships value on day one** via the *interim* channel (email + owner alert); the prospect-SMS leg switches on at A2P approval.
+1. **A2P is an account gate** — it gates Engage SMS and cannot be solved in repo code. Everything else routes around it.
+2. **Instant-ack ships through the interim channel** via email + owner alert; the prospect-SMS leg switches on at A2P approval.
 3. **Owned-store-first is the keystone** — stand up D1/R2 + the bus before repointing any lead source.
 4. **Migrate, don't rebuild** — reuse what already works in Make (especially RoofRuler intake), move it onto the JobNimbus/Drive spine, then retire GHL.
 5. **Managed over self-host; name a maintainer** — this is owned code now; the build/maintenance owner is decision #0 (see Gates).
@@ -53,81 +54,72 @@ QuickBooks Payments/webhook, JobNimbus config, and AssistAI remain account/owner
 
 ## Phase overview
 
-| # | Phase | Exit gate | Depends on | ~Effort |
-|---|---|---|---|---|
-| 0 | Foundations & unblock | Bus deployed; A2P submitted; owners named | — | wk 0–1 |
-| 1 | Lead spine + instant-ack (interim) | Every lead → D1/R2 → JN; <60s email ack; reconcile green | 0 | wk 1–2 |
-| 2 | Messaging + retire GHL | Engage SMS live; GHL decommissioned; CASL ledger live | 1 + A2P approved | wk 3–4 |
-| 3 | Field · documents · proposals | Jotform photos, RoofRuler, proposals, QuickBooks on the spine | 1 | wk 3–5 (∥) |
-| 4 | Phone AI (gated) | AssistAI passes written eval (≥85%, 0 catastrophic) | 2 | wk 5–6 |
-| 5 | QA · security · launch | Full QA + compliance gate + owner sign-off | 1–4 | wk 6–7 |
+| # | Phase | Exit gate | Depends on |
+|---|---|---|---|
+| 0 | Foundations & unblock | Bus deployed; account gates identified; owners named | — |
+| 1 | Lead spine + instant-ack (interim) | Every lead -> D1/R2 -> JN; <60s email ack; reconcile green | 0 |
+| 2 | Messaging + retire GHL | Engage SMS live; GHL decommissioned; CASL ledger live | 1 + A2P approved |
+| 3 | Field · documents · proposals | Jotform photos, RoofRuler, proposals, QuickBooks on the spine | 1 |
+| 4 | Phone AI (gated) | AssistAI passes written eval (>=85%, 0 catastrophic) | 2 |
+| 5 | QA · security · launch | Full QA + compliance gate + owner sign-off | 1-4 |
 
 ## Phases in detail
 
-### Phase 0 — Foundations & unblock (wk 0–1)
+### Phase 0 — Foundations & unblock
 - **Decide (done):** build/maintenance owner; Google Workspace/Drive; two-brand handling.
-- **A2P 10DLC + Canadian carrier registration — submit today** (`02 §0.5`, `09`). Long pole.
+- **A2P 10DLC + Canadian carrier registration** (`02 §0.5`, `09`) is an external account gate.
 - **Provision & own the Twilio business DID** (portable; AssistAI/Engage later).
 - **Rotate the JobNimbus API key** (it was shared in chat) and issue a dedicated bus key.
 - **Deploy the owned data layer / bus** (`workers-bus/`): `wrangler d1/r2/queues create` → migrate → `wrangler secret put` → `deploy`. Decide **hybrid**: Workers bus for the heavy lifting + keep the Make Core seat for connectors/observability.
 - **Verify website form post destinations** (both brand domains) so they can be repointed.
 - *Exit:* bus deployed + healthy; A2P submitted (tracking); DID owned; owners named.
 
-### Phase 1 — Lead spine + instant-ack interim (wk 1–2)
+### Phase 1 — Lead spine + instant-ack interim
 - Repoint website/GBP/manual leads → bus → **D1/R2 first** → JobNimbus, with **dedup, dead-letter (Sheet+email), daily reconciliation + heartbeat, partial-write repair** (`01`,`04 §WF1/§WF8`,`06`).
 - **Instant-ack / MCTB interim** live: prospect **email** + owner alert <60s, off the owned-store write (`04 §WF7`).
 - **Brand tagging** on the envelope (`03`).
 - **Rescue GHL data:** fix the Make import `record_type_name` (`"Lead"`→`Customer`), run the one-time GHL→JobNimbus import, verify; stop routing *new* leads to GHL.
 - *Exit:* every test lead (both brands) lands in D1/R2 + JN, deduped, with a <60s email ack; reconciliation green; GHL no longer the front door.
 
-### Phase 2 — Messaging + retire GHL (wk 3–4, after A2P)
+### Phase 2 — Messaging + retire GHL
 - A2P approved → **Engage 2-way SMS** live → MCTB **prospect-SMS leg** switches on.
 - **Google Workspace brand-mailbox email** (SPF/DKIM/DMARC + bounce monitoring) for nurture/review; JN native email stays off. Microsoft 365 mirrors only during migration.
 - **CASL consent ledger** live in JobNimbus + dual-written (`09`); review-request flow with stop conditions.
 - **Retire GHL:** decommission/disable the experimental scenarios, confirm nothing depends on them.
 - *Exit:* SMS round-trips; review/nurture send via brand mailboxes; GHL off; consent enforced.
 
-### Phase 3 — Field · documents · proposals (wk 3–5, parallel with 2)
+### Phase 3 — Field · documents · proposals
 - **Jotform "Jobsite Photo"** form live (device GPS at submit, offline) → bus → **Google Drive** job folder + JN (`02 §2B`; supersedes OneDrive, see Gates #3).
-- **RoofRuler/AppliCad intake** hardened (deterministic → `toMarkdown()` → Mistral only for hard docs); migrate the existing Make RoofRuler scenario onto the spine (`07`); re-point off `quote@ironwrapexteriors.com` when that mailbox migrates to Google Workspace.
+- **RoofRuler/AppliCad intake** uses the Worker-owned `POST /ingest/measurement` path; Make can bridge existing RoofRuler events into that route until direct intake is proven. Deterministic extraction comes before `toMarkdown()` and Mistral-only hard cases (`07`).
 - **Google Drive folder automation** keyed by **JobNimbus job number** (migrate from GHL-lead-number keying); **migrate historical job files from OneDrive** during the same cutover (some contact/job/file mapping needs manual fixing — owner flagged this).
 - **Proposals:** JobNimbus native e-sign / HTML+PDF; DocuSeal remains a benched escape hatch only (`07`).
 - **QuickBooks** as catalog + invoice + PO master; **QuickBooks Payments** for invoice payments (`04 §WF4`); BookIPI/Stripe/MileIQ retire.
 - **Business-process scenarios** (Proposal Sent → Contract Signed → Deposit Paid → Job Started → Completion): build in this order once the lead spine is capturing live traffic — full detail in `final-spec-pack/04` Workflows 3/3C/5/5C/6.
 - *Exit:* a job runs measurements → proposal → deposit with photos/folders auto-filed; no manual retyping.
 
-### Phase 4 — Phone AI (gated, wk 5–6)
+### Phase 4 — Phone AI
 - Configure **AssistAI**; run the **written scored eval** (15–20 calls; ≥85% capture+routing, zero catastrophic) (`05`). Voicemail floor always on; hard minute cap/budget alert.
 - Managed **Retell** only if AssistAI fails the gate. (4-vendor DIY stack stays killed.)
 - *Exit:* eval passed + Ilya approves production call behavior; MCTB confirmed on every missed path.
 
-### Phase 5 — QA · security · launch (wk 6–7)
+### Phase 5 — QA · security · launch
 - **End-to-end QA** across every path + both brands (`10` test matrix): web/quote/contact/service leads, duplicate, file upload, missed call, dual-write repair, interim+SMS ack, reconciliation, RoofRuler, proposal, deposit.
 - **Security hardening** (`09 §Final`): rotate all creds, MFA, named users, least-privilege, secrets manager, vendor register, field allowlists.
 - **Compliance go-live gate** (`09`): privacy notice (names cross-border processors incl. Google, temporary Microsoft mirror, Cloudflare, Make, Mistral), CASL + unsubscribe tested, A2P approved, DNCL policy, call-recording notice, retention schedule, breach playbook, signed DPAs/ZDR.
 - **Owner sign-off** (`11`).
 - *Exit:* "What Counts As Shipped" (`README`) fully satisfied.
 
-## Critical path & timeline
+## Proof-Gate Execution Map
 
-```mermaid
-gantt
-  dateFormat X
-  axisFormat wk%s
-  section Long pole
-  A2P 10DLC + carrier registration       :crit, a2p, 0, 3
-  section Build
-  P0 Foundations + deploy bus            :p0, 0, 1
-  P1 Lead spine + interim instant-ack    :p1, after p0, 1
-  P3 Field/docs/proposals (parallel)     :p3, after p1, 2
-  section Gated on A2P
-  P2 Engage SMS + retire GHL             :p2, after a2p, 1
-  section Gated on eval
-  P4 Phone AI (AssistAI eval)            :p4, after p2, 1
-  section Launch
-  P5 QA + security + compliance + signoff:crit, p5, after p4, 1
-```
-Day-one value (interim email instant-ack + lead spine) lands in wk 1–2 regardless of the A2P pole.
+| Gate | Proof |
+|---|---|
+| Lead spine | One real lead source posts to `/ingest/website`; D1/R2, JobNimbus, Gmail ack, and reconcile all prove it. |
+| Measurement spine | RoofRuler/AppliCad feed posts to `/ingest/measurement`; raw body, measurement values, Drive filing, and audit row prove it. |
+| Field photo spine | Jotform posts to `/ingest/photo`; raw body, Drive folder, uploaded files, and audit row prove it. |
+| QuickBooks webhook | Signed webhook returns `{ ok: true }`; bad signature returns 401; audit row exists. |
+| Engage SMS | A2P approved; opt-in SMS sends/receives; STOP honored. |
+| AssistAI | Eval in `docs/ASSISTAI-EVAL.md` passes with >=85% capture+routing and zero catastrophic failures. |
+| Launch | `docs/QA-TEST-MATRIX.md` P0/P1 cases pass; compliance and owner signoff are complete. |
 
 ## Current → target migration map (experimental Make → disposition)
 
@@ -136,7 +128,7 @@ Day-one value (interim email instant-ack + lead spine) lands in wk 1–2 regardl
 | GHL → JobNimbus Import / Bulk Import | **Fix `record_type` → run once (rescue) → retire** |
 | GHL webform lead | **Replace** with bus website intake (D1/R2-first) |
 | GHL Lead#/Job# → OneDrive folder (create/rename/move) | **Retire/re-key to JobNimbus job number + Google Drive** on the spine |
-| RoofRuler Report Processing (AI Extract + OneDrive) | **Migrate carefully**: current direct Make-mailhook path works; add dedup before changing feeds, then file to Google Drive |
+| RoofRuler Report Processing (AI Extract + OneDrive) | **Bridge/migrate to Worker**: Worker owns `/ingest/measurement`; current Make-mailhook may forward there until direct intake is proven |
 | GHL Opportunity file uploads / "Before" / Signed-off→DONE | **Re-trigger from JobNimbus stages** |
 | Jotform Completion Form (inactive) | **Activate** on the spine (Phase 3) |
 | Facebook Lead Ads (inactive) | Re-enable later as a bus source (gated with paid ads) |
@@ -162,14 +154,14 @@ Day-one value (interim email instant-ack + lead spine) lands in wk 1–2 regardl
 
 | Risk | Mitigation |
 |---|---|
-| A2P approval slips | Interim email/owner-alert ack ships day one; SMS leg switches on later |
+| A2P approval slips | Interim email/owner-alert ack runs while SMS waits for approval |
 | No-devops shop owns custom code | Name a maintainer (Gate #1); hybrid keeps Make Core as the visual fallback |
 | GHL-rescue duplicates in JobNimbus | Idempotency via `external_id`/`bus:` tag; verify a sample before bulk run |
 | Dual-write partial failure | Already designed out: single owned-store write + retried JN push + sweep (`06`) |
 | Two-brand sender/deliverability | Per-brand SPF/DKIM/DMARC; brand on the envelope drives sender/GBP/review |
 | Compliance miss at launch | Hard go-live gate (`09`); nothing texts/calls before A2P + consent + notices |
 
-## Immediate next actions (this week)
+## Current Next Actions
 
 1. ✅ Maintainer named (Ilia via Claude Code). ✅ JobNimbus write path validated + gate on. ✅ Google Workspace/Drive path built.
 2. **Wire one real lead source to `/ingest/website`** — website server-side forward or one Make UI HTTP module.

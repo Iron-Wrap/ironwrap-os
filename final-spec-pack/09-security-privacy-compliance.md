@@ -27,7 +27,7 @@ Official sources checked on 2026-06-27:
 | Service providers | IronWrap remains accountable for vendors | Vendor register and terms review |
 | Cross-border processing | Outside-Canada processors (Claude/OCR for measurement docs, Google Workspace/Drive, the temporary Microsoft 365 mirror, Cloudflare, Jotform, Make) handle data — Cloudflare (D1/R2) and Make hold canonical PII, the brand mailboxes handle lead PII; requires disclosure + written agreements | Privacy notice names outside-Canada processors; signed DPAs/ZDR on file (incl. Cloudflare, Make, Google Workspace, and Microsoft while the mirror remains active) |
 | Breach response | Record and report qualifying breaches | Breach playbook approved |
-| A2P 10DLC | SMS via Engage requires registered campaign/brand + Canadian carrier registration before any messaging. US framework; CA carriers (Rogers/Bell/Telus) filter unregistered A2P but don't run 10DLC per se; numbers bought before 2025-03-26 can send CA→CA unregistered; brand registration needs the CRA Business Number; ~$4 one-time low-volume registration | Fresh registration submitted early, approved before any automated texting (1-3 wks lead time) |
+| A2P 10DLC | SMS via Engage requires registered campaign/brand + Canadian carrier registration before any messaging. US framework; CA carriers (Rogers/Bell/Telus) filter unregistered A2P but don't run 10DLC per se; numbers bought before 2025-03-26 can send CA→CA unregistered; brand registration needs the CRA Business Number; ~$4 one-time low-volume registration | Fresh registration approved before any automated texting |
 | CASL | Commercial electronic messages require consent, identification, unsubscribe | Per-contact consent ledger live in JobNimbus; unsubscribe handling tested |
 | DNCL | Telemarketing-style outbound calls must respect DNCL/internal DNC | Outbound call policy approved |
 | Call recording | Call recording/transcription needs notice and purpose | Start-of-call notice approved |
@@ -75,10 +75,9 @@ No production AI call launch until wording is approved.
 
 ## CASL Requirements For SMS/Email
 
-A2P 10DLC + Canadian carrier registration is a prerequisite, not a config flip
-(1-3 week lead time). This is a fresh registration for JobNimbus Engage SMS, not
-a re-registration from any prior tool. Submit it early in Phase 0; do not start
-any automated texting until the campaign is approved.
+A2P 10DLC + Canadian carrier registration is a prerequisite, not a config flip.
+This is a fresh registration for JobNimbus Engage SMS, not a re-registration from
+any prior tool. Do not start any automated texting until the campaign is approved.
 
 A2P 10DLC is a US framework; Canadian carriers (Rogers/Bell/Telus) filter
 unregistered A2P traffic but don't run 10DLC per se. Numbers provisioned before

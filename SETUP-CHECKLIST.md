@@ -37,8 +37,10 @@ See `docs/EMAIL-DUAL-DELIVERY.md` for mailbox routing, GUID addresses, service l
 - [x] Shared Drives exist: IW Jobs, IW Restricted, IW Archive.
 - [x] Worker has Shared Drive ids in `workers-bus/wrangler.jsonc`.
 - [x] Photos and measurement files use Google Drive through `GOOGLE_SERVICE_ACCOUNT_JSON`.
+- [x] Measurement ownership decision: the Worker owns the canonical `POST /ingest/measurement`
+  path; the existing RoofRuler Make route should forward there or be migrated to it, not stay a
+  separate source of truth.
 - [ ] Point Jotform Jobsite Photo form at `POST /ingest/photo`.
-- [ ] Decide whether the existing RoofRuler Make scenario stays owner for reports or moves to `POST /ingest/measurement`.
 - [ ] Migrate historical OneDrive files using `docs/DRIVE-STRUCTURE-AND-MIGRATION.md`.
 
 ## 4. Cloudflare Worker Bus
@@ -93,9 +95,10 @@ Moneris is not the current invoice-payment path.
 
 ## 9. Jotform / Field Forms
 
-- [ ] Build/confirm Jobsite Photo form payload includes JobNimbus job number and photo URLs.
+- [x] Worker payload contract exists for Jobsite Photo: JobNimbus job number + photo URLs.
+- [ ] Build/confirm the live Jotform Jobsite Photo form sends that payload.
 - [ ] Connect webhook to `POST /ingest/photo` with `Authorization: Bearer <INGEST_TOKEN>`.
-- [ ] Build Safety Form and Completion forms when the job-stage gates are configured.
+- [ ] Build Safety Form and Completion forms in Jotform when the JobNimbus stage fields are configured.
 - [ ] Confirm offline/mobile behavior on a real device before field rollout.
 
 ## 10. Compliance / Legal

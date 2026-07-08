@@ -51,8 +51,10 @@ Verify: `POST /admin/reconcile` with `ADMIN_TOKEN` and confirm the digest reache
 ## 3. Google Drive Job Files
 
 - [x] Worker can file photos and measurement reports to Google Drive Shared Drives.
+- [x] Measurement path decision made: the Worker owns canonical `POST /ingest/measurement`;
+  Make/RoofRuler may bridge into it, but should not remain a separate source of truth.
 - [ ] Point Jotform Jobsite Photo form at `POST /ingest/photo`.
-- [ ] Point the measurement/report feed at `POST /ingest/measurement` only after deciding whether Make or the Worker owns that flow.
+- [ ] Point the measurement/report feed or Make bridge at `POST /ingest/measurement`.
 - [ ] Migrate historical OneDrive files to Google Drive using `docs/DRIVE-STRUCTURE-AND-MIGRATION.md`.
 
 Verify: photo/report test returns `uploaded > 0` and lands under the JobNimbus job-number folder.
@@ -70,7 +72,8 @@ Verify: after approval, Engage can send/receive an opt-in transactional SMS and 
 - [ ] Set `QB_WEBHOOK_TOKEN`.
 - [ ] Point QuickBooks Online webhook to `POST /webhook/quickbooks`.
 - [ ] Enable QuickBooks Payments if that is the chosen invoice payment path.
-- [ ] Follow-up build only when needed: QB OAuth read path to mirror invoice/payment status back to JobNimbus.
+- [~] QB OAuth read path is deliberately deferred; the current Worker accepts signed webhook
+  events and records audit rows, but does not mirror invoice/payment status back to JobNimbus yet.
 
 Verify: signed webhook returns `{ ok: true }`; wrong `intuit-signature` returns 401.
 

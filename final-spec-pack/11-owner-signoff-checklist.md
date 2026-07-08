@@ -73,7 +73,7 @@ Use this as the final acceptance checklist with IronWrap.
 - [ ] Privacy notice reviewed.
 - [ ] Website/form consent language approved.
 - [ ] CASL unsubscribe handling tested.
-- [ ] A2P 10DLC + Canadian carrier registration for JobNimbus Engage SMS APPROVED — fresh registration (~1-3 wk lead time), prerequisite before any automated texting, not a config flip and not a re-registration from GHL.
+- [ ] A2P 10DLC + Canadian carrier registration for JobNimbus Engage SMS APPROVED — fresh registration, prerequisite before any automated texting, not a config flip and not a re-registration from GHL.
 - [ ] DNCL/internal DNC handling approved for outbound calls.
 - [ ] Vendor register complete.
 - [ ] Cross-border processing notice decision complete.

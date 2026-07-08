@@ -86,9 +86,9 @@ Actions:
 - Provision and OWN the business phone number for AssistAI/Engage in Twilio so it
   is portable and a later provider swap is config-only, never a number change on
   site/GBP/trucks. (This is a fresh provisioning, not a port out of GHL.)
-- Start A2P 10DLC + Canadian carrier registration now for JobNimbus Engage SMS
-  (a FRESH registration, prerequisite before any automated texting, ~1-3 weeks,
-  runs in the background). Messaging cannot go live until this is approved.
+- Start A2P 10DLC + Canadian carrier registration for JobNimbus Engage SMS
+  (a FRESH registration and prerequisite before any automated texting).
+  Messaging cannot go live until this is approved.
 - Use the existing **Google Workspace brand mailboxes** for outbound email (IronWrap
   `sales@` with `info@`/`quote@` aliases; iRoof `info@iroofalberta.ca`)
   with SPF/DKIM/DMARC + a deliverability seed test. JN native email unused
@@ -201,7 +201,7 @@ Jotform structured forms (deferred — introduce only when a specific structured
 Done when:
 
 - The Jotform "Jobsite Photo" form is live and photos + device-GPS geo route to the right
-  JobNimbus job and Google Drive job folder from day one, with offline capture verified.
+  JobNimbus job and Google Drive job folder from cutover, with offline capture verified.
 - The Jotform structured-form trigger criteria are documented (which workflow, what pain signal).
 - When a structured Jotform form is introduced, one test form completes offline from
   mobile/tablet, archives to the job folder, lands in JobNimbus without duplicate jobs,
@@ -379,12 +379,10 @@ MCTB / instant-response (headline deliverable):
 - Every unanswered call -> SMS within ~10s on a pipe separate from nurture.
 - Target <60s human-or-AI touch, 24/7.
 - Interim pre-A2P ack path: JobNimbus Engage SMS cannot send until the fresh A2P 10DLC
-  + Canadian carrier registration is approved (~1-3 wks). Until then the instant-ack /
-  MCTB runs on an interim channel — an email acknowledgement to the prospect (via the
-  ESP) + an owner phone/SMS alert from the owner's own line — so the <60s touch SLA
-  holds from day one. The prospect-SMS leg of MCTB switches on at A2P approval. Be
-  honest in the pitch: the email/owner-alert form of instant-ack ships day one; the
-  prospect-SMS form ships at A2P approval.
+  + Canadian carrier registration is approved. Until then the instant-ack /
+  MCTB runs on an interim channel — an email acknowledgement to the prospect (via
+  Google Workspace) + an owner phone/SMS alert from the owner's own line. The
+  prospect-SMS leg of MCTB switches on at A2P approval.
 
 Scope of AssistAI = capture + book + route-flag (not a custom intelligent router).
 Do not replace human live-answer during business hours until the eval gate passes.

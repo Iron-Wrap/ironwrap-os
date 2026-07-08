@@ -12,6 +12,8 @@ Exploring the next-generation ERPNext/Hermes product direction? See
 **[docs/HERMES-ERPNEXT-END-PRODUCT-BLUEPRINT.md](./docs/HERMES-ERPNEXT-END-PRODUCT-BLUEPRINT.md)**
 and the blocker triage in
 **[docs/HERMES-ERPNEXT-BLOCKER-AUDIT.md](./docs/HERMES-ERPNEXT-BLOCKER-AUDIT.md)**.
+The resolved proof packet is
+**[docs/HERMES-ERPNEXT-PROOF-PACK.md](./docs/HERMES-ERPNEXT-PROOF-PACK.md)**.
 
 ## Layout
 
@@ -23,7 +25,7 @@ and the blocker triage in
 | `docs/` | Summaries & plans (incl. Russian deliverables). |
 | `output/` | Generated deliverables (Russian `.docx`, overview PDF, website audit). |
 | `task1-spec/` | Original source material (v9.1 docs, pricing, early PDFs). |
-| `tools/` | Build scripts. |
+| `tools/` | Build/proof scripts, including the AppliCad XML measurement proof. |
 
 ## Status
 

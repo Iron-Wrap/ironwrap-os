@@ -13,6 +13,8 @@ Frappe token auth and exposes read tools plus token-gated approved-write tools:
 - `list_measurement_reports_for_job`
 - `get_evidence_item`
 - `list_evidence_for_job`
+- `get_field_check_in`
+- `list_field_check_ins_for_job`
 - `get_proposal_evidence_pack`
 - `list_proposal_evidence_packs_for_job`
 - `get_hermes_run`

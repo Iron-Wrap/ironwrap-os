@@ -83,6 +83,12 @@ const specs = [
     requiredFields: ["evidence_id", "roof_job", "lead_envelope", "evidence_type", "source_system", "source_uri", "r2_key", "drive_file_id", "customer_safe"],
   },
   {
+    name: "Field Check-in",
+    dir: "field_check_in",
+    idField: "checkin_id",
+    requiredFields: ["checkin_id", "roof_job", "job_number", "source_system", "submitted_at", "status", "photo_count", "evidence_ids_json", "notes", "drive_folder_url", "raw_key"],
+  },
+  {
     name: "Proposal Evidence Pack",
     dir: "proposal_evidence_pack",
     idField: "pack_id",

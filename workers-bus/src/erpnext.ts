@@ -23,6 +23,7 @@ export interface ErpNextResult {
 export interface ErpNextPhotoEvidenceResult {
   names: string[];
   reused: boolean;
+  fieldCheckInName?: string;
 }
 
 export interface ErpNextMeasurementInput {
@@ -41,6 +42,7 @@ export interface ErpNextPhotoEvidenceInput {
   rawKey: string;
   capturedAt: string;
   caption: string | null;
+  driveFolderUrl?: string | null;
   photos: Array<{
     index: number;
     sourceUri: string;
@@ -229,7 +231,20 @@ export async function pushPhotoEvidenceToErpNext(
     names.push(evidence.name);
     reused = reused || evidence.reused;
   }
-  return { names, reused };
+  const checkIn = await upsertByField(cfg, base, "Field Check-in", "checkin_id", fieldCheckInId(input.submissionId), {
+    checkin_id: fieldCheckInId(input.submissionId),
+    roof_job: roofJob ?? undefined,
+    job_number: input.jobNumber,
+    source_system: "Jotform",
+    submitted_at: input.capturedAt,
+    status: input.photos.some((photo) => photo.error) ? "Needs Review" : "Received",
+    photo_count: input.photos.length,
+    evidence_ids_json: JSON.stringify(names),
+    notes: input.caption ?? undefined,
+    drive_folder_url: input.driveFolderUrl ?? undefined,
+    raw_key: input.rawKey,
+  });
+  return { names, reused: reused || checkIn.reused, fieldCheckInName: checkIn.name };
 }
 
 async function createIfMissingByField(
@@ -337,6 +352,10 @@ function measurementUnit(metric: string): string | undefined {
 
 function photoEvidenceId(submissionId: string, index: number): string {
   return `evidence:photo:${submissionId}:${String(index + 1).padStart(2, "0")}`;
+}
+
+function fieldCheckInId(submissionId: string): string {
+  return `field:${submissionId}`;
 }
 
 function photoSummary(index: number, fileName: string, caption: string | null, error?: string | null): string {

@@ -52,6 +52,7 @@ Worker: `https://ironwrap-bus.yellow-rain-7498.workers.dev`
 - [x] Queues `ironwrap-jn-push` and `ironwrap-jn-dlq` configured.
 - [x] Cron retry/reconcile configured.
 - [x] Secrets set for current code path: `INGEST_TOKEN`, `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`.
+- [ ] Switch/refresh Wrangler auth for the configured IronWrap account `7ee5775bc1ba46f05c5a65235b60e939`; current local login reads Mindburn Labs and cannot inventory this account.
 - [ ] Set `QB_WEBHOOK_TOKEN` when QuickBooks webhook is connected.
 - [ ] Confirm old Cloudflare API tokens are revoked.
 
@@ -73,6 +74,7 @@ wrangler d1 execute ironwrap-bus --remote --command "SELECT envelope_id, source,
 - [x] Existing GHL -> JobNimbus imports were fixed to use `Customer` / `New` and omit invalid `source_name`.
 - [x] Bulk rescue completed: JobNimbus went from 6 to 103 contacts; duplicates skipped.
 - [~] RoofRuler currently sends directly to the Make mailhook; do not add a second Google routing feed unless the scenario gets dedup.
+- [ ] Export/record the current scenario map from the Make UI and tag each scenario keep/bridge/retire.
 - [ ] Re-save any stale/unlinked live scenario in the Make UI if the UI still shows a warning.
 - [ ] Retire unused one-time rescue scenarios after owner confirms no re-run is needed.
 

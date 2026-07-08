@@ -6,6 +6,8 @@ Current repo truth remains the Worker/Make owned bus, JobNimbus, Google Workspac
 and QuickBooks path described in `README.md`, `AGENTS.md`, `DELIVERY-PLAN.md`, and the
 `final-spec-pack/`. This document defines the candidate end product: IronWrap first, then
 a white-label operating system for similar roofing and exterior companies.
+The exhaustive first-phase bridge from current stack to ERPNext/Hermes is
+`final-spec-pack/18-phase-1-source-truth-and-build-contract.md`.
 
 Calendar estimates are intentionally omitted. Progress is framed as build slices, proof
 artifacts, maturity gates, and blockers.

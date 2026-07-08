@@ -40,9 +40,8 @@ The main correction from this audit is that Google Business Profile, Local
 Services Ads readiness, UTM/source attribution, and call-source tracking should
 be explicit in Task 1. They do not require a new expensive tool first.
 Attribution is deferred to UTM + manual Lead Source + one tracked number;
-CallRail is added only when paid ads start. (GHL was trial-evaluated and
-declined: it is not the lead/booking/phone/SMS/review/nurture layer and nothing
-runs on it.)
+CallRail is added only when paid ads start. (GHL is declined as keeper: it is
+not the future lead/booking/phone/SMS/review/nurture layer.)
 
 ## Best-Practice Cross-Reference
 

@@ -14,12 +14,14 @@ and the blocker triage in
 **[docs/HERMES-ERPNEXT-BLOCKER-AUDIT.md](./docs/HERMES-ERPNEXT-BLOCKER-AUDIT.md)**.
 The resolved proof packet is
 **[docs/HERMES-ERPNEXT-PROOF-PACK.md](./docs/HERMES-ERPNEXT-PROOF-PACK.md)**.
+The exhaustive first phase is
+**[final-spec-pack/18-phase-1-source-truth-and-build-contract.md](./final-spec-pack/18-phase-1-source-truth-and-build-contract.md)**.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| [`final-spec-pack/`](./final-spec-pack/) | **The spec** (18 chapters; start at its `README.md`). The target system. |
+| [`final-spec-pack/`](./final-spec-pack/) | **The spec** (19 chapters; start at its `README.md`). The target system. |
 | [`workers-bus/`](./workers-bus/) | **The integration bus** — Cloudflare Worker (owned D1/R2 store + lead bus). `npm test` / `wrangler deploy`. |
 | `samples/` | Real RoofRuler measurement reports + AppliCad XML (extraction inputs). `_duplicates/` = deletable. |
 | `docs/` | Summaries & plans (incl. Russian deliverables). |

@@ -3,9 +3,10 @@
 Date: 2026-06-28
 
 Prices change often. Re-check before purchase. Vendors bill in USD; figures below
-are USD unless marked CAD. For CAD, load ~1.40 FX + GST (~5%). GHL was
-trial-evaluated only and is being declined before any production use; nothing to
-migrate — end the trial. JobNimbus is the operational CRM / job-truth, fronted by
+are USD unless marked CAD. For CAD, load ~1.40 FX + GST (~5%). GHL is declined
+as the keeper. It existed as experimental GHL/Make scaffolding and import-rescue
+plumbing, not as the future system of record. The contact rescue has run;
+remaining GHL routes should be retired after replacement proof. JobNimbus is the operational CRM / job-truth, fronted by
 an integration bus (Make, or a Cloudflare Workers + D1 + R2 + Queues + Cron bus —
 see the bus note below) and an owned Cloudflare D1+R2 data layer that every
 scenario dual-writes to first.
@@ -67,10 +68,8 @@ the GHL note below). The two numbers answer different questions.
 
 **One-time setup costs:**
 
-GHL was trial-evaluated only and is being declined before any production use —
-there is no GHL production data, number, conversation history, or CASL consent
-records to migrate. The one-time spend below is standing up the JobNimbus spine,
-not migrating off GHL.
+GHL is declined as the keeper. The one-time spend below is standing up the
+JobNimbus spine, not expanding the experimental GHL hub.
 
 | One-time item | Expected-case CAD |
 |---|---:|
@@ -82,7 +81,7 @@ not migrating off GHL.
 | Staff training (JN-first intake, instant-ack, reconciliation owner) | ~CAD $150-$400 (labour) |
 | **One-time setup subtotal** | **~CAD $700-$2,100** |
 
-**Cost position vs GHL:** GHL was never adopted, so this **avoids ~CAD
+**Cost position vs GHL:** GHL is not the keeper, so this **avoids ~CAD
 $135-$415/mo of GHL cost** entirely. The honest **first-deliverable incremental is
 ~CAD $120-$220/mo** (loaded, incl. ~1.40 FX + GST). The driver is **JobNimbus Engage
 (~CAD $90-$140 loaded with SMS usage)**; the rest is small — Twilio DID + usage
@@ -93,9 +92,9 @@ Affinity). **AssistAI minutes are a Phase-2 (post-eval) cost (~CAD $35-$70 loade
 live), not part of the first-deliverable incremental.** This is distinct from the
 **~CAD $940-$1,310/mo all-in run-rate** above (existing subscriptions repriced from
 zero). Frame this as **"simpler, more portable, and avoids GHL's cost"** — not as a
-saving from cancelling a live system, because there is no live GHL system. The durable
+clean migration from a mature GHL production system. The durable
 win is portability (owned D1/R2 data) + simplicity + reliability, on a CASL consent
-ledger maintained in JobNimbus going forward (no historical GHL export needed).
+ledger maintained in JobNimbus going forward.
 
 ## Phone AI Alternatives
 

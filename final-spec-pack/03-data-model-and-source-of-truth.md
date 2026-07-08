@@ -101,8 +101,8 @@ going forward; any remaining GHL route is legacy and retires after replacement p
 Rules:
 
 - Consent provenance must be recorded at point of capture and maintained in
-  JobNimbus going forward (no GHL export needed — GHL was trial-only, never
-  production).
+  JobNimbus going forward. Do not assume useful consent truth from the
+  experimental GHL hub.
 - A withdrawn/expired consent blocks outbound SMS/email regardless of CRM state.
 
 ## Core Objects

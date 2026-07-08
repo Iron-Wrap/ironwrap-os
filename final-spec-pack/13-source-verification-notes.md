@@ -119,9 +119,9 @@ Present the existing-subscription first deliverable first:
 - One-time setup ~CAD $700-2,100 (A2P registration, DID provisioning, Make/Workers
   bus build labor, ESP domain auth, form re-pointing, training). "$0 new vendor
   setup" is false — Cloudflare, the ESP, the owned Twilio number, and (if adopted)
-  DocuSeal are new vendor lines. GHL was never adopted, so this still avoids
+  DocuSeal are new vendor lines. GHL is declined as the keeper, so this still avoids
   ~CAD $135-415/mo of GHL cost; frame as "simpler, more portable, avoids GHL's
-  cost," not a dramatic saving.
+  cost," not a dramatic saving from a mature GHL production system.
 - CAD $1,100-$2,500/month remains the all-in planning run-rate if the existing
   subscriptions are re-priced from zero — the all-in figure, NOT the incremental.
 

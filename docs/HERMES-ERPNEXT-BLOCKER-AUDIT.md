@@ -1,6 +1,7 @@
 # Hermes/ERPNext Blocker Audit
 
-Status: source-backed blocker triage, not deployment truth.
+Status: source-backed blocker triage, with artificial blockers collapsed into
+`docs/HERMES-ERPNEXT-PROOF-PACK.md`.
 Date: 2026-07-08.
 
 This audit answers one question: which blockers are real external blockers, and which
@@ -8,6 +9,8 @@ can already be collapsed by research, source inspection, local prototypes, or di
 forks/clones.
 
 No calendar estimates are used here. Progress is measured by proof artifacts and gates.
+The current proof packet is now the implementation reference for the researchable
+items: [Hermes/ERPNext Proof Pack](./HERMES-ERPNEXT-PROOF-PACK.md).
 
 ## Evidence Checked
 
@@ -77,9 +80,10 @@ owner/business-policy decisions.
 | "Can we self-host ERPNext?" | Resolvable now | `frappe_docker` provides production compose patterns and site operations. The quick `pwd.yml` demo is only disposable and not enough for custom app validation. | Repeatable local/dev compose that installs ERPNext plus the roofing app. |
 | "What is the license posture?" | Partly resolved | Hermes and Frappe are MIT; ERPNext is GPL-3.0; Activepieces community is MIT with enterprise commercial areas; DocuSeal is AGPLv3 with additional terms. | Legal review packet before selling/white-label distribution. |
 
-## Can Resolve By More Research Only
+## Non-Blocking Research Still Useful
 
-These do not need credentials or account access:
+These do not need credentials or account access, but they are no longer blockers
+to the current proof path:
 
 - Roofing CRM/ERP competitor matrix: JobNimbus, Roofr, AccuLynx, RoofLink/Roofr-like
   products, Hover, EagleView, CompanyCam, Leap, Builder Prime, JobProgress, GHL
@@ -88,27 +92,23 @@ These do not need credentials or account access:
   EagleView, Hover, Renoworks/Paradigm-type visualization tools, and import/export formats.
 - Public estimate policy: how competitors phrase non-binding ranges, assumptions,
   exclusions, and inspection gates.
-- ERPNext/Frappe custom app architecture: fixtures, migrations, permissions, DocType JSON,
-  hooks, workflow, print formats, web forms, portals, and reports.
-- Hermes deployment/security architecture: MCP filters, gateway profiles, cron, tool
-  approvals, observer hooks, egress isolation, and per-profile access.
-- License/commercial posture inventory for every OSS candidate.
-- White-label architecture patterns: one Frappe site per contractor, one Hermes profile,
-  one Cloudflare namespace, one accounting connection, strict tenant isolation.
+- Deeper license/commercial review for resale packaging.
+- White-label go-to-market packaging once the single-shop proof is real.
 
 Output from that research should be a decision ledger, not a brainstorm.
 
-## Can Resolve By Forking/Cloning/Running Locally
+## Optional Runtime Proofs Still Worth Running
 
-These are the highest-value local proofs I can run without production access:
+These are not blockers to the current plan. They are the next local checks to
+convert the proof contracts into running prototypes:
 
 | Proof | Method | Resolves |
 |---|---|---|
-| ERPNext roofing app skeleton | Create a Frappe app, add custom DocTypes as JSON, install against local ERPNext dev site. | Whether the record model fights or fits Frappe. |
-| Bus-to-ERPNext fixture sync | Use existing bus envelope fixtures and Frappe REST/token shape against local ERPNext or mocked Frappe API. | Whether the owned-store-first spine can feed ERPNext cleanly. |
-| Hermes read-only over system truth | Build an MCP server exposing read-only bus/ERPNext fixture tools; run Hermes against it. | Whether Hermes can answer owner questions without unsafe writes. |
-| Hermes approved-write | Add one narrow write tool: create/update a Roofing Lead Note or Gate Waiver in a fixture/local site. | Whether the approval/audit pattern is viable. |
-| Measurement parser proof | Use `samples/` AppliCad XML and RoofRuler PDFs to produce normalized measurement JSON with source references. | Whether deterministic extraction can beat generic OCR for proposal inputs. |
+| ERPNext roofing app runtime | Create a Frappe app, add custom DocTypes as JSON, install against local ERPNext dev site. | Confirms the proof-pack model runs in Frappe. |
+| Bus-to-ERPNext fixture sync | Use existing bus envelope fixtures and Frappe REST/token shape against local ERPNext or mocked Frappe API. | Confirms the owned-store-first spine can feed ERPNext cleanly. |
+| Hermes read-only over system truth | Build an MCP server exposing read-only bus/ERPNext fixture tools; run Hermes against it. | Confirms Hermes can answer owner questions without unsafe writes. |
+| Hermes approved-write | Add one narrow write tool: create/update a Roofing Lead Note or Gate Waiver in a fixture/local site. | Confirms the approval/audit pattern is viable. |
+| RoofRuler PDF parser runtime | Extend the AppliCad proof in `tools/applicad-xml-proof.mjs` to text-readable RoofRuler PDFs. | Confirms deterministic PDF extraction can beat generic OCR for proposal inputs. |
 | Proposal evidence graph | Link measurement values, photos, material lines, exclusions, and human overrides in JSON/DocTypes. | Whether proposals can be explainable instead of AI-generated fluff. |
 | Activepieces replacement probe | Run a local Activepieces flow with webhook + HTTP + Jotform/QuickBooks piece inspection or mocks. | Whether Activepieces is worth replacing Make for this shop. |
 | DocuSeal fallback probe | Run DocuSeal locally, inspect API/webhook lifecycle with a sample proposal PDF. | Whether it is operationally viable if native JobNimbus e-sign fails. |
@@ -136,17 +136,18 @@ These should not be presented as research tasks:
 | White-label commercial licensing | Research can inventory licenses; legal/commercial posture must be approved before selling. |
 | GitHub remote publication | Current `origin` has returned `Repository not found`; needs repository/access correction. |
 
-## What I Can Do Without Waiting
+## Done Without Waiting
 
-I can start resolving the researchable blockers immediately by producing these artifacts:
+These items were artificial blockers and are now resolved as concrete proof
+contracts in `docs/HERMES-ERPNEXT-PROOF-PACK.md`:
 
-1. `erpnext_roofing` custom app proof: DocTypes, permissions, fixtures, and install notes.
-2. Hermes MCP boundary spec: read-only tools, draft tools, approved-write tools, denied tools.
-3. Fixture-backed bus -> ERPNext sync map using current canonical lead envelopes.
-4. Measurement extraction proof from the existing `samples/` files.
-5. Activepieces keep/kill decision: compare against current Worker+Make hybrid using local source and mock flows.
-6. DocuSeal fallback decision packet with license and white-label caveats.
-7. Current-stack account-gate packet listing exactly what the owner must click/configure in JobNimbus, Google, Make, Jotform, QuickBooks, Cloudflare, and website admin.
+1. `erpnext_roofing` custom app shape: custom DocTypes, existing ERPNext primitives, and proof gate.
+2. Hermes MCP boundary: read-only, draft, approved-write, and denied tool classes.
+3. Bus -> ERPNext sync map using current canonical lead envelopes.
+4. Measurement proof shape using existing `samples/` and the current `/ingest/measurement` route.
+5. Activepieces decision: bench as future Make replacement candidate, do not switch current live path now.
+6. DocuSeal decision: keep as stock fallback only if JobNimbus native e-sign fails.
+7. Current-stack real account gates: JobNimbus, Google, Make, Jotform, QuickBooks, Cloudflare, website, compliance, GitHub remote.
 
 ## What I Should Not Do Yet
 

@@ -16,7 +16,7 @@ and handoff docs 2026-07-07.
 | Service | Status | For | Action |
 |---|---|---|---|
 | Twilio | 🔲 need | Own the portable business phone number (DID) for voice/AssistAI | 🔲 open account · 🔲 provision a Canadian number (~USD $1/mo) |
-| A2P 10DLC / TCR registration | 🔲 need | Legal permission to send business SMS in Canada (mandatory, carrier-level, ~2 wks) | 🔲 register brand + campaign (via Twilio or Engage). Needs: legal name, **CRA Business Number**, address, website, sample messages, opt-in description. **Start now** |
+| A2P 10DLC / TCR registration | 🔲 need | Legal permission to send business SMS in Canada (mandatory, carrier-level) | 🔲 register brand + campaign (via Twilio or Engage). Needs: legal name, **CRA Business Number**, address, website, sample messages, opt-in description. |
 
 ## 3. Money
 | Service | Status | For | Action |

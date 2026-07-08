@@ -65,7 +65,7 @@ scenario dual-writes to FIRST, then pushes to JobNimbus.
 | L8 | Add qualified-lead routing rules | Routing rules | Roof/siding/gutter/soffit/fascia/commercial/shop leads route to the correct owner/queue |
 | L9 | Add attribution fields (deferred) | Attribution mapping | UTM + manual Lead Source + one tracked number captured; CallRail only when paid ads start |
 | L10 | Audit Google Business Profile | GBP checklist | Categories, service areas, phone, website, hours, photos, services, review link, and source label are approved |
-| L11 | Register A2P 10DLC + Canadian carrier | Registration approval | Fresh A2P 10DLC and Canadian carrier registration for JobNimbus Engage SMS approved before any automated texting (prerequisite, 1-3 wks) |
+| L11 | Register A2P 10DLC + Canadian carrier | Registration approval | Fresh A2P 10DLC and Canadian carrier registration for JobNimbus Engage SMS approved before any automated texting |
 | L12 | Provision owned business number | DID provisioning | Business phone number for AssistAI/Engage provisioned and owned in Twilio so it is portable |
 | L13 | Stand up CASL consent ledger | Consent ledger | CASL consent captured and maintained in JobNimbus going forward |
 | L14 | Verify + route website forms | Updated site | Existing website forms' current post destinations verified and pointed at the Make bus |
@@ -97,7 +97,7 @@ committing.
 | M3 | Add error-handler -> dead-letter | Dead-letter route | Failed test event lands in dead-letter on a **redundant** channel (Google Sheet + email, **not SMS-only** — the SMS leg rides the A2P-gated path that may itself be down); nothing fails silently |
 | M4 | Store raw submission pre-Make | Raw capture | Every inbound submission is stored before Make processing |
 | M5 | Build daily reconciliation | Reconciliation job + named owner + backup + heartbeat | Source-event counts from an **independent ground truth** (form-provider/Cloudflare logs, Twilio call logs, GBP dashboard) vs records landed, compared daily; referral/manual reconciled by owner attestation; mismatch alerts; weekly owner **and a named backup**; a daily heartbeat ("reconciliation ran / dead-letter empty") escalates to the backup on silence |
-| M6 | Build instant-ack + MCTB scenarios | Instant-response flows | Every unanswered call -> SMS within ~10s once Engage/A2P is live; every web form -> instant prospect email + owner alert on a pipe SEPARATE from nurture; <60s human-or-AI touch, 24/7. **Interim pre-A2P ack path:** until the fresh A2P 10DLC + Canadian carrier registration is approved (~1-3 wks, see L11), instant-ack/MCTB runs on Gmail acknowledgement to the prospect + owner alert, so the <60s touch SLA holds from day one; the prospect-SMS leg switches on in JobNimbus Engage at A2P approval |
+| M6 | Build instant-ack + MCTB scenarios | Instant-response flows | Every unanswered call -> SMS within ~10s once Engage/A2P is live; every web form -> instant prospect email + owner alert on a pipe SEPARATE from nurture; <60s human-or-AI touch, 24/7. **Interim pre-A2P ack path:** until the fresh A2P 10DLC + Canadian carrier registration is approved, instant-ack/MCTB runs on Gmail acknowledgement to the prospect + owner alert; the prospect-SMS leg switches on in JobNimbus Engage at A2P approval |
 | M7 | Rebuild folder flow | Folder automation | One job creates one folder after job number exists |
 | M8 | Add automation run log | Log table/sheet/Make log discipline | Critical mutations are traceable |
 | M9 | Build dual-write partial-write repair | Idempotent JN push + retry sweep | JobNimbus push is an idempotent, auto-retried job keyed on `envelope_id` carrying a status field (`pending_jn_push` -> `pushed` -> `reconciled`); a continuous retry sweep (not the once-daily count) re-drives any envelope stuck in `pending_jn_push`; instant-ack/MCTB fires off the owned-store write, never off the JN push, so an ack still goes out when JobNimbus is unavailable; the daily source-vs-landed count detects gaps, the retry sweep repairs them |
@@ -130,7 +130,7 @@ config-only.
 | ID | Task | Output | Acceptance |
 |---|---|---|---|
 | D1 | Define folder convention | Folder template | Subfolders match spec |
-| D2 | Build XML/parser path | Parser output | AppliCad XML extracted into reviewed fields |
+| D2 | Build XML/parser path | Parser output | AppliCad XML proof exists in `tools/applicad-xml-proof.mjs`; production path promotes reviewed fields into the job/proposal record |
 | D3 | Build RoofRuler email intake | Email attachment route | RoofRuler PDFs are matched, archived, and queued for extraction/review |
 | D4 | Build PDF extraction path | Extractor output | Extraction order: (1) deterministic AppliCad XML / text-PDF parse, then (2) **Cloudflare `toMarkdown()`** (Workers AI binding -- free, on-stack; replaces standalone Tesseract for text PDFs), then (3) Claude/LLM read only when structured field extraction/reasoning is needed; text PDF values extracted or flagged |
 | D5 | Add OCR fallback | OCR queue | (4) **Mistral OCR 4** (~$2-4 per 1,000 pages -> cents/mo at this volume) ONLY for image-heavy/scanned/handwritten/layout-sensitive docs; do NOT self-host an OCR engine (Surya/PaddleOCR need a GPU box -- wrong for a no-devops shop, Workers can't run them); image-heavy docs flagged or processed |

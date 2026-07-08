@@ -509,7 +509,23 @@ The white-label product should be packaged as:
 - Do not build custom mobile-native apps before the field PWA/form workflow proves the job.
 - Do not optimize for generic contractors before IronWrap's roofing/metal-exteriors workflow is excellent.
 
-## Decision Backlog
+## Resolved Proof Decisions
+
+The artificial blockers below are collapsed in
+[`HERMES-ERPNEXT-PROOF-PACK.md`](./HERMES-ERPNEXT-PROOF-PACK.md):
+
+| Topic | Current Decision |
+| --- | --- |
+| ERPNext customization path | Custom Frappe app first; no ERPNext core fork for the first proof. |
+| Roofing record model | Use ERPNext Lead/Opportunity/Customer/Quotation/Sales Order/Project/Task/Item/Material Request plus roofing custom DocTypes. |
+| Bus-to-ERPNext sync | Worker/D1/R2 remains front door and source spine; ERPNext is added as a consumer after the current path is stable. |
+| Hermes boundary | Read-only first, draft second, narrow approved-write third; no raw SQL/API freestyle writes. |
+| Measurement proof | Use the existing `/ingest/measurement` route and sample files; add deterministic extraction before OCR. |
+| Activepieces | Bench as future Make replacement candidate; do not switch the current live path now. |
+| DocuSeal | Keep as stock fallback only if JobNimbus native e-sign fails. |
+| License posture | MIT/GPL/AGPL obligations are inventoried; legal/commercial approval remains the sale/white-label gate. |
+
+## Remaining Decision Backlog
 
 | Decision | Needed to move |
 | --- | --- |
@@ -522,7 +538,6 @@ The white-label product should be packaged as:
 | Supplier integration strategy | Manual supplier quote capture vs API/order integrations |
 | Hermes runtime | VPS/Docker, hosted runner, or local first |
 | White-label isolation | site-per-company first, shared services later |
-| License posture | GPL/AGPL/MIT obligations and commercial packaging review |
 | Support model | software only, managed operations, or hybrid |
 
 ## Recommended Build Order By Proof

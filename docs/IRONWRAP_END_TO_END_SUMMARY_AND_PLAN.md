@@ -427,9 +427,8 @@ purchase or implementation.
 
 1. **Do not start Task 2 build yet.** Finish Task 1 enough to generate real
    operational data and sample jobs.
-2. **Run a 2-week Task 1 audit/build sprint**: account inventory, Make scenario
-   map, JobNimbus stage/field cleanup, GHL intake/calendar cleanup, safe test
-   records.
+2. **Run the Task 1 audit/build pass**: account inventory, Make scenario map,
+   JobNimbus stage/field cleanup, GHL intake/calendar cleanup, safe test records.
 3. **Build the measurement parser prototype inside Task 1**: AppliCad XML +
    RoofRuler PDF extraction + review status. This becomes reusable evidence for
    Task 2.

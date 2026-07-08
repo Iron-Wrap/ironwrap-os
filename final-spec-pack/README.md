@@ -45,10 +45,10 @@ front door after the experimental/import-rescue paths are replaced.
 - GHL retirement is a cutover, not a rewrite: keep the existing working routes
   until `/ingest/website` is fed by website/server-side forwarding or one Make UI
   bridge, then retire GHL paths. Complete before automated texting goes live: a
-  fresh A2P 10DLC + Canadian carrier registration for JobNimbus Engage SMS (lead
-  time ~1–3 wks); maintain the CASL consent ledger in JobNimbus going forward.
+  fresh A2P 10DLC + Canadian carrier registration for JobNimbus Engage SMS; maintain
+  the CASL consent ledger in JobNimbus going forward.
 - Security/access hardening last, after build/config/test, with basic access
-  containment from day one.
+  containment from the first production use.
 
 The first deliverable reuses Make (on Core, already subscribed), Google Workspace,
 RoofRuler, QuickBooks, JobNimbus, and Jotform, which IronWrap already pays for or

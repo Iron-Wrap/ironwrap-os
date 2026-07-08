@@ -131,4 +131,4 @@ Admin console → Gmail → Routing → Disable/Delete rules `3fe82` and `b823e`
 "Microsoft 365 dual delivery" host). Nothing else to unwind. DNS already final:
 SPF `v=spf1 include:_spf.google.com include:spf.protection.outlook.com ~all` (drop the outlook
 include once M365 is retired), DMARC `p=none rua=info@` (tighten back toward `p=quarantine`
-after a few clean weeks of reports).
+after clean report evidence).

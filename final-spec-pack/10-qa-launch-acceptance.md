@@ -53,7 +53,7 @@ proves staff can recover.
 | Opt-out | SMS/email stops |  |
 | Automation failure | Make error-handler routes to dead-letter (Google Sheet + email alert); owner task created; no silent loss |  |
 | API key revoked | Failure visible, no silent data loss |  |
-| A2P 10DLC Canadian registration | Fresh A2P 10DLC + Canadian carrier registration for JobNimbus Engage SMS is approved before any automated texting (lead time ~1-3 wks; not a re-registration) |  |
+| A2P 10DLC Canadian registration | Fresh A2P 10DLC + Canadian carrier registration for JobNimbus Engage SMS is approved before any automated texting; not a re-registration |  |
 | Business number in Twilio | Business phone number for AssistAI/Engage is provisioned/owned in Twilio so it stays portable |  |
 | "Messaging is live" smoke test | A test SMS and a test call route correctly through Engage/AssistAI on the owned number |  |
 | CASL consent ledger in JobNimbus | CASL consent is captured and maintained in JobNimbus going forward (no historical export needed) |  |
@@ -100,7 +100,7 @@ Task 1 is accepted when:
 
 - All active lead sources normalize through the Make bus into the owned store (D1+R2) and JobNimbus.
 - Every inbound lead is dual-written to the owned store FIRST, then pushed to JobNimbus via an idempotent, `envelope_id`-keyed job; a continuous retry sweep re-drives any envelope stuck in `pending_jn_push` so a transient JobNimbus outage self-heals (the daily count only detects gaps).
-- Instant-ack/MCTB fires off the owned-store write, never off the JobNimbus push: pre-A2P it runs on the interim channel (prospect email via ESP + owner phone/SMS alert) so the <60s touch holds from day one; the prospect-SMS leg switches on at A2P approval.
+- Instant-ack/MCTB fires off the owned-store write, never off the JobNimbus push: pre-A2P it runs on the interim channel (prospect email via Google Workspace + owner phone/SMS alert); the prospect-SMS leg switches on at A2P approval.
 - Daily source-vs-landed reconciliation runs green with a named weekly owner; dead-letter + email alert proven.
 - Idempotency/dedup keyed on phone/email prevents duplicate records across inbound paths.
 - Website source page, service intent, UTM/manual Lead Source data are preserved when available (call-tracking deferred).

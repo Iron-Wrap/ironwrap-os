@@ -35,6 +35,12 @@ export interface ErpNextMeasurementInput {
   rawKey: string;
   parsedAt: string;
   measurements: Record<string, number>;
+  /** Measurement source; defaults to RoofRuler for the legacy report path. */
+  provider?: string;
+  /** True when first-principles geometry verification flagged a mismatch. */
+  needsReview?: boolean;
+  /** metric -> in-file source ref from the geometry engine (evidence graph). */
+  sourceRefs?: Record<string, string>;
 }
 
 export interface ErpNextPhotoEvidenceInput {
@@ -216,30 +222,31 @@ export async function pushMeasurementToErpNext(
   if (!cfg.ERPNEXT_API_KEY || !cfg.ERPNEXT_API_SECRET) throw new Error("erpnext_no_token");
 
   const base = normalizeBaseUrl(cfg.ERPNEXT_BASE_URL);
+  const provider = input.provider ?? "RoofRuler";
   const roofJob = await findByTerm(cfg, base, "Roof Job", "job_number", input.jobNumber);
   const report = await upsertByField(cfg, base, "Measurement Report", "measurement_id", input.measurementId, {
     measurement_id: input.measurementId,
     roof_job: roofJob ?? undefined,
-    provider: "RoofRuler",
+    provider,
     source_file: input.reportFileUrl ?? input.reportUrl ?? undefined,
     report_url: input.reportUrl ?? undefined,
     raw_key: input.rawKey,
     parsed_at: input.parsedAt,
-    review_status: Object.keys(input.measurements).length ? "Parsed" : "Needs Review",
+    review_status: input.needsReview || !Object.keys(input.measurements).length ? "Needs Review" : "Parsed",
     measurements: Object.entries(input.measurements).map(([metric, value]) => ({
       metric,
       value,
       unit: measurementUnit(metric),
-      confidence: "parsed",
-      source_ref: input.rawKey,
-      needs_review: 0,
+      confidence: input.sourceRefs?.[metric] ? "deterministic" : "parsed",
+      source_ref: input.sourceRefs?.[metric] ?? input.rawKey,
+      needs_review: input.needsReview ? 1 : 0,
     })),
   });
   const evidence = await upsertByField(cfg, base, "Evidence Item", "evidence_id", `evidence:${input.measurementId}`, {
     evidence_id: `evidence:${input.measurementId}`,
     roof_job: roofJob ?? undefined,
     evidence_type: "Measurement Report",
-    source_system: "RoofRuler",
+    source_system: provider,
     source_uri: input.reportFileUrl ?? input.reportUrl ?? undefined,
     r2_key: input.rawKey,
     captured_at: input.parsedAt,

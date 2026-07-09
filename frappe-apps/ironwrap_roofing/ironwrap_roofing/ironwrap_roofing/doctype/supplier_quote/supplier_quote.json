@@ -29,7 +29,7 @@
     { "fieldname": "supplier_quote_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Supplier Quote ID", "reqd": 1, "unique": 1 },
     { "fieldname": "roof_job", "fieldtype": "Link", "in_standard_filter": 1, "label": "Roof Job", "options": "Roof Job" },
     { "fieldname": "material_takeoff", "fieldtype": "Link", "label": "Material Takeoff", "options": "Material Takeoff" },
-    { "fieldname": "supplier", "fieldtype": "Link", "label": "Supplier", "options": "Supplier" },
+    { "fieldname": "supplier", "fieldtype": "Link", "label": "Supplier", "options": "Supplier Profile" },
     { "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Status", "options": "Needs Review\nApproved\nRejected\nExpired", "reqd": 1 },
     { "fieldname": "quoted_at", "fieldtype": "Datetime", "in_list_view": 1, "in_standard_filter": 1, "label": "Quoted At" },
     { "fieldname": "valid_until", "fieldtype": "Date", "label": "Valid Until" },

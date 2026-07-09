@@ -418,10 +418,10 @@ Build:
 - Mistral OCR only for hard cases (image-heavy/scanned/handwritten/layout-sensitive).
 - Human review before price/material truth.
 - Simple proposal HTML/PDF.
-- JobNimbus native e-sign / HTML+PDF contract path FIRST (NaturalForms is dropped); if
-  it fails the workflow, adopt DocuSeal (open-source; managed Cloud ~CAD $30/mo or one
-  self-hosted container; webhooks fire completion back through Make -> JobNimbus) as the
-  e-sign escape hatch, before PandaDoc/DocuSign.
+- JobNimbus native e-sign / HTML+PDF contract path can bridge (NaturalForms is dropped),
+  but it dies with the JobNimbus retirement. DocuSeal is retired permanently (AGPL, not
+  even an escape hatch); the keeper path is a commercial e-sign API (e.g. Dropbox Sign
+  or the DocuSign API) or owned signing on the Proposal Evidence Pack.
 - PDF archive to folder.
 - Contract decision: JobNimbus native contract/signature; Jotform structured signature only if a structured workflow requires it.
 - Material list decision: one multi-scope list versus per-scope material-list forms.

@@ -16,7 +16,7 @@ materials → completion → invoice → review, on a portable owned-data spine.
 |---|---|---|
 | `final-spec-pack/` | **The spec** — 19 numbered chapters (`README.md` is the index). The source of truth for the target system. | Authoritative |
 | `workers-bus/` | **The integration bus** — a Cloudflare Worker (fetch + queue + scheduled) that is the owned data layer + Make-bus replacement. Builds + tests green. | Buildable |
-| `frappe-apps/ironwrap_roofing/` | **ERPNext operating core** — custom Frappe app (23 DocTypes: lead/property/job through closeout/warranty/review, comms, supplier quote, market watch, Hermes Run audit). Contract-validated, no core fork. | Buildable |
+| `frappe-apps/ironwrap_roofing/` | **Frappe-only operating core**: proprietary custom Frappe app (26 DocTypes: lead/customer/property/job/quote through closeout/warranty/review, comms, supplier quote/profile, market watch, Hermes Run audit). Zero GPL link targets (only Frappe core `User`); ERPNext removed 2026-07-09 for 100% IP. Contract-validated; erpnext-* tool/env naming retained for compatibility. | Buildable |
 | `mcp/` | **Hermes tool surface** — `ironwrap-bus-mcp` (bus read + replay) and `erpnext-roofing-mcp` (read + deterministic policy checks + review-gated approved writes). Tests green. | Buildable |
 | `hermes/` | **Agent runtime layer** — `agents/roles.json` (per-role MCP tool allowlists, source of truth), agent profiles, `mcp-servers.json`, and the `skills/` procedure packs. | Buildable |
 | `config/tenants/` | **White-label tenant configs** — one JSON per contractor (brands, geography, gates, agents), secrets by env-var name only. Validated. | Buildable |
@@ -35,7 +35,7 @@ materials → completion → invoice → review, on a portable owned-data spine.
   FIRST as a canonical envelope `{source, brand, contact, job_ref, payload, ts}`, then pushed
   only to needed bridge systems. JobNimbus/GHL are consumers, not owners.
 - **Estimator/configurator** = owned path first. `POST /ingest/estimate` stores raw estimator
-  payloads, creates/updates ERPNext Lead Envelope / Roof Job / Instant Estimate Session when
+  payloads, creates/updates Frappe-site Lead Envelope / Roof Job / Instant Estimate Session when
   enabled, and keeps all pricing non-binding until human review.
 - **Integration bus** = Make (on the **Core** plan, ~$9/mo, already subscribed) **or** the
   `workers-bus/` Cloudflare Worker. Recommended hybrid: Worker does the heavy lifting; keep the
@@ -52,8 +52,10 @@ materials → completion → invoice → review, on a portable owned-data spine.
   (LiveKit/Pipecat) → voicemail floor. The 4-vendor DIY voice stack stays killed.
 - **Field photos/geo** = Jotform "Jobsite Photo" form (device GPS at submit, offline).
 - **e-sign** = owned proposal evidence pack first as it matures; JobNimbus native can bridge while
-  the owned proposal flow is incomplete. DocuSeal is only a benched escape hatch; there is no
-  active `/proposal/create` Worker route.
+  the owned proposal flow is incomplete (and dies with the JobNimbus retirement). DocuSeal is
+  retired permanently (AGPL, not even a fallback); the replacement is a commercial e-sign API
+  (e.g. Dropbox Sign / DocuSign API) or owned signing. There is no active `/proposal/create`
+  Worker route.
 - **OCR** = deterministic XML/text → Cloudflare `toMarkdown()` (free) → Mistral OCR only for hard docs.
 - **Design** = free Canva + free Affinity. **Accounting** = QuickBooks. **QuoteLock feature: CUT.**
 
@@ -95,7 +97,7 @@ npx wrangler deploy --dry-run    # validate config + bundle
 ## Working with `hermes/`, `mcp/`, and the validators
 
 ```bash
-node tools/validate-erpnext-doctypes.mjs   # DocType JSON contract (23 DocTypes)
+node tools/validate-erpnext-doctypes.mjs   # DocType JSON contract (26 DocTypes)
 node tools/validate-tenant-config.mjs      # white-label tenant configs, no secrets, isolation
 node tools/validate-hermes-config.mjs      # agent roles vs LIVE MCP tool inventory + safety contract
 (cd mcp/erpnext-roofing-mcp && npm test)   # pure-logic builders + policy checks
@@ -119,7 +121,7 @@ node tools/validate-hermes-config.mjs      # agent roles vs LIVE MCP tool invent
   product, so owning the custom code (bus, ERPNext app, MCP/Hermes layer) is the strategy. Design
   for multi-tenant operation and resale from the start.
 - **The owned IronWrap OS path is the target.** Don't "fix the spec" to match temporary
-  JobNimbus/GHL behavior; migrate toward the bus + ERPNext/Hermes estimator/proof spine.
+  JobNimbus/GHL behavior; migrate toward the bus + Frappe (IronWrap OS)/Hermes estimator/proof spine.
 - **Never commit secrets.** The JobNimbus API key was shared in chat during setup — **rotate it**
   and issue a dedicated key for the bus.
 - Spec house style: terse, declarative, tables + mermaid; heavy cross-referencing is intentional.

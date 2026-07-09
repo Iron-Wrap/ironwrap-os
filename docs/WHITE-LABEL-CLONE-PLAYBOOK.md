@@ -14,7 +14,7 @@ deferred until the cloneable shape is proven (see the blueprint's Non-Goals).
 
 | Layer | Per-tenant unit | Repo artifact |
 | --- | --- | --- |
-| ERPNext | One Frappe/ERPNext site | `frappe-apps/ironwrap_roofing` installed per site |
+| Frappe (IronWrap OS) | One plain Frappe site (never install the erpnext app) | `frappe-apps/ironwrap_roofing` installed per site |
 | Hermes | One Hermes profile (own memory, skills, MCP allowlist) | MCP env vars below |
 | Cloudflare | One Worker + D1 + R2 + queues + secrets set | `workers-bus/wrangler.jsonc` |
 | Storage | One Drive namespace (Shared Drives) + one R2 bucket | `SHARED_DRIVE_ID_*` vars, `RAW` binding |
@@ -67,14 +67,17 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 8. `npm test`, `npm run typecheck`, `npx wrangler deploy --dry-run` in `workers-bus/`,
    then deploy.
 
-### 3. ERPNext site
+### 3. Frappe site
 
-1. Create a fresh Frappe/ERPNext site for the tenant (own database, own users).
+1. Create a fresh plain Frappe site for the tenant: `bench new-site <tenant-site>`
+   (own database, own users). Never install the erpnext app; the site is Frappe-only.
 2. Install the custom app: `bench get-app frappe-apps/ironwrap_roofing` then
    `bench --site <tenant-site> install-app ironwrap_roofing`.
 3. Sanity: `node tools/validate-erpnext-doctypes.mjs` in the repo confirms the DocType
-   pack shape; on the site, confirm the IronWrap Roofing DocTypes exist.
+   pack shape (prints `ok 26`); on the site, confirm the IronWrap Roofing DocTypes exist.
 4. Create a tenant-scoped API key/secret pair for the bus and MCP (never the IronWrap pair).
+5. Never adopt frappe/press (AGPL, Frappe Cloud's control plane): per-tenant provisioning
+   stays on IronWrap's own scripts (`config/tenants/` + validators + this playbook).
 
 ### 4. Drive / evidence namespace
 
@@ -119,8 +122,8 @@ Run all of these before calling the clone done:
    shows only the demo tenant's rows; the IronWrap database count is unchanged by demo traffic.
 4. R2: demo raw payloads land only in `<tenant>-bus-raw`; spot-check the IronWrap bucket
    for the same timestamps.
-5. ERPNext: the demo lead exists only on the tenant site; search the IronWrap site for the
-   demo contact and expect zero hits.
+5. Frappe site: the demo lead exists only on the tenant site; search the IronWrap site for
+   the demo contact and expect zero hits.
 6. Drive: the demo job folder exists only in the tenant's Shared Drive.
 7. MCP: from the tenant Hermes profile, `list_recent_envelopes` returns only tenant data;
    attempting the other tenant's `ERPNEXT_BASE_URL` credentials fails.
@@ -134,7 +137,7 @@ Gate 11 (blueprint): "A second demo company runs with separate brand/config/data
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
 - [ ] All 6 D1 migrations applied to the tenant database.
-- [ ] Tenant ERPNext site up with `ironwrap_roofing` installed and its own API key pair.
+- [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed and its own API key pair.
 - [ ] Tenant Shared Drives + R2 bucket receive a test job's files.
 - [ ] Tenant QuickBooks webhook verified (signature accepted on `POST /webhook/quickbooks`).
 - [ ] Tenant Hermes profile answers a read-only question from tenant data via both MCP servers.

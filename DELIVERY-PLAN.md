@@ -35,9 +35,9 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
 
 | Area | Today (experimental) | Target (spec final) |
 |---|---|---|
-| Lead front door | Website/FB → **GHL** via ~16 experimental Make scenarios | All sources → **Workers bus → owned D1/R2 FIRST → ERPNext/IronWrap OS**, with JobNimbus/GHL only as temporary consumers |
-| System of record | None (GHL holds it) | **Cloudflare D1 + R2** (owned), ERPNext/IronWrap OS as operating truth; JobNimbus/GHL = bridge consumers |
-| CRM / job truth | GHL + partial JobNimbus | **IronWrap OS / ERPNext** as target; JobNimbus bridges until replaced |
+| Lead front door | Website/FB → **GHL** via ~16 experimental Make scenarios | All sources → **Workers bus → owned D1/R2 FIRST → Frappe (IronWrap OS)**, with JobNimbus/GHL only as temporary consumers |
+| System of record | None (GHL holds it) | **Cloudflare D1 + R2** (owned), Frappe (IronWrap OS) as operating truth; JobNimbus/GHL = bridge consumers |
+| CRM / job truth | GHL + partial JobNimbus | **IronWrap OS (Frappe)** as target; JobNimbus bridges until replaced |
 | Instant response | none | **Instant-ack / MCTB <60s, 24/7** |
 | SMS / email | Google Workspace live for email; SMS not live | **Engage SMS** (post-A2P) + **Google Workspace brand mailboxes** |
 | Storage | OneDrive (GHL-keyed folders) | **Google Drive** (Google Workspace, supersedes OneDrive, 2026-07-01), JobNimbus-job-number-keyed |
@@ -52,7 +52,7 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
 1. **A2P is an account gate** — it gates Engage SMS and cannot be solved in repo code. Everything else routes around it.
 2. **Instant-ack ships through the interim channel** via email + owner alert; the prospect-SMS leg switches on at A2P approval.
 3. **Owned-store-first is the keystone** — stand up D1/R2 + the bus before repointing any lead source.
-4. **Migrate, don't duplicate subscriptions** — reuse what works only as a bridge, move proof into the owned bus/ERPNext spine, then retire GHL/JN pieces route-by-route.
+4. **Migrate, don't duplicate subscriptions.** Reuse what works only as a bridge, move proof into the owned bus/Frappe (IronWrap OS) spine, then retire GHL/JN pieces route-by-route.
 5. **Managed to prove, own-operated to scale.** Start on managed hosting to prove the core, then move to IronWrap-operated infra as resale tenants onboard; owning and operating the code is the product strategy (see Gates).
 6. **Compliance gates are hard launch-blockers**, not paperwork (`09`).
 
@@ -61,7 +61,7 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
 | # | Phase | Exit gate | Depends on |
 |---|---|---|---|
 | 0 | Foundations & unblock | Bus deployed; account gates identified; owners named | — |
-| 1 | Lead + estimator spine | Every lead/estimate -> D1/R2 -> ERPNext; bridge push where still needed; reconcile green | 0 |
+| 1 | Lead + estimator spine | Every lead/estimate -> D1/R2 -> Frappe (IronWrap OS); bridge push where still needed; reconcile green | 0 |
 | 2 | Messaging + bridge shrink | Customer messaging works with consent; GHL/JN automations retired where owned proof exists | 1 + A2P or owned messaging proof |
 | 3 | Field · documents · proposals | Jotform photos, RoofRuler, proposals, QuickBooks on the spine | 1 |
 | 4 | Phone AI (gated) | AssistAI passes written eval (>=85%, 0 catastrophic) | 2 |
@@ -80,13 +80,13 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
 
 ### Phase 1 — Lead + estimator spine
 - Execute `final-spec-pack/18-phase-1-source-truth-and-build-contract.md` as the exhaustive source-truth/build contract.
-- Repoint one real website/GBP/manual/Make lead source → bus → **D1/R2 first** → ERPNext/IronWrap OS, with JobNimbus push only where still needed, and with **dedup, dead-letter, retry sweep, daily reconciliation + heartbeat, partial-write repair** (`01`,`04 §WF1/§WF8`,`06`).
+- Repoint one real website/GBP/manual/Make lead source → bus → **D1/R2 first** → Frappe (IronWrap OS), with JobNimbus push only where still needed, and with **dedup, dead-letter, retry sweep, daily reconciliation + heartbeat, partial-write repair** (`01`,`04 §WF1/§WF8`,`06`).
 - Repoint the 3D estimator/configurator submit/save action → `POST /ingest/estimate`. This creates the owned raw record, D1 envelope, ERPNext Roof Job, and review-gated Instant Estimate Session without GHL/JN dependency.
 - **Instant-ack / MCTB interim** live: prospect **email** + owner alert, off the owned-store write (`04 §WF7`).
 - **Brand tagging** on the envelope (`03`).
 - **GHL/JN cutover rule:** the bulk GHL rescue is complete; freeze new keeper work in GHL/JN, keep only bridge/retire actions, and disable old routes after replacement proof.
-- **ERPNext/Hermes first contract:** define ERPNext sync objects and Hermes tool boundary, but keep live intake fronted by the Worker until the first source is operating.
-- *Exit:* every test lead and estimator session (both brands) lands in D1/R2 + ERPNext, bridge-pushes only where still needed, with email ack/reconcile green; GHL no longer owns the front door; Hermes cannot mutate live customer/job truth outside approved tools.
+- **Frappe (IronWrap OS)/Hermes first contract:** define the Frappe-site sync objects (erpnext-* naming retained) and Hermes tool boundary, but keep live intake fronted by the Worker until the first source is operating.
+- *Exit:* every test lead and estimator session (both brands) lands in D1/R2 + the Frappe site, bridge-pushes only where still needed, with email ack/reconcile green; GHL no longer owns the front door; Hermes cannot mutate live customer/job truth outside approved tools.
 
 ### Phase 2 — Messaging + bridge shrink
 - A2P approved → **Engage 2-way SMS** live → MCTB **prospect-SMS leg** switches on.
@@ -99,7 +99,7 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
 - **Jotform "Jobsite Photo"** form live (device GPS at submit, offline) → bus → **Google Drive** job folder + JN (`02 §2B`; supersedes OneDrive, see Gates #3).
 - **RoofRuler/AppliCad intake** uses the Worker-owned `POST /ingest/measurement` path; Make can bridge existing RoofRuler events into that route until direct intake is proven. Deterministic extraction comes before `toMarkdown()` and Mistral-only hard cases (`07`).
 - **Google Drive folder automation** keyed by **JobNimbus job number** (migrate from GHL-lead-number keying); **migrate historical job files from OneDrive** during the same cutover (some contact/job/file mapping needs manual fixing — owner flagged this).
-- **Proposals:** JobNimbus native e-sign / HTML+PDF; DocuSeal remains a benched escape hatch only (`07`).
+- **Proposals:** JobNimbus native e-sign / HTML+PDF bridges only until the JobNimbus retirement; DocuSeal is retired permanently (AGPL). Keeper path: commercial e-sign API or owned signing on the Proposal Evidence Pack (`07`).
 - **Owned estimator/proposal path:** `/ingest/estimate` captures configurator totals, project links, selected services, and material choices as a review-gated ERPNext Instant Estimate Session; Hermes/MCP then drafts Material Takeoff and Proposal Evidence Pack rows for human approval.
 - **QuickBooks** as catalog + invoice + PO master; **QuickBooks Payments** for invoice payments (`04 §WF4`); BookIPI/Stripe/MileIQ retire.
 - **Business-process scenarios** (Proposal Sent → Contract Signed → Deposit Paid → Job Started → Completion): build in this order once the lead spine is capturing live traffic — full detail in `final-spec-pack/04` Workflows 3/3C/5/5C/6.
@@ -159,7 +159,7 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
    Job Started → Completion): full SOP in `final-spec-pack/04` Workflows 3/3C/5/5C/6. Two items
    still need owner/real-world confirmation: whether Engage can trigger from pipeline automations
    (vs. manual-template-only), and the actual WCB Alberta filing mechanism (no API assumed yet).
-5. Phase-gated buys (default deferred): AssistAI minutes, managed Retell (only on eval fail), Mistral OCR (hard docs only), CallRail (only with paid ads), Renoworks, Paradigm. DocuSeal stays the e-sign fallback bench (JobNimbus native e-sign is still first choice for Proposal Sent).
+5. Phase-gated buys (default deferred): AssistAI minutes, managed Retell (only on eval fail), Mistral OCR (hard docs only), CallRail (only with paid ads), Renoworks, Paradigm. DocuSeal is retired permanently (AGPL, not even a fallback); e-sign lands on a commercial e-sign API or owned signing, with JobNimbus native e-sign only a temporary bridge for Proposal Sent until JobNimbus retires.
 6. Compliance artifacts (lawyer-reviewed where noted in `09`).
 
 ## Risk register

@@ -19,7 +19,7 @@ The strongest end product is not "ERPNext with AI" and not "a JobNimbus clone." 
 evidence-first roofing operating system where:
 
 - Cloudflare owns raw intake and event truth.
-- ERPNext/Frappe owns deterministic business records and workflow gates.
+- Frappe (IronWrap OS) owns deterministic business records and workflow gates.
 - Hermes owns agentic operation through narrow, auditable tools.
 - QuickBooks owns accounting truth.
 - Drive/R2 own human and raw evidence archives.
@@ -30,11 +30,11 @@ IronWrap OS should prove every job from estimate to warranty, not merely track i
 
 Current implementation checkpoint: the Worker exposes `POST /ingest/estimate` for the 3D
 estimator/configurator. It uses stable project/idempotency keys for retry-safe replay, stores the
-accepted estimator payload in R2, creates a D1 envelope, and mirrors ERPNext Lead Envelope / Roof
-Job / Instant Estimate Session rows when enabled. This is the owned handoff that lets JobNimbus/GHL
+accepted estimator payload in R2, creates a D1 envelope, and mirrors Frappe-site Lead Envelope /
+Roof Job / Instant Estimate Session rows when enabled. This is the owned handoff that lets JobNimbus/GHL
 stay bridges instead of product dependencies.
 
-Closeout/comms/market checkpoint (2026-07-08): the ERPNext app now carries the full closeout
+Closeout/comms/market checkpoint (2026-07-08): the Frappe app now carries the full closeout
 spine (Completion Packet, Warranty Packet, Review Request), policy-gated Communication Event,
 Supplier Quote with validity and per-line pricing, and Market Watch Item. The `erpnext-roofing-mcp`
 server exposes read plus dry-run/approved-write pairs for each, all funneled through one shared
@@ -54,6 +54,15 @@ roles and the manifest against the live MCP tool inventory and enforces the safe
 config level: every referenced tool exists, buckets are correctly typed, and no approved-write tool
 is granted without its `dry_run` counterpart in the same role. No tool sends a customer message or
 mutates accounting.
+
+Frappe-only checkpoint (2026-07-09): the ERPNext (GPL-3.0) dependency is removed for 100% IP
+ownership. `ironwrap_roofing` now deploys on a plain Frappe site (never install the erpnext app)
+and is proprietary IronWrap IP on the MIT Frappe framework. The app carries 26 DocTypes: Roofing
+Customer, Customer Quote, and Supplier Profile replace the former ERPNext Customer/Quotation/
+Supplier link targets, and the Roof Job lead/opportunity/project links are gone, leaving Frappe
+core `User` as the only non-custom Link target. The erpnext-* names (`erpnext-roofing-mcp`,
+`workers-bus/src/erpnext.ts`, `ERPNEXT_*` env vars, `tools/validate-erpnext-doctypes.mjs`) are
+retained for compatibility and refer to the Frappe site.
 
 ## Research Basis
 
@@ -169,7 +178,7 @@ flowchart TD
   Bus --> R2["R2 raw files and payloads"]
   Bus --> Queue["Queues, retries, DLQ, reconcile"]
 
-  Queue --> ERP["ERPNext/Frappe roofing app"]
+  Queue --> ERP["Frappe roofing app (IronWrap OS)"]
   ERP --> Drive["Google Drive job archive"]
   ERP --> QB["QuickBooks accounting truth"]
   ERP --> Portal["Customer / subcontractor portal"]
@@ -194,38 +203,37 @@ flowchart TD
 | Layer | Owner | Rule |
 | --- | --- | --- |
 | Cloudflare bus | Raw intake and event truth | Every external event lands here first where practical |
-| ERPNext/Frappe | Business workflow truth | Deterministic records, permissions, gates, and status |
+| Frappe (IronWrap OS operating core) | Business workflow truth | Deterministic records, permissions, gates, and status |
 | Hermes | Intelligent operator | Reads broadly; writes only through approved command tools |
 | QuickBooks | Accounting truth | No final accounting mutation by Hermes without explicit approval |
 | Drive/R2 | Evidence | R2 raw, Drive human archive; neither replaces ERP workflow state |
 | Google/Engage/email/voice | Communications | Customer-facing actions are policy-gated and logged |
 
-## ERPNext/Frappe Product Model
+## Frappe Product Model
 
-Do not fork ERPNext. Build an app such as `ironwrap_roofing` on top of Frappe/ERPNext.
+The model is Frappe-only. `ironwrap_roofing` is a proprietary custom app on the MIT Frappe
+framework, installed on a plain Frappe site; the erpnext app is never installed. The former
+ERPNext reuse targets are replaced by owned DocTypes:
 
-Reuse ERPNext where it already fits:
-
-| Existing ERPNext/Frappe concept | Use |
+| Former ERPNext target | Owned replacement |
 | --- | --- |
-| Lead / Opportunity | Sales intake and qualification |
-| Customer / Contact / Address | Homeowner/company/property parties |
-| Quotation | Proposal commercial object |
-| Project / Task | Job execution and internal work |
-| Item / Item Group | Product catalog, services, materials |
-| Material Request / Purchase Order | Materials and supplier workflow |
-| Sales Invoice mirror | Operational mirror only if QuickBooks remains accounting truth |
-| User / Role / Permission | Office, owner, crew, subcontractor, white-label admin separation |
-| Web Forms / Portal | Customer and field submission surfaces |
-| Workflow / Assignment Rules | Hard stage gates and owner routing |
+| Lead / Opportunity | Lead Envelope + Roof Job own the pipeline |
+| Customer / Contact | Roofing Customer |
+| Quotation | Customer Quote |
+| Project / Task | Roof Job + Production Gate State + Field Check-in |
+| Item / Material Request / Purchase Order | Material Takeoff + Supplier Quote + Supplier Order + Supplier Profile |
+| Sales Invoice mirror | Payment Milestone; QuickBooks stays accounting truth |
+| User / Role / Permission, Web Forms, Workflow | MIT Frappe framework features |
 
 Custom DocTypes:
 
 | DocType | Purpose |
 | --- | --- |
-| Lead Envelope | Canonical bus event mapped into ERPNext |
+| Lead Envelope | Canonical bus event mapped into the Frappe site |
+| Roofing Customer | Owned customer/party record (homeowner or company); replaces ERPNext Customer/Contact |
 | Roofing Property | Address, structure, access, roof metadata, hazards |
-| Roof Job | Job wrapper tying contact, property, opportunity, project, files, and accounting refs |
+| Roof Job | Job wrapper tying Roofing Customer, Roofing Property, Customer Quote, files, and accounting refs |
+| Customer Quote | Owned commercial quote object; replaces ERPNext Quotation |
 | Evidence Asset | Photo, PDF, XML, transcript, email, signed document, invoice, or field note |
 | Instant Estimate Session | Public estimate interaction, assumptions, selected options, range, and lead score |
 | Price Book Rule | Material/labor/option pricing rule with source, approval, and effective state |
@@ -243,6 +251,7 @@ Custom DocTypes:
 | Warranty Packet | Final warranty terms, proof, dates, material system, exclusions |
 | Review Request | Review eligibility, channel, sent state, stop conditions |
 | Communication Event | SMS/email/call/portal action, consent basis, template, status, and audit result |
+| Supplier Profile | Owned supplier master; replaces ERPNext Supplier |
 | Supplier Quote | Supplier, requested materials, price, validity, substitutions, delivery terms |
 | Supplier Order | Approved material order, delivery status, shortages, substitutions, received proof |
 | Hermes Run / Agent Run | Hermes prompt, tools, inputs, dry-run output, approval, write result, audit link |
@@ -455,7 +464,7 @@ architecture cloneable.
 
 Preferred early model:
 
-- one Frappe/ERPNext site per contractor
+- one plain Frappe site per contractor (never the erpnext app)
 - one Hermes profile per contractor
 - one Cloudflare namespace/config set per contractor
 - one Drive/R2/evidence namespace per contractor
@@ -497,8 +506,8 @@ The white-label product should be packaged as:
 | Gate | Name | Proof artifact |
 | --- | --- | --- |
 | 0 | Source truth | Current architecture, owners, secrets, and vendors documented without conflicts |
-| 1 | Intake spine | Real source event lands in bus, R2/D1, ERPNext, and audit log |
-| 2 | ERP operating core | Lead, property, job, task, gate, evidence, and proposal records work in ERPNext |
+| 1 | Intake spine | Real source event lands in bus, R2/D1, the Frappe site, and audit log |
+| 2 | Operating core | Lead, property, job, task, gate, evidence, and proposal records work in the Frappe app |
 | 3 | Read-only Hermes | Hermes answers owner questions from live system truth without writes |
 | 4 | Approved-write Hermes | Hermes can draft and execute one approved mutation with audit trail |
 | 5 | Instant estimate parity | Public widget creates qualified lead, non-binding range, assumptions, and follow-up |
@@ -516,8 +525,8 @@ The white-label product should be packaged as:
 | Risk | Why it matters | Control |
 | --- | --- | --- |
 | Agent overreach | AI writes can damage jobs, money, or customer trust | Narrow tools, dry-run, approval, audit |
-| ERPNext customization debt | Heavy forks make upgrades painful | Custom app, no core fork |
-| GPL/commercial terms | ERPNext is GPL-3.0; white-label distribution needs legal review | License review before selling/distribution |
+| Framework customization debt | Heavy framework forks make upgrades painful | Proprietary custom app on stock MIT Frappe, no framework fork |
+| License/commercial terms | ERPNext (GPL-3.0) dependency removed 2026-07-09; stack is MIT foundations (Frappe, Hermes, MCP SDK) plus the proprietary IronWrap app | Remaining legal gate is trademark hygiene and MIT notice preservation; one legal pass before the first external tenant |
 | Accounting mistakes | Payments, invoices, taxes are high-risk | QuickBooks remains source of truth; Hermes read/draft only |
 | Field adoption | Crew will reject slow tools | Field PWA is minimal: today, photos, checklist, submit |
 | Data migration | Old GHL/JobNimbus/Drive data may be messy | Import ledger, manual exception queue |
@@ -534,7 +543,7 @@ The white-label product should be packaged as:
 
 - Do not use Hermes memory as CRM.
 - Do not let Hermes freestyle SQL/API writes.
-- Do not fork ERPNext unless there is no app-level alternative.
+- Do not reintroduce ERPNext: it was removed entirely (2026-07-09), not merely left unforked. The app stays Frappe-only; never install the erpnext app.
 - Do not build multi-tenant SaaS before the single-shop system is proven cloneable.
 - Do not replace QuickBooks accounting truth with ERPNext until accounting migration is explicitly chosen.
 - Do not build custom mobile-native apps before the field PWA/form workflow proves the job.
@@ -547,22 +556,22 @@ The artificial blockers below are collapsed in
 
 | Topic | Current Decision |
 | --- | --- |
-| ERPNext customization path | Custom Frappe app first; no ERPNext core fork for the first proof. |
-| Roofing record model | Use ERPNext Lead/Opportunity/Customer/Quotation/Sales Order/Project/Task/Item/Material Request plus roofing custom DocTypes. |
-| Bus-to-ERPNext sync | Worker/D1/R2 remains front door and source spine; ERPNext is added as a consumer after the current path is stable. |
+| ERPNext customization path | Frappe-only custom app; ERPNext removed entirely (2026-07-09) for 100% IP ownership. Never install the erpnext app. |
+| Roofing record model | Owned DocTypes only: Lead Envelope/Roof Job/Roofing Customer/Customer Quote/Supplier Profile plus the rest of the 26-DocType pack; the only non-custom Link target is Frappe core User. |
+| Bus-to-ERPNext sync | Worker/D1/R2 remains front door and source spine; the Frappe site (erpnext-* naming retained for compatibility) is added as a consumer after the current path is stable. |
 | Hermes boundary | Read-only first, draft second, narrow approved-write third; no raw SQL/API freestyle writes. |
 | Measurement proof | Use the existing `/ingest/measurement` route and sample files; add deterministic extraction before OCR. |
 | Activepieces | Bench as future Make replacement candidate; do not switch the current live path now. |
-| DocuSeal | Keep as stock fallback only if JobNimbus native e-sign fails. |
-| License posture | MIT/GPL/AGPL obligations are inventoried; legal/commercial approval remains the sale/white-label gate. |
+| DocuSeal | Retired permanently (AGPL), even as a fallback. E-sign direction: commercial e-sign API (e.g. Dropbox Sign or DocuSign API) or owned signing on the Proposal Evidence Pack; JobNimbus native e-sign dies with the JobNimbus retirement. |
+| License posture | MIT foundations (Frappe, Hermes, MCP SDK) plus the proprietary IronWrap app; GPL eliminated by removing ERPNext. Remaining gate: trademark hygiene and MIT notice preservation before the first external tenant. |
 
 ## Remaining Decision Backlog
 
 | Decision | Needed to move |
 | --- | --- |
-| ERPNext hosting path | Frappe Cloud, self-hosted Docker, or managed VPS |
-| Accounting boundary | QuickBooks permanent truth vs future ERPNext accounting migration |
-| Proposal renderer | ERPNext print formats, custom Frappe UI, or external PDF service |
+| Frappe site hosting path | Self-hosted Docker or managed VPS; frappe/press (AGPL) is never adopted, provisioning stays on IronWrap scripts |
+| Accounting boundary | QuickBooks permanent truth vs a future owned accounting migration |
+| Proposal renderer | Frappe print formats, custom Frappe UI, or external PDF service |
 | Public estimate policy | Range logic, disclaimers, required fields, estimator-review threshold |
 | Field surface | Frappe portal/PWA, Jotform bridge, or small custom mobile web app |
 | Measurement/visual provider strategy | RoofRuler/AppliCad only vs Eagleview/Hover/provider-agnostic ingest |
@@ -573,9 +582,9 @@ The artificial blockers below are collapsed in
 
 ## Recommended Build Order By Proof
 
-1. Prove ERPNext can hold the roofing record model without fighting the framework.
-2. Prove bus-to-ERPNext sync with real envelopes and idempotency.
-3. Prove read-only Hermes over live bus/ERPNext state.
+1. Prove the Frappe app can hold the roofing record model without fighting the framework.
+2. Prove bus-to-Frappe-site sync with real envelopes and idempotency.
+3. Prove read-only Hermes over live bus/Frappe-site state.
 4. Prove one approved Hermes write with a full audit trail.
 5. Prove public instant estimate capture with idempotent retry, a non-binding range, and review gate.
 6. Prove measurement/3D/model ingest to approved takeoff values.

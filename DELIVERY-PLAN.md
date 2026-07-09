@@ -145,6 +145,30 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
 | Jotform Completion Form (inactive) | **Activate** on the spine (Phase 3) |
 | Facebook Lead Ads (inactive) | Re-enable later as a bus source (gated with paid ads) |
 
+## JobNimbus retirement map (owner-confirmed 2026-07-09: JN/GHL sunset soon)
+
+JobNimbus provides five capabilities today; each gets an owned replacement, a proof gate,
+and a kill condition. The bus already writes to D1/R2 first, so data ownership never
+depends on JN; only the bridge push and `jn_*` reference fields retire.
+
+| Capability JN provides | Owned replacement | Proof gate before kill |
+|---|---|---|
+| CRM/job daily UI | Frappe Desk on the live site now (`docs/LAUNCH-RUNBOOK.md`); branded cockpits later (task backlog: proposal renderer / surfaces) | One real job managed start to finish in Desk |
+| Engage SMS (never activated) | Owned SMS provider + the comms policy layer (consent, quiet hours, record-only until A2P) | A2P approved plus one consent-gated, human-approved send |
+| AssistAI phone AI | Eval ladder skips to managed Retell or the voicemail floor (AssistAI dies with JN; `docs/ASSISTAI-EVAL.md` applies to the replacement) | Same eval bar: >=85% capture/routing, zero catastrophic failures |
+| Native e-sign | Interim: proposal PDF by email + signed scan captured as an Evidence Item (`customer_signoff_ref`); target: commercial e-sign API or owned signing | One real proposal signed via the owned path |
+| Mobile field app | Jotform photo/voice forms into `/ingest/photo` (built); Frappe web forms as needed | Crew documents one real job end to end |
+
+Kill sequence once all five proof gates pass:
+
+1. Set `JOBNIMBUS_ENABLED="false"` (new envelopes stop pushing to JN; owned store and
+   Frappe mirror keep working untouched).
+2. Run 30 days of green reconciles in that state.
+3. Remove the bridge code and config: `workers-bus/src/jobnimbus.ts`, the JN queue push in
+   `index.ts`, `JOBNIMBUS_*`/`JN_*` vars, and the Make GHL-era scenarios. Keep
+   `jn_contact_id`/`jn_job_id`/`jobnimbus_*` fields as read-only historical references.
+4. Cancel the JobNimbus subscription; export/archive any remaining JN-side data first.
+
 ## Gates & decisions needed from the owner
 
 1. ✅ **Build/operate owner, DECIDED: Ilia (owner) via Claude Code** (CC = the engineering/ops capacity). IronWrap builds and operates this platform as an owned product and resells it to other contractors, so owning the code is the strategy, not a liability.

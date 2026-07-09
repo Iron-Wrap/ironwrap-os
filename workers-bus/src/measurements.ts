@@ -9,6 +9,7 @@ import { newEnvelopeId, parseBody } from "./core.ts";
 import * as store from "./store.ts";
 import { googleConfigured, fileToJobFolder } from "./google.ts";
 import { pushMeasurementToErpNext } from "./erpnext.ts";
+import { isAppliCadXml, parseAppliCadGeometry, type GeometryModel } from "./geometry.ts";
 
 const JOB_KEYS = ["job_number", "jobnumber", "job", "job_no", "jn_job", "jobnimbus_job", "job_id", "jobid"];
 const REPORT_KEYS = ["report_url", "report", "pdf", "pdf_url", "document", "document_url", "file", "url"];
@@ -53,6 +54,19 @@ export function parseMeasurementSubmission(raw: Record<string, unknown>): Measur
   return { jobNumber, reportUrl, measurements };
 }
 
+/** Find AppliCad XML embedded in any string field, or as the raw body itself. Pure.
+ * Parsed fields are checked FIRST: a JSON envelope's raw text carries the marker but
+ * with escaped quotes, so only the JSON-decoded field value parses correctly. */
+export function extractGeometry(rawText: string, raw: Record<string, unknown>): GeometryModel | null {
+  for (const v of Object.values(raw)) {
+    if (typeof v === "string" && isAppliCadXml(v)) {
+      const g = parseAppliCadGeometry(v);
+      if (g) return g;
+    }
+  }
+  return isAppliCadXml(rawText) ? parseAppliCadGeometry(rawText) : null;
+}
+
 /** Extension for the report file from URL then content-type. Pure. */
 export function reportExt(url: string, contentType: string): string {
   const fromUrl = (url.split(/[?#]/)[0].match(/\.([a-z0-9]{1,5})$/i)?.[1] ?? "").toLowerCase();
@@ -64,11 +78,18 @@ const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
 
 /** POST /ingest/measurement handler. Auth + body-size checked by the caller (index.ts). */
 export async function handleMeasurementIngest(env: Env, rawText: string, contentType: string | null): Promise<Response> {
-  const sub = parseMeasurementSubmission(parseBody(rawText, contentType));
+  const raw = parseBody(rawText, contentType);
+  const sub = parseMeasurementSubmission(raw);
   const id = newEnvelopeId();
   const now = new Date().toISOString();
   const rawKey = `raw/measurements/${now.slice(0, 10)}/${id}.json`;
   await store.putRaw(env, rawKey, rawText, "application/json");
+
+  // First-principles geometry: AppliCad XML (raw or embedded) is parsed AND
+  // cross-verified (lengths from coordinates, areas via Newell). Deterministic
+  // values override upstream-AI-extracted keys on collision.
+  const geometry = extractGeometry(rawText, raw);
+  if (geometry) sub.measurements = { ...sub.measurements, ...geometry.measurements };
 
   if (!sub.jobNumber) {
     await store.recordAudit(env, { automation: "measurement", trigger: "roofruler", envelope_id: id,
@@ -78,11 +99,12 @@ export async function handleMeasurementIngest(env: Env, rawText: string, content
 
   const haveMeasures = Object.keys(sub.measurements).length;
   if (!googleConfigured(env) || !sub.reportUrl) {
-    const erp = await syncMeasurementToErpNext(env, id, sub, rawKey, now, null);
+    const erp = await syncMeasurementToErpNext(env, id, sub, rawKey, now, null, geometry);
     await store.recordAudit(env, { automation: "measurement", trigger: "roofruler", envelope_id: id,
       job_number: sub.jobNumber, target_ids: erp.name ?? (haveMeasures ? JSON.stringify(sub.measurements) : null),
       action: "received", result: "ok", error: !sub.reportUrl ? "no_report_url" : "drive_not_configured" });
     return jsonResp({ ok: true, job_number: sub.jobNumber, measurements: sub.measurements, filed: false,
+      geometry: geometrySummary(geometry),
       erpnext_measurement_id: erp.name,
       erpnext_evidence_id: erp.evidenceItemName,
       erpnext_error: erp.error,
@@ -105,13 +127,26 @@ export async function handleMeasurementIngest(env: Env, rawText: string, content
   await store.recordAudit(env, { automation: "measurement", trigger: "roofruler", envelope_id: id,
     job_number: sub.jobNumber, target_ids: report ?? folder,
     action: "filed", result: report ? "ok" : "error", error: report ? null : "report_not_filed" });
-  const erp = await syncMeasurementToErpNext(env, id, sub, rawKey, now, report);
+  const erp = await syncMeasurementToErpNext(env, id, sub, rawKey, now, report, geometry);
   return jsonResp({ ok: true, job_number: sub.jobNumber, measurements: sub.measurements, report, folder,
+    geometry: geometrySummary(geometry),
     erpnext_measurement_id: erp.name, erpnext_evidence_id: erp.evidenceItemName, erpnext_error: erp.error });
 }
 
 function jsonResp(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+/** Compact response summary of a geometry parse; null when no geometry present. */
+function geometrySummary(g: GeometryModel | null) {
+  if (!g) return null;
+  return {
+    facets: g.facets.length,
+    lines: g.lines.length,
+    points: g.points.length,
+    needs_review: g.needsReview,
+    failed_checks: g.checks.filter((c) => !c.ok).map((c) => `${c.check}:${c.target}`),
+  };
 }
 
 async function syncMeasurementToErpNext(
@@ -121,6 +156,7 @@ async function syncMeasurementToErpNext(
   rawKey: string,
   parsedAt: string,
   reportFileUrl: string | null,
+  geometry: GeometryModel | null,
 ): Promise<{ name: string | null; evidenceItemName: string | null; error: string | null }> {
   try {
     const erp = await pushMeasurementToErpNext(env, {
@@ -131,6 +167,9 @@ async function syncMeasurementToErpNext(
       rawKey,
       parsedAt,
       measurements: sub.measurements,
+      provider: geometry ? "AppliCad" : undefined,
+      needsReview: geometry?.needsReview,
+      sourceRefs: geometry?.sourceRefs,
     });
     if (erp) {
       await store.recordAudit(env, { automation: "erpnext_measurement", trigger: "roofruler",

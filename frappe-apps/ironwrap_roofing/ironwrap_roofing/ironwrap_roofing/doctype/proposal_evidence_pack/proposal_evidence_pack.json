@@ -21,7 +21,7 @@
   "fields": [
     { "fieldname": "pack_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Pack ID", "reqd": 1, "unique": 1 },
     { "fieldname": "roof_job", "fieldtype": "Link", "in_standard_filter": 1, "label": "Roof Job", "options": "Roof Job", "reqd": 1 },
-    { "fieldname": "quotation", "fieldtype": "Link", "label": "Quotation", "options": "Quotation" },
+    { "fieldname": "quotation", "fieldtype": "Link", "label": "Customer Quote", "options": "Customer Quote" },
     { "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Status", "options": "Draft\nReady\nApproved\nSent\nSigned\nRejected", "reqd": 1 },
     { "fieldname": "prepared_at", "fieldtype": "Datetime", "label": "Prepared At" },
     { "fieldname": "approved_by", "fieldtype": "Link", "label": "Approved By", "options": "User" },

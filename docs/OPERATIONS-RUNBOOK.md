@@ -46,13 +46,14 @@ lost queue message. If the same envelopes stay stuck across sweeps, the push its
 failing; look at `last_error` via `GET /admin/envelope/<id>` and treat as an outage of the
 target system, not a queue problem.
 
-### ERPNext down
+### Frappe site down
 
-No action needed to protect data. `handlePush` throws on ERPNext failure, which keeps the
-envelope pending and lets queue retries (max 5, then DLQ) preserve the proof path; the
-envelope, raw R2 body, and audit rows already exist. When ERPNext recovers, retries or the
-retry sweep complete the mirror. If envelopes dead-lettered during the outage, run the
-dead-letter replay above after ERPNext is back.
+The IronWrap OS Frappe site (the bridge keeps its erpnext-* naming) can be down without data
+risk. `handlePush` throws on Frappe-site failure, which keeps the envelope pending and lets
+queue retries (max 5, then DLQ) preserve the proof path; the envelope, raw R2 body, and audit
+rows already exist. When the Frappe site recovers, retries or the retry sweep complete the
+mirror. If envelopes dead-lettered during the outage, run the dead-letter replay above after
+the site is back.
 
 ### QuickBooks webhook signature failures
 
@@ -85,11 +86,11 @@ push payload must OMIT `source_name` entirely (see `CLAUDE.md` and
 | --- | --- | --- |
 | D1 (`ironwrap-bus` database) | System of record: envelopes, audit, dead-letter, heartbeats, dedup claims, QB receipts | Schema rebuildable from `workers-bus/migrations/`; export via `wrangler d1 export`. Everything downstream can be rebuilt from D1 + R2 |
 | R2 (`ironwrap-bus-raw` bucket) | Immutable raw inbound payloads, stored FIRST before any processing | Any envelope can be re-derived from its `raw_key` object |
-| ERPNext site | Operating mirror (Lead Envelope, Roof Job, gates, evidence records) | Re-populatable by replaying envelopes; not the system of record |
+| Frappe site (IronWrap OS) | Operating mirror (Lead Envelope, Roof Job, gates, evidence records) | Re-populatable by replaying envelopes; not the system of record |
 | Google Drive Shared Drives (IW Jobs / Restricted / Archive) | Human-facing job files and archive | Drive-native versioning/trash; IDs in `wrangler.jsonc` vars |
 | QuickBooks | Accounting truth (invoices, payments) | Owned by Intuit; the bus only mirrors status |
 
-Ownership rule: customer/tenant data lives in tenant-owned D1/R2/Drive/ERPNext/QuickBooks,
+Ownership rule: customer/tenant data lives in tenant-owned D1/R2/Drive/Frappe/QuickBooks,
 never only inside a vendor tool. JobNimbus is a temporary bridge and holds no unique truth.
 
 ## Secret Rotation
@@ -105,7 +106,7 @@ Local dev values go in `workers-bus/.dev.vars` (gitignored; template `.dev.vars.
 | `ADMIN_TOKEN` | Rotate, then update operator tooling and `mcp/ironwrap-bus-mcp` env (`IRONWRAP_ADMIN_TOKEN`) |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Mint a new service-account key in Google Cloud, apply, then delete the old key |
 | `QB_WEBHOOK_TOKEN` | Must match the Intuit developer portal verifier token; change both together |
-| `ERPNEXT_API_KEY` / `ERPNEXT_API_SECRET` | Regenerate on the ERPNext site; also update `mcp/erpnext-roofing-mcp` env |
+| `ERPNEXT_API_KEY` / `ERPNEXT_API_SECRET` | Regenerate on the Frappe site (env names keep the ERPNEXT_* prefix for compatibility); also update `mcp/erpnext-roofing-mcp` env |
 | `HERMES_WRITE_TOKEN`, `ERPNEXT_WRITE_ENABLED` | MCP-side write guards (not Worker secrets); rotate the token per tenant, keep the flag false unless approved writes are in use |
 
 Never commit secret values. After any rotation, send a test lead and confirm the ack path
@@ -119,7 +120,7 @@ Contacts: primary `OWNER_ALERT_EMAIL` (info@ironwrapexteriors.com), backup
 | Severity | Definition | Examples | Response |
 | --- | --- | --- | --- |
 | SEV1 | Lead loss possible or ingest down | `/ingest/*` erroring, R2/D1 writes failing, Worker down | Act immediately; fix ingest before anything else. Raw-first design means true loss requires R2 and D1 both failing |
-| SEV2 | Leads captured but not flowing | Dead-letters accumulating, JobNimbus/ERPNext push failing, ack emails not sending | Same business day; replay after fix |
+| SEV2 | Leads captured but not flowing | Dead-letters accumulating, JobNimbus/Frappe push failing, ack emails not sending | Same business day; replay after fix |
 | SEV3 | Degraded visibility or stale mirrors | Reconcile gaps, missed digest, QB webhook 401s, Drive filing failing | Within 1 to 2 business days |
 | SEV4 | Cosmetic or debt | Known rotation debt, placeholder config, doc drift | Next weekly review |
 

@@ -32,7 +32,7 @@ Upstream source clones inspected under `/tmp/ironwrap-research`:
 | `frappe/erpnext` | `95212e5` | ERPNext already contains CRM, sales, projects, stock/materials, quotations, sales orders, material requests, purchase flow primitives, and GPL license terms. |
 | `frappe/frappe_docker` | `d4a3100` | ERPNext/Frappe can be locally and production deployed with Docker; the disposable demo is explicitly not the custom-app proof path. |
 | `activepieces/activepieces` | `598f1535` | Activepieces is a real self-hostable Make/Zapier alternative with HTTP/webhook, Google, Jotform, Gmail/Drive, QuickBooks, Twilio pieces and MCP-facing ambitions. |
-| `docusealco/docuseal` | `d86b16d` | DocuSeal is a real e-sign fallback with API/webhooks/embedded signing, but AGPL plus additional terms make white-label use a legal/commercial decision. |
+| `docusealco/docuseal` | `d86b16d` | DocuSeal has API/webhooks/embedded signing, but AGPL plus additional terms made white-label use a legal/commercial decision. Retired outright 2026-07-09; direction is a commercial e-sign API or owned signing. |
 
 External source anchors:
 
@@ -58,7 +58,9 @@ research and local proofs:
 - The Make replacement question can be tested against Activepieces source and a local
   flow, instead of guessed.
 - DocuSeal can be evaluated as a fallback, but should not be promoted above JobNimbus
-  native e-sign until license/white-label posture is accepted.
+  native e-sign until license/white-label posture is accepted. (Superseded 2026-07-09:
+  DocuSeal is retired outright, AGPL; the direction is a commercial e-sign API or owned
+  signing.)
 - ERPNext's fit for roofing can be tested using actual custom DocTypes and sample
   IronWrap lead/measurement/job fixtures.
 
@@ -76,9 +78,9 @@ owner/business-policy decisions.
 | "Can Hermes run outside a laptop?" | Resolvable now | Hermes source/docs show Docker/SSH/Modal/Daytona/local terminal backends and gateways. Production design still needs an operational choice. | Runtime matrix: VPS Docker vs managed/serverless vs local-first. |
 | "Can field forms move from Jotform into ERPNext later?" | Resolvable now | Frappe Web Forms can create records for DocTypes and standard web forms can live in version control. | Prototype photo/checklist Web Form against custom Jobsite Update DocType. |
 | "Can we avoid Make later?" | Resolvable now | Activepieces is open-core/MIT community edition, has source-visible pieces for HTTP, webhooks, Jotform, Gmail, Drive, QuickBooks, Twilio, and a TypeScript piece framework. | Local Activepieces flow: webhook -> transform -> mock bus/ERPNext. |
-| "Can e-sign be owned if JobNimbus native e-sign fails?" | Partly resolved | DocuSeal has API/webhooks, embedded signing, PDF form builder, Docker deployment. License and white-label terms remain a decision. | E-sign fallback decision packet: JobNimbus native vs DocuSeal vs other OSS/commercial. |
+| "Can e-sign be owned if JobNimbus native e-sign fails?" | Resolved 2026-07-09 | DocuSeal has API/webhooks, embedded signing, PDF form builder, Docker deployment, but AGPL plus additional terms killed it as an option. | Decision closed: DocuSeal retired; direction is a commercial e-sign API or owned signing on the Proposal Evidence Pack. |
 | "Can we self-host ERPNext?" | Resolvable now | `frappe_docker` provides production compose patterns and site operations. The quick `pwd.yml` demo is only disposable and not enough for custom app validation. | Repeatable local/dev compose that installs ERPNext plus the roofing app. |
-| "What is the license posture?" | Partly resolved | Hermes and Frappe are MIT; ERPNext is GPL-3.0; Activepieces community is MIT with enterprise commercial areas; DocuSeal is AGPLv3 with additional terms. | Legal review packet before selling/white-label distribution. |
+| "What is the license posture?" | Resolved 2026-07-09 | Hermes and Frappe are MIT; ERPNext (GPL-3.0) was removed from the stack and DocuSeal (AGPLv3) was retired, leaving MIT foundations plus the proprietary IronWrap app. | One legal pass (trademark hygiene, MIT notice preservation) before the first external tenant. |
 
 ## Non-Blocking Research Still Useful
 
@@ -111,7 +113,7 @@ convert the proof contracts into running prototypes:
 | RoofRuler PDF parser runtime | Extend the AppliCad proof in `tools/applicad-xml-proof.mjs` to text-readable RoofRuler PDFs. | Confirms deterministic PDF extraction can beat generic OCR for proposal inputs. |
 | Proposal evidence graph | Link measurement values, photos, material lines, exclusions, and human overrides in JSON/DocTypes. | Whether proposals can be explainable instead of AI-generated fluff. |
 | Activepieces replacement probe | Run a local Activepieces flow with webhook + HTTP + Jotform/QuickBooks piece inspection or mocks. | Whether Activepieces is worth replacing Make for this shop. |
-| DocuSeal fallback probe | Run DocuSeal locally, inspect API/webhook lifecycle with a sample proposal PDF. | Whether it is operationally viable if native JobNimbus e-sign fails. |
+| DocuSeal fallback probe | Cancelled 2026-07-09: DocuSeal is retired (AGPL); probe a commercial e-sign API or the owned signing path instead. | Whether the chosen e-sign path survives a real proposal workflow. |
 | Frappe field surface probe | Create Web Forms/Portal pages for jobsite photo, safety, completion, and deficiency capture. | Whether Jotform can eventually be retired without hurting crews. |
 
 ## Real Blockers Requiring Account/Owner/Legal Access
@@ -147,6 +149,7 @@ contracts in `docs/HERMES-ERPNEXT-PROOF-PACK.md`:
 4. Measurement proof shape using existing `samples/` and the current `/ingest/measurement` route.
 5. Activepieces decision: bench as future Make replacement candidate, do not switch current live path now.
 6. DocuSeal decision: keep as stock fallback only if JobNimbus native e-sign fails.
+   (Superseded 2026-07-09: retired outright, AGPL; commercial e-sign API or owned signing.)
 7. Current-stack real account gates: JobNimbus, Google, Make, Jotform, QuickBooks, Cloudflare, website, compliance, GitHub remote.
 
 ## What I Should Not Do Yet
@@ -167,7 +170,7 @@ contracts in `docs/HERMES-ERPNEXT-PROOF-PACK.md`:
 4. One approved Hermes write with audit trail.
 5. Measurement/evidence parser and proposal traceability.
 6. Field forms and production gate surface.
-7. Activepieces and DocuSeal keep/bench/reject decisions.
+7. Activepieces keep/bench decision; the DocuSeal decision is closed (rejected/retired 2026-07-09, AGPL).
 8. White-label/license packet.
 
 This order deliberately separates product architecture proof from external account gates.

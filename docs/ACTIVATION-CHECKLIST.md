@@ -20,7 +20,7 @@ Legend: `[ ]` todo, `[x]` done/verified, `[~]` operating with a known temporary 
 - [x] Shared Drives exist: IW Jobs, IW Restricted, IW Archive.
 - [x] Inbound `ironwrapexteriors.com` mail lands in Google Workspace.
 - [~] `info@` and `quote@` are mirrored to Microsoft 365 until migration is closed; `ilya@` routes Microsoft-only. See `EMAIL-DUAL-DELIVERY.md`.
-- [x] DocuSeal Worker route removed; JobNimbus native e-sign is first choice.
+- [x] DocuSeal Worker route removed; DocuSeal itself is retired permanently (AGPL). E-sign: commercial e-sign API or owned signing; JobNimbus native e-sign bridges only until JobNimbus retires.
 - [x] SMS sending removed from the Worker; prospect SMS belongs in JobNimbus Engage after A2P approval.
 
 ## 1. Feed Real Leads Into The Bus - Hard Go-Live Gate

@@ -588,7 +588,7 @@ Exit criteria:
 - Historical file migration.
 - Paid acquisition expansion.
 - Supplier price feeds.
-- DocuSeal.
+- DocuSeal (since retired permanently 2026-07-09, AGPL; e-sign direction is a commercial e-sign API or owned signing).
 - Deeper proposal automation.
 
 ## 6. Cross-Thread Corrections Applied
@@ -599,7 +599,7 @@ The attached other-agent thread was directionally useful, but the final proposal
 2. Google Workspace/Drive is now the owner-directed target, but code still contains Microsoft/OneDrive assumptions. Treat this as a migration item.
 3. JobNimbus Engage is the preferred SMS path, but A2P/Canadian carrier registration is still required before prospect SMS.
 4. Moneris is not automatically the online payment link for QuickBooks invoices. Use QBO Payments by default unless fees/process justify Moneris plus Benji Pays.
-5. DocuSeal should stay benched unless JobNimbus native e-sign fails in practice.
+5. DocuSeal should stay benched unless JobNimbus native e-sign fails in practice. (Superseded 2026-07-09: DocuSeal retired outright, AGPL; commercial e-sign API or owned signing instead.)
 6. MileIQ is not needed initially if QuickBooks mileage tracking covers the actual requirement.
 7. WCB should be handled with clearance letters/account number workflow, not assumed API automation.
 8. RoofRuler/AppliCad structured exports should beat AI/OCR extraction whenever available.
@@ -613,7 +613,7 @@ The attached other-agent thread was directionally useful, but the final proposal
 - Custom BI/dashboard product.
 - OCR-first measurement extraction.
 - Four-vendor DIY phone AI.
-- DocuSeal unless JobNimbus e-sign fails.
+- DocuSeal, ever (retired 2026-07-09, AGPL; use a commercial e-sign API or owned signing).
 - Resend/bulk email unless Google Workspace deliverability cannot meet the need.
 - Paid lead channels before attribution and response QA are stable.
 - Any automation that has no owner-visible failure state.

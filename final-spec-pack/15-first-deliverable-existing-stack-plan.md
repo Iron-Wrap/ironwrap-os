@@ -39,7 +39,7 @@ AssistAI minutes are a Phase-2 (post-eval) cost (~CAD $35-70 loaded when live), 
 part of the first-deliverable incremental. One-time setup ~CAD $700-2,100 (A2P
 registration, DID provisioning, Make/Workers bus build labor, mailbox SPF/DKIM/DMARC
 domain auth, form re-pointing, training). "$0 new vendor setup" is false — Cloudflare,
-the owned Twilio number, and (if adopted) DocuSeal are new vendor lines. GHL was never
+the owned Twilio number, and (if adopted) a commercial e-sign API are new vendor lines. GHL was never
 adopted, so this still AVOIDS ~CAD $135-415/mo of GHL cost; frame as "simpler, more
 portable, avoids GHL's cost," not a dramatic saving.
 
@@ -98,8 +98,8 @@ Hold from Task 1 (gated):
   + one tracked number in the interim).
 - Renoworks.
 - Paradigm.
-- DocuSeal (open-source e-sign escape hatch — adopt only if JobNimbus native e-sign /
-  HTML+PDF fails the workflow; permanently retires the old PandaDoc/DocuSign line).
+- DocuSeal: retired permanently (AGPL), never adopt; the e-sign fallback beyond the
+  temporary JobNimbus bridge is a commercial e-sign API or owned signing.
 - Custom dashboard product.
 - Standing custom voice stack (the Retell+Twilio+Gemini+ElevenLabs build is killed;
   escalation only to managed Retell if the AssistAI eval gate fails).
@@ -120,7 +120,7 @@ flowchart TD
   H --> I["Review + Nurture via Google Workspace Brand Mailboxes / Engage"]
   I --> J["Jotform Jobsite Photo Form (device-GPS, offline) Live"]
   J --> K["RoofRuler Email / XML Measurement Intake (XML/text parse -> Cloudflare toMarkdown() free pass -> LLM/Mistral OCR only if needed) + Google Drive Archive"]
-  K --> L["Simple Proposal + Contract Path (JobNimbus e-sign / HTML+PDF; DocuSeal escape hatch)"]
+  K --> L["Simple Proposal + Contract Path (JobNimbus e-sign / HTML+PDF bridge; commercial e-sign API or owned signing later; DocuSeal retired)"]
   L --> M["QuickBooks Reviewed Finance Flow"]
   M --> P["Owner Exceptions + Reconciliation View"]
   P --> Q["QA + Final Security Hardening"]
@@ -158,7 +158,7 @@ Field/document jobs that previously rode NaturalForms templates now route as:
 | Work Order / dispatch | JobNimbus task/status | Jotform later if structured capture hurts |
 | Completion / inspection evidence | Jotform photo form + JobNimbus status | Jotform later for structured pass/fail |
 | Materials request | JobNimbus pipeline + (later) one Jotform | Paradigm deferred |
-| Contract / customer acceptance | JobNimbus e-sign / HTML+PDF | DocuSeal (open-source) escape hatch if it fails; retires PandaDoc/DocuSign |
+| Contract / customer acceptance | JobNimbus e-sign / HTML+PDF (bridge) | DocuSeal retired (AGPL); escape hatch is a commercial e-sign API or owned signing |
 | Safety record | Jotform / JobNimbus note | Jotform later if a structured form is needed |
 
 Integration priority for the keystone intake:

@@ -36,7 +36,7 @@ that "built" became "operating."
 | E4 | Unreachable photo URL | skipped + logged; raw retained; other photos still file |
 
 ## F. Proposals & finance
-| F1 | JobNimbus native e-sign proposal | proposal/signature flow works in JobNimbus; DocuSeal remains N/A unless adopted later |
+| F1 | JobNimbus native e-sign proposal | proposal/signature flow works in JobNimbus while it bridges; DocuSeal is retired (AGPL, never adopt); keeper path is a commercial e-sign API or owned signing |
 | F2 | QuickBooks invoice/payment event | `/webhook/quickbooks` verifies signature + records event |
 | F3 | Wrong `intuit-signature` | 401 |
 

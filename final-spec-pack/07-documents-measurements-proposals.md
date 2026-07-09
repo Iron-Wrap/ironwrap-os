@@ -117,18 +117,18 @@ Build a practical proposal path first:
 - Archive PDF to job folder.
 - Update JobNimbus status.
 
-JobNimbus native e-sign / HTML+PDF is the first contract/signature path because it
-consolidates onto the operational CRM with no added vendor. If it fails the customer
-workflow, adopt **DocuSeal** (open-source, AGPLv3; managed DocuSeal Cloud ~CAD $30/mo
-or one self-hosted container) — legally valid in Canada (audit-trail PDF; PIPEDA /
+JobNimbus native e-sign / HTML+PDF is the bridge contract/signature path because it
+consolidates onto the operational CRM with no added vendor; it dies with the JobNimbus
+retirement. **DocuSeal is retired permanently (2026-07-09)**: AGPLv3 plus additional
+terms conflict with the 100% IP-ownership posture, so it is not even a fallback. The
+keeper path is a commercial e-sign API (a proprietary service, e.g. Dropbox Sign or
+the DocuSign API) or owned signing built on the Proposal Evidence Pack. E-signatures
+remain legally valid in Canada for ordinary commercial docs (audit-trail PDF; PIPEDA /
 Alberta ETA recognize ordinary commercial e-signatures; PKI "secure electronic
 signatures" are only needed for narrow federal cases, not roofing contracts).
-Webhooks are in the free edition, so signing completion fires back through Make ->
-JobNimbus. Deploy stock and integrate via API/webhook (do not fork the AGPL code);
-the signer page shows DocuSeal branding unless Pro is purchased.
 
-This permanently retires the PandaDoc/DocuSign line — only consider PandaDoc/DocuSign
-if both JobNimbus native e-sign and DocuSeal fail acceptance criteria.
+The old "retire PandaDoc/DocuSign" line applied to the suites; the DocuSign API as a
+commercial e-sign service is an acceptable candidate for the keeper path.
 
 ## Proposal Flow
 

@@ -46,8 +46,9 @@ NOT need a native Cloudflare app — the bus's HTTP endpoints ARE the integratio
   plan is the **automation/integration cap** (~10 automations / 5 integrations on lower tiers) —
   5-8 stage scenarios + Make + QuickBooks could hit that ceiling. 💲
 - ✅ **Native e-signature / proposals:** estimates/documents support requested e-sign (email to
-  signer, type name, mobile finger/stylus, multi-signer tracking, "legally binding"). **Good enough
-  to drop DocuSeal.**
+  signer, type name, mobile finger/stylus, multi-signer tracking, "legally binding"). **Bridge
+  only: it dies with the JobNimbus retirement. DocuSeal is retired regardless (AGPL); the keeper
+  path is a commercial e-sign API or owned signing.**
 - ✅ **Native QuickBooks Online integration** (see QuickBooks). Contacts one-way (JN master);
   products/services + invoices sync; price/cost direction is **configurable via sync-priority**.
 - ⚠️ **API (api1, live-verified):** `Bearer` auth, `{count,results}`, id `jnid`, `filter` param
@@ -134,11 +135,12 @@ NOT need a native Cloudflare app — the bus's HTTP endpoints ARE the integratio
   attachments work on Notifications, not Autoresponders — use that to your advantage).
 - 💲 ~USD $39/mo paid tier for offline app / volume.
 
-## DocuSeal (e-sign — benched)
-- ✅ Open-source **AGPLv3**; webhooks + API in the **free/self-host** edition fire on completion;
-  e-sign valid in Canada (PIPEDA + Alberta ETA, ordinary commercial docs). 💲 Cloud/Pro $20/user/mo;
-  self-host free (branding on free tier; Pro features need a license). ⚠️ AGPL: deploy stock, don't
-  fork-and-expose. **Benched** — JobNimbus native e-sign suffices; adopt only if native fails.
+## DocuSeal (e-sign, RETIRED)
+- ⛔ **Retired permanently (2026-07-09), not even a fallback:** open-source **AGPLv3** plus
+  additional terms conflict with the 100% IP-ownership posture. Never adopt. E-sign stays valid
+  in Canada (PIPEDA + Alberta ETA, ordinary commercial docs); the replacement is a **commercial
+  e-sign API** (a proprietary service, e.g. Dropbox Sign or the DocuSign API) or **owned signing**
+  on the Proposal Evidence Pack. JobNimbus native e-sign bridges only until JobNimbus retires.
 
 ## RoofRuler / AppliCad (measurements)
 - ✅ **RoofRuler** = order-a-measurement service. **Exports structured XML + ESX (Xactimate-native) +

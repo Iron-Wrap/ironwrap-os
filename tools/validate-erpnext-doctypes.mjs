@@ -5,13 +5,9 @@ import { join } from "node:path";
 
 const root = new URL("..", import.meta.url).pathname;
 const doctypeRoot = "frappe-apps/ironwrap_roofing/ironwrap_roofing/ironwrap_roofing/doctype";
-const existingErpNextTargets = new Set([
-  "Customer",
-  "Lead",
-  "Opportunity",
-  "Project",
-  "Quotation",
-  "Supplier",
+// Frappe-only IP posture: the app links to no ERPNext (GPL-3.0) DocTypes. The only
+// non-custom Link target allowed is User, which lives in the MIT Frappe framework.
+const frappeCoreTargets = new Set([
   "User",
 ]);
 
@@ -37,6 +33,24 @@ const specs = [
     ],
   },
   {
+    name: "Roofing Customer",
+    dir: "roofing_customer",
+    idField: "customer_id",
+    requiredFields: ["customer_id", "display_name", "customer_type", "first_name", "last_name", "phone", "email", "lead_envelope", "notes"],
+  },
+  {
+    name: "Customer Quote",
+    dir: "customer_quote",
+    idField: "customer_quote_id",
+    requiredFields: ["customer_quote_id", "roof_job", "customer", "status", "quote_total", "currency", "valid_until", "prepared_at", "approved_by", "approved_at", "scope_summary", "assumptions", "exclusions", "quote_summary_json", "notes"],
+  },
+  {
+    name: "Supplier Profile",
+    dir: "supplier_profile",
+    idField: "supplier_id",
+    requiredFields: ["supplier_id", "supplier_name", "active", "contact_name", "phone", "email", "address_line1", "city", "province", "notes"],
+  },
+  {
     name: "Roofing Property",
     dir: "roofing_property",
     idField: "property_key",
@@ -54,11 +68,8 @@ const specs = [
       "job_status",
       "lead_envelope",
       "roofing_property",
-      "lead",
-      "opportunity",
       "customer",
       "quotation",
-      "project",
       "current_gate_state",
       "jobnimbus_contact_id",
       "jobnimbus_job_id",
@@ -330,7 +341,7 @@ for (const spec of specs) {
     if (field.fieldtype !== "Link" && field.fieldtype !== "Table") continue;
     const target = field.options;
     assert.ok(target, `${spec.name}.${field.fieldname} missing link/table target`);
-    assert.ok(localDoctypes.has(target) || existingErpNextTargets.has(target), `${spec.name}.${field.fieldname} unknown target: ${target}`);
+    assert.ok(localDoctypes.has(target) || frappeCoreTargets.has(target), `${spec.name}.${field.fieldname} unknown target: ${target} (only owned DocTypes and MIT Frappe core targets are allowed)`);
   }
 }
 

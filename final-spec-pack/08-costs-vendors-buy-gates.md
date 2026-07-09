@@ -15,7 +15,7 @@ scenario dual-writes to first.
 
 | Scenario | Monthly Estimate | One-Time Estimate | Recommendation |
 |---|---:|---:|---|
-| Existing-subscription first deliverable | ~CAD $120-$220/mo incremental (loaded) | ~CAD $700-$2,100 setup (**"$0 new vendor setup" is false** — Cloudflare, owned voice number if needed, and any later DocuSeal line are real vendor lines) | Default first delivery (keystone: retire GHL routes after proof, stand up JN spine + Make/Workers bus + owned store) |
+| Existing-subscription first deliverable | ~CAD $120-$220/mo incremental (loaded) | ~CAD $700-$2,100 setup (**"$0 new vendor setup" is false**: Cloudflare, owned voice number if needed, and any later commercial e-sign API line are real vendor lines) | Default first delivery (keystone: retire GHL routes after proof, stand up JN spine + Make/Workers bus + owned store) |
 | Low-volume operating spine | CAD $900-$1,900 all-in, or CAD $50-$350 incremental if current subscriptions are already paid | CAD $400-$1,500 (setup) | Best immediate target |
 | Lean build/test with AI pilot | CAD $1,100-$2,200 | CAD $400-$2,000 | Use during active build/config/test |
 | Expansion after volume proof | CAD $3,500-$5,000 | CAD $8,000-$12,000 | Only if Renoworks/report volume is justified |
@@ -127,7 +127,7 @@ Floor fallback always = voicemail → JobNimbus lead + human callback.
 | Jotform (paid tier / API) | USD ~$39/mo+ | Add only when a structured field workflow becomes daily and painful |
 | CallRail | Paid call/source attribution; pricing by plan/usage | **Deferred.** Add only when paid ads start (interim: UTM + manual Lead Source + 1 tracked number) |
 | Paradigm | CAD $10,800 setup + CAD ~$673/mo | Deferred; add only after manual material flow is stable |
-| DocuSeal (OSS e-sign escape hatch) | Managed DocuSeal Cloud ~CAD $30/mo, or one self-hosted container | **Escape hatch if JobNimbus native e-sign / HTML+PDF fails the workflow** — open-source (AGPLv3), legally valid in Canada (audit-trail PDF; PIPEDA / Alberta ETA recognize ordinary commercial e-signatures), webhooks in the free edition fire completion back through Make → JobNimbus. **Permanently retires the PandaDoc/DocuSign line.** Caveat: AGPL — deploy stock and integrate via API/webhook (don't fork); signer page shows DocuSeal branding unless Pro |
+| DocuSeal (RETIRED 2026-07-09) | n/a | **Retired permanently, not even an escape hatch:** AGPLv3 plus additional terms conflict with the 100% IP-ownership posture. When e-sign is needed beyond the temporary JobNimbus bridge, the path is a commercial e-sign API (a proprietary service, e.g. Dropbox Sign or the DocuSign API) or owned signing on the Proposal Evidence Pack; e-signatures stay legally valid in Canada for ordinary commercial docs (PIPEDA / Alberta ETA) |
 | Acrobat Pro (standalone) | future-maybe | Only if a real fillable-PDF gap remains (not a structured-capture tool) |
 | Affinity (Canva-owned, now free) | CAD $0 | Future-maybe for advanced design |
 | Moneris | Transaction-fee based | Not the default invoice path. Consider only for future in-person terminal/reconciliation needs |
@@ -155,7 +155,7 @@ and accounting confirm wording, fees, reconciliation, and staff handling.
 | Storage | Cloudflare R2 raw + Google Drive Shared Drives | Workspace paid storage if capacity requires | Custom object storage |
 | OCR | AppliCad XML, PDF text extraction, Cloudflare `toMarkdown()` (free Workers AI binding, replaces standalone Tesseract for text PDFs) | Mistral OCR (~$2-$4 per 1,000 pages) only for image-heavy/scanned/handwritten/layout-sensitive docs | Google Document AI if preferred (do NOT self-host an OCR engine — needs a GPU box) |
 | LLM drafting | Manual templates or de-identified prompts | Cheap models for non-sensitive text; Claude when structured field extraction/reasoning is needed | Dedicated paid LLM/vendor with privacy review |
-| E-sign | JobNimbus native e-sign / HTML+PDF | DocuSeal (OSS; managed Cloud ~CAD $30/mo or one self-hosted container) | PandaDoc/DocuSign (retired — DocuSeal is the escape hatch) |
+| E-sign | JobNimbus native e-sign / HTML+PDF (bridge only; dies with the JobNimbus retirement) | Commercial e-sign API (e.g. Dropbox Sign or the DocuSign API) or owned signing on the Proposal Evidence Pack | DocuSeal (retired permanently: AGPL); PandaDoc suite still rejected |
 | Automation | Existing Make scenarios (on Core) | Make Core covers dead-letter/dedup/reconcile at this volume; or the Cloudflare Workers bus | Custom relay |
 | Booking | JobNimbus calendar via Make webhook | Cal.com fallback | Custom booking page |
 | Field photos/geo | Jotform "Jobsite Photo" form ($0 incremental; device GPS at submit, offline-capable) | Improve the Jotform flow (kiosk mode, simpler/auto job-picker) if crew capture friction appears | Self-hosted OSS photo server / custom PWA (rejected) |

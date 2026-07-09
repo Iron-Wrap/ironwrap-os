@@ -221,7 +221,7 @@ flowchart LR
 | Webhooks/API relay | Make first | Cloudflare Workers free/low cost | Small Node service |
 | OCR | Deterministic extraction first | Tesseract/PaddleOCR local | Mistral OCR 4 for hard docs |
 | PDF generation | HTML + Playwright | WeasyPrint | Paid PDF API only if scaling pain appears |
-| E-sign | JobNimbus/native first | DocuSeal self-hosted | PandaDoc only if sales workflow requires it |
+| E-sign | JobNimbus/native first | DocuSeal self-hosted (since retired 2026-07-09, AGPL; use a commercial e-sign API or owned signing) | PandaDoc only if sales workflow requires it |
 | Dashboard | JobNimbus/GHL reports first | Google Sheet/Looker Studio | Custom dashboard |
 | File storage | Existing Drive/OneDrive | Google Drive | Custom object storage only if needed |
 
@@ -287,7 +287,7 @@ Selection rule:
 |---|---|
 | JobNimbus estimates/templates | First thing to test |
 | Custom HTML + PDF | Best IronWrap-specific proposal path |
-| DocuSeal / Documenso | Cheap/self-hosted e-sign fallback |
+| DocuSeal / Documenso | Cheap/self-hosted e-sign fallback (since retired 2026-07-09: AGPL; replaced by commercial e-sign API or owned signing) |
 | PandaDoc | Paid polished proposal/signature suite |
 | DocuSign | Standard e-sign, less proposal-specific |
 
@@ -684,7 +684,7 @@ Default stack:
 
 - HTML proposal template plus Playwright PDF export.
 - JobNimbus native signing/templates if sufficient.
-- DocuSeal if cheap self-hosted e-sign is needed.
+- DocuSeal if cheap self-hosted e-sign is needed (since retired 2026-07-09, AGPL; use a commercial e-sign API or owned signing instead).
 - PandaDoc only if IronWrap wants a polished paid proposal/signature suite.
 
 Done when:
@@ -966,7 +966,7 @@ Task 1 is shipped when:
 - LiveKit Agents is an open-source/custom alternative for realtime voice AI.
 - Retell/Vapi/Bland/Telnyx are managed voice-agent alternatives when speed matters more than full control.
 - Cal.com is a cheap/free booking fallback.
-- Cloudflare Workers, Neon/Supabase, n8n self-hosted, Tesseract/PaddleOCR, DocuSeal, and Playwright PDF are the cheap/default custom stack options.
+- Cloudflare Workers, Neon/Supabase, n8n self-hosted, Tesseract/PaddleOCR, DocuSeal (since retired, AGPL), and Playwright PDF are the cheap/default custom stack options.
 
 Reference URLs:
 

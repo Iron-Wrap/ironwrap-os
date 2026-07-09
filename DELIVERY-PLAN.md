@@ -124,7 +124,9 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
 | Lead spine | One real lead source posts to `/ingest/website`; D1/R2, ERPNext, temporary bridge push if needed, Gmail ack, and reconcile all prove it. |
 | Estimator spine | 3D estimator posts to `/ingest/estimate`; raw R2, D1 envelope, ERPNext Roof Job, and Instant Estimate Session prove it without JobNimbus/GHL. |
 | Measurement spine | RoofRuler/AppliCad feed posts to `/ingest/measurement`; raw body, measurement values, Drive filing, and audit row prove it. |
-| Field photo spine | Jotform posts to `/ingest/photo`; raw body, Drive folder, uploaded files, and audit row prove it. |
+| Field photo/voice spine | Jotform posts to `/ingest/photo`; raw body, Drive folder, uploaded files, `Voice Note` evidence for audio, and audit row prove it. |
+| Hermes agent layer | `node tools/validate-hermes-config.mjs` proves all 8 agent roles map only to real MCP tools and that no approved-write is granted without its `dry_run` pair; `hermes/agents/` + `hermes/skills/` codify the roles and procedures. |
+| Closeout spine | Completion/Warranty/Review-request and Communication-event DocTypes plus their review-gated MCP tools; review requests are never auto-sent, comms enforce CASL consent + quiet hours and are record-only. |
 | QuickBooks webhook | Signed webhook returns `{ ok: true }`; bad signature returns 401; audit row exists. |
 | Engage SMS | A2P approved; opt-in SMS sends/receives; STOP honored. |
 | AssistAI | Eval in `docs/ASSISTAI-EVAL.md` passes with >=85% capture+routing and zero catastrophic failures. |

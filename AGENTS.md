@@ -16,11 +16,15 @@ materials → completion → invoice → review, on a portable owned-data spine.
 |---|---|---|
 | `final-spec-pack/` | **The spec** — 19 numbered chapters (`README.md` is the index). The source of truth for the target system. | Authoritative |
 | `workers-bus/` | **The integration bus** — a Cloudflare Worker (fetch + queue + scheduled) that is the owned data layer + Make-bus replacement. Builds + tests green. | Buildable |
+| `frappe-apps/ironwrap_roofing/` | **ERPNext operating core** — custom Frappe app (23 DocTypes: lead/property/job through closeout/warranty/review, comms, supplier quote, market watch, Hermes Run audit). Contract-validated, no core fork. | Buildable |
+| `mcp/` | **Hermes tool surface** — `ironwrap-bus-mcp` (bus read + replay) and `erpnext-roofing-mcp` (read + deterministic policy checks + review-gated approved writes). Tests green. | Buildable |
+| `hermes/` | **Agent runtime layer** — `agents/roles.json` (per-role MCP tool allowlists, source of truth), agent profiles, `mcp-servers.json`, and the `skills/` procedure packs. | Buildable |
+| `config/tenants/` | **White-label tenant configs** — one JSON per contractor (brands, geography, gates, agents), secrets by env-var name only. Validated. | Buildable |
 | `samples/` | Real RoofRuler measurement-report PDFs + one AppliCad XML (the extraction inputs the spec references). `samples/_duplicates/` = byte-identical dupes, safe to delete. | Inputs |
-| `docs/` | Loose summaries/plans (incl. Russian deliverables, end-to-end plan). | Reference |
+| `docs/` | Loose summaries/plans plus the Hermes/ERPNext blueprint, proof pack, clone playbook, and operations runbook. | Reference |
 | `output/` | Generated deliverables (Russian `.docx`, overview PDF, website audit). | Generated |
 | `task1-spec/` | Original source material (v9.1 planning docs, early PDFs, pricing, a build script). | Legacy source |
-| `tools/` | One-off build scripts. | Legacy |
+| `tools/` | Zero-dep validators run in CI/manually: `validate-erpnext-doctypes.mjs`, `validate-tenant-config.mjs`, `validate-hermes-config.mjs`, plus the AppliCad XML proof. | Active |
 
 ## The architecture in one screen (target = the spec)
 
@@ -87,6 +91,26 @@ npx wrangler deploy --dry-run    # validate config + bundle
 - Secrets go in `.dev.vars` (local, gitignored) or `wrangler secret put` (prod): `INGEST_TOKEN`,
   `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`, and `QB_WEBHOOK_TOKEN`
   when QuickBooks is connected.
+
+## Working with `hermes/`, `mcp/`, and the validators
+
+```bash
+node tools/validate-erpnext-doctypes.mjs   # DocType JSON contract (23 DocTypes)
+node tools/validate-tenant-config.mjs      # white-label tenant configs, no secrets, isolation
+node tools/validate-hermes-config.mjs      # agent roles vs LIVE MCP tool inventory + safety contract
+(cd mcp/erpnext-roofing-mcp && npm test)   # pure-logic builders + policy checks
+(cd mcp/ironwrap-bus-mcp && npm test)      # bus read/replay wrappers
+```
+- **Hermes is the operating brain, not the database.** It reads broadly and writes only through
+  narrow approved-command tools. `hermes/agents/roles.json` is the source of truth for which MCP
+  tools each of the 8 agent roles may use; `validate-hermes-config.mjs` proves every listed tool
+  exists and that no approved-write tool is granted without its `dry_run` counterpart in the same
+  role (the read → dry_run → approval → write → audit contract cannot be skipped).
+- **The mutation contract is universal:** `read → propose → dry_run → policy_check →
+  human_approval → write → audit_event`. No tool sends a customer message or mutates accounting;
+  comms and review requests are record-only, and every approved write records a `Hermes Run` row.
+- Approved writes are double-gated: `ERPNEXT_WRITE_ENABLED=true` (or `IRONWRAP_BUS_WRITE_ENABLED`)
+  **plus** the `HERMES_WRITE_TOKEN` passed as `approval_token`. Skill packs live in `hermes/skills/`.
 
 ## Conventions & guardrails
 

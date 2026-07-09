@@ -46,6 +46,15 @@ record-only (no tool can send). Field intake now recognizes voice-note attachmen
 (`tools/validate-tenant-config.mjs`), a clone playbook (`docs/WHITE-LABEL-CLONE-PLAYBOOK.md`), and
 an operations runbook (`docs/OPERATIONS-RUNBOOK.md`) covering gates 11 and 13.
 
+Hermes runtime checkpoint (2026-07-09): the agent layer is codified under `hermes/`. Per-role MCP
+tool allowlists for all eight agent roles are the source of truth in `hermes/agents/roles.json`,
+with a human-readable profile per role, the launch/tool-filter manifest `hermes/mcp-servers.json`,
+and the eleven skill packs under `hermes/skills/`. `tools/validate-hermes-config.mjs` proves the
+roles and the manifest against the live MCP tool inventory and enforces the safety contract at
+config level: every referenced tool exists, buckets are correctly typed, and no approved-write tool
+is granted without its `dry_run` counterpart in the same role. No tool sends a customer message or
+mutates accounting.
+
 ## Research Basis
 
 Primary sources reviewed:

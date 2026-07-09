@@ -1,0 +1,16 @@
+# Cloudflare Tunnel config for the IronWrap OS Frappe site (free HTTPS ingress,
+# no open ports). Copy to /etc/cloudflared/config.yml on the VM and replace the
+# placeholders. Create the tunnel first:
+#   cloudflared tunnel login
+#   cloudflared tunnel create ironwrap-os
+#   cloudflared tunnel route dns ironwrap-os os.ironwrapexteriors.com
+tunnel: <TUNNEL_UUID>
+credentials-file: /root/.cloudflared/<TUNNEL_UUID>.json
+
+ingress:
+  # frappe_docker's frontend (nginx) listens on 8080 by default
+  - hostname: os.ironwrapexteriors.com
+    service: http://localhost:8080
+    originRequest:
+      httpHostHeader: os.ironwrapexteriors.com
+  - service: http_status:404

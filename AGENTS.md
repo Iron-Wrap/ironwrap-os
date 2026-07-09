@@ -20,6 +20,7 @@ materials → completion → invoice → review, on a portable owned-data spine.
 | `mcp/` | **Hermes tool surface** — `ironwrap-bus-mcp` (bus read + replay) and `erpnext-roofing-mcp` (read + deterministic policy checks + review-gated approved writes). Tests green. | Buildable |
 | `hermes/` | **Agent runtime layer** — `agents/roles.json` (per-role MCP tool allowlists, source of truth), agent profiles, `mcp-servers.json`, and the `skills/` procedure packs. | Buildable |
 | `config/tenants/` | **White-label tenant configs** — one JSON per contractor (brands, geography, gates, agents), secrets by env-var name only. Validated. | Buildable |
+| `deploy/` | **Launch kit** (free-tier path): app-repo split script, frappe_docker apps.json template, Cloudflare Tunnel config, R2 backup cron script, env inventory. Runbook: `docs/LAUNCH-RUNBOOK.md`; live-spine proof: `tools/launch-proof.mjs`. | Buildable |
 | `samples/` | Real RoofRuler measurement-report PDFs + one AppliCad XML (the extraction inputs the spec references). `samples/_duplicates/` = byte-identical dupes, safe to delete. | Inputs |
 | `docs/` | Loose summaries/plans plus the Hermes/ERPNext blueprint, proof pack, clone playbook, and operations runbook. | Reference |
 | `output/` | Generated deliverables (Russian `.docx`, overview PDF, website audit). | Generated |

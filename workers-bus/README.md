@@ -160,10 +160,11 @@ independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
    Roof Job sync also creates missing initial production gate rows without resetting
    existing gate state. ERPNext is still a consumer, not the raw intake source.
 
-## Maintenance owner (don't skip — spec gap #3)
+## Operating owner
 
-This is owned code a no-devops shop must keep running. Name a build/maintenance owner (or
-a retainer) before going live, and keep the **hybrid**: a ~$9/mo Make Core seat for its
-native connectors + visual observability until the owned replacements are proven. The bus
-discipline (envelope, dedup, dead-letter, reconcile) is the
-same as the spec — this only changes *where the infra runs*.
+This is owned product code that IronWrap builds, operates, and resells, so keeping it running is
+core to the business, not an outsourced burden. The owner plus Claude Code is the engineering/ops
+capacity; the operations runbook (`docs/OPERATIONS-RUNBOOK.md`) covers monitoring, incident
+playbooks, and rotation. Optionally keep a ~$9/mo Make Core seat for its native connectors and
+visual observability until the owned replacements are proven. The bus discipline (envelope, dedup,
+dead-letter, reconcile) is the same as the spec; this only changes where the infra runs.

@@ -1,0 +1,38 @@
+name: CI
+# Enforces the contracts every PR claims: DocType JSON shape, Hermes role/manifest
+# safety (no approved-write without its dry_run pair), tenant-config isolation, and
+# all three test suites. workers-bus typecheck and wrangler dry-run stay local per
+# AGENTS.md: they need wrangler-generated Env types (gitignored).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate DocType contract (26 DocTypes, Frappe-only link targets)
+        run: node tools/validate-erpnext-doctypes.mjs
+      - name: Validate Hermes roles + manifest against live MCP tool inventory
+        run: node tools/validate-hermes-config.mjs
+      - name: Validate tenant configs (no secrets, isolation)
+        run: node tools/validate-tenant-config.mjs
+
+      - name: Test erpnext-roofing-mcp
+        run: npm ci --prefix mcp/erpnext-roofing-mcp && npm test --prefix mcp/erpnext-roofing-mcp
+      - name: Test ironwrap-bus-mcp
+        run: npm ci --prefix mcp/ironwrap-bus-mcp && npm test --prefix mcp/ironwrap-bus-mcp
+      - name: Test workers-bus (zero-dep node --test)
+        run: npm test --prefix workers-bus
+
+      - name: No em dashes in Hermes/agent-facing content
+        run: |
+          if grep -rl $'—' hermes/ config/ deploy/; then
+            echo "em dash found in agent-facing content" >&2; exit 1
+          fi

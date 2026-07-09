@@ -89,9 +89,9 @@ dead-letter, Cron gives the daily reconciliation, and the dual-write becomes a
 problem (M9). **Recommended hybrid:** the Worker does the heavy lifting (envelope,
 dedup, dead-letter, reconcile, single-write) and a cheap **Make Core seat (~$9/mo)**
 is kept for its native JobNimbus/QuickBooks/Twilio connectors + owner-visible
-observability, until the custom JobNimbus integration is proven. **Caveat:** this adds
-owned code a no-devops shop must maintain — name a build/maintenance owner before
-committing.
+observability, until the custom JobNimbus integration is proven. **Note:** this is owned
+product code IronWrap builds, operates, and resells; the owner plus Claude Code is the
+engineering/ops capacity (see docs/OPERATIONS-RUNBOOK.md).
 
 | ID | Task | Output | Acceptance |
 |---|---|---|---|
@@ -137,7 +137,7 @@ config-only.
 | D2 | Build XML/parser path | Parser output | AppliCad XML proof exists in `tools/applicad-xml-proof.mjs`; production path promotes reviewed fields into the job/proposal record |
 | D3 | Build RoofRuler email intake | Email attachment route | RoofRuler PDFs are matched, archived, and queued for extraction/review |
 | D4 | Build PDF extraction path | Extractor output | Extraction order: (1) deterministic AppliCad XML / text-PDF parse, then (2) **Cloudflare `toMarkdown()`** (Workers AI binding -- free, on-stack; replaces standalone Tesseract for text PDFs), then (3) Claude/LLM read only when structured field extraction/reasoning is needed; text PDF values extracted or flagged |
-| D5 | Add OCR fallback | OCR queue | (4) **Mistral OCR 4** (~$2-4 per 1,000 pages -> cents/mo at this volume) ONLY for image-heavy/scanned/handwritten/layout-sensitive docs; do NOT self-host an OCR engine (Surya/PaddleOCR need a GPU box -- wrong for a no-devops shop, Workers can't run them); image-heavy docs flagged or processed |
+| D5 | Add OCR fallback | OCR queue | (4) **Mistral OCR 4** (~$2-4 per 1,000 pages -> cents/mo at this volume) ONLY for image-heavy/scanned/handwritten/layout-sensitive docs; do NOT self-host an OCR engine (Surya/PaddleOCR need a GPU box Workers can't run, not warranted at this volume); image-heavy docs flagged or processed |
 | D6 | Build proposal template | HTML/PDF proposal | Customer can view and PDF archives |
 | D7 | Decide contract path | Approved signing/contract flow | JobNimbus native e-sign / HTML+PDF FIRST; if it fails the workflow, adopt **DocuSeal** (open-source AGPLv3; managed DocuSeal Cloud ~CAD $30/mo or one self-hosted container; legally valid in Canada -- audit-trail PDF, PIPEDA / Alberta ETA recognize ordinary commercial e-signatures; webhooks in the free edition fire completion back through Make -> JobNimbus). Deploy stock, integrate via API/webhook (AGPL -- don't fork). Permanently retires the PandaDoc/DocuSign line. Contract archives and updates job status |
 | D8 | Decide material-list design | Approved material-list template | Office/shop can review and use the selected format |

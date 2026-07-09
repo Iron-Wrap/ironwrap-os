@@ -107,8 +107,8 @@ D1/R2 layer is the system of record.
 Make's bus role may instead run on Cloudflare Workers (Workers + D1 + R2 + Queues
 + Cron) as a hybrid — the Worker does the heavy lifting and a cheap Make Core seat
 is kept for native connectors + observability until the custom JobNimbus
-integration is proven; this adds owned code, so name a build/maintenance owner
-before committing (see 01).
+integration is proven; this is owned product code IronWrap builds, operates, and
+resells, with the owner plus Claude Code as the engineering/ops capacity (see 01).
 
 Current implementation note: this hybrid is already the active direction. The
 Worker owns `/ingest/:source`, `/ingest/photo`, `/ingest/measurement`,
@@ -170,8 +170,8 @@ photo GPS by default, and direct camera-capture uploads lose metadata regardless
 If real-world crew adoption shows per-submission job-picking friction is tanking
 photo-documentation compliance, fix the Jotform flow itself — kiosk mode, a
 simpler/auto job-picker, fewer taps — rather than adding a second photo tool. Do
-not self-host an OSS photo server (Immich/PhotoPrism/LibrePhotos) — wrong trade
-for a no-devops shop. Do not build a custom photo PWA yet.
+not self-host an OSS photo server (Immich/PhotoPrism/LibrePhotos); not warranted at
+this volume, prove the simpler Jotform path first. Do not build a custom photo PWA yet.
 
 Integration order:
 

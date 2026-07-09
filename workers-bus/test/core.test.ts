@@ -31,12 +31,13 @@ test("extractContact normalizes varied inbound field names", () => {
   assert.equal(c.email, "jane@example.com");
 });
 
-test("normalizeEnvelope builds canonical shape; job_ref null at intake", () => {
+test("normalizeEnvelope builds canonical shape and preserves upstream job refs when present", () => {
   const e = normalizeEnvelope("website", { name: "Bob", phone: "5875551234" }, "2026-06-28T20:00:00.000Z");
   assert.equal(e.source, "website");
   assert.equal(e.job_ref, null);
   assert.equal(e.contact.phone, "+15875551234");
   assert.equal(e.ts, "2026-06-28T20:00:00.000Z");
+  assert.equal(normalizeEnvelope("website", { email: "bob@example.com", job_number: "26-180-ER" }, "t").job_ref, "26-180-ER");
 });
 
 test("validateInbound requires a contact handle (phone or email)", () => {

@@ -1,5 +1,8 @@
 # IronWrap End-To-End Summary And Plan
 
+> Historical planning reference. Use `final-spec-pack/00-final-decisions.md`,
+> `docs/ACTIVATION-CHECKLIST.md`, and `SETUP-CHECKLIST.md` for current operating truth.
+
 Date: 2026-06-27  
 Scope: notes from the Ilia discussion, local files in `/Users/ivan/Code/ironwrap`,
 and current public web/vendor research. No shared credentials were used.
@@ -8,7 +11,7 @@ and current public web/vendor research. No shared credentials were used.
 
 There are two separate opportunities and they should stay separate.
 
-1. **Task 1: IronWrap internal operating system.** Build the operating spine for
+1. **Task 1: IronWrap OS.** Build the operating spine for
    IronWrap first: lead capture, booking, JobNimbus cleanup, Make automations,
    folders, proposals, payment/review follow-up, measurement intake, AI
    missed-call handling, and launch controls. The local `final-spec-pack` already
@@ -101,7 +104,7 @@ Caveats:
   available. Do not buy upgrades or REST/API access until native JobNimbus
   integration, web apps, or webhook output fail a real test.
 
-## Task 1 Plan: IronWrap Internal OS
+## Task 1 Plan: IronWrap OS
 
 ### Goal
 
@@ -424,9 +427,8 @@ purchase or implementation.
 
 1. **Do not start Task 2 build yet.** Finish Task 1 enough to generate real
    operational data and sample jobs.
-2. **Run a 2-week Task 1 audit/build sprint**: account inventory, Make scenario
-   map, JobNimbus stage/field cleanup, GHL intake/calendar cleanup, safe test
-   records.
+2. **Run the Task 1 audit/build pass**: account inventory, Make scenario map,
+   JobNimbus stage/field cleanup, GHL intake/calendar cleanup, safe test records.
 3. **Build the measurement parser prototype inside Task 1**: AppliCad XML +
    RoofRuler PDF extraction + review status. This becomes reusable evidence for
    Task 2.

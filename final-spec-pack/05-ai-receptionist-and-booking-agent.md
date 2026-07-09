@@ -94,13 +94,10 @@ The agent must:
   within ~10s; target <60s human-or-AI touch, 24/7. Runs on a pipe separate from
   nurture.
   - **Interim pre-A2P ack path.** JobNimbus Engage SMS cannot send until the fresh
-    A2P 10DLC + Canadian carrier registration is approved (~1–3 wks). Until then the
+    A2P 10DLC + Canadian carrier registration is approved. Until then the
     instant-ack/MCTB runs on an interim channel — an **email acknowledgement to the
-    prospect (via the Microsoft 365 brand mailbox) + an owner phone/SMS alert from
-    the owner's own line** — so the <60s touch SLA holds from day one. The
-    prospect-**SMS** leg of MCTB switches on at A2P approval. Be honest in the pitch:
-    the email/owner-alert form of instant-ack ships day one; the prospect-SMS form
-    ships at A2P approval.
+    prospect (via the Google Workspace brand mailbox) + an owner phone/SMS alert from
+    the owner's own line**. The prospect-**SMS** leg of MCTB switches on at A2P approval.
 - Capture name, phone, email if available, address, service interest, urgency.
 - Classify lead type: roof, siding, gutter, soffit, fascia, commercial, supply/shop, warranty, emergency.
 - Classify operating division: residential, commercial, shop/supply, or steel/distribution.
@@ -113,11 +110,11 @@ The agent must:
 - Update JobNimbus task/note when the lead is qualified or already tied to a job.
 - Create a clear next step after every call.
 - Trigger the appropriate follow-up sequence after the call when eligible (any
-  email leg sends from the Microsoft 365 brand mailbox; SMS via Engage; JobNimbus
+  email leg sends from the Google Workspace brand mailbox; SMS via Engage; JobNimbus
   native email unused).
 - Escalate urgent, angry/complaint, legal, warranty, payment, insurance, low-confidence, and human-request calls.
 - Send confirmation after booking — SMS via Engage; any booking-confirmation email
-  sends from the Microsoft 365 brand mailbox (JobNimbus native email unused).
+  sends from the Google Workspace brand mailbox (JobNimbus native email unused).
 - On no-answer / failure, always degrade to a JobNimbus lead + human callback (voicemail floor).
 - Write a short summary staff can read without listening to full recording.
 

@@ -2,7 +2,8 @@
 
 Every account/service/access the end-state system needs, with status. Doubles as the **vendor
 register** required by `final-spec-pack/09` (compliance). Status: ✅ have · 🔲 need (set up / upgrade /
-enable) · ❌ retire (cancel to avoid double-paying) · ❓ confirm. 💲 = cost. Verified 2026-07-01.
+enable) · ❌ retire (cancel to avoid double-paying) · ❓ confirm. 💲 = cost. Verified against repo
+and handoff docs 2026-07-07.
 
 ## 1. CRM & operations
 | Service | Status | For | Action |
@@ -15,7 +16,7 @@ enable) · ❌ retire (cancel to avoid double-paying) · ❓ confirm. 💲 = cos
 | Service | Status | For | Action |
 |---|---|---|---|
 | Twilio | 🔲 need | Own the portable business phone number (DID) for voice/AssistAI | 🔲 open account · 🔲 provision a Canadian number (~USD $1/mo) |
-| A2P 10DLC / TCR registration | 🔲 need | Legal permission to send business SMS in Canada (mandatory, carrier-level, ~2 wks) | 🔲 register brand + campaign (via Twilio or Engage). Needs: legal name, **CRA Business Number**, address, website, sample messages, opt-in description. **Start now** |
+| A2P 10DLC / TCR registration | 🔲 need | Legal permission to send business SMS in Canada (mandatory, carrier-level) | 🔲 register brand + campaign (via Twilio or Engage). Needs: legal name, **CRA Business Number**, address, website, sample messages, opt-in description. |
 
 ## 3. Money
 | Service | Status | For | Action |
@@ -25,12 +26,18 @@ enable) · ❌ retire (cancel to avoid double-paying) · ❓ confirm. 💲 = cos
 | CRA Business Number | ✅ have | Needed for A2P registration + tax | — |
 
 ## 4. Email, files & storage (moving Microsoft → Google)
+
+> **2026-07-03:** IronWrap Workspace is LIVE (`sales@` + aliases `info@`/`quote@`, MX → Google)
+> and everything inbound is mirrored to the old Microsoft 365 mailboxes until migration
+> completes — rules, tenant (`NETORG18843785`, GoDaddy-resold) and off-switch documented in
+> [`EMAIL-DUAL-DELIVERY.md`](./EMAIL-DUAL-DELIVERY.md).
+
 | Service | Status | For | Action |
 |---|---|---|---|
 | Google Workspace — iRoof (`info@iroofalberta.ca`) | ✅ have | iRoof brand email | — |
-| Google Workspace — IronWrap | 🔲 need | IronWrap brand email + Drive; built on the unassigned `[]@ironwrapexteriors.com` mailbox | 🔲 create Workspace · 🔲 migrate `quote@` + `info@ironwrapexteriors.com` onto it |
-| Google Drive (Shared Drive) | 🔲 need | All job files, folder-per-job by JobNimbus number | 🔲 create a **Shared Drive** (not personal My Drive) |
-| Google send-path creds | 🔲 need | Automated email from the bus/Make | 🔲 SMTP relay OR service account + domain-wide delegation (in Workspace admin) |
+| Google Workspace — IronWrap | ✅ have | IronWrap brand email; `sales@` user with `info@`/`quote@` aliases | Keep M365 mirror until migration close; see `EMAIL-DUAL-DELIVERY.md` |
+| Google Drive (Shared Drives) | ✅ have | All job files, folder-per-job by JobNimbus number | IW Jobs / IW Restricted / IW Archive are live |
+| Google send-path creds | ✅ have | Automated email from the bus | Service account + domain-wide delegation; bus sends from `sales@` for now |
 
 ## 5. Integration & infrastructure
 | Service | Status | For | Action |
@@ -54,7 +61,7 @@ enable) · ❌ retire (cancel to avoid double-paying) · ❓ confirm. 💲 = cos
 ## 8. Domains / DNS
 | Service | Status | For | Action |
 |---|---|---|---|
-| `ironwrapexteriors.com` + `iroofalberta.ca` registrars | ✅ have | Email authentication + form repoint | 🔲 DNS access for **SPF + DKIM + DMARC** on the new Google Workspace domain |
+| `ironwrapexteriors.com` + `iroofalberta.ca` registrars | ✅ have | Email authentication + form repoint | 🔲 confirm Google DKIM + clean DMARC monitoring before tightening policy |
 
 ## 9. Compliance / legal
 | Service | Status | For | Action |
@@ -68,12 +75,13 @@ enable) · ❌ retire (cancel to avoid double-paying) · ❓ confirm. 💲 = cos
 | ❌ GoHighLevel (GHL) | JobNimbus + the bus |
 | ❌ Microsoft 365 / OneDrive | Google Workspace + Google Drive |
 | ❌ BookIPI | QuickBooks (invoices/quotes/receipts) |
-| ❌ Stripe | QuickBooks Payments / Moneris |
+| ❌ Stripe | QuickBooks Payments |
 | ❌ MileIQ | QuickBooks built-in mileage tracker |
 
 ## 11. Secrets the bus holds (not services — credentials, stored as Cloudflare secrets, never in code)
-`INGEST_TOKEN`, `ADMIN_TOKEN` (generated) · `JOBNIMBUS_API_KEY` (rotate) · Google email/Drive creds ·
-Twilio creds (post-A2P). **Rotate anything pasted in chat** (JobNimbus key, Cloudflare token).
+`INGEST_TOKEN`, `ADMIN_TOKEN` (generated) · `JOBNIMBUS_API_KEY` (rotate) ·
+`GOOGLE_SERVICE_ACCOUNT_JSON` · `QB_WEBHOOK_TOKEN` once QuickBooks is connected. **Rotate anything
+pasted in chat** (JobNimbus key, Cloudflare token). The Worker does not hold Twilio SMS secrets.
 
 ## 12. Design (optional, minor)
 Free **Canva** + free **Affinity** cover marketing/proposal graphics. 💲 CAD $0.

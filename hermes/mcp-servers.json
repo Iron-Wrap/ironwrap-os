@@ -1,0 +1,107 @@
+{
+  "version": "0.1.0",
+  "note": "Launch/config manifest for the two MCP servers Hermes connects to. tool_filter arrays are the UNION of each bucket across every agent role in hermes/agents/roles.json that uses the server; per-role narrowing is enforced from roles.json, not here. Every approved_write tool is gated: it does nothing unless the server's write-enable env var is true (IRONWRAP_BUS_WRITE_ENABLED for the bus, ERPNEXT_WRITE_ENABLED for erpnext) AND the caller passes HERMES_WRITE_TOKEN as approval_token, and each write records a Hermes Run audit row. env values are placeholders resolved from the Hermes host environment; never commit real secret values.",
+  "mcpServers": {
+    "ironwrap-bus-mcp": {
+      "command": "node",
+      "args": ["mcp/ironwrap-bus-mcp/src/server.mjs"],
+      "description": "Read-only bus truth plus the approved-write dead-letter replay proof.",
+      "tool_filter": {
+        "read": [
+          "list_recent_envelopes",
+          "get_envelope",
+          "list_dead_letters"
+        ],
+        "dry_run": [
+          "dry_run_replay"
+        ],
+        "approved_write": [
+          "request_replay"
+        ]
+      },
+      "env": {
+        "IRONWRAP_BUS_BASE_URL": "${IRONWRAP_BUS_BASE_URL}",
+        "IRONWRAP_ADMIN_TOKEN": "${IRONWRAP_ADMIN_TOKEN}",
+        "IRONWRAP_BUS_WRITE_ENABLED": "${IRONWRAP_BUS_WRITE_ENABLED}",
+        "HERMES_WRITE_TOKEN": "${HERMES_WRITE_TOKEN}"
+      }
+    },
+    "erpnext-roofing-mcp": {
+      "command": "node",
+      "args": ["mcp/erpnext-roofing-mcp/src/server.mjs"],
+      "description": "ERPNext roofing operating core: read, deterministic policy checks, and review-gated approved writes.",
+      "tool_filter": {
+        "read": [
+          "get_roof_job",
+          "get_lead_envelope",
+          "list_job_gates",
+          "list_blocked_jobs",
+          "get_measurement_report",
+          "list_measurement_reports_for_job",
+          "get_material_takeoff",
+          "list_material_takeoffs_for_job",
+          "get_supplier_order",
+          "list_supplier_orders_for_job",
+          "get_supplier_quote",
+          "list_supplier_quotes_for_job",
+          "get_instant_estimate_session",
+          "list_instant_estimate_sessions_for_job",
+          "get_evidence_item",
+          "list_evidence_for_job",
+          "get_field_check_in",
+          "list_field_check_ins_for_job",
+          "get_proposal_evidence_pack",
+          "list_proposal_evidence_packs_for_job",
+          "get_payment_milestone",
+          "list_payment_milestones_for_job",
+          "get_completion_packet",
+          "list_completion_packets_for_job",
+          "get_warranty_packet",
+          "list_warranty_packets_for_job",
+          "get_review_request",
+          "list_review_requests_for_job",
+          "get_communication_event",
+          "list_communication_events_for_job",
+          "list_market_watch_items",
+          "check_consent",
+          "check_quiet_hours",
+          "get_hermes_run",
+          "list_hermes_runs_for_job"
+        ],
+        "dry_run": [
+          "dry_run_update_gate",
+          "dry_run_material_takeoff",
+          "dry_run_update_material_takeoff_status",
+          "dry_run_supplier_order",
+          "dry_run_supplier_quote",
+          "dry_run_proposal_evidence_pack",
+          "dry_run_completion_packet",
+          "dry_run_warranty_packet",
+          "dry_run_review_request",
+          "dry_run_communication_event",
+          "dry_run_market_watch_item"
+        ],
+        "approved_write": [
+          "request_update_gate",
+          "request_create_material_takeoff",
+          "request_update_material_takeoff_status",
+          "request_create_supplier_order",
+          "request_create_supplier_quote",
+          "request_create_proposal_evidence_pack",
+          "request_create_completion_packet",
+          "request_create_warranty_packet",
+          "request_create_review_request",
+          "request_record_communication_event",
+          "request_add_market_watch_item"
+        ]
+      },
+      "env": {
+        "ERPNEXT_BASE_URL": "${ERPNEXT_BASE_URL}",
+        "ERPNEXT_API_KEY": "${ERPNEXT_API_KEY}",
+        "ERPNEXT_API_SECRET": "${ERPNEXT_API_SECRET}",
+        "ERPNEXT_WRITE_ENABLED": "${ERPNEXT_WRITE_ENABLED}",
+        "HERMES_WRITE_TOKEN": "${HERMES_WRITE_TOKEN}"
+      }
+    }
+  }
+}

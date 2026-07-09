@@ -1,0 +1,125 @@
+{
+  "tenant": {
+    "id": "demo-exteriors",
+    "display_name": "Demo Exteriors Co (fake gate-11 clone tenant)",
+    "status": "demo"
+  },
+  "brand": {
+    "name": "Demo Exteriors",
+    "brands": [
+      {
+        "key": "demoext",
+        "display_name": "Demo Exteriors Co",
+        "sender_mailbox": "hello@demo-exteriors.example",
+        "sender_aliases": ["quotes@demo-exteriors.example"],
+        "sender_domain": "demo-exteriors.example"
+      }
+    ],
+    "review_links": {
+      "demoext": "PLACEHOLDER: Google Business Profile review link (Demo Exteriors Co)"
+    }
+  },
+  "geography": {
+    "service_areas": ["Calgary", "Airdrie", "Okotoks"],
+    "province": "AB",
+    "country": "Canada",
+    "compliance": {
+      "casl_consent_required": true,
+      "quiet_hours": {
+        "start_hour": 9,
+        "end_hour": 20,
+        "timezone": "America/Edmonton"
+      }
+    }
+  },
+  "services": ["roofing", "metal_roofing", "gutters"],
+  "materials": {
+    "suppliers": [
+      { "key": "primary_metal", "name": "PLACEHOLDER: demo metal supplier", "role": "metal_panels_trim" }
+    ],
+    "profiles": "PLACEHOLDER: panel profile catalog",
+    "gauges": "PLACEHOLDER: metal gauge catalog",
+    "colors": "PLACEHOLDER: color catalog per supplier line"
+  },
+  "estimates": {
+    "instant_estimate": {
+      "non_binding": true,
+      "review_required": true,
+      "disclaimer": "This is a non-binding budget range for demonstration purposes only. Final pricing requires an estimator review."
+    }
+  },
+  "proposal": {
+    "renderer": "erpnext_print_format",
+    "options_model": "good_better_best",
+    "payment_milestones": [
+      { "milestone": "deposit", "percent": 30 },
+      { "milestone": "materials_delivered", "percent": 40 },
+      { "milestone": "completion", "percent": 30 }
+    ]
+  },
+  "production": {
+    "gates": ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"],
+    "photo_requirements": {
+      "before": 4,
+      "progress": 6,
+      "completion": 8
+    }
+  },
+  "communications": {
+    "channels": ["email", "phone"],
+    "templates": "PLACEHOLDER: demo template pack",
+    "consent_policy": "express_or_ebr",
+    "quiet_hours_ref": "geography.compliance.quiet_hours"
+  },
+  "integrations": {
+    "jobnimbus": {
+      "role": "temporary_bridge",
+      "enabled_env": "JOBNIMBUS_ENABLED",
+      "api_key_env": "JOBNIMBUS_API_KEY"
+    },
+    "quickbooks": {
+      "role": "accounting_truth",
+      "webhook_verifier_env": "QB_WEBHOOK_TOKEN"
+    },
+    "google_drive": {
+      "service_account_env": "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "shared_drive_id_vars": ["SHARED_DRIVE_ID_JOBS", "SHARED_DRIVE_ID_RESTRICTED", "SHARED_DRIVE_ID_ARCHIVE"]
+    },
+    "measurement_vendors": ["RoofRuler", "AppliCad"],
+    "erpnext": {
+      "enabled_env": "ERPNEXT_ENABLED",
+      "base_url_env": "ERPNEXT_BASE_URL",
+      "api_key_env": "ERPNEXT_API_KEY",
+      "api_secret_env": "ERPNEXT_API_SECRET"
+    }
+  },
+  "agents": {
+    "enabled_roles": [
+      "owner_operator",
+      "lead_concierge",
+      "estimator_assistant",
+      "production_controller",
+      "field_companion",
+      "finance_reconciler",
+      "closeout_agent",
+      "support_admin_agent"
+    ],
+    "approval_policy": "dry_run_then_human_approval",
+    "write_guard_envs": ["ERPNEXT_WRITE_ENABLED", "HERMES_WRITE_TOKEN"]
+  },
+  "market_defense": {
+    "competitor_set": [
+      "JobNimbus",
+      "Roofr",
+      "AccuLynx",
+      "CompanyCam",
+      "GoHighLevel",
+      "Eagleview",
+      "Hover",
+      "SumoQuote",
+      "ServiceTitan"
+    ],
+    "watch_cadence_days": 30,
+    "escalation_owner": "owner"
+  }
+}

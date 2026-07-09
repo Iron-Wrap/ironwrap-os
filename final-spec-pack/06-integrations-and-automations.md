@@ -15,22 +15,22 @@
 | System | Needed Surface | Direction | Priority |
 |---|---|---|---|
 | JobNimbus | Contacts, jobs, tasks, notes, attachments, boards/statuses, API keys, automations; lead records from every inbound path | In/out | P0 |
-| Make (integration bus) | Canonical lead envelope, scenario triggers, webhooks, error-handler -> dead-letter, idempotency/dedup, schedules, data stores, daily reconciliation | In/out | P0 |
-| Owned data layer (Cloudflare D1 + R2) | Dual-write target for every lead envelope FIRST (before JobNimbus); raw submission store; reconciliation source | In/out | P0 |
+| Make (connector/visibility layer) | Existing scenario triggers, native SaaS connectors, owner-visible runs, Make UI bridge/retire actions | In/out | P0 |
+| Owned Worker bus (Cloudflare Workers + D1 + R2 + Queues + Cron) | Canonical lead envelope, raw submission store, idempotency/dedup, retry/dead-letter, source counts, reconciliation heartbeat | In/out | P0 |
 | JobNimbus AssistAI | Inbound/missed/after-hours calls, transcripts, summaries, capture+book+route-flag, books natively into the JobNimbus calendar (Make used for route-flagging + the owned-store dual-write, not necessarily the booking call), lead-record creation | In/out | P0 |
 | JobNimbus Engage | Two-way SMS, MCTB / instant-ack send, nurture, review-request sequences | In/out | P0 |
-| Microsoft 365 email (brand mailboxes); JN native email unused; dedicated ESP deferred for bulk deliverability | All outbound email from brand mailboxes (JN native email unreliable); SPF/DKIM/DMARC, bounce monitoring, message IDs | Out | P0 |
-| Jotform "Jobsite Photo" form | Sole jobsite photo/geo path ($0 incremental): JN job picker, Geolocation widget (device GPS at submit, offline-capable), multi-photo upload, auto timestamp; webhook -> Make -> OneDrive + JN + owned store | In/out | P0 |
+| Google Workspace email (brand mailboxes); JN native email unused; dedicated ESP deferred for bulk deliverability | All outbound email from brand mailboxes (JN native email unreliable); SPF/DKIM/DMARC, bounce monitoring, message IDs | Out | P0 |
+| Jotform "Jobsite Photo" form | Sole jobsite photo/geo path ($0 incremental): JN job picker, Geolocation widget (device GPS at submit, offline-capable), multi-photo upload, auto timestamp; webhook -> Make -> Google Drive + JN + owned store | In/out | P0 |
 | Google Business Profile | Profile fields, review link, source label, optional booking link | Manual/config | P0 |
-| OneDrive (Microsoft 365) | Folder create/rename, upload, permission links | Out | P0 |
-| Email / Google mailbox | RoofRuler report emails (inbound report inbox; distinct from the Microsoft 365 brand mailboxes used for outbound), sender filters, PDF attachments, message IDs | In | P0 |
+| Google Drive (Google Workspace) | Folder create/rename, upload, permission links | Out | P0 |
+| Email / Google mailbox | RoofRuler report emails (inbound report inbox; distinct from the Google Workspace brand mailboxes used for outbound), sender filters, PDF attachments, message IDs | In | P0 |
 | Jotform | Structured field forms (offline app: photo/file, draw signature, device-GPS geotag), webhook -> Make -> JN | In/out | Deferred (add when a structured workflow hurts) |
 | QuickBooks | Customers, invoice status, payment status, products/services | Mostly out/status back | P1 |
 | OCR/parser | File input, extracted blocks/tables, confidence | In | P1 |
 | Proposal generator | Job data in, HTML/PDF out, sent/accepted state | In/out | P1 |
 | Renoworks | Lead, uploaded photo/model, roof/wall/product/color interest, visualizer link, engagement stats if exportable | In | Deferred |
 | Paradigm | Material/production order import/API, rollformer model mapping, shop status | Out/in | Deferred |
-| Moneris | Interac debit and credit-card processing status only | Status back | Approval required |
+| QuickBooks Payments | Invoice card/EFT payment status | Status back | P1 |
 | FinanceIT | Financing application/status reference only | Status back | Approval required |
 
 ## Core Automations
@@ -47,7 +47,7 @@
 | RoofRuler report email | RoofRuler email with PDF attachment received | Match job/address, archive PDF, parse or flag review | Review task + unmatched report queue |
 | Measurement uploaded | File attached/uploaded | Parse/extract or flag review | Review-needed task |
 | Structured form completed (Jotform, deferred) | Form completed/submitted | Archive PDF/output, update JobNimbus note/task/status, log event | Admin alert + manual archive task |
-| Jobsite photos synced | Jotform "Jobsite Photo" submit (offline app, syncs on reconnect) | Webhook -> Make: dual-write envelope to owned store, archive photos to OneDrive job folder, attach to JobNimbus job with device-GPS geo + timestamp | Dead-letter + admin alert if webhook/sync fails |
+| Jobsite photos synced | Jotform "Jobsite Photo" submit (offline app, syncs on reconnect) | Webhook -> Make: dual-write envelope to owned store, archive photos to Google Drive job folder, attach to JobNimbus job with device-GPS geo + timestamp | Dead-letter + admin alert if webhook/sync fails |
 | Proposal sent | Proposal generated/sent | Update status, archive PDF, start follow-up | Sales task |
 | Proposal accepted | Customer accepts/signs | Update status, deposit workflow | Office task |
 | Deposit paid | QuickBooks/payment event | Update JobNimbus deposit status | Finance task |
@@ -110,6 +110,12 @@ is kept for native connectors + observability until the custom JobNimbus
 integration is proven; this adds owned code, so name a build/maintenance owner
 before committing (see 01).
 
+Current implementation note: this hybrid is already the active direction. The
+Worker owns `/ingest/:source`, `/ingest/photo`, `/ingest/measurement`,
+`/webhook/quickbooks`, queue push, DLQ, retry sweep, and reconcile. Make remains
+the safe UI-controlled bridge for existing RoofRuler/GHL/Jotform routes until
+replacement proof exists.
+
 ## Logging Standard (Mandatory)
 
 Every automation MUST log to the owned store; each log includes:
@@ -171,10 +177,10 @@ Integration order:
 
 1. Jotform "Jobsite Photo" form (offline app: JN job picker, device-GPS
    Geolocation widget, multi-photo upload, auto timestamp) -> webhook -> Make ->
-   OneDrive job folder + JobNimbus job + dual-write to owned store.
+   Google Drive job folder + JobNimbus job + dual-write to owned store.
 2. When a structured workflow hurts: Jotform offline app (photo/file, draw
    signature, device-GPS geotag) -> webhook -> Make -> JobNimbus.
-3. Structured output files/exports archived to OneDrive via Make.
+3. Structured output files/exports archived to Google Drive via Make or the Worker.
 4. Every structured-form event flows through the Make bus (envelope, dedup,
    dual-write to owned store) like any other inbound.
 
@@ -196,7 +202,7 @@ Rules:
 - Jotform owns structured completed-form evidence (when introduced).
 - JobNimbus owns job status and next action.
 - Owned D1/R2 layer is the system of record (dual-write first).
-- OneDrive owns the archived PDF/output copy.
+- Google Drive owns the archived PDF/output copy.
 - QuickBooks invoices and receipts remain reviewed accounting actions.
 - Adobe interactive PDFs are not a structured-capture tool (flat output;
   structured JSON only via the paid Adobe dev API + re-keying).

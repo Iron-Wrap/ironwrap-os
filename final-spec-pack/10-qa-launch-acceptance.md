@@ -34,8 +34,8 @@ proves staff can recover.
 | Cancel/reschedule | Calendar and task updated |  |
 | Job qualification | JobNimbus job updated and owner assigned |  |
 | Folder creation | One folder created after job number exists |  |
-| Email deliverability seed test | Seed/inbox-placement test passes via the Microsoft 365 brand mailboxes; SPF/DKIM/DMARC verified; bounce monitoring active |  |
-| Jobsite Photo form | Jotform "Jobsite Photo" form captures device GPS (Geolocation widget) offline, correct job picked, multi-photos + timestamp; webhooks Make -> lands in correct JobNimbus job + OneDrive folder; no duplicate job |  |
+| Email deliverability seed test | Seed/inbox-placement test passes via the Google Workspace brand mailboxes; SPF/DKIM/DMARC verified; bounce monitoring active |  |
+| Jobsite Photo form | Jotform "Jobsite Photo" form captures device GPS (Geolocation widget) offline, correct job picked, multi-photos + timestamp; webhooks Make -> lands in correct JobNimbus job + Google Drive folder; no duplicate job |  |
 | Jotform structured form (if active) | Completed structured form (photo/file, drawn signature, GPS) webhooks Make -> JobNimbus job; no duplicate job |  |
 | RoofRuler email intake | Incoming RoofRuler PDF is matched, archived, extracted or flagged |  |
 | Measurement upload | Extracted or review-needed flag |  |
@@ -53,7 +53,7 @@ proves staff can recover.
 | Opt-out | SMS/email stops |  |
 | Automation failure | Make error-handler routes to dead-letter (Google Sheet + email alert); owner task created; no silent loss |  |
 | API key revoked | Failure visible, no silent data loss |  |
-| A2P 10DLC Canadian registration | Fresh A2P 10DLC + Canadian carrier registration for JobNimbus Engage SMS is approved before any automated texting (lead time ~1-3 wks; not a re-registration) |  |
+| A2P 10DLC Canadian registration | Fresh A2P 10DLC + Canadian carrier registration for JobNimbus Engage SMS is approved before any automated texting; not a re-registration |  |
 | Business number in Twilio | Business phone number for AssistAI/Engage is provisioned/owned in Twilio so it stays portable |  |
 | "Messaging is live" smoke test | A test SMS and a test call route correctly through Engage/AssistAI on the owned number |  |
 | CASL consent ledger in JobNimbus | CASL consent is captured and maintained in JobNimbus going forward (no historical export needed) |  |
@@ -100,7 +100,7 @@ Task 1 is accepted when:
 
 - All active lead sources normalize through the Make bus into the owned store (D1+R2) and JobNimbus.
 - Every inbound lead is dual-written to the owned store FIRST, then pushed to JobNimbus via an idempotent, `envelope_id`-keyed job; a continuous retry sweep re-drives any envelope stuck in `pending_jn_push` so a transient JobNimbus outage self-heals (the daily count only detects gaps).
-- Instant-ack/MCTB fires off the owned-store write, never off the JobNimbus push: pre-A2P it runs on the interim channel (prospect email via ESP + owner phone/SMS alert) so the <60s touch holds from day one; the prospect-SMS leg switches on at A2P approval.
+- Instant-ack/MCTB fires off the owned-store write, never off the JobNimbus push: pre-A2P it runs on the interim channel (prospect email via Google Workspace + owner phone/SMS alert); the prospect-SMS leg switches on at A2P approval.
 - Daily source-vs-landed reconciliation runs green with a named weekly owner; dead-letter + email alert proven.
 - Idempotency/dedup keyed on phone/email prevents duplicate records across inbound paths.
 - Website source page, service intent, UTM/manual Lead Source data are preserved when available (call-tracking deferred).
@@ -108,12 +108,12 @@ Task 1 is accepted when:
 - Qualified leads reach JobNimbus.
 - JobNimbus owns job number and stage.
 - Folder creation is idempotent.
-- Jobsite photos: the Jotform "Jobsite Photo" form (sole jobsite-photo/geo tool, $0 incremental) captures device GPS offline + correct job and lands in the right JobNimbus job + OneDrive folder. Jotform structured forms (if active) webhook Make -> JobNimbus correctly.
+- Jobsite photos: the Jotform "Jobsite Photo" form (sole jobsite-photo/geo tool, $0 incremental) captures device GPS offline + correct job and lands in the right JobNimbus job + Google Drive folder. Jotform structured forms (if active) webhook Make -> JobNimbus correctly.
 - RoofRuler email reports are matched, archived, and reviewed.
 - Appointments work (JobNimbus calendar; native booking).
 - AssistAI passes the written scored eval gate (>=85% capture+routing, zero catastrophic failures); voicemail floor fallback verified.
-- Microsoft 365 brand-mailbox email passes the seed/inbox-placement test; SPF/DKIM/DMARC + bounce monitoring active.
-- GHL was trial-evaluated only and is being declined before any production use; nothing to migrate — end the trial. Fresh A2P 10DLC + Canadian carrier registration approved, business number owned in Twilio, "messaging is live" smoke test passes, CASL consent ledger maintained in JobNimbus going forward, and website form post destinations verified/pointed at the Make bus.
+- Google Workspace brand-mailbox email passes the seed/inbox-placement test; SPF/DKIM/DMARC + bounce monitoring active; temporary Microsoft mirror rules are either verified or disabled after migration close.
+- GHL lead routes are retired after replacement proof. Fresh A2P 10DLC + Canadian carrier registration approved, Engage "messaging is live" smoke test passes, CASL consent ledger maintained in JobNimbus going forward, and website form post destinations verified/pointed at the bus.
 - Proposal/PDF flow works.
 - Contract/signature path works.
 - Measurement extraction or review flag works.

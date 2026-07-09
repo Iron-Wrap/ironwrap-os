@@ -11,9 +11,11 @@ import {
 } from "./core.ts";
 import * as store from "./store.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
+import { pushToErpNext } from "./erpnext.ts";
 import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
 import { handlePhotoIngest } from "./photos.ts";
 import { handleMeasurementIngest } from "./measurements.ts";
+import { handleEstimateIngest } from "./estimates.ts";
 import { handleQuickbooksWebhook } from "./quickbooks.ts";
 import { ensureJobFolder, googleConfigured } from "./google.ts";
 
@@ -43,16 +45,31 @@ export default {
         if (body === null) return json({ error: "payload_too_large" }, 413);
         return await handleMeasurementIngest(env, body, req.headers.get("content-type"));
       }
+      // Estimator/configurator handoff: own the lead/session first; do not depend on JobNimbus/GHL.
+      if (req.method === "POST" && url.pathname === "/ingest/estimate") {
+        if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
+        const body = await readBounded(req);
+        if (body === null) return json({ error: "payload_too_large" }, 413);
+        return await handleEstimateIngest(
+          env,
+          body,
+          req.headers.get("content-type"),
+          req.headers.get("idempotency-key") ?? req.headers.get("x-idempotency-key"),
+        );
+      }
       const ingest = url.pathname.match(/^\/ingest\/([a-z]+)$/);
       if (req.method === "POST" && ingest) {
         if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
         return await handleIngest(req, env, ctx, ingest[1]);
       }
-      if (req.method === "POST" && url.pathname.startsWith("/admin/")) {
+      if (url.pathname.startsWith("/admin/")) {
         if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN)) return json({ error: "unauthorized" }, 401);
-        if (url.pathname === "/admin/reconcile") return json(await runReconcile(env));
-        if (url.pathname === "/admin/source-count") return await handleSourceCount(req, env);
-        if (url.pathname === "/admin/replay") return json(await replayDeadLetter(env));
+        if (req.method === "GET" && url.pathname === "/admin/envelopes") return json(await handleListEnvelopes(env, url));
+        if (req.method === "GET" && url.pathname.startsWith("/admin/envelope/")) return json(await handleGetEnvelope(env, url));
+        if (req.method === "GET" && url.pathname === "/admin/dead-letter") return json(await handleListDeadLetters(env, url));
+        if (req.method === "POST" && url.pathname === "/admin/reconcile") return json(await runReconcile(env));
+        if (req.method === "POST" && url.pathname === "/admin/source-count") return await handleSourceCount(req, env);
+        if (req.method === "POST" && url.pathname === "/admin/replay") return json(await replayDeadLetter(env));
       }
       // (Proposal e-sign route removed 2026-07-02: JobNimbus native e-sign is confirmed
       // sufficient; DocuSeal stays benched as the escape hatch — see final-spec-pack/00.)
@@ -117,7 +134,7 @@ async function handleIngest(req: Request, env: Env, ctx: ExecutionContext, sourc
   if (key) {
     const windowH = Number(env.DEDUP_WINDOW_HOURS ?? "72");
     const since = new Date(Date.now() - windowH * 3600_000).toISOString();
-    dupOf = await store.findDuplicate(env, key, since);
+    dupOf = await store.claimDedup(env, key, envelopeId, now, since);
   }
 
   const intentText = `${raw["service"] ?? ""} ${raw["service_intent"] ?? ""} ${raw["message"] ?? ""}`;
@@ -161,20 +178,20 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
   const rec = await store.getEnvelope(env, envelopeId);
   if (!rec) throw new Error("envelope_missing");
   if (rec.status === "pushed" || rec.status === "reconciled") return; // idempotent re-delivery
+  let r: Awaited<ReturnType<typeof pushToJobNimbus>>;
   try {
-    const r = await pushToJobNimbus(env, rec);
-    await store.setStatus(env, envelopeId, "pushed", { jn_contact_id: r.contactId, jn_job_id: r.jobId ?? null });
+    r = await pushToJobNimbus(env, rec);
+    await store.recordAudit(env, {
+      automation: "jn_push", trigger: "queue", envelope_id: envelopeId,
+      target_ids: `contact:${r.contactId}${r.jobId ? ",job:" + r.jobId : ""}`,
+      action: "push", result: "ok",
+    });
     // Fresh job → ensure its Drive folder (+01–06 template) now (best-effort, credential-gated).
     if (r.jobNumber && googleConfigured(env)) {
       const p = safeJson(rec.payload_json);
       await ensureJobFolder(env, r.jobNumber, rec.contact_name, typeof p.brand === "string" ? p.brand : null)
         .catch((e) => log({ at: "job_folder", job: r.jobNumber, error: String(e) }));
     }
-    await store.recordAudit(env, {
-      automation: "jn_push", trigger: "queue", envelope_id: envelopeId,
-      target_ids: `contact:${r.contactId}${r.jobId ? ",job:" + r.jobId : ""}`,
-      action: "push", result: "ok",
-    });
   } catch (err) {
     const n = await store.bumpAttempt(env, envelopeId, String(err));
     await store.recordAudit(env, {
@@ -184,19 +201,58 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     });
     throw err; // → queue retry; exhausted → DLQ
   }
+
+  try {
+    const erp = await pushToErpNext(env, rec, r);
+    if (erp) {
+      await store.setErpNextSync(env, envelopeId, {
+        leadEnvelopeId: erp.name,
+        roofingPropertyId: erp.roofingPropertyName ?? null,
+        roofJobId: erp.roofJobName ?? null,
+      });
+      const targetIds = [
+        `lead_envelope:${erp.name}`,
+        erp.roofingPropertyName ? `roofing_property:${erp.roofingPropertyName}` : null,
+        erp.roofJobName ? `roof_job:${erp.roofJobName}` : null,
+        erp.productionGateCount ? `production_gates:${erp.productionGateCount}` : null,
+      ].filter(Boolean).join(",");
+      await store.recordAudit(env, {
+        automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,
+        target_ids: targetIds,
+        action: erp.reused ? "upsert_existing" : "create", result: "ok",
+      });
+    }
+  } catch (err) {
+    const error = `erpnext_push: ${String(err)}`;
+    await store.setErpNextError(env, envelopeId, error).catch(() => {});
+    const n = await store.bumpAttempt(env, envelopeId, error);
+    await store.recordAudit(env, {
+      automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,
+      action: `push_attempt_${n}`, result: "error", error,
+      recovery_owner: env.OWNER_ALERT_EMAIL,
+    });
+    throw err; // keep the envelope pending; queue retry preserves the ERPNext proof path
+  }
+
+  await store.setStatus(env, envelopeId, "pushed", {
+    job_ref: r.jobNumber ?? rec.job_ref,
+    jn_contact_id: r.contactId,
+    jn_job_id: r.jobId ?? null,
+  });
 }
 
 async function handleDead(env: Env, envelopeId: string): Promise<void> {
   const rec = await store.getEnvelope(env, envelopeId);
+  const stage = rec?.last_error?.includes("erpnext_") ? "erpnext_push" : "jn_push";
   await store.setStatus(env, envelopeId, "dead", { last_error: rec?.last_error ?? "dead_letter" });
   await store.recordDeadLetter(env, {
-    envelope_id: envelopeId, stage: "jn_push",
+    envelope_id: envelopeId, stage,
     error: rec?.last_error ?? "unknown", payload_json: rec?.payload_json ?? "{}",
   });
   // Best-effort: the dead_letter ROW (recorded above) is the source of truth; a failed alert email
   // must not throw, or the DLQ message would needlessly retry/drop.
-  await sendOwnerAlert(env, `DEAD-LETTER: lead ${envelopeId} failed to reach JobNimbus`,
-    `<p>Envelope <b>${envelopeId}</b> exhausted retries to JobNimbus.</p>
+  await sendOwnerAlert(env, `DEAD-LETTER: lead ${envelopeId} failed during ${stage}`,
+    `<p>Envelope <b>${envelopeId}</b> exhausted retries during <b>${stage}</b>.</p>
      <p>Last error: ${rec?.last_error ?? "unknown"}</p>
      <p>Recover with POST /admin/replay once the cause is fixed.</p>`)
     .catch((e) => log({ at: "deadletter_alert_failed", envelope_id: envelopeId, error: String(e) }));
@@ -252,6 +308,33 @@ async function replayDeadLetter(env: Env): Promise<{ requeued: number }> {
   if (ids.length) await env.JN_QUEUE.sendBatch(ids.map((id) => ({ body: { envelope_id: id } })));
   await env.DB.prepare(`UPDATE dead_letter SET recovered = 1 WHERE recovered = 0`).run();
   return { requeued: ids.length };
+}
+
+async function handleListEnvelopes(env: Env, url: URL): Promise<{ envelopes: ReturnType<typeof adminEnvelope>[] }> {
+  const limit = clampLimit(url.searchParams.get("limit"), 50, 100);
+  const rows = await store.listRecentEnvelopes(env, limit);
+  return { envelopes: rows.map(adminEnvelope) };
+}
+
+async function handleGetEnvelope(env: Env, url: URL): Promise<{ envelope: ReturnType<typeof adminEnvelope> | null }> {
+  const id = decodeURIComponent(url.pathname.slice("/admin/envelope/".length));
+  const rec = id ? await store.getEnvelope(env, id) : null;
+  return { envelope: rec ? adminEnvelope(rec) : null };
+}
+
+async function handleListDeadLetters(env: Env, url: URL): Promise<{ dead_letters: Awaited<ReturnType<typeof store.listOpenDeadLetters>> }> {
+  const limit = clampLimit(url.searchParams.get("limit"), 50, 100);
+  return { dead_letters: await store.listOpenDeadLetters(env, limit) };
+}
+
+function adminEnvelope(rec: EnvelopeRecord): Omit<EnvelopeRecord, "payload_json"> & { payload: Record<string, unknown> } {
+  const { payload_json, ...rest } = rec;
+  return { ...rest, payload: safeJson(payload_json) };
+}
+
+function clampLimit(raw: string | null, fallback: number, max: number): number {
+  const n = Number(raw ?? fallback);
+  return Number.isInteger(n) && n > 0 ? Math.min(n, max) : fallback;
 }
 
 async function handleSourceCount(req: Request, env: Env): Promise<Response> {

@@ -1,6 +1,6 @@
 // measurements.ts — RoofRuler/AppliCad measurement-report intake (Phase 3, spec 07).
 //
-// Files the report into the job's OneDrive folder (keyed by JobNimbus job number) and captures any
+// Files the report into the job's Google Drive folder (keyed by JobNimbus job number) and captures any
 // structured measurements an upstream AI-Extract already produced. The deterministic → toMarkdown()
 // → Mistral OCR ladder (spec 07) is a credential-gated follow-up; for now the report is filed and
 // provided measurements are recorded. Raw is stored FIRST, so nothing is lost.
@@ -8,6 +8,7 @@
 import { newEnvelopeId, parseBody } from "./core.ts";
 import * as store from "./store.ts";
 import { googleConfigured, fileToJobFolder } from "./google.ts";
+import { pushMeasurementToErpNext } from "./erpnext.ts";
 
 const JOB_KEYS = ["job_number", "jobnumber", "job", "job_no", "jn_job", "jobnimbus_job", "job_id", "jobid"];
 const REPORT_KEYS = ["report_url", "report", "pdf", "pdf_url", "document", "document_url", "file", "url"];
@@ -66,7 +67,8 @@ export async function handleMeasurementIngest(env: Env, rawText: string, content
   const sub = parseMeasurementSubmission(parseBody(rawText, contentType));
   const id = newEnvelopeId();
   const now = new Date().toISOString();
-  await store.putRaw(env, `raw/measurements/${now.slice(0, 10)}/${id}.json`, rawText, "application/json");
+  const rawKey = `raw/measurements/${now.slice(0, 10)}/${id}.json`;
+  await store.putRaw(env, rawKey, rawText, "application/json");
 
   if (!sub.jobNumber) {
     await store.recordAudit(env, { automation: "measurement", trigger: "roofruler", envelope_id: id,
@@ -76,10 +78,14 @@ export async function handleMeasurementIngest(env: Env, rawText: string, content
 
   const haveMeasures = Object.keys(sub.measurements).length;
   if (!googleConfigured(env) || !sub.reportUrl) {
+    const erp = await syncMeasurementToErpNext(env, id, sub, rawKey, now, null);
     await store.recordAudit(env, { automation: "measurement", trigger: "roofruler", envelope_id: id,
-      job_number: sub.jobNumber, target_ids: haveMeasures ? JSON.stringify(sub.measurements) : null,
+      job_number: sub.jobNumber, target_ids: erp.name ?? (haveMeasures ? JSON.stringify(sub.measurements) : null),
       action: "received", result: "ok", error: !sub.reportUrl ? "no_report_url" : "drive_not_configured" });
     return jsonResp({ ok: true, job_number: sub.jobNumber, measurements: sub.measurements, filed: false,
+      erpnext_measurement_id: erp.name,
+      erpnext_evidence_id: erp.evidenceItemName,
+      erpnext_error: erp.error,
       note: !sub.reportUrl ? "no report_url — measurements captured only" : "drive_not_configured — raw stored" });
   }
 
@@ -99,9 +105,44 @@ export async function handleMeasurementIngest(env: Env, rawText: string, content
   await store.recordAudit(env, { automation: "measurement", trigger: "roofruler", envelope_id: id,
     job_number: sub.jobNumber, target_ids: report ?? folder,
     action: "filed", result: report ? "ok" : "error", error: report ? null : "report_not_filed" });
-  return jsonResp({ ok: true, job_number: sub.jobNumber, measurements: sub.measurements, report, folder });
+  const erp = await syncMeasurementToErpNext(env, id, sub, rawKey, now, report);
+  return jsonResp({ ok: true, job_number: sub.jobNumber, measurements: sub.measurements, report, folder,
+    erpnext_measurement_id: erp.name, erpnext_evidence_id: erp.evidenceItemName, erpnext_error: erp.error });
 }
 
 function jsonResp(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+async function syncMeasurementToErpNext(
+  env: Env,
+  id: string,
+  sub: MeasurementSubmission,
+  rawKey: string,
+  parsedAt: string,
+  reportFileUrl: string | null,
+): Promise<{ name: string | null; evidenceItemName: string | null; error: string | null }> {
+  try {
+    const erp = await pushMeasurementToErpNext(env, {
+      measurementId: `measurement:${id}`,
+      jobNumber: sub.jobNumber ?? "",
+      reportUrl: sub.reportUrl,
+      reportFileUrl,
+      rawKey,
+      parsedAt,
+      measurements: sub.measurements,
+    });
+    if (erp) {
+      await store.recordAudit(env, { automation: "erpnext_measurement", trigger: "roofruler",
+        envelope_id: id, job_number: sub.jobNumber,
+        target_ids: `measurement_report:${erp.name}${erp.evidenceItemName ? ",evidence_item:" + erp.evidenceItemName : ""}`,
+        action: erp.reused ? "upsert_existing" : "create", result: "ok" });
+    }
+    return { name: erp?.name ?? null, evidenceItemName: erp?.evidenceItemName ?? null, error: null };
+  } catch (err) {
+    const error = `erpnext_measurement: ${String(err)}`;
+    await store.recordAudit(env, { automation: "erpnext_measurement", trigger: "roofruler",
+      envelope_id: id, job_number: sub.jobNumber, action: "sync", result: "error", error });
+    return { name: null, evidenceItemName: null, error };
+  }
 }

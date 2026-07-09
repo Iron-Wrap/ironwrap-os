@@ -5,10 +5,13 @@ completed with evidence, not just marked done.
 
 ## Epic 1 - Audit And Containment
 
+Active first-phase detail lives in `18-phase-1-source-truth-and-build-contract.md`.
+Do not expand this epic from older GHL-first notes.
+
 | ID | Task | Output | Acceptance |
 |---|---|---|---|
-| A1 | Inventory accounts and roles | Access inventory | JobNimbus, Make, Cloudflare, ESP, Jotform, QuickBooks, storage, website, AI/phone listed |
-| A2 | Inventory Make scenarios | Scenario map | Each scenario tagged keep/fix/pause/delete |
+| A1 | Inventory accounts and roles | Access inventory | JobNimbus, Make, Cloudflare, Jotform, QuickBooks, Google Workspace/Drive, website, AI/phone listed; Cloudflare account mismatch cleared or explicitly recorded |
+| A2 | Inventory Make scenarios | Scenario map | Each scenario tagged keep/bridge/retire; edits made in Make UI only |
 | A3 | Identify live webhooks/API keys | Integration register | Owner and purpose known for each connection |
 | A4 | Create safe test records | Test data list | Staff can tell test records from real jobs |
 | A5 | Pause dangerous duplicates | Disabled/paused list | No two automations mutate same folder/action |
@@ -35,7 +38,7 @@ which needs a Google Maps API key) plus a multi-photo File Upload and an auto
 timestamp. Do NOT rely on photo EXIF for geo: iOS strips photo GPS by default, and
 direct camera-capture uploads lose metadata regardless — so capture device GPS at
 submit; don't depend on EXIF. Crews use Offline Mode (queues on-device, syncs on
-reconnect) -> webhook -> Make -> OneDrive job folder + JobNimbus job + dual-write to
+reconnect) -> webhook -> Make -> Google Drive job folder + JobNimbus job + dual-write to
 the owned store. If per-submission job-picking friction hurts photo-documentation
 compliance, the fix is to improve the Jotform flow (kiosk mode, simpler/auto
 job-picker) -- not a new photo vendor.
@@ -43,14 +46,13 @@ job-picker) -- not a new photo vendor.
 | ID | Task | Output | Acceptance |
 |---|---|---|---|
 | FC1 | Build Jotform "Jobsite Photo" form | Structured form | JobNimbus job picker, Jotform Geolocation widget (device GPS, offline-capable), multi-photo File Upload, auto timestamp |
-| FC2 | Configure Jotform Make route | Webhook -> Make -> OneDrive/JN route | Completed form reaches Make, dual-writes to owned store, lands photos in the OneDrive job folder, and updates the correct JobNimbus job |
+| FC2 | Configure Jotform Make route | Webhook -> Make -> Google Drive/JN route | Completed form reaches Make, dual-writes to owned store, lands photos in the Google Drive job folder, and updates the correct JobNimbus job |
 | FC3 | Train crews on Jotform Mobile App offline capture | Field adoption note | Crews capture photos + device-GPS geo on the right job in Offline Mode; queue syncs on reconnect without re-keying |
 
 ## Epic 3 - Lead Front Door (Owned Data Layer + JobNimbus)
 
-GHL was trial-evaluated only and is being declined before any production use;
-nothing to migrate -- end the trial. JobNimbus is the operational CRM / lead
-front door, fronted by a Make integration bus and an instant-ack branch. A thin
+GHL is legacy experimental scaffolding. JobNimbus is the operational CRM / lead
+front door, fronted by the Worker/Make bus and an instant-ack branch. A thin
 owned data layer (Cloudflare D1 + R2) is the system of record that every Make
 scenario dual-writes to FIRST, then pushes to JobNimbus.
 
@@ -60,17 +62,17 @@ scenario dual-writes to FIRST, then pushes to JobNimbus.
 | L2 | Configure JobNimbus lead pipeline | Pipeline | New/contacted/booked/estimate/proposal/won/lost visible |
 | L3 | Configure forms/intake | Intake forms | Website/manual/ad leads map to required envelope fields |
 | L4 | Configure JobNimbus calendar | Calendar | Appointment types, buffers, confirmations work; AssistAI books natively into the calendar (Make webhook for route-flag/dual-write) |
-| L5 | Verify brand-mailbox email + domain auth | Email config | Outbound email sends from the **Microsoft 365 brand mailboxes** (IronWrap `quote@ironwrapexteriors.com`; iRoof `info@iroofalberta.ca` via Gmail); SPF/DKIM/DMARC pass on each domain; bounce monitoring on; JN native email unused. A dedicated transactional ESP (Resend ≈ $0 / Postmark ~$15) is **deferred** for bulk nurture/review only |
+| L5 | Verify brand-mailbox email + domain auth | Email config | Outbound email sends from **Google Workspace brand mailboxes** (IronWrap `sales@` with `info@`/`quote@` aliases; iRoof `info@iroofalberta.ca`); SPF/DKIM/DMARC pass on each domain; bounce monitoring on; JN native email unused. Dedicated ESP is deferred for bulk nurture/review only |
 | L6 | Configure Engage SMS + review flow | Message templates + review sequence | Confirmation/follow-up via Engage; review request stop conditions implemented |
 | L7 | Map website funnel sources | Source mapping table | Home, quote, contact, service pages, city pages, and blog CTAs preserve source URL/service intent |
 | L8 | Add qualified-lead routing rules | Routing rules | Roof/siding/gutter/soffit/fascia/commercial/shop leads route to the correct owner/queue |
 | L9 | Add attribution fields (deferred) | Attribution mapping | UTM + manual Lead Source + one tracked number captured; CallRail only when paid ads start |
 | L10 | Audit Google Business Profile | GBP checklist | Categories, service areas, phone, website, hours, photos, services, review link, and source label are approved |
-| L11 | Register A2P 10DLC + Canadian carrier | Registration approval | Fresh A2P 10DLC and Canadian carrier registration for JobNimbus Engage SMS approved before any automated texting (prerequisite, 1-3 wks) |
+| L11 | Register A2P 10DLC + Canadian carrier | Registration approval | Fresh A2P 10DLC and Canadian carrier registration for JobNimbus Engage SMS approved before any automated texting |
 | L12 | Provision owned business number | DID provisioning | Business phone number for AssistAI/Engage provisioned and owned in Twilio so it is portable |
 | L13 | Stand up CASL consent ledger | Consent ledger | CASL consent captured and maintained in JobNimbus going forward |
 | L14 | Verify + route website forms | Updated site | Existing website forms' current post destinations verified and pointed at the Make bus |
-| L15 | Decline GHL trial | Trial-end note | GHL trial-evaluated only and declined before any production use; nothing to migrate -- end the trial |
+| L15 | Retire GHL routes | Cutover note | Remaining GHL routes disabled only after replacement proof through the bus |
 | L16 | Define paid-lead readiness gate | Readiness checklist | LSA/paid campaigns stay off until attribution, response time, dedupe, reconciliation, and owner exceptions pass QA |
 
 ## Epic 4 - Make = Critical Integration Infrastructure
@@ -98,10 +100,11 @@ committing.
 | M3 | Add error-handler -> dead-letter | Dead-letter route | Failed test event lands in dead-letter on a **redundant** channel (Google Sheet + email, **not SMS-only** — the SMS leg rides the A2P-gated path that may itself be down); nothing fails silently |
 | M4 | Store raw submission pre-Make | Raw capture | Every inbound submission is stored before Make processing |
 | M5 | Build daily reconciliation | Reconciliation job + named owner + backup + heartbeat | Source-event counts from an **independent ground truth** (form-provider/Cloudflare logs, Twilio call logs, GBP dashboard) vs records landed, compared daily; referral/manual reconciled by owner attestation; mismatch alerts; weekly owner **and a named backup**; a daily heartbeat ("reconciliation ran / dead-letter empty") escalates to the backup on silence |
-| M6 | Build instant-ack + MCTB scenarios | Instant-response flows | Every unanswered call -> SMS within ~10s; every web form -> instant prospect SMS + owner alert on a pipe SEPARATE from nurture; <60s human-or-AI touch, 24/7. **Interim pre-A2P ack path:** until the fresh A2P 10DLC + Canadian carrier registration is approved (~1-3 wks, see L11), instant-ack/MCTB runs on an interim channel -- an email acknowledgement to the prospect (via the ESP) + an owner phone/SMS alert from the owner's own line -- so the <60s touch SLA holds from day one; the prospect-SMS leg switches on at A2P approval |
+| M6 | Build instant-ack + MCTB scenarios | Instant-response flows | Every unanswered call -> SMS within ~10s once Engage/A2P is live; every web form -> instant prospect email + owner alert on a pipe SEPARATE from nurture; <60s human-or-AI touch, 24/7. **Interim pre-A2P ack path:** until the fresh A2P 10DLC + Canadian carrier registration is approved, instant-ack/MCTB runs on Gmail acknowledgement to the prospect + owner alert; the prospect-SMS leg switches on in JobNimbus Engage at A2P approval |
 | M7 | Rebuild folder flow | Folder automation | One job creates one folder after job number exists |
 | M8 | Add automation run log | Log table/sheet/Make log discipline | Critical mutations are traceable |
 | M9 | Build dual-write partial-write repair | Idempotent JN push + retry sweep | JobNimbus push is an idempotent, auto-retried job keyed on `envelope_id` carrying a status field (`pending_jn_push` -> `pushed` -> `reconciled`); a continuous retry sweep (not the once-daily count) re-drives any envelope stuck in `pending_jn_push`; instant-ack/MCTB fires off the owned-store write, never off the JN push, so an ack still goes out when JobNimbus is unavailable; the daily source-vs-landed count detects gaps, the retry sweep repairs them |
+| M10 | Execute Phase 1 contract | Source-truth proof pack | `18-phase-1-source-truth-and-build-contract.md` definition of Phase 1 done is satisfied |
 
 ## Epic 5 - Phone AI (JobNimbus AssistAI)
 
@@ -131,7 +134,7 @@ config-only.
 | ID | Task | Output | Acceptance |
 |---|---|---|---|
 | D1 | Define folder convention | Folder template | Subfolders match spec |
-| D2 | Build XML/parser path | Parser output | AppliCad XML extracted into reviewed fields |
+| D2 | Build XML/parser path | Parser output | AppliCad XML proof exists in `tools/applicad-xml-proof.mjs`; production path promotes reviewed fields into the job/proposal record |
 | D3 | Build RoofRuler email intake | Email attachment route | RoofRuler PDFs are matched, archived, and queued for extraction/review |
 | D4 | Build PDF extraction path | Extractor output | Extraction order: (1) deterministic AppliCad XML / text-PDF parse, then (2) **Cloudflare `toMarkdown()`** (Workers AI binding -- free, on-stack; replaces standalone Tesseract for text PDFs), then (3) Claude/LLM read only when structured field extraction/reasoning is needed; text PDF values extracted or flagged |
 | D5 | Add OCR fallback | OCR queue | (4) **Mistral OCR 4** (~$2-4 per 1,000 pages -> cents/mo at this volume) ONLY for image-heavy/scanned/handwritten/layout-sensitive docs; do NOT self-host an OCR engine (Surya/PaddleOCR need a GPU box -- wrong for a no-devops shop, Workers can't run them); image-heavy docs flagged or processed |
@@ -148,7 +151,7 @@ config-only.
 | P3 | Configure review request | Review sequence | Eligible completed jobs get review request; complaints/disputes do not |
 | P4 | Build exceptions view | Sheet/report/page | Owner sees daily blockers |
 | P5 | Staff SOP review | SOP checklist | Staff can run workflow without developer |
-| P6 | Validate payment stack | Approved payment method map | Cash/cheque/direct deposit, Interac, Moneris, credit card, and FinanceIT are approved or deliberately hidden |
+| P6 | Validate payment stack | Approved payment method map | Cash/cheque/direct deposit, QBO Payments card/EFT, and FinanceIT are approved or deliberately hidden; Moneris stays deferred unless an in-person terminal need is approved |
 | P7 | Add response-time visibility | Owner exception metric | New leads/calls show first-response timestamp and overdue follow-up status |
 | P8 | Add reconciliation visibility | Owner reconciliation view | Daily source-vs-landed reconciliation result, instant-ack/MCTB firing, and dead-letter count are visible to the named weekly owner |
 

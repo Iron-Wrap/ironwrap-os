@@ -1,0 +1,51 @@
+{
+  "actions": [],
+  "allow_rename": 0,
+  "autoname": "field:evidence_id",
+  "creation": "2026-07-08 00:00:00.000000",
+  "custom": 0,
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "evidence_id",
+    "roof_job",
+    "lead_envelope",
+    "evidence_type",
+    "source_system",
+    "source_uri",
+    "r2_key",
+    "drive_file_id",
+    "captured_at",
+    "customer_safe",
+    "summary"
+  ],
+  "fields": [
+    { "fieldname": "evidence_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Evidence ID", "reqd": 1, "unique": 1 },
+    { "fieldname": "roof_job", "fieldtype": "Link", "in_standard_filter": 1, "label": "Roof Job", "options": "Roof Job" },
+    { "fieldname": "lead_envelope", "fieldtype": "Link", "label": "Lead Envelope", "options": "Lead Envelope" },
+    { "fieldname": "evidence_type", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Evidence Type", "options": "Photo\nMeasurement Report\nXML\nPDF\nVoice Note\nEmail\nSigned Document\nInvoice\nField Note\nOther", "reqd": 1 },
+    { "fieldname": "source_system", "fieldtype": "Data", "label": "Source System" },
+    { "fieldname": "source_uri", "fieldtype": "Data", "label": "Source URI" },
+    { "fieldname": "r2_key", "fieldtype": "Data", "label": "R2 Key", "read_only": 1 },
+    { "fieldname": "drive_file_id", "fieldtype": "Data", "label": "Drive File ID", "read_only": 1 },
+    { "fieldname": "captured_at", "fieldtype": "Datetime", "in_standard_filter": 1, "label": "Captured At" },
+    { "fieldname": "customer_safe", "fieldtype": "Check", "label": "Customer Safe" },
+    { "fieldname": "summary", "fieldtype": "Small Text", "label": "Summary" }
+  ],
+  "index_web_pages_for_search": 0,
+  "istable": 0,
+  "links": [],
+  "modified": "2026-07-08 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "IronWrap Roofing",
+  "name": "Evidence Item",
+  "naming_rule": "By fieldname",
+  "owner": "Administrator",
+  "permissions": [
+    { "create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1 }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 1
+}

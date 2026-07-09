@@ -152,7 +152,7 @@ async function ensureSubfolder(env: Env, token: string, parentId: string, name: 
   return (await driveCreateFolder(env, token, name, parentId)).id;
 }
 
-export interface UploadResult { name: string; webUrl?: string; error?: string }
+export interface UploadResult { name: string; webUrl?: string; driveFileId?: string; error?: string }
 export interface FiledBatch { folderId: string; folderUrl: string; files: UploadResult[] }
 
 /** Upload files into a job's template subfolder (e.g. "03 Photos"). One bad file never sinks the batch. */
@@ -180,7 +180,7 @@ export async function fileToJobFolder(
       });
       if (!res.ok) throw new Error(`drive_upload_${res.status}: ${(await res.text()).slice(0, 150)}`);
       const j = (await res.json()) as { id: string; webViewLink?: string };
-      out.push({ name: safeSegment(f.name), webUrl: j.webViewLink ?? `https://drive.google.com/file/d/${j.id}` });
+      out.push({ name: safeSegment(f.name), webUrl: j.webViewLink ?? `https://drive.google.com/file/d/${j.id}`, driveFileId: j.id });
     } catch (e) {
       out.push({ name: safeSegment(f.name), error: String(e) });
     }

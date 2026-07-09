@@ -171,8 +171,8 @@ structured forms but those remain deferred until a structured workflow actually 
 Adobe interactive PDFs are not a
 structured-capture tool (flat output; structured JSON only via the paid Adobe dev API +
 re-keying) — excluded. Self-hosted OSS photo servers (Immich/PhotoPrism/LibrePhotos) are
-excluded (server to babysit, no auto-routing to the JobNimbus job; wrong trade for a
-no-devops shop). A custom photo PWA is not built yet (offline-queue/silent-failure ops
+excluded (server to babysit, no auto-routing to the JobNimbus job; not warranted at this
+volume, prove the simpler Jotform path first). A custom photo PWA is not built yet (offline-queue/silent-failure ops
 burden); revisit only if Jotform UX fails crews. Prices are USD; CAD ~1.4x.
 
 Jotform "Jobsite Photo" form (sole jobsite-photo/geo tool — $0 incremental, ships in core):

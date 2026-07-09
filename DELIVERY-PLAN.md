@@ -53,7 +53,7 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
 2. **Instant-ack ships through the interim channel** via email + owner alert; the prospect-SMS leg switches on at A2P approval.
 3. **Owned-store-first is the keystone** — stand up D1/R2 + the bus before repointing any lead source.
 4. **Migrate, don't duplicate subscriptions** — reuse what works only as a bridge, move proof into the owned bus/ERPNext spine, then retire GHL/JN pieces route-by-route.
-5. **Managed over self-host; name a maintainer** — this is owned code now; the build/maintenance owner is decision #0 (see Gates).
+5. **Managed to prove, own-operated to scale.** Start on managed hosting to prove the core, then move to IronWrap-operated infra as resale tenants onboard; owning and operating the code is the product strategy (see Gates).
 6. **Compliance gates are hard launch-blockers**, not paperwork (`09`).
 
 ## Phase overview
@@ -70,7 +70,7 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
 ## Phases in detail
 
 ### Phase 0 — Foundations & unblock
-- **Decide (done):** build/maintenance owner; Google Workspace/Drive; two-brand handling.
+- **Decide (done):** build/operate owner; Google Workspace/Drive; two-brand handling.
 - **A2P 10DLC + Canadian carrier registration** (`02 §0.5`, `09`) is an external account gate.
 - **Provision & own the Twilio business DID** (portable; AssistAI/Engage later).
 - **Rotate the JobNimbus API key** (it was shared in chat) and issue a dedicated bus key.
@@ -147,7 +147,7 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
 
 ## Gates & decisions needed from the owner
 
-1. ✅ **Build/maintenance owner — DECIDED: Ilia (owner) via Claude Code** (CC = the dev/ops capacity).
+1. ✅ **Build/operate owner, DECIDED: Ilia (owner) via Claude Code** (CC = the engineering/ops capacity). IronWrap builds and operates this platform as an owned product and resells it to other contractors, so owning the code is the strategy, not a liability.
 2. ✅ **Two live actions done:** JobNimbus write path live-tested + gate flipped to `true`; Make bulk-import fixed (`record_type`→`Customer`, `status`→`New`, dropped invalid `source_name`) — ready to run the one-time rescue.
 3. ✅ **Standing decisions confirmed:** two brands. **Superseded 2026-07-01 (owner-directed, see
    `final-spec-pack/00`):** storage moves OneDrive → **Google Drive**; email moves Microsoft
@@ -167,7 +167,7 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
 | Risk | Mitigation |
 |---|---|
 | A2P approval slips | Interim email/owner-alert ack runs while SMS waits for approval |
-| No-devops shop owns custom code | Name a maintainer (Gate #1); hybrid keeps Make Core as the visual fallback |
+| Operating and reselling an owned platform | IronWrap builds, operates, and resells this platform as a product, so engineering/ops is a core capability, not an outsourced risk. Control it with the operations runbook (`docs/OPERATIONS-RUNBOOK.md`), per-tenant isolation, config/CI validators, and a defined tenant support/SLA model |
 | GHL-rescue duplicates in JobNimbus | Idempotency via `external_id`/`bus:` tag; verify a sample before bulk run |
 | Dual-write partial failure | Already designed out: single owned-store write + retried JN push + sweep (`06`) |
 | Two-brand sender/deliverability | Per-brand SPF/DKIM/DMARC; brand on the envelope drives sender/GBP/review |

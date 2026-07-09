@@ -114,8 +114,10 @@ node tools/validate-hermes-config.mjs      # agent roles vs LIVE MCP tool invent
 
 ## Conventions & guardrails
 
-- **Maintainer = Ilia (owner) via Claude Code** — CC is the dev/ops capacity; run changes through
-  CC sessions. This is why owning custom code (the bus) is viable for a no-devops shop.
+- **Builder/operator = Ilia (owner) via Claude Code:** CC is the engineering/ops capacity; run
+  changes through CC sessions. IronWrap builds, operates, and resells this platform as an owned
+  product, so owning the custom code (bus, ERPNext app, MCP/Hermes layer) is the strategy. Design
+  for multi-tenant operation and resale from the start.
 - **The owned IronWrap OS path is the target.** Don't "fix the spec" to match temporary
   JobNimbus/GHL behavior; migrate toward the bus + ERPNext/Hermes estimator/proof spine.
 - **Never commit secrets.** The JobNimbus API key was shared in chat during setup — **rotate it**

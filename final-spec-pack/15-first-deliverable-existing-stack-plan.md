@@ -143,8 +143,8 @@ cosmetic-only updates).
 
 If per-submission job-picking friction tanks photo-documentation compliance, improve
 the Jotform flow (kiosk mode, simpler/auto job-picker) — do NOT introduce a photo
-vendor. Do NOT self-host an OSS photo server (Immich/PhotoPrism/LibrePhotos) — wrong
-trade for a no-devops shop. Do NOT build a custom photo PWA yet
+vendor. Do NOT self-host an OSS photo server (Immich/PhotoPrism/LibrePhotos); not
+warranted at this volume, prove the simpler Jotform path first. Do NOT build a custom photo PWA yet
 (offline-queue/silent-failure ops burden); revisit only if Jotform UX fails crews.
 
 Adobe interactive PDFs are NOT a structured-capture tool — flat output; structured
@@ -184,8 +184,8 @@ Integration priority for the keystone intake:
   the heavy lifting (envelope, dedup, dead-letter, reconcile, single-write) and a cheap
   Make Core seat (~$9/mo) is kept for its native JobNimbus/QuickBooks/Twilio connectors
   + owner-visible observability, until the custom JobNimbus integration is proven.
-  Caveat: this adds owned code a no-devops shop must maintain — name a
-  build/maintenance owner before committing.
+  Note: this is owned product code IronWrap builds, operates, and resells; the owner
+  plus Claude Code is the engineering/ops capacity (see docs/OPERATIONS-RUNBOOK.md).
 - Every Make scenario dual-writes the canonical envelope to D1/R2 FIRST, then JN.
 - Store the raw submission pre-Make so nothing is lost if a scenario fails.
 - Mandatory error-handler → dead-letter (Google Sheet + email alert) on every path.

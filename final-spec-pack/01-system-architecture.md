@@ -131,8 +131,8 @@ partial-write problem. **Recommended hybrid:** the Worker does the heavy lifting
 (envelope, dedup, dead-letter, reconcile, single-write) and a cheap **Make Core
 seat (~$9/mo)** is kept for its native JobNimbus/QuickBooks/Twilio connectors +
 owner-visible observability, until the custom JobNimbus integration is proven.
-**Caveat:** this adds owned code a no-devops shop must maintain — name a
-build/maintenance owner before committing. (Make stays "critical infra"; this is
+**Note:** this is owned product code IronWrap builds, operates, and resells; the owner
+plus Claude Code is the engineering/ops capacity (see docs/OPERATIONS-RUNBOOK.md). (Make stays "critical infra"; this is
 about *where the infra runs*, not abandoning the discipline.)
 
 ## Integration Contract

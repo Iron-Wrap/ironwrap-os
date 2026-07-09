@@ -34,7 +34,7 @@ Use this as the final acceptance checklist with IronWrap.
 - [ ] Folder naming and subfolders approved.
 - [ ] QuickBooks status visibility tested.
 - [ ] Proposal template approved.
-- [ ] Contract/signature platform decision approved: owned Proposal Evidence Pack first as it matures; JobNimbus native e-sign / HTML+PDF can bridge; DocuSeal stays benched unless needed.
+- [ ] Contract/signature platform decision approved: owned Proposal Evidence Pack first as it matures; JobNimbus native e-sign / HTML+PDF can bridge until JobNimbus retires; DocuSeal is retired permanently (AGPL); the commercial fallback is a proprietary e-sign API (e.g. Dropbox Sign or the DocuSign API).
 - [ ] Material list design approved.
 - [ ] Measurement/document upload convention approved.
 

@@ -56,8 +56,8 @@ IronWrap OS.
 | NaturalForms per-user planning cost | Obsolete — NaturalForms dropped; replaced by the default Jotform "Jobsite Photo" form (photos/geo, $0 incremental) + Jotform (structured, deferred) |
 | AI receptionist setup/monthly planning cost | Included in pricing notes |
 | 12 forms/document types | Added to Workflow 5B |
-| Custom proposal tool | Covered as JobNimbus e-sign / HTML / PDF proposal first; if it fails the workflow, adopt DocuSeal (open-source) as the escape hatch — retires the PandaDoc/DocuSign line |
-| Contract platform open decision | Added as build and QA gate; JobNimbus native e-sign first, then DocuSeal (open-source, audit-trail PDF valid in Canada; webhooks in the free edition) — permanently retires PandaDoc/DocuSign |
+| Custom proposal tool | Covered as JobNimbus e-sign / HTML / PDF proposal while it bridges; DocuSeal is retired (AGPL); the escape hatch is a commercial e-sign API or owned signing |
+| Contract platform open decision | Added as build and QA gate; JobNimbus native e-sign bridges, then a commercial e-sign API (e.g. Dropbox Sign or the DocuSign API) or owned signing; DocuSeal retired permanently (AGPL) |
 | Material list design open decision | Added as build and QA gate |
 | Moneris payment options | Deferred; QBO Payments is the default invoice path |
 | FinanceIT financing | Added as gated financing/payment option |
@@ -72,7 +72,7 @@ These are not gaps. They are decisions IronWrap must make before the related
 workflow goes live.
 
 1. Confirm Google Drive (Google Workspace) as the storage authority, unless owner explicitly overrides.
-2. Choose contract/signature path: JobNimbus native e-sign / HTML+PDF first; if it fails the workflow, adopt DocuSeal (open-source, AGPLv3; managed DocuSeal Cloud ~CAD $30/mo or one self-hosted container) — legally valid in Canada (audit-trail PDF; PIPEDA / Alberta ETA recognize ordinary commercial e-signatures), webhooks in the free edition fire completion back through Make → JobNimbus. This permanently retires the PandaDoc/DocuSign line.
+2. Choose contract/signature path: JobNimbus native e-sign / HTML+PDF bridges only until the JobNimbus retirement; DocuSeal is retired permanently (AGPLv3, not even a fallback). The keeper path is a commercial e-sign API (a proprietary service, e.g. Dropbox Sign or the DocuSign API) or owned signing on the Proposal Evidence Pack; e-signatures remain legally valid in Canada for ordinary commercial docs (audit-trail PDF; PIPEDA / Alberta ETA).
 3. Choose material-list format: one multi-scope list or separate per-scope lists.
 4. Approve AssistAI pilot scope and pass the written scored eval gate (≥85% capture+routing, zero catastrophic failures); enforce a hard monthly minute cap / budget alert (verify AssistAI's native cap support — it bills pure-metered at ~$0.15/min; if there is no native cap, enforce via usage monitoring + an overage alert; cap = owner-set, e.g. ~500 min/mo) to keep the spam/robocall buffer; confirm voicemail→JN-lead floor.
 5. Decide whether Renoworks is part of the first paid production expansion.

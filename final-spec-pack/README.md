@@ -62,8 +62,9 @@ duplicate JobNimbus/GHL modules while the owned estimator/Hermes path is being
 proven. Incremental spend should stay limited to necessary delivery rails:
 Cloudflare, email/domain infrastructure, SMS/phone only if approved, and
 measurement/payment vendors when a real workflow requires them. Renoworks,
-Paradigm, CallRail, paid OCR, DocuSeal, and any custom voice stack remain gated
-until a tested workflow proves the need.
+Paradigm, CallRail, paid OCR, any commercial e-sign API, and any custom voice
+stack remain gated until a tested workflow proves the need; DocuSeal is retired
+outright (AGPL), not gated.
 
 ## Pack Index
 

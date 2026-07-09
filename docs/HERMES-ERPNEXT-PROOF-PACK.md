@@ -1,7 +1,8 @@
 # Hermes/ERPNext Proof Pack
 
 Status: local/source proof packet.
-Date: 2026-07-08.
+Date: 2026-07-08. Updated 2026-07-09: Frappe-only, ERPNext dependency removed; erpnext-* naming
+retained for compatibility and refers to the Frappe site.
 
 This collapses the artificial blockers from the Hermes/ERPNext blocker audit.
 It defines the owned path that gradually replaces JobNimbus/GHL bridge duties as each proof gate
@@ -15,31 +16,36 @@ Upstream repos inspected under `/tmp/ironwrap-research`:
 |---|---:|---|
 | Hermes Agent | `f64e4f4` | MCP config, tool filters, cron, gateways, skills, memory, observability, and security hooks are source-visible. |
 | Frappe | `80d9c31` | Custom apps, DocType JSON, hooks, generated REST APIs, permissions, and web forms cover the extension path. |
-| ERPNext | `95212e5` | Lead, Opportunity, Customer, Quotation, Sales Order, Project, Task, Item, Material Request, Purchase, and Stock primitives already exist. |
+| ERPNext | `95212e5` | Lead, Opportunity, Customer, Quotation, Sales Order, Project, Task, Item, Material Request, Purchase, and Stock primitives already exist. Since removed from the stack (2026-07-09, GPL-3.0): replaced by owned DocTypes. |
 | Frappe Docker | `d4a3100` | Docker path exists; disposable `pwd.yml` is not the custom-app proof path. |
 | Activepieces | `598f1535` | Community source includes HTTP/webhook, Jotform, Gmail, Google Drive, QuickBooks, and Twilio pieces. |
-| DocuSeal | `d86b16d` | API/webhooks/embedded signing exist; AGPL plus additional terms keep it a legal/commercial decision. |
+| DocuSeal | `d86b16d` | API/webhooks/embedded signing exist; AGPL plus additional terms. Retired 2026-07-09: AGPL rules it out even as a fallback. |
 
 ## ERPNext Roofing App Proof
 
-No ERPNext core fork is needed for the first proof. Use a custom Frappe app,
-for example `erpnext_roofing`, with fixtures committed as DocType JSON.
+The app is Frappe-only: `ironwrap_roofing` installs on a plain Frappe site and the erpnext app
+is never installed. ERPNext was removed 2026-07-09 for 100% IP ownership; the app is proprietary
+IronWrap IP on the MIT Frappe framework, with fixtures committed as DocType JSON. The only
+non-custom Link target is Frappe core `User`.
 
 Custom DocTypes:
 
 | DocType | Purpose | Links |
 |---|---|---|
-| Lead Envelope | Immutable inbound source event mirrored from the Worker bus | ERPNext Lead, Contact, Customer, Opportunity |
-| Roofing Property | Roof/site-specific property facts | Customer, Address, Lead Envelope |
-| Measurement Report | Report metadata, vendor, source file, normalized values | Roofing Property, Project, Quotation |
+| Lead Envelope | Immutable inbound source event mirrored from the Worker bus | none (root record; customer/property/job rows link back to it) |
+| Roofing Customer | Owned customer/party record (homeowner or company); replaces ERPNext Customer/Contact | Lead Envelope |
+| Roofing Property | Roof/site-specific property facts | Roofing Customer, Lead Envelope |
+| Customer Quote | Owned commercial quote with approval state; replaces ERPNext Quotation | Roof Job, Roofing Customer |
+| Measurement Report | Report metadata, vendor, source file, normalized values | Roof Job, Roofing Property |
 | Measurement Value | Child rows for slope, area, eave, ridge, valley, perimeter, waste, confidence | Measurement Report |
 | Instant Estimate Session | Estimator/configurator submission, non-binding total/range, project link, selected services/materials, review gate | Lead Envelope, Roof Job |
-| Evidence Item | Photo/report/document/source reference used in proposal or gate | Project, Quotation, Task, Measurement Report |
+| Evidence Item | Photo/report/document/source reference used in proposal or gate | Roof Job, Lead Envelope |
 | Material Takeoff | Review-gated material rows generated from measurement evidence | Measurement Report, Roof Job |
-| Supplier Order | Internal supplier-order draft, delivery status, shortages, substitutions, received proof | Material Takeoff, Roof Job, Supplier |
-| Proposal Evidence Pack | Draft customer proof pack from measurements/evidence/takeoff state | Roof Job, Quotation |
-| Production Gate State | Deposit/material/safety/completion gate state and override history | Project, Task, Sales Order |
-| Supplier Quote | Supplier, valid-until, material lines, substitutions, delivery readiness | Material Request, Supplier |
+| Supplier Profile | Owned supplier master; replaces ERPNext Supplier | none required |
+| Supplier Order | Internal supplier-order draft, delivery status, shortages, substitutions, received proof | Material Takeoff, Roof Job, Supplier Profile |
+| Proposal Evidence Pack | Draft customer proof pack from measurements/evidence/takeoff state | Roof Job, Customer Quote |
+| Production Gate State | Deposit/material/safety/completion gate state and override history | Roof Job, Evidence Item |
+| Supplier Quote | Supplier, valid-until, material lines, substitutions, delivery readiness | Roof Job, Material Takeoff, Supplier Profile |
 | Completion Packet | Review-gated completion proof: photos, deficiencies, signoff, warranty readiness | Roof Job, Field Check-in, Evidence Item |
 | Warranty Packet | Warranty draft allowed only from an approved, warranty-ready Completion Packet | Roof Job, Completion Packet |
 | Review Request | Review eligibility with deterministic stop conditions; never auto-sent | Roof Job, Completion Packet, Payment Milestone |
@@ -47,25 +53,28 @@ Custom DocTypes:
 | Market Watch Item | Competitor/product gap and response decision | none required |
 | Hermes Run | Agent run metadata, tool calls, approvals, blocked writes | any linked business record |
 
-Use existing ERPNext primitives first:
+The former ERPNext primitives are replaced by owned equivalents:
 
-| Existing ERPNext Primitive | Roofing Use |
+| Former ERPNext Primitive | Owned Equivalent |
 |---|---|
-| Lead / Opportunity / Customer | Lead and sales pipeline |
-| Quotation / Sales Order | Proposal and accepted contract mirror |
-| Project / Task | Production board and owner exceptions |
-| Item / Item Price / Supplier | Materials/catalog/pricing |
-| Material Request / Purchase Order | Supplier quote/order readiness |
-| File / Communication / Activity Log | Evidence and audit history |
+| Lead / Opportunity | Lead Envelope + Roof Job own the pipeline |
+| Customer / Contact | Roofing Customer |
+| Quotation | Customer Quote |
+| Project / Task | Roof Job + Production Gate State + Field Check-in |
+| Item / Material Request / Purchase Order | Material Takeoff + Supplier Quote + Supplier Order + Supplier Profile |
+| Sales Invoice mirror | Payment Milestone; QuickBooks is accounting truth |
+| User / Role / Permission, Web Forms, Workflow | MIT Frappe framework features |
 
-Proof gate: install the app on a local ERPNext dev site and create one job from
-sample lead -> property -> measurement -> quotation -> project gates without a
-core fork.
+Proof gate: install the app on a local plain Frappe dev site (no erpnext app)
+and create one job from sample lead -> property -> measurement -> customer
+quote -> production gates.
 
 ## Bus To ERPNext Sync Contract
 
-The current Worker remains the front door. ERPNext becomes an additional
-consumer only after the current owned-store-first path is stable.
+The current Worker remains the front door. The Frappe site becomes an additional
+consumer only after the current owned-store-first path is stable. The erpnext-*
+names below (bridge module, env vars, validator) are retained for compatibility
+and refer to the Frappe site.
 
 Current implementation checkpoint:
 
@@ -94,7 +103,8 @@ Current implementation checkpoint:
   Existing rows are not overwritten on retry.
 - Closeout spine (2026-07-08): Completion Packet, Warranty Packet, Review Request,
   Communication Event, Supplier Quote, and Market Watch Item DocTypes are committed
-  and validated (`node tools/validate-erpnext-doctypes.mjs`, 23 DocTypes).
+  and validated (`node tools/validate-erpnext-doctypes.mjs`, 26 DocTypes since the
+  2026-07-09 Frappe-only rework added Roofing Customer, Customer Quote, and Supplier Profile).
   `mcp/erpnext-roofing-mcp` exposes read plus dry-run/approved-write pairs for each,
   through one shared audited-write helper. Review Requests apply deterministic stop
   conditions; Communication Events apply CASL-style consent plus quiet hours and are
@@ -281,19 +291,16 @@ mock Worker/ERPNext endpoint, and shows retries/failures clearly enough for ops.
 
 ## DocuSeal Decision
 
-Decision: keep DocuSeal benched, not primary.
+Decision (2026-07-09): DocuSeal is retired permanently, even as a fallback. AGPLv3 plus
+additional terms conflict with the 100% IP-ownership posture, so it is no longer an option.
 
-Use the owned Proposal Evidence Pack as the target. JobNimbus native e-sign can bridge while that
-owned proposal/signature path is incomplete. Use DocuSeal only if a real proposal workflow cannot
-be handled by the owned path or the temporary JobNimbus bridge.
+E-sign direction: a commercial e-sign API (a proprietary service, e.g. Dropbox Sign or the
+DocuSign API) or owned signing built on the Proposal Evidence Pack. The owned Proposal Evidence
+Pack remains the target; JobNimbus native e-sign can bridge only while that path is incomplete
+and dies with the JobNimbus retirement.
 
-DocuSeal is viable as a fallback because it has Docker deployment, API,
-webhooks, embedded signing, and PDF/template tooling. It is not "free to
-white-label without thought": AGPLv3 plus additional terms need legal/commercial
-approval before packaged resale.
-
-Proof gate: if JobNimbus e-sign fails, run one sample proposal through stock
-DocuSeal and confirm completion webhook -> Worker/Make -> job status update.
+Proof gate: one sample proposal signed through the chosen commercial e-sign API or the owned
+signing path, with completion recorded back to the Roof Job.
 
 ## Real Remaining Gates
 

@@ -116,8 +116,9 @@ without a manual handoff being forgotten. (Owner-directed 2026-07-01, Scenario "
 
 SOP:
 
-1. A signed contract (JobNimbus native e-sign, or DocuSeal if native e-sign fails the workflow —
-   see Workflow 3/Proposals decision) moves the job to the "Contract Signed" pipeline stage.
+1. A signed contract (JobNimbus native e-sign while it bridges, or a commercial e-sign API /
+   owned signing; DocuSeal is retired, AGPL; see Workflow 3/Proposals decision) moves the job
+   to the "Contract Signed" pipeline stage.
 2. Send the customer a "thanks and welcome" message (Engage SMS + Google Workspace brand
    mailbox email) that includes the approximate start date.
 3. Issue the deposit invoice in QuickBooks, referencing the catalog items from the accepted

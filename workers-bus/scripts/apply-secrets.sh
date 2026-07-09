@@ -30,6 +30,8 @@ put TWILIO_ACCOUNT_SID          "${TWILIO_ACCOUNT_SID:-}"
 put TWILIO_AUTH_TOKEN           "${TWILIO_AUTH_TOKEN:-}"
 put TWILIO_FROM_NUMBER          "${TWILIO_FROM_NUMBER:-}"
 put QB_WEBHOOK_TOKEN            "${QB_WEBHOOK_TOKEN:-}"
+put ERPNEXT_API_KEY             "${ERPNEXT_API_KEY:-}"
+put ERPNEXT_API_SECRET          "${ERPNEXT_API_SECRET:-}"
 
 echo ""
 echo "Секреты применены. НЕ-секретные настройки (OWNER/BACKUP/FROM email, Shared Drive IDs)"

@@ -30,7 +30,7 @@ flowchart LR
   Owned --> JN["JobNimbus = Operational CRM / Job Truth"]
   Bus --> JN
 
-  JN --> Engage["Engage 2-way SMS + Microsoft 365 email"]
+  JN --> Engage["Engage 2-way SMS + Google Workspace email"]
   Engage --> Customer["Customer"]
   JN --> Jotform["Jotform 'Jobsite Photo' form: device-GPS geo + multi-photo, offline (SOLE jobsite-photo/geo tool, $0 incremental)"]
   JN --> Proposal["Proposal + e-sign + PDF"]
@@ -91,10 +91,10 @@ flowchart TD
 | JobNimbus | Operational CRM / job-truth: customer/job/property/stage/task/owner, lead front door (fronted by Make bus), 2-way SMS (Engage), booking, review requests | Canonical data ownership (it is a *consumer* of the owned store), accounting ledger, outbound email, broad nurture |
 | AssistAI | Native 24/7 phone receptionist: answer, qualify, book natively into the JN calendar, route-flag | Custom voice stack, division logic beyond one-question intent, lead truth (writes via the bus) |
 | Make | **Critical integration bus**: canonical envelope, dedup/idempotency on phone/email, dual-write-first, error-handler to dead-letter (Sheet + email), daily reconciliation | System-of-record ownership, unlogged critical mutations |
-| JobNimbus Engage (2-way SMS) + Microsoft 365 email (brand mailboxes, SPF/DKIM/DMARC); dedicated ESP deferred for bulk | Engage: 2-way SMS; Microsoft 365 brand mailboxes: outbound email with SPF/DKIM/DMARC + bounce monitoring (JN native email unused; dedicated ESP deferred for bulk) | System of record, job stage truth |
-| Jotform | **Sole jobsite-photo/geo capture ($0 incremental)**: "Jobsite Photo" form — JobNimbus job picker, Geolocation widget (device GPS lat/long at submit, coordinates-only, works offline in the Jotform Mobile App), multi-photo File Upload, auto timestamp; plus genuinely structured offline field forms (file, draw signature) via webhook → Make → JN/OneDrive/owned store. If crew capture friction appears, fix it inside the Jotform flow (kiosk mode, simpler/auto job-picker) — do not add a photo vendor. Do not rely on photo EXIF (iOS strips it on-device) | Canonical job stage, accounting |
+| JobNimbus Engage (2-way SMS) + Google Workspace email (brand mailboxes, SPF/DKIM/DMARC); dedicated ESP deferred for bulk | Engage: 2-way SMS; Google Workspace brand mailboxes: outbound email with SPF/DKIM/DMARC + bounce monitoring (JN native email unused; dedicated ESP deferred for bulk) | System of record, job stage truth |
+| Jotform | **Sole jobsite-photo/geo capture ($0 incremental)**: "Jobsite Photo" form — JobNimbus job picker, Geolocation widget (device GPS lat/long at submit, coordinates-only, works offline in the Jotform Mobile App), multi-photo File Upload, auto timestamp; plus genuinely structured offline field forms (file, draw signature) via webhook → Make/Worker → JN/Google Drive/owned store. If crew capture friction appears, fix it inside the Jotform flow (kiosk mode, simpler/auto job-picker) — do not add a photo vendor. Do not rely on photo EXIF (iOS strips it on-device) | Canonical job stage, accounting |
 | Webhook relay, if built | Dedupe, idempotency, logging, validation | CRM replacement |
-| OneDrive (Microsoft 365) | Job archive and attachments | Source of truth for job stage or payment status |
+| Google Drive (Google Workspace) | Job archive and attachments | Source of truth for job stage or payment status |
 | QuickBooks | Invoices, payments, accounting records | CRM pipeline, job operations |
 | Parser/OCR | Extracts document data and confidence | Final pricing without human review |
 | Proposal generator | Customer-facing proposal and PDF archive | Final accounting invoice |

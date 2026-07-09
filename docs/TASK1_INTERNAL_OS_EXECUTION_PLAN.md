@@ -1,11 +1,15 @@
 # IronWrap Task 1: Internal Operating System Execution Plan
 
+> Superseded implementation reference. Use `final-spec-pack/00-final-decisions.md`,
+> `docs/ACTIVATION-CHECKLIST.md`, and `SETUP-CHECKLIST.md` for current Google
+> Workspace/Drive, QuickBooks Payments, and Worker-bus truth.
+
 Date: 2026-06-27
 Scope: IronWrap internal business system only. This is not the external metal-layout SaaS.
 
 ## Goal
 
-Build and ship IronWrap's internal operating system for leads, calls, booking,
+Build and ship IronWrap OS for leads, calls, booking,
 CRM, proposals, visualization, field work, materials, finance, reviews,
 documents, reporting, and automation.
 

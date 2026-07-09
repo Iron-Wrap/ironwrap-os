@@ -6,7 +6,7 @@ Canonical guide for any agent/contributor working in this repo. (`CLAUDE.md` poi
 
 **IronWrap Exteriors** is a low-volume Alberta (Canada) roofing & metal-exteriors contractor
 running **two brands: IronWrap Exteriors (ironwrapexteriors.com) and iRoof Alberta
-(iroofalberta.ca)**. This repo holds the spec + build for its **internal operating system**:
+(iroofalberta.ca)**. This repo holds the spec + build for **IronWrap OS**:
 capture every lead, never lose one, move jobs cleanly from lead → proposal → deposit →
 materials → completion → invoice → review, on a portable owned-data spine.
 
@@ -14,37 +14,46 @@ materials → completion → invoice → review, on a portable owned-data spine.
 
 | Path | What | Status |
 |---|---|---|
-| `final-spec-pack/` | **The spec** — 18 numbered chapters (`README.md` is the index). The source of truth for the target system. | Authoritative |
+| `final-spec-pack/` | **The spec** — 19 numbered chapters (`README.md` is the index). The source of truth for the target system. | Authoritative |
 | `workers-bus/` | **The integration bus** — a Cloudflare Worker (fetch + queue + scheduled) that is the owned data layer + Make-bus replacement. Builds + tests green. | Buildable |
+| `frappe-apps/ironwrap_roofing/` | **ERPNext operating core** — custom Frappe app (23 DocTypes: lead/property/job through closeout/warranty/review, comms, supplier quote, market watch, Hermes Run audit). Contract-validated, no core fork. | Buildable |
+| `mcp/` | **Hermes tool surface** — `ironwrap-bus-mcp` (bus read + replay) and `erpnext-roofing-mcp` (read + deterministic policy checks + review-gated approved writes). Tests green. | Buildable |
+| `hermes/` | **Agent runtime layer** — `agents/roles.json` (per-role MCP tool allowlists, source of truth), agent profiles, `mcp-servers.json`, and the `skills/` procedure packs. | Buildable |
+| `config/tenants/` | **White-label tenant configs** — one JSON per contractor (brands, geography, gates, agents), secrets by env-var name only. Validated. | Buildable |
 | `samples/` | Real RoofRuler measurement-report PDFs + one AppliCad XML (the extraction inputs the spec references). `samples/_duplicates/` = byte-identical dupes, safe to delete. | Inputs |
-| `docs/` | Loose summaries/plans (incl. Russian deliverables, end-to-end plan). | Reference |
+| `docs/` | Loose summaries/plans plus the Hermes/ERPNext blueprint, proof pack, clone playbook, and operations runbook. | Reference |
 | `output/` | Generated deliverables (Russian `.docx`, overview PDF, website audit). | Generated |
 | `task1-spec/` | Original source material (v9.1 planning docs, early PDFs, pricing, a build script). | Legacy source |
-| `tools/` | One-off build scripts. | Legacy |
+| `tools/` | Zero-dep validators run in CI/manually: `validate-erpnext-doctypes.mjs`, `validate-tenant-config.mjs`, `validate-hermes-config.mjs`, plus the AppliCad XML proof. | Active |
 
 ## The architecture in one screen (target = the spec)
 
-- **JobNimbus** = operational CRM / job truth. **GoHighLevel (GHL) is experimental and being
-  retired** — do **NOT** re-introduce GHL as a keeper. The live GHL-based Make scenarios are
-  throwaway scaffolding being migrated to the JobNimbus spine.
+- **JobNimbus and GoHighLevel are temporary bridges, not the final system.** Keep them only where
+  they still keep operations running. Do not buy or build new keeper workflows around either one.
+  New work moves toward the owned IronWrap OS path.
 - **Owned data layer = Cloudflare D1 + R2** (the system of record). Every lead is written here
   FIRST as a canonical envelope `{source, brand, contact, job_ref, payload, ts}`, then pushed
-  to JobNimbus. JobNimbus is a *consumer*, not the owner.
+  only to needed bridge systems. JobNimbus/GHL are consumers, not owners.
+- **Estimator/configurator** = owned path first. `POST /ingest/estimate` stores raw estimator
+  payloads, creates/updates ERPNext Lead Envelope / Roof Job / Instant Estimate Session when
+  enabled, and keeps all pricing non-binding until human review.
 - **Integration bus** = Make (on the **Core** plan, ~$9/mo, already subscribed) **or** the
   `workers-bus/` Cloudflare Worker. Recommended hybrid: Worker does the heavy lifting; keep the
   Make Core seat for native connectors + observability.
 - **Instant-ack / MCTB** is the headline: <60s touch, 24/7. Interim (pre-A2P) ack = email +
   owner alert; the prospect-SMS leg switches on at A2P approval.
-- **Storage = OneDrive (Microsoft 365)** for the human job-folder archive (R2 holds raw). **Not
-  Google Drive.**
-- **Email = Microsoft 365 brand mailboxes** (IronWrap `quote@ironwrapexteriors.com` via MS365;
-  iRoof `info@iroofalberta.ca` via Gmail), SPF/DKIM/DMARC. JobNimbus native email is unused
-  (unreliable). A dedicated transactional ESP (Resend) is **deferred** for bulk only.
+- **Storage = Google Drive Shared Drives** for the human job-folder archive (R2 holds raw).
+  OneDrive is a migration source / temporary legacy archive only.
+- **Email = Google Workspace brand mailboxes** for IronWrap (`sales@` with `info@`/`quote@`
+  aliases) plus the separate iRoof Google account. Microsoft 365 is only a mirror during
+  migration; see `docs/EMAIL-DUAL-DELIVERY.md`. JobNimbus native email stays unused.
 - **SMS** = JobNimbus Engage (needs fresh A2P 10DLC + Canadian carrier registration first).
 - **Phone AI** = JobNimbus AssistAI (behind a written eval gate) → managed Retell → managed-OSS
   (LiveKit/Pipecat) → voicemail floor. The 4-vendor DIY voice stack stays killed.
 - **Field photos/geo** = Jotform "Jobsite Photo" form (device GPS at submit, offline).
-- **e-sign** = JobNimbus native → **DocuSeal** (OSS) if it fails (retires PandaDoc/DocuSign).
+- **e-sign** = owned proposal evidence pack first as it matures; JobNimbus native can bridge while
+  the owned proposal flow is incomplete. DocuSeal is only a benched escape hatch; there is no
+  active `/proposal/create` Worker route.
 - **OCR** = deterministic XML/text → Cloudflare `toMarkdown()` (free) → Mistral OCR only for hard docs.
 - **Design** = free Canva + free Affinity. **Accounting** = QuickBooks. **QuoteLock feature: CUT.**
 
@@ -63,7 +72,7 @@ materials → completion → invoice → review, on a portable owned-data spine.
   `bus:<envelope_id>`/`external_id` search as the backstop. Write path live-tested 2026-06-28.
 - **Make** (MCP connected): org "IronWrap Exteriors" (id 6202921, **Core** plan, 10k ops/mo),
   team "My Team" (id 1742726). ~16 scenarios on the experimental GHL hub (RoofRuler intake via
-  AI Extract + OneDrive, OneDrive folder automation, GHL→JobNimbus import mid-cutover, inactive
+  AI Extract + legacy OneDrive, Drive folder automation, GHL→JobNimbus import mid-cutover, inactive
   Jotform completion + Facebook Lead Ads). JobNimbus + Jotform already connected in Make.
 
 ## Working with `workers-bus/`
@@ -80,14 +89,35 @@ npx wrangler deploy --dry-run    # validate config + bundle
   `JOBNIMBUS_ENABLED` is now `"true"`. Record types are configurable via `JN_CONTACT_RECORD_TYPE`
   (`Customer`) / `JN_JOB_RECORD_TYPE` (`Retail`) / `*_STATUS`.
 - Secrets go in `.dev.vars` (local, gitignored) or `wrangler secret put` (prod): `INGEST_TOKEN`,
-  `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY`, `RESEND_API_KEY`.
+  `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`, and `QB_WEBHOOK_TOKEN`
+  when QuickBooks is connected.
+
+## Working with `hermes/`, `mcp/`, and the validators
+
+```bash
+node tools/validate-erpnext-doctypes.mjs   # DocType JSON contract (23 DocTypes)
+node tools/validate-tenant-config.mjs      # white-label tenant configs, no secrets, isolation
+node tools/validate-hermes-config.mjs      # agent roles vs LIVE MCP tool inventory + safety contract
+(cd mcp/erpnext-roofing-mcp && npm test)   # pure-logic builders + policy checks
+(cd mcp/ironwrap-bus-mcp && npm test)      # bus read/replay wrappers
+```
+- **Hermes is the operating brain, not the database.** It reads broadly and writes only through
+  narrow approved-command tools. `hermes/agents/roles.json` is the source of truth for which MCP
+  tools each of the 8 agent roles may use; `validate-hermes-config.mjs` proves every listed tool
+  exists and that no approved-write tool is granted without its `dry_run` counterpart in the same
+  role (the read → dry_run → approval → write → audit contract cannot be skipped).
+- **The mutation contract is universal:** `read → propose → dry_run → policy_check →
+  human_approval → write → audit_event`. No tool sends a customer message or mutates accounting;
+  comms and review requests are record-only, and every approved write records a `Hermes Run` row.
+- Approved writes are double-gated: `ERPNEXT_WRITE_ENABLED=true` (or `IRONWRAP_BUS_WRITE_ENABLED`)
+  **plus** the `HERMES_WRITE_TOKEN` passed as `approval_token`. Skill packs live in `hermes/skills/`.
 
 ## Conventions & guardrails
 
 - **Maintainer = Ilia (owner) via Claude Code** — CC is the dev/ops capacity; run changes through
   CC sessions. This is why owning custom code (the bus) is viable for a no-devops shop.
-- **The spec is the target; current GHL/Make is experimental.** Don't "fix the spec" to match
-  experimental GHL — migrate toward the spec.
+- **The owned IronWrap OS path is the target.** Don't "fix the spec" to match temporary
+  JobNimbus/GHL behavior; migrate toward the bus + ERPNext/Hermes estimator/proof spine.
 - **Never commit secrets.** The JobNimbus API key was shared in chat during setup — **rotate it**
   and issue a dedicated key for the bus.
 - Spec house style: terse, declarative, tables + mermaid; heavy cross-referencing is intentional.

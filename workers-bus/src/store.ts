@@ -23,6 +23,29 @@ export interface DeadLetterEntry {
   payload_json: string;
 }
 
+export interface DeadLetterRecord extends DeadLetterEntry {
+  id: number;
+  ts: string;
+  recovered: number;
+}
+
+export interface QuickBooksWebhookReceipt {
+  payload_hash: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  envelope_id: string;
+  raw_key: string;
+  events_count: number;
+  replay_count: number;
+}
+
+export interface DedupClaim {
+  dedup_key: string;
+  first_envelope_id: string;
+  first_seen_at: string;
+  updated_at: string;
+}
+
 const nowIso = () => new Date().toISOString();
 
 /** Archive the raw inbound body to R2 FIRST, so nothing is lost if later steps fail. */
@@ -34,12 +57,13 @@ export async function insertEnvelope(env: Env, rec: EnvelopeRecord): Promise<voi
   await env.DB.prepare(
     `INSERT INTO envelopes (envelope_id, source, contact_name, contact_phone, contact_email,
        job_ref, payload_json, raw_key, ts, status, dedup_key, dup_of, attempts, last_error,
-       jn_contact_id, jn_job_id, intent_queue, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       jn_contact_id, jn_job_id, estimate_submission_key, intent_queue, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).bind(
     rec.envelope_id, rec.source, rec.contact_name, rec.contact_phone, rec.contact_email,
     rec.job_ref, rec.payload_json, rec.raw_key, rec.ts, rec.status, rec.dedup_key, rec.dup_of,
-    rec.attempts, rec.last_error, rec.jn_contact_id, rec.jn_job_id, rec.intent_queue,
+    rec.attempts, rec.last_error, rec.jn_contact_id, rec.jn_job_id,
+    rec.estimate_submission_key ?? null, rec.intent_queue,
     rec.created_at, rec.updated_at,
   ).run();
 }
@@ -47,6 +71,13 @@ export async function insertEnvelope(env: Env, rec: EnvelopeRecord): Promise<voi
 export async function getEnvelope(env: Env, id: string): Promise<EnvelopeRecord | null> {
   return await env.DB.prepare(`SELECT * FROM envelopes WHERE envelope_id = ?`)
     .bind(id).first<EnvelopeRecord>();
+}
+
+export async function listRecentEnvelopes(env: Env, limit: number): Promise<EnvelopeRecord[]> {
+  const res = await env.DB.prepare(
+    `SELECT * FROM envelopes ORDER BY created_at DESC LIMIT ?`,
+  ).bind(limit).all<EnvelopeRecord>();
+  return res.results ?? [];
 }
 
 /**
@@ -62,17 +93,103 @@ export async function findDuplicate(env: Env, key: string, sinceIso: string): Pr
   return row?.envelope_id ?? null;
 }
 
+export async function claimDedup(
+  env: Env,
+  key: string,
+  envelopeId: string,
+  nowIsoValue: string,
+  sinceIso: string,
+): Promise<string | null> {
+  const existing = await getDedupClaim(env, key);
+  if (existing && existing.first_seen_at >= sinceIso) return existing.first_envelope_id;
+
+  if (existing) {
+    const res = await env.DB.prepare(
+      `UPDATE dedup_claims
+       SET first_envelope_id = ?, first_seen_at = ?, updated_at = ?
+       WHERE dedup_key = ? AND first_seen_at < ?`,
+    ).bind(envelopeId, nowIsoValue, nowIsoValue, key, sinceIso).run();
+    if (Number((res as { meta?: { changes?: number } }).meta?.changes ?? 0) > 0) return null;
+
+    const raced = await getDedupClaim(env, key);
+    return raced && raced.first_seen_at >= sinceIso ? raced.first_envelope_id : null;
+  }
+
+  try {
+    await env.DB.prepare(
+      `INSERT INTO dedup_claims (dedup_key, first_envelope_id, first_seen_at, updated_at)
+       VALUES (?,?,?,?)`,
+    ).bind(key, envelopeId, nowIsoValue, nowIsoValue).run();
+    return null;
+  } catch (err) {
+    if (!isUniqueConstraintError(err)) throw err;
+    const raced = await getDedupClaim(env, key);
+    return raced && raced.first_seen_at >= sinceIso ? raced.first_envelope_id : null;
+  }
+}
+
+async function getDedupClaim(env: Env, key: string): Promise<DedupClaim | null> {
+  return await env.DB.prepare(
+    `SELECT * FROM dedup_claims WHERE dedup_key = ?`,
+  ).bind(key).first<DedupClaim>();
+}
+
+function isUniqueConstraintError(err: unknown): boolean {
+  return /unique|constraint/i.test(String(err));
+}
+
+export async function findEstimateSubmission(env: Env, key: string): Promise<EnvelopeRecord | null> {
+  return await env.DB.prepare(
+    `SELECT * FROM envelopes
+     WHERE estimate_submission_key = ?
+     ORDER BY created_at ASC LIMIT 1`,
+  ).bind(key).first<EnvelopeRecord>();
+}
+
 export async function setStatus(
   env: Env, id: string, status: Status, patch: Partial<EnvelopeRecord> = {},
 ): Promise<void> {
   await env.DB.prepare(
-    `UPDATE envelopes SET status = ?, jn_contact_id = COALESCE(?, jn_contact_id),
+    `UPDATE envelopes SET status = ?, job_ref = COALESCE(?, job_ref),
+       jn_contact_id = COALESCE(?, jn_contact_id),
        jn_job_id = COALESCE(?, jn_job_id), dup_of = COALESCE(?, dup_of),
        last_error = ?, updated_at = ? WHERE envelope_id = ?`,
   ).bind(
-    status, patch.jn_contact_id ?? null, patch.jn_job_id ?? null, patch.dup_of ?? null,
+    status, patch.job_ref ?? null, patch.jn_contact_id ?? null, patch.jn_job_id ?? null, patch.dup_of ?? null,
     patch.last_error ?? null, nowIso(), id,
   ).run();
+}
+
+export interface ErpNextSyncPatch {
+  leadEnvelopeId: string;
+  roofingPropertyId?: string | null;
+  roofJobId?: string | null;
+  instantEstimateSessionId?: string | null;
+}
+
+export async function setErpNextSync(env: Env, id: string, patch: ErpNextSyncPatch): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE envelopes SET erpnext_lead_envelope_id = ?,
+       erpnext_roofing_property_id = COALESCE(?, erpnext_roofing_property_id),
+       erpnext_roof_job_id = COALESCE(?, erpnext_roof_job_id),
+       erpnext_instant_estimate_session_id = COALESCE(?, erpnext_instant_estimate_session_id),
+       erpnext_synced_at = ?,
+       erpnext_error = NULL, updated_at = ? WHERE envelope_id = ?`,
+  ).bind(
+    patch.leadEnvelopeId,
+    patch.roofingPropertyId ?? null,
+    patch.roofJobId ?? null,
+    patch.instantEstimateSessionId ?? null,
+    nowIso(),
+    nowIso(),
+    id,
+  ).run();
+}
+
+export async function setErpNextError(env: Env, id: string, error: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE envelopes SET erpnext_error = ?, updated_at = ? WHERE envelope_id = ?`,
+  ).bind(error, nowIso(), id).run();
 }
 
 /** Atomically bump attempts and stamp the error; returns the new attempt count. */
@@ -100,7 +217,58 @@ export async function recordDeadLetter(env: Env, e: DeadLetterEntry): Promise<vo
   await env.DB.prepare(
     `INSERT INTO dead_letter (ts, envelope_id, stage, error, payload_json, recovered)
      VALUES (?,?,?,?,?,0)`,
-  ).bind(nowIso(), e.envelope_id, e.stage, e.error, e.payload_json).run();
+  ).bind(nowIso(), e.envelope_id, e.stage, e.error, redactedDeadLetterPayload(e)).run();
+}
+
+function redactedDeadLetterPayload(e: DeadLetterEntry): string {
+  let keys: string[] = [];
+  try {
+    const parsed = JSON.parse(e.payload_json) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) keys = Object.keys(parsed).slice(0, 25);
+  } catch {
+    keys = [];
+  }
+  return JSON.stringify({
+    redacted: true,
+    envelope_id: e.envelope_id,
+    payload_keys: keys,
+    recovery: "Use /admin/envelope/:id for the canonical payload.",
+  });
+}
+
+export async function getQuickBooksWebhookReceipt(
+  env: Env,
+  payloadHash: string,
+): Promise<QuickBooksWebhookReceipt | null> {
+  return await env.DB.prepare(
+    `SELECT * FROM quickbooks_webhook_receipts WHERE payload_hash = ?`,
+  ).bind(payloadHash).first<QuickBooksWebhookReceipt>();
+}
+
+export async function insertQuickBooksWebhookReceipt(
+  env: Env,
+  receipt: Omit<QuickBooksWebhookReceipt, "replay_count">,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO quickbooks_webhook_receipts
+       (payload_hash, first_seen_at, last_seen_at, envelope_id, raw_key, events_count, replay_count)
+     VALUES (?,?,?,?,?,?,0)`,
+  ).bind(
+    receipt.payload_hash,
+    receipt.first_seen_at,
+    receipt.last_seen_at,
+    receipt.envelope_id,
+    receipt.raw_key,
+    receipt.events_count,
+  ).run();
+}
+
+export async function recordQuickBooksWebhookReplay(env: Env, payloadHash: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE quickbooks_webhook_receipts
+     SET last_seen_at = ?, replay_count = replay_count + 1
+     WHERE payload_hash = ?`,
+  ).bind(nowIso(), payloadHash).run();
 }
 
 /** Envelopes still pending past the threshold — the retry sweep re-drives these. */
@@ -144,6 +312,14 @@ export async function countOpenDeadLetter(env: Env): Promise<number> {
   const row = await env.DB.prepare(`SELECT COUNT(*) AS n FROM dead_letter WHERE recovered = 0`)
     .first<{ n: number }>();
   return row?.n ?? 0;
+}
+
+export async function listOpenDeadLetters(env: Env, limit: number): Promise<DeadLetterRecord[]> {
+  const res = await env.DB.prepare(
+    `SELECT id, ts, envelope_id, stage, error, payload_json, recovered
+     FROM dead_letter WHERE recovered = 0 ORDER BY ts ASC LIMIT ?`,
+  ).bind(limit).all<DeadLetterRecord>();
+  return res.results ?? [];
 }
 
 export async function writeHeartbeat(env: Env, day: string, reconciled: boolean, openDlq: number): Promise<void> {

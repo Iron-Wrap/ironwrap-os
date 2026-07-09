@@ -12,18 +12,18 @@ job-truth consumer of IronWrap's data, not the owner of the raw event stream.
 | Raw inbound events | **Owned store (D1+R2)** (canonical) | JobNimbus, Make logs | Dual-write FIRST, then push to JobNimbus; canonical lead envelope |
 | Brand | **Owned store (D1+R2)** (on the envelope) | JobNimbus | `ironwrap \| iroof`, captured at intake; selects sender mailbox / GBP / review link |
 | Lead source and marketing attribution | **Owned store (D1+R2)** + JobNimbus | JobNimbus Lead Source field | Preserve original source/campaign; attribution via UTM + manual Lead Source (call-tracking deferred) |
-| Conversations | JobNimbus (Engage SMS) + Microsoft 365 brand mailboxes (email sender) + **owned store** | JobNimbus notes summary | Store summaries, not every raw log everywhere; raw envelope retained in owned store; email sends from brand mailboxes (dedicated ESP deferred) |
+| Conversations | JobNimbus (Engage SMS) + Google Workspace brand mailboxes (email sender) + **owned store** | JobNimbus notes summary | Store summaries, not every raw log everywhere; raw envelope retained in owned store; email sends from brand mailboxes (dedicated ESP deferred) |
 | Customer/contact | JobNimbus after qualification | Owned store | JobNimbus is the operational CRM and job-facing truth |
 | Property | JobNimbus | Owned store | Normalize address early |
 | Job | JobNimbus | Owned store | JobNimbus owns job number and stage |
 | Appointment | JobNimbus Calendar | Owned store, AssistAI booking event | Booked via Make webhook; avoid competing calendars |
-| Files | OneDrive (Microsoft 365) + R2 | Links in JobNimbus | Archive only; R2 holds raw submission payloads |
+| Files | Google Drive (Google Workspace) + R2 | Links in JobNimbus | Archive only; R2 holds raw submission payloads |
 | Measurements | JobNimbus + folder | Proposal workspace | Extracted values need review status |
 | Proposal | JobNimbus/proposal generator | Folder, JobNimbus status | Versioned |
-| Field forms/signatures | Jotform "Jobsite Photo" form (photos/geo, sole tool, $0 incremental) + Jotform (structured) | JobNimbus notes/tasks, folder PDFs | Webhook -> Make -> OneDrive + JobNimbus + owned store; JobNimbus owns job state |
+| Field forms/signatures | Jotform "Jobsite Photo" form (photos/geo, sole tool, $0 incremental) + Jotform (structured) | JobNimbus notes/tasks, folder PDFs | Webhook -> Make -> Google Drive + JobNimbus + owned store; JobNimbus owns job state |
 | Materials | JobNimbus | Jotform material-request form | Manual flow first; Paradigm deferred |
 | Invoice/payment | QuickBooks | JobNimbus status fields | QuickBooks owns accounting truth |
-| Reviews/nurture | JobNimbus automation + Engage (SMS) + Microsoft 365 brand mailboxes (email sender) | Owned store event/status | Must respect consent/stop conditions; nurture on a pipe separate from instant-ack; email from brand mailboxes (SPF/DKIM/DMARC), dedicated ESP deferred for bulk |
+| Reviews/nurture | JobNimbus automation + Engage (SMS) + Google Workspace brand mailboxes (email sender) | Owned store event/status | Must respect consent/stop conditions; nurture on a pipe separate from instant-ack; email from brand mailboxes (SPF/DKIM/DMARC), dedicated ESP deferred for bulk |
 | CASL consent | JobNimbus (consent ledger) | Owned store | Per-contact consent basis + date + source; required to keep texting/emailing |
 | Automation logs | Make plus owned-store audit table | Exceptions view + dead-letter | Every critical mutation logged; failures route to dead-letter |
 
@@ -84,8 +84,7 @@ Rules:
 
 Per-contact consent record; system of record is JobNimbus, mirrored to the owned
 store. Required to keep texting/emailing legally (CASL). Maintained in JobNimbus
-going forward; no historical export is needed (GHL was trial-evaluated only and is
-being declined before any production use — nothing to migrate).
+going forward; any remaining GHL route is legacy and retires after replacement proof.
 
 ```json
 {
@@ -102,8 +101,8 @@ being declined before any production use — nothing to migrate).
 Rules:
 
 - Consent provenance must be recorded at point of capture and maintained in
-  JobNimbus going forward (no GHL export needed — GHL was trial-only, never
-  production).
+  JobNimbus going forward. Do not assume useful consent truth from the
+  experimental GHL hub.
 - A withdrawn/expired consent blocks outbound SMS/email regardless of CRM state.
 
 ## Core Objects
@@ -257,7 +256,7 @@ works offline in the Jotform Mobile App; not the GeoStamp widget, which needs
 internet/falls back to IP, and not the GPS Location widget, which needs a Google
 Maps API key), a multi-photo File Upload, and an auto timestamp. Crews use the
 Jotform Mobile App in Offline Mode (queues on-device, syncs on reconnect) ->
-webhook -> Make -> OneDrive job folder + JobNimbus job + dual-write to the
+webhook -> Make -> Google Drive job folder + JobNimbus job + dual-write to the
 owned store. If crew job-picking friction tanks photo compliance, the fix is to
 improve the Jotform flow (kiosk mode, simpler/auto job-picker), not a new photo
 vendor. Jotform also covers genuinely structured forms.
@@ -272,7 +271,7 @@ Jotform jobsite-photo record — required fields:
 - Photo/document references (multi-photo File Upload).
 - Device-GPS geotag (Geolocation widget lat/long captured at submit).
 - Capture timestamp (auto).
-- Make scenario/run ID (webhook -> Make -> OneDrive + JobNimbus + owned store).
+- Make scenario/run ID (webhook -> Make -> Google Drive + JobNimbus + owned store).
 
 Jotform structured-form record — required fields:
 

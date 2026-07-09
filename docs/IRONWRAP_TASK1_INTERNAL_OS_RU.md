@@ -1,4 +1,8 @@
-# IronWrap Internal OS
+# IronWrap OS
+
+> Историческая справка. Актуальные решения по реализации находятся в
+> `final-spec-pack/00-final-decisions.md`, `docs/ACTIVATION-CHECKLIST.md` и
+> `SETUP-CHECKLIST.md`.
 
 Этот документ только про внутреннюю систему IronWrap. Он не про внешний SaaS для
 metal-layout.
@@ -115,4 +119,3 @@ workflow: OCR или ручная проверка, потом расчет.
 - NaturalForms output попадает в правильную job folder;
 - phone AI создает summary, task, booking или escalation;
 - owner видит exceptions без ручного обхода всех систем.
-

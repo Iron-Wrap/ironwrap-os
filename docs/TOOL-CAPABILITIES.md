@@ -86,12 +86,11 @@ NOT need a native Cloudflare app — the bus's HTTP endpoints ARE the integratio
 - ✅ Retires **BookIPI** (invoices/quotes/receipts/Tap-to-Pay) and **Stripe** once live.
 
 ## Moneris (card processor — Canada)
-- ⚠️ **NOT a payment gateway on QBO invoices.** The native **Moneris↔QBO connector (launched May
-  2026, $10/mo, Canada-only, single-location)** is **reconciliation/data-sync ONLY** — settlement
-  data into QBO for bank rec. You **cannot** put "Pay with Moneris" on a QBO invoice.
-- ✅ **Options:** (a) card-on-invoice via **QBO Payments** (native) + Moneris for in-person/terminal
-  + the $10 connector for rec; (b) **Benji Pays** (third-party) DOES bridge Moneris as a gateway onto
-  QBO invoices. ❓ Choose by comparing Ilia's negotiated **Moneris rate** vs QBO's 2.9%+$0.25.
+- ❌ **Not the current invoice-payment path.** Owner decision moved invoice payments to
+  **QuickBooks Payments**. Keep Moneris only as a future/in-person terminal option if the business
+  deliberately approves it.
+- ⚠️ The native Moneris↔QBO connector is reconciliation/data-sync only; it does not put a Moneris
+  pay button on QBO invoices.
 
 ## Google Workspace (email + storage — replaces Microsoft 365)
 - ✅ **Server email send, 3 paths:** **SMTP relay** (`smtp-relay.gmail.com`, ~10,000/day,
@@ -108,7 +107,7 @@ NOT need a native Cloudflare app — the bus's HTTP endpoints ARE the integratio
   at our volume.
 
 ## Cloudflare (the bus)
-- ✅ **Workers + D1 + R2 + Queues + Cron** = the owned spine (deployed, 26 tests pass, live). Queues =
+- ✅ **Workers + D1 + R2 + Queues + Cron** = the owned spine (deployed, current test suite passes, live). Queues =
   native retry + dead-letter; Cron = reconcile/heartbeat; single owned-store write (no dual-write).
   💲 ~CAD $7/mo at this volume.
 - ✅ **`env.AI.toMarkdown()`** (Workers AI binding + REST): converts PDF/Office/ODF/CSV/HTML/images to
@@ -174,5 +173,4 @@ NOT need a native Cloudflare app — the bus's HTTP endpoints ARE the integratio
 ## Open "confirm-with-vendor" items (the only things left to verify)
 1. ❓ JobNimbus AssistAI — Canadian phone-number support.
 2. ❓ RoofRuler — is XML/ESX export auto-delivered (email/API/webhook) or manual download?
-3. ❓ Moneris invoice payments — is Ilia's negotiated Moneris rate better than QBO Payments' 2.9%+$0.25 (decides QBO-Payments vs Benji-Pays)?
-4. ❓ JobNimbus Engage — can automations trigger it on stage change at our tier (confirmed possible in general; verify on the account's plan).
+3. ❓ JobNimbus Engage — can automations trigger it on stage change at our tier (confirmed possible in general; verify on the account's plan).

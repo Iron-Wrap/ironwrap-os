@@ -7,7 +7,7 @@ Use deterministic extraction first:
 1. RoofRuler report PDFs delivered automatically by email.
 2. AppliCad XML.
 3. Text-based PDF extraction.
-4. Jotform "Jobsite Photo" form = default ($0 incremental) for site-evidence photos/geo: a JobNimbus job picker, the Jotform Geolocation widget (captures device GPS at submit, coordinates-only, works offline in the Jotform Mobile App), multi-photo File Upload, and auto timestamp -> webhook -> Make -> OneDrive job folder + JobNimbus + dual-write to the owned store. Do not rely on photo EXIF for geo (iOS strips it on-device). If Jotform capture friction appears, improve the Jotform flow (kiosk mode, simpler/auto job-picker) rather than adding a photo vendor.
+4. Jotform "Jobsite Photo" form = default ($0 incremental) for site-evidence photos/geo: a JobNimbus job picker, the Jotform Geolocation widget (captures device GPS at submit, coordinates-only, works offline in the Jotform Mobile App), multi-photo File Upload, and auto timestamp -> webhook -> Make -> Google Drive job folder + JobNimbus + dual-write to the owned store. Do not rely on photo EXIF for geo (iOS strips it on-device). If Jotform capture friction appears, improve the Jotform flow (kiosk mode, simpler/auto job-picker) rather than adding a photo vendor.
 5. Cloudflare `toMarkdown()` (Workers AI binding) as the free first pass for text PDFs/DOCX/etc. — on-stack, converts to clean Markdown, no extra vendor.
 6. Free/local OCR.
 7. Mistral OCR 4 only for hard image-heavy, handwritten, multilingual, or layout-sensitive documents.

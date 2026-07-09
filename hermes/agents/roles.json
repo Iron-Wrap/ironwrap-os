@@ -1,0 +1,171 @@
+{
+  "version": "0.1.0",
+  "description": "Machine-readable Hermes agent role tool allowlists. Source of truth for MCP tool filtering. Validated against the live MCP tool inventory by tools/validate-hermes-config.mjs. Every approved_write tool must carry its dry_run counterpart in the same role (read -> dry_run -> approval -> write -> audit). No tool in this repo can send a customer message or mutate accounting; approved-write tools only draft or set review-gated status and always record a Hermes Run audit row.",
+  "servers": {
+    "ironwrap-bus-mcp": "Read-only bus truth plus the approved-write dead-letter replay proof.",
+    "erpnext-roofing-mcp": "ERPNext roofing operating core: read, deterministic policy checks, and review-gated approved writes."
+  },
+  "roles": {
+    "owner-operator": {
+      "title": "Owner Operator",
+      "summary": "Broadest supervisor. Reads all system truth, approves any drafted mutation. Cannot send legal/contract communications or mutate accounting because no such tool exists.",
+      "reads": [
+        "list_recent_envelopes", "get_envelope", "list_dead_letters",
+        "get_roof_job", "get_lead_envelope", "list_job_gates", "list_blocked_jobs",
+        "get_measurement_report", "list_measurement_reports_for_job",
+        "get_material_takeoff", "list_material_takeoffs_for_job",
+        "get_supplier_order", "list_supplier_orders_for_job",
+        "get_supplier_quote", "list_supplier_quotes_for_job",
+        "get_instant_estimate_session", "list_instant_estimate_sessions_for_job",
+        "get_evidence_item", "list_evidence_for_job",
+        "get_field_check_in", "list_field_check_ins_for_job",
+        "get_proposal_evidence_pack", "list_proposal_evidence_packs_for_job",
+        "get_payment_milestone", "list_payment_milestones_for_job",
+        "get_completion_packet", "list_completion_packets_for_job",
+        "get_warranty_packet", "list_warranty_packets_for_job",
+        "get_review_request", "list_review_requests_for_job",
+        "get_communication_event", "list_communication_events_for_job",
+        "list_market_watch_items", "check_consent", "check_quiet_hours",
+        "get_hermes_run", "list_hermes_runs_for_job"
+      ],
+      "dry_run": [
+        "dry_run_replay",
+        "dry_run_update_gate", "dry_run_material_takeoff", "dry_run_update_material_takeoff_status",
+        "dry_run_supplier_order", "dry_run_supplier_quote", "dry_run_proposal_evidence_pack",
+        "dry_run_completion_packet", "dry_run_warranty_packet", "dry_run_review_request",
+        "dry_run_communication_event", "dry_run_market_watch_item"
+      ],
+      "approved_write": [
+        "request_replay",
+        "request_update_gate", "request_create_material_takeoff", "request_update_material_takeoff_status",
+        "request_create_supplier_order", "request_create_supplier_quote", "request_create_proposal_evidence_pack",
+        "request_create_completion_packet", "request_create_warranty_packet", "request_create_review_request",
+        "request_record_communication_event", "request_add_market_watch_item"
+      ],
+      "forbidden": [
+        "Final accounting or payment mutation (no such tool exists; QuickBooks stays accounting truth)",
+        "Sending contract/legal communications without explicit human send (comms tools are record-only)"
+      ]
+    },
+    "lead-concierge": {
+      "title": "Lead Concierge",
+      "summary": "Handles new leads and first response drafts. Never promises price or makes legal claims.",
+      "reads": [
+        "list_recent_envelopes", "get_envelope",
+        "get_lead_envelope", "get_roof_job",
+        "get_instant_estimate_session", "list_instant_estimate_sessions_for_job",
+        "get_communication_event", "list_communication_events_for_job",
+        "check_consent", "check_quiet_hours"
+      ],
+      "dry_run": ["dry_run_communication_event"],
+      "approved_write": ["request_record_communication_event"],
+      "forbidden": [
+        "Price promises or binding quotes (no estimate/takeoff write tools granted)",
+        "Legal claims or warranty commitments"
+      ]
+    },
+    "estimator-assistant": {
+      "title": "Estimator Assistant",
+      "summary": "Drafts takeoff, scope, supplier quote, and proposal proof from approved measurement evidence. Never sets final price without estimator approval.",
+      "reads": [
+        "get_roof_job",
+        "get_measurement_report", "list_measurement_reports_for_job",
+        "get_evidence_item", "list_evidence_for_job",
+        "get_material_takeoff", "list_material_takeoffs_for_job",
+        "get_supplier_quote", "list_supplier_quotes_for_job",
+        "get_proposal_evidence_pack", "list_proposal_evidence_packs_for_job",
+        "get_instant_estimate_session", "list_instant_estimate_sessions_for_job"
+      ],
+      "dry_run": [
+        "dry_run_material_takeoff", "dry_run_update_material_takeoff_status",
+        "dry_run_supplier_quote", "dry_run_proposal_evidence_pack"
+      ],
+      "approved_write": [
+        "request_create_material_takeoff", "request_update_material_takeoff_status",
+        "request_create_supplier_quote", "request_create_proposal_evidence_pack"
+      ],
+      "forbidden": [
+        "Production gate changes (Production Controller scope)",
+        "Customer communication sends",
+        "Final price commitment without estimator approval (all writes stay review-gated)"
+      ]
+    },
+    "production-controller": {
+      "title": "Production Controller",
+      "summary": "Manages gates and supplier orders. Cannot move a job to production if a hard gate fails.",
+      "reads": [
+        "get_roof_job", "list_job_gates", "list_blocked_jobs",
+        "get_material_takeoff", "list_material_takeoffs_for_job",
+        "get_supplier_order", "list_supplier_orders_for_job",
+        "get_supplier_quote", "list_supplier_quotes_for_job",
+        "get_field_check_in", "list_field_check_ins_for_job",
+        "get_measurement_report"
+      ],
+      "dry_run": ["dry_run_update_gate", "dry_run_supplier_order"],
+      "approved_write": ["request_update_gate", "request_create_supplier_order"],
+      "forbidden": [
+        "Starting a job while a required gate is Blocked (gate logic and human approval enforce this)",
+        "Estimator pricing or customer communication"
+      ]
+    },
+    "field-companion": {
+      "title": "Field Companion",
+      "summary": "Turns field check-ins and photo/voice evidence into a completion draft. Cannot delete evidence or bypass the completion gate.",
+      "reads": [
+        "get_roof_job", "list_job_gates",
+        "get_field_check_in", "list_field_check_ins_for_job",
+        "get_evidence_item", "list_evidence_for_job"
+      ],
+      "dry_run": ["dry_run_completion_packet"],
+      "approved_write": ["request_create_completion_packet"],
+      "forbidden": [
+        "Deleting evidence (no delete tool exists)",
+        "Bypassing the completion gate (completion packet requires photo evidence and stays review-gated)"
+      ]
+    },
+    "finance-reconciler": {
+      "title": "Finance Reconciler",
+      "summary": "Reads payment/invoice mirror truth for reconciliation. Read-only until a reconciliation-task tool exists; no accounting mutation.",
+      "reads": [
+        "get_roof_job",
+        "get_payment_milestone", "list_payment_milestones_for_job"
+      ],
+      "dry_run": [],
+      "approved_write": [],
+      "forbidden": [
+        "Final invoice or payment mutation without approval (QuickBooks stays accounting truth; no write tool granted)"
+      ]
+    },
+    "closeout-agent": {
+      "title": "Closeout Agent",
+      "summary": "Drafts completion, warranty, and review-request records. A review request is only Eligible when deterministic stop conditions clear and is never marked Sent.",
+      "reads": [
+        "get_roof_job",
+        "get_completion_packet", "list_completion_packets_for_job",
+        "get_warranty_packet", "list_warranty_packets_for_job",
+        "get_review_request", "list_review_requests_for_job",
+        "get_payment_milestone", "list_payment_milestones_for_job",
+        "check_consent", "check_quiet_hours"
+      ],
+      "dry_run": ["dry_run_completion_packet", "dry_run_warranty_packet", "dry_run_review_request"],
+      "approved_write": ["request_create_completion_packet", "request_create_warranty_packet", "request_create_review_request"],
+      "forbidden": [
+        "Sending a review request while stop or compliance conditions exist (enforced by stop-condition logic; requests are never Sent by a tool)"
+      ]
+    },
+    "support-admin": {
+      "title": "Support/Admin Agent",
+      "summary": "Diagnoses failed automations and maintains the market-watch radar. Single-site isolation prevents cross-tenant access.",
+      "reads": [
+        "list_recent_envelopes", "get_envelope", "list_dead_letters",
+        "get_hermes_run", "list_hermes_runs_for_job",
+        "list_market_watch_items"
+      ],
+      "dry_run": ["dry_run_replay", "dry_run_market_watch_item"],
+      "approved_write": ["request_replay", "request_add_market_watch_item"],
+      "forbidden": [
+        "Cross-tenant access (each tenant runs an isolated site/profile/namespace)"
+      ]
+    }
+  }
+}

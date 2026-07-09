@@ -1,125 +1,130 @@
-# IronWrap — Manual Setup Checklist
+# IronWrap OS - Manual Setup Checklist
 
-The human/UI configuration that happens **in the SaaS tools** (not in code). Companion to
-[DELIVERY-PLAN.md](./DELIVERY-PLAN.md): the plan says *what gets built*; this says *what you click*.
-Most of this is **not blocked by the Cloudflare account** and can be done now, in parallel.
+Human/UI configuration that happens in SaaS tools, not in repo code. This file tracks the current
+Google Workspace / Google Drive / owned bus + ERPNext direction. JobNimbus and GoHighLevel are
+temporary bridges until the owned path covers the same work.
 
-Legend: ☐ to do · ✅ done/verified · ⏳ waiting on something.
+Legend: `[ ]` todo, `[x]` done/verified, `[~]` temporary bridge.
 
-## 1. JobNimbus configuration (UI → Settings) — do now
-Grounded in the live API check (2026-06-28): the account **validates these values**, so the bus
-and the Make imports only succeed with configured names.
+## 1. JobNimbus
 
-- ✅ Contact record type **`Customer`** exists; job record type **`Retail`** exists.
-- ✅ Contact status **`New`** exists.
-- ☐ **Decide the lead record type:** the account currently **rejects `"Lead"`** (HTTP 400). Either
-  (a) create a `Lead` contact record type in Settings, or (b) accept `Customer` (what the bus uses).
-- ☐ **Configure Lead Sources** for: `website, gbp, ad, referral, manual, phone`. Until these exist,
-  arbitrary `source_name` values 400, so the bus/imports carry source in **tags + description**
-  instead. Add the sources if you want native, reportable Lead Source — then we map `source_name`.
-- ☐ **Pipeline statuses** (per `final-spec-pack/02`): confirm/create the lead-funnel statuses you
-  want (New → Contacted → Appointment Booked → Estimate Needed → Proposal Sent → Won → Lost). Any
-  status the automations set must exist as a valid `status_name`.
-- ☐ **Custom fields** (optional, for reporting): `brand` (ironwrap|iroof), `envelope_id`, UTM
-  fields. The bus always tags records; custom fields make them filterable in JobNimbus.
-- ☐ **Rotate the API key** (`mqalwrda6zbamv2x` was shared in chat) and issue a **dedicated key for
-  the bus**; store it via `wrangler secret put JOBNIMBUS_API_KEY` (never in code).
+Grounded in the live API check: valid contact record type is `Customer`, job record type is
+`Retail`, contact status `New` exists, and `Lead` was rejected by this account.
 
-## 2. A2P 10DLC + Canadian carrier registration (Twilio) — the long pole, start now
-Gates Engage SMS (1–3 wks). Prepare this content so submission is one sitting:
-- ☐ **Brand:** legal entity name, **CRA Business Number**, address, support email, website. (Both
-  brands if you'll text under both: IronWrap Exteriors + iRoof Alberta.)
-- ☐ **Campaign / use-case:** customer care + lead follow-up + appointment reminders (transactional).
-- ☐ **Sample messages:** the MCTB ack, the appointment confirmation, the review request.
-- ☐ **Opt-in description** (how consent is collected: web form, phone, in-person) + **STOP/HELP**
-  opt-out language in every message.
-- ⏳ Note: numbers provisioned **before 2025-03-26** can send CA→CA unregistered; low-volume
-  standard registration is ~$4 one-time.
+Bridge rule: keep JobNimbus only where it still keeps operations running; do not buy or build new
+keeper workflows around it.
 
-## 3. Twilio number — do now
-- ☐ **Provision & own the business DID(s)** in Twilio (portable; AssistAI/Engage later re-point to it).
+- [x] JobNimbus API works on the current account.
+- [x] Bus write path live-tested; `JOBNIMBUS_ENABLED=true`.
+- [ ] Rotate the API key that was shared in chat and issue a dedicated bus key.
+- [ ] Confirm current plan limits for automations/integrations/Engage.
+- [ ] Add/report Lead Sources: `website`, `gbp`, `ad`, `referral`, `manual`, `phone`.
+- [ ] Confirm pipeline statuses used by the six stage automations in `final-spec-pack/00`.
+- [ ] Optional reporting fields: `brand`, `envelope_id`, consent basis/date/source.
+- [ ] Hard-delete archived `ZZZ ... DELETE ME` test contacts in the UI.
 
-## 4. Email deliverability (Microsoft 365 / Gmail) — do now
-- ☐ **SPF + DKIM + DMARC** on `ironwrapexteriors.com` (Microsoft 365, `quote@…`) and on
-  `iroofalberta.ca` (Gmail/Google Workspace, `info@…`).
-- ☐ Turn on **bounce monitoring**; confirm a seed/inbox-placement test passes.
-- ☐ Leave JobNimbus native email **off** (unreliable). Dedicated ESP stays deferred.
+## 2. Google Workspace Email
 
-## 5. Website forms — do now (discovery)
-- ☐ Identify the **current post destination** of every lead form on both brand sites (home, quote,
-  contact, service pages). These get repointed to the bus `POST /ingest/website` once it's deployed.
-- ☐ Confirm hidden fields capture `source_url, page_type, service intent, brand, UTM`.
+- [x] `ironwrapexteriors.com` MX points to Google.
+- [x] Google user: `sales@ironwrapexteriors.com`.
+- [x] Google aliases: `info@ironwrapexteriors.com`, `quote@ironwrapexteriors.com`.
+- [x] Bus Gmail send path works through service account + domain-wide delegation.
+- [~] Microsoft 365 mirrors `info@` and `quote@` until migration closes.
+- [~] `ilya@ironwrapexteriors.com` routes to Microsoft only.
+- [ ] Confirm DKIM enabled and clean DMARC reports before tightening policy.
+- [ ] Disable Microsoft mirror rules only after owner confirms migration completion.
 
-## 6. Google Business Profile — do now
-- ☐ Audit both brands' GBP: categories, service areas, hours, phone, website, photos, review link.
+See `docs/EMAIL-DUAL-DELIVERY.md` for mailbox routing, GUID addresses, service logins, and off-switch.
 
-## 7. Cloudflare — ✅ DEPLOYED (2026-06-30)
-Worker **live**: `https://ironwrap-bus.yellow-rain-7498.workers.dev` (dedicated account
-`Info@ironwrapexteriors.com's`, id `7ee5775b…`). D1 `ironwrap-bus` (schema applied) + R2
-`ironwrap-bus-raw` + queues `ironwrap-jn-push`/`-dlq` + cron (5-min retry sweep, daily reconcile)
-all bound. Secrets set (INGEST_TOKEN, ADMIN_TOKEN, JOBNIMBUS_API_KEY). **End-to-end verified:**
-test lead → D1 (`status=pushed`) → queue → JobNimbus contact (`Customer`).
-- ☐ **Wire the website forms** → `POST .../ingest/website` with header
-  `Authorization: Bearer <INGEST_TOKEN>` (token shown once in chat — store it in your password manager).
-- ⚙️ **Instant-ack email is code-complete, pending credentials.** `notify.ts` now sends via
-  **Microsoft 365 Graph** (preferred, per spec) or **Resend** (fallback); prospect **SMS** via Twilio
-  once A2P is on. All credential-gated — with no creds, email/SMS are skipped and lead capture is
-  unaffected. To turn email on, set ONE:
-  - **MS365:** Azure app registration with **Mail.Send** application permission for `FROM_EMAIL`'s
-    mailbox → `wrangler secret put MS_TENANT_ID` / `MS_CLIENT_ID` / `MS_CLIENT_SECRET`.
-  - **Resend:** verify the brand domain → `wrangler secret put RESEND_API_KEY`.
-- ✅ **Brand tagging live + verified:** website `brand` (`ironwrap`|`iroof`) flows to JobNimbus contact
-  tags (`brand:iroof` confirmed) and the owner alert. SMS leg ready (`TWILIO_*` secrets) for post-A2P.
-- ✅ **Admin/cron paths verified:** `/admin/reconcile` (daily heartbeat), `/admin/replay` (dead-letter
-  drain), `/admin/source-count`, all `ADMIN_TOKEN`-guarded; email sends are best-effort (non-fatal).
-- ☐ **Rotate the Cloudflare API token + the JobNimbus key** (both were pasted in chat).
-- Note: D1 landed in **WEUR**; relocatable to WNAM pre-launch if write latency matters.
+## 3. Google Drive
 
-## 8. Make
-- ✅ **Both** GHL→JobNimbus imports fixed (5490009 bulk + 5489498 live per-contact sync):
-  `record_type_name`=`Customer`, `status_name`=`New`, invalid `source_name` removed.
-- ✅ **Bulk GHL→JobNimbus rescue COMPLETE** (via API, 2026-06-28): added a `builtin:Ignore` error
-  handler to the createContact module (so JobNimbus's duplicate-name rejections are skipped, not
-  fatal) and re-ran — execution **status 1 (success), 402 ops**; **JobNimbus went 6 → 103 contacts
-  (~97 GHL contacts imported), duplicates skipped.** (The Workers bus handles the same dup case in
-  code: dedup by tag/email/phone + find-by-name fallback.)
-- ☐ Optional: disable/retire scenario 5490009 now the one-time rescue is done (avoids accidental
-  re-runs; re-running is harmless — all would now be skipped as dups — just wastes operations).
-- ☐ Hard-delete the archived test contacts ("ZZZ TEST/DEDUP … DELETE ME") in the JobNimbus UI.
+- [x] Shared Drives exist: IW Jobs, IW Restricted, IW Archive.
+- [x] Worker has Shared Drive ids in `workers-bus/wrangler.jsonc`.
+- [x] Photos and measurement files use Google Drive through `GOOGLE_SERVICE_ACCOUNT_JSON`.
+- [x] Measurement ownership decision: the Worker owns the canonical `POST /ingest/measurement`
+  path; the existing RoofRuler Make route should forward there or be migrated to it, not stay a
+  separate source of truth.
+- [ ] Point Jotform Jobsite Photo form at `POST /ingest/photo`.
+- [ ] Migrate historical OneDrive files using `docs/DRIVE-STRUCTURE-AND-MIGRATION.md`.
 
-## 9. OneDrive document spine + Jotform photos (Phase 3) — ⚙️ code live, pending connect
-The bus now exposes `POST /ingest/photo` (Jotform jobsite photos → OneDrive folder **keyed by the
-JobNimbus job number**). Verified live; credential-gated (stores raw + audits now, files once Graph
-is connected).
-- ☐ **Azure app registration** (can be the **same app as email**): add application permission
-  **Files.ReadWrite.All** (or **Sites.ReadWrite.All** for a SharePoint library) + admin consent →
-  `wrangler secret put MS_TENANT_ID` / `MS_CLIENT_ID` / `MS_CLIENT_SECRET`.
-- ☐ **Pick the target drive/library** → set `wrangler.jsonc` var `ONEDRIVE_DRIVE_ID` (+ `ONEDRIVE_ROOT`,
-  default `IronWrap Jobs`; the root folder must pre-exist) → redeploy.
-- ☐ **Jotform "Jobsite Photo" form** → webhook/POST to `.../ingest/photo` with header
-  `Authorization: Bearer <INGEST_TOKEN>`; include the **JobNimbus job number** field + the photo
-  upload field. Photo URLs must be Worker-fetchable (public Jotform CDN or a normalized payload);
-  unreachable URLs are skipped + logged, raw is always retained for re-processing.
-- ✅ **Also shipped + verified (credential-gated):**
-  - `POST /ingest/measurement` — RoofRuler/AppliCad report → OneDrive job folder + captures structured
-    measurements (squares, pitch, ridge/valley ft…). Uses the **same Graph creds** as photos.
-  - **OneDrive folder auto-creates** when the bus mints a JobNimbus job (no photo needed first).
-  - `POST /proposal/create` (ADMIN_TOKEN) — proposal e-sign via **DocuSeal**. Connect:
-    `wrangler secret put DOCUSEAL_API_KEY` + set `DOCUSEAL_TEMPLATE_ID` (wrangler.jsonc var;
-    `DOCUSEAL_BASE_URL` only for a self-hosted instance).
-  - `POST /webhook/quickbooks` — Intuit-signature-verified receiver for invoice/payment events.
-    Connect: `wrangler secret put QB_WEBHOOK_TOKEN` (Intuit verifier token) + point the QB webhook here.
-- ☐ **Phase 3 follow-ups (not built):** the OCR ladder (deterministic → toMarkdown → Mistral) for
-  hard measurement docs; QuickBooks→JobNimbus status sync (needs QB OAuth to read entity detail);
-  JobNimbus measurement custom-field write.
+## 4. Cloudflare Worker Bus
 
-## Decisions already locked
-- ✅ Maintainer: Ilia via Claude Code. ✅ Two brands. ✅ GHL: experimental, being retired. ✅ Make: Core plan.
-- **Superseded 2026-07-01 (owner-directed, see `final-spec-pack/00`):** ✅ Storage: **Google Drive**
-  (was OneDrive/Microsoft 365) — migration pending a new Google Workspace on the unassigned
-  `[]@ironwrapexteriors.com` mailbox. ✅ Email: **Google Workspace, both brands** (was M365/Gmail
-  split) — `quote@` and `info@ironwrapexteriors.com` migrate onto the new Workspace. ✅ SMS:
-  **JobNimbus Engage** (reconfirmed — this was always the plan, not a change; Twilio stays
-  DID-only). ✅ Accounting: **QuickBooks** (catalog + invoices + POs + mileage) + **Moneris**
-  (payments); BookIPI/Stripe/MileIQ retire. Sections 4 and 9 below still describe the interim
-  Microsoft-based setup — treat them as superseded once the Google Workspace exists.
+Worker: `https://ironwrap-bus.yellow-rain-7498.workers.dev`
+
+- [x] D1 `ironwrap-bus` schema applied.
+- [x] R2 `ironwrap-bus-raw` stores raw inbound bodies first.
+- [x] Queues `ironwrap-jn-push` and `ironwrap-jn-dlq` configured.
+- [x] Cron retry/reconcile configured.
+- [x] Estimator intake route exists: `POST /ingest/estimate` stores raw R2 + D1 and syncs ERPNext Instant Estimate Session when enabled.
+- [x] Secrets set for current code path: `INGEST_TOKEN`, `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`.
+- [ ] Set `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`, `ERPNEXT_BASE_URL`, and `ERPNEXT_ENABLED=true` after the Frappe app is installed.
+- [ ] Switch/refresh Wrangler auth for the configured IronWrap account `7ee5775bc1ba46f05c5a65235b60e939`; current local login reads Mindburn Labs and cannot inventory this account.
+- [ ] Set `QB_WEBHOOK_TOKEN` when QuickBooks webhook is connected.
+- [ ] Confirm old Cloudflare API tokens are revoked.
+
+## 5. Website / Make Lead Feed
+
+- [ ] Identify current post destination of each lead form on both brand sites.
+- [ ] Best path: agency/server adds the server-side forward in `docs/WEBSITE-INTEGRATION.md`.
+- [ ] Backup path: Make UI appends one HTTP forwarder to `/ingest/website` after the working lead sync.
+- [ ] Estimator path: 3D configurator backend/server action posts finalized/save payloads to `POST /ingest/estimate`; never expose `INGEST_TOKEN` in browser code.
+- [ ] Do not edit live Make scenarios via API.
+
+Verify with D1:
+
+```bash
+wrangler d1 execute ironwrap-bus --remote --command "SELECT envelope_id, source, status, created_at FROM envelopes ORDER BY created_at DESC LIMIT 5"
+```
+
+## 6. Make
+
+- [x] Existing GHL -> JobNimbus imports were fixed to use `Customer` / `New` and omit invalid `source_name`.
+- [x] Bulk rescue completed: JobNimbus went from 6 to 103 contacts; duplicates skipped.
+- [~] GHL remains a temporary bridge only; no new keeper flows should be added there.
+- [~] RoofRuler currently sends directly to the Make mailhook; do not add a second Google routing feed unless the scenario gets dedup.
+- [ ] Export/record the current scenario map from the Make UI and tag each scenario keep/bridge/retire.
+- [ ] Re-save any stale/unlinked live scenario in the Make UI if the UI still shows a warning.
+- [ ] Retire unused one-time rescue scenarios after owner confirms no re-run is needed.
+
+## 7. QuickBooks / Payments
+
+- [x] QuickBooks Online account exists.
+- [ ] Confirm/enable the tier needed for purchase orders/inventory.
+- [ ] Enable QuickBooks Payments if card/EFT invoice payment is the chosen path.
+- [ ] Connect signed QuickBooks webhook to `POST /webhook/quickbooks`.
+- [ ] Follow-up build only when needed: QB OAuth read path for JobNimbus status mirroring.
+
+Moneris is not the current invoice-payment path.
+
+## 8. A2P / SMS / Phone
+
+- [ ] Subscribe/configure JobNimbus Engage for 2-way SMS.
+- [ ] Submit A2P 10DLC / Canadian carrier registration.
+- [ ] Provision/own a portable voice DID if AssistAI/voice routing needs it.
+- [ ] Do not configure Worker Twilio SMS secrets; the Worker does not send SMS.
+
+## 9. Jotform / Field Forms
+
+- [x] Worker payload contract exists for Jobsite Photo: JobNimbus job number + photo URLs.
+- [ ] Build/confirm the live Jotform Jobsite Photo form sends that payload.
+- [ ] Connect webhook to `POST /ingest/photo` with `Authorization: Bearer <INGEST_TOKEN>`.
+- [ ] Build Safety Form and Completion forms in Jotform when the JobNimbus stage fields are configured.
+- [ ] Confirm offline/mobile behavior on a real device before field rollout.
+
+## 10. Compliance / Legal
+
+- [ ] Lawyer review of `docs/COMPLIANCE-NOTICES.md`.
+- [ ] Privacy notice published on both brand sites.
+- [ ] CASL consent capture and unsubscribe tested.
+- [ ] AI/call-recording notice approved before AssistAI.
+- [ ] Vendor register, DPAs/ZDR, retention schedule, breach playbook, MFA/least-privilege complete.
+
+## 11. Retire Later
+
+Retire only after replacement proof exists:
+
+- Microsoft 365 / OneDrive mirror and archive.
+- GoHighLevel live lead routes and AI/marketing workflows.
+- JobNimbus marketing/AI/proposal pieces that the owned estimator/Hermes path replaces.
+- BookIPI, Stripe, MileIQ.
+- One-time Make rescue scenarios.

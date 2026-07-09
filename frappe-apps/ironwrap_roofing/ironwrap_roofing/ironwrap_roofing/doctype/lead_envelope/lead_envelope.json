@@ -1,0 +1,165 @@
+{
+  "actions": [],
+  "allow_rename": 0,
+  "autoname": "field:envelope_id",
+  "creation": "2026-07-08 00:00:00.000000",
+  "custom": 0,
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "envelope_id",
+    "source",
+    "event_ts",
+    "status",
+    "intent_queue",
+    "contact_section",
+    "contact_name",
+    "contact_phone",
+    "contact_email",
+    "job_section",
+    "job_ref",
+    "jobnimbus_contact_id",
+    "jobnimbus_job_id",
+    "evidence_section",
+    "raw_key",
+    "payload_json"
+  ],
+  "fields": [
+    {
+      "fieldname": "envelope_id",
+      "fieldtype": "Data",
+      "in_list_view": 1,
+      "in_standard_filter": 1,
+      "label": "Envelope ID",
+      "reqd": 1,
+      "unique": 1
+    },
+    {
+      "fieldname": "source",
+      "fieldtype": "Select",
+      "in_list_view": 1,
+      "in_standard_filter": 1,
+      "label": "Source",
+      "options": "website\nphone\ngbp\nad\nreferral\nmanual",
+      "reqd": 1
+    },
+    {
+      "fieldname": "event_ts",
+      "fieldtype": "Datetime",
+      "in_list_view": 1,
+      "in_standard_filter": 1,
+      "label": "Event Time",
+      "reqd": 1
+    },
+    {
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "in_list_view": 1,
+      "in_standard_filter": 1,
+      "label": "Bus Status",
+      "options": "received\npending_jn_push\npushed\nreconciled\nduplicate\ndead",
+      "reqd": 1
+    },
+    {
+      "fieldname": "intent_queue",
+      "fieldtype": "Data",
+      "in_standard_filter": 1,
+      "label": "Intent Queue"
+    },
+    {
+      "fieldname": "contact_section",
+      "fieldtype": "Section Break",
+      "label": "Contact"
+    },
+    {
+      "fieldname": "contact_name",
+      "fieldtype": "Data",
+      "in_global_search": 1,
+      "in_list_view": 1,
+      "label": "Contact Name"
+    },
+    {
+      "fieldname": "contact_phone",
+      "fieldtype": "Data",
+      "in_global_search": 1,
+      "label": "Contact Phone",
+      "options": "Phone"
+    },
+    {
+      "fieldname": "contact_email",
+      "fieldtype": "Data",
+      "in_global_search": 1,
+      "label": "Contact Email",
+      "options": "Email"
+    },
+    {
+      "fieldname": "job_section",
+      "fieldtype": "Section Break",
+      "label": "Job Links"
+    },
+    {
+      "fieldname": "job_ref",
+      "fieldtype": "Data",
+      "label": "Job Reference"
+    },
+    {
+      "fieldname": "jobnimbus_contact_id",
+      "fieldtype": "Data",
+      "label": "JobNimbus Contact ID",
+      "read_only": 1
+    },
+    {
+      "fieldname": "jobnimbus_job_id",
+      "fieldtype": "Data",
+      "label": "JobNimbus Job ID",
+      "read_only": 1
+    },
+    {
+      "fieldname": "evidence_section",
+      "fieldtype": "Section Break",
+      "label": "Evidence"
+    },
+    {
+      "fieldname": "raw_key",
+      "fieldtype": "Data",
+      "label": "R2 Raw Key",
+      "read_only": 1
+    },
+    {
+      "fieldname": "payload_json",
+      "fieldtype": "Code",
+      "label": "Canonical Payload JSON",
+      "options": "JSON",
+      "read_only": 1
+    }
+  ],
+  "index_web_pages_for_search": 0,
+  "istable": 0,
+  "links": [],
+  "modified": "2026-07-08 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "IronWrap Roofing",
+  "name": "Lead Envelope",
+  "naming_rule": "By fieldname",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 0,
+      "email": 0,
+      "export": 1,
+      "import": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    }
+  ],
+  "quick_entry": 0,
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 1
+}

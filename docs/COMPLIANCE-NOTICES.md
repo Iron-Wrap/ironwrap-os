@@ -16,7 +16,8 @@ lawyer must review and approve before production.** Fill the `[bracketed]` items
 >
 > **Service providers / cross-border.** We use trusted service providers, some of which store or
 > process data **outside Canada (primarily the United States)**: JobNimbus (CRM), Make and
-> Cloudflare (lead processing/storage), Microsoft 365 and Google (email/files), Twilio (calls/SMS),
+> Cloudflare (lead processing/storage), Google Workspace/Drive (email/files), Microsoft 365 while
+> the temporary mailbox mirror remains active, JobNimbus Engage / phone providers for calls or SMS,
 > and AI document/OCR tools (e.g., Mistral). They process your information only to provide these
 > services under written agreements; we remain accountable for it.
 >

@@ -1,79 +1,69 @@
-# IronWrap Internal OS Final Spec Pack
+# IronWrap OS Final Spec Pack
 
-Date: 2026-06-27 (re-architected 2026-06-28: GHL trial declined → JobNimbus spine).
+Date: 2026-06-27 (re-architected 2026-06-28; updated 2026-07-08 for Google Workspace/Drive, Phase 1 source truth, and owned estimator/ERPNext direction).
 
-This pack is the final implementation specification for IronWrap's internal
-operating system. It is not the external metal-layout SaaS idea. It covers the
-internal system we should set up, configure, build, test, and ship for IronWrap.
+This pack is the final implementation specification for **IronWrap OS**. It is
+not the external metal-layout SaaS idea. It covers the internal system we should
+set up, configure, build, test, and ship for IronWrap.
 
 ## Final Direction
 
-Consolidate onto JobNimbus and decline the GoHighLevel trial. Implement the
-operating spine first:
+Consolidate onto the owned Cloudflare bus and IronWrap OS operating core. JobNimbus and
+GoHighLevel remain temporary bridge systems only until the owned path covers their live
+work. The exhaustive first-phase build contract is `18-phase-1-source-truth-and-build-contract.md`;
+it wins when older provenance docs disagree.
 
-- JobNimbus as the operational CRM, job-truth, and lead front door (customer,
-  property, job, stage, task, owner, job number). GHL was trial-evaluated only
-  and is being declined before any production use; nothing to migrate — end the
-  trial.
+- IronWrap OS / ERPNext as the target operating truth for customer, property,
+  job, estimate, stage, task, owner, evidence, and approval state. JobNimbus can
+  bridge existing job/CRM operations while owned replacements mature.
 - A thin owned data layer (Cloudflare D1 + R2) is the system of record: Make
-  dual-writes every lead/event to it first, then to JobNimbus. JobNimbus is a
-  consumer of IronWrap's data, not the owner.
-- Make as the critical integration bus, not plumbing: canonical lead envelope,
-  dedup, error-handler → dead-letter, and a daily source-vs-landed reconciliation
-  so no lead is ever silently lost.
+  dual-writes every lead/event to it first, then to bridge systems only when
+  still needed. JobNimbus/GHL are consumers of IronWrap's data, not owners.
+- The owned estimator/configurator path is first-class: public/internal
+  estimate payloads land at `POST /ingest/estimate`, use stable project/idempotency
+  keys for retry-safe replay, save raw R2 + D1 truth, and create review-gated
+  ERPNext Instant Estimate Session rows. No generated estimate is binding until
+  a human approves scope, exclusions, and price.
+- Make as connector/visibility infrastructure and the Cloudflare Worker as the
+  owned bus: canonical lead envelope, dedup, dead-letter, retry, and daily
+  source-vs-landed reconciliation so no lead is ever silently lost.
 - Instant-response / missed-call-text-back (MCTB) is the headline deliverable:
   every call or form gets a touch in under a minute, 24/7.
-- JobNimbus Engage for two-way SMS; email sends from each brand's own mailbox —
-  IronWrap via Microsoft 365 (`quote@ironwrapexteriors.com`), iRoof Alberta via
-  Google/Gmail (`info@iroofalberta.ca`) — both with SPF/DKIM/DMARC on their
-  domains. Microsoft 365 is the default sender for transactional, instant-ack,
-  RoofRuler, and notification email. JobNimbus native email stays unused
-  (unreliable). A dedicated transactional ESP (e.g., Resend) is DEFERRED — add
-  only if/when high-volume nurture or review-request sequences need bulk-grade
-  deliverability that mailbox email isn't built for.
+- JobNimbus Engage for two-way SMS after A2P/carrier approval; email sends from
+  Google Workspace brand mailboxes. IronWrap currently uses `sales@` with
+  `info@`/`quote@` aliases, mirrored to Microsoft 365 during migration. JobNimbus
+  native email stays unused. A dedicated transactional ESP is deferred.
 - Phone AI = native JobNimbus AssistAI, behind a written scored eval gate;
   voicemail-to-lead floor; managed Retell only if AssistAI fails the gate. No
   custom multi-vendor voice stack; Google Voice is not usable (no media API).
 - Field photos/geo = the Jotform "Jobsite Photo" form (JobNimbus job picker +
   Geolocation widget capturing device GPS at submit, coordinates-only, offline-capable
   in the Jotform Mobile App; multi-photo upload, auto timestamp, offline-queued →
-  webhook → Make → OneDrive + JobNimbus + owned store; $0 incremental). iOS
+  webhook → Make → Google Drive + JobNimbus + owned store; $0 incremental). iOS
   strips photo GPS by default, and direct camera-capture uploads lose metadata
   regardless — so capture device GPS at submit; don't depend on EXIF. Jotform for
   structured forms when a workflow needs it. NaturalForms dropped.
 - Free Canva + free Affinity for design/marketing graphics — not full Adobe
   Creative Cloud (Canva Pro only if brand-kit/team features are needed).
-- OneDrive (Microsoft 365) as the first storage authority; QuickBooks for accounting truth.
+- Google Drive (Google Workspace) as the first storage authority; QuickBooks for accounting truth.
 - Deterministic document extraction first, free OCR second, paid OCR only when
   needed.
-- No GHL migration: GHL was trial-only and is declined, so there is nothing to
-  migrate. Independent of GHL, complete before automated texting goes live: a
-  fresh A2P 10DLC + Canadian carrier registration for JobNimbus Engage SMS (lead
-  time ~1–3 wks); provision/own the business phone number for AssistAI/Engage in
-  Twilio so it stays portable; maintain the CASL consent ledger in JobNimbus
-  going forward; and verify the existing website forms' current post destinations
-  and point them at the Make bus.
+- GHL retirement is a cutover, not a rewrite: keep the existing working routes
+  until `/ingest/website` is fed by website/server-side forwarding or one Make UI
+  bridge, then retire GHL paths. Complete before automated texting goes live: a
+  fresh A2P 10DLC + Canadian carrier registration for JobNimbus Engage SMS; maintain
+  the CASL consent ledger in JobNimbus going forward.
 - Security/access hardening last, after build/config/test, with basic access
-  containment from day one.
+  containment from the first production use.
 
-The first deliverable reuses Make (on Core, already subscribed), Microsoft 365,
-Google, RoofRuler, QuickBooks, JobNimbus, and Jotform, which IronWrap already
-pays for. The first-deliverable incremental is ~CAD $120–220/mo (loaded, incl.
-~1.40 FX + GST), and is Engage-driven. The driver is JobNimbus Engage (~CAD
-$90–140 loaded with SMS usage); the rest is small — Twilio DID + usage (~CAD
-$5–30) and the A2P monthly campaign fee (~CAD $5–15). Email = existing Microsoft
-365 ($0 incremental) and storage = existing OneDrive ($0 incremental); Make is on
-the existing Core plan, and the bus can run on Cloudflare Workers (D1/R2/Workers ≈
-$0). A dedicated ESP is deferred (≈ $0 until adopted; Resend's free tier likely
-covers low volume if/when needed), design = $0 (free Canva + free Affinity). AssistAI minutes are a Phase-2 (post-eval) cost (~CAD $35–70
-loaded when live), not part of the first-deliverable incremental. One-time setup
-~CAD $700–2,100 (A2P registration, DID provisioning, Make/Workers bus build
-labor, ESP domain auth, form re-pointing, training). "$0 new vendor setup" is
-false — Cloudflare, the ESP, the owned Twilio number, and (if adopted) DocuSeal
-are new vendor lines. GHL was never adopted, so this still avoids ~CAD
-$135–415/mo of GHL cost; the honest pitch is "simpler, more portable, and avoids
-GHL's cost," not a dramatic saving. Renoworks, Paradigm, CallRail, paid OCR, and
-any custom voice stack remain gated until a tested workflow proves the need.
+The first deliverable reuses only what is already useful as a bridge: Make Core,
+Google Workspace, RoofRuler, QuickBooks, JobNimbus, GHL, and Jotform. Do not buy
+duplicate JobNimbus/GHL modules while the owned estimator/Hermes path is being
+proven. Incremental spend should stay limited to necessary delivery rails:
+Cloudflare, email/domain infrastructure, SMS/phone only if approved, and
+measurement/payment vendors when a real workflow requires them. Renoworks,
+Paradigm, CallRail, paid OCR, DocuSeal, and any custom voice stack remain gated
+until a tested workflow proves the need.
 
 ## Pack Index
 
@@ -95,6 +85,7 @@ any custom voice stack remain gated until a tested workflow proves the need.
 16. [First Deliverable Existing-Stack Plan](./15-first-deliverable-existing-stack-plan.md)
 17. [Website Funnels & Qualified-Lead Capture](./16-website-funnels-qualified-leads.md)
 18. [US Best-Practice Cross-Reference](./17-us-best-practices-cross-reference.md)
+19. [Phase 1 Source Truth And Build Contract](./18-phase-1-source-truth-and-build-contract.md)
 
 ## What Counts As Shipped
 
@@ -107,7 +98,8 @@ Task 1 is shipped only when:
 - Website and service-page leads retain source page, service intent, location,
   attachment, and next-step data.
 - Qualified leads create/update JobNimbus without duplicates.
-- JobNimbus owns the canonical job number and job stage.
+- IronWrap OS owns job truth; JobNimbus may bridge job numbers/stages until owned production records
+  replace that slice.
 - Job folders are created once and linked back to JobNimbus and the owned store.
 - Appointment, proposal, deposit, material request, completion, invoice, and
   review paths work end to end.
@@ -116,10 +108,9 @@ Task 1 is shipped only when:
   without manual retyping.
 - AssistAI (behind the eval gate) can qualify, book, update CRM records,
   summarize, trigger follow-up, and escalate; MCTB covers missed/after-hours calls.
-- GHL trial is ended (nothing to migrate); A2P 10DLC + Canadian carrier
-  registration is approved, the business number is provisioned and owned in
-  Twilio, the CASL consent ledger is live in JobNimbus, and website forms post to
-  the Make bus.
+- GHL lead routes are retired after replacement proof; A2P 10DLC + Canadian
+  carrier registration is approved, the CASL consent ledger is live in JobNimbus,
+  and website forms post to the bus.
 - Staff can run test jobs without developer support.
 - Every critical automation has an owner, test record, kill switch, failure alert,
   and dead-letter path.

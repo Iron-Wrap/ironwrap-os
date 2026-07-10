@@ -134,6 +134,7 @@ const WRITE_PAIRS = {
   request_create_warranty_packet: "dry_run_warranty_packet",
   request_create_review_request: "dry_run_review_request",
   request_record_communication_event: "dry_run_communication_event",
+  request_mark_lead_triaged: "dry_run_mark_lead_triaged",
   request_add_market_watch_item: "dry_run_market_watch_item",
   request_create_job_assignment: "dry_run_job_assignment",
   request_create_change_order: "dry_run_change_order",
@@ -172,14 +173,14 @@ for (const tool of NEW_STRICT_READS) {
 }
 
 const frappeTools = new Set([...inventory].filter((tool) => toolServer.get(tool) === "erpnext-roofing-mcp"));
-assert.equal(frappeTools.size, 111, "Frappe MCP inventory must stay at the reviewed 111-tool contract");
-assert.equal([...frappeTools].filter((tool) => reads.has(tool)).length, 69,
-  "Frappe MCP must expose 69 read tools");
-assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 21,
-  "Frappe MCP must expose 21 dry-run tools");
-assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 21,
-  "Frappe MCP must expose 21 approved-write tools");
-assert.equal(inventory.size, 118, "two-server Hermes inventory must stay at 118 tools");
+assert.equal(frappeTools.size, 115, "Frappe MCP inventory must stay at the reviewed 115-tool contract");
+assert.equal([...frappeTools].filter((tool) => reads.has(tool)).length, 71,
+  "Frappe MCP must expose 71 read tools");
+assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 22,
+  "Frappe MCP must expose 22 dry-run tools");
+assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 22,
+  "Frappe MCP must expose 22 approved-write tools");
+assert.equal(inventory.size, 122, "two-server Hermes inventory must stay at 122 tools");
 
 // Contract Acceptance is evidence produced by the customer/provider, never an agent mutation.
 assert.ok(reads.has("get_contract_acceptance") && reads.has("list_contract_acceptances_for_job"),
@@ -262,6 +263,29 @@ for (const [roleName, role] of Object.entries(config.roles)) {
     `${label} Markdown dry-run list must exactly match roles.json`);
   assert.deepEqual(profileTools("Approved-write", "Forbidden"), new Set(role.approved_write),
     `${label} Markdown approved-write list must exactly match roles.json`);
+}
+
+// Lead qualification is intentionally limited to the concierge and the owner
+// supervisor. The local triage annotation is not a backdoor to bus transport
+// state or communications, so no field, finance, production, or closeout role
+// may discover or mutate it.
+const LEAD_TRIAGE_TOOLS = new Set([
+  "list_untriaged_lead_envelopes",
+  "list_communication_events_for_lead",
+  "dry_run_mark_lead_triaged",
+  "request_mark_lead_triaged",
+]);
+for (const [roleName, role] of Object.entries(config.roles)) {
+  const granted = new Set([...role.reads, ...role.dry_run, ...role.approved_write]);
+  if (["owner-operator", "lead-concierge"].includes(roleName)) {
+    for (const tool of LEAD_TRIAGE_TOOLS) {
+      assert.ok(granted.has(tool), `${roleName} must receive the lead-triage tool ${tool}`);
+    }
+  } else {
+    for (const tool of LEAD_TRIAGE_TOOLS) {
+      assert.ok(!granted.has(tool), `${roleName} must not receive the lead-triage tool ${tool}`);
+    }
+  }
 }
 
 const fieldCompanionTools = new Set([

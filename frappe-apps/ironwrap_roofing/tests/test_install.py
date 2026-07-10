@@ -89,6 +89,24 @@ class InstallHookTests(unittest.TestCase):
 
         self.assertEqual(events, ["commit", "clear_cache"])
 
+    def test_after_migrate_marks_legacy_leads_unknown_without_calling_them_untriaged(self) -> None:
+        sql_calls = []
+        frappe_module = types.ModuleType("frappe")
+        frappe_module.db = types.SimpleNamespace(
+            exists=lambda doctype, name: name,
+            set_value=lambda *args, **kwargs: None,
+            sql=lambda statement: sql_calls.append(statement),
+        )
+        frappe_module.get_doc = lambda payload: FakeRoleDocument(payload, [])
+        frappe_module.clear_cache = lambda: None
+        module = self.load_install_module(frappe_module)
+
+        module.after_migrate()
+
+        self.assertEqual(len(sql_calls), 1)
+        self.assertIn("SET triage_status = 'Unknown'", sql_calls[0])
+        self.assertIn("triage_status IS NULL", sql_calls[0])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,7 +21,30 @@ LOCK_FILE="$REPO_ROOT/workers-bus/package-lock.json"
 EXPECTED_ACCOUNT_ID="7ee5775bc1ba46f05c5a65235b60e939"
 EXPECTED_DATABASE_NAME="ironwrap-bus"
 EXPECTED_DATABASE_ID="f0674848-13df-4422-9896-8ba2719663b8"
-REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,quickbooks_webhook_receipts,dedup_claims,replay_requests,field_actions,field_action_media,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit,app_action_throttles,app_device_pairings,app_devices"
+REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,quickbooks_webhook_receipts,dedup_claims,replay_requests,field_actions,field_action_media,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit,app_action_throttles,app_device_pairings,app_devices,lead_ack_receipts"
+# A recoverable export must retain both source-count validation and append-only
+# receipt evidence, bound to their intended tables.
+REQUIRED_TRIGGER_BINDINGS="validate_source_count_insert=source_counts,validate_source_count_update=source_counts,prevent_lead_ack_receipts_update=lead_ack_receipts,prevent_lead_ack_receipts_delete=lead_ack_receipts"
+REQUIRED_RECEIPT_TRIGGER_SEMANTICS="prevent_lead_ack_receipts_update=beforeupdateonlead_ack_receipts,prevent_lead_ack_receipts_delete=beforedeleteonlead_ack_receipts"
+RECEIPT_IMMUTABILITY_ABORT="raise(abort,'lead_ack_receipts_immutable')"
+
+verify_receipt_trigger_semantics() {
+  local database="$1"
+  local label="$2"
+  local trigger_spec trigger_name expected_prefix normalized_sql
+  local -a required_receipt_trigger_semantics
+
+  IFS=',' read -r -a required_receipt_trigger_semantics <<< "$REQUIRED_RECEIPT_TRIGGER_SEMANTICS"
+  for trigger_spec in "${required_receipt_trigger_semantics[@]}"; do
+    trigger_name="${trigger_spec%%=*}"
+    expected_prefix="${trigger_spec#*=}"
+    normalized_sql="$(sqlite3 "$database" "SELECT lower(replace(replace(replace(replace(sql, char(10), ''), char(13), ''), char(9), ''), ' ', '')) FROM sqlite_master WHERE type='trigger' AND name='$trigger_name';")"
+    if [[ "$normalized_sql" != *"$expected_prefix"* || "$normalized_sql" != *"$RECEIPT_IMMUTABILITY_ABORT"* ]]; then
+      echo "error: $label does not enforce immutable receipt trigger semantics: $trigger_name" >&2
+      return 1
+    fi
+  done
+}
 mode="${D1_RESTORE_MODE:-verify}"
 
 if [[ "$mode" != "verify" && "$mode" != "remote" ]]; then
@@ -346,6 +369,22 @@ for table_name in "${required_tables[@]}"; do
   fi
   printf '%s=%s\n' "$table_name" "$row_count" >> "$local_counts"
 done
+IFS=',' read -r -a required_trigger_bindings <<< "$REQUIRED_TRIGGER_BINDINGS"
+local_trigger_bindings="$WORK_DIR/local-trigger-inventory.txt"
+: > "$local_trigger_bindings"
+for trigger_binding in "${required_trigger_bindings[@]}"; do
+  trigger_name="${trigger_binding%%=*}"
+  trigger_table="${trigger_binding#*=}"
+  present="$(sqlite3 "$verification_db" "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='$trigger_name' AND tbl_name='$trigger_table';")"
+  if [[ "$present" != "1" ]]; then
+    echo "error: restored D1 export is missing required invariant trigger: $trigger_name on $trigger_table" >&2
+    exit 1
+  fi
+  printf '%s=%s\n' "$trigger_name" "$trigger_table" >> "$local_trigger_bindings"
+done
+if ! verify_receipt_trigger_semantics "$verification_db" "restored D1 export"; then
+  exit 1
+fi
 
 if [[ "$mode" == "verify" ]]; then
   echo "ok: selected D1 backup cryptographically and structurally verified locally; no remote mutation performed"
@@ -409,6 +448,54 @@ if ! node -e '
   for(const [name,count] of expected){ if(actual.get(name)!==count) process.exit(1); }
 ' "$verify_json" "$local_counts"; then
   echo "error: remote D1 restore table row counts differ from the locally verified export" >&2
+  exit 1
+fi
+
+trigger_verify_sql="$WORK_DIR/target-trigger-verify.sql"
+{
+  first=1
+  for trigger_binding in "${required_trigger_bindings[@]}"; do
+    trigger_name="${trigger_binding%%=*}"
+    if (( first == 0 )); then printf ' UNION ALL '; fi
+    printf "SELECT name AS trigger_name, tbl_name AS table_name, sql AS trigger_sql FROM sqlite_master WHERE type='trigger' AND name='%s'" "$trigger_name"
+    first=0
+  done
+  printf ';\n'
+} > "$trigger_verify_sql"
+trigger_verify_json="$WORK_DIR/target-trigger-verify.json"
+CLOUDFLARE_API_TOKEN="$d1_restore_api_token" "$WRANGLER" d1 execute "$D1_RESTORE_TARGET_DATABASE_NAME" --remote \
+  --config "$target_config" --file "$trigger_verify_sql" --json > "$trigger_verify_json"
+if ! node -e '
+  const fs=require("fs");
+  const payload=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+  const batches=Array.isArray(payload)?payload:[payload];
+  if(!batches.length||batches.some((entry)=>entry?.success!==true)) process.exit(1);
+  const rows=batches.flatMap((entry)=>Array.isArray(entry.results)?entry.results:[]);
+  const receiptSemantics=new Map([
+    ["prevent_lead_ack_receipts_update","beforeupdateonlead_ack_receipts"],
+    ["prevent_lead_ack_receipts_delete","beforedeleteonlead_ack_receipts"],
+  ]);
+  const receiptAbort="raise(abort,'lead_ack_receipts_immutable')";
+  const expected=new Map(fs.readFileSync(process.argv[2],"utf8").trim().split("\n").filter(Boolean).map((line)=>{
+    const at=line.indexOf("=");
+    const name=line.slice(0,at); const table=line.slice(at+1);
+    if(at<1||!table) process.exit(1);
+    return [name,table];
+  }));
+  const actual=new Map();
+  for(const row of rows){
+    if(typeof row?.trigger_name!=="string"||typeof row?.table_name!=="string"||typeof row?.trigger_sql!=="string"||!row.trigger_name||!row.table_name||actual.has(row.trigger_name)) process.exit(1);
+    const expectedSemantic=receiptSemantics.get(row.trigger_name);
+    if(expectedSemantic){
+      const normalized=row.trigger_sql.toLowerCase().replace(/\s+/g,"");
+      if(!normalized.includes(expectedSemantic)||!normalized.includes(receiptAbort)) process.exit(1);
+    }
+    actual.set(row.trigger_name,row.table_name);
+  }
+  if(actual.size!==expected.size) process.exit(1);
+  for(const [name,table] of expected){ if(actual.get(name)!==table) process.exit(1); }
+' "$trigger_verify_json" "$local_trigger_bindings"; then
+  echo "error: remote D1 restore trigger inventory or receipt semantics differ from the locally verified export" >&2
   exit 1
 fi
 

@@ -53,6 +53,127 @@ class DomainPolicyTests(unittest.TestCase):
             previous={"evidence_id": "ev-1", "r2_key": "raw/original"},
         )
 
+    def test_jobnimbus_ids_are_late_bound_once_then_immutable(self) -> None:
+        lead_before = {
+            "envelope_id": "lead-1",
+            "jobnimbus_contact_id": "",
+            "jobnimbus_job_id": None,
+        }
+        lead_bound = {
+            **lead_before,
+            "jobnimbus_contact_id": "jn-contact-1",
+            "jobnimbus_job_id": "jn-job-1",
+        }
+        # Owned-first intake creates the envelope before JobNimbus responds.
+        validate_record("lead_envelope", lead_bound, previous=lead_before)
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "lead_envelope",
+            {**lead_bound, "jobnimbus_contact_id": "jn-contact-2"},
+            previous=lead_bound,
+        )
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "lead_envelope",
+            {**lead_bound, "jobnimbus_job_id": ""},
+            previous=lead_bound,
+        )
+
+        roof_job_before = {
+            "roof_job_id": "job-1",
+            "jobnimbus_contact_id": "",
+            "jobnimbus_job_id": "",
+        }
+        roof_job_bound = {
+            **roof_job_before,
+            "jobnimbus_contact_id": "jn-contact-1",
+            "jobnimbus_job_id": "jn-job-1",
+        }
+        validate_record("roof_job", roof_job_bound, previous=roof_job_before)
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "roof_job",
+            {**roof_job_bound, "jobnimbus_job_id": "jn-job-2"},
+            previous=roof_job_bound,
+        )
+
+    def test_lead_envelope_triage_is_migration_safe_and_sticky_once_triaged(self) -> None:
+        # Pre-triage documents have no triage fields. They remain valid as Unknown.
+        legacy = {"envelope_id": "lead-legacy"}
+        validate_record("lead_envelope", legacy)
+
+        # A worker-created legacy envelope can subsequently be marked Untriaged.
+        validate_record(
+            "lead_envelope",
+            {"envelope_id": "lead-legacy", "triage_status": "Untriaged"},
+            previous=legacy,
+        )
+
+        triaged = {
+            "envelope_id": "lead-1",
+            "triage_status": "Triaged",
+            "triaged_by": "sales@example.com",
+            "triaged_at": "2026-07-10 12:00:00",
+            "triage_summary": "Confirmed residential metal reroof request.",
+        }
+        validate_record("lead_envelope", triaged)
+        validate_record(
+            "lead_envelope",
+            {**triaged, "triage_summary": "Customer requested a Friday call."},
+            previous=triaged,
+        )
+
+        for triage_status in ("Unknown", "Untriaged"):
+            with self.subTest(triage_status=triage_status):
+                self.assert_policy(
+                    "invalid_state_transition",
+                    validate_record,
+                    "lead_envelope",
+                    {"envelope_id": "lead-1", "triage_status": triage_status},
+                    previous=triaged,
+                )
+
+    def test_lead_envelope_triage_requires_complete_details_and_known_state(self) -> None:
+        self.assert_policy(
+            "invalid_triage_status",
+            validate_record,
+            "lead_envelope",
+            {"envelope_id": "lead-1", "triage_status": "Queued"},
+        )
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "lead_envelope",
+            {"envelope_id": "lead-1", "triage_status": "Triaged"},
+        )
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "lead_envelope",
+            {
+                "envelope_id": "lead-1",
+                "triage_status": "Triaged",
+                "triaged_by": "sales@example.com",
+                "triaged_at": "2026-07-10 12:00:00",
+                "triage_summary": "   ",
+            },
+        )
+        for triage_status in ("Unknown", "Untriaged"):
+            with self.subTest(triage_status=triage_status):
+                self.assert_policy(
+                    "stale_triage_details",
+                    validate_record,
+                    "lead_envelope",
+                    {
+                        "envelope_id": "lead-1",
+                        "triage_status": triage_status,
+                        "triage_summary": "Needs a human check.",
+                    },
+                )
+
     def test_estimate_review_and_approval_gate(self) -> None:
         approved = {
             "estimate_session_id": "est-1",

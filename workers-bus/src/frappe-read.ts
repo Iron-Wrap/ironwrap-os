@@ -32,7 +32,7 @@ export const FRAPPE_READ_FIELDS = {
   ],
   "Roofing Customer": ["name", "display_name", "phone", "modified"],
   "Production Gate State": [
-    "name", "gate_id", "roof_job", "gate", "state", "owner_user", "due_at",
+    "name", "gate_id", "roof_job", "gate", "state", "owner_user", "assigned_at", "due_at",
     "blocker_reason", "modified",
   ],
   "Evidence Item": [
@@ -64,17 +64,18 @@ export const FRAPPE_READ_FIELDS = {
     "hazard_summary", "controls", "emergency_plan", "ppe_requirements", "weather_limits", "modified",
   ],
   "Automation Incident": [
-    "name", "incident_id", "status", "severity", "category", "summary", "roof_job", "modified",
+    "name", "incident_id", "status", "severity", "category", "summary", "roof_job", "detected_at", "modified",
   ],
   "Payment Milestone": [
     "name", "payment_milestone_id", "roof_job", "milestone_type", "status", "due_date",
-    "notes", "modified",
+    "event_ts", "notes", "modified",
   ],
   "Lead Envelope": [
-    "name", "envelope_id", "source", "status", "intent_queue", "contact_name", "job_ref", "modified",
+    "name", "envelope_id", "source", "event_ts", "status", "intent_queue", "triage_status",
+    "contact_name", "job_ref", "modified",
   ],
   "Supplier Order": [
-    "name", "supplier_order_id", "roof_job", "status", "requested_delivery_date",
+    "name", "supplier_order_id", "roof_job", "status", "prepared_at", "requested_delivery_date",
     "delivery_notes", "modified",
   ],
 } as const;
@@ -97,7 +98,7 @@ const FILTER_FIELDS: Readonly<Record<FrappeDocType, ReadonlySet<string>>> = {
   "Roofing Customer": new Set(["name"]),
   "Production Gate State": new Set(["roof_job", "state"]),
   "Evidence Item": new Set(["name", "roof_job", "evidence_id", "device_action_id"]),
-  "Field Check-in": new Set(["name", "roof_job", "checkin_id", "device_action_id"]),
+  "Field Check-in": new Set(["name", "roof_job", "checkin_id", "device_action_id", "blocker_flag", "status", "sync_state"]),
   "Scope Clause": new Set(["roof_job", "status"]),
   "Measurement Report": new Set(["roof_job", "review_status"]),
   "Material Takeoff": new Set(["roof_job", "status"]),
@@ -105,7 +106,7 @@ const FILTER_FIELDS: Readonly<Record<FrappeDocType, ReadonlySet<string>>> = {
   "Safety Plan": new Set(["roof_job", "status"]),
   "Automation Incident": new Set(["status"]),
   "Payment Milestone": new Set(["status"]),
-  "Lead Envelope": new Set(["status"]),
+  "Lead Envelope": new Set(["status", "triage_status"]),
   "Supplier Order": new Set(["roof_job", "status"]),
 };
 

@@ -24,7 +24,30 @@ LOCK_FILE="$REPO_ROOT/workers-bus/package-lock.json"
 EXPECTED_ACCOUNT_ID="7ee5775bc1ba46f05c5a65235b60e939"
 EXPECTED_DATABASE_NAME="ironwrap-bus"
 EXPECTED_DATABASE_ID="f0674848-13df-4422-9896-8ba2719663b8"
-REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,quickbooks_webhook_receipts,dedup_claims,replay_requests,field_actions,field_action_media,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit,app_action_throttles,app_device_pairings,app_devices"
+REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,quickbooks_webhook_receipts,dedup_claims,replay_requests,field_actions,field_action_media,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit,app_action_throttles,app_device_pairings,app_devices,lead_ack_receipts"
+# Name and target table are both release-state invariants. A backup that has the
+# rows but not these safeguards is not a recoverable production backup.
+REQUIRED_TRIGGER_BINDINGS="validate_source_count_insert=source_counts,validate_source_count_update=source_counts,prevent_lead_ack_receipts_update=lead_ack_receipts,prevent_lead_ack_receipts_delete=lead_ack_receipts"
+REQUIRED_RECEIPT_TRIGGER_SEMANTICS="prevent_lead_ack_receipts_update=beforeupdateonlead_ack_receipts,prevent_lead_ack_receipts_delete=beforedeleteonlead_ack_receipts"
+RECEIPT_IMMUTABILITY_ABORT="raise(abort,'lead_ack_receipts_immutable')"
+
+verify_receipt_trigger_semantics() {
+  local database="$1"
+  local label="$2"
+  local trigger_spec trigger_name expected_prefix normalized_sql
+  local -a required_receipt_trigger_semantics
+
+  IFS=',' read -r -a required_receipt_trigger_semantics <<< "$REQUIRED_RECEIPT_TRIGGER_SEMANTICS"
+  for trigger_spec in "${required_receipt_trigger_semantics[@]}"; do
+    trigger_name="${trigger_spec%%=*}"
+    expected_prefix="${trigger_spec#*=}"
+    normalized_sql="$(sqlite3 "$database" "SELECT lower(replace(replace(replace(replace(sql, char(10), ''), char(13), ''), char(9), ''), ' ', '')) FROM sqlite_master WHERE type='trigger' AND name='$trigger_name';")"
+    if [[ "$normalized_sql" != *"$expected_prefix"* || "$normalized_sql" != *"$RECEIPT_IMMUTABILITY_ABORT"* ]]; then
+      echo "error: $label does not enforce immutable receipt trigger semantics: $trigger_name" >&2
+      return 1
+    fi
+  done
+}
 
 required_env=(
   D1_PRODUCTION_ACCOUNT_ID
@@ -173,6 +196,19 @@ for table_name in "${required_tables[@]}"; do
     exit 1
   fi
 done
+IFS=',' read -r -a required_trigger_bindings <<< "$REQUIRED_TRIGGER_BINDINGS"
+for trigger_binding in "${required_trigger_bindings[@]}"; do
+  trigger_name="${trigger_binding%%=*}"
+  trigger_table="${trigger_binding#*=}"
+  present="$(sqlite3 "$verification_db" "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='$trigger_name' AND tbl_name='$trigger_table';")"
+  if [[ "$present" != "1" ]]; then
+    echo "error: D1 export is missing required invariant trigger: $trigger_name on $trigger_table" >&2
+    exit 1
+  fi
+done
+if ! verify_receipt_trigger_semantics "$verification_db" "D1 export"; then
+  exit 1
+fi
 
 package="$WORK_DIR/package"
 publish="$WORK_DIR/publish"

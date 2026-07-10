@@ -11,6 +11,7 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - list_dead_letters
 - get_roof_job
 - get_lead_envelope
+- list_untriaged_lead_envelopes
 - list_job_gates
 - list_blocked_jobs
 - get_measurement_report
@@ -39,6 +40,7 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - list_review_requests_for_job
 - get_communication_event
 - list_communication_events_for_job
+- list_communication_events_for_lead
 - get_price_book_rule
 - list_price_book_rules
 - get_visual_property_model
@@ -102,6 +104,7 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - dry_run_warranty_packet
 - dry_run_review_request
 - dry_run_communication_event
+- dry_run_mark_lead_triaged
 - dry_run_market_watch_item
 
 ## Approved-write
@@ -127,6 +130,7 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - request_create_warranty_packet
 - request_create_review_request
 - request_record_communication_event
+- request_mark_lead_triaged
 - request_add_market_watch_item
 
 ## Forbidden
@@ -147,6 +151,9 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
   envelope with matching `dry_run_replay` / `request_replay`; Hermes is never granted bulk replay.
 - Use `check_consent` / `check_quiet_hours` before approving any `request_record_communication_event`;
   comms are record-only and never a send.
+- Lead triage is an approved local annotation: use `dry_run_mark_lead_triaged` then
+  `request_mark_lead_triaged`. It cannot alter bus transport status and does not create or
+  update a Communication Event.
 - Treat assignments, change orders, safety plans, compliance records, decisions, consent, and
   export requests as append-only/evidence-backed history where the tool contract says so.
   `Contract Acceptance` and `Crew Profile` are read-only; no role can sign for a customer.

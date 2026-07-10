@@ -21,6 +21,11 @@ export interface ErpNextResult {
   instantEstimateSessionName?: string;
 }
 
+export interface ErpNextTransportSyncResult {
+  name: string;
+  roofJobName?: string;
+}
+
 export interface ErpNextPhotoEvidenceResult {
   names: string[];
   reused: boolean;
@@ -81,23 +86,7 @@ export async function pushToErpNext(
   const base = normalizeBaseUrl(cfg.ERPNEXT_BASE_URL);
   const doctype = cfg.ERPNEXT_LEAD_ENVELOPE_DOCTYPE || "Lead Envelope";
   const p = safeJson(rec.payload_json);
-  const leadDoc = {
-    envelope_id: rec.envelope_id,
-    source: rec.source,
-    contact_name: rec.contact_name ?? undefined,
-    contact_phone: rec.contact_phone ?? undefined,
-    contact_email: rec.contact_email ?? undefined,
-    job_ref: rec.job_ref ?? undefined,
-    raw_key: rec.raw_key ?? undefined,
-    event_ts: rec.ts,
-    status: rec.status,
-    intent_queue: rec.intent_queue ?? undefined,
-    payload_json: rec.payload_json,
-    jobnimbus_contact_id: jn?.contactId ?? rec.jn_contact_id ?? undefined,
-    jobnimbus_job_id: jn?.jobId ?? rec.jn_job_id ?? undefined,
-  };
-
-  const lead = await upsertByField(cfg, base, doctype, "envelope_id", rec.envelope_id, leadDoc);
+  const lead = await upsertLeadEnvelope(cfg, base, doctype, rec, jn);
   const property = await upsertProperty(cfg, base, rec, p, lead.name);
   const roofJob = await upsertRoofJob(cfg, base, rec, p, lead.name, property?.name, jn);
   const productionGateCount = await ensureInitialProductionGates(cfg, base, roofJob.name);
@@ -113,6 +102,68 @@ export async function pushToErpNext(
   };
 }
 
+/**
+ * Reconcile only bridge/transport facts after JobNimbus succeeds. This deliberately avoids the
+ * business triage fields, so a later queue retry cannot erase a human Triaged decision.
+ */
+export async function syncLeadTransportToErpNext(
+  env: Env,
+  rec: EnvelopeRecord,
+  jn: JnResult,
+): Promise<ErpNextTransportSyncResult | null> {
+  const cfg = env as ErpEnv;
+  if (!isOn(cfg.ERPNEXT_ENABLED)) return null;
+  if (!cfg.ERPNEXT_API_KEY || !cfg.ERPNEXT_API_SECRET) throw new Error("erpnext_no_token");
+  const base = normalizeBaseUrl(cfg.ERPNEXT_BASE_URL);
+  const doctype = cfg.ERPNEXT_LEAD_ENVELOPE_DOCTYPE || "Lead Envelope";
+  const existing = await findByTerm(cfg, base, doctype, "envelope_id", rec.envelope_id);
+  if (!existing) throw new Error("erpnext_lead_envelope_missing");
+  await erpFetch(cfg, base, "PUT", `/api/resource/${enc(doctype)}/${enc(existing)}`, leadTransportDoc(rec, jn));
+  const roofJobName = await syncRoofJobTransport(cfg, base, rec, jn);
+  return { name: existing, ...(roofJobName ? { roofJobName } : {}) };
+}
+
+function leadTransportDoc(rec: EnvelopeRecord, jn?: JnResult): Record<string, unknown> {
+  return {
+    envelope_id: rec.envelope_id,
+    source: rec.source,
+    contact_name: rec.contact_name ?? undefined,
+    contact_phone: rec.contact_phone ?? undefined,
+    contact_email: rec.contact_email ?? undefined,
+    job_ref: rec.job_ref ?? undefined,
+    raw_key: rec.raw_key ?? undefined,
+    event_ts: rec.ts,
+    status: rec.status,
+    intent_queue: rec.intent_queue ?? undefined,
+    payload_json: rec.payload_json,
+    jobnimbus_contact_id: jn?.contactId ?? rec.jn_contact_id ?? undefined,
+    jobnimbus_job_id: jn?.jobId ?? rec.jn_job_id ?? undefined,
+  };
+}
+
+async function upsertLeadEnvelope(
+  env: ErpEnv,
+  base: string,
+  doctype: string,
+  rec: EnvelopeRecord,
+  jn?: JnResult,
+): Promise<ErpNextResult> {
+  const existing = await findByTerm(env, base, doctype, "envelope_id", rec.envelope_id);
+  const transport = leadTransportDoc(rec, jn);
+  if (existing) {
+    await erpFetch(env, base, "PUT", `/api/resource/${enc(doctype)}/${enc(existing)}`, transport);
+    return { name: existing, reused: true };
+  }
+  const created = await erpFetch(env, base, "POST", `/api/resource/${enc(doctype)}`, {
+    ...transport,
+    // This is a business lifecycle, intentionally distinct from transport `status` above.
+    triage_status: "Untriaged",
+  });
+  const name = readName(created);
+  if (!name) throw new Error(`erpnext_create_no_name:${doctype}`);
+  return { name, reused: false };
+}
+
 async function upsertProperty(
   env: ErpEnv,
   base: string,
@@ -126,7 +177,9 @@ async function upsertProperty(
   if (!address && !city && !postal) return null;
 
   const propertyKey = ["property", address, city, postal].filter(Boolean).join(":").toLowerCase() || `property:${rec.envelope_id}`;
-  return await upsertByField(env, base, "Roofing Property", "property_key", propertyKey, {
+  // A retry must complete a missing initial record, never overwrite field corrections made after
+  // the first queue attempt. Source facts remain in the immutable envelope/R2 record.
+  return await createIfMissingByField(env, base, "Roofing Property", "property_key", propertyKey, {
     property_key: propertyKey,
     lead_envelope: leadName,
     address_line1: address,
@@ -151,7 +204,9 @@ async function upsertRoofJob(
   jn?: JnResult,
 ): Promise<ErpNextResult> {
   const roofJobId = stableId("job", instantEstimateProjectRef(p), rec.envelope_id);
-  return await upsertByField(env, base, "Roof Job", "roof_job_id", roofJobId, {
+  // `job_status` and `current_gate_state` are human-owned operational state. Queue retries may
+  // create a missing initial job but must not reset an in-progress job to qualification.
+  return await createIfMissingByField(env, base, "Roof Job", "roof_job_id", roofJobId, {
     roof_job_id: roofJobId,
     brand: brand(p),
     job_number: jn?.jobNumber ?? rec.job_ref ?? undefined,
@@ -192,7 +247,8 @@ async function upsertInstantEstimateSession(
   const total = money(p.estimate_total ?? p.total_estimate ?? p.totalEstimate ?? p.total);
   if (!hasInstantEstimateSignal(p, low, high, total)) return null;
 
-  return await upsertByField(env, base, "Instant Estimate Session", "estimate_session_id", stableId("estimate", estimateProjectRef(p), rec.envelope_id), {
+  // Keep an estimator's approved/rejected review decision sticky across transport retries.
+  return await createIfMissingByField(env, base, "Instant Estimate Session", "estimate_session_id", stableId("estimate", estimateProjectRef(p), rec.envelope_id), {
     estimate_session_id: stableId("estimate", estimateProjectRef(p), rec.envelope_id),
     lead_envelope: leadName,
     roof_job: roofJobName,
@@ -211,6 +267,25 @@ async function upsertInstantEstimateSession(
     material_choices_json: jsonMaybe(p.material_choices ?? p.materials ?? p.colors),
     payload_json: rec.payload_json,
   });
+}
+
+/** Mirror only bridge identifiers into the already-created Roof Job. */
+async function syncRoofJobTransport(
+  env: ErpEnv,
+  base: string,
+  rec: EnvelopeRecord,
+  jn: JnResult,
+): Promise<string | null> {
+  const p = safeJson(rec.payload_json);
+  const roofJobId = stableId("job", instantEstimateProjectRef(p), rec.envelope_id);
+  const existing = await findByTerm(env, base, "Roof Job", "roof_job_id", roofJobId);
+  if (!existing) return null;
+  await erpFetch(env, base, "PUT", `/api/resource/${enc("Roof Job")}/${enc(existing)}`, {
+    job_number: jn.jobNumber ?? rec.job_ref ?? undefined,
+    jobnimbus_contact_id: jn.contactId,
+    jobnimbus_job_id: jn.jobId ?? undefined,
+  });
+  return existing;
 }
 
 export async function pushMeasurementToErpNext(

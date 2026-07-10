@@ -341,15 +341,43 @@ const REQUIRED_D1_TABLES = [
   "quickbooks_webhook_receipts", "dedup_claims", "replay_requests",
   "field_actions", "field_action_media",
   "app_users", "app_magic_links", "app_sessions", "app_auth_throttles", "app_auth_audit",
-  "app_action_throttles", "app_device_pairings", "app_devices",
+  "app_action_throttles", "app_device_pairings", "app_devices", "lead_ack_receipts",
 ];
 
-function d1Sql({ missingTable = "" } = {}) {
-  const tables = REQUIRED_D1_TABLES.filter((name) => name !== missingTable);
-  return `BEGIN TRANSACTION;\n${tables.map((name, index) => `CREATE TABLE ${name} (id TEXT PRIMARY KEY);\nINSERT INTO ${name} (id) VALUES ('row-${index}');`).join("\n")}\nCOMMIT;\n`;
+const REQUIRED_D1_TRIGGER_BINDINGS = [
+  ["validate_source_count_insert", "source_counts"],
+  ["validate_source_count_update", "source_counts"],
+  ["prevent_lead_ack_receipts_update", "lead_ack_receipts"],
+  ["prevent_lead_ack_receipts_delete", "lead_ack_receipts"],
+];
+
+function d1TriggerSql(name, table, { weakReceiptTrigger = "", wrongTimingReceiptTrigger = "" } = {}) {
+  if (name === "validate_source_count_insert") {
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} WHEN 0 BEGIN SELECT RAISE(ABORT, 'invalid_source_count'); END;`;
+  }
+  if (name === "validate_source_count_update") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} WHEN 0 BEGIN SELECT RAISE(ABORT, 'invalid_source_count'); END;`;
+  }
+  if (name === weakReceiptTrigger) {
+    const timing = name === "prevent_lead_ack_receipts_update" ? "UPDATE" : "DELETE";
+    return `CREATE TRIGGER ${name} BEFORE ${timing} ON ${table} BEGIN SELECT 1; END;`;
+  }
+  if (name === wrongTimingReceiptTrigger) {
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, 'lead_ack_receipts_immutable'); END;`;
+  }
+  if (name === "prevent_lead_ack_receipts_update") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'lead_ack_receipts_immutable'); END;`;
+  }
+  return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'lead_ack_receipts_immutable'); END;`;
 }
 
-async function mockD1BackupEnvironment(t, { failCopy = false, signalCopy = false, missingTable = "" } = {}) {
+function d1Sql({ missingTable = "", missingTrigger = "", weakReceiptTrigger = "", wrongTimingReceiptTrigger = "" } = {}) {
+  const tables = REQUIRED_D1_TABLES.filter((name) => name !== missingTable);
+  const triggers = REQUIRED_D1_TRIGGER_BINDINGS.filter(([name]) => name !== missingTrigger);
+  return `BEGIN TRANSACTION;\n${tables.map((name, index) => `CREATE TABLE ${name} (id TEXT PRIMARY KEY);\nINSERT INTO ${name} (id) VALUES ('row-${index}');`).join("\n")}\n${triggers.map(([name, table]) => d1TriggerSql(name, table, { weakReceiptTrigger, wrongTimingReceiptTrigger })).join("\n")}\nCOMMIT;\n`;
+}
+
+async function mockD1BackupEnvironment(t, { failCopy = false, signalCopy = false, missingTable = "", missingTrigger = "", weakReceiptTrigger = "" } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-d1-backup-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const bin = path.join(root, "bin");
@@ -406,7 +434,7 @@ exit 0
       PATH: `${bin}:${process.env.PATH}`,
       TMPDIR: root,
       MOCK_STATE: state,
-      MOCK_D1_SQL: d1Sql({ missingTable }),
+      MOCK_D1_SQL: d1Sql({ missingTable, missingTrigger, weakReceiptTrigger }),
       MOCK_FAIL_COPY: failCopy ? "1" : "0",
       MOCK_SIGNAL_COPY: signalCopy ? "1" : "0",
       D1_BACKUP_API_TOKEN: "cloudflare_d1_backup_read_4c8f0b2d6a9137e5",
@@ -425,7 +453,7 @@ exit 0
   };
 }
 
-async function mockD1RestoreEnvironment(t, { badChecksum = false, targetCount = 0, signalDownload = false, rowMismatch = false } = {}) {
+async function mockD1RestoreEnvironment(t, { badChecksum = false, targetCount = 0, signalDownload = false, rowMismatch = false, triggerMismatch = false, triggerSemanticsMismatch = false, missingTrigger = "", weakReceiptTrigger = "", wrongTimingReceiptTrigger = "" } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-d1-restore-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const bin = path.join(root, "bin");
@@ -437,7 +465,7 @@ async function mockD1RestoreEnvironment(t, { badChecksum = false, targetCount = 
   const stamp = "20260710T120000Z";
   const sqlFile = `ironwrap-d1-ironwrap-bus-${stamp}.sql`;
   const sqlPath = path.join(packageDir, sqlFile);
-  await writeFile(sqlPath, d1Sql());
+  await writeFile(sqlPath, d1Sql({ missingTrigger, weakReceiptTrigger, wrongTimingReceiptTrigger }));
   const sqlDigest = createHash("sha256").update(await readFile(sqlPath)).digest("hex");
   await writeFile(path.join(packageDir, "IRONWRAP-D1-BACKUP-MANIFEST.txt"), [
     "schema_version=1",
@@ -479,6 +507,30 @@ async function mockD1RestoreEnvironment(t, { badChecksum = false, targetCount = 
     results: REQUIRED_D1_TABLES.map((table_name, index) => ({ table_name, row_count: index === 0 ? 2 : 1 })),
     success: true,
   }]);
+  const matchingTriggers = JSON.stringify([{
+    results: REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({
+      trigger_name,
+      table_name,
+      trigger_sql: d1TriggerSql(trigger_name, table_name),
+    })),
+    success: true,
+  }]);
+  const mismatchedTriggers = JSON.stringify([{
+    results: REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name], index) => ({
+      trigger_name,
+      table_name: index === 0 ? "lead_ack_receipts" : table_name,
+      trigger_sql: d1TriggerSql(trigger_name, table_name),
+    })),
+    success: true,
+  }]);
+  const semanticallyMismatchedTriggers = JSON.stringify([{
+    results: REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({
+      trigger_name,
+      table_name,
+      trigger_sql: d1TriggerSql(trigger_name, table_name, { wrongTimingReceiptTrigger: "prevent_lead_ack_receipts_update" }),
+    })),
+    success: true,
+  }]);
 
   await writeExecutable(path.join(staged.workerBin, "wrangler"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -500,6 +552,8 @@ if (( json == 1 )); then
     printf '[{"results":[{"table_count":%s}],"success":true}]\\n' "$MOCK_TARGET_COUNT"
   elif [[ "$file" == *target-verify.sql ]]; then
     if [[ "$MOCK_ROW_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedRows}'; else printf '%s\\n' '${matchingRows}'; fi
+  elif [[ "$file" == *target-trigger-verify.sql ]]; then
+    if [[ "$MOCK_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${semanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedTriggers}'; else printf '%s\\n' '${matchingTriggers}'; fi
   fi
 fi
 `);
@@ -545,6 +599,8 @@ esac
       MOCK_TARGET_COUNT: String(targetCount),
       MOCK_SIGNAL_DOWNLOAD: signalDownload ? "1" : "0",
       MOCK_ROW_MISMATCH: rowMismatch ? "1" : "0",
+      MOCK_TRIGGER_MISMATCH: triggerMismatch ? "1" : "0",
+      MOCK_TRIGGER_SEMANTICS_MISMATCH: triggerSemanticsMismatch ? "1" : "0",
       D1_BACKUP_API_TOKEN: "cloudflare_d1_backup_read_4c8f0b2d6a9137e5",
       D1_RESTORE_API_TOKEN: "",
       D1_PRODUCTION_ACCOUNT_ID: "7ee5775bc1ba46f05c5a65235b60e939",
@@ -1032,6 +1088,23 @@ test("D1 backup fails before upload when a required auth table is missing", asyn
   assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
 });
 
+test("D1 backup fails before upload when an invariant trigger is missing", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { missingTrigger: "prevent_lead_ack_receipts_delete" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required invariant trigger: prevent_lead_ack_receipts_delete on lead_ack_receipts/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
+});
+
+test("D1 backup rejects a named receipt trigger without immutable update/delete semantics", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { weakReceiptTrigger: "prevent_lead_ack_receipts_delete" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /does not enforce immutable receipt trigger semantics: prevent_lead_ack_receipts_delete/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
 test("D1 backup purges incomplete remote state and plaintext on upload failure", async (t) => {
   const mock = await mockD1BackupEnvironment(t, { failCopy: true });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
@@ -1059,7 +1132,7 @@ test("D1 recovery defaults to local cryptographic and SQLite verification withou
   assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-restore.")), false);
 });
 
-test("remote D1 drill uses exact generated target config and verifies the restored tables", async (t) => {
+test("remote D1 drill uses exact generated target config and verifies restored tables and triggers", async (t) => {
   const mock = await mockD1RestoreEnvironment(t);
   mock.env.D1_RESTORE_MODE = "remote";
   mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
@@ -1068,7 +1141,7 @@ test("remote D1 drill uses exact generated target config and verifies the restor
   assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
   assert.match(run.stdout, /exact confirmed non-production drill database/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, 3);
+  assert.equal(operations.length, 4);
   assert.equal(operations.every((line) => line.startsWith(`d1 execute ${mock.env.D1_RESTORE_TARGET_DATABASE_NAME} --remote`)), true);
   assert.equal(operations.join("\n").includes(mock.env.D1_RESTORE_API_TOKEN), false);
   const config = JSON.parse(await readFile(path.join(mock.state, "target-config.json"), "utf8"));
@@ -1133,6 +1206,46 @@ test("remote D1 drill fails when any restored production-table row count differs
   assert.match(run.stderr, /table row counts differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
   assert.equal(operations.length, 3);
+});
+
+test("D1 recovery rejects an export missing a required invariant trigger", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { missingTrigger: "prevent_lead_ack_receipts_update" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required invariant trigger: prevent_lead_ack_receipts_update on lead_ack_receipts/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
+test("D1 recovery rejects a local receipt trigger without immutable update/delete semantics", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { weakReceiptTrigger: "prevent_lead_ack_receipts_update" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /does not enforce immutable receipt trigger semantics: prevent_lead_ack_receipts_update/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
+test("remote D1 drill fails when named invariant-trigger inventory differs", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { triggerMismatch: true });
+  mock.env.D1_RESTORE_MODE = "remote";
+  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
+  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+  assert.equal(operations.length, 4);
+});
+
+test("remote D1 drill rejects receipt triggers without immutable update/delete semantics", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { triggerSemanticsMismatch: true });
+  mock.env.D1_RESTORE_MODE = "remote";
+  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
+  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+  assert.equal(operations.length, 4);
 });
 
 test("D1 recovery rejects bad ciphertext checksums and signal-cleans decrypted workspace", async (t) => {

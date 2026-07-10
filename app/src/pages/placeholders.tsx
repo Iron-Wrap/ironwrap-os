@@ -1,10 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { CircleGauge, ClipboardCheck, Hammer, ShieldCheck, UsersRound } from "lucide-react";
+import { ClipboardCheck, Hammer, ShieldCheck, UsersRound } from "lucide-react";
 import { lazy, Suspense, type ReactNode } from "react";
 
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
+
+export { OwnerNowPage } from "../owner/owner-now-page";
 
 const DevicePairingSettings = lazy(async () => ({
   default: (await import("../pairing/device-pairing-settings")).DevicePairingSettings,
@@ -90,21 +92,6 @@ export function CheckInPage() {
             <Link to="/today">Open Today</Link>
           </Button>
         }
-      />
-    </RoleGuard>
-  );
-}
-
-export function OwnerNowPage() {
-  return (
-    <RoleGuard surface="owner">
-      <PlaceholderSurface
-        eyebrow="Exception-first cockpit"
-        title="Owner Now"
-        description="Blocked gates, approvals, incidents, and stale work will come before vanity metrics or broad lists."
-        emptyTitle="No live exceptions are connected"
-        emptyMessage="When the Owner Now read model is enabled, only items that need a decision will appear here, each with its evidence and next safe action."
-        icon={<CircleGauge className="size-6" aria-hidden="true" />}
       />
     </RoleGuard>
   );

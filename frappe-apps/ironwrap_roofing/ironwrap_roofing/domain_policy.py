@@ -384,6 +384,8 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "source",
         "event_ts",
         "raw_key",
+        # Bridge identifiers are unknown on owned-first intake. Allow their
+        # first verified JobNimbus value, then freeze it permanently.
         "jobnimbus_contact_id",
         "jobnimbus_job_id",
     ),
@@ -431,6 +433,8 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "workflow_profile",
         "locale_policy_version",
         "locale_policy_snapshot_json",
+        # A JobNimbus mapping is attached after bridge creation, not at owned
+        # Roof Job creation; it is therefore write-once rather than immutable.
         "jobnimbus_contact_id",
         "jobnimbus_job_id",
         "qb_invoice_ref",
@@ -748,6 +752,44 @@ def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
     if status == "Blocked":
         require_fields(record, "blocker_reason")
     _validate_correction(record, context)
+
+
+def _validate_lead_envelope(record: Any, context: Mapping[str, Any]) -> None:
+    """Keep business triage distinct from the immutable intake transport facts."""
+
+    triage_status = _get(record, "triage_status")
+    # Existing envelopes predate the triage fields. Treat their absent/blank value as
+    # Unknown so the schema migration does not turn ordinary updates into rejections.
+    if _blank(triage_status):
+        triage_status = "Unknown"
+    if triage_status not in {"Unknown", "Untriaged", "Triaged"}:
+        raise PolicyViolation(
+            "invalid_triage_status",
+            "must be Unknown, Untriaged, or Triaged",
+            "triage_status",
+        )
+
+    triage_fields = ("triaged_by", "triaged_at", "triage_summary")
+    if triage_status == "Triaged":
+        require_fields(record, *triage_fields)
+    elif any(not _blank(_get(record, field)) for field in triage_fields):
+        raise PolicyViolation(
+            "stale_triage_details",
+            "triage details require a Triaged status",
+            "triage_status",
+        )
+
+    previous = context.get("_previous")
+    if previous is not None:
+        previous_status = _get(previous, "triage_status")
+        if _blank(previous_status):
+            previous_status = "Unknown"
+        if previous_status == "Triaged" and triage_status != "Triaged":
+            raise PolicyViolation(
+                "invalid_state_transition",
+                "cannot move away from Triaged",
+                "triage_status",
+            )
 
 
 def _validate_change_order(record: Any, context: Mapping[str, Any]) -> None:
@@ -1703,6 +1745,7 @@ VALIDATORS = {
     "integration_reconciliation": _validate_reconciliation,
     "job_assignment": _validate_job_assignment,
     "job_compliance_record": _validate_compliance,
+    "lead_envelope": _validate_lead_envelope,
     "material_takeoff": _validate_takeoff,
     "measurement_report": _validate_measurement,
     "option_package": _validate_option_package,

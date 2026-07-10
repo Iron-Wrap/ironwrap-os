@@ -37,6 +37,18 @@ def reconcile_site_contract() -> None:
     frappe.clear_cache()
 
 
+def backfill_lead_triage_unknown() -> None:
+    """Make pre-triage Lead Envelopes explicit data-quality work, never fresh leads."""
+
+    frappe.db.sql(
+        """
+        UPDATE `tabLead Envelope`
+        SET triage_status = 'Unknown'
+        WHERE triage_status IS NULL OR TRIM(triage_status) = ''
+        """
+    )
+
+
 def before_install() -> None:
     """Create app roles before initial DocType permission synchronization."""
 
@@ -60,3 +72,4 @@ def after_migrate() -> None:
     """Reconcile permissions again after DocType metadata has been installed."""
 
     reconcile_site_contract()
+    backfill_lead_triage_unknown()

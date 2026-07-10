@@ -57,7 +57,8 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    (JobNimbus is a temporary bridge, not a keeper).
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
-   (applies `workers-bus/migrations/0001_init.sql` through `0006_dedup_claims.sql`).
+   (applies `workers-bus/migrations/0001_init.sql` through
+   `0015_lead_ack_receipts.sql`).
 7. Secrets: fill a tenant-specific `ACCESS.env` and run
    `bash workers-bus/scripts/apply-secrets.sh` with the tenant's Cloudflare API token, or
    `printf '%s' '<value>' | npx wrangler secret put <NAME>` per secret. Required set:
@@ -141,7 +142,7 @@ Gate 11 (blueprint): "A second demo company runs with separate brand/config/data
 
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
-- [ ] All 6 D1 migrations applied to the tenant database.
+- [ ] All 15 D1 migrations applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed and its own API key pair.
 - [ ] Tenant Shared Drives + R2 bucket receive a test job's files.
 - [ ] Tenant QuickBooks webhook verified (signature accepted on `POST /webhook/quickbooks`).

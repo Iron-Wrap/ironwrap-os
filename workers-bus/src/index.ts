@@ -19,7 +19,7 @@ import {
   validateReplayApprovalContext,
 } from "./operations.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
-import { pushToErpNext } from "./erpnext.ts";
+import { pushToErpNext, syncLeadTransportToErpNext } from "./erpnext.ts";
 import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
 import { handlePhotoIngest } from "./photos.ts";
 import { handleMeasurementIngest } from "./measurements.ts";
@@ -213,6 +213,40 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     await store.markDeadLettersRecovered(env, envelopeId);
     return; // idempotent re-delivery also closes any stale open recovery row for this envelope only
   }
+  // The owned operating record must exist before the temporary JobNimbus bridge. A bridge outage
+  // is an Automation Incident, never a reason to hide a fresh lead from the operator queue.
+  try {
+    const erp = await pushToErpNext(env, rec);
+    if (erp) {
+      await store.setErpNextSync(env, envelopeId, {
+        leadEnvelopeId: erp.name,
+        roofingPropertyId: erp.roofingPropertyName ?? null,
+        roofJobId: erp.roofJobName ?? null,
+      });
+      const targetIds = [
+        `lead_envelope:${erp.name}`,
+        erp.roofingPropertyName ? `roofing_property:${erp.roofingPropertyName}` : null,
+        erp.roofJobName ? `roof_job:${erp.roofJobName}` : null,
+        erp.productionGateCount ? `production_gates:${erp.productionGateCount}` : null,
+      ].filter(Boolean).join(",");
+      await store.recordAudit(env, {
+        automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,
+        target_ids: targetIds,
+        action: erp.reused ? "upsert_pre_bridge" : "create_pre_bridge", result: "ok",
+      });
+    }
+  } catch (err) {
+    const error = `erpnext_push: ${String(err)}`;
+    await store.setErpNextError(env, envelopeId, error).catch(() => {});
+    const n = await store.bumpAttempt(env, envelopeId, error);
+    await store.recordAudit(env, {
+      automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,
+      action: `push_attempt_${n}`, result: "error", error,
+      recovery_owner: env.OWNER_ALERT_EMAIL,
+    });
+    throw err; // retry preserves the owned business record as a hard prerequisite for the bridge
+  }
+
   let r: Awaited<ReturnType<typeof pushToJobNimbus>>;
   try {
     r = await pushToJobNimbus(env, rec);
@@ -237,36 +271,35 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     throw err; // → queue retry; exhausted → DLQ
   }
 
+  const pushedRecord: EnvelopeRecord = {
+    ...rec,
+    status: "pushed",
+    job_ref: r.jobNumber ?? rec.job_ref,
+    jn_contact_id: r.contactId,
+    jn_job_id: r.jobId ?? null,
+  };
   try {
-    const erp = await pushToErpNext(env, rec, r);
-    if (erp) {
-      await store.setErpNextSync(env, envelopeId, {
-        leadEnvelopeId: erp.name,
-        roofingPropertyId: erp.roofingPropertyName ?? null,
-        roofJobId: erp.roofJobName ?? null,
-      });
-      const targetIds = [
-        `lead_envelope:${erp.name}`,
-        erp.roofingPropertyName ? `roofing_property:${erp.roofingPropertyName}` : null,
-        erp.roofJobName ? `roof_job:${erp.roofJobName}` : null,
-        erp.productionGateCount ? `production_gates:${erp.productionGateCount}` : null,
-      ].filter(Boolean).join(",");
+    const lead = await syncLeadTransportToErpNext(env, pushedRecord, r);
+    if (lead) {
       await store.recordAudit(env, {
         automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,
-        target_ids: targetIds,
-        action: erp.reused ? "upsert_existing" : "create", result: "ok",
+        target_ids: [
+          `lead_envelope:${lead.name}`,
+          lead.roofJobName ? `roof_job:${lead.roofJobName}` : null,
+        ].filter(Boolean).join(","),
+        action: "sync_bridge_transport", result: "ok",
       });
     }
   } catch (err) {
-    const error = `erpnext_push: ${String(err)}`;
+    const error = `erpnext_transport_sync: ${String(err)}`;
     await store.setErpNextError(env, envelopeId, error).catch(() => {});
     const n = await store.bumpAttempt(env, envelopeId, error);
     await store.recordAudit(env, {
       automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,
-      action: `push_attempt_${n}`, result: "error", error,
+      action: `transport_sync_attempt_${n}`, result: "error", error,
       recovery_owner: env.OWNER_ALERT_EMAIL,
     });
-    throw err; // keep the envelope pending; queue retry preserves the ERPNext proof path
+    throw err; // keep pending so retry re-verifies both the bridge and its mirrored transport facts
   }
 
   await store.setStatus(env, envelopeId, "pushed", {

@@ -4,7 +4,7 @@ Narrow MCP server for the proprietary IronWrap OS Frappe app. The `erpnext-*`
 name is retained only for compatibility; ERPNext is not installed or linked.
 
 This server is the Hermes command surface over IronWrap OS business truth. It uses
-Frappe token auth. The implemented source contract is **111 tools: 69 reads, 21 dry-runs, and 21
+Frappe token auth. The implemented source contract is **115 tools: 71 reads, 22 dry-runs, and 22
 approved writes**. The manifest in `hermes/mcp-servers.json` is the exact source-registration
 inventory; deployed runtime proof remains a launch gate.
 

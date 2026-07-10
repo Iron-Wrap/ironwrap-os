@@ -113,6 +113,16 @@ Stream plus physical gate locks; canonical job identity, owned export/restore, l
 role-shaped read models, offline verified outbox, field proof, owner exceptions, traceable
 estimation, and customer-safe closeout are required slices rather than future polish.
 
+Owner Now checkpoint (2026-07-10): the PWA's owner/ops route is locally implemented as a
+read-only, exception-first BFF surface. It prioritizes verified crew work-stops, blocked gates,
+automation/material/finance exceptions, and business-triage state. A Lead Envelope now separates
+`triage_status` from bus-owned, audited transport status; `Untriaged` is created before the JobNimbus
+bridge and legacy rows become explicit `Unknown` data-quality work. MCTB displays only an
+append-only Gmail provider-acceptance receipt (within SLA or late) or the distinct absence/no-channel
+state, never a claim of delivery or human follow-up. Local contract proof is not deployment proof:
+remote D1/Frappe migration, enabled BFF, real device/browser, provider receipt, and operator
+acceptance remain launch gates.
+
 ## Research Basis
 
 Primary sources reviewed:
@@ -389,7 +399,7 @@ Build narrow MCP servers, not one giant god tool.
 | MCP server | Repository state | Capability boundary |
 | --- | --- | --- |
 | `ironwrap-bus-mcp` | Implemented: 7 tools | Read readiness/status/envelopes/dead letters; preview and request one targeted replay. No bulk Hermes replay |
-| `erpnext-roofing-mcp` | Implemented under compatibility name: 111 tools | 69 bounded reads plus 21 dry-run/request pairs across job, proof, estimator, production, safety, compliance, consent, customer-decision, reconciliation, export, closeout, comms, and market truth; runtime role/actor filtering is enforced in-server |
+| `erpnext-roofing-mcp` | Implemented under compatibility name: 115 tools | 71 bounded reads plus 22 dry-run/request pairs across job, proof, estimator, production, safety, compliance, consent, customer-decision, lead triage, reconciliation, export, closeout, comms, and market truth; runtime role/actor filtering is enforced in-server |
 | `evidence-mcp` | Planned split | Evidence search, packet assembly, and approved attachment only |
 | `measurement-mcp` | Planned split | Deterministic parsing/comparison and review flags |
 | `instant-estimate-mcp` | Planned split | Range/qualification drafts and quote-review request |
@@ -400,7 +410,7 @@ Build narrow MCP servers, not one giant god tool.
 | `tenant-admin-mcp` | Planned split | Tenant readiness and clone dry-run; no cross-tenant data access |
 
 `tools/validate-hermes-config.mjs` currently validates all eight roles and the launch manifest
-against 118 implemented tools. It also rejects an approved-write grant that lacks the matching
+against 122 implemented tools. It also rejects an approved-write grant that lacks the matching
 dry-run grant in the same role and verifies the runtime receipt/role/evidence enforcement seams.
 
 Mutation pattern:
@@ -581,7 +591,7 @@ Repository support means code/contracts/tests exist. It is not the same as a pas
 | 0 | Source truth | Documented and contract-validated | Reconcile Cloudflare, Frappe, Hermes, QB, Drive, bridge, and admin inventory |
 | 1 | Intake spine | Worker route/storage/consumer/reconcile tests exist | One real source lands in R2, D1, Frappe, audit, ack, and bridge with zero gap |
 | 2 | Operating core | 46 DocTypes, shared policy/RBAC, atomic safety append, and packaging tests exist | Install/migrate on plain Frappe; role-specific fixture workflow passes |
-| 3 | Read-only Hermes | Eight roles and 118-tool inventory validate | Hermes answers owner questions from live bus/Frappe truth with zero writes |
+| 3 | Read-only Hermes | Eight roles and 122-tool inventory validate | Hermes answers owner questions from live bus/Frappe truth with zero writes |
 | 4 | Approved-write Hermes | Dry-run/receipt/approval, single-claim idempotency, verified evidence, actor scope, and audit-failure tests exist | One approved live mutation has complete Hermes Run, receipt, and replay-safe proof |
 | 5 | Instant estimate parity | Owned idempotent ingest/session contract exists | Public widget, range policy, consent, owner follow-up, and estimator review pass |
 | 6 | Proposal proof | Evidence/takeoff/options/scope/quote/proposal records and tools exist | Customer-quality renderer plus selected e-sign path complete one signed packet |
@@ -646,7 +656,7 @@ The artificial blockers below are collapsed in
 | Accounting boundary | QuickBooks permanent truth vs a future owned accounting migration |
 | Proposal renderer | Frappe print formats, custom Frappe UI, or external PDF service |
 | Public estimate policy | Range logic, disclaimers, required fields, estimator-review threshold |
-| Product PWA acceptance | P0 shell/session/outbox, P1 Field Companion/BFF, and QR pairing/revocation are locally implemented; complete live backend, browser/device gates, and P2-P5 owner/sales/portal/tenant protocols |
+| Product PWA acceptance | P0 shell/session/outbox, P1 Field Companion/BFF/QR pairing, and P2 read-only Owner Now/lead-triage/MCTB evidence are locally implemented; complete live backend, browser/device/provider receipt gates, P2 approvals, and P3-P5 sales/portal/tenant protocols |
 | Frappe fallback cockpit | Repository surface exists; prove live role filtering, Worker readiness reachability, empty/error states, responsive layout, and source-record navigation on the deployed site |
 | Measurement/visual provider strategy | RoofRuler/AppliCad only vs Eagleview/Hover/provider-agnostic ingest |
 | Supplier integration strategy | Manual supplier quote capture vs API/order integrations |

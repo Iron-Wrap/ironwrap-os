@@ -42,6 +42,25 @@ export interface QuickBooksWebhookReceipt {
   replay_count: number;
 }
 
+export type LeadAckOutcome = "provider_accepted" | "attempt_failed" | "no_eligible_channel";
+
+export interface LeadAckReceipt {
+  receipt_id: string;
+  envelope_id: string;
+  channel: "email" | "none";
+  outcome: LeadAckOutcome;
+  observed_at: string;
+  provider_message_id: string | null;
+  error_code: string | null;
+  created_at: string;
+}
+
+export interface LeadMctbEnvelope {
+  envelope_id: string;
+  received_at: string;
+  bus_status: Status;
+}
+
 export interface DedupClaim {
   dedup_key: string;
   first_envelope_id: string;
@@ -132,6 +151,53 @@ export async function insertEnvelope(env: Env, rec: EnvelopeRecord): Promise<voi
 export async function getEnvelope(env: Env, id: string): Promise<EnvelopeRecord | null> {
   return await env.DB.prepare(`SELECT * FROM envelopes WHERE envelope_id = ?`)
     .bind(id).first<EnvelopeRecord>();
+}
+
+/**
+ * Append one privacy-minimized receipt for the automated prospect-ack attempt. The receipt is
+ * evidence of provider acceptance only, never a claim of customer delivery or human follow-up.
+ */
+export async function recordLeadAckReceipt(
+  env: Env,
+  receipt: Omit<LeadAckReceipt, "created_at">,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO lead_ack_receipts (
+       receipt_id, envelope_id, channel, outcome, observed_at, provider_message_id, error_code, created_at
+     ) VALUES (?,?,?,?,?,?,?,?)`,
+  ).bind(
+    receipt.receipt_id,
+    receipt.envelope_id,
+    receipt.channel,
+    receipt.outcome,
+    receipt.observed_at,
+    receipt.provider_message_id,
+    receipt.error_code,
+    nowIso(),
+  ).run();
+}
+
+/** Read only the owned timing/transport facts and receipt evidence needed for MCTB truth. */
+export async function listLeadMctbEvidence(
+  env: Env,
+  envelopeIds: readonly string[],
+): Promise<{ envelopes: LeadMctbEnvelope[]; receipts: LeadAckReceipt[] }> {
+  const ids = [...new Set(envelopeIds.filter((id) => id.length > 0))];
+  if (ids.length === 0) return { envelopes: [], receipts: [] };
+  if (ids.length > 100) throw new Error("lead_mctb_too_many_envelopes");
+  const placeholders = ids.map(() => "?").join(",");
+  const [envelopes, receipts] = await Promise.all([
+    env.DB.prepare(
+      `SELECT envelope_id, ts AS received_at, status AS bus_status
+       FROM envelopes WHERE envelope_id IN (${placeholders})`,
+    ).bind(...ids).all<LeadMctbEnvelope>(),
+    env.DB.prepare(
+      `SELECT receipt_id, envelope_id, channel, outcome, observed_at, provider_message_id, error_code, created_at
+       FROM lead_ack_receipts WHERE envelope_id IN (${placeholders})
+       ORDER BY envelope_id ASC, observed_at ASC, receipt_id ASC`,
+    ).bind(...ids).all<LeadAckReceipt>(),
+  ]);
+  return { envelopes: envelopes.results ?? [], receipts: receipts.results ?? [] };
 }
 
 export async function listRecentEnvelopes(env: Env, limit: number): Promise<EnvelopeRecord[]> {
@@ -342,7 +408,7 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'quickbooks_webhook_receipts','dedup_claims','replay_requests','app_users',
           'app_magic_links','app_sessions','app_auth_throttles','app_auth_audit',
           'field_actions','field_action_media','app_action_throttles','app_device_pairings',
-          'app_devices') THEN 1 ELSE 0 END), 0) AS table_count,
+          'app_devices','lead_ack_receipts') THEN 1 ELSE 0 END), 0) AS table_count,
        COALESCE(SUM(CASE WHEN type = 'index' AND name IN
          ('idx_dead_letter_open_envelope','idx_audit_result_ts','idx_envelopes_operational',
           'idx_envelopes_erpnext_error_open','idx_heartbeat_ran_at','idx_qb_receipts_last_seen',
@@ -352,10 +418,12 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'idx_app_auth_audit_tenant_created','idx_field_actions_job_created',
           'idx_field_actions_recovery','idx_field_action_media_evidence',
           'idx_app_action_throttles_expiry','idx_app_sessions_device_active',
-          'idx_app_device_pairings_user_expiry','idx_app_devices_tenant_user_active')
+          'idx_app_device_pairings_user_expiry','idx_app_devices_tenant_user_active',
+          'idx_lead_ack_receipts_envelope_observed')
          THEN 1 ELSE 0 END), 0) AS index_count,
        COALESCE(SUM(CASE WHEN type = 'trigger' AND name IN
-         ('validate_source_count_insert','validate_source_count_update') THEN 1 ELSE 0 END), 0) AS trigger_count
+         ('validate_source_count_insert','validate_source_count_update',
+          'prevent_lead_ack_receipts_update','prevent_lead_ack_receipts_delete') THEN 1 ELSE 0 END), 0) AS trigger_count
      FROM sqlite_master`,
   ).first<{ table_count: number; index_count: number; trigger_count: number }>();
 
@@ -368,6 +436,7 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             s.day AS source_day, s.channel, s.count AS source_count,
             h.ran_at, h.reconciled, h.dead_letter_open,
             q.last_seen_at, q.events_count, q.replay_count,
+            lar.receipt_id AS lead_ack_receipt_id, lar.outcome AS lead_ack_outcome,
             c.dedup_key,
             rr.run_id AS replay_run_id, rr.selection AS replay_selection,
             rr.status AS replay_status, rr.attempt_count AS replay_attempt_count,
@@ -387,6 +456,7 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN source_counts s ON 1 = 0
      LEFT JOIN heartbeat h ON 1 = 0
      LEFT JOIN quickbooks_webhook_receipts q ON 1 = 0
+     LEFT JOIN lead_ack_receipts lar ON 1 = 0
      LEFT JOIN dedup_claims c ON 1 = 0
      LEFT JOIN replay_requests rr ON 1 = 0
      LEFT JOIN app_users au ON 1 = 0
@@ -401,9 +471,9 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN app_action_throttles aat ON 1 = 0
      LIMIT 0`,
   ).all();
-  return Number(artifacts?.table_count ?? 0) === 18 &&
-    Number(artifacts?.index_count ?? 0) === 20 &&
-    Number(artifacts?.trigger_count ?? 0) === 2;
+  return Number(artifacts?.table_count ?? 0) === 19 &&
+    Number(artifacts?.index_count ?? 0) === 21 &&
+    Number(artifacts?.trigger_count ?? 0) === 4;
 }
 
 /** Envelopes still pending past the threshold — the retry sweep re-drives these. */

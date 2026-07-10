@@ -70,8 +70,20 @@ SAFETY_PLAN_FROZEN_FIELDS = (
     "correction_reason",
     "notes",
 )
+LEAD_TRIAGE_FIELDS = (
+    "triage_status",
+    "triaged_by",
+    "triaged_at",
+    "triage_summary",
+)
 _ATOMIC_SAFETY_ACKNOWLEDGEMENT_APPEND: ContextVar[tuple[str, str] | None] = ContextVar(
     "ironwrap_atomic_safety_acknowledgement_append",
+    default=None,
+)
+_APPROVED_LEAD_TRIAGE_TRANSITION: ContextVar[
+    tuple[str, str, str, str, str] | None
+] = ContextVar(
+    "ironwrap_approved_lead_triage_transition",
     default=None,
 )
 
@@ -106,6 +118,18 @@ def _safety_plan_content_snapshot(document: Any) -> tuple[str, ...]:
     )
 
 
+def _lead_triage_snapshot(document: Any) -> tuple[str, str, str, str]:
+    """Normalize the four locally-owned triage fields for mutation checks."""
+
+    status = document.get("triage_status") or "Unknown"
+    return (
+        str(status),
+        "" if document.get("triaged_by") is None else str(document.get("triaged_by")),
+        "" if document.get("triaged_at") is None else str(document.get("triaged_at")),
+        "" if document.get("triage_summary") is None else str(document.get("triage_summary")),
+    )
+
+
 @contextmanager
 def safety_acknowledgement_append_context(safety_plan_id: str, device_action_id: str):
     """Authorize exactly one server-side acknowledgement append for one save.
@@ -121,6 +145,76 @@ def safety_acknowledgement_append_context(safety_plan_id: str, device_action_id:
         yield
     finally:
         _ATOMIC_SAFETY_ACKNOWLEDGEMENT_APPEND.reset(token)
+
+
+@contextmanager
+def lead_triage_transition_context(
+    lead_envelope_id: str,
+    hermes_run_id: str,
+    triaged_by: str,
+    triaged_at: str,
+    triage_summary: str,
+):
+    """Authorize one exact Lead Envelope triage transition for one save.
+
+    The context is created only after the narrow server command has locked and
+    validated the approved Hermes Run.  It is intentionally not populated from
+    a Desk/REST document payload, so ordinary Lead Envelope write permission
+    cannot opt into the Triaged transition.
+    """
+
+    token = _APPROVED_LEAD_TRIAGE_TRANSITION.set(
+        (
+            lead_envelope_id,
+            hermes_run_id,
+            triaged_by,
+            triaged_at,
+            triage_summary,
+        )
+    )
+    try:
+        yield
+    finally:
+        _APPROVED_LEAD_TRIAGE_TRANSITION.reset(token)
+
+
+def validate_lead_envelope_triage_mutation(document: Any) -> None:
+    """Keep generic Desk/REST writes from creating or changing a triage fact."""
+
+    current = _lead_triage_snapshot(document)
+    previous_document = _previous(document)
+    if previous_document is None:
+        # Workers create initial envelopes as Unknown/Untriaged.  A new record
+        # must not arrive pre-triaged through the generic resource endpoint.
+        if current[0] == "Triaged" or any(current[1:]):
+            frappe.throw(
+                "Lead Envelope triage can only be changed through the approved Hermes command.",
+                exc=frappe.ValidationError,
+            )
+        return
+
+    previous = _lead_triage_snapshot(previous_document)
+    if current == previous:
+        # Bus transport-only updates preserve these four fields and remain valid.
+        return
+
+    context = _APPROVED_LEAD_TRIAGE_TRANSITION.get()
+    if not context:
+        frappe.throw(
+            "Lead Envelope triage can only be changed through the approved Hermes command.",
+            exc=frappe.ValidationError,
+        )
+    lead_envelope_id, _hermes_run_id, triaged_by, triaged_at, triage_summary = context
+    expected = ("Triaged", triaged_by, triaged_at, triage_summary)
+    if (
+        document.get("name") != lead_envelope_id
+        or previous[0] == "Triaged"
+        or current != expected
+    ):
+        frappe.throw(
+            "Lead Envelope triage mutation did not match the approved Hermes command.",
+            exc=frappe.ValidationError,
+        )
 
 
 def validate_safety_acknowledgement_mutation(document: Any) -> None:

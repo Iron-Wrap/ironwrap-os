@@ -195,6 +195,10 @@ that no mutation or `Hermes Run` was created. For the approved-write proof, enab
 required write surface, use a stable unique `run_id`, execute the matching dry-run, obtain human
 approval, and invoke the request tool with the approval token. Repeating the same completed
 Frappe `run_id` must return its recorded result without repeating the business mutation.
+For lead triage specifically, archive an `Untriaged` Lead Envelope dry-run, its signed human
+approval, the protected triage command result, and the linked Hermes Run. Verify the command
+changed exactly `triage_status`, `triaged_by`, `triaged_at`, and `triage_summary`, left bus
+transport unchanged, and that an ordinary Desk/REST Lead Envelope patch is rejected.
 
 ## 9. Run Repository And Live-Environment Readiness
 
@@ -218,8 +222,9 @@ Field Companion deployment and must not be described as one.
 
 Before enabling the BFF in the intended Cloudflare account:
 
-1. Apply the exact D1 migration sequence remotely, including `0014_device_pairing.sql`, then
-   verify `/ready` against the intended database. The 18-table backup/restore inventory must be
+1. Apply the exact D1 migration sequence remotely, including `0015_lead_ack_receipts.sql`, then
+   run the Frappe app migration so legacy Lead Envelopes become explicit `Unknown` triage rows.
+   Verify `/ready` against the intended database. The 19-table backup/restore inventory must be
    deployed with the same release.
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
@@ -238,6 +243,12 @@ Before enabling the BFF in the intended Cloudflare account:
 6. Capture real iOS and Android install/camera/share/clipboard/weak-signal evidence before any
    field-launch wording. A local build, static QR image, or a browser emulator does not close this
    gate.
+7. Run one consented lead through the production sender. Archive the canonical envelope id, D1
+   `lead_ack_receipts` row, provider message id, and observed timestamp; prove Owner Now labels it
+   only as provider acceptance within/after 60 seconds. Do not call this delivery proof. Repeat
+   with no eligible email to prove the queue shows a no-channel exception rather than a false
+   “sent” result. For an intentionally rejected staging send, wait past the 60-second deadline
+   and prove the queue shows an unproven exception.
 
 ## 10. Prove The End-To-End Intake Slice
 
@@ -255,7 +266,7 @@ unexplained gaps. Remove or clearly label fixture records after proof.
 
 | Source | Runtime proof |
 | --- | --- |
-| Website | Real consented submission reaches `/ingest/website`, raw R2, D1, Frappe, ack, and temporary JobNimbus bridge |
+| Website | Real consented submission reaches `/ingest/website`, raw R2, D1, Frappe, provider-acceptance receipt (not delivery proof), and temporary JobNimbus bridge |
 | 3D estimator | Repeated `/ingest/estimate` idempotency key returns the original session and remains review-gated |
 | Jotform field intake | Device submission reaches `/ingest/photo`, Drive/R2, evidence, and check-in with photos plus one voice note |
 | RoofRuler/AppliCad | `/ingest/measurement` stores raw source and source-referenced values; uncertain values remain review-gated |
@@ -297,9 +308,10 @@ CRON_TZ=UTC
 `backup-d1-to-r2.sh` is bound to Cloudflare account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
-the SQL into isolated SQLite, checks integrity and all 18 current core/auth/operational tables,
-packages manifest plus SQL, encrypts locally, uploads immutably, remotely checks the objects,
-and publishes `IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
+the SQL into isolated SQLite, checks integrity and all 19 current core/auth/operational tables,
+plus the four release-state invariant trigger bindings, packages manifest plus SQL, encrypts
+locally, uploads immutably, remotely checks the objects, and publishes
+`IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
 `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Never discover or infer `latest`.
 Both D1 scripts unset any inherited generic `CLOUDFLARE_API_TOKEN` and expose only the applicable
 dedicated token to each Wrangler command.
@@ -324,7 +336,8 @@ For the launch remote drill, create a fresh empty D1 database named
 `ironwrap-restore-drill-<label>` in the same committed account and record its exact UUID. The
 name and UUID must both differ from production. Bind one approval to that exact pair; the script
 generates a target-only Wrangler config, rechecks emptiness, imports, then compares the complete
-table-to-row-count map for all 18 required tables with the locally verified SQLite export:
+table-to-row-count map for all 19 required tables and the exact four trigger-to-table bindings
+with the locally verified SQLite export:
 
 ```bash
 export D1_RESTORE_MODE=remote
@@ -339,11 +352,17 @@ export D1_RESTORE_MODE=verify
 ```
 
 Any new D1 migration that adds a persistent table must update the required-table allowlist in
-both D1 scripts and their readiness tests before deployment. The current 18 are `envelopes`,
+both D1 scripts and their readiness tests before deployment. Any migration that adds or changes
+an invariant trigger must update the trigger inventory too. The current 19 are `envelopes`,
 `audit_log`, `dead_letter`, `source_counts`, `heartbeat`, `quickbooks_webhook_receipts`,
 `dedup_claims`, `replay_requests`, `field_actions`, `field_action_media`, `app_users`,
 `app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`,
-`app_action_throttles`, `app_device_pairings`, and `app_devices`.
+`app_action_throttles`, `app_device_pairings`, `app_devices`, and `lead_ack_receipts`.
+The required triggers are `validate_source_count_insert` and `validate_source_count_update` on
+`source_counts`, plus `prevent_lead_ack_receipts_update` and
+`prevent_lead_ack_receipts_delete` on `lead_ack_receipts`. The latter two must be `BEFORE UPDATE`
+and `BEFORE DELETE`, respectively, and each must raise
+`ABORT, 'lead_ack_receipts_immutable'` in both local export verification and remote drill proof.
 
 Before launch, prove R2 delete protection in the live Cloudflare account. Archive the bucket-lock
 rule identifiers, protected backup prefixes, retention durations, and a denied deletion of a
@@ -367,7 +386,7 @@ artifact checksums. A successful upload without this restore drill is not backup
 | Operating core | 46 DocTypes (39 top-level + 7 child), policy/RBAC tests, Workspace/Control Center package proof | App installed on plain Frappe; fixture, per-role cockpit, empty/error/readiness, and source-navigation checks pass |
 | Read-only Hermes | Role/manifest and MCP tests | Owner query uses live truth with zero writes |
 | Approved write | Dry-run/request contracts and idempotency tests | One human-approved mutation and complete `Hermes Run` audit |
-| Recovery | Readiness/status/replay plus encrypted Frappe/D1 backup tests | Targeted replay, alerts, exact-prefix local verification, isolated Frappe and D1 restores, table row-count parity, and live R2 denied-delete proof |
+| Recovery | Readiness/status/replay plus encrypted Frappe/D1 backup tests | Targeted replay, alerts, exact-prefix local verification, isolated Frappe and D1 restores, table row-count, trigger-inventory, and receipt-semantics parity, and live R2 denied-delete proof |
 | Real sources | Intake contracts | Website, estimator, field, measurement, and QB admin proofs |
 
 Record commit, image digest, Worker deployment version, migration state, Frappe site/app versions,

@@ -80,3 +80,22 @@ test("0014 QR pairing binds field sessions to revocable hashed device proofs", a
   assert.doesNotMatch(sql, /raw_token|raw_session|device_proof[^_h]|pairing_token/i);
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
+
+test("0015 lead-ack receipts preserve provider-acceptance evidence without recipient content", async () => {
+  const sql = await readFile(new URL("../migrations/0015_lead_ack_receipts.sql", import.meta.url), "utf8");
+  const schema = sql.replace(/^--.*$/gm, "");
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS lead_ack_receipts\b/);
+  assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_lead_ack_receipts_envelope_observed\b/);
+  for (const trigger of ["prevent_lead_ack_receipts_update", "prevent_lead_ack_receipts_delete"]) {
+    assert.match(sql, new RegExp(`CREATE TRIGGER IF NOT EXISTS ${trigger}\\b`));
+  }
+  assert.match(sql, /BEFORE UPDATE ON lead_ack_receipts/);
+  assert.match(sql, /BEFORE DELETE ON lead_ack_receipts/);
+  assert.match(sql, /RAISE\(ABORT, 'lead_ack_receipts_immutable'\)/);
+  assert.match(sql, /provider_accepted/);
+  assert.match(sql, /attempt_failed/);
+  assert.match(sql, /no_eligible_channel/);
+  assert.match(sql, /provider_message_id TEXT/);
+  assert.doesNotMatch(schema, /recipient|contact_email|message_body|raw_message/i);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});

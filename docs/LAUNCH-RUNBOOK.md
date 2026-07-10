@@ -222,9 +222,9 @@ Field Companion deployment and must not be described as one.
 
 Before enabling the BFF in the intended Cloudflare account:
 
-1. Apply the exact D1 migration sequence remotely, including `0015_lead_ack_receipts.sql`, then
+1. Apply the exact D1 migration sequence remotely, including `0016_approval_requests.sql`, then
    run the Frappe app migration so legacy Lead Envelopes become explicit `Unknown` triage rows.
-   Verify `/ready` against the intended database. The 19-table backup/restore inventory must be
+   Verify `/ready` against the intended database. The 21-table backup/restore inventory must be
    deployed with the same release.
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
@@ -353,16 +353,16 @@ export D1_RESTORE_MODE=verify
 
 Any new D1 migration that adds a persistent table must update the required-table allowlist in
 both D1 scripts and their readiness tests before deployment. Any migration that adds or changes
-an invariant trigger must update the trigger inventory too. The current 19 are `envelopes`,
+an invariant trigger must update the trigger inventory too. The current 21 are `envelopes`,
 `audit_log`, `dead_letter`, `source_counts`, `heartbeat`, `quickbooks_webhook_receipts`,
 `dedup_claims`, `replay_requests`, `field_actions`, `field_action_media`, `app_users`,
 `app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`,
-`app_action_throttles`, `app_device_pairings`, `app_devices`, and `lead_ack_receipts`.
-The required triggers are `validate_source_count_insert` and `validate_source_count_update` on
-`source_counts`, plus `prevent_lead_ack_receipts_update` and
-`prevent_lead_ack_receipts_delete` on `lead_ack_receipts`. The latter two must be `BEFORE UPDATE`
-and `BEFORE DELETE`, respectively, and each must raise
-`ABORT, 'lead_ack_receipts_immutable'` in both local export verification and remote drill proof.
+`app_action_throttles`, `app_device_pairings`, `app_devices`, `lead_ack_receipts`,
+`approval_requests`, and `approval_request_events`. The required triggers include source-count
+validation, immutable lead-ack receipts, and the approval ledger's transition/event/immutability
+rules. Approval binding rewrites must raise `ABORT, 'approval_request_binding_immutable'`; approval
+event updates/deletes must raise `ABORT, 'approval_request_events_immutable'` in both local export
+verification and remote drill proof.
 
 Before launch, prove R2 delete protection in the live Cloudflare account. Archive the bucket-lock
 rule identifiers, protected backup prefixes, retention durations, and a denied deletion of a

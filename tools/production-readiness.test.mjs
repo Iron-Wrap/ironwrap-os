@@ -342,6 +342,7 @@ const REQUIRED_D1_TABLES = [
   "field_actions", "field_action_media",
   "app_users", "app_magic_links", "app_sessions", "app_auth_throttles", "app_auth_audit",
   "app_action_throttles", "app_device_pairings", "app_devices", "lead_ack_receipts",
+  "approval_requests", "approval_request_events",
 ];
 
 const REQUIRED_D1_TRIGGER_BINDINGS = [
@@ -349,6 +350,15 @@ const REQUIRED_D1_TRIGGER_BINDINGS = [
   ["validate_source_count_update", "source_counts"],
   ["prevent_lead_ack_receipts_update", "lead_ack_receipts"],
   ["prevent_lead_ack_receipts_delete", "lead_ack_receipts"],
+  ["prevent_approval_request_binding_rewrite", "approval_requests"],
+  ["enforce_approval_request_transition", "approval_requests"],
+  ["enforce_approval_request_reconciliation", "approval_requests"],
+  ["append_approval_request_created_event", "approval_requests"],
+  ["append_approval_request_transition_event", "approval_requests"],
+  ["append_approval_request_reconciliation_event", "approval_requests"],
+  ["prevent_approval_request_event_update", "approval_request_events"],
+  ["prevent_approval_request_event_delete", "approval_request_events"],
+  ["prevent_approval_request_delete", "approval_requests"],
 ];
 
 function d1TriggerSql(name, table, { weakReceiptTrigger = "", wrongTimingReceiptTrigger = "" } = {}) {
@@ -368,7 +378,25 @@ function d1TriggerSql(name, table, { weakReceiptTrigger = "", wrongTimingReceipt
   if (name === "prevent_lead_ack_receipts_update") {
     return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'lead_ack_receipts_immutable'); END;`;
   }
-  return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'lead_ack_receipts_immutable'); END;`;
+  if (name === "prevent_lead_ack_receipts_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'lead_ack_receipts_immutable'); END;`;
+  }
+  if (name === "prevent_approval_request_binding_rewrite") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'approval_request_binding_immutable'); END;`;
+  }
+  if (name === "prevent_approval_request_event_update") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'approval_request_events_immutable'); END;`;
+  }
+  if (name === "prevent_approval_request_event_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'approval_request_events_immutable'); END;`;
+  }
+  if (name === "prevent_approval_request_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'approval_requests_append_only'); END;`;
+  }
+  if (name.startsWith("append_approval_request_")) {
+    return `CREATE TRIGGER ${name} AFTER INSERT ON ${table} BEGIN SELECT 1; END;`;
+  }
+  return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT 1; END;`;
 }
 
 function d1Sql({ missingTable = "", missingTrigger = "", weakReceiptTrigger = "", wrongTimingReceiptTrigger = "" } = {}) {

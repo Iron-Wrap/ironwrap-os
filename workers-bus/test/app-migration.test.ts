@@ -34,3 +34,30 @@ test("Wrangler asset routing keeps all dynamic/auth surfaces Worker-first", asyn
     assert.ok(config.includes(`"${route}"`), `missing Worker-first route ${route}`);
   }
 });
+
+test("0012 field migration preserves idempotent actions and immutable media receipts", async () => {
+  const sql = await readFile(new URL("../migrations/0012_field_companion.sql", import.meta.url), "utf8");
+  for (const table of ["field_actions", "field_action_media"]) {
+    assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+  }
+  assert.match(sql, /device_action_id TEXT PRIMARY KEY/);
+  assert.match(sql, /PRIMARY KEY \(device_action_id, attachment_id\)/);
+  assert.match(sql, /r2_key TEXT NOT NULL UNIQUE/);
+  assert.match(sql, /checksum_sha256 TEXT NOT NULL/);
+  assert.match(sql, /ON DELETE RESTRICT/g);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+  assert.match(
+    sql,
+    /status IN \('processing', 'r2_stored', 'frappe_persisted', 'verified', 'retryable_error'\)/,
+  );
+});
+
+test("0013 field upload throttles are bounded and user-scoped", async () => {
+  const sql = await readFile(new URL("../migrations/0013_field_action_throttles.sql", import.meta.url), "utf8");
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS app_action_throttles\b/);
+  assert.match(sql, /PRIMARY KEY \(tenant_id, user_id, scope\)/);
+  assert.match(sql, /scope IN \('field_upload'\)/);
+  assert.match(sql, /idx_app_action_throttles_expiry/);
+  assert.match(sql, /ON DELETE RESTRICT/);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});

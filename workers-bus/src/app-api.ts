@@ -10,9 +10,17 @@ import {
   sessionPayload,
   unauthenticatedSessionPayload,
   validateAppOrigin,
+  validAppCsrf,
 } from "./app-auth.ts";
-import { buildJobReadModel, buildOwnerNowReadModel, buildTodayReadModel } from "./app-read-models.ts";
+import {
+  activeAssignmentForJob,
+  buildJobProofReadModel,
+  buildJobReadModel,
+  buildOwnerNowReadModel,
+  buildTodayReadModel,
+} from "./app-read-models.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
+import { handleFieldAction } from "./field-actions.ts";
 
 const MAX_ADMIN_BODY_BYTES = 8 * 1024;
 
@@ -77,7 +85,7 @@ export async function handleAdminAppUserProvision(req: Request, env: Env): Promi
   });
 }
 
-async function handleAuthenticatedRoute(
+export async function handleAuthenticatedRoute(
   req: Request,
   env: AppEnv,
   auth: AuthContext,
@@ -98,14 +106,36 @@ async function handleAuthenticatedRoute(
       return appJson({ error: "upstream_unavailable" }, 502);
     }
   }
+  const proofMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)\/proof$/);
+  if (req.method === "GET" && proofMatch) {
+    const jobName = decodedPathSegment(proofMatch[1]);
+    if (!jobName) return appJson({ error: "not_found" }, 404);
+    try {
+      const model = await buildJobProofReadModel(env, auth, jobName, url.searchParams.get("cursor"));
+      return model ? appJson(model) : appJson({ error: "not_found" }, 404);
+    } catch {
+      return appJson({ error: "upstream_unavailable" }, 502);
+    }
+  }
+  const checkInMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)\/check-ins$/);
+  if (req.method === "POST" && checkInMatch) {
+    if (auth.session.role !== "field") return appJson({ error: "field_role_required" }, 403);
+    if (!validAppCsrf(req, auth)) return appJson({ error: "csrf_failed" }, 403);
+    const jobName = decodedPathSegment(checkInMatch[1]);
+    if (!jobName) return appJson({ error: "not_found" }, 404);
+    try {
+      const assignment = await activeAssignmentForJob(env, auth, jobName);
+      const assignmentName = typeof assignment?.name === "string" ? assignment.name : null;
+      if (!assignmentName) return appJson({ error: "not_found" }, 404);
+      return await handleFieldAction(req, env, auth, jobName, assignmentName);
+    } catch {
+      return appJson({ error: "upstream_unavailable" }, 502);
+    }
+  }
   const jobMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)$/);
   if (req.method === "GET" && jobMatch) {
-    let jobName: string;
-    try {
-      jobName = decodeURIComponent(jobMatch[1]);
-    } catch {
-      return appJson({ error: "not_found" }, 404);
-    }
+    const jobName = decodedPathSegment(jobMatch[1]);
+    if (!jobName) return appJson({ error: "not_found" }, 404);
     try {
       const model = await buildJobReadModel(env, auth, jobName);
       return model ? appJson(model) : appJson({ error: "not_found" }, 404);
@@ -132,7 +162,10 @@ function withCors(response: Response, origin: string | null): Response {
   headers.set("access-control-allow-origin", origin);
   headers.set("access-control-allow-credentials", "true");
   headers.set("access-control-allow-methods", "GET, POST, OPTIONS");
-  headers.set("access-control-allow-headers", "Content-Type, X-CSRF-Token, X-Request-ID, X-Correlation-ID");
+  headers.set(
+    "access-control-allow-headers",
+    "Content-Type, X-CSRF-Token, X-Device-Action-Id, Idempotency-Key, X-Request-ID, X-Correlation-ID",
+  );
   headers.set("access-control-max-age", "600");
   headers.append("vary", "Origin");
   return new Response(response.body, {
@@ -140,6 +173,14 @@ function withCors(response: Response, origin: string | null): Response {
     statusText: response.statusText,
     headers,
   });
+}
+
+function decodedPathSegment(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
 }
 
 async function readJson(

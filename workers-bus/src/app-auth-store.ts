@@ -257,6 +257,7 @@ export async function pruneAuthRecords(env: Env, now = new Date()): Promise<void
     ).bind(nowValue, consumedCutoff).run(),
     env.DB.prepare(`DELETE FROM app_sessions WHERE expires_at <= ?`).bind(nowValue).run(),
     env.DB.prepare(`DELETE FROM app_auth_throttles WHERE window_expires_at <= ?`).bind(nowValue).run(),
+    env.DB.prepare(`DELETE FROM app_action_throttles WHERE window_expires_at <= ?`).bind(nowValue).run(),
     env.DB.prepare(`DELETE FROM app_auth_audit WHERE created_at <= ?`).bind(auditCutoff).run(),
   ]);
 }

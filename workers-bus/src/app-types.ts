@@ -81,7 +81,7 @@ export interface AppTenantPublic {
 export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
   owner: ["session:read", "jobs:read:any", "owner:read"],
   ops: ["session:read", "jobs:read:any", "owner:read"],
-  field: ["session:read", "jobs:read:assigned"],
+  field: ["session:read", "jobs:read:assigned", "field:write:assigned"],
 };
 
 export function permissionsForRole(role: AppRole): string[] {

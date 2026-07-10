@@ -3,11 +3,18 @@ import { deleteDB, openDB, type DBSchema, type IDBPDatabase } from "idb";
 import type { OutboxAction, OutboxBlobRecord, OutboxState } from "./outbox-types";
 
 const DATABASE_NAME = "ironwrap-os";
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 3;
 
 export interface MetaRecord {
   key: string;
   value: unknown;
+  updatedAt: number;
+}
+
+export interface FieldCacheRecord {
+  key: string;
+  value: unknown;
+  sourceUpdatedAt: string | null;
   updatedAt: number;
 }
 
@@ -17,6 +24,7 @@ interface IronWrapDatabase extends DBSchema {
     value: OutboxAction;
     indexes: {
       by_state: OutboxState;
+      by_principal_state: [string, string, OutboxState];
       by_next_attempt: number;
       by_updated_at: number;
     };
@@ -32,23 +40,41 @@ interface IronWrapDatabase extends DBSchema {
     key: string;
     value: MetaRecord;
   };
+  field_cache: {
+    key: string;
+    value: FieldCacheRecord;
+    indexes: {
+      by_updated_at: number;
+    };
+  };
 }
 
 let databasePromise: Promise<IDBPDatabase<IronWrapDatabase>> | undefined;
 
 export function getDatabase(): Promise<IDBPDatabase<IronWrapDatabase>> {
   databasePromise ??= openDB<IronWrapDatabase>(DATABASE_NAME, DATABASE_VERSION, {
-    upgrade(database) {
-      const actions = database.createObjectStore("outbox_actions", {
-        keyPath: "deviceActionId",
-      });
-      actions.createIndex("by_state", "state");
-      actions.createIndex("by_next_attempt", "nextAttemptAt");
-      actions.createIndex("by_updated_at", "updatedAt");
+    upgrade(database, oldVersion, _newVersion, transaction) {
+      if (oldVersion < 1) {
+        const actions = database.createObjectStore("outbox_actions", {
+          keyPath: "deviceActionId",
+        });
+        actions.createIndex("by_state", "state");
+        actions.createIndex("by_next_attempt", "nextAttemptAt");
+        actions.createIndex("by_updated_at", "updatedAt");
 
-      const blobs = database.createObjectStore("outbox_blobs", { keyPath: "blobKey" });
-      blobs.createIndex("by_action", "deviceActionId");
-      database.createObjectStore("meta", { keyPath: "key" });
+        const blobs = database.createObjectStore("outbox_blobs", { keyPath: "blobKey" });
+        blobs.createIndex("by_action", "deviceActionId");
+        database.createObjectStore("meta", { keyPath: "key" });
+      }
+      if (oldVersion < 2) {
+        const fieldCache = database.createObjectStore("field_cache", { keyPath: "key" });
+        fieldCache.createIndex("by_updated_at", "updatedAt");
+      }
+      if (oldVersion < 3) {
+        transaction
+          .objectStore("outbox_actions")
+          .createIndex("by_principal_state", ["tenantId", "userId", "state"]);
+      }
     },
   });
   return databasePromise;

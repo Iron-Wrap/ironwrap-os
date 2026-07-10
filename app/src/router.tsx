@@ -11,16 +11,14 @@ import { AuthBoundary } from "./auth/auth-boundary";
 import { MagicLinkConsume } from "./auth/magic-link-consume";
 import { takeMagicLinkTokenFromWindow } from "./auth/magic-link-fragment";
 import { AppShell } from "./components/app-shell";
+import { CheckInPage, JobPage, TodayPage } from "./field/field-pages";
 import {
-  CheckInPage,
-  JobPage,
   NotFoundPage,
   OwnerNowPage,
   PortalLinkRequiredPage,
   PortalPage,
   SalesPage,
   SettingsPage,
-  TodayPage,
 } from "./pages/placeholders";
 
 const rootRoute = createRootRoute({

@@ -1,0 +1,42 @@
+{
+  "actions": [], "allow_rename": 0, "autoname": "field:reconciliation_id", "creation": "2026-07-10 00:00:00.000000", "custom": 0, "doctype": "DocType", "engine": "InnoDB",
+  "field_order": ["reconciliation_id", "roof_job", "system_name", "entity_type", "external_entity_id", "local_doctype", "local_name", "direction", "status", "detected_at", "source_version", "source_amount", "local_amount", "currency", "diff_json", "source_payload_hash", "local_payload_hash", "last_attempt_at", "attempt_count", "resolution_action", "resolved_by", "resolved_at", "resolution_evidence", "automation_incident", "supersedes", "correction_reason", "notes"],
+  "fields": [
+    {"fieldname": "reconciliation_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Reconciliation ID", "reqd": 1, "unique": 1},
+    {"fieldname": "roof_job", "fieldtype": "Link", "in_standard_filter": 1, "label": "Roof Job", "options": "Roof Job"},
+    {"fieldname": "system_name", "fieldtype": "Data", "in_list_view": 1, "label": "System Name", "reqd": 1},
+    {"fieldname": "entity_type", "fieldtype": "Data", "label": "Entity Type", "reqd": 1},
+    {"fieldname": "external_entity_id", "fieldtype": "Data", "label": "External Entity ID", "reqd": 1},
+    {"fieldname": "local_doctype", "fieldtype": "Data", "label": "Local DocType", "reqd": 1},
+    {"fieldname": "local_name", "fieldtype": "Data", "label": "Local Name", "reqd": 1},
+    {"fieldname": "direction", "fieldtype": "Select", "label": "Direction", "options": "Inbound\nOutbound\nBidirectional", "reqd": 1},
+    {"fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Status", "options": "Pending\nMatched\nMismatch\nResolved\nIgnored\nSuperseded", "reqd": 1},
+    {"fieldname": "detected_at", "fieldtype": "Datetime", "label": "Detected At", "reqd": 1},
+    {"fieldname": "source_version", "fieldtype": "Data", "label": "Source Version"},
+    {"fieldname": "source_amount", "fieldtype": "Currency", "label": "Source Amount"},
+    {"fieldname": "local_amount", "fieldtype": "Currency", "label": "Local Amount"},
+    {"fieldname": "currency", "fieldtype": "Data", "label": "Currency"},
+    {"fieldname": "diff_json", "fieldtype": "Code", "label": "Diff JSON", "options": "JSON"},
+    {"fieldname": "source_payload_hash", "fieldtype": "Data", "label": "Source Payload Hash", "reqd": 1},
+    {"fieldname": "local_payload_hash", "fieldtype": "Data", "label": "Local Payload Hash", "reqd": 1},
+    {"fieldname": "last_attempt_at", "fieldtype": "Datetime", "label": "Last Attempt At"},
+    {"default": "0", "fieldname": "attempt_count", "fieldtype": "Int", "label": "Attempt Count"},
+    {"fieldname": "resolution_action", "fieldtype": "Small Text", "label": "Resolution Action"},
+    {"fieldname": "resolved_by", "fieldtype": "Link", "label": "Resolved By", "options": "User"},
+    {"fieldname": "resolved_at", "fieldtype": "Datetime", "label": "Resolved At"},
+    {"fieldname": "resolution_evidence", "fieldtype": "Link", "label": "Resolution Evidence", "options": "Evidence Item"},
+    {"fieldname": "automation_incident", "fieldtype": "Link", "label": "Automation Incident", "options": "Automation Incident"},
+    {"fieldname": "supersedes", "fieldtype": "Link", "label": "Supersedes", "options": "Integration Reconciliation"},
+    {"fieldname": "correction_reason", "fieldtype": "Small Text", "label": "Correction Reason"},
+    {"fieldname": "notes", "fieldtype": "Small Text", "label": "Notes"}
+  ],
+  "index_web_pages_for_search": 0, "istable": 0, "links": [], "modified": "2026-07-10 00:00:00.000000", "modified_by": "Administrator", "module": "IronWrap Roofing", "name": "Integration Reconciliation", "naming_rule": "By fieldname", "owner": "Administrator",
+  "permissions": [
+    {"create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Owner", "write": 1},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Finance", "write": 1},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Production"},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support", "write": 1}
+  ],
+  "sort_field": "modified", "sort_order": "DESC", "states": [], "track_changes": 1
+}

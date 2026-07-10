@@ -30,13 +30,21 @@ DOCTYPE_ROOT = APP_ROOT / "ironwrap_roofing" / "ironwrap_roofing" / "doctype"
 
 TOP_LEVEL_DOCTYPES = {
     "Automation Incident",
+    "Change Order",
+    "Communication Consent",
     "Communication Event",
     "Completion Packet",
+    "Contract Acceptance",
+    "Crew Profile",
+    "Customer Decision",
     "Customer Quote",
     "Evidence Item",
     "Field Check-in",
     "Hermes Run",
     "Instant Estimate Session",
+    "Integration Reconciliation",
+    "Job Assignment",
+    "Job Compliance Record",
     "Lead Envelope",
     "Market Watch Item",
     "Material Takeoff",
@@ -51,19 +59,24 @@ TOP_LEVEL_DOCTYPES = {
     "Roof Job",
     "Roofing Customer",
     "Roofing Property",
+    "Safety Plan",
     "Scope Clause",
     "Supplier Order",
     "Supplier Profile",
     "Supplier Quote",
+    "Tenant Export Run",
     "Visual Property Model",
     "Warranty Packet",
     "White-Label Tenant",
 }
 CHILD_DOCTYPES = {
+    "Change Order Item",
+    "Crew Member",
     "Material Takeoff Item",
     "Measurement Value",
     "Supplier Order Item",
     "Supplier Quote Item",
+    "Safety Acknowledgement",
 }
 FRAPPE_CORE_LINK_TARGETS = {"User"}
 NEW_BLUEPRINT_FIELDS = {
@@ -162,6 +175,27 @@ NEW_BLUEPRINT_FIELDS = {
     },
 }
 
+NEW_BLUEPRINT_FIELDS.update(
+    {
+        "Crew Profile": {"crew_profile_id", "crew_name", "status", "primary_lead", "members", "home_region", "timezone"},
+        "Job Assignment": {"assignment_id", "roof_job", "status", "crew_profile", "assigned_user", "scheduled_start", "scheduled_end", "supersedes", "correction_reason"},
+        "Change Order": {"change_order_id", "roof_job", "version", "status", "subtotal", "tax_amount", "total_amount", "tax_policy_snapshot_json", "items", "contract_acceptance", "supersedes", "correction_reason"},
+        "Safety Plan": {"safety_plan_id", "roof_job", "version", "status", "hazard_summary", "controls", "emergency_plan", "acknowledgements", "supersedes", "correction_reason"},
+        "Job Compliance Record": {"compliance_record_id", "roof_job", "jurisdiction", "record_type", "status", "required_before_gate", "evidence_item", "owner_user", "due_date"},
+        "Communication Consent": {"consent_id", "channel", "purpose", "status", "jurisdiction", "consent_basis", "captured_at", "proof_evidence", "supersedes"},
+        "Customer Decision": {"decision_id", "roof_job", "decision_type", "status", "decision_value", "decided_at", "evidence_item", "supersedes"},
+        "Contract Acceptance": {"acceptance_id", "roof_job", "contract_version", "status", "accepted_at", "evidence_item", "terms_hash", "document_checksum", "supersedes"},
+        "Integration Reconciliation": {"reconciliation_id", "system_name", "external_entity_id", "status", "diff_json", "source_payload_hash", "local_payload_hash", "resolution_evidence"},
+        "Tenant Export Run": {"export_run_id", "tenant", "status", "scope_json", "manifest_key", "manifest_checksum", "archive_key", "archive_checksum", "encryption_key_ref"},
+        "Evidence Item": {"evidence_id", "device_action_id", "proof_owner", "proof_slot", "content_checksum", "capture_actor", "latitude", "longitude", "sync_state", "correction_of"},
+        "Field Check-in": {"checkin_id", "device_action_id", "job_assignment", "crew_profile", "capture_actor", "sync_state", "blocker_flag", "voice_evidence", "correction_of"},
+        "Production Gate State": {"gate_id", "owner_user", "assigned_at", "due_at"},
+        "Roof Job": {"roof_job_id", "workflow_profile", "locale_policy_version", "locale_policy_snapshot_json"},
+        "Customer Quote": {"customer_quote_id", "quote_version", "price_book_version", "subtotal", "tax_amount", "tax_policy_snapshot_json", "amount_due", "amount_paid", "balance_due", "payment_truth_source", "supersedes"},
+        "Payment Milestone": {"payment_milestone_id", "milestone_version", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due", "tax_policy_snapshot_json", "truth_source", "supersedes"},
+    }
+)
+
 
 def load_doctypes() -> dict[str, tuple[Path, dict]]:
     result = {}
@@ -176,9 +210,9 @@ class DocTypeContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.doctypes = load_doctypes()
 
-    def test_complete_33_doctype_blueprint(self) -> None:
+    def test_complete_46_doctype_blueprint(self) -> None:
         self.assertEqual(set(self.doctypes), TOP_LEVEL_DOCTYPES | CHILD_DOCTYPES)
-        self.assertEqual(len(self.doctypes), 33)
+        self.assertEqual(len(self.doctypes), 46)
 
         for name, (_, document) in self.doctypes.items():
             with self.subTest(doctype=name):
@@ -428,6 +462,17 @@ class DocTypeContractTests(unittest.TestCase):
         self.assertEqual(
             values["before_migrate"], "ironwrap_roofing.install.before_migrate"
         )
+        self.assertEqual(
+            values["after_migrate"], "ironwrap_roofing.install.after_migrate"
+        )
+
+        namespace = runpy.run_path(str(APP_ROOT / "ironwrap_roofing" / "hooks.py"))
+        self.assertEqual(set(namespace["doc_events"]), TOP_LEVEL_DOCTYPES)
+        for event in namespace["doc_events"].values():
+            self.assertEqual(
+                event["on_trash"],
+                "ironwrap_roofing.document_validation.deny_business_document_delete",
+            )
 
 
 if __name__ == "__main__":

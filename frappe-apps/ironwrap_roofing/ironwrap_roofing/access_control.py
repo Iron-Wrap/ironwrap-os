@@ -22,9 +22,21 @@ CREATE_OWN = "create_own"
 # Each Frappe site is one tenant.  These roles never grant cross-site access.
 DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
     "Automation Incident": {"IronWrap Support": WRITE},
+    "Change Order": {
+        "IronWrap Sales": WRITE,
+        "IronWrap Estimator": WRITE,
+        "IronWrap Production": WRITE,
+        "IronWrap Finance": READ,
+        "IronWrap Closeout": READ,
+    },
     "Communication Event": {
         "IronWrap Sales": WRITE,
         "IronWrap Closeout": WRITE,
+        "IronWrap Support": READ,
+    },
+    "Communication Consent": {
+        "IronWrap Sales": WRITE,
+        "IronWrap Closeout": READ,
         "IronWrap Support": READ,
     },
     "Completion Packet": {
@@ -37,6 +49,25 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Estimator": WRITE,
         "IronWrap Finance": READ,
         "IronWrap Production": READ,
+    },
+    "Contract Acceptance": {
+        "IronWrap Sales": WRITE,
+        "IronWrap Estimator": READ,
+        "IronWrap Finance": READ,
+        "IronWrap Production": READ,
+        "IronWrap Closeout": READ,
+        "IronWrap Support": READ,
+    },
+    "Crew Profile": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": READ,
+        "IronWrap Support": READ,
+    },
+    "Customer Decision": {
+        "IronWrap Sales": WRITE,
+        "IronWrap Estimator": WRITE,
+        "IronWrap Production": READ,
+        "IronWrap Closeout": READ,
     },
     "Evidence Item": {
         "IronWrap Sales": WRITE,
@@ -55,6 +86,24 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
     "Instant Estimate Session": {
         "IronWrap Sales": WRITE,
         "IronWrap Estimator": WRITE,
+        "IronWrap Support": READ,
+    },
+    "Integration Reconciliation": {
+        "IronWrap Finance": WRITE,
+        "IronWrap Production": READ,
+        "IronWrap Support": WRITE,
+    },
+    "Job Assignment": {
+        "IronWrap Sales": READ,
+        "IronWrap Production": WRITE,
+        "IronWrap Field": READ,
+        "IronWrap Closeout": READ,
+    },
+    "Job Compliance Record": {
+        "IronWrap Sales": READ,
+        "IronWrap Production": WRITE,
+        "IronWrap Field": READ,
+        "IronWrap Closeout": READ,
         "IronWrap Support": READ,
     },
     "Lead Envelope": {
@@ -133,6 +182,12 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Field": READ,
         "IronWrap Closeout": READ,
     },
+    "Safety Plan": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": READ,
+        "IronWrap Closeout": READ,
+        "IronWrap Support": READ,
+    },
     "Scope Clause": {
         "IronWrap Estimator": WRITE,
         "IronWrap Sales": READ,
@@ -154,6 +209,10 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Production": WRITE,
         "IronWrap Estimator": WRITE,
         "IronWrap Finance": READ,
+    },
+    "Tenant Export Run": {
+        "IronWrap Finance": READ,
+        "IronWrap Support": WRITE,
     },
     "Visual Property Model": {
         "IronWrap Estimator": WRITE,

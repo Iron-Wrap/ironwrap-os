@@ -178,7 +178,23 @@ class DomainPolicyTests(unittest.TestCase):
             "status": "Accepted",
             "roof_job": "job-1",
             "customer": "customer-1",
+            "quote_version": 1,
+            "price_book_version": "retail-2026-07",
+            "pricing_effective_at": "2026-07-10 11:30:00",
+            "subtotal": 23_809.52,
+            "tax_amount": 1_190.48,
+            "tax_code": "GST",
+            "tax_rate": 5,
+            "tax_policy_snapshot_json": '{"country":"CA","province":"AB","rate":5}',
             "quote_total": 25_000,
+            "currency": "CAD",
+            "deposit_amount": 5_000,
+            "amount_due": 25_000,
+            "amount_paid": 0,
+            "balance_due": 25_000,
+            "payment_status": "Deposit Due",
+            "payment_truth_source": "IronWrap Quote",
+            "payment_truth_at": "2026-07-10 12:00:00",
             "scope_summary": "Standing-seam replacement.",
             "assumptions": "Clear driveway.",
             "exclusions": "Structural repairs.",
@@ -186,6 +202,7 @@ class DomainPolicyTests(unittest.TestCase):
             "approved_at": "2026-07-10 12:00:00",
             "quote_summary_json": '{"total":25000}',
             "acceptance_evidence": "ev-signed",
+            "contract_acceptance": "accept-1",
             "accepted_at": "2026-07-10 12:30:00",
         }
         validate_record("customer_quote", customer_quote)
@@ -255,25 +272,50 @@ class DomainPolicyTests(unittest.TestCase):
 
     def test_production_and_closeout_gates_fail_closed(self) -> None:
         gates = [
-            {"gate": gate, "state": "Ready", "evidence_item": f"ev-{gate.lower()}"}
+            {
+                "gate": gate,
+                "state": "Ready",
+                "evidence_item": f"ev-{gate.lower()}",
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+                "due_at": "2026-07-11 08:00:00",
+            }
             for gate in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
         ]
         validate_record(
             "roof_job",
-            {"roof_job_id": "job-1", "job_status": "In Production"},
+            {
+                "roof_job_id": "job-1",
+                "job_status": "In Production",
+                "workflow_profile": "Residential Retail",
+                "locale_policy_version": "ca-ab-2026-01",
+                "locale_policy_snapshot_json": '{"country":"CA","province":"AB"}',
+            },
             context={"gates": gates},
         )
         self.assert_policy(
             "production_gate_block",
             validate_record,
             "roof_job",
-            {"roof_job_id": "job-1", "job_status": "In Production"},
+            {
+                "roof_job_id": "job-1",
+                "job_status": "In Production",
+                "workflow_profile": "Residential Retail",
+                "locale_policy_version": "ca-ab-2026-01",
+                "locale_policy_snapshot_json": '{"country":"CA","province":"AB"}',
+            },
             context={"gates": gates[:-1]},
         )
 
         closed_gates = [{**gate, "state": "Done"} for gate in gates]
         closed_gates.append(
-            {"gate": "Completion", "state": "Done", "evidence_item": "ev-complete"}
+            {
+                "gate": "Completion",
+                "state": "Done",
+                "evidence_item": "ev-complete",
+                "owner_user": "closeout@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+            }
         )
         closeout_context = {
             "gates": closed_gates,
@@ -283,7 +325,13 @@ class DomainPolicyTests(unittest.TestCase):
         }
         validate_record(
             "roof_job",
-            {"roof_job_id": "job-1", "job_status": "Closed"},
+            {
+                "roof_job_id": "job-1",
+                "job_status": "Closed",
+                "workflow_profile": "Residential Retail",
+                "locale_policy_version": "ca-ab-2026-01",
+                "locale_policy_snapshot_json": '{"country":"CA","province":"AB"}',
+            },
             context=closeout_context,
         )
 
@@ -338,6 +386,404 @@ class DomainPolicyTests(unittest.TestCase):
                 "policy_result": "Blocked",
                 "policy_reasons_json": '["no consent"]',
             },
+        )
+
+    def test_offline_evidence_and_field_checkin_truth(self) -> None:
+        evidence = {
+            "evidence_id": "ev-verified",
+            "device_action_id": "device-action-1",
+            "evidence_type": "Photo",
+            "source_system": "IronWrap Field",
+            "source_uri": "device://photo/1",
+            "content_checksum": "a" * 64,
+            "checksum_algorithm": "SHA-256",
+            "content_type": "image/jpeg",
+            "content_length": 2048,
+            "capture_actor": "field@example.com",
+            "captured_at": "2026-07-10 08:00:00",
+            "proof_owner": "production@example.com",
+            "proof_slot": "Production",
+            "latitude": 51.0447,
+            "longitude": -114.0719,
+            "location_accuracy_m": 5,
+            "sync_state": "Verified",
+            "verified_at": "2026-07-10 08:01:00",
+            "verification_source": "R2 receipt",
+        }
+        validate_record(
+            "evidence_item",
+            evidence,
+            previous={**evidence, "sync_state": "Uploaded", "verified_at": None},
+        )
+        self.assert_policy(
+            "invalid_location",
+            validate_record,
+            "evidence_item",
+            {**evidence, "latitude": 100},
+        )
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "evidence_item",
+            {**evidence, "device_action_id": "device-action-2"},
+            previous=evidence,
+        )
+        self.assert_policy(
+            "invalid_state_transition",
+            validate_record,
+            "evidence_item",
+            {**evidence, "sync_state": "Uploaded"},
+            previous=evidence,
+        )
+
+        checkin = {
+            "checkin_id": "checkin-1",
+            "device_action_id": "checkin-device-1",
+            "roof_job": "job-1",
+            "job_assignment": "assignment-1",
+            "crew_profile": "crew-1",
+            "source_system": "IronWrap Field",
+            "capture_actor": "field@example.com",
+            "capture_started_at": "2026-07-10 08:00:00",
+            "capture_completed_at": "2026-07-10 08:05:00",
+            "submitted_at": "2026-07-10 08:06:00",
+            "status": "Needs Review",
+            "sync_state": "Verified",
+            "verified_at": "2026-07-10 08:07:00",
+            "evidence_ids_json": '["ev-verified"]',
+            "blocker_flag": 1,
+            "blocker_category": "Weather",
+            "blocker_summary": "Wind exceeds plan limit.",
+            "voice_evidence": "ev-voice-1",
+        }
+        validate_record("field_check_in", checkin)
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "field_check_in",
+            {**checkin, "blocker_summary": None},
+        )
+
+    def test_workforce_safety_and_compliance_records(self) -> None:
+        crew = {
+            "crew_profile_id": "crew-1",
+            "crew_name": "Calgary Metal Crew",
+            "status": "Active",
+            "primary_lead": "lead@example.com",
+            "home_region": "Calgary, AB",
+            "timezone": "America/Edmonton",
+            "members": [
+                {"crew_user": "lead@example.com", "active": 1},
+                {"crew_user": "roofer@example.com", "active": 1},
+            ],
+        }
+        validate_record("crew_profile", crew)
+        self.assert_policy(
+            "duplicate_crew_member",
+            validate_record,
+            "crew_profile",
+            {**crew, "members": [crew["members"][0], crew["members"][0]]},
+        )
+
+        validate_record(
+            "job_assignment",
+            {
+                "assignment_id": "assignment-1",
+                "roof_job": "job-1",
+                "assignment_type": "Installation",
+                "status": "In Progress",
+                "crew_profile": "crew-1",
+                "assigned_by": "production@example.com",
+                "assigned_at": "2026-07-10 07:00:00",
+                "accepted_at": "2026-07-10 07:15:00",
+                "started_at": "2026-07-10 08:00:00",
+            },
+        )
+
+        safety = {
+            "safety_plan_id": "safety-1",
+            "roof_job": "job-1",
+            "version": 1,
+            "status": "Acknowledged",
+            "effective_date": "2026-07-10",
+            "prepared_by": "production@example.com",
+            "prepared_at": "2026-07-09 17:00:00",
+            "hazard_summary": "Falls, wind, material handling.",
+            "controls": "Tie-off and exclusion zones.",
+            "emergency_plan": "Call 911 and site lead.",
+            "ppe_requirements": "Harness, helmet, gloves.",
+            "weather_limits": "Stop above approved wind threshold.",
+            "evidence_item": "ev-safety-plan",
+            "approved_by": "owner@example.com",
+            "approved_at": "2026-07-09 18:00:00",
+            "acknowledgements": [
+                {
+                    "acknowledged_by": "lead@example.com",
+                    "acknowledged_at": "2026-07-10 07:30:00",
+                    "acknowledgement_method": "Field App",
+                    "device_action_id": "ack-device-1",
+                    "evidence_item": "ev-safety-ack-1",
+                }
+            ],
+        }
+        validate_record("safety_plan", safety)
+
+        compliance = {
+            "compliance_record_id": "permit-1",
+            "roof_job": "job-1",
+            "jurisdiction": "Calgary, AB",
+            "record_type": "Permit",
+            "authority_name": "City of Calgary",
+            "status": "Waived",
+            "required_before_gate": "Materials",
+            "owner_user": "production@example.com",
+            "waived_by": "owner@example.com",
+            "waived_at": "2026-07-10 09:00:00",
+            "waiver_reason": "Authority confirmed no permit is required for like-for-like work.",
+        }
+        validate_record("job_compliance_record", compliance)
+
+    def test_change_order_and_payment_truth_are_versioned(self) -> None:
+        change = {
+            "change_order_id": "co-1",
+            "roof_job": "job-1",
+            "customer_quote": "cq-1",
+            "change_number": "CO-001",
+            "version": 1,
+            "status": "Approved",
+            "title": "Deck repair",
+            "reason": "Hidden rot discovered after tear-off.",
+            "scope_delta": "Replace 10 sheets of decking.",
+            "currency": "CAD",
+            "subtotal": 1000,
+            "tax_amount": 50,
+            "total_amount": 1050,
+            "price_book_version": "retail-2026-07",
+            "tax_policy_snapshot_json": '{"country":"CA","province":"AB","rate":5}',
+            "items": [
+                {
+                    "item_type": "Labour and Material",
+                    "description": "Deck replacement",
+                    "quantity": 10,
+                    "unit": "sheet",
+                    "unit_price": 100,
+                    "line_total": 1000,
+                }
+            ],
+            "requested_by": "production@example.com",
+            "requested_at": "2026-07-10 10:00:00",
+            "approved_by": "owner@example.com",
+            "approved_at": "2026-07-10 10:15:00",
+        }
+        validate_record("change_order", change)
+        self.assert_policy(
+            "amount_mismatch",
+            validate_record,
+            "change_order",
+            {**change, "total_amount": 1000},
+        )
+        corrected = {
+            **change,
+            "change_order_id": "co-2",
+            "version": 2,
+            "supersedes": "co-1",
+            "correction_reason": "Correct tax treatment.",
+        }
+        validate_record(
+            "change_order", corrected, context={"superseded_record": change}
+        )
+        self.assert_policy(
+            "stale_version",
+            validate_record,
+            "change_order",
+            {**corrected, "version": 1},
+            context={"superseded_record": change},
+        )
+
+        payment = {
+            "payment_milestone_id": "pay-1",
+            "roof_job": "job-1",
+            "milestone_type": "Invoice",
+            "milestone_version": 1,
+            "status": "Matched",
+            "currency": "CAD",
+            "subtotal": 1000,
+            "tax_amount": 50,
+            "total_amount": 1050,
+            "amount_due": 1050,
+            "amount_paid": 250,
+            "balance_due": 800,
+            "payment_status": "Partially Paid",
+            "tax_code": "GST",
+            "tax_rate": 5,
+            "tax_policy_snapshot_json": '{"rate":5}',
+            "truth_source": "QuickBooks",
+            "truth_at": "2026-07-10 11:00:00",
+        }
+        validate_record("payment_milestone", payment)
+
+    def test_customer_consent_decision_and_acceptance_are_append_only(self) -> None:
+        consent = {
+            "consent_id": "consent-1",
+            "customer": "customer-1",
+            "channel": "SMS",
+            "purpose": "Job Updates",
+            "status": "Granted",
+            "jurisdiction": "Alberta, Canada",
+            "consent_basis": "Written",
+            "source_system": "IronWrap Web",
+            "source_reference": "form-1",
+            "captured_by": "sales@example.com",
+            "captured_at": "2026-07-10 09:00:00",
+            "effective_from": "2026-07-10 09:00:00",
+            "proof_evidence": "ev-consent-1",
+        }
+        validate_record("communication_consent", consent)
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "communication_consent",
+            {**consent, "status": "Revoked"},
+            previous=consent,
+        )
+
+        validate_record(
+            "customer_decision",
+            {
+                "decision_id": "decision-1",
+                "roof_job": "job-1",
+                "customer": "customer-1",
+                "decision_type": "Option Selection",
+                "status": "Recorded",
+                "decision_value": "Premium",
+                "decision_summary": "Customer selected premium standing seam option.",
+                "source_channel": "In Person",
+                "decided_at": "2026-07-10 09:30:00",
+                "captured_by": "sales@example.com",
+                "evidence_item": "ev-decision-1",
+                "option_package": "option-premium",
+            },
+        )
+
+        validate_record(
+            "contract_acceptance",
+            {
+                "acceptance_id": "accept-1",
+                "roof_job": "job-1",
+                "customer": "customer-1",
+                "customer_quote": "cq-1",
+                "contract_version": "cq-1:v1",
+                "status": "Accepted",
+                "signer_name": "Alex Customer",
+                "signer_email": "alex@example.com",
+                "signer_ip": "203.0.113.10",
+                "accepted_at": "2026-07-10 10:00:00",
+                "acceptance_method": "Click to Accept",
+                "evidence_item": "ev-contract-1",
+                "terms_hash": "a" * 64,
+                "document_checksum": "b" * 64,
+                "source_system": "Owned Signing",
+                "provider_reference": "signature-1",
+                "captured_by": "sales@example.com",
+            },
+        )
+        self.assert_policy(
+            "invalid_acceptance_method",
+            validate_record,
+            "contract_acceptance",
+            {
+                "acceptance_id": "accept-verbal",
+                "roof_job": "job-1",
+                "customer": "customer-1",
+                "customer_quote": "cq-1",
+                "contract_version": "cq-1:v1",
+                "status": "Accepted",
+                "signer_name": "Alex Customer",
+                "signer_email": "alex@example.com",
+                "accepted_at": "2026-07-10 10:00:00",
+                "acceptance_method": "Recorded Verbal",
+                "evidence_item": "ev-contract-1",
+                "terms_hash": "a" * 64,
+                "document_checksum": "b" * 64,
+                "source_system": "Phone",
+                "provider_reference": "call-1",
+                "captured_by": "sales@example.com",
+            },
+        )
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "contract_acceptance",
+            {
+                "acceptance_id": "accept-no-ip",
+                "roof_job": "job-1",
+                "customer": "customer-1",
+                "customer_quote": "cq-1",
+                "contract_version": "cq-1:v1",
+                "status": "Accepted",
+                "signer_name": "Alex Customer",
+                "signer_email": "alex@example.com",
+                "accepted_at": "2026-07-10 10:00:00",
+                "acceptance_method": "Click to Accept",
+                "evidence_item": "ev-contract-1",
+                "terms_hash": "a" * 64,
+                "document_checksum": "b" * 64,
+                "source_system": "Owned Signing",
+                "provider_reference": "signature-1",
+                "captured_by": "sales@example.com",
+            },
+        )
+
+    def test_reconciliation_and_tenant_export_fail_closed(self) -> None:
+        reconciliation = {
+            "reconciliation_id": "recon-1",
+            "system_name": "QuickBooks",
+            "entity_type": "Invoice",
+            "external_entity_id": "qb-1",
+            "local_doctype": "Payment Milestone",
+            "local_name": "pay-1",
+            "direction": "Inbound",
+            "status": "Matched",
+            "detected_at": "2026-07-10 11:00:00",
+            "source_amount": 1050,
+            "local_amount": 1050,
+            "currency": "CAD",
+            "source_payload_hash": "a" * 64,
+            "local_payload_hash": "a" * 64,
+            "attempt_count": 1,
+        }
+        validate_record("integration_reconciliation", reconciliation)
+        self.assert_policy(
+            "unmatched_payload",
+            validate_record,
+            "integration_reconciliation",
+            {**reconciliation, "local_payload_hash": "b" * 64},
+        )
+
+        export = {
+            "export_run_id": "export-1",
+            "tenant": "ironwrap",
+            "status": "Completed",
+            "requested_by": "support@example.com",
+            "requested_at": "2026-07-10 12:00:00",
+            "started_at": "2026-07-10 12:01:00",
+            "completed_at": "2026-07-10 12:05:00",
+            "scope_json": '{"doctypes":["Roof Job","Evidence Item"]}',
+            "manifest_key": "exports/export-1/manifest.json",
+            "manifest_checksum": "a" * 64,
+            "archive_key": "exports/export-1/archive.tar.zst",
+            "archive_checksum": "b" * 64,
+            "record_count": 10,
+            "evidence_count": 3,
+            "byte_count": 4096,
+            "encryption_key_ref": "kms://ironwrap/export-1",
+        }
+        validate_record("tenant_export_run", export)
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "tenant_export_run",
+            {**export, "manifest_checksum": None},
         )
 
     def test_executed_hermes_write_requires_complete_audit_chain(self) -> None:

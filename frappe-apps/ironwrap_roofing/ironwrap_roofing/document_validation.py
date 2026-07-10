@@ -9,6 +9,35 @@ import frappe
 from ironwrap_roofing.domain_policy import PolicyViolation, validate_record
 
 
+CORRECTION_TARGETS: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "change_order": ("supersedes", "Change Order", ("roof_job", "version")),
+    "communication_consent": ("supersedes", "Communication Consent", ("roof_job",)),
+    "contract_acceptance": ("supersedes", "Contract Acceptance", ("roof_job",)),
+    "customer_decision": ("supersedes", "Customer Decision", ("roof_job",)),
+    "customer_quote": ("supersedes", "Customer Quote", ("roof_job", "quote_version")),
+    "evidence_item": ("correction_of", "Evidence Item", ("roof_job",)),
+    "field_check_in": ("correction_of", "Field Check-in", ("roof_job",)),
+    "integration_reconciliation": (
+        "supersedes",
+        "Integration Reconciliation",
+        ("roof_job",),
+    ),
+    "job_assignment": ("supersedes", "Job Assignment", ("roof_job",)),
+    "job_compliance_record": (
+        "supersedes",
+        "Job Compliance Record",
+        ("roof_job",),
+    ),
+    "payment_milestone": (
+        "supersedes",
+        "Payment Milestone",
+        ("roof_job", "milestone_version"),
+    ),
+    "safety_plan": ("supersedes", "Safety Plan", ("roof_job", "version")),
+    "tenant_export_run": ("supersedes", "Tenant Export Run", ("tenant",)),
+}
+
+
 def _as_dict(document: Any) -> Any:
     if document is None:
         return None
@@ -29,6 +58,14 @@ def _value(doctype: str, name: str | None, field: str) -> Any:
 
 def _context(document: Any, kind: str) -> dict[str, Any]:
     context: dict[str, Any] = {}
+    correction = CORRECTION_TARGETS.get(kind)
+    if correction:
+        link_field, doctype, fields = correction
+        target = document.get(link_field)
+        if target:
+            context["superseded_record"] = frappe.db.get_value(
+                doctype, target, fields, as_dict=True
+            )
     if kind == "material_takeoff":
         context["measurement_status"] = _value(
             "Measurement Report", document.get("measurement_report"), "review_status"
@@ -63,6 +100,9 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
             fields=[
                 "gate",
                 "state",
+                "owner_user",
+                "assigned_at",
+                "due_at",
                 "blocker_reason",
                 "evidence_item",
                 "waived_by",
@@ -100,3 +140,12 @@ def validate_business_document(document: Any, kind: str) -> None:
         )
     except PolicyViolation as exc:
         frappe.throw(str(exc), exc=frappe.ValidationError)
+
+
+def deny_business_document_delete(_document: Any, _method: str | None = None) -> None:
+    """Keep operational facts auditable; corrections must create a new record."""
+
+    frappe.throw(
+        "IronWrap business records are append-only and cannot be deleted; create a correction or superseding record.",
+        exc=frappe.ValidationError,
+    )

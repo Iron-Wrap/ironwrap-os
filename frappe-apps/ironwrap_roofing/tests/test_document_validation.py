@@ -74,7 +74,13 @@ class DocumentValidationAdapterTests(unittest.TestCase):
 
     def test_closed_roof_job_uses_database_context(self) -> None:
         gates = [
-            {"gate": gate, "state": "Done", "evidence_item": f"ev-{gate.lower()}"}
+            {
+                "gate": gate,
+                "state": "Done",
+                "evidence_item": f"ev-{gate.lower()}",
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+            }
             for gate in (
                 "Deposit",
                 "Materials",
@@ -94,7 +100,14 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             }
         )
         document = FakeDocument(
-            {"name": "job-1", "roof_job_id": "job-1", "job_status": "Closed"}
+            {
+                "name": "job-1",
+                "roof_job_id": "job-1",
+                "job_status": "Closed",
+                "workflow_profile": "Residential Retail",
+                "locale_policy_version": "ca-ab-2026-01",
+                "locale_policy_snapshot_json": '{"country":"CA","province":"AB"}',
+            }
         )
 
         adapter.validate_business_document(document, "roof_job")

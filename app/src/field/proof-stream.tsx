@@ -13,11 +13,15 @@ export function ProofStream({
   hasMore,
   loadingMore,
   onLoadMore,
+  locale,
+  timeZone,
 }: {
   items: ProofStreamItem[];
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => void;
+  locale?: string;
+  timeZone?: string;
 }) {
   const [scrollTop, setScrollTop] = useState(0);
   const window = useMemo(() => {
@@ -89,7 +93,8 @@ export function ProofStream({
                   </span>
                 </div>
                 <p className="mt-2 text-xs text-muted">
-                  {formatTime(item.occurred_at)} ·{" "}
+                  {formatTime(item.occurred_at, locale, timeZone)} ·{" "}
+                  {item.source ?? "Source unavailable"} ·{" "}
                   {item.customer_safe ? "Customer-safe" : "Internal"}
                 </p>
               </article>
@@ -117,9 +122,17 @@ export function ProofStream({
   );
 }
 
-function formatTime(value: string | null): string {
+function formatTime(value: string | null, locale?: string, timeZone?: string): string {
   if (!value || Number.isNaN(Date.parse(value))) return "Time unavailable";
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
-    new Date(value),
-  );
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone,
+    }).format(new Date(value));
+  } catch {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
+      new Date(value),
+    );
+  }
 }

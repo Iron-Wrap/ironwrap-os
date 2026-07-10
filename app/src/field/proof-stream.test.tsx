@@ -27,4 +27,31 @@ describe("ProofStream states", () => {
     expect(screen.getAllByRole("article").length).toBeLessThan(20);
     expect(screen.getByRole("button", { name: "Load older proof" })).toHaveClass("min-h-16");
   });
+
+  it("renders proof provenance and tenant-local time without inventing media detail", () => {
+    render(
+      <ProofStream
+        items={[
+          {
+            id: "proof-1",
+            type: "Photo",
+            proof_slot: "Production",
+            occurred_at: "2026-07-10T16:00:00.000Z",
+            summary: "Arrival condition",
+            customer_safe: false,
+            source: "field_checkin",
+            sync_state: "Verified",
+            blocker: false,
+          },
+        ]}
+        hasMore={false}
+        loadingMore={false}
+        onLoadMore={vi.fn()}
+        locale="en-CA"
+        timeZone="America/Edmonton"
+      />,
+    );
+    expect(screen.getByText(/10:00.*field_checkin.*Internal/i)).toBeVisible();
+    expect(screen.queryByText(/preview|play media/i)).not.toBeInTheDocument();
+  });
 });

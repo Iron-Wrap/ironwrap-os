@@ -27,6 +27,9 @@ const VOLATILE_PREVIEW_FIELDS = new Set([
   "verified_at",
 ]);
 
+const MAX_APPROVAL_RECEIPT_LIFETIME_MS = 10 * 60_000;
+const MAX_APPROVAL_RECEIPT_FUTURE_ISSUED_MS = 60_000;
+
 export function canonicalJson(value) {
   return JSON.stringify(canonicalize(value));
 }
@@ -87,7 +90,7 @@ export function verifyApprovalReceipt(publicKey, receipt, expected) {
   if (payload.v !== 1 || payload.type !== "hermes-human-approval") {
     throw new Error("hermes_approval_receipt_invalid");
   }
-  assertNotExpired(payload.expires_at, "hermes_approval_receipt_expired");
+  assertApprovalReceiptWindow(payload);
   for (const [key, value] of Object.entries(expected)) {
     if (payload[key] !== value) throw new Error(`hermes_approval_receipt_mismatch:${key}`);
   }
@@ -171,4 +174,17 @@ function verifyHmac(key, receipt, errorCode) {
 function assertNotExpired(expiresAt, errorCode) {
   const expiresMs = Date.parse(expiresAt);
   if (!Number.isFinite(expiresMs) || expiresMs <= Date.now()) throw new Error(errorCode);
+}
+
+function assertApprovalReceiptWindow(payload) {
+  const now = Date.now();
+  const issuedAt = Date.parse(payload.issued_at);
+  const expiresAt = Date.parse(payload.expires_at);
+  if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || expiresAt <= now) {
+    throw new Error("hermes_approval_receipt_expired");
+  }
+  if (issuedAt > now + MAX_APPROVAL_RECEIPT_FUTURE_ISSUED_MS || expiresAt <= issuedAt ||
+      expiresAt - issuedAt > MAX_APPROVAL_RECEIPT_LIFETIME_MS) {
+    throw new Error("hermes_approval_receipt_window_invalid");
+  }
 }

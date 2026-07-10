@@ -2297,6 +2297,8 @@ function attachDryRunReceipt(config, dryRunTool, args, result) {
       agent_role: config.agentRole,
       actor_user: config.actorUser,
       site_id: config.siteId,
+      args_digest: digest(dryRunArgs(args)),
+      preview_digest: digest(semanticPreview(payload)),
       dry_run_receipt: dryRunReceipt,
       expires_at: expiresAt,
       note: "A separately authenticated human approver must issue the matching approval_receipt for the exact approved-write arguments.",

@@ -183,9 +183,14 @@ HERMES_APPROVAL_PUBLIC_KEY_FILE=/run/secrets/hermes-approval-public.pem
 ERPNEXT_REQUEST_TIMEOUT_MS=10000
 ```
 
-The separate approval broker holds the Ed25519 private key. It signs a bounded
-approval request with `node tools/issue-hermes-approval.mjs`; the MCP server holds
-only the public key. For an atomic safety acknowledgement, the Frappe API token
+The private approval broker holds the Ed25519 private key and starts a fresh,
+fixed-role MCP child only for its two lead-triage endpoints. It accepts a
+short-window HMAC-bound Worker request, revalidates the exact dry-run packet,
+signs the receipt in memory, and never returns that receipt to the Worker or
+browser. Run it with `node src/approval-broker.mjs` only behind the loopback
+systemd/tunnel contract in `deploy/approval-broker.service.example`; the legacy
+`tools/issue-hermes-approval.mjs` remains a host-side break-glass utility, not
+an HTTP primitive. For an atomic safety acknowledgement, the Frappe API token
 must belong to exactly `HERMES_ACTOR_USER`; a shared integration/service account
 is rejected. Run one MCP process per actor and never reuse the Worker's Frappe
 integration credential for that process.

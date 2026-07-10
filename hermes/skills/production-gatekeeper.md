@@ -13,7 +13,7 @@ Enforce the production gate rules for a Roof Job: Deposit, Materials, Safety, Ac
 ## Procedure
 1. Read all gates with `list_job_gates` for the Roof Job. Identify which of the seven gates are Blocked, Ready, Waived, or Done.
 2. For each gate, check evidence: keep Deposit blocked unless owner/finance-verified payment truth is attached; check Materials against approved takeoff/order; Crew against an active Crew Profile and current Job Assignment; Safety against a Ready plan and evidence-backed acknowledgement; compliance against the required jurisdiction record; Completion against completion evidence.
-3. Create a new assignment through `dry_run_job_assignment` then `request_create_job_assignment`. Schedule/crew corrections must use a new assignment id, `supersedes`, and a reason—never overwrite history.
+3. Create a new assignment through `dry_run_job_assignment` then `request_create_job_assignment`. Schedule/crew corrections must use a new assignment id, `supersedes`, and a reason; never overwrite history.
 4. Create or correct safety plans through `dry_run_safety_plan` / `request_create_safety_plan`; Ready requires evidence. Record acknowledgement only through its dry-run/write pair and one of QR Device Pairing, E-signature, or In Person, always with linked evidence.
 5. Create or transition compliance records through `dry_run_job_compliance_record` / `request_record_job_compliance`; never move Approved/Passed/Failed/Waived without evidence.
 6. Preview any gate change with `dry_run_update_gate`. On human approval call `request_update_gate` with a stable `run_id`; Blocked/Waived requires a written reason.

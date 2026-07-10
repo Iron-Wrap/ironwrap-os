@@ -16,6 +16,8 @@ const TOOL = path.join(DEFAULT_REPO_ROOT, "tools/production-readiness.mjs");
 const HOST_PREFLIGHT = path.join(DEFAULT_REPO_ROOT, "deploy/host-preflight.sh");
 const BACKUP = path.join(DEFAULT_REPO_ROOT, "deploy/backup-to-r2.sh");
 const RESTORE = path.join(DEFAULT_REPO_ROOT, "deploy/restore-from-r2.sh");
+const D1_BACKUP = path.join(DEFAULT_REPO_ROOT, "deploy/backup-d1-to-r2.sh");
+const D1_RESTORE = path.join(DEFAULT_REPO_ROOT, "deploy/restore-d1-from-r2.sh");
 const BUILD = path.join(DEFAULT_REPO_ROOT, "deploy/build-production-image.sh");
 
 async function writeExecutable(file, source) {
@@ -301,6 +303,250 @@ esac
   };
 }
 
+async function stageD1Script(root, source) {
+  const deploy = path.join(root, "deploy");
+  const workerBin = path.join(root, "workers-bus/node_modules/.bin");
+  await mkdir(deploy, { recursive: true });
+  await mkdir(workerBin, { recursive: true });
+  const target = path.join(deploy, path.basename(source));
+  await cp(source, target);
+  await chmod(target, 0o755);
+  await writeFile(path.join(root, "workers-bus/package-lock.json"), `${JSON.stringify({
+    packages: { "node_modules/wrangler": { version: "4.110.0" } },
+  })}\n`);
+  return { target, workerBin };
+}
+
+const REQUIRED_D1_TABLES = [
+  "envelopes", "audit_log", "dead_letter", "source_counts", "heartbeat",
+  "quickbooks_webhook_receipts", "dedup_claims", "replay_requests",
+  "field_actions", "field_action_media",
+  "app_users", "app_magic_links", "app_sessions", "app_auth_throttles", "app_auth_audit",
+];
+
+function d1Sql({ missingTable = "" } = {}) {
+  const tables = REQUIRED_D1_TABLES.filter((name) => name !== missingTable);
+  return `BEGIN TRANSACTION;\n${tables.map((name, index) => `CREATE TABLE ${name} (id TEXT PRIMARY KEY);\nINSERT INTO ${name} (id) VALUES ('row-${index}');`).join("\n")}\nCOMMIT;\n`;
+}
+
+async function mockD1BackupEnvironment(t, { failCopy = false, signalCopy = false, missingTable = "" } = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-d1-backup-test-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  const state = path.join(root, "state");
+  await Promise.all([mkdir(bin), mkdir(state)]);
+  const staged = await stageD1Script(root, D1_BACKUP);
+
+  await writeExecutable(path.join(staged.workerBin, "wrangler"), `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == '--version' ]]; then printf '4.110.0\\n'; exit 0; fi
+[[ "\${CLOUDFLARE_API_TOKEN:-}" == 'cloudflare_d1_backup_read_4c8f0b2d6a9137e5' ]] || exit 77
+printf '%s\\n' "$*" >> "$MOCK_STATE/wrangler.log"
+output=''; config=''
+while (( $# > 0 )); do
+  case "$1" in
+    --output) output="$2"; shift 2 ;;
+    --config) config="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ -n "$output" ]] || exit 2
+if [[ -n "$config" ]]; then /bin/cp "$config" "$MOCK_STATE/source-config.json"; fi
+printf '%s' "$MOCK_D1_SQL" > "$output"
+`);
+  await writeExecutable(path.join(bin, "age"), `#!/usr/bin/env bash
+set -euo pipefail
+output=''; input=''
+while (( $# > 0 )); do
+  case "$1" in
+    --output) output="$2"; shift 2 ;;
+    --recipient) shift 2 ;;
+    --encrypt) shift ;;
+    *) input="$1"; shift ;;
+  esac
+done
+/bin/cp "$input" "$output"
+`);
+  await writeExecutable(path.join(bin, "flock"), "#!/usr/bin/env bash\nexit 0\n");
+  await writeExecutable(path.join(bin, "rclone"), `#!/usr/bin/env bash
+set -euo pipefail
+[[ -z "\${CLOUDFLARE_API_TOKEN:-}" && -z "\${D1_BACKUP_API_TOKEN:-}" && -z "\${D1_RESTORE_API_TOKEN:-}" ]] || exit 78
+printf '%s\\n' "\${1:-}" >> "$MOCK_STATE/rclone.log"
+if [[ "\${1:-}" == 'copy' && "\${MOCK_SIGNAL_COPY:-0}" == '1' ]]; then kill -TERM "$PPID"; exit 143; fi
+if [[ "\${1:-}" == 'copy' && "\${MOCK_FAIL_COPY:-0}" == '1' ]]; then exit 9; fi
+exit 0
+`);
+
+  return {
+    root,
+    state,
+    script: staged.target,
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      TMPDIR: root,
+      MOCK_STATE: state,
+      MOCK_D1_SQL: d1Sql({ missingTable }),
+      MOCK_FAIL_COPY: failCopy ? "1" : "0",
+      MOCK_SIGNAL_COPY: signalCopy ? "1" : "0",
+      D1_BACKUP_API_TOKEN: "cloudflare_d1_backup_read_4c8f0b2d6a9137e5",
+      D1_PRODUCTION_ACCOUNT_ID: "7ee5775bc1ba46f05c5a65235b60e939",
+      D1_PRODUCTION_DATABASE_NAME: "ironwrap-bus",
+      D1_PRODUCTION_DATABASE_ID: "f0674848-13df-4422-9896-8ba2719663b8",
+      D1_R2_BACKUP_BUCKET: "ironwrap-backups-prod",
+      D1_BACKUP_RETENTION_DAYS: "30",
+      BACKUP_AGE_RECIPIENT: `age1${"q".repeat(58)}`,
+      RCLONE_CONFIG_R2_TYPE: "s3",
+      RCLONE_CONFIG_R2_PROVIDER: "Cloudflare",
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: "r2_access_31a68f02",
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: "r2_secret_97c63bd012ab45f6a1e8029f",
+      RCLONE_CONFIG_R2_ENDPOINT: "https://a1b2c3d4.r2.cloudflarestorage.com",
+    },
+  };
+}
+
+async function mockD1RestoreEnvironment(t, { badChecksum = false, targetCount = 0, signalDownload = false, rowMismatch = false } = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-d1-restore-test-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  const state = path.join(root, "state");
+  const remote = path.join(root, "remote");
+  const packageDir = path.join(root, "package");
+  await Promise.all([mkdir(bin), mkdir(state), mkdir(remote), mkdir(packageDir)]);
+  const staged = await stageD1Script(root, D1_RESTORE);
+  const stamp = "20260710T120000Z";
+  const sqlFile = `ironwrap-d1-ironwrap-bus-${stamp}.sql`;
+  const sqlPath = path.join(packageDir, sqlFile);
+  await writeFile(sqlPath, d1Sql());
+  const sqlDigest = createHash("sha256").update(await readFile(sqlPath)).digest("hex");
+  await writeFile(path.join(packageDir, "IRONWRAP-D1-BACKUP-MANIFEST.txt"), [
+    "schema_version=1",
+    `created_utc=${stamp}`,
+    "account_id=7ee5775bc1ba46f05c5a65235b60e939",
+    "database_name=ironwrap-bus",
+    "database_id=f0674848-13df-4422-9896-8ba2719663b8",
+    "format=cloudflare-d1-sql-export",
+    "wrangler_version=4.110.0",
+    `sql_file=${sqlFile}`,
+    `sql_sha256=${sqlDigest}`,
+    `required_tables=${REQUIRED_D1_TABLES.join(",")}`,
+    "",
+  ].join("\n"));
+  const archiveName = `ironwrap-d1-ironwrap-bus-${stamp}.tar.gz.age`;
+  const archivePath = path.join(remote, archiveName);
+  const tarRun = spawnSync("tar", ["-czf", archivePath, "-C", packageDir, "IRONWRAP-D1-BACKUP-MANIFEST.txt", sqlFile], { encoding: "utf8" });
+  assert.equal(tarRun.status, 0, tarRun.stderr);
+  const digest = createHash("sha256").update(await readFile(archivePath)).digest("hex");
+  await writeFile(path.join(remote, `${archiveName}.sha256`), `${badChecksum ? "b".repeat(64) : digest}  ${archiveName}\n`);
+  await writeFile(path.join(remote, "IRONWRAP-D1-BACKUP-COMPLETE"), [
+    "schema_version=1",
+    `created_utc=${stamp}`,
+    "database_name=ironwrap-bus",
+    "database_id=f0674848-13df-4422-9896-8ba2719663b8",
+    `archive=${archiveName}`,
+    `checksum=${archiveName}.sha256`,
+    "",
+  ].join("\n"));
+  const identity = path.join(root, "age-identity.txt");
+  await writeFile(identity, "AGE-SECRET-KEY-MOCK\n", { mode: 0o600 });
+  await chmod(identity, 0o600);
+
+  const matchingRows = JSON.stringify([{
+    results: REQUIRED_D1_TABLES.map((table_name) => ({ table_name, row_count: 1 })),
+    success: true,
+  }]);
+  const mismatchedRows = JSON.stringify([{
+    results: REQUIRED_D1_TABLES.map((table_name, index) => ({ table_name, row_count: index === 0 ? 2 : 1 })),
+    success: true,
+  }]);
+
+  await writeExecutable(path.join(staged.workerBin, "wrangler"), `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == '--version' ]]; then printf '4.110.0\\n'; exit 0; fi
+[[ "\${CLOUDFLARE_API_TOKEN:-}" == 'cloudflare_d1_restore_write_91e6a4c8f02b735d' ]] || exit 77
+printf '%s\\n' "$*" >> "$MOCK_STATE/wrangler.log"
+file=''; config=''; json=0
+while (( $# > 0 )); do
+  case "$1" in
+    --file) file="$2"; shift 2 ;;
+    --config) config="$2"; shift 2 ;;
+    --json) json=1; shift ;;
+    *) shift ;;
+  esac
+done
+if [[ -n "$config" ]]; then /bin/cp "$config" "$MOCK_STATE/target-config.json"; fi
+if (( json == 1 )); then
+  if [[ "$file" == *target-preflight.sql ]]; then
+    printf '[{"results":[{"table_count":%s}],"success":true}]\\n' "$MOCK_TARGET_COUNT"
+  elif [[ "$file" == *target-verify.sql ]]; then
+    if [[ "$MOCK_ROW_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedRows}'; else printf '%s\\n' '${matchingRows}'; fi
+  fi
+fi
+`);
+  await writeExecutable(path.join(bin, "flock"), "#!/usr/bin/env bash\nexit 0\n");
+  await writeExecutable(path.join(bin, "age"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'decrypt\\n' >> "$MOCK_STATE/age.log"
+output=''; input=''
+while (( $# > 0 )); do
+  case "$1" in
+    --output) output="$2"; shift 2 ;;
+    --identity) shift 2 ;;
+    --decrypt) shift ;;
+    *) input="$1"; shift ;;
+  esac
+done
+/bin/cp "$input" "$output"
+`);
+  await writeExecutable(path.join(bin, "rclone"), `#!/usr/bin/env bash
+set -euo pipefail
+[[ -z "\${CLOUDFLARE_API_TOKEN:-}" && -z "\${D1_BACKUP_API_TOKEN:-}" && -z "\${D1_RESTORE_API_TOKEN:-}" ]] || exit 78
+printf '%s\\n' "\${1:-}" >> "$MOCK_STATE/rclone.log"
+case "\${1:-}" in
+  cat) /bin/cat "$MOCK_REMOTE/\${2##*/}" ;;
+  copyto)
+    if [[ "\${MOCK_SIGNAL_DOWNLOAD:-0}" == '1' ]]; then kill -TERM "$PPID"; exit 143; fi
+    /bin/cp "$MOCK_REMOTE/\${2##*/}" "$3"
+    ;;
+  *) exit 2 ;;
+esac
+`);
+
+  return {
+    root,
+    state,
+    script: staged.target,
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      TMPDIR: root,
+      MOCK_STATE: state,
+      MOCK_REMOTE: remote,
+      MOCK_TARGET_COUNT: String(targetCount),
+      MOCK_SIGNAL_DOWNLOAD: signalDownload ? "1" : "0",
+      MOCK_ROW_MISMATCH: rowMismatch ? "1" : "0",
+      D1_BACKUP_API_TOKEN: "cloudflare_d1_backup_read_4c8f0b2d6a9137e5",
+      D1_RESTORE_API_TOKEN: "",
+      D1_PRODUCTION_ACCOUNT_ID: "7ee5775bc1ba46f05c5a65235b60e939",
+      D1_PRODUCTION_DATABASE_NAME: "ironwrap-bus",
+      D1_PRODUCTION_DATABASE_ID: "f0674848-13df-4422-9896-8ba2719663b8",
+      D1_R2_BACKUP_BUCKET: "ironwrap-backups-prod",
+      D1_RESTORE_R2_COMPLETED_PREFIX: "d1/ironwrap-bus/20260710T120000Z-1234-5678",
+      D1_RESTORE_AGE_IDENTITY_FILE: identity,
+      D1_RESTORE_MODE: "verify",
+      D1_RESTORE_TARGET_ACCOUNT_ID: "7ee5775bc1ba46f05c5a65235b60e939",
+      D1_RESTORE_TARGET_DATABASE_NAME: "ironwrap-restore-drill-monthly",
+      D1_RESTORE_TARGET_DATABASE_ID: "83b5835e-24cf-4b52-8f89-e3a822e1c980",
+      D1_RESTORE_CONFIRMATION: "",
+      RCLONE_CONFIG_R2_TYPE: "s3",
+      RCLONE_CONFIG_R2_PROVIDER: "Cloudflare",
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: "r2_access_31a68f02",
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: "r2_secret_97c63bd012ab45f6a1e8029f",
+      RCLONE_CONFIG_R2_ENDPOINT: "https://a1b2c3d4.r2.cloudflarestorage.com",
+    },
+  };
+}
+
 function validLiveEnv() {
   const adminToken = "admin_7f9e4c21b6a348d5a8f0c2e4";
   return {
@@ -335,6 +581,20 @@ function validLiveEnv() {
     R2_BACKUP_BUCKET: "ironwrap-backups-prod",
     BACKUP_RETENTION_DAYS: "30",
     BACKUP_AGE_RECIPIENT: `age1${"q".repeat(58)}`,
+    D1_BACKUP_API_TOKEN: "cloudflare_d1_backup_read_4c8f0b2d6a9137e5",
+    D1_RESTORE_API_TOKEN: "",
+    D1_PRODUCTION_ACCOUNT_ID: "7ee5775bc1ba46f05c5a65235b60e939",
+    D1_PRODUCTION_DATABASE_NAME: "ironwrap-bus",
+    D1_PRODUCTION_DATABASE_ID: "f0674848-13df-4422-9896-8ba2719663b8",
+    D1_R2_BACKUP_BUCKET: "ironwrap-backups-prod",
+    D1_BACKUP_RETENTION_DAYS: "30",
+    D1_RESTORE_R2_COMPLETED_PREFIX: "d1/ironwrap-bus/20260710T120000Z-1234-5678",
+    D1_RESTORE_AGE_IDENTITY_FILE: "/secure/ironwrap/d1-restore-age-identity.txt",
+    D1_RESTORE_MODE: "verify",
+    D1_RESTORE_TARGET_ACCOUNT_ID: "7ee5775bc1ba46f05c5a65235b60e939",
+    D1_RESTORE_TARGET_DATABASE_NAME: "ironwrap-restore-drill-monthly",
+    D1_RESTORE_TARGET_DATABASE_ID: "83b5835e-24cf-4b52-8f89-e3a822e1c980",
+    D1_RESTORE_CONFIRMATION: "",
     RESTORE_R2_COMPLETED_PREFIX: "os.ironwrapexteriors.com/20260710T120000Z-1234-5678",
     RESTORE_AGE_IDENTITY_FILE: "/secure/ironwrap/restore-age-identity.txt",
     RESTORE_TARGET_SITE: "restore-drill.ironwrap.invalid",
@@ -436,11 +696,38 @@ test("live-env mode aligns backup inputs with the executable backup contract", a
   }
 });
 
+test("live-env mode binds D1 recovery to exact source, separated authority, and non-production defaults", async () => {
+  const env = validLiveEnv();
+  env.D1_PRODUCTION_DATABASE_ID = env.D1_RESTORE_TARGET_DATABASE_ID;
+  env.D1_BACKUP_API_TOKEN = env.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY;
+  env.D1_RESTORE_API_TOKEN = env.RCLONE_CONFIG_R2_ACCESS_KEY_ID;
+  env.D1_RESTORE_R2_COMPLETED_PREFIX = "d1/other/latest";
+  env.D1_RESTORE_MODE = "remote";
+  env.D1_RESTORE_TARGET_DATABASE_ID = "f0674848-13df-4422-9896-8ba2719663b8";
+  env.D1_RESTORE_CONFIRMATION = "RESTORE_D1:unsafe";
+
+  const result = await validateLiveEnv({ env });
+  assert.equal(result.ok, false);
+  for (const id of [
+    "live.d1.source.id",
+    "live.secret.separation",
+    "live.secret.d1_restore_ephemeral",
+    "live.d1.restore_prefix",
+    "live.d1.restore_mode",
+    "live.d1.target_id",
+    "live.d1.confirmation",
+  ]) {
+    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
+  }
+});
+
 test("validator output never includes supplied secret values", async () => {
   const env = validLiveEnv();
   const secretValue = "do-not-print-this-sensitive-value";
   env.ADMIN_TOKEN = secretValue;
   env.IRONWRAP_ADMIN_TOKEN = secretValue;
+  env.D1_BACKUP_API_TOKEN = secretValue;
+  env.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY = secretValue;
   env.ERPNEXT_BASE_URL = `https://${secretValue}@os.ironwrapexteriors.com`;
 
   const result = await validateLiveEnv({ env });
@@ -657,6 +944,160 @@ test("restore rejects missing completion markers and configuration in argv", asy
   const argv = spawnSync("bash", [RESTORE, "--restore", secretValue], { encoding: "utf8", env: mock.env });
   assert.equal(argv.status, 64);
   assert.equal(`${argv.stdout}${argv.stderr}`.includes(secretValue), false);
+});
+
+test("D1 backup exports through locked Wrangler, validates SQL, and commits its marker last", async (t) => {
+  const mock = await mockD1BackupEnvironment(t);
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+  assert.match(run.stdout, /exact production D1 export validated, encrypted, committed/);
+  const wrangler = await readFile(path.join(mock.state, "wrangler.log"), "utf8");
+  assert.match(wrangler, /^d1 export ironwrap-bus --remote --config .* --output /m);
+  assert.equal(wrangler.includes(mock.env.D1_BACKUP_API_TOKEN), false);
+  const config = JSON.parse(await readFile(path.join(mock.state, "source-config.json"), "utf8"));
+  assert.equal(config.account_id, mock.env.D1_PRODUCTION_ACCOUNT_ID);
+  assert.deepEqual(config.d1_databases, [{
+    binding: "BACKUP_SOURCE",
+    database_name: mock.env.D1_PRODUCTION_DATABASE_NAME,
+    database_id: mock.env.D1_PRODUCTION_DATABASE_ID,
+  }]);
+  const operations = (await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n");
+  assert.deepEqual(operations.slice(0, 3), ["copy", "check", "copyto"]);
+  assert.equal(operations.indexOf("delete") > operations.indexOf("copyto"), true);
+  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
+});
+
+test("D1 backup fails before upload when a required auth table is missing", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { missingTable: "app_sessions" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required core\/auth table: app_sessions/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
+});
+
+test("D1 backup purges incomplete remote state and plaintext on upload failure", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { failCopy: true });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.equal(run.status, 9, `${run.stdout}${run.stderr}`);
+  const operations = (await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n");
+  assert.deepEqual(operations, ["copy", "purge"]);
+  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
+});
+
+test("D1 backup signal trap exits, purges incomplete objects, and removes plaintext", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { signalCopy: true });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.equal(run.status, 143, `${run.stdout}${run.stderr}`);
+  const operations = (await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n");
+  assert.deepEqual(operations, ["copy", "purge"]);
+  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
+});
+
+test("D1 recovery defaults to local cryptographic and SQLite verification without remote mutation", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t);
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+  assert.match(run.stdout, /no remote mutation performed/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-restore.")), false);
+});
+
+test("remote D1 drill uses exact generated target config and verifies the restored tables", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t);
+  mock.env.D1_RESTORE_MODE = "remote";
+  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+  assert.match(run.stdout, /exact confirmed non-production drill database/);
+  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+  assert.equal(operations.length, 3);
+  assert.equal(operations.every((line) => line.startsWith(`d1 execute ${mock.env.D1_RESTORE_TARGET_DATABASE_NAME} --remote`)), true);
+  assert.equal(operations.join("\n").includes(mock.env.D1_RESTORE_API_TOKEN), false);
+  const config = JSON.parse(await readFile(path.join(mock.state, "target-config.json"), "utf8"));
+  assert.equal(config.account_id, mock.env.D1_RESTORE_TARGET_ACCOUNT_ID);
+  assert.deepEqual(config.d1_databases, [{
+    binding: "RESTORE_TARGET",
+    database_name: mock.env.D1_RESTORE_TARGET_DATABASE_NAME,
+    database_id: mock.env.D1_RESTORE_TARGET_DATABASE_ID,
+  }]);
+});
+
+test("remote D1 drill rejects reused backup, restore, or R2 authority before download", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t);
+  mock.env.D1_RESTORE_MODE = "remote";
+  mock.env.D1_RESTORE_API_TOKEN = mock.env.D1_BACKUP_API_TOKEN;
+  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /pairwise distinct/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
+test("remote D1 drill rejects production, unconfirmed, and nonempty targets before import", async (t) => {
+  const production = await mockD1RestoreEnvironment(t);
+  production.env.D1_RESTORE_MODE = "remote";
+  production.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  production.env.D1_RESTORE_TARGET_DATABASE_NAME = production.env.D1_PRODUCTION_DATABASE_NAME;
+  production.env.D1_RESTORE_TARGET_DATABASE_ID = production.env.D1_PRODUCTION_DATABASE_ID;
+  production.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${production.env.D1_RESTORE_TARGET_DATABASE_NAME}@${production.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const productionRun = spawnSync("bash", [production.script], { encoding: "utf8", env: production.env });
+  assert.notEqual(productionRun.status, 0);
+  assert.match(productionRun.stderr, /name or UUID is unsafe|production D1 database can never/);
+  await assert.rejects(readFile(path.join(production.state, "rclone.log"), "utf8"));
+
+  const unconfirmed = await mockD1RestoreEnvironment(t);
+  unconfirmed.env.D1_RESTORE_MODE = "remote";
+  unconfirmed.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  unconfirmed.env.D1_RESTORE_CONFIRMATION = "RESTORE_D1:wrong@00000000-0000-4000-8000-000000000000";
+  const unconfirmedRun = spawnSync("bash", [unconfirmed.script], { encoding: "utf8", env: unconfirmed.env });
+  assert.notEqual(unconfirmedRun.status, 0);
+  assert.match(unconfirmedRun.stderr, /confirmation is not bound/);
+  await assert.rejects(readFile(path.join(unconfirmed.state, "rclone.log"), "utf8"));
+
+  const nonempty = await mockD1RestoreEnvironment(t, { targetCount: 1 });
+  nonempty.env.D1_RESTORE_MODE = "remote";
+  nonempty.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  nonempty.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${nonempty.env.D1_RESTORE_TARGET_DATABASE_NAME}@${nonempty.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const nonemptyRun = spawnSync("bash", [nonempty.script], { encoding: "utf8", env: nonempty.env });
+  assert.notEqual(nonemptyRun.status, 0);
+  assert.match(nonemptyRun.stderr, /empty dedicated drill database/);
+  const operations = (await readFile(path.join(nonempty.state, "wrangler.log"), "utf8")).trim().split("\n");
+  assert.equal(operations.length, 1);
+});
+
+test("remote D1 drill fails when any restored production-table row count differs", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { rowMismatch: true });
+  mock.env.D1_RESTORE_MODE = "remote";
+  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /table row counts differ/);
+  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+  assert.equal(operations.length, 3);
+});
+
+test("D1 recovery rejects bad ciphertext checksums and signal-cleans decrypted workspace", async (t) => {
+  const bad = await mockD1RestoreEnvironment(t, { badChecksum: true });
+  const badRun = spawnSync("bash", [bad.script], { encoding: "utf8", env: bad.env });
+  assert.notEqual(badRun.status, 0);
+  await assert.rejects(readFile(path.join(bad.state, "age.log"), "utf8"));
+
+  const signalled = await mockD1RestoreEnvironment(t, { signalDownload: true });
+  const signalRun = spawnSync("bash", [signalled.script], { encoding: "utf8", env: signalled.env });
+  assert.equal(signalRun.status, 143, `${signalRun.stdout}${signalRun.stderr}`);
+  assert.equal((await readdir(signalled.root)).some((entry) => entry.startsWith("ironwrap-d1-restore.")), false);
+});
+
+test("D1 recovery commands reject argv without echoing supplied values", () => {
+  const secretValue = "d1-argv-secret-that-must-not-be-printed";
+  for (const script of [D1_BACKUP, D1_RESTORE]) {
+    const run = spawnSync("bash", [script, secretValue], { encoding: "utf8" });
+    assert.equal(run.status, 64);
+    assert.equal(`${run.stdout}${run.stderr}`.includes(secretValue), false);
+  }
 });
 
 test("image build rejects configuration in argv without echoing it", () => {

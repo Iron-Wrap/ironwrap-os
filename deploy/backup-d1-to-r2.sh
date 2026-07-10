@@ -9,6 +9,9 @@ if (( $# != 0 )); then
   echo "error: this command accepts no arguments; configuration and secrets are environment-only" >&2
   exit 64
 fi
+d1_backup_api_token="${D1_BACKUP_API_TOKEN:-}"
+unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN
+set +a
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
@@ -21,10 +24,9 @@ LOCK_FILE="$REPO_ROOT/workers-bus/package-lock.json"
 EXPECTED_ACCOUNT_ID="7ee5775bc1ba46f05c5a65235b60e939"
 EXPECTED_DATABASE_NAME="ironwrap-bus"
 EXPECTED_DATABASE_ID="f0674848-13df-4422-9896-8ba2719663b8"
-REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit"
+REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,quickbooks_webhook_receipts,dedup_claims,replay_requests,field_actions,field_action_media,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit"
 
 required_env=(
-  CLOUDFLARE_API_TOKEN
   D1_PRODUCTION_ACCOUNT_ID
   D1_PRODUCTION_DATABASE_NAME
   D1_PRODUCTION_DATABASE_ID
@@ -51,12 +53,12 @@ if [[ "$D1_PRODUCTION_ACCOUNT_ID" != "$EXPECTED_ACCOUNT_ID" || \
   echo "error: D1 source coordinates do not match the committed production database" >&2
   exit 1
 fi
-if [[ ! "$CLOUDFLARE_API_TOKEN" =~ ^[^[:space:]]{24,}$ ]]; then
-  echo "error: CLOUDFLARE_API_TOKEN is missing or malformed" >&2
+if [[ ! "$d1_backup_api_token" =~ ^[^[:space:]]{24,}$ ]]; then
+  echo "error: D1_BACKUP_API_TOKEN is missing or malformed" >&2
   exit 1
 fi
-if [[ "$CLOUDFLARE_API_TOKEN" == "$RCLONE_CONFIG_R2_ACCESS_KEY_ID" || \
-      "$CLOUDFLARE_API_TOKEN" == "$RCLONE_CONFIG_R2_SECRET_ACCESS_KEY" || \
+if [[ "$d1_backup_api_token" == "$RCLONE_CONFIG_R2_ACCESS_KEY_ID" || \
+      "$d1_backup_api_token" == "$RCLONE_CONFIG_R2_SECRET_ACCESS_KEY" || \
       "$RCLONE_CONFIG_R2_ACCESS_KEY_ID" == "$RCLONE_CONFIG_R2_SECRET_ACCESS_KEY" ]]; then
   echo "error: Cloudflare D1 API and R2 backup credentials must be separated by purpose" >&2
   exit 1
@@ -91,7 +93,7 @@ for command_name in age flock mktemp node rclone sha256sum sqlite3 tar; do
   fi
 done
 if [[ ! -x "$WRANGLER" || ! -f "$LOCK_FILE" ]]; then
-  echo "error: install the workers-bus locked dependencies with npm ci before D1 backup" >&2
+  echo "error: install the workers-bus locked dependencies with npm ci --ignore-scripts before D1 backup" >&2
   exit 1
 fi
 locked_wrangler="$(node -e 'const l=require(process.argv[1]); const v=l.packages?.["node_modules/wrangler"]?.version; if(typeof v!=="string") process.exit(1); process.stdout.write(v)' "$LOCK_FILE")"
@@ -115,8 +117,11 @@ cleanup() {
   status=$?
   trap - EXIT
   if (( remote_started == 1 && remote_complete == 0 )) && [[ -n "$remote" ]]; then
-    rclone purge "$remote" >/dev/null 2>&1 || true
+    if ! rclone purge "$remote" >/dev/null 2>&1; then
+      echo "error: incomplete markerless D1 backup prefix could not be purged; quarantine it until retention permits deletion" >&2
+    fi
   fi
+  d1_backup_api_token=""
   rm -rf -- "$WORK_DIR"
   exit "$status"
 }
@@ -144,7 +149,7 @@ cat > "$config" <<EOF
 }
 EOF
 
-"$WRANGLER" d1 export "$D1_PRODUCTION_DATABASE_NAME" \
+CLOUDFLARE_API_TOKEN="$d1_backup_api_token" "$WRANGLER" d1 export "$D1_PRODUCTION_DATABASE_NAME" \
   --remote --config "$config" --output "$export_sql" >/dev/null
 if [[ ! -s "$export_sql" ]]; then
   echo "error: Wrangler produced an empty D1 export" >&2
@@ -227,4 +232,4 @@ rclone delete "R2:$D1_R2_BACKUP_BUCKET/d1/$D1_PRODUCTION_DATABASE_NAME/" \
   --exclude '*'
 rclone rmdirs "R2:$D1_R2_BACKUP_BUCKET/d1/$D1_PRODUCTION_DATABASE_NAME/" --leave-root
 
-echo "ok: exact production D1 export validated, encrypted, committed, and remotely verified"
+echo "ok: exact production D1 export validated, encrypted, committed, and remotely verified; prefix=d1/$D1_PRODUCTION_DATABASE_NAME/$RUN_ID"

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const root = new URL("..", import.meta.url).pathname;
@@ -10,6 +11,16 @@ const doctypeRoot = "frappe-apps/ironwrap_roofing/ironwrap_roofing/ironwrap_roof
 const frappeCoreTargets = new Set([
   "User",
 ]);
+const canonicalIronWrapRoles = [
+  "IronWrap Owner",
+  "IronWrap Sales",
+  "IronWrap Estimator",
+  "IronWrap Production",
+  "IronWrap Field",
+  "IronWrap Finance",
+  "IronWrap Closeout",
+  "IronWrap Support",
+];
 
 const specs = [
   {
@@ -167,6 +178,9 @@ const specs = [
       "tool_name",
       "tool_args_json",
       "dry_run_json",
+      "policy_check_json",
+      "policy_checked_at",
+      "policy_checked_by",
       "approval_status",
       "approved_by",
       "approved_at",
@@ -175,7 +189,22 @@ const specs = [
       "result_status",
       "result_json",
       "error",
+      "mutation_applied",
+      "audit_event_id",
+      "audit_incident_id",
+      "request_correlation_id",
+      "completed_at",
     ],
+    fieldContracts: {
+      policy_check_json: { fieldtype: "Code", options: "JSON" },
+      policy_checked_at: { fieldtype: "Datetime", read_only: 1 },
+      policy_checked_by: { fieldtype: "Link", options: "User", read_only: 1 },
+      mutation_applied: { fieldtype: "Check", read_only: 1 },
+      audit_event_id: { fieldtype: "Data", read_only: 1, unique: 1 },
+      audit_incident_id: { fieldtype: "Data", read_only: 1 },
+      request_correlation_id: { fieldtype: "Data", read_only: 1 },
+      completed_at: { fieldtype: "Datetime", read_only: 1 },
+    },
   },
   {
     name: "Completion Packet",
@@ -311,10 +340,214 @@ const specs = [
       "created_by_ref",
     ],
   },
+  {
+    name: "Price Book Rule",
+    dir: "price_book_rule",
+    idField: "price_rule_id",
+    requiredFields: [
+      "price_rule_id",
+      "rule_name",
+      "rule_type",
+      "status",
+      "service_type",
+      "material_system",
+      "unit",
+      "unit_cost",
+      "unit_price",
+      "minimum_quantity",
+      "currency",
+      "source_ref",
+      "rule_json",
+      "effective_from",
+      "effective_to",
+      "assumptions",
+      "exclusions",
+      "approved_by",
+      "approved_at",
+      "approval_note",
+      "notes",
+    ],
+  },
+  {
+    name: "Visual Property Model",
+    dir: "visual_property_model",
+    idField: "visual_model_id",
+    requiredFields: [
+      "visual_model_id",
+      "roof_job",
+      "roofing_property",
+      "provider",
+      "provider_model_id",
+      "model_uri",
+      "raw_key",
+      "status",
+      "confidence",
+      "needs_review",
+      "source_evidence",
+      "screenshots_json",
+      "measurements_json",
+      "captured_at",
+      "approved_by",
+      "approved_at",
+      "approval_note",
+      "notes",
+    ],
+  },
+  {
+    name: "Roof Area",
+    dir: "roof_area",
+    idField: "roof_area_id",
+    requiredFields: [
+      "roof_area_id",
+      "roof_job",
+      "roofing_property",
+      "area_name",
+      "status",
+      "area_sqft",
+      "pitch",
+      "facet_count",
+      "penetration_count",
+      "edge_length_ft",
+      "measurement_report",
+      "visual_model",
+      "source_ref",
+      "needs_review",
+      "approved_by",
+      "approved_at",
+      "approval_note",
+      "notes",
+    ],
+  },
+  {
+    name: "Option Package",
+    dir: "option_package",
+    idField: "option_package_id",
+    requiredFields: [
+      "option_package_id",
+      "roof_job",
+      "package_name",
+      "tier",
+      "status",
+      "material_system",
+      "price_delta",
+      "currency",
+      "options_json",
+      "scope_clause_ids_json",
+      "warranty_summary",
+      "payment_assumptions",
+      "assumptions",
+      "exclusions",
+      "approved_by",
+      "approved_at",
+      "approval_note",
+      "notes",
+    ],
+  },
+  {
+    name: "Scope Clause",
+    dir: "scope_clause",
+    idField: "scope_clause_id",
+    requiredFields: [
+      "scope_clause_id",
+      "roof_job",
+      "clause_type",
+      "title",
+      "clause_text",
+      "version",
+      "status",
+      "source_ref",
+      "customer_visible",
+      "approved_by",
+      "approved_at",
+      "approval_note",
+      "notes",
+    ],
+  },
+  {
+    name: "Automation Incident",
+    dir: "automation_incident",
+    idField: "incident_id",
+    requiredFields: [
+      "incident_id",
+      "status",
+      "severity",
+      "source_system",
+      "category",
+      "summary",
+      "details",
+      "roof_job",
+      "lead_envelope",
+      "record_ref",
+      "correlation_id",
+      "detected_at",
+      "retry_count",
+      "assigned_to",
+      "acknowledged_at",
+      "resolution_notes",
+      "resolved_by",
+      "resolved_at",
+      "notes",
+    ],
+  },
+  {
+    name: "White-Label Tenant",
+    dir: "white_label_tenant",
+    idField: "tenant_id",
+    requiredFields: [
+      "tenant_id",
+      "status",
+      "site_hostname",
+      "legal_name",
+      "primary_brand",
+      "owner_user",
+      "support_email",
+      "data_residency",
+      "isolation_model",
+      "brand_config_json",
+      "namespace_config_json",
+      "policy_config_json",
+      "approved_by",
+      "approved_at",
+      "approval_note",
+      "activated_at",
+      "notes",
+    ],
+  },
 ];
+
+const appRoot = "frappe-apps/ironwrap_roofing/ironwrap_roofing";
+const doctypePath = join(root, doctypeRoot);
+const expectedDirs = specs.map((spec) => spec.dir).sort();
+const discoveredDirs = readdirSync(doctypePath, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  .filter((dir) => existsSync(join(doctypePath, dir, `${dir}.json`)))
+  .sort();
+
+assert.equal(specs.length, 33, "the product contract must contain exactly 33 DocTypes");
+assert.equal(specs.filter((spec) => spec.child).length, 4, "expected four child-table DocTypes");
+assert.equal(specs.filter((spec) => !spec.child).length, 29, "expected 29 top-level DocTypes");
+assert.equal(new Set(specs.map((spec) => spec.name)).size, specs.length, "duplicate DocType name in validator");
+assert.equal(new Set(expectedDirs).size, specs.length, "duplicate DocType directory in validator");
+assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 33-type product contract");
+
+const pythonContracts = readPythonContracts();
+assert.deepEqual(
+  [...pythonContracts.roles].sort(),
+  [...canonicalIronWrapRoles].sort(),
+  "access_control.py must declare the canonical eight IronWrap roles",
+);
 
 const docs = new Map(specs.map((spec) => [spec.name, readDoc(spec.dir)]));
 const localDoctypes = new Set(docs.keys());
+const topLevelNames = specs.filter((spec) => !spec.child).map((spec) => spec.name).sort();
+assert.deepEqual(
+  [...pythonContracts.matrixNames].sort(),
+  topLevelNames,
+  "access_control.py must define least-privilege access for every top-level DocType",
+);
+
+const controllerKinds = new Set();
 
 for (const spec of specs) {
   const doc = docs.get(spec.name);
@@ -324,6 +557,12 @@ for (const spec of specs) {
   assert.equal(doc.name, spec.name);
   assert.equal(doc.module, "IronWrap Roofing");
   assert.equal(doc.istable ? 1 : 0, spec.child ? 1 : 0, `${spec.name} istable mismatch`);
+  assert.equal(fields.size, doc.fields.length, `${spec.name} has duplicate field names`);
+  assert.deepEqual(
+    [...new Set(doc.field_order)].sort(),
+    [...fields.keys()].sort(),
+    `${spec.name} fields and field_order must describe the same contract`,
+  );
 
   if (spec.idField) {
     assert.equal(doc.autoname, `field:${spec.idField}`, `${spec.name} autoname`);
@@ -337,13 +576,36 @@ for (const spec of specs) {
     assert.ok(doc.field_order.includes(name), `${spec.name} field_order missing: ${name}`);
   }
 
+  for (const [fieldName, contract] of Object.entries(spec.fieldContracts ?? {})) {
+    const field = fields.get(fieldName);
+    assert.ok(field, `${spec.name} missing contracted field: ${fieldName}`);
+    for (const [property, expected] of Object.entries(contract)) {
+      assert.equal(
+        field[property],
+        expected,
+        `${spec.name}.${fieldName}.${property} contract mismatch`,
+      );
+    }
+  }
+
   for (const field of doc.fields) {
     if (field.fieldtype !== "Link" && field.fieldtype !== "Table") continue;
     const target = field.options;
     assert.ok(target, `${spec.name}.${field.fieldname} missing link/table target`);
     assert.ok(localDoctypes.has(target) || frappeCoreTargets.has(target), `${spec.name}.${field.fieldname} unknown target: ${target} (only owned DocTypes and MIT Frappe core targets are allowed)`);
   }
+
+  validatePermissions(spec, doc);
+  validateController(spec, fields);
 }
+
+assert.deepEqual(
+  [...controllerKinds].sort(),
+  [...pythonContracts.identityKinds].sort(),
+  "domain_policy.py identity policies must exactly cover the top-level DocType controllers",
+);
+
+validateRuntimeWiring();
 
 function readDoc(dir) {
   const path = join(root, doctypeRoot, dir, `${dir}.json`);
@@ -351,4 +613,156 @@ function readDoc(dir) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-console.log(`ok ${specs.length} IronWrap ERPNext DocTypes validated`);
+function readPythonContracts() {
+  const accessControlPath = join(root, appRoot, "access_control.py");
+  const domainPolicyPath = join(root, appRoot, "domain_policy.py");
+  assert.ok(existsSync(accessControlPath), `missing access-control contract: ${accessControlPath}`);
+  assert.ok(existsSync(domainPolicyPath), `missing domain-policy contract: ${domainPolicyPath}`);
+
+  const source = String.raw`
+import json
+import runpy
+import sys
+
+access = runpy.run_path(sys.argv[1])
+domain = runpy.run_path(sys.argv[2])
+matrix = access["DOCTYPE_ROLE_MATRIX"]
+print(json.dumps({
+    "roles": access["IRONWRAP_ROLES"],
+    "matrix_names": list(matrix),
+    "expected_permissions": {
+        name: access["expected_permissions"](name) for name in matrix
+    },
+    "identity_kinds": list(domain["IDENTITY_FIELDS"]),
+    "identity_fields": domain["IDENTITY_FIELDS"],
+}))
+`;
+
+  let output;
+  try {
+    output = execFileSync("python3", ["-c", source, accessControlPath, domainPolicyPath], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const detail = error?.stderr?.toString().trim() || error.message;
+    assert.fail(`unable to load Python production contracts: ${detail}`);
+  }
+  const parsed = JSON.parse(output);
+  return {
+    roles: parsed.roles,
+    matrixNames: parsed.matrix_names,
+    expectedPermissions: parsed.expected_permissions,
+    identityKinds: parsed.identity_kinds,
+    identityFields: parsed.identity_fields,
+  };
+}
+
+function normalizedPermissions(rows) {
+  return rows
+    .map((row) => Object.fromEntries(Object.entries(row).sort(([left], [right]) => left.localeCompare(right))))
+    .sort((left, right) => left.role.localeCompare(right.role));
+}
+
+function validatePermissions(spec, doc) {
+  const permissions = doc.permissions ?? [];
+  if (spec.child) {
+    assert.deepEqual(permissions, [], `${spec.name} child tables must not grant direct access`);
+    return;
+  }
+
+  const expected = pythonContracts.expectedPermissions[spec.name];
+  assert.ok(expected, `${spec.name} missing from access_control.py permission contract`);
+  assert.deepEqual(
+    normalizedPermissions(permissions),
+    normalizedPermissions(expected),
+    `${spec.name} permissions diverge from access_control.py`,
+  );
+
+  const allowedRoles = new Set(["System Manager", ...canonicalIronWrapRoles]);
+  const roles = permissions.map((row) => row.role);
+  assert.equal(new Set(roles).size, roles.length, `${spec.name} has duplicate permission roles`);
+  assert.ok(roles.includes("System Manager"), `${spec.name} must retain System Manager access`);
+  assert.ok(roles.includes("IronWrap Owner"), `${spec.name} must retain owner-operator access`);
+  for (const row of permissions) {
+    assert.ok(allowedRoles.has(row.role), `${spec.name} grants non-canonical role ${row.role}`);
+    assert.notEqual(row.delete, 1, `${spec.name} must never grant delete to ${row.role}`);
+    if (row.role !== "System Manager") {
+      assert.notEqual(row.export, 1, `${spec.name} must not grant export to ${row.role}`);
+      assert.notEqual(row.import, 1, `${spec.name} must not grant import to ${row.role}`);
+      assert.notEqual(row.share, 1, `${spec.name} must not grant share to ${row.role}`);
+    }
+  }
+}
+
+function validateController(spec, fields) {
+  const path = join(root, doctypeRoot, spec.dir, `${spec.dir}.py`);
+  assert.ok(existsSync(path), `missing DocType controller: ${path}`);
+  const source = readFileSync(path, "utf8");
+  const sharedImport = /from\s+ironwrap_roofing\.document_validation\s+import\s+validate_business_document/;
+  const sharedCall = new RegExp(
+    `validate_business_document\\s*\\(\\s*self\\s*,\\s*["']${spec.dir}["']\\s*\\)`,
+  );
+
+  if (spec.child) {
+    assert.ok(!sharedCall.test(source), `${spec.name} child validation belongs to its owning parent`);
+    return;
+  }
+
+  assert.match(source, sharedImport, `${spec.name} controller must import shared validation`);
+  assert.match(source, /def\s+validate\s*\(\s*self\s*\)/, `${spec.name} controller must validate before save`);
+  assert.match(source, sharedCall, `${spec.name} controller must validate with kind ${spec.dir}`);
+  assert.equal(
+    [...source.matchAll(/validate_business_document\s*\(/g)].length,
+    1,
+    `${spec.name} controller must call shared validation exactly once`,
+  );
+  assert.ok(pythonContracts.identityKinds.includes(spec.dir), `${spec.name} has no identity policy`);
+  for (const fieldName of pythonContracts.identityFields[spec.dir] ?? []) {
+    assert.ok(fields.has(fieldName), `${spec.name} identity policy references missing field ${fieldName}`);
+  }
+  controllerKinds.add(spec.dir);
+}
+
+function validateRuntimeWiring() {
+  const paths = {
+    accessControl: join(root, appRoot, "access_control.py"),
+    documentValidation: join(root, appRoot, "document_validation.py"),
+    domainPolicy: join(root, appRoot, "domain_policy.py"),
+    hooks: join(root, appRoot, "hooks.py"),
+    install: join(root, appRoot, "install.py"),
+  };
+  for (const [name, path] of Object.entries(paths)) {
+    assert.ok(existsSync(path), `missing ${name} runtime contract: ${path}`);
+  }
+
+  const hooks = readFileSync(paths.hooks, "utf8");
+  const hookContracts = {
+    before_install: "ironwrap_roofing.install.before_install",
+    after_install: "ironwrap_roofing.install.after_install",
+    before_migrate: "ironwrap_roofing.install.before_migrate",
+  };
+  for (const [hook, target] of Object.entries(hookContracts)) {
+    const assignment = new RegExp(`^${hook}\\s*=\\s*["']${target}["']\\s*$`, "m");
+    assert.match(hooks, assignment, `${hook} must reconcile IronWrap roles through ${target}`);
+  }
+
+  const install = readFileSync(paths.install, "utf8");
+  assert.match(install, /from\s+ironwrap_roofing\.access_control\s+import\s+IRONWRAP_ROLES/);
+  assert.match(install, /def\s+ensure_roles\s*\(\s*\)/, "install.py must expose idempotent role reconciliation");
+  assert.match(install, /for\s+role_name\s+in\s+IRONWRAP_ROLES/, "role reconciliation must cover every canonical role");
+  assert.match(install, /def\s+before_install\s*\(\s*\)/, "install.py must expose before_install");
+  assert.match(install, /def\s+before_migrate\s*\(\s*\)/, "install.py must expose before_migrate");
+  assert.match(install, /def\s+after_install\s*\(\s*\)/, "install.py must expose after_install");
+  assert.equal(
+    [...install.matchAll(/^\s+ensure_roles\(\)\s*$/gm)].length,
+    2,
+    "initial install and migrations must both run role reconciliation",
+  );
+
+  const adapter = readFileSync(paths.documentValidation, "utf8");
+  assert.match(adapter, /from\s+ironwrap_roofing\.domain_policy\s+import\s+PolicyViolation,\s+validate_record/);
+  assert.match(adapter, /def\s+validate_business_document\s*\(/, "shared Frappe validation adapter is missing");
+}
+
+console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (29 top-level + 4 child)`);

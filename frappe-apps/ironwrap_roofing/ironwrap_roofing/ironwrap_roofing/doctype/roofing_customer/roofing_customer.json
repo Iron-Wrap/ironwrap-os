@@ -40,7 +40,14 @@
   "naming_rule": "By fieldname",
   "owner": "Administrator",
   "permissions": [
-    { "create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1 }
+    {"create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Owner", "write": 1},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Sales", "write": 1},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Estimator"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Production"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Finance"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Closeout"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support"}
   ],
   "sort_field": "modified",
   "sort_order": "DESC",

@@ -4,3 +4,7 @@ app_publisher = "IronWrap Exteriors"
 app_description = "Roofing operating DocTypes for IronWrap OS"
 app_email = "sales@ironwrapexteriors.com"
 app_license = "Proprietary"
+
+before_install = "ironwrap_roofing.install.before_install"
+after_install = "ironwrap_roofing.install.after_install"
+before_migrate = "ironwrap_roofing.install.before_migrate"

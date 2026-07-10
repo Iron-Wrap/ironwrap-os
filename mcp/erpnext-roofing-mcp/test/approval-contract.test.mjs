@@ -123,3 +123,29 @@ test("semantic preview excludes generated safety acknowledgement timestamps", ()
   });
   assert.equal(digest(firstPreview), digest(replayedPreview));
 });
+
+test("approval receipts require a short, non-future issuance window", () => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const receipt = signApprovalReceipt(privateKey, {
+    write_tool: "request_update_gate",
+    dry_run_receipt: "dry-run-receipt",
+    agent_role: "owner-operator",
+    actor_user: "owner@example.com",
+    site_id: "site:ironwrap-1",
+    run_id: "run-approval-0002",
+    approved_by: "owner@example.com",
+    args_digest: "a".repeat(64),
+    issued_at: new Date(Date.now() - 11 * 60_000).toISOString(),
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+  });
+  assert.throws(() => verifyApprovalReceipt(publicKey, receipt, {
+    write_tool: "request_update_gate",
+    dry_run_receipt: "dry-run-receipt",
+    agent_role: "owner-operator",
+    actor_user: "owner@example.com",
+    site_id: "site:ironwrap-1",
+    run_id: "run-approval-0002",
+    approved_by: "owner@example.com",
+    args_digest: "a".repeat(64),
+  }), /hermes_approval_receipt_window_invalid/);
+});

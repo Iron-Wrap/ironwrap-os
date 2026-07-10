@@ -240,6 +240,10 @@ test("lead triage requires matching receipts, patches only local fields, and rep
   assert.equal(dryRun.communication_events_mutated, false);
   assert.equal(dryRun.patch.triaged_by, "owner@example.com");
   assert.equal("status" in dryRun.patch, false);
+  assert.equal(dryRun.approval_request.args_digest, digest(baseArgs));
+  const undecoratedDryRun = { ...dryRun };
+  delete undecoratedDryRun.approval_request;
+  assert.equal(dryRun.approval_request.preview_digest, digest(semanticPreview(undecoratedDryRun)));
 
   const writeArgs = {
     ...baseArgs,

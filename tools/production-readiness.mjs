@@ -13,6 +13,7 @@ const REQUIRED_DEPLOY_FILES = [
   "deploy/apps.example.json",
   "deploy/env.example",
   "deploy/cloudflared-config.example.yml",
+  "deploy/approval-broker.service.example",
   "deploy/backup-to-r2.sh",
   "deploy/restore-from-r2.sh",
   "deploy/backup-d1-to-r2.sh",
@@ -323,6 +324,8 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   const cloudflared = contents.get("deploy/cloudflared-config.example.yml") ?? "";
   checks.push(check("contract.tunnel.fallback", /- service:\s*http_status:404\s*$/m.test(cloudflared), "Tunnel template has a fail-closed 404 fallback", "Tunnel template must end with an HTTP 404 fallback"));
   checks.push(check("contract.tunnel.local_origin", /service:\s*http:\/\/(?:127\.0\.0\.1|localhost):8080/.test(cloudflared), "Tunnel origin stays on the local host", "Tunnel origin must target localhost port 8080"));
+  const approvalBrokerService = contents.get("deploy/approval-broker.service.example") ?? "";
+  checks.push(check("contract.approval_broker.service", approvalBrokerService.includes("User=ironwrap-broker") && approvalBrokerService.includes("EnvironmentFile=/etc/ironwrap/approval-broker.env") && approvalBrokerService.includes("approval-broker.mjs") && approvalBrokerService.includes("NoNewPrivileges=true") && approvalBrokerService.includes("ProtectSystem=strict") && approvalBrokerService.includes("UMask=0077"), "approval broker service is least-privilege and environment-file scoped", "approval broker service must run under a dedicated account with no-new-privileges, strict filesystem protection, and a root-owned environment file"));
 
   const backup = contents.get("deploy/backup-to-r2.sh") ?? "";
   checks.push(check("contract.backup.safety", backup.includes("set -euo pipefail") && backup.includes("set +x") && backup.includes("umask 077") && backup.includes("this command accepts no arguments") && backup.includes("mktemp -d") && backup.includes("trap cleanup EXIT") && backup.includes("flock -n"), "backup script uses fail-closed input, temporary-file, and concurrency controls", "backup script lacks fail-closed input, temporary-file, or concurrency controls"));

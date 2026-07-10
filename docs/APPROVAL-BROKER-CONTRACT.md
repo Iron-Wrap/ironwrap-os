@@ -72,6 +72,8 @@ arbitrary broker/MCP output.
    and bound approver identity are configured in the MCP host.
 2. Worker-to-broker HTTPS is HMAC authenticated in both directions with a
    short timestamp window; browser origins are never accepted by the broker.
+   The service binds loopback only and is reached through a separately scoped,
+   TLS-protected internal tunnel/Access path.
 3. Broker request, execution, expiry, denial, conflicting decision,
    unauthorized identity, stale preview, audit-failure, and ambiguous-network
    paths have deterministic tests.

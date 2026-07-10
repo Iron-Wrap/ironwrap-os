@@ -1,0 +1,674 @@
+import assert from "node:assert/strict";
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import test from "node:test";
+import {
+  DEFAULT_REPO_ROOT,
+  renderHuman,
+  validateContract,
+  validateLiveEnv,
+} from "./production-readiness.mjs";
+
+const TOOL = path.join(DEFAULT_REPO_ROOT, "tools/production-readiness.mjs");
+const HOST_PREFLIGHT = path.join(DEFAULT_REPO_ROOT, "deploy/host-preflight.sh");
+const BACKUP = path.join(DEFAULT_REPO_ROOT, "deploy/backup-to-r2.sh");
+const RESTORE = path.join(DEFAULT_REPO_ROOT, "deploy/restore-from-r2.sh");
+const BUILD = path.join(DEFAULT_REPO_ROOT, "deploy/build-production-image.sh");
+
+async function writeExecutable(file, source) {
+  await writeFile(file, source);
+  await chmod(file, 0o755);
+}
+
+async function mockBackupEnvironment(t, { failCopy = false, signalCopy = false } = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-backup-test-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  const state = path.join(root, "state");
+  await Promise.all([mkdir(bin), mkdir(state)]);
+
+  await writeExecutable(path.join(bin, "docker"), `#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-}" in
+  inspect) exit 0 ;;
+  exec)
+    if [[ "\${3:-}" == "find" ]]; then
+      if [[ -f "$MOCK_STATE/created" ]]; then
+        printf '%s\\n' \\
+          '20260710_120000-os_ironwrapexteriors_com-database.sql.gz' \\
+          '20260710_120000-os_ironwrapexteriors_com-files.tar' \\
+          '20260710_120000-os_ironwrapexteriors_com-private-files.tar' \\
+          '20260710_120000-os_ironwrapexteriors_com-site_config_backup.json'
+      fi
+    elif [[ "\${3:-}" == "bench" ]]; then
+      : > "$MOCK_STATE/created"
+    else
+      exit 2
+    fi
+    ;;
+  cp)
+    source_path="\${2:-}"
+    destination="\${@: -1}"
+    [[ "\${source_path##*/}" == "\${destination##*/}" ]] || exit 2
+    mkdir -p "\${destination%/*}"
+    printf 'backup-data\\n' > "$destination"
+    ;;
+  *) exit 2 ;;
+esac
+`);
+  await writeExecutable(path.join(bin, "age"), `#!/usr/bin/env bash
+set -euo pipefail
+output=''
+input=''
+while (( $# > 0 )); do
+  case "$1" in
+    --output) output="$2"; shift 2 ;;
+    --recipient) shift 2 ;;
+    --encrypt) shift ;;
+    *) input="$1"; shift ;;
+  esac
+done
+cp "$input" "$output"
+`);
+  await writeExecutable(path.join(bin, "tar"), `#!/usr/bin/env bash
+set -euo pipefail
+output=''
+while (( $# > 0 )); do
+  if [[ "$1" == '--file' ]]; then output="$2"; shift 2; else shift; fi
+done
+printf 'mock-archive\\n' > "$output"
+`);
+  await writeExecutable(path.join(bin, "flock"), "#!/usr/bin/env bash\nexit 0\n");
+  await writeExecutable(path.join(bin, "rclone"), `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "\${1:-}" >> "$MOCK_STATE/rclone.log"
+if [[ "\${1:-}" == 'copy' && "\${MOCK_FAIL_COPY:-0}" == '1' ]]; then exit 9; fi
+if [[ "\${1:-}" == 'copy' && "\${MOCK_SIGNAL_COPY:-0}" == '1' ]]; then kill -TERM "$PPID"; fi
+exit 0
+`);
+
+  return {
+    root,
+    state,
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      TMPDIR: root,
+      MOCK_STATE: state,
+      MOCK_FAIL_COPY: failCopy ? "1" : "0",
+      MOCK_SIGNAL_COPY: signalCopy ? "1" : "0",
+      FRAPPE_SITE: "os.ironwrapexteriors.com",
+      BACKEND_CONTAINER: "frappe-backend-1",
+      R2_BACKUP_BUCKET: "ironwrap-backups-prod",
+      RCLONE_CONFIG_R2_TYPE: "s3",
+      RCLONE_CONFIG_R2_PROVIDER: "Cloudflare",
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: "r2_access_31a68f02",
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: "r2_secret_97c63bd012ab45f6a1e8029f",
+      RCLONE_CONFIG_R2_ENDPOINT: "https://a1b2c3d4.r2.cloudflarestorage.com",
+      BACKUP_AGE_RECIPIENT: `age1${"q".repeat(58)}`,
+      IRONWRAP_OS_IMAGE: `registry.ironwrap.internal/ironwrap-os:v1@sha256:${"a".repeat(64)}`,
+      BACKUP_RETENTION_DAYS: "30",
+    },
+  };
+}
+
+async function mockRestoreEnvironment(t, {
+  badChecksum = false,
+  manifestSite = "os.ironwrapexteriors.com",
+  archiveLink = false,
+  failRestore = false,
+  markerPresent = true,
+  targetImageMismatch = false,
+  targetNetworkInternal = true,
+  targetPortsPublished = false,
+  targetRootReady = true,
+} = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-restore-test-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  const state = path.join(root, "state");
+  const remote = path.join(root, "remote");
+  const source = path.join(root, "source");
+  await Promise.all([mkdir(bin), mkdir(state), mkdir(remote), mkdir(source)]);
+
+  const stamp = "20260710T120000Z";
+  const prefix = "20260710_120000-os_ironwrapexteriors_com";
+  const image = `registry.ironwrap.internal/ironwrap-os:v1@sha256:${"a".repeat(64)}`;
+  const names = {
+    database: `${prefix}-database.sql.gz`,
+    siteConfig: `${prefix}-site_config_backup.json`,
+    publicFiles: `${prefix}-files.tar`,
+    privateFiles: `${prefix}-private-files.tar`,
+  };
+  await writeFile(path.join(source, names.database), "database-backup\n");
+  await writeFile(path.join(source, names.siteConfig), `${JSON.stringify({
+    db_name: "production_db",
+    encryption_key: "FrappeBackupEncryptionKey_20260710_Stable",
+  })}\n`);
+  await writeFile(path.join(source, names.publicFiles), "public-file-backup\n");
+  await writeFile(path.join(source, names.privateFiles), "private-file-backup\n");
+  await writeFile(path.join(source, "IRONWRAP-BACKUP-MANIFEST.txt"), [
+    "schema_version=1",
+    `created_utc=${stamp}`,
+    `site=${manifestSite}`,
+    "format=frappe-v15-bench-backup",
+    "encrypted=true",
+    `image=${image}`,
+    `database_file=${names.database}`,
+    `site_config_file=${names.siteConfig}`,
+    `public_files_file=${names.publicFiles}`,
+    `private_files_file=${names.privateFiles}`,
+    "",
+  ].join("\n"));
+  const archiveEntries = ["IRONWRAP-BACKUP-MANIFEST.txt", names.database, names.siteConfig, names.publicFiles, names.privateFiles];
+  if (archiveLink) {
+    await rm(path.join(source, names.publicFiles));
+    await symlink(names.database, path.join(source, names.publicFiles));
+  }
+  const archiveName = `ironwrap-os.ironwrapexteriors.com-${stamp}.tar.gz.age`;
+  const archivePath = path.join(remote, archiveName);
+  const tarRun = spawnSync("tar", ["-czf", archivePath, "-C", source, ...archiveEntries], { encoding: "utf8" });
+  assert.equal(tarRun.status, 0, tarRun.stderr);
+  const archiveBytes = await readFile(archivePath);
+  const digest = createHash("sha256").update(archiveBytes).digest("hex");
+  await writeFile(path.join(remote, `${archiveName}.sha256`), `${badChecksum ? "b".repeat(64) : digest}  ${archiveName}\n`);
+  if (markerPresent) {
+    await writeFile(path.join(remote, "IRONWRAP-BACKUP-COMPLETE"), [
+      "schema_version=1",
+      `created_utc=${stamp}`,
+      `archive=${archiveName}`,
+      `checksum=${archiveName}.sha256`,
+      "",
+    ].join("\n"));
+  }
+  const identity = path.join(root, "age-identity.txt");
+  await writeFile(identity, "AGE-SECRET-KEY-MOCK\n", { mode: 0o600 });
+  await chmod(identity, 0o600);
+
+  await writeExecutable(path.join(bin, "rclone"), `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "\${1:-}" >> "$MOCK_STATE/rclone.log"
+case "\${1:-}" in
+  cat)
+    file="\${2##*/}"
+    [[ -f "$MOCK_REMOTE/$file" ]] || exit 4
+    /bin/cat "$MOCK_REMOTE/$file"
+    ;;
+  copyto)
+    file="\${2##*/}"
+    [[ -f "$MOCK_REMOTE/$file" ]] || exit 4
+    /bin/cp "$MOCK_REMOTE/$file" "$3"
+    ;;
+  *) exit 2 ;;
+esac
+`);
+  await writeExecutable(path.join(bin, "age"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'decrypt\n' >> "$MOCK_STATE/age.log"
+output=''
+input=''
+while (( $# > 0 )); do
+  case "$1" in
+    --output) output="$2"; shift 2 ;;
+    --identity) shift 2 ;;
+    --decrypt) shift ;;
+    *) input="$1"; shift ;;
+  esac
+done
+/bin/cp "$input" "$output"
+`);
+  await writeExecutable(path.join(bin, "flock"), "#!/usr/bin/env bash\nexit 0\n");
+  await writeExecutable(path.join(bin, "docker"), `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$MOCK_STATE/docker.log"
+case "\${1:-}" in
+  inspect)
+    if [[ "\${2:-}" == '--format' && "\${3:-}" == *'restore-target'* ]]; then
+      printf 'true\n'
+    elif [[ "\${2:-}" == '--format' && "\${3:-}" == *'Config.Image'* ]]; then
+      printf '%s\n' "$MOCK_TARGET_IMAGE"
+    elif [[ "\${2:-}" == '--format' && "\${3:-}" == *'NetworkSettings.Networks'* ]]; then
+      printf '{"restore_internal":{}}\n'
+    fi
+    ;;
+  network)
+    [[ "\${2:-}" == 'inspect' ]] || exit 2
+    printf '%s\n' "$MOCK_TARGET_NETWORK_INTERNAL"
+    ;;
+  port)
+    if [[ "$MOCK_TARGET_PORTS_PUBLISHED" == '1' ]]; then
+      printf '8080/tcp -> 0.0.0.0:18080\n'
+    fi
+    ;;
+  exec)
+    shift 2
+    case "\${1:-}" in
+      test) exit 0 ;;
+      python3)
+        if [[ "$*" == *'root-ready'* ]]; then
+          printf '%s\n' "$MOCK_TARGET_CONFIG_STATUS"
+        elif [[ "$*" == *'encryption_key'* ]]; then
+          exit 0
+        else
+          exit 2
+        fi
+        ;;
+      mktemp) printf '/tmp/ironwrap-restore.Mock1234\n' ;;
+      rm) exit 0 ;;
+      bench)
+        if [[ "$*" == *' restore '* && "\${MOCK_FAIL_RESTORE:-0}" == '1' ]]; then exit 19; fi
+        ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  cp) exit 0 ;;
+  *) exit 2 ;;
+esac
+`);
+
+  return {
+    root,
+    state,
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      TMPDIR: root,
+      MOCK_STATE: state,
+      MOCK_REMOTE: remote,
+      MOCK_FAIL_RESTORE: failRestore ? "1" : "0",
+      MOCK_TARGET_IMAGE: targetImageMismatch ? `registry.ironwrap.internal/ironwrap-os:v2@sha256:${"b".repeat(64)}` : image,
+      MOCK_TARGET_NETWORK_INTERNAL: targetNetworkInternal ? "true" : "false",
+      MOCK_TARGET_PORTS_PUBLISHED: targetPortsPublished ? "1" : "0",
+      MOCK_TARGET_CONFIG_STATUS: `restore_drill_db|${targetRootReady ? "root-ready" : "root-missing"}`,
+      FRAPPE_SITE: "os.ironwrapexteriors.com",
+      BACKEND_CONTAINER: "frappe-backend-1",
+      R2_BACKUP_BUCKET: "ironwrap-backups-prod",
+      RCLONE_CONFIG_R2_TYPE: "s3",
+      RCLONE_CONFIG_R2_PROVIDER: "Cloudflare",
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: "r2_access_31a68f02",
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: "r2_secret_97c63bd012ab45f6a1e8029f",
+      RCLONE_CONFIG_R2_ENDPOINT: "https://a1b2c3d4.r2.cloudflarestorage.com",
+      IRONWRAP_OS_IMAGE: image,
+      RESTORE_R2_COMPLETED_PREFIX: "os.ironwrapexteriors.com/20260710T120000Z-1234-5678",
+      RESTORE_AGE_IDENTITY_FILE: identity,
+      RESTORE_TARGET_SITE: "restore-drill.ironwrap.invalid",
+      RESTORE_TARGET_CONTAINER: "frappe-restore-drill-1",
+      RESTORE_CONFIRMATION: "",
+    },
+  };
+}
+
+function validLiveEnv() {
+  const adminToken = "admin_7f9e4c21b6a348d5a8f0c2e4";
+  return {
+    FRAPPE_VERSION: "v15.114.0",
+    FRAPPE_COMMIT: "105b17938839f4e5c6cdff817d42afc40c3bcc32",
+    FRAPPE_DOCKER_VERSION: "v3.2.1",
+    FRAPPE_DOCKER_COMMIT: "d4a310089f5d6fc38ed1317b898d75b9c74901db",
+    HERMES_VERSION: "v2026.7.7.2",
+    HERMES_COMMIT: "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+    IRONWRAP_OS_IMAGE: `registry.ironwrap.internal/ironwrap-os:prod@sha256:${"a".repeat(64)}`,
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://os.ironwrapexteriors.com",
+    ERPNEXT_API_KEY: "frappe_key_8c921",
+    ERPNEXT_API_SECRET: "frappe_secret_d1a9f80c42",
+    IRONWRAP_BUS_BASE_URL: "https://bus.ironwrapexteriors.com",
+    IRONWRAP_ADMIN_TOKEN: adminToken,
+    IRONWRAP_BUS_WRITE_ENABLED: "false",
+    ERPNEXT_WRITE_ENABLED: "false",
+    HERMES_WRITE_TOKEN: "approval_1d9a84f620be4c7a936820d5ef31",
+    IRONWRAP_BUS_REQUEST_TIMEOUT_MS: "10000",
+    ERPNEXT_REQUEST_TIMEOUT_MS: "10000",
+    BUS_BASE_URL: "https://bus.ironwrapexteriors.com",
+    INGEST_TOKEN: "ingest_4ef90c12a86b43d1ab75f3e8",
+    ADMIN_TOKEN: adminToken,
+    FRAPPE_SITE: "os.ironwrapexteriors.com",
+    BACKEND_CONTAINER: "frappe-backend-1",
+    RCLONE_CONFIG_R2_TYPE: "s3",
+    RCLONE_CONFIG_R2_PROVIDER: "Cloudflare",
+    RCLONE_CONFIG_R2_ACCESS_KEY_ID: "r2_access_31a68f02",
+    RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: "r2_secret_97c63bd012ab45f6a1e8029f",
+    RCLONE_CONFIG_R2_ENDPOINT: "https://a1b2c3d4.r2.cloudflarestorage.com",
+    R2_BACKUP_BUCKET: "ironwrap-backups-prod",
+    BACKUP_RETENTION_DAYS: "30",
+    BACKUP_AGE_RECIPIENT: `age1${"q".repeat(58)}`,
+    RESTORE_R2_COMPLETED_PREFIX: "os.ironwrapexteriors.com/20260710T120000Z-1234-5678",
+    RESTORE_AGE_IDENTITY_FILE: "/secure/ironwrap/restore-age-identity.txt",
+    RESTORE_TARGET_SITE: "restore-drill.ironwrap.invalid",
+    RESTORE_TARGET_CONTAINER: "frappe-restore-drill-1",
+    RESTORE_CONFIRMATION: "",
+  };
+}
+
+test("repository deployment contract is complete and Frappe-only", async () => {
+  const result = await validateContract();
+  assert.equal(result.ok, true, renderHuman(result));
+  assert.equal(result.summary.failed, 0);
+});
+
+test("contract mode rejects a floating runtime reference", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
+  const lockPath = path.join(root, "deploy/runtime-lock.json");
+  const lock = JSON.parse(await readFile(lockPath, "utf8"));
+  lock.components.hermes.version = "main";
+  await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+
+  const result = await validateContract({ repoRoot: root });
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.find((item) => item.id === "contract.lock.hermes.version")?.status, "fail");
+});
+
+test("contract mode rejects an overridable container pin", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
+  const containerfilePath = path.join(root, "deploy/Containerfile.frappe");
+  const containerfile = await readFile(containerfilePath, "utf8");
+  await writeFile(containerfilePath, `${containerfile}\nARG FRAPPE_BASE_IMAGE\n`);
+
+  const result = await validateContract({ repoRoot: root });
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.find((item) => item.id === "contract.container.non_overridable")?.status, "fail");
+});
+
+test("live-env mode accepts a complete locked production environment", async () => {
+  const result = await validateLiveEnv({ env: validLiveEnv() });
+  assert.equal(result.ok, true, renderHuman(result));
+  assert.equal(result.summary.failed, 0);
+});
+
+test("live-env mode refuses to trust an invalid repository contract", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
+  const lockPath = path.join(root, "deploy/runtime-lock.json");
+  const lock = JSON.parse(await readFile(lockPath, "utf8"));
+  lock.policy.erpnext = "allowed";
+  await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+
+  const result = await validateLiveEnv({ env: validLiveEnv(), repoRoot: root });
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.find((item) => item.id === "live.contract")?.status, "fail");
+});
+
+test("live-env mode fails closed on placeholders, HTTP URLs, and implicit gates", async () => {
+  const env = validLiveEnv();
+  env.ERPNEXT_API_SECRET = "<frappe-api-secret>";
+  env.ERPNEXT_BASE_URL = "http://os.ironwrapexteriors.com";
+  env.ERPNEXT_WRITE_ENABLED = "yes";
+  env.IRONWRAP_BUS_REQUEST_TIMEOUT_MS = "0";
+  env.BACKUP_AGE_RECIPIENT = "<age-recipient>";
+
+  const result = await validateLiveEnv({ env });
+  assert.equal(result.ok, false);
+  for (const id of [
+    "live.env.ERPNEXT_API_SECRET",
+    "live.url.ERPNEXT_BASE_URL",
+    "live.gate.ERPNEXT_WRITE_ENABLED",
+    "live.timeout.IRONWRAP_BUS_REQUEST_TIMEOUT_MS",
+    "live.backup.encryption",
+  ]) {
+    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
+  }
+});
+
+test("live-env mode aligns backup inputs with the executable backup contract", async () => {
+  const env = validLiveEnv();
+  env.RCLONE_CONFIG_R2_ENDPOINT = "https://a1b2c3d4.r2.cloudflarestorage.com/unexpected";
+  env.BACKUP_RETENTION_DAYS = "30.0";
+  env.FRAPPE_SITE = "other.ironwrapexteriors.com";
+  env.HERMES_WRITE_TOKEN = env.ERPNEXT_API_SECRET;
+
+  const result = await validateLiveEnv({ env });
+  assert.equal(result.ok, false);
+  for (const id of [
+    "live.backup.endpoint",
+    "live.backup.retention",
+    "live.url.site_consistency",
+    "live.secret.separation",
+  ]) {
+    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
+  }
+});
+
+test("validator output never includes supplied secret values", async () => {
+  const env = validLiveEnv();
+  const secretValue = "do-not-print-this-sensitive-value";
+  env.ADMIN_TOKEN = secretValue;
+  env.IRONWRAP_ADMIN_TOKEN = secretValue;
+  env.ERPNEXT_BASE_URL = `https://${secretValue}@os.ironwrapexteriors.com`;
+
+  const result = await validateLiveEnv({ env });
+  assert.equal(result.ok, false);
+  assert.equal(JSON.stringify(result).includes(secretValue), false);
+  assert.equal(renderHuman(result).includes(secretValue), false);
+});
+
+test("CLI emits machine-readable JSON and an accurate exit code", () => {
+  const run = spawnSync(process.execPath, [TOOL, "contract", "--json"], {
+    cwd: DEFAULT_REPO_ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(run.status, 0, run.stderr);
+  const result = JSON.parse(run.stdout);
+  assert.equal(result.mode, "contract");
+  assert.equal(result.ok, true);
+  assert.equal(result.summary.failed, 0);
+});
+
+test("live-env CLI supports JSON and human output modes", () => {
+  const env = { ...process.env, ...validLiveEnv() };
+  const jsonRun = spawnSync(process.execPath, [TOOL, "live-env", "--json"], {
+    cwd: DEFAULT_REPO_ROOT,
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(jsonRun.status, 0, jsonRun.stderr);
+  const result = JSON.parse(jsonRun.stdout);
+  assert.equal(result.mode, "live-env");
+  assert.equal(result.ok, true);
+
+  const humanRun = spawnSync(process.execPath, [TOOL, "live-env"], {
+    cwd: DEFAULT_REPO_ROOT,
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(humanRun.status, 0, humanRun.stderr);
+  assert.match(humanRun.stdout, /READY: \d+ passed, 0 failed/);
+});
+
+test("live-env CLI fails closed without printing a supplied secret", () => {
+  const secretValue = "cli-secret-that-must-never-be-printed";
+  const env = { ...process.env, ...validLiveEnv(), ERPNEXT_API_SECRET: secretValue, ERPNEXT_BASE_URL: `https://${secretValue}@os.ironwrapexteriors.com` };
+  const run = spawnSync(process.execPath, [TOOL, "live-env", "--json"], {
+    cwd: DEFAULT_REPO_ROOT,
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(run.status, 1);
+  assert.equal(`${run.stdout}${run.stderr}`.includes(secretValue), false);
+  assert.equal(JSON.parse(run.stdout).ok, false);
+});
+
+test("backup commits its completion marker only after upload verification", async (t) => {
+  const mock = await mockBackupEnvironment(t);
+  const run = spawnSync("bash", [BACKUP], { encoding: "utf8", env: mock.env });
+  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+  const operations = (await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n");
+  assert.deepEqual(operations.slice(0, 3), ["copy", "check", "copyto"]);
+  assert.deepEqual(operations.slice(3), ["delete", "delete", "rmdirs"]);
+  assert.equal(operations.includes("purge"), false);
+  assert.match(run.stdout, /restore-ready Frappe backup committed and verified/);
+  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-backup.")), false);
+});
+
+test("backup purges an incomplete remote prefix and local plaintext on failure", async (t) => {
+  const mock = await mockBackupEnvironment(t, { failCopy: true });
+  const run = spawnSync("bash", [BACKUP], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  const output = `${run.stdout}${run.stderr}`;
+  for (const name of ["RCLONE_CONFIG_R2_ACCESS_KEY_ID", "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"]) {
+    assert.equal(output.includes(mock.env[name]), false, name);
+  }
+  const operations = (await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n");
+  assert.deepEqual(operations, ["copy", "purge"]);
+  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-backup.")), false);
+});
+
+test("backup signal traps exit and purge the incomplete remote prefix", async (t) => {
+  const mock = await mockBackupEnvironment(t, { signalCopy: true });
+  const run = spawnSync("bash", [BACKUP], { encoding: "utf8", env: mock.env });
+  assert.equal(run.status, 143, `${run.stdout}${run.stderr}`);
+  const operations = (await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n");
+  assert.deepEqual(operations, ["copy", "purge"]);
+  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-backup.")), false);
+});
+
+test("backup rejects configuration in argv without echoing it", () => {
+  const secretValue = "backup-argv-secret-that-must-not-be-printed";
+  const run = spawnSync("bash", [BACKUP, secretValue], { encoding: "utf8" });
+  assert.equal(run.status, 64);
+  assert.equal(`${run.stdout}${run.stderr}`.includes(secretValue), false);
+});
+
+test("restore verification validates a completed encrypted package without mutation", async (t) => {
+  const mock = await mockRestoreEnvironment(t);
+  const run = spawnSync("bash", [RESTORE], { encoding: "utf8", env: mock.env });
+  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+  assert.match(run.stdout, /cryptographically verified.*no restore mutation performed/);
+  const dockerOperations = (await readFile(path.join(mock.state, "docker.log"), "utf8")).trim().split("\n");
+  assert.equal(dockerOperations.some((line) => line.startsWith("cp ") || / exec .* (?:mktemp|bench|rm -rf)(?: |$)/.test(` ${line}`)), false, dockerOperations.join("\n"));
+  assert.deepEqual((await readFile(path.join(mock.state, "rclone.log"), "utf8")).trim().split("\n"), ["cat", "copyto", "copyto"]);
+  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-restore.")), false);
+});
+
+test("restore mode targets only an isolated site, merges only the source encryption key, migrates, and cleans staging", async (t) => {
+  const mock = await mockRestoreEnvironment(t);
+  mock.env.RESTORE_CONFIRMATION = `RESTORE:${mock.env.RESTORE_TARGET_SITE}@${mock.env.RESTORE_TARGET_CONTAINER}`;
+  const run = spawnSync("bash", [RESTORE, "--restore"], { encoding: "utf8", env: mock.env });
+  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+  assert.match(run.stdout, /isolated restore and migration completed/);
+  const dockerOperations = (await readFile(path.join(mock.state, "docker.log"), "utf8")).trim().split("\n");
+  assert.equal(dockerOperations.filter((line) => line.startsWith("cp ")).length, 4);
+  assert.equal(dockerOperations.some((line) => line.startsWith("cp ") && line.includes("site_config_backup")), false);
+  assert.equal(dockerOperations.some((line) => line.startsWith("cp ") && line.includes("IRONWRAP-RESTORE-ENCRYPTION-KEY.json")), true);
+  assert.equal(dockerOperations.some((line) => line.includes(`bench --site ${mock.env.RESTORE_TARGET_SITE} restore `)), true);
+  assert.equal(dockerOperations.some((line) => line.includes("python3 -c") && line.includes("encryption_key") && line.includes("site_config.json")), true);
+  assert.equal(dockerOperations.some((line) => line.includes(`bench --site ${mock.env.RESTORE_TARGET_SITE} migrate`)), true);
+  assert.equal(dockerOperations.at(-1)?.includes("rm -rf -- /tmp/ironwrap-restore.Mock1234"), true);
+  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-restore.")), false);
+});
+
+test("restore mode rejects a target-unbound confirmation before package download", async (t) => {
+  const mock = await mockRestoreEnvironment(t);
+  mock.env.RESTORE_CONFIRMATION = "RESTORE:wrong.example@wrong-container";
+  const run = spawnSync("bash", [RESTORE, "--restore"], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /confirmation.*not bound/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
+test("restore can never target the recorded production site or container", async (t) => {
+  const mock = await mockRestoreEnvironment(t);
+  mock.env.RESTORE_TARGET_SITE = mock.env.FRAPPE_SITE;
+  const run = spawnSync("bash", [RESTORE], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /production site can never be a restore target/);
+  await assert.rejects(readFile(path.join(mock.state, "docker.log"), "utf8"));
+});
+
+test("restore rejects an unpinned target image and a target without non-interactive database authority", async (t) => {
+  const wrongImage = await mockRestoreEnvironment(t, { targetImageMismatch: true });
+  const imageRun = spawnSync("bash", [RESTORE], { encoding: "utf8", env: wrongImage.env });
+  assert.notEqual(imageRun.status, 0);
+  assert.match(imageRun.stderr, /target container image does not match/);
+
+  const missingRoot = await mockRestoreEnvironment(t, { targetRootReady: false });
+  const rootRun = spawnSync("bash", [RESTORE], { encoding: "utf8", env: missingRoot.env });
+  assert.notEqual(rootRun.status, 0);
+  assert.match(rootRun.stderr, /non-interactive target-only root credential/);
+  await assert.rejects(readFile(path.join(missingRoot.state, "rclone.log"), "utf8"));
+});
+
+test("restore rejects targets with an external Docker network or published host ports", async (t) => {
+  const externalNetwork = await mockRestoreEnvironment(t, { targetNetworkInternal: false });
+  const networkRun = spawnSync("bash", [RESTORE], { encoding: "utf8", env: externalNetwork.env });
+  assert.notEqual(networkRun.status, 0);
+  assert.match(networkRun.stderr, /Docker network must be internal/);
+  await assert.rejects(readFile(path.join(externalNetwork.state, "rclone.log"), "utf8"));
+
+  const publishedPorts = await mockRestoreEnvironment(t, { targetPortsPublished: true });
+  const portRun = spawnSync("bash", [RESTORE], { encoding: "utf8", env: publishedPorts.env });
+  assert.notEqual(portRun.status, 0);
+  assert.match(portRun.stderr, /must not publish host ports/);
+  await assert.rejects(readFile(path.join(publishedPorts.state, "rclone.log"), "utf8"));
+});
+
+test("restore rejects a bad remote checksum before decryption and mutation", async (t) => {
+  const mock = await mockRestoreEnvironment(t, { badChecksum: true });
+  const run = spawnSync("bash", [RESTORE], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  await assert.rejects(readFile(path.join(mock.state, "age.log"), "utf8"));
+  const dockerOperations = (await readFile(path.join(mock.state, "docker.log"), "utf8")).trim().split("\n");
+  assert.equal(dockerOperations.some((line) => line.startsWith("cp ") || / exec .* bench(?: |$)/.test(` ${line}`)), false);
+});
+
+test("restore rejects manifest source-site mismatch without mutation", async (t) => {
+  const mock = await mockRestoreEnvironment(t, { manifestSite: "other.example.com" });
+  const run = spawnSync("bash", [RESTORE], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /manifest schema, source site, timestamp, format, or image does not match/);
+  const dockerOperations = (await readFile(path.join(mock.state, "docker.log"), "utf8")).trim().split("\n");
+  assert.equal(dockerOperations.some((line) => line.startsWith("cp ") || / exec .* bench(?: |$)/.test(` ${line}`)), false);
+});
+
+test("restore rejects archive links and unexpected files before extraction", async (t) => {
+  const mock = await mockRestoreEnvironment(t, { archiveLink: true });
+  const run = spawnSync("bash", [RESTORE], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /links, directories, and non-regular entries are forbidden/);
+  const dockerOperations = (await readFile(path.join(mock.state, "docker.log"), "utf8")).trim().split("\n");
+  assert.equal(dockerOperations.some((line) => line.startsWith("cp ") || / exec .* bench(?: |$)/.test(` ${line}`)), false);
+});
+
+test("failed bench restore cleans container and host plaintext", async (t) => {
+  const mock = await mockRestoreEnvironment(t, { failRestore: true });
+  mock.env.RESTORE_CONFIRMATION = `RESTORE:${mock.env.RESTORE_TARGET_SITE}@${mock.env.RESTORE_TARGET_CONTAINER}`;
+  const run = spawnSync("bash", [RESTORE, "--restore"], { encoding: "utf8", env: mock.env });
+  assert.equal(run.status, 19, `${run.stdout}${run.stderr}`);
+  const dockerOperations = (await readFile(path.join(mock.state, "docker.log"), "utf8")).trim().split("\n");
+  assert.equal(dockerOperations.some((line) => line.includes(" bench ") && line.includes(" restore ")), true);
+  assert.equal(dockerOperations.at(-1)?.includes("rm -rf -- /tmp/ironwrap-restore.Mock1234"), true);
+  assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-restore.")), false);
+});
+
+test("restore rejects missing completion markers and configuration in argv", async (t) => {
+  const mock = await mockRestoreEnvironment(t, { markerPresent: false });
+  const missing = spawnSync("bash", [RESTORE], { encoding: "utf8", env: mock.env });
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /no readable completion marker/);
+
+  const secretValue = "restore-argv-secret-that-must-not-be-printed";
+  const argv = spawnSync("bash", [RESTORE, "--restore", secretValue], { encoding: "utf8", env: mock.env });
+  assert.equal(argv.status, 64);
+  assert.equal(`${argv.stdout}${argv.stderr}`.includes(secretValue), false);
+});
+
+test("image build rejects configuration in argv without echoing it", () => {
+  const secretValue = "build-argv-secret-that-must-not-be-printed";
+  const run = spawnSync("bash", [BUILD, secretValue], { encoding: "utf8" });
+  assert.equal(run.status, 64);
+  assert.equal(`${run.stdout}${run.stderr}`.includes(secretValue), false);
+});
+
+test("host preflight rejects configuration in argv without echoing it", () => {
+  const secretValue = "argv-secret-that-must-not-be-printed";
+  const run = spawnSync("bash", [HOST_PREFLIGHT, secretValue], { encoding: "utf8" });
+  assert.equal(run.status, 64);
+  assert.equal(`${run.stdout}${run.stderr}`.includes(secretValue), false);
+});

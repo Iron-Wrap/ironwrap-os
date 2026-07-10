@@ -1,0 +1,57 @@
+# syntax=docker/dockerfile:1.7
+# Build context: the exact frappe_docker checkout locked in runtime-lock.json.
+# Runtime bases and Frappe source are intentionally not overridable build args.
+# apps_json and optional git_credentials are BuildKit secrets, never build args.
+
+FROM docker.io/frappe/build:version-15@sha256:db27282afc1be4e9040e040f92da308e7e4720239bd819ae538299557957b798 AS builder
+
+ARG IRONWRAP_APP_COMMIT
+
+USER frappe
+
+RUN --mount=type=secret,id=apps_json,target=/run/secrets/apps_json,uid=1000,gid=1000,required=true \
+    --mount=type=secret,id=git_credentials,target=/run/secrets/git_credentials,uid=1000,gid=1000,required=false \
+  set -eu; \
+  : "${IRONWRAP_APP_COMMIT:?IRONWRAP_APP_COMMIT must be a 40-character git commit}"; \
+  test "${#IRONWRAP_APP_COMMIT}" -eq 40; \
+  case "${IRONWRAP_APP_COMMIT}" in *[!0-9a-f]*) exit 1 ;; esac; \
+  export GIT_CONFIG_GLOBAL=/tmp/ironwrap-build.gitconfig; \
+  if [ -s /run/secrets/git_credentials ]; then \
+    printf '[credential]\n\thelper = store --file /run/secrets/git_credentials\n' > "${GIT_CONFIG_GLOBAL}"; \
+  fi; \
+  bench init \
+    --apps_path=/run/secrets/apps_json \
+    --frappe-branch=v15.114.0 \
+    --frappe-path=https://github.com/frappe/frappe.git \
+    --no-procfile \
+    --no-backups \
+    --skip-redis-config-generation \
+    /home/frappe/frappe-bench; \
+  cd /home/frappe/frappe-bench; \
+  test "$(git -C apps/frappe rev-parse HEAD)" = "105b17938839f4e5c6cdff817d42afc40c3bcc32"; \
+  test -d apps/ironwrap_roofing; \
+  test "$(git -C apps/ironwrap_roofing rev-parse HEAD)" = "${IRONWRAP_APP_COMMIT}"; \
+  test ! -e apps/erpnext; \
+  printf '{}\n' > sites/common_site_config.json; \
+  find apps -mindepth 1 -path '*/.git' -prune -exec rm -rf '{}' +; \
+  rm -f "${GIT_CONFIG_GLOBAL}"
+
+FROM docker.io/frappe/base:version-15@sha256:e7d48f6bfdcec5c37dc877b7133cf9e6bd86773d6eb4667008e07fb40973dc57 AS backend
+
+USER frappe
+COPY --from=builder --chown=frappe:frappe /home/frappe/frappe-bench /home/frappe/frappe-bench
+WORKDIR /home/frappe/frappe-bench
+
+RUN cp -r /home/frappe/frappe-bench/sites/assets /home/frappe/frappe-bench/assets && \
+  rm -rf /home/frappe/frappe-bench/sites/assets
+
+VOLUME ["/home/frappe/frappe-bench/sites", "/home/frappe/frappe-bench/logs"]
+
+USER root
+COPY resources/core/main-entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY resources/core/start.sh /usr/local/bin/start.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/start.sh
+
+USER frappe
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["start.sh"]

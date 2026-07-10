@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { sessionResponseSchema } from "./session";
+import { getDeviceSecret, storeDeviceSecret } from "./device-credential";
+import { resetDatabaseForTests } from "../storage/db";
+import { fetchSession, sessionResponseSchema } from "./session";
 
 const authenticatedSession = {
   version: 1,
@@ -30,6 +32,10 @@ const authenticatedSession = {
 } as const;
 
 describe("sessionResponseSchema", () => {
+  afterEach(async () => {
+    await resetDatabaseForTests();
+  });
+
   it("accepts the exact authenticated BFF envelope", () => {
     expect(sessionResponseSchema.parse(authenticatedSession)).toEqual(authenticatedSession);
   });
@@ -44,5 +50,55 @@ describe("sessionResponseSchema", () => {
     expect(
       sessionResponseSchema.safeParse({ ...authenticatedSession, csrf_token: null }).success,
     ).toBe(false);
+  });
+
+  it("accepts the Worker public tenant for an unauthenticated session", () => {
+    expect(
+      sessionResponseSchema.parse({
+        version: 1,
+        authenticated: false,
+        user: null,
+        tenant: authenticatedSession.tenant,
+        permissions: [],
+        allowed_actions: ["auth.device_pairing.consume"],
+        csrf_token: null,
+        session_expires_at: null,
+        source_updated_at: null,
+        read_model_generated_at: "2026-07-10T12:00:01.000Z",
+        stale_fields: [],
+      }),
+    ).toMatchObject({ authenticated: false, tenant: { id: "ironwrap" } });
+  });
+
+  it("clears a revoked field proof and tells the auth boundary that re-pairing is required", async () => {
+    const activeFieldSession = {
+      ...authenticatedSession,
+      session_expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+    };
+    await fetchSession(vi.fn<typeof fetch>().mockResolvedValue(Response.json(activeFieldSession)));
+    await storeDeviceSecret("d".repeat(43));
+    const unauthenticated = await fetchSession(
+      vi.fn<typeof fetch>().mockResolvedValue(
+        Response.json({
+          version: 1,
+          authenticated: false,
+          user: null,
+          tenant: authenticatedSession.tenant,
+          permissions: [],
+          allowed_actions: ["auth.device_pairing.consume"],
+          csrf_token: null,
+          session_expires_at: null,
+          source_updated_at: null,
+          read_model_generated_at: "2026-07-10T12:00:01.000Z",
+          stale_fields: [],
+        }),
+      ),
+    );
+
+    expect(unauthenticated).toMatchObject({
+      authenticated: false,
+      stale_fields: ["field_device_repair_required"],
+    });
+    expect(await getDeviceSecret()).toBeUndefined();
   });
 });

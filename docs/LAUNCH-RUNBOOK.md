@@ -210,6 +210,35 @@ node tools/production-readiness.mjs all
 HTTPS URLs, explicit write gates, credential separation, and backup inputs. It does not call the
 live services; the HTTP and application smoke tests in this runbook remain mandatory.
 
+### Field Companion BFF Enablement Gate
+
+The checked-in Worker baseline deliberately leaves `APP_BFF_ENABLED=false` and both app origins
+blank. A successful `wrangler deploy --dry-run` proves the bundle/config shape only; it is not a
+Field Companion deployment and must not be described as one.
+
+Before enabling the BFF in the intended Cloudflare account:
+
+1. Apply the exact D1 migration sequence remotely, including `0014_device_pairing.sql`, then
+   verify `/ready` against the intended database. The 18-table backup/restore inventory must be
+   deployed with the same release.
+2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
+   presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
+   `APP_ALLOWED_ORIGINS` to that exact origin (or an explicit, reviewed comma-separated set).
+   Leave `APP_ALLOW_INSECURE_LOCAL=false`. Do not bake an operator's temporary preview origin into
+   the release configuration.
+3. Store a new high-entropy `APP_AUTH_PEPPER` only with `wrangler secret put`; it is a Worker
+   secret, never a `vars` value or a browser value. Configure the dedicated Gmail sender and any
+   Frappe read credentials separately. Keep Hermes write flags false for this gate.
+4. Provision one owner/ops user and one assigned field user through the guarded app-user admin
+   route. Confirm office magic-link delivery, QR issue, fragment-only consume, one field read with
+   `X-IronWrap-Device-Proof`, and the refusal of the same request without that proof.
+5. Run the lost-device procedure in `OPERATIONS-RUNBOOK.md`: revoke the paired device, prove its
+   old cookie/proof fails, then pair a replacement with a fresh QR. Archive request ids, device
+   ids, and timestamps only; never archive QR URLs, tokens, or device proofs.
+6. Capture real iOS and Android install/camera/share/clipboard/weak-signal evidence before any
+   field-launch wording. A local build, static QR image, or a browser emulator does not close this
+   gate.
+
 ## 10. Prove The End-To-End Intake Slice
 
 ```bash
@@ -268,7 +297,7 @@ CRON_TZ=UTC
 `backup-d1-to-r2.sh` is bound to Cloudflare account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
-the SQL into isolated SQLite, checks integrity and all 16 current core/auth/operational tables,
+the SQL into isolated SQLite, checks integrity and all 18 current core/auth/operational tables,
 packages manifest plus SQL, encrypts locally, uploads immutably, remotely checks the objects,
 and publishes `IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
 `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Never discover or infer `latest`.
@@ -295,7 +324,7 @@ For the launch remote drill, create a fresh empty D1 database named
 `ironwrap-restore-drill-<label>` in the same committed account and record its exact UUID. The
 name and UUID must both differ from production. Bind one approval to that exact pair; the script
 generates a target-only Wrangler config, rechecks emptiness, imports, then compares the complete
-table-to-row-count map for all 16 required tables with the locally verified SQLite export:
+table-to-row-count map for all 18 required tables with the locally verified SQLite export:
 
 ```bash
 export D1_RESTORE_MODE=remote
@@ -310,11 +339,11 @@ export D1_RESTORE_MODE=verify
 ```
 
 Any new D1 migration that adds a persistent table must update the required-table allowlist in
-both D1 scripts and their readiness tests before deployment. The current 16 are `envelopes`,
+both D1 scripts and their readiness tests before deployment. The current 18 are `envelopes`,
 `audit_log`, `dead_letter`, `source_counts`, `heartbeat`, `quickbooks_webhook_receipts`,
 `dedup_claims`, `replay_requests`, `field_actions`, `field_action_media`, `app_users`,
-`app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`, and
-`app_action_throttles`.
+`app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`,
+`app_action_throttles`, `app_device_pairings`, and `app_devices`.
 
 Before launch, prove R2 delete protection in the live Cloudflare account. Archive the bucket-lock
 rule identifiers, protected backup prefixes, retention durations, and a denied deletion of a

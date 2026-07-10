@@ -1,17 +1,14 @@
 import { Link } from "@tanstack/react-router";
-import {
-  CircleGauge,
-  ClipboardCheck,
-  Hammer,
-  Settings,
-  ShieldCheck,
-  UsersRound,
-} from "lucide-react";
-import type { ReactNode } from "react";
+import { CircleGauge, ClipboardCheck, Hammer, ShieldCheck, UsersRound } from "lucide-react";
+import { lazy, Suspense, type ReactNode } from "react";
 
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
-import { EmptyState, ErrorState } from "../components/ui/state-panel";
+import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
+
+const DevicePairingSettings = lazy(async () => ({
+  default: (await import("../pairing/device-pairing-settings")).DevicePairingSettings,
+}));
 
 function PlaceholderSurface({
   eyebrow,
@@ -130,14 +127,9 @@ export function SalesPage() {
 
 export function SettingsPage() {
   return (
-    <PlaceholderSurface
-      eyebrow="Device and account"
-      title="Settings"
-      description="Installation, storage durability, device pairing, locale, and account controls will live here."
-      emptyTitle="No settings need attention"
-      emptyMessage="App-wide connection, install, update, and sync truth remains visible in the header. Additional controls will appear only when their server contracts are ready."
-      icon={<Settings className="size-6" aria-hidden="true" />}
-    />
+    <Suspense fallback={<LoadingState label="Loading crew device controls…" />}>
+      <DevicePairingSettings />
+    </Suspense>
   );
 }
 

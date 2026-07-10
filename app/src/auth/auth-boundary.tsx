@@ -37,7 +37,14 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
   if (!sessionQuery.data.authenticated) {
     return (
       <main className="flex min-h-dvh items-center justify-center p-4 sm:p-8">
-        <MagicLinkForm />
+        {sessionQuery.data.stale_fields.includes("field_device_repair_required") ? (
+          <ErrorState
+            title="This field device needs a new pairing"
+            message="Its trusted device session is no longer active. Ask the office to issue a fresh QR code before using Field Companion again."
+          />
+        ) : (
+          <MagicLinkForm />
+        )}
       </main>
     );
   }

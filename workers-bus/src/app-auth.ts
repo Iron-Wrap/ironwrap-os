@@ -2,14 +2,17 @@ import { gmailConfigured, sendGmail } from "./google.ts";
 import { frappeReadConfigured } from "./frappe-read.ts";
 import * as authStore from "./app-auth-store.ts";
 import {
+  APP_DEVICE_PROOF_HEADER,
   APP_SESSION_COOKIE,
   AUTH_THROTTLE_WINDOW_SECONDS,
+  DEVICE_PAIRING_TTL_SECONDS,
   MAGIC_LINK_CONSUME_IP_LIMIT,
   MAGIC_LINK_REQUEST_EMAIL_LIMIT,
   MAGIC_LINK_REQUEST_IP_LIMIT,
   MAGIC_LINK_TTL_SECONDS,
   SESSION_TTL_SECONDS,
   type AppEnv,
+  type AppDeviceRecord,
   type AppTenantPublic,
   type AppUserRecord,
   type AuthContext,
@@ -26,6 +29,10 @@ const GENERIC_LINK_RESPONSE = {
 
 export interface AuthDependencies {
   sendMagicLink?: (env: AppEnv, user: AppUserRecord, rawToken: string) => Promise<void>;
+  now?: () => Date;
+}
+
+export interface DevicePairingDependencies {
   now?: () => Date;
 }
 
@@ -185,9 +192,12 @@ export async function requestMagicLink(
     }),
   ]);
 
-  const user = tenantMatches && emailAllowed && ipAllowed
+  const candidate = tenantMatches && emailAllowed && ipAllowed
     ? await authStore.findActiveUser(env, configuredTenant!, email)
     : null;
+  // Field crew never receive a passwordless email session. Their session must be
+  // created from an office-issued, single-use QR pairing and a device proof.
+  const user = candidate?.role === "field" ? null : candidate;
 
   if (user) {
     const rawToken = randomToken();
@@ -234,6 +244,7 @@ export async function requestMagicLink(
       event: "magic_link_request",
       outcome: emailAllowed && ipAllowed ? "accepted_unknown" : "throttled",
       request,
+      ...(candidate?.role === "field" ? { detailCode: "field_pairing_required" } : {}),
     });
   }
 
@@ -270,14 +281,14 @@ export async function consumeMagicLink(
 
   const user = await authStore.consumeMagicLink(env, await sha256Hex(rawToken), now.toISOString());
   const tenantId = configuredTenantId(env);
-  if (!user || !tenantId || user.tenant_id !== tenantId) {
+  if (!user || !tenantId || user.tenant_id !== tenantId || user.role === "field") {
     await authStore.recordAuthAudit(env, {
       tenantId: null,
       userId: null,
       event: "magic_link_consume",
       outcome: "rejected",
       request,
-      detailCode: "invalid_or_expired",
+      detailCode: user?.role === "field" ? "field_pairing_required" : "invalid_or_expired",
     });
     return authJson({ error: "invalid_or_expired_link" }, 401);
   }
@@ -310,6 +321,202 @@ export async function consumeMagicLink(
   return response;
 }
 
+export async function issueDevicePairing(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  fieldUserId: string,
+  deps: DevicePairingDependencies = {},
+): Promise<
+  | { ok: true; pairing_url: string; expires_at: string; field_user: ReturnType<typeof publicUser> }
+  | { ok: false; error: string; status: number }
+> {
+  if (auth.session.role !== "owner" && auth.session.role !== "ops") {
+    return { ok: false, error: "office_role_required", status: 403 };
+  }
+  if (!validAppCsrf(req, auth)) return { ok: false, error: "csrf_failed", status: 403 };
+  if (!/^appu_[0-9a-f-]{36}$/i.test(fieldUserId)) {
+    return { ok: false, error: "invalid_field_user", status: 400 };
+  }
+  const tenantId = configuredTenantId(env);
+  const origin = normalizeConfiguredOrigin(env.APP_PUBLIC_ORIGIN, String(env.APP_ALLOW_INSECURE_LOCAL) === "true");
+  if (!tenantId || !origin || !allowedOrigins(env).has(origin)) {
+    return { ok: false, error: "app_bff_not_configured", status: 503 };
+  }
+  const fieldUser = await authStore.findActiveUserById(env, tenantId, fieldUserId);
+  if (!fieldUser || fieldUser.role !== "field") {
+    return { ok: false, error: "field_user_not_found", status: 404 };
+  }
+  const now = (deps.now ?? (() => new Date()))();
+  const rawToken = randomToken();
+  const expiresAt = new Date(now.getTime() + DEVICE_PAIRING_TTL_SECONDS * 1000).toISOString();
+  const request = await authRequestContext(req, env);
+  await authStore.replaceDevicePairing(env, {
+    tokenHash: await sha256Hex(rawToken),
+    user: fieldUser,
+    issuedByUserId: auth.session.user_id,
+    createdAt: now.toISOString(),
+    expiresAt,
+    request,
+  });
+  await authStore.recordAuthAudit(env, {
+    tenantId,
+    userId: fieldUser.user_id,
+    event: "device_pairing_issue",
+    outcome: "issued",
+    request,
+    detailCode: `issuer:${auth.session.user_id}`,
+  });
+  // A fragment is deliberately not transmitted to Worker logs or static-asset routing.
+  return {
+    ok: true,
+    pairing_url: `${origin}/auth/pair#token=${encodeURIComponent(rawToken)}`,
+    expires_at: expiresAt,
+    field_user: publicUser(fieldUser),
+  };
+}
+
+export async function consumeDevicePairing(
+  req: Request,
+  env: AppEnv,
+  deps: DevicePairingDependencies = {},
+): Promise<Response> {
+  const body = await readJsonObject(req);
+  if (!body.ok) return authJson({ error: body.error }, body.status);
+  if (Object.keys(body.value).some((key) => key !== "token" && key !== "device_proof")) {
+    return authJson({ error: "unexpected_field" }, 400);
+  }
+  const rawToken = typeof body.value.token === "string" && /^[A-Za-z0-9_-]{43}$/.test(body.value.token)
+    ? body.value.token
+    : null;
+  const rawDeviceProof = typeof body.value.device_proof === "string" && /^[A-Za-z0-9_-]{43}$/.test(body.value.device_proof)
+    ? body.value.device_proof
+    : null;
+  if (!rawToken || !rawDeviceProof) return authJson({ error: "invalid_or_expired_pairing" }, 401);
+
+  const request = await authRequestContext(req, env);
+  const now = (deps.now ?? (() => new Date()))();
+  const windowExpires = new Date(now.getTime() + AUTH_THROTTLE_WINDOW_SECONDS * 1000).toISOString();
+  const allowed = await authStore.claimThrottle(env, {
+    keyHash: await hmacHex(env, `throttle:pairing_consume_ip:${request.ip_hash}`),
+    scope: "consume_ip",
+    now: now.toISOString(),
+    windowExpiresAt: windowExpires,
+    limit: MAGIC_LINK_CONSUME_IP_LIMIT,
+  });
+  if (!allowed) return authJson({ error: "invalid_or_expired_pairing" }, 401);
+
+  const rawSessionToken = randomToken();
+  const sessionHash = await sessionHashFor(env, rawSessionToken);
+  const expiresAt = new Date(now.getTime() + SESSION_TTL_SECONDS * 1000).toISOString();
+  const deviceId = `appd_${crypto.randomUUID()}`;
+  let pairing;
+  try {
+    pairing = await authStore.consumeDevicePairing(env, {
+      tokenHash: await sha256Hex(rawToken),
+      deviceId,
+      deviceProofHash: await sha256Hex(rawDeviceProof),
+      sessionHash,
+      createdAt: now.toISOString(),
+      expiresAt,
+      request,
+    });
+  } catch {
+    return authJson({ error: "pairing_unavailable" }, 503);
+  }
+  if (!pairing) {
+    await authStore.recordAuthAudit(env, {
+      tenantId: null,
+      userId: null,
+      event: "device_pairing_consume",
+      outcome: "rejected",
+      request,
+      detailCode: "invalid_or_expired",
+    });
+    return authJson({ error: "invalid_or_expired_pairing" }, 401);
+  }
+  await authStore.recordAuthAudit(env, {
+    tenantId: pairing.user.tenant_id,
+    userId: pairing.user.user_id,
+    event: "device_pairing_consume",
+    outcome: "session_created",
+    request,
+    detailCode: `device:${pairing.deviceId}`,
+  });
+  const response = authJson(sessionEnvelopeForUser(
+    env,
+    pairing.user,
+    expiresAt,
+    await csrfTokenFor(env, rawSessionToken),
+  ));
+  response.headers.set("set-cookie", sessionCookie(rawSessionToken, expiresAt));
+  return response;
+}
+
+export async function listFieldPairingUsers(
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Array<{ id: string; display_name: string; email: string; frappe_user_id: string | null }>> {
+  if (auth.session.role !== "owner" && auth.session.role !== "ops") return [];
+  const users = await authStore.listActiveFieldUsers(env, auth.session.tenant_id);
+  return users.map((user) => ({
+    id: user.user_id,
+    display_name: user.display_name,
+    email: user.email_normalized,
+    frappe_user_id: user.frappe_user_id,
+  }));
+}
+
+export async function listDevicePairings(
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Array<{ id: string; field_user_id: string; field_user_name: string; paired_at: string; last_seen_at: string | null; revoked_at: string | null; revoked_by: string | null }>> {
+  if (auth.session.role !== "owner" && auth.session.role !== "ops") return [];
+  const devices = await authStore.listDeviceBindings(env, auth.session.tenant_id);
+  return devices.map((device: AppDeviceRecord) => ({
+    id: device.device_id,
+    field_user_id: device.user_id,
+    field_user_name: device.field_user_name,
+    paired_at: device.paired_at,
+    last_seen_at: device.last_seen_at,
+    revoked_at: device.revoked_at,
+    revoked_by: device.revoked_by_user_id,
+  }));
+}
+
+export async function revokeDevicePairing(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  deviceId: string,
+): Promise<{ ok: true; device_id: string; revoked_at: string } | { ok: false; error: string; status: number }> {
+  if (auth.session.role !== "owner" && auth.session.role !== "ops") {
+    return { ok: false, error: "office_role_required", status: 403 };
+  }
+  if (!validAppCsrf(req, auth)) return { ok: false, error: "csrf_failed", status: 403 };
+  if (!/^appd_[0-9a-f-]{36}$/i.test(deviceId)) {
+    return { ok: false, error: "invalid_device", status: 400 };
+  }
+  const now = new Date().toISOString();
+  const revoked = await authStore.revokeDeviceBinding(env, {
+    tenantId: auth.session.tenant_id,
+    deviceId,
+    revokedByUserId: auth.session.user_id,
+    now,
+  });
+  if (!revoked) return { ok: false, error: "device_not_found_or_revoked", status: 404 };
+  const request = await authRequestContext(req, env);
+  await authStore.recordAuthAudit(env, {
+    tenantId: auth.session.tenant_id,
+    userId: auth.session.user_id,
+    event: "device_revoke",
+    outcome: "revoked",
+    request,
+    detailCode: `device:${deviceId}`,
+  });
+  return { ok: true, device_id: deviceId, revoked_at: now };
+}
+
 export async function authenticateAppRequest(req: Request, env: AppEnv): Promise<AuthContext | null> {
   const rawSessionToken = cookieValue(req.headers.get("cookie"), APP_SESSION_COOKIE);
   const tenantId = configuredTenantId(env);
@@ -318,6 +525,13 @@ export async function authenticateAppRequest(req: Request, env: AppEnv): Promise
   const now = new Date().toISOString();
   const session = await authStore.findActiveSession(env, sessionHash, tenantId, now);
   if (!session) return null;
+  if (session.role === "field") {
+    const rawDeviceProof = req.headers.get(APP_DEVICE_PROOF_HEADER);
+    if (!rawDeviceProof || !/^[A-Za-z0-9_-]{43}$/.test(rawDeviceProof) || !session.device_proof_hash) {
+      return null;
+    }
+    if (!constantTimeEqual(await sha256Hex(rawDeviceProof), session.device_proof_hash)) return null;
+  }
   await authStore.touchSession(env, sessionHash, now);
   return {
     session,
@@ -344,7 +558,7 @@ export function unauthenticatedSessionPayload(env: AppEnv): Record<string, unkno
     user: null,
     tenant: publicTenant(env),
     permissions: [],
-    allowed_actions: ["auth.magic_link.request", "auth.magic_link.consume"],
+    allowed_actions: ["auth.magic_link.request", "auth.magic_link.consume", "auth.device_pairing.consume"],
     csrf_token: null,
     session_expires_at: null,
     source_updated_at: null,

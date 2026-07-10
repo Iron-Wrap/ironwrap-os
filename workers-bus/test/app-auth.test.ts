@@ -31,12 +31,41 @@ interface SessionRow {
   last_seen_at: string;
   created_ip_hash: string;
   created_user_agent_hash: string;
+  device_id: string | null;
+}
+
+interface DevicePairingRow {
+  token_hash: string;
+  tenant_id: string;
+  user_id: string;
+  issued_by_user_id: string;
+  created_at: string;
+  expires_at: string;
+  consumed_at: string | null;
+  revoked_at: string | null;
+  issued_ip_hash: string;
+  issued_user_agent_hash: string;
+}
+
+interface DeviceRow {
+  device_id: string;
+  tenant_id: string;
+  user_id: string;
+  device_proof_hash: string;
+  paired_at: string;
+  last_seen_at: string;
+  revoked_at: string | null;
+  revoked_by_user_id: string | null;
+  created_ip_hash: string;
+  created_user_agent_hash: string;
 }
 
 class AuthMemoryDb {
   users = new Map<string, AppUserRecord>();
   magic = new Map<string, MagicRow>();
   sessions = new Map<string, SessionRow>();
+  pairings = new Map<string, DevicePairingRow>();
+  devices = new Map<string, DeviceRow>();
   throttles = new Map<string, { scope: string; started: string; expires: string; attempts: number }>();
   audits: Array<Record<string, unknown>> = [];
 
@@ -45,9 +74,15 @@ class AuthMemoryDb {
       bind: (...args: unknown[]) => ({
         first: async <T>() => this.first(sql, args) as T | null,
         run: async () => this.run(sql, args),
-        all: async <T>() => ({ results: [] as T[] }),
+        all: async <T>() => ({ results: this.all(sql, args) as T[] }),
       }),
     };
+  }
+
+  async batch(statements: Array<{ run: () => Promise<{ success: true; meta: { changes: number } }> }>) {
+    const results = [];
+    for (const statement of statements) results.push(await statement.run());
+    return results;
   }
 
   private userByTenantEmail(tenant: string, email: string): AppUserRecord | null {
@@ -69,6 +104,18 @@ class AuthMemoryDb {
       const row = this.userByTenantEmail(String(args[0]), String(args[1]));
       return row && (!sql.includes("active = 1") || row.active === 1) ? { ...row } : null;
     }
+    if (sql.includes("FROM app_users") && sql.includes("tenant_id = ?") && sql.includes("user_id = ?")) {
+      const row = this.users.get(String(args[1]));
+      return row && row.tenant_id === String(args[0]) && (!sql.includes("active = 1") || row.active === 1)
+        ? { ...row }
+        : null;
+    }
+    if (sql.includes("FROM app_device_pairings p")) {
+      const pairing = this.pairings.get(String(args[0]));
+      if (!pairing || pairing.consumed_at || pairing.revoked_at || pairing.expires_at <= String(args[1])) return null;
+      const user = this.users.get(pairing.user_id);
+      return user?.active === 1 && user.tenant_id === pairing.tenant_id && user.role === "field" ? { ...user } : null;
+    }
     if (sql.includes("FROM app_magic_links ml")) {
       const magic = this.magic.get(String(args[0]));
       if (!magic || magic.consumed_at || magic.expires_at <= String(args[1])) return null;
@@ -82,15 +129,57 @@ class AuthMemoryDb {
       if (!session || session.tenant_id !== tenant || session.revoked_at || session.expires_at <= now) return null;
       const user = this.users.get(session.user_id);
       if (!user || user.active !== 1 || user.tenant_id !== tenant) return null;
+      const device = session.device_id ? this.devices.get(session.device_id) : null;
+      if (user.role === "field" && (!device || device.revoked_at)) return null;
       return {
         ...user,
         session_hash: session.session_hash,
         session_created_at: session.created_at,
         session_expires_at: session.expires_at,
         revoked_at: session.revoked_at,
+        device_id: session.device_id,
+        device_proof_hash: device?.device_proof_hash ?? null,
       };
     }
     return null;
+  }
+
+  private all(sql: string, args: unknown[]): unknown[] {
+    if (sql.includes("FROM app_users") && sql.includes("role = 'field'")) {
+      return [...this.users.values()]
+        .filter((user) => user.tenant_id === String(args[0]) && user.active === 1 && user.role === "field")
+        .sort((a, b) => a.display_name.localeCompare(b.display_name) || a.user_id.localeCompare(b.user_id))
+        .map((user) => ({
+          user_id: user.user_id,
+          display_name: user.display_name,
+          email_normalized: user.email_normalized,
+          frappe_user_id: user.frappe_user_id,
+        }));
+    }
+    if (sql.includes("FROM app_devices d")) {
+      return [...this.devices.values()]
+        .filter((device) => device.tenant_id === String(args[0]))
+        .map((device) => {
+          const user = this.users.get(device.user_id);
+          const latest = [...this.sessions.values()]
+            .filter((session) => session.device_id === device.device_id)
+            .map((session) => session.last_seen_at)
+            .sort()
+            .at(-1) ?? device.last_seen_at;
+          return {
+            device_id: device.device_id,
+            tenant_id: device.tenant_id,
+            user_id: device.user_id,
+            field_user_name: user?.display_name ?? "Unknown",
+            paired_at: device.paired_at,
+            last_seen_at: latest,
+            revoked_at: device.revoked_at,
+            revoked_by_user_id: device.revoked_by_user_id,
+          };
+        })
+        .sort((a, b) => Number(a.revoked_at !== null) - Number(b.revoked_at !== null) || b.paired_at.localeCompare(a.paired_at));
+    }
+    return [];
   }
 
   private run(sql: string, args: unknown[]): { success: true; meta: { changes: number } } {
@@ -131,6 +220,82 @@ class AuthMemoryDb {
       });
       return changed(1);
     }
+    if (sql.includes("UPDATE app_device_pairings") && sql.includes("SET revoked_at") && sql.includes("user_id = ?")) {
+      const [now, tenantId, userId] = args;
+      let changes = 0;
+      for (const pairing of this.pairings.values()) {
+        if (pairing.tenant_id === String(tenantId) && pairing.user_id === String(userId) && !pairing.consumed_at && !pairing.revoked_at) {
+          pairing.revoked_at = String(now);
+          changes++;
+        }
+      }
+      return changed(changes);
+    }
+    if (sql.includes("INSERT INTO app_device_pairings")) {
+      const [tokenHash, tenantId, userId, issuedByUserId, createdAt, expiresAt, ipHash, userAgentHash] = args;
+      this.pairings.set(String(tokenHash), {
+        token_hash: String(tokenHash),
+        tenant_id: String(tenantId),
+        user_id: String(userId),
+        issued_by_user_id: String(issuedByUserId),
+        created_at: String(createdAt),
+        expires_at: String(expiresAt),
+        consumed_at: null,
+        revoked_at: null,
+        issued_ip_hash: String(ipHash),
+        issued_user_agent_hash: String(userAgentHash),
+      });
+      return changed(1);
+    }
+    if (sql.includes("UPDATE app_device_pairings SET consumed_at")) {
+      const [now, tokenHash, userId, expiryNow] = args;
+      const pairing = this.pairings.get(String(tokenHash));
+      if (!pairing || pairing.user_id !== String(userId) || pairing.consumed_at || pairing.revoked_at || pairing.expires_at <= String(expiryNow)) {
+        return changed(0);
+      }
+      pairing.consumed_at = String(now);
+      return changed(1);
+    }
+    if (sql.includes("INSERT INTO app_devices")) {
+      const [deviceId, tenantId, userId, proofHash, pairedAt, lastSeenAt, ipHash, userAgentHash] = args;
+      if ([...this.devices.values()].some((device) => device.device_proof_hash === String(proofHash))) {
+        throw new Error("unique device proof");
+      }
+      this.devices.set(String(deviceId), {
+        device_id: String(deviceId),
+        tenant_id: String(tenantId),
+        user_id: String(userId),
+        device_proof_hash: String(proofHash),
+        paired_at: String(pairedAt),
+        last_seen_at: String(lastSeenAt),
+        revoked_at: null,
+        revoked_by_user_id: null,
+        created_ip_hash: String(ipHash),
+        created_user_agent_hash: String(userAgentHash),
+      });
+      return changed(1);
+    }
+    if (sql.includes("DELETE FROM app_devices WHERE device_id = ?")) {
+      this.devices.delete(String(args[0]));
+      return changed(1);
+    }
+    if (sql.includes("UPDATE app_devices SET revoked_at") && sql.includes("device_id = ?")) {
+      const [now, revokedByUserId, tenantId, deviceId] = args;
+      const device = this.devices.get(String(deviceId));
+      if (!device || device.tenant_id !== String(tenantId) || device.revoked_at) return changed(0);
+      device.revoked_at = String(now);
+      device.revoked_by_user_id = String(revokedByUserId);
+      return changed(1);
+    }
+    if (sql.includes("UPDATE app_devices SET revoked_at") && sql.includes("user_id = ?")) {
+      const [now, userId] = args;
+      let changes = 0;
+      for (const device of this.devices.values()) if (device.user_id === String(userId) && !device.revoked_at) {
+        device.revoked_at = String(now);
+        changes++;
+      }
+      return changed(changes);
+    }
     if (sql.includes("UPDATE app_magic_links SET consumed_at") && sql.includes("token_hash = ?")) {
       const [now, tokenHash, userId, expiryNow] = args;
       const row = this.magic.get(String(tokenHash));
@@ -150,11 +315,12 @@ class AuthMemoryDb {
       return changed(changes);
     }
     if (sql.includes("INSERT INTO app_sessions")) {
-      const [sessionHash, userId, tenant, createdAt, expiresAt, lastSeen, ipHash, userAgentHash] = args;
+      const [sessionHash, userId, tenant, createdAt, expiresAt, lastSeen, ipHash, userAgentHash, deviceId] = args;
       this.sessions.set(String(sessionHash), {
         session_hash: String(sessionHash), user_id: String(userId), tenant_id: String(tenant),
         created_at: String(createdAt), expires_at: String(expiresAt), revoked_at: null,
         last_seen_at: String(lastSeen), created_ip_hash: String(ipHash), created_user_agent_hash: String(userAgentHash),
+        device_id: deviceId === null ? null : String(deviceId),
       });
       return changed(1);
     }
@@ -171,6 +337,17 @@ class AuthMemoryDb {
       if (!row || row.revoked_at) return changed(0);
       row.revoked_at = String(now);
       return changed(1);
+    }
+    if (sql.includes("UPDATE app_sessions SET revoked_at") && sql.includes("device_id = ?")) {
+      const [now, tenantId, deviceId] = args;
+      let changes = 0;
+      for (const session of this.sessions.values()) if (
+        session.tenant_id === String(tenantId) && session.device_id === String(deviceId) && !session.revoked_at
+      ) {
+        session.revoked_at = String(now);
+        changes++;
+      }
+      return changed(changes);
     }
     if (sql.includes("UPDATE app_sessions SET revoked_at") && sql.includes("user_id = ?")) {
       const [now, userId] = args;
@@ -245,9 +422,47 @@ async function addFieldUser(env: AppEnv): Promise<AppUserRecord> {
   });
 }
 
+async function addOfficeUser(env: AppEnv, role: "owner" | "ops" = "owner"): Promise<AppUserRecord> {
+  return await upsertAppUser(env, {
+    tenant_id: "ironwrap",
+    email_normalized: "owner@example.com",
+    display_name: "Office Owner",
+    role,
+    frappe_user_id: null,
+    active: true,
+    provisioned_by: "owner@example.com",
+  });
+}
+
+async function signInOffice(env: AppEnv): Promise<{
+  user: AppUserRecord;
+  cookiePair: string;
+  csrfToken: string;
+}> {
+  const user = await addOfficeUser(env);
+  let token = "";
+  const waiter = waitContext();
+  await requestMagicLink(
+    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: user.email_normalized }),
+    env,
+    waiter.ctx as never,
+    { sendMagicLink: async (_env, _user, raw) => { token = raw; } },
+  );
+  await waiter.flush();
+  const consumed = await consumeMagicLink(jsonRequest("/api/v1/auth/magic-link/consume", { token }), env);
+  assert.equal(consumed.status, 200);
+  const body = await consumed.json() as { csrf_token: string };
+  return {
+    user,
+    cookiePair: (consumed.headers.get("set-cookie") ?? "").split(";")[0],
+    csrfToken: body.csrf_token,
+  };
+}
+
 test("magic-link request is enumeration-resistant and stores only a hash", async () => {
   const db = new AuthMemoryDb();
   const env = baseEnv(db);
+  await addOfficeUser(env);
   await addFieldUser(env);
   await upsertAppUser(env, {
     tenant_id: "ironwrap",
@@ -262,7 +477,7 @@ test("magic-link request is enumeration-resistant and stores only a hash", async
 
   const activeCtx = waitContext();
   const active = await requestMagicLink(
-    jsonRequest("/api/v1/auth/magic-link/request", { email: "CREW@example.com" }),
+    jsonRequest("/api/v1/auth/magic-link/request", { email: "OWNER@example.com" }),
     env,
     activeCtx.ctx as never,
     { sendMagicLink: async (_env, _user, token) => { delivered.push(token); } },
@@ -284,10 +499,19 @@ test("magic-link request is enumeration-resistant and stores only a hash", async
     { sendMagicLink: async () => { throw new Error("should_not_send"); } },
   );
   await inactiveCtx.flush();
+  const fieldCtx = waitContext();
+  const field = await requestMagicLink(
+    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "crew@example.com" }),
+    env,
+    fieldCtx.ctx as never,
+    { sendMagicLink: async () => { throw new Error("field users must not receive magic links"); } },
+  );
+  await fieldCtx.flush();
 
   assert.equal(active.status, 202);
   assert.equal(unknown.status, 202);
   assert.equal(inactive.status, 202);
+  assert.equal(field.status, 202);
   assert.equal(await active.text(), await unknown.text());
   assert.equal(await inactive.text(), JSON.stringify({
     ok: true,
@@ -298,6 +522,7 @@ test("magic-link request is enumeration-resistant and stores only a hash", async
   assert.equal([...db.magic.keys()].length, 1);
   assert.notEqual([...db.magic.keys()][0], delivered[0]);
   assert.equal(JSON.stringify({ magic: [...db.magic.values()], audits: db.audits }).includes(delivered[0]), false);
+  assert.equal(JSON.stringify(db.audits).includes("field_pairing_required"), true);
 });
 
 test("magic-link email targets the canonical verifier and keeps the token out of the query", () => {
@@ -316,11 +541,11 @@ test("magic-link email targets the canonical verifier and keeps the token out of
 test("magic links are one-time and create only a hashed fixed-TTL session", async () => {
   const db = new AuthMemoryDb();
   const env = baseEnv(db);
-  await addFieldUser(env);
+  await addOfficeUser(env);
   let token = "";
   const waiter = waitContext();
   await requestMagicLink(
-    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "crew@example.com" }),
+    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "owner@example.com" }),
     env,
     waiter.ctx as never,
     { sendMagicLink: async (_env, _user, raw) => { token = raw; } },
@@ -352,11 +577,11 @@ test("magic links are one-time and create only a hashed fixed-TTL session", asyn
 test("a scanner GET cannot consume a magic link", async () => {
   const db = new AuthMemoryDb();
   const env = baseEnv(db);
-  await addFieldUser(env);
+  await addOfficeUser(env);
   let token = "";
   const waiter = waitContext();
   await requestMagicLink(
-    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "crew@example.com" }),
+    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "owner@example.com" }),
     env,
     waiter.ctx as never,
     { sendMagicLink: async (_env, _user, raw) => { token = raw; } },
@@ -380,13 +605,13 @@ test("a scanner GET cannot consume a magic link", async () => {
 test("a new magic-link request atomically replaces the prior link for that user", async () => {
   const db = new AuthMemoryDb();
   const env = baseEnv(db);
-  await addFieldUser(env);
+  await addOfficeUser(env);
   const tokens: string[] = [];
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const waiter = waitContext();
     await requestMagicLink(
-      jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "crew@example.com" }),
+      jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "owner@example.com" }),
       env,
       waiter.ctx as never,
       { sendMagicLink: async (_env, _user, token) => { tokens.push(token); } },
@@ -408,11 +633,11 @@ test("a new magic-link request atomically replaces the prior link for that user"
 test("session envelope is exact, unauthenticated session is 200, and logout requires CSRF", async () => {
   const db = new AuthMemoryDb();
   const env = baseEnv(db);
-  await addFieldUser(env);
+  await addOfficeUser(env);
   let token = "";
   const waiter = waitContext();
   await requestMagicLink(
-    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "crew@example.com" }),
+    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "owner@example.com" }),
     env,
     waiter.ctx as never,
     { sendMagicLink: async (_env, _user, raw) => { token = raw; } },
@@ -438,10 +663,10 @@ test("session envelope is exact, unauthenticated session is 200, and logout requ
   });
   assert.deepEqual(body.user, {
     id: [...db.users.values()][0].user_id,
-    email: "crew@example.com",
-    display_name: "Crew Member",
-    role: "field",
-    frappe_user_id: "crew@example.com",
+    email: "owner@example.com",
+    display_name: "Office Owner",
+    role: "owner",
+    frappe_user_id: null,
   });
 
   const badLogout = await worker.fetch(jsonRequest(
@@ -529,11 +754,11 @@ test("admin-token provisioning is tenant-bound, strict, and requires a Frappe as
 test("admin deactivation revokes existing sessions and consumes open links", async () => {
   const db = new AuthMemoryDb();
   const env = baseEnv(db);
-  await addFieldUser(env);
+  await addOfficeUser(env);
   let token = "";
   const firstWaiter = waitContext();
   await requestMagicLink(
-    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "crew@example.com" }),
+    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "owner@example.com" }),
     env,
     firstWaiter.ctx as never,
     { sendMagicLink: async (_env, _user, raw) => { token = raw; } },
@@ -547,7 +772,7 @@ test("admin deactivation revokes existing sessions and consumes open links", asy
 
   const secondWaiter = waitContext();
   await requestMagicLink(
-    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "crew@example.com" }),
+    jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "owner@example.com" }),
     env,
     secondWaiter.ctx as never,
     { sendMagicLink: async () => {} },
@@ -557,10 +782,10 @@ test("admin deactivation revokes existing sessions and consumes open links", asy
 
   const deactivated = await worker.fetch(jsonRequest("/admin/app-users", {
     tenant_id: "ironwrap",
-    email: "crew@example.com",
-    display_name: "Crew Member",
-    role: "field",
-    frappe_user_id: "crew@example.com",
+    email: "owner@example.com",
+    display_name: "Office Owner",
+    role: "owner",
+    frappe_user_id: null,
     active: false,
     provisioned_by: "owner@example.com",
   }, { authorization: "Bearer admin-token" }), env, secondWaiter.ctx as never);
@@ -578,13 +803,13 @@ test("admin deactivation revokes existing sessions and consumes open links", asy
 test("per-email request throttling keeps the same 202 response and stops issuing links", async () => {
   const db = new AuthMemoryDb();
   const env = baseEnv(db);
-  await addFieldUser(env);
+  await addOfficeUser(env);
   let sends = 0;
   let canonicalResponse = "";
   for (let index = 0; index < 6; index++) {
     const waiter = waitContext();
     const response = await requestMagicLink(
-      jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "crew@example.com" }),
+      jsonRequest("/api/v1/auth/magic-link/request", { tenant_id: "ironwrap", email: "owner@example.com" }),
       env,
       waiter.ctx as never,
       { sendMagicLink: async () => { sends++; } },
@@ -596,4 +821,130 @@ test("per-email request throttling keeps the same 202 response and stops issuing
     assert.equal(text, canonicalResponse);
   }
   assert.equal(sends, 5);
+});
+
+test("office-issued QR pairing is fragment-only, proof-bound, and revocable", async () => {
+  const db = new AuthMemoryDb();
+  const env = baseEnv(db);
+  const fieldUser = await addFieldUser(env);
+  const office = await signInOffice(env);
+  const ctx = waitContext();
+
+  const missingCsrf = await worker.fetch(jsonRequest("/api/v1/device-pairings", {
+    field_user_id: fieldUser.user_id,
+  }, { cookie: office.cookiePair }), env, ctx.ctx as never);
+  assert.equal(missingCsrf.status, 403);
+
+  const wrongRole = await worker.fetch(jsonRequest("/api/v1/device-pairings", {
+    field_user_id: office.user.user_id,
+  }, { cookie: office.cookiePair, "x-csrf-token": office.csrfToken }), env, ctx.ctx as never);
+  assert.equal(wrongRole.status, 404);
+
+  const issuedResponse = await worker.fetch(jsonRequest("/api/v1/device-pairings", {
+    field_user_id: fieldUser.user_id,
+  }, { cookie: office.cookiePair, "x-csrf-token": office.csrfToken }), env, ctx.ctx as never);
+  assert.equal(issuedResponse.status, 200);
+  const issued = await issuedResponse.json() as {
+    pairing_url: string;
+    expires_at: string;
+    field_user: { id: string; role: string };
+  };
+  const pairingUrl = new URL(issued.pairing_url);
+  const rawPairingToken = pairingUrl.hash.slice("#token=".length);
+  assert.equal(pairingUrl.pathname, "/auth/pair");
+  assert.equal(pairingUrl.search, "");
+  assert.match(rawPairingToken, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(issued.field_user.id, fieldUser.user_id);
+  assert.equal(issued.field_user.role, "field");
+  assert.equal(Date.parse(issued.expires_at) > Date.now(), true);
+  assert.equal(db.pairings.size, 1);
+  assert.equal(JSON.stringify({ pairings: [...db.pairings.values()], audits: db.audits }).includes(rawPairingToken), false);
+
+  const scanner = await worker.fetch(new Request(
+    `https://worker.example.com/api/v1/auth/device-pairing/consume?token=${rawPairingToken}`,
+    { headers: { origin: "https://app.example.com" } },
+  ), env, ctx.ctx as never);
+  assert.equal(scanner.status, 401);
+  assert.equal([...db.pairings.values()][0].consumed_at, null);
+
+  const deviceProof = "p".repeat(43);
+  const paired = await worker.fetch(jsonRequest("/api/v1/auth/device-pairing/consume", {
+    token: rawPairingToken,
+    device_proof: deviceProof,
+  }), env, ctx.ctx as never);
+  assert.equal(paired.status, 200);
+  assert.match(paired.headers.get("access-control-allow-headers") ?? "", /X-IronWrap-Device-Proof/);
+  const fieldCookie = (paired.headers.get("set-cookie") ?? "").split(";")[0];
+  assert.equal(db.devices.size, 1);
+  assert.equal([...db.sessions.values()].filter((session) => session.device_id !== null).length, 1);
+  assert.equal(JSON.stringify({ devices: [...db.devices.values()], audits: db.audits }).includes(deviceProof), false);
+
+  const withoutProof = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
+    headers: { cookie: fieldCookie, origin: "https://app.example.com" },
+  }), env, ctx.ctx as never);
+  assert.equal((await withoutProof.json() as { authenticated: boolean }).authenticated, false);
+
+  const wrongProof = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
+    headers: {
+      cookie: fieldCookie,
+      origin: "https://app.example.com",
+      "x-ironwrap-device-proof": "q".repeat(43),
+    },
+  }), env, ctx.ctx as never);
+  assert.equal((await wrongProof.json() as { authenticated: boolean }).authenticated, false);
+
+  const fieldSession = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
+    headers: {
+      cookie: fieldCookie,
+      origin: "https://app.example.com",
+      "x-ironwrap-device-proof": deviceProof,
+    },
+  }), env, ctx.ctx as never);
+  assert.equal((await fieldSession.json() as { authenticated: boolean; user: { role: string } }).authenticated, true);
+
+  const fieldDeviceList = await worker.fetch(new Request("https://worker.example.com/api/v1/device-pairings", {
+    headers: {
+      cookie: fieldCookie,
+      origin: "https://app.example.com",
+      "x-ironwrap-device-proof": deviceProof,
+    },
+  }), env, ctx.ctx as never);
+  assert.equal(fieldDeviceList.status, 403);
+
+  const officeDeviceList = await worker.fetch(new Request("https://worker.example.com/api/v1/device-pairings", {
+    headers: { cookie: office.cookiePair, origin: "https://app.example.com" },
+  }), env, ctx.ctx as never);
+  assert.equal(officeDeviceList.status, 200);
+  const listed = await officeDeviceList.json() as { devices: Array<Record<string, unknown>> };
+  assert.equal(listed.devices.length, 1);
+  assert.equal(listed.devices[0].field_user_id, fieldUser.user_id);
+  assert.equal("device_proof_hash" in listed.devices[0], false);
+
+  const replay = await worker.fetch(jsonRequest("/api/v1/auth/device-pairing/consume", {
+    token: rawPairingToken,
+    device_proof: deviceProof,
+  }), env, ctx.ctx as never);
+  assert.equal(replay.status, 401);
+
+  const deviceId = String(listed.devices[0].id);
+  const revokeMissingCsrf = await worker.fetch(jsonRequest(`/api/v1/device-pairings/${deviceId}/revoke`, {}, {
+    cookie: office.cookiePair,
+  }), env, ctx.ctx as never);
+  assert.equal(revokeMissingCsrf.status, 403);
+
+  const revoked = await worker.fetch(jsonRequest(`/api/v1/device-pairings/${deviceId}/revoke`, {}, {
+    cookie: office.cookiePair,
+    "x-csrf-token": office.csrfToken,
+  }), env, ctx.ctx as never);
+  assert.equal(revoked.status, 200);
+  assert.equal((await revoked.json() as { ok: boolean; device_id: string }).device_id, deviceId);
+
+  const afterRevoke = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
+    headers: {
+      cookie: fieldCookie,
+      origin: "https://app.example.com",
+      "x-ironwrap-device-proof": deviceProof,
+    },
+  }), env, ctx.ctx as never);
+  assert.equal((await afterRevoke.json() as { authenticated: boolean }).authenticated, false);
 });

@@ -1,5 +1,7 @@
 import { z, type ZodType } from "zod";
 
+import { clearDeviceSecret, type DeviceProofProvider } from "../auth/device-credential";
+
 export const apiErrorBodySchema = z
   .object({
     error: z.string().optional(),
@@ -38,6 +40,7 @@ export interface ApiRequestOptions<T> {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   csrfToken?: string;
+  deviceProof?: DeviceProofProvider;
   signal?: AbortSignal;
   timeoutMs?: number;
   fetcher?: typeof fetch;
@@ -47,6 +50,7 @@ export interface ApiCommandOptions {
   path: string;
   body?: unknown;
   csrfToken?: string;
+  deviceProof?: DeviceProofProvider;
   signal?: AbortSignal;
   timeoutMs?: number;
   fetcher?: typeof fetch;
@@ -119,6 +123,8 @@ async function executeRequest(
     const headers = new Headers({ Accept: "application/json" });
     if (options.body !== undefined) headers.set("Content-Type", "application/json");
     if (options.csrfToken) headers.set("X-CSRF-Token", options.csrfToken);
+    const deviceProof = await options.deviceProof?.();
+    if (deviceProof) headers.set("X-IronWrap-Device-Proof", deviceProof);
 
     const response = await fetcher(options.path, {
       method: options.method ?? "GET",
@@ -128,7 +134,11 @@ async function executeRequest(
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: controller.signal,
     });
-    if (!response.ok) throw await responseError(response);
+    if (!response.ok) {
+      const error = await responseError(response);
+      if (options.deviceProof && error.status === 401) await clearDeviceSecret();
+      throw error;
+    }
     return response;
   } catch (error) {
     if (error instanceof ApiError) throw error;

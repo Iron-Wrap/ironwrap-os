@@ -1,4 +1,5 @@
 import type {
+  AppDeviceRecord,
   AppRole,
   AppSessionRecord,
   AppUserRecord,
@@ -20,6 +21,34 @@ export async function findActiveUser(
      WHERE tenant_id = ? AND email_normalized = ? AND active = 1
      LIMIT 1`,
   ).bind(tenantId, emailNormalized).first<AppUserRecord>();
+}
+
+export async function findActiveUserById(
+  env: Env,
+  tenantId: string,
+  userId: string,
+): Promise<AppUserRecord | null> {
+  return await env.DB.prepare(
+    `SELECT user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+            active, created_by, created_at, updated_at
+     FROM app_users
+     WHERE tenant_id = ? AND user_id = ? AND active = 1
+     LIMIT 1`,
+  ).bind(tenantId, userId).first<AppUserRecord>();
+}
+
+export async function listActiveFieldUsers(
+  env: Env,
+  tenantId: string,
+): Promise<Array<Pick<AppUserRecord, "user_id" | "display_name" | "email_normalized" | "frappe_user_id">>> {
+  const result = await env.DB.prepare(
+    `SELECT user_id, display_name, email_normalized, frappe_user_id
+     FROM app_users
+     WHERE tenant_id = ? AND active = 1 AND role = 'field'
+     ORDER BY display_name COLLATE NOCASE ASC, user_id ASC
+     LIMIT 100`,
+  ).bind(tenantId).all<Pick<AppUserRecord, "user_id" | "display_name" | "email_normalized" | "frappe_user_id">>();
+  return result.results ?? [];
 }
 
 export async function upsertAppUser(env: Env, input: ProvisionAppUserInput): Promise<AppUserRecord> {
@@ -60,6 +89,7 @@ export async function upsertAppUser(env: Env, input: ProvisionAppUserInput): Pro
     await Promise.all([
       revokeAllUserSessions(env, row.user_id, now),
       consumeOpenMagicLinks(env, row.user_id, now),
+      revokeAllUserDevices(env, row.user_id, now),
     ]);
   }
   return row;
@@ -122,6 +152,139 @@ export async function consumeMagicLink(
   return d1Changes(result) === 1 ? candidate : null;
 }
 
+export async function replaceDevicePairing(
+  env: Env,
+  input: {
+    tokenHash: string;
+    user: AppUserRecord;
+    issuedByUserId: string;
+    createdAt: string;
+    expiresAt: string;
+    request: AuthRequestContext;
+  },
+): Promise<void> {
+  // D1 batches are transactional and execute the statements sequentially. This means two
+  // office tabs cannot interleave a revoke/insert pair and leave two live QR secrets for the
+  // same crew user: the later completed issuance revokes the earlier one as one mutation.
+  const revokeOpen = env.DB.prepare(
+    `UPDATE app_device_pairings
+     SET revoked_at = ?
+     WHERE tenant_id = ? AND user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL`,
+  ).bind(input.createdAt, input.user.tenant_id, input.user.user_id);
+  const insertPairing = env.DB.prepare(
+    `INSERT INTO app_device_pairings
+       (token_hash, tenant_id, user_id, issued_by_user_id, created_at, expires_at,
+        consumed_at, revoked_at, issued_ip_hash, issued_user_agent_hash)
+     VALUES (?,?,?,?,?,?,NULL,NULL,?,?)`,
+  ).bind(
+    input.tokenHash,
+    input.user.tenant_id,
+    input.user.user_id,
+    input.issuedByUserId,
+    input.createdAt,
+    input.expiresAt,
+    input.request.ip_hash,
+    input.request.user_agent_hash,
+  );
+  await env.DB.batch([revokeOpen, insertPairing]);
+}
+
+export async function consumeDevicePairing(
+  env: Env,
+  input: {
+    tokenHash: string;
+    deviceId: string;
+    deviceProofHash: string;
+    sessionHash: string;
+    createdAt: string;
+    expiresAt: string;
+    request: AuthRequestContext;
+  },
+): Promise<{ user: AppUserRecord; deviceId: string } | null> {
+  const candidate = await env.DB.prepare(
+    `SELECT u.user_id, u.tenant_id, u.email_normalized, u.display_name, u.role,
+            u.frappe_user_id, u.active, u.created_by, u.created_at, u.updated_at
+     FROM app_device_pairings p
+     INNER JOIN app_users u ON u.user_id = p.user_id AND u.tenant_id = p.tenant_id
+     WHERE p.token_hash = ? AND p.consumed_at IS NULL AND p.revoked_at IS NULL
+       AND p.expires_at > ? AND u.active = 1 AND u.role = 'field'
+     LIMIT 1`,
+  ).bind(input.tokenHash, input.createdAt).first<AppUserRecord>();
+  if (!candidate) return null;
+
+  // Claim before creating a session. The compare-and-set makes the opaque QR secret
+  // single-use even when two scanners submit at the same instant. A later storage
+  // failure is fail-closed: the office issues a fresh QR instead of restoring a claim.
+  const claim = await env.DB.prepare(
+    `UPDATE app_device_pairings SET consumed_at = ?
+     WHERE token_hash = ? AND user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL
+       AND expires_at > ?`,
+  ).bind(input.createdAt, input.tokenHash, candidate.user_id, input.createdAt).run();
+  if (d1Changes(claim) !== 1) return null;
+
+  try {
+    await env.DB.prepare(
+      `INSERT INTO app_devices
+         (device_id, tenant_id, user_id, device_proof_hash, paired_at, last_seen_at,
+          revoked_at, revoked_by_user_id, created_ip_hash, created_user_agent_hash)
+       VALUES (?,?,?,?,?,?,NULL,NULL,?,?)`,
+    ).bind(
+      input.deviceId,
+      candidate.tenant_id,
+      candidate.user_id,
+      input.deviceProofHash,
+      input.createdAt,
+      input.createdAt,
+      input.request.ip_hash,
+      input.request.user_agent_hash,
+    ).run();
+    await insertSession(env, {
+      sessionHash: input.sessionHash,
+      user: candidate,
+      createdAt: input.createdAt,
+      expiresAt: input.expiresAt,
+      request: input.request,
+      deviceId: input.deviceId,
+    });
+  } catch (error) {
+    await env.DB.prepare(`DELETE FROM app_devices WHERE device_id = ?`).bind(input.deviceId).run().catch(() => {});
+    throw error;
+  }
+  return { user: candidate, deviceId: input.deviceId };
+}
+
+export async function listDeviceBindings(env: Env, tenantId: string): Promise<AppDeviceRecord[]> {
+  const result = await env.DB.prepare(
+    `SELECT d.device_id, d.tenant_id, d.user_id, u.display_name AS field_user_name,
+            d.paired_at, COALESCE(MAX(s.last_seen_at), d.last_seen_at) AS last_seen_at,
+            d.revoked_at, d.revoked_by_user_id
+     FROM app_devices d
+     INNER JOIN app_users u ON u.user_id = d.user_id AND u.tenant_id = d.tenant_id
+     LEFT JOIN app_sessions s ON s.device_id = d.device_id AND s.tenant_id = d.tenant_id
+     WHERE d.tenant_id = ?
+     GROUP BY d.device_id
+     ORDER BY d.revoked_at IS NULL DESC, d.paired_at DESC
+     LIMIT 100`,
+  ).bind(tenantId).all<AppDeviceRecord>();
+  return result.results ?? [];
+}
+
+export async function revokeDeviceBinding(
+  env: Env,
+  input: { tenantId: string; deviceId: string; revokedByUserId: string; now: string },
+): Promise<boolean> {
+  const revoked = await env.DB.prepare(
+    `UPDATE app_devices SET revoked_at = ?, revoked_by_user_id = ?
+     WHERE tenant_id = ? AND device_id = ? AND revoked_at IS NULL`,
+  ).bind(input.now, input.revokedByUserId, input.tenantId, input.deviceId).run();
+  if (d1Changes(revoked) !== 1) return false;
+  await env.DB.prepare(
+    `UPDATE app_sessions SET revoked_at = ?
+     WHERE tenant_id = ? AND device_id = ? AND revoked_at IS NULL`,
+  ).bind(input.now, input.tenantId, input.deviceId).run();
+  return true;
+}
+
 export async function insertSession(
   env: Env,
   input: {
@@ -130,13 +293,14 @@ export async function insertSession(
     createdAt: string;
     expiresAt: string;
     request: AuthRequestContext;
+    deviceId?: string;
   },
 ): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO app_sessions
        (session_hash, user_id, tenant_id, created_at, expires_at, revoked_at, last_seen_at,
-        created_ip_hash, created_user_agent_hash)
-     VALUES (?,?,?,?,?,NULL,?,?,?)`,
+        created_ip_hash, created_user_agent_hash, device_id)
+     VALUES (?,?,?,?,?,NULL,?,?,?,?)`,
   ).bind(
     input.sessionHash,
     input.user.user_id,
@@ -146,6 +310,7 @@ export async function insertSession(
     input.createdAt,
     input.request.ip_hash,
     input.request.user_agent_hash,
+    input.deviceId ?? null,
   ).run();
 }
 
@@ -157,13 +322,16 @@ export async function findActiveSession(
 ): Promise<AppSessionRecord | null> {
   return await env.DB.prepare(
     `SELECT s.session_hash, s.created_at AS session_created_at,
-            s.expires_at AS session_expires_at, s.revoked_at,
+            s.expires_at AS session_expires_at, s.revoked_at, s.device_id,
+            d.device_proof_hash,
             u.user_id, u.tenant_id, u.email_normalized, u.display_name, u.role,
             u.frappe_user_id, u.active, u.created_by, u.created_at, u.updated_at
      FROM app_sessions s
      INNER JOIN app_users u ON u.user_id = s.user_id AND u.tenant_id = s.tenant_id
+     LEFT JOIN app_devices d ON d.device_id = s.device_id AND d.tenant_id = s.tenant_id
      WHERE s.session_hash = ? AND s.tenant_id = ? AND s.revoked_at IS NULL
        AND s.expires_at > ? AND u.active = 1 AND u.tenant_id = ?
+       AND (u.role != 'field' OR (s.device_id IS NOT NULL AND d.device_id IS NOT NULL AND d.revoked_at IS NULL))
      LIMIT 1`,
   ).bind(sessionHash, configuredTenantId, now, configuredTenantId).first<AppSessionRecord>();
 }
@@ -256,6 +424,10 @@ export async function pruneAuthRecords(env: Env, now = new Date()): Promise<void
        WHERE expires_at <= ? OR (consumed_at IS NOT NULL AND consumed_at <= ?)`,
     ).bind(nowValue, consumedCutoff).run(),
     env.DB.prepare(`DELETE FROM app_sessions WHERE expires_at <= ?`).bind(nowValue).run(),
+    env.DB.prepare(
+      `DELETE FROM app_device_pairings
+       WHERE expires_at <= ? OR (consumed_at IS NOT NULL AND consumed_at <= ?) OR (revoked_at IS NOT NULL AND revoked_at <= ?)`,
+    ).bind(nowValue, consumedCutoff, consumedCutoff).run(),
     env.DB.prepare(`DELETE FROM app_auth_throttles WHERE window_expires_at <= ?`).bind(nowValue).run(),
     env.DB.prepare(`DELETE FROM app_action_throttles WHERE window_expires_at <= ?`).bind(nowValue).run(),
     env.DB.prepare(`DELETE FROM app_auth_audit WHERE created_at <= ?`).bind(auditCutoff).run(),
@@ -272,6 +444,12 @@ async function consumeOpenMagicLinks(env: Env, userId: string, now: string): Pro
   await env.DB.prepare(
     `UPDATE app_magic_links SET consumed_at = ?
      WHERE user_id = ? AND consumed_at IS NULL`,
+  ).bind(now, userId).run();
+}
+
+async function revokeAllUserDevices(env: Env, userId: string, now: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE app_devices SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
   ).bind(now, userId).run();
 }
 

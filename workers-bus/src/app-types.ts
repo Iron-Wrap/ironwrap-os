@@ -6,6 +6,8 @@ export const AUTH_THROTTLE_WINDOW_SECONDS = 15 * 60;
 export const MAGIC_LINK_REQUEST_EMAIL_LIMIT = 5;
 export const MAGIC_LINK_REQUEST_IP_LIMIT = 20;
 export const MAGIC_LINK_CONSUME_IP_LIMIT = 30;
+export const DEVICE_PAIRING_TTL_SECONDS = 10 * 60;
+export const APP_DEVICE_PROOF_HEADER = "x-ironwrap-device-proof";
 
 export type AppRole = "owner" | "ops" | "field";
 
@@ -45,6 +47,19 @@ export interface AppSessionRecord extends AppUserRecord {
   session_created_at: string;
   session_expires_at: string;
   revoked_at: string | null;
+  device_id: string | null;
+  device_proof_hash: string | null;
+}
+
+export interface AppDeviceRecord {
+  device_id: string;
+  tenant_id: string;
+  user_id: string;
+  field_user_name: string;
+  paired_at: string;
+  last_seen_at: string | null;
+  revoked_at: string | null;
+  revoked_by_user_id: string | null;
 }
 
 export interface AuthContext {

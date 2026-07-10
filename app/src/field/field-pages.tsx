@@ -18,6 +18,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useSession } from "../auth/session-context";
+import { getDeviceSecret } from "../auth/device-credential";
 import { OutboxStateBadge } from "../components/outbox-state-badge";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
@@ -220,7 +221,7 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
     if (!cursor || loadingMore || offline) return;
     setLoadingMore(true);
     try {
-      const page = await loadProofPage(model.job.id, cursor);
+      const page = await loadProofPage(session, model.job.id, cursor);
       setProof((current) => dedupeProof([...current, ...page.items]));
       setCursor(page.next_cursor);
     } finally {
@@ -471,6 +472,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
           tenantId: session.tenant.id,
           userId: session.user.id,
           csrfToken: session.csrf_token,
+          deviceProof: getDeviceSecret,
         });
         const latest = await getOutboxAction(action.deviceActionId);
         if (latest) setSavedAction(latest);

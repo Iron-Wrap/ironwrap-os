@@ -4,6 +4,7 @@ import { deleteMeta, getMeta, setMeta } from "../storage/db";
 import { ApiError, apiRequest, isRetryableApiError } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import { appRoles } from "../lib/roles";
+import { clearDeviceSecret, getDeviceSecret } from "./device-credential";
 
 const userSchema = z.object({
   id: z.string().min(1),
@@ -35,7 +36,7 @@ export const sessionResponseSchema = z.discriminatedUnion("authenticated", [
   sessionBaseSchema.extend({
     authenticated: z.literal(false),
     user: z.null(),
-    tenant: z.null(),
+    tenant: tenantSchema.nullable(),
     csrf_token: z.null(),
     session_expires_at: z.null(),
   }),
@@ -64,6 +65,7 @@ export async function fetchSession(fetcher: typeof fetch = fetch): Promise<Sessi
       path: API_PATHS.session,
       schema: sessionResponseSchema,
       fetcher,
+      deviceProof: getDeviceSecret,
     });
     if (session.authenticated) {
       const expiresAt = Date.parse(session.session_expires_at);
@@ -74,7 +76,14 @@ export async function fetchSession(fetcher: typeof fetch = fetch): Promise<Sessi
         } satisfies OfflineSessionSnapshot);
       }
     } else {
+      const snapshot = await getMeta<OfflineSessionSnapshot>(SNAPSHOT_KEY);
       await clearSessionSnapshot();
+      if (snapshot?.session.user.role !== "field") return session;
+      await clearDeviceSecret();
+      return {
+        ...session,
+        stale_fields: [...new Set([...session.stale_fields, "field_device_repair_required"])],
+      };
     }
     return session;
   } catch (error) {

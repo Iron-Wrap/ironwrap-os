@@ -341,7 +341,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
          ('envelopes','audit_log','dead_letter','source_counts','heartbeat',
           'quickbooks_webhook_receipts','dedup_claims','replay_requests','app_users',
           'app_magic_links','app_sessions','app_auth_throttles','app_auth_audit',
-          'field_actions','field_action_media','app_action_throttles') THEN 1 ELSE 0 END), 0) AS table_count,
+          'field_actions','field_action_media','app_action_throttles','app_device_pairings',
+          'app_devices') THEN 1 ELSE 0 END), 0) AS table_count,
        COALESCE(SUM(CASE WHEN type = 'index' AND name IN
          ('idx_dead_letter_open_envelope','idx_audit_result_ts','idx_envelopes_operational',
           'idx_envelopes_erpnext_error_open','idx_heartbeat_ran_at','idx_qb_receipts_last_seen',
@@ -350,7 +351,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'idx_app_sessions_user_expiry','idx_app_auth_throttles_expiry',
           'idx_app_auth_audit_tenant_created','idx_field_actions_job_created',
           'idx_field_actions_recovery','idx_field_action_media_evidence',
-          'idx_app_action_throttles_expiry')
+          'idx_app_action_throttles_expiry','idx_app_sessions_device_active',
+          'idx_app_device_pairings_user_expiry','idx_app_devices_tenant_user_active')
          THEN 1 ELSE 0 END), 0) AS index_count,
        COALESCE(SUM(CASE WHEN type = 'trigger' AND name IN
          ('validate_source_count_insert','validate_source_count_update') THEN 1 ELSE 0 END), 0) AS trigger_count
@@ -372,6 +374,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             au.user_id AS app_user_id, au.tenant_id AS app_tenant_id, au.role AS app_role,
             ml.token_hash AS magic_link_hash, ml.expires_at AS magic_link_expires_at,
             aps.session_hash AS app_session_hash, aps.expires_at AS app_session_expires_at,
+            dp.token_hash AS device_pairing_hash, dp.expires_at AS device_pairing_expires_at,
+            ad.device_id AS app_device_id, ad.paired_at AS app_device_paired_at,
             at.key_hash AS auth_throttle_hash, at.attempts AS auth_throttle_attempts,
             aa.event AS auth_audit_event, aa.outcome AS auth_audit_outcome,
             fa.device_action_id AS field_action_id, fa.payload_hash AS field_payload_hash,
@@ -388,6 +392,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN app_users au ON 1 = 0
      LEFT JOIN app_magic_links ml ON 1 = 0
      LEFT JOIN app_sessions aps ON 1 = 0
+     LEFT JOIN app_device_pairings dp ON 1 = 0
+     LEFT JOIN app_devices ad ON 1 = 0
      LEFT JOIN app_auth_throttles at ON 1 = 0
      LEFT JOIN app_auth_audit aa ON 1 = 0
      LEFT JOIN field_actions fa ON 1 = 0
@@ -395,8 +401,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN app_action_throttles aat ON 1 = 0
      LIMIT 0`,
   ).all();
-  return Number(artifacts?.table_count ?? 0) === 16 &&
-    Number(artifacts?.index_count ?? 0) === 17 &&
+  return Number(artifacts?.table_count ?? 0) === 18 &&
+    Number(artifacts?.index_count ?? 0) === 20 &&
     Number(artifacts?.trigger_count ?? 0) === 2;
 }
 

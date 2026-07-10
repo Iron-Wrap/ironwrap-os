@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { clearDeviceSecret, type DeviceProofProvider } from "../auth/device-credential";
+
 import {
   claimNextQueuedAction,
   getOutboxActionWithBlobs,
@@ -26,6 +28,7 @@ const verifiedResponseSchema = z.object({
 export interface FlushOutboxOptions {
   fetcher?: typeof fetch;
   csrfToken?: string | (() => string | undefined);
+  deviceProof?: DeviceProofProvider;
   tenantId?: string;
   userId?: string;
   now?: () => number;
@@ -84,6 +87,7 @@ async function executeFlush(
     typeof options.csrfToken === "function" ? options.csrfToken() : options.csrfToken;
   if (!csrfToken || csrfToken === "offline-session-no-csrf") return result;
   if (typeof navigator !== "undefined" && !navigator.onLine) return result;
+  const deviceProof = await options.deviceProof?.();
 
   while (result.processed < maxActions && !options.signal?.aborted) {
     const action = await claimNextQueuedAction(principal, now());
@@ -97,6 +101,7 @@ async function executeFlush(
       withBlobs.blobs,
       options.fetcher ?? fetch,
       csrfToken,
+      deviceProof,
       options.signal,
       now(),
     );
@@ -150,6 +155,7 @@ async function uploadAction(
   blobs: OutboxBlobRecord[],
   fetcher: typeof fetch,
   csrfToken: string,
+  deviceProof: string | undefined,
   signal: AbortSignal | undefined,
   now: number,
 ): Promise<
@@ -161,6 +167,7 @@ async function uploadAction(
     "X-Device-Action-Id": action.deviceActionId,
     "X-CSRF-Token": csrfToken,
   });
+  if (deviceProof) headers.set("X-IronWrap-Device-Proof", deviceProof);
   let body: BodyInit;
   if (action.attachments.length === 0 && action.kind !== "field_checkin") {
     headers.set("Content-Type", "application/json");
@@ -239,6 +246,7 @@ async function uploadAction(
   }
 
   const payload = await safeJson(response);
+  if (response.status === 401 && deviceProof) await clearDeviceSecret();
   const message = responseMessage(payload);
   if (response.status === 409 || response.status === 412) {
     const status = response.status;

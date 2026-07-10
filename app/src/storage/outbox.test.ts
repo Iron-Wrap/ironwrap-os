@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getDatabase, resetDatabaseForTests } from "./db";
+import { getDeviceSecret, storeDeviceSecret } from "../auth/device-credential";
 import {
   assertTransition,
   claimNextQueuedAction,
@@ -69,6 +70,7 @@ describe("offline outbox", () => {
       expect(headers.get("Idempotency-Key")).toBe("stable-action");
       expect(headers.get("X-Device-Action-Id")).toBe("stable-action");
       expect(headers.get("X-CSRF-Token")).toBe("current-csrf-only");
+      expect(headers.get("X-IronWrap-Device-Proof")).toBe("current-device-proof");
       expect(JSON.parse(String(init?.body))).toEqual({
         device_action_id: "stable-action",
         payload: { blocker: false },
@@ -84,6 +86,7 @@ describe("offline outbox", () => {
       ...principal,
       fetcher,
       csrfToken: "current-csrf-only",
+      deviceProof: async () => "current-device-proof",
       now: () => 3_000,
     });
 
@@ -94,6 +97,7 @@ describe("offline outbox", () => {
       verification: { serverRef: "checkin-42", verifiedAt: 3_000 },
     });
     expect(JSON.stringify(saved)).not.toContain("current-csrf-only");
+    expect(JSON.stringify(saved)).not.toContain("current-device-proof");
   });
 
   it("does not upload until a current CSRF token is available", async () => {
@@ -115,6 +119,34 @@ describe("offline outbox", () => {
     });
     expect(fetcher).not.toHaveBeenCalled();
     expect((await getOutboxAction("waiting-action"))?.state).toBe("queued");
+  });
+
+  it("clears a rejected device proof while retaining the local action for later review", async () => {
+    await storeDeviceSecret("d".repeat(43));
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "revoked-device-action",
+      kind: "field_note",
+      endpoint: "/api/v1/jobs/job-1/notes",
+      payload: { note: "Weather delay" },
+    });
+    await queueOutboxAction("revoked-device-action", 2_000);
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ error: "unauthorized" }, { status: 401 }));
+
+    await flushOutbox({
+      ...principal,
+      fetcher,
+      csrfToken: "csrf",
+      deviceProof: getDeviceSecret,
+      now: () => 3_000,
+    });
+
+    expect(await getDeviceSecret()).toBeUndefined();
+    expect(await getOutboxAction("revoked-device-action")).toMatchObject({
+      state: "needs_attention",
+    });
   });
 
   it("sends a metadata-only field check-in as multipart", async () => {
@@ -273,6 +305,14 @@ describe("offline outbox", () => {
         kind: "unsafe",
         endpoint: "/api/v1/jobs/job-1/notes",
         payload: { nested: { csrf_token: "must-not-persist" } },
+      }),
+    ).rejects.toThrow("Session secrets cannot be saved");
+    await expect(
+      saveOutboxAction({
+        ...principal,
+        kind: "unsafe-device-proof",
+        endpoint: "/api/v1/jobs/job-1/notes",
+        payload: { device_proof: "must-not-persist" },
       }),
     ).rejects.toThrow("Session secrets cannot be saved");
 

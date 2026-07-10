@@ -19,7 +19,7 @@ capability only.
 | Hermes agent layer | 8 runtime-filtered roles, 118 MCP tools, receipt-bound approved-write contract |
 | Deploy/ops | Contract-validated production configuration, pinned runtime lock, encrypted Frappe/D1 recovery, launch runbook |
 | Competitive truth | 10 exceeded / 7 covered / 19 open, adversarially audited |
-| Product UI | P0 shell/session/magic-link/outbox and P1 Field Companion/BFF are locally implemented. QR pairing, live backend, browser/device proof, and P2-P5 owner/sales/portal/tenant surfaces remain open; Frappe Control Center is the truthful fallback. |
+| Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, and office-issued QR pairing with device proof/revocation are locally implemented and contract-tested. Live backend, browser/device proof, and P2-P5 owner/sales/portal/tenant surfaces remain open; Frappe Control Center is the truthful fallback. |
 
 Every "their UX beats ours" row in the scorecard (boards, mobile app, omnichannel inbox,
 homeowner widget) lands in this one missing layer. That makes the UI the highest-leverage
@@ -96,8 +96,9 @@ style, OKLCH tokens, sonner for toasts.
   roof. On iOS, install + push opt-in + pairing happen as ONE supervised provisioning ritual
   at the office (Safari's share-sheet install and the push permission tap are manual by
   design). Customer portal: signed per-job links.
-  QR crew pairing is intentionally not yet implemented; no field launch claim is permitted until
-  the pairing, revocation, and lost-device proof gate closes.
+  The QR pairing flow, device-bound field proof, office revocation surface, and lost-device
+  procedure are locally implemented. No field-launch claim is permitted until the deployed
+  pairing, revocation, and lost-device proof gate closes on real devices.
 - **Offline outbox, iOS-real.** Field actions (check-in, photos, voice, gate view) write to
   IndexedDB first; the server already dedupes and replays safely. Verified WebKit constraint:
   there is NO Background Sync API on iOS, so the outbox flushes only while the app is open.
@@ -119,9 +120,9 @@ marketed or shipped until its own prerequisite proof gates pass.
 
 ### P0: Foundation (design system + shell + auth + BFF)
 
-Repository status: shell, session/magic-link boundaries, BFF read routes, and principal-bound
-outbox are implemented. QR crew pairing, live-backend enablement, browser accessibility, and
-performance acceptance remain open.
+Repository status: shell, session/magic-link boundaries, BFF read routes, principal-bound
+outbox, and QR crew pairing/revocation are implemented. Live-backend enablement, browser
+accessibility, real-device, and performance acceptance remain open.
 
 Tokens, component tier, app shell with role-based navigation, session auth, `/api/*` read
 models for jobs/gates/evidence, outbox plumbing, CI wiring (build, Playwright, pinned
@@ -139,8 +140,9 @@ Stream from live-shaped fixtures.
 ### P1: Field Companion (the crew app; biggest differentiator)
 
 Repository status: Today, Job, Proof Stream, three-step Check-in, IndexedDB packets/outbox,
-upload verification, and bounded proof rendering are implemented and locally green. Real iOS/Android,
-weak-signal, process-kill, storage, multi-tab, accessibility, and timing proof remain open.
+upload verification, bounded proof rendering, and device-bound QR access are implemented and
+locally green. Real iOS/Android, weak-signal, process-kill, storage, multi-tab, accessibility,
+and timing proof remain open.
 
 Screens: Today (assigned jobs, one card each), Job (Proof Stream + gate locks), Check-in
 stepper (photos, voice note, blocker flag, submit), all offline-first.
@@ -248,8 +250,8 @@ category-defining, and they are now part of the plan:
 
 ## 7. What this needs
 
-From the repo: QR crew pairing, remaining product surfaces, live flags/deployment, and device
-acceptance remain to be built or proven. From the owner: P1 field testing needs a phone and one
-crew member; P4 widget embed needs website access (already tracked). Build order starts with the
-remaining P0 acceptance work; every phase is verifiable locally per the
+From the repo: remaining product surfaces, live flags/deployment, and device acceptance remain to
+be built or proven. From the owner: P1 field testing needs a phone and one crew member; P4 widget
+embed needs website access (already tracked). Build order starts with the remaining P0 acceptance
+work; every phase is verifiable locally per the
 launch runbook's truth-boundary rules before anything ships to the Oracle host.

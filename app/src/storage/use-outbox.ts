@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import type { DeviceProofProvider } from "../auth/device-credential";
 import { emptyOutboxSummary, getOutboxSummary, subscribeOutboxChanges } from "./outbox-store";
 import { flushOutbox, initializeOutbox } from "./outbox-processor";
 import type { OutboxSummary } from "./outbox-types";
@@ -27,13 +28,15 @@ export function useOutboxSummary(principal: { tenantId: string; userId: string }
 export function useAppOpenOutboxSync(
   principal: { tenantId: string; userId: string },
   csrfToken?: string,
+  deviceProof?: DeviceProofProvider,
 ): void {
   const { tenantId, userId } = principal;
   useEffect(() => {
     const flush = () => {
-      if (navigator.onLine && csrfToken) void flushOutbox({ tenantId, userId, csrfToken });
+      if (navigator.onLine && csrfToken)
+        void flushOutbox({ tenantId, userId, csrfToken, deviceProof });
     };
-    if (csrfToken) void initializeOutbox({ tenantId, userId, csrfToken });
+    if (csrfToken) void initializeOutbox({ tenantId, userId, csrfToken, deviceProof });
     window.addEventListener("online", flush);
     const visibility = () => {
       if (document.visibilityState === "visible") flush();
@@ -45,5 +48,5 @@ export function useAppOpenOutboxSync(
       document.removeEventListener("visibilitychange", visibility);
       window.clearInterval(interval);
     };
-  }, [csrfToken, tenantId, userId]);
+  }, [csrfToken, deviceProof, tenantId, userId]);
 }

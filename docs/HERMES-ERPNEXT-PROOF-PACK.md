@@ -417,7 +417,7 @@ These are not artificial and should stay visible:
 | Cloudflare token rotation | Cloudflare account authority |
 | Historical OneDrive migration | Microsoft/Google access plus legacy mapping |
 | Compliance/legal notices | lawyer/owner approval |
-| Operator UI | Frappe Control Center exists in source; React owner cockpit and customer portal remain absent; live role/device proof remains open |
+| Operator UI | Frappe Control Center and the read-only React Owner Now decision board exist in source; Sales, approvals, and customer portal remain open. Live role/device/browser proof remains open. |
 
 These are launch/product gates, not reasons to weaken repository contracts. Keep them open until
 the named external evidence exists.

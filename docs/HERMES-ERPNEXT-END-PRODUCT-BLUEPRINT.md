@@ -114,14 +114,16 @@ role-shaped read models, offline verified outbox, field proof, owner exceptions,
 estimation, and customer-safe closeout are required slices rather than future polish.
 
 Owner Now checkpoint (2026-07-10): the PWA's owner/ops route is locally implemented as a
-read-only, exception-first BFF surface. It prioritizes verified crew work-stops, blocked gates,
-automation/material/finance exceptions, and business-triage state. A Lead Envelope now separates
-`triage_status` from bus-owned, audited transport status; `Untriaged` is created before the JobNimbus
-bridge and legacy rows become explicit `Unknown` data-quality work. MCTB displays only an
-append-only Gmail provider-acceptance receipt (within SLA or late) or the distinct absence/no-channel
-state, never a claim of delivery or human follow-up. Local contract proof is not deployment proof:
-remote D1/Frappe migration, enabled BFF, real device/browser, provider receipt, and operator
-acceptance remain launch gates.
+read-only, exception-first BFF decision board. It separates verified crew work-stops/blocked gates,
+operating exceptions, and lead attention into compact signals and durable decision rows; source
+freshness, bounded totals, unavailable action guidance, and missing due timing are disclosed once as
+data-confidence state. Job-packet links render only with the BFF's `job.read` capability. A Lead
+Envelope now separates `triage_status` from bus-owned, audited transport status; `Untriaged` is
+created before the JobNimbus bridge and legacy rows become explicit `Unknown` data-quality work.
+MCTB displays only an append-only Gmail provider-acceptance receipt (within SLA or late) or the
+distinct absence/no-channel state, never a claim of delivery or human follow-up. Local contract and
+mocked-browser proof are not deployment proof: remote D1/Frappe migration, enabled BFF, real
+device/browser, provider receipt, and operator acceptance remain launch gates.
 
 ## Research Basis
 

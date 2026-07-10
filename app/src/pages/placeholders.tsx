@@ -6,8 +6,6 @@ import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
 
-export { OwnerNowPage } from "../owner/owner-now-page";
-
 const DevicePairingSettings = lazy(async () => ({
   default: (await import("../pairing/device-pairing-settings")).DevicePairingSettings,
 }));

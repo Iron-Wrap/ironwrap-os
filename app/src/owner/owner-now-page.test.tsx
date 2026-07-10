@@ -8,7 +8,7 @@ import type { AuthenticatedSession } from "../auth/session";
 import type { OwnerNowResponse } from "./owner-contracts";
 import { loadOwnerNow } from "./owner-api";
 import { OwnerNowPage } from "./owner-now-page";
-import { formatOwnerDate, groupOwnerExceptions, validJobId } from "./owner-now-utils";
+import { buildDecisionLanes, formatOwnerDate, validJobId } from "./owner-now-utils";
 
 vi.mock("./owner-api", () => ({ loadOwnerNow: vi.fn() }));
 vi.mock("@tanstack/react-router", () => ({
@@ -143,7 +143,7 @@ function ownerNowModel(): OwnerNowResponse {
         severity: "Critical",
         title: "QuickBooks replay stalled",
         why: "Webhook receipt is unresolved",
-        next_action: "Review the receipt evidence.",
+        next_action: null,
         job_id: "JOB-A",
         occurred_at: "2026-07-10T17:30:00.000Z",
         due_at: "2026-07-10T18:00:00.000Z",
@@ -201,8 +201,13 @@ function ownerNowModel(): OwnerNowResponse {
   };
 }
 
-function renderOwner(session: AuthenticatedSession = ownerSession) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderOwner({
+  session = ownerSession,
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+}: {
+  session?: AuthenticatedSession;
+  client?: QueryClient;
+} = {}) {
   return render(
     <QueryClientProvider client={client}>
       <SessionProvider session={session}>
@@ -217,51 +222,100 @@ describe("OwnerNowPage", () => {
     vi.mocked(loadOwnerNow).mockResolvedValue(ownerNowModel());
   });
 
-  it("puts the work-stoppage groups first, signals stale source data, and avoids fake actions", async () => {
+  it("turns proof-safe exceptions into a decision board without fabricating actions or delivery", async () => {
     const { container } = renderOwner();
 
-    await screen.findByRole("heading", { name: "Crew-reported work stops" });
+    await screen.findByRole("heading", { name: "Work stopped" });
 
     expect(
-      Array.from(container.querySelectorAll('section[aria-labelledby^="owner-exceptions-"]')).map(
-        (section) => section.getAttribute("aria-labelledby"),
-      ),
+      Array.from(
+        container.querySelectorAll('section[aria-labelledby^="owner-decision-lane-"]'),
+      ).map((section) => section.getAttribute("aria-labelledby")),
     ).toEqual([
-      "owner-exceptions-field_blocker",
-      "owner-exceptions-blocked_gate",
-      "owner-exceptions-automation_incident",
-      "owner-exceptions-material_exception",
-      "owner-exceptions-finance_exception",
-      "owner-exceptions-untriaged_lead",
-      "owner-exceptions-lead_triage_unknown",
+      "owner-decision-lane-work_stopped",
+      "owner-decision-lane-operating_exceptions",
+      "owner-decision-lane-lead_attention",
     ]);
-    expect(screen.getByText("Source update time is unavailable.")).toBeVisible();
+    expect(screen.getAllByText("Work stopped").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("Needs review").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("Lead attention").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("Source update").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(1);
     expect(
-      screen.getByText(/Stale fields: exceptions.next_action, exceptions.due_at/i),
-    ).toBeVisible();
+      screen.getAllByText("Action guidance is unavailable in this read-only queue.").length,
+    ).toBeGreaterThan(1);
+    expect(screen.getAllByText("Some due timing is unavailable.").length).toBeGreaterThan(1);
     expect(
-      screen.getByText(
-        /Some totals are lower bounds because these sources reached their query limit/i,
-      ),
-    ).toBeVisible();
-    expect(screen.getByText(/Recorded .*10:05/)).toBeVisible();
-    expect(screen.getByText("provider accepted within 60s")).toBeVisible();
-    expect(screen.getByText("no provider proof after 60s")).toBeVisible();
-    expect(screen.getByText(formatOwnerDate("2026-07-10T11:01:00.000Z"))).toBeVisible();
-    expect(screen.getAllByText(formatOwnerDate("2026-07-10T11:00:45.000Z")).length).toBeGreaterThan(
-      1,
-    );
-    expect(screen.getAllByText("Untriaged leads").length).toBeGreaterThan(0);
+      screen.getAllByText(/Counts are lower bounds for Field Blockers, Material Exceptions/i)
+        .length,
+    ).toBeGreaterThan(1);
+    expect(screen.getAllByText("Acknowledgement evidence").length).toBeGreaterThan(1);
     expect(screen.queryByText("New leads")).not.toBeInTheDocument();
     expect(screen.queryByText(/sent|delivered|human follow-up/i)).not.toBeInTheDocument();
-    expect(screen.getAllByText("No verified next action was returned.").length).toBeGreaterThan(0);
-    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    expect(screen.queryByText("No verified next action was returned.")).not.toBeInTheDocument();
 
-    expect(screen.getAllByRole("link", { name: "Open job JOB-A" })[0]!).toHaveAttribute(
+    expect(screen.getAllByRole("link", { name: "Open job packet for JOB-A" })[0]!).toHaveAttribute(
       "href",
       "/jobs/JOB-A",
     );
     expect(screen.queryByRole("link", { name: /not-a-job/i })).not.toBeInTheDocument();
+  });
+
+  it("gates job access on the server-backed capability rather than showing a disabled control", async () => {
+    const noJobAccess = ownerNowModel();
+    noJobAccess.allowed_actions = [];
+    vi.mocked(loadOwnerNow).mockResolvedValueOnce(noJobAccess);
+    renderOwner();
+
+    await screen.findByRole("heading", { name: "Work stopped" });
+    expect(screen.queryByRole("link", { name: /Open job packet/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps a prior read visible when refresh fails", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(["owner-now", "ironwrap", "appu_owner"], ownerNowModel());
+    vi.mocked(loadOwnerNow).mockRejectedValueOnce(new Error("upstream unavailable"));
+
+    renderOwner({ client });
+
+    expect(await screen.findByText("Showing the previous read.")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Work stopped" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Retry queue" })).toBeVisible();
+  });
+
+  it("uses an honest empty state when a bounded source returns no exception rows", async () => {
+    const empty = ownerNowModel();
+    empty.exceptions = [];
+    empty.summary = {
+      active_jobs: 3,
+      field_blockers: 0,
+      blocked_gates: 0,
+      open_incidents: 0,
+      finance_exceptions: 0,
+      untriaged_leads: 0,
+      lead_triage_unknown: 0,
+      mctb_unproven_due: 0,
+      material_exceptions: 0,
+    };
+    vi.mocked(loadOwnerNow).mockResolvedValueOnce(empty);
+
+    renderOwner();
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "No exceptions were returned from available sources",
+      }),
+    ).toBeVisible();
+  });
+
+  it("shows the route-specific retry state when no read is available", async () => {
+    vi.mocked(loadOwnerNow).mockRejectedValueOnce(new Error("upstream unavailable"));
+
+    renderOwner();
+
+    expect(await screen.findByRole("heading", { name: "Current queue unavailable" })).toBeVisible();
+    expect(screen.getByText(/Retrying does not change jobs or acknowledgements/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Retry queue" })).toBeVisible();
   });
 
   it("keeps the existing owner/ops access semantics for operations", async () => {
@@ -270,30 +324,39 @@ describe("OwnerNowPage", () => {
       user: { ...ownerSession.user, role: "ops" as const },
     };
 
-    renderOwner(opsSession);
+    renderOwner({ session: opsSession });
 
-    expect(await screen.findByRole("heading", { name: "Owner Now" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Now" })).toBeVisible();
     expect(loadOwnerNow).toHaveBeenCalledOnce();
   });
 
-  it("keeps grouping and job links deterministic and defensive", () => {
-    const groups = groupOwnerExceptions(ownerNowModel().exceptions);
+  it("keeps lane order, dates, and job links deterministic and defensive", () => {
+    const lanes = buildDecisionLanes(ownerNowModel().exceptions, { dueTimingAvailable: false });
 
-    expect(groups.map((group) => group.kind)).toEqual([
-      "field_blocker",
-      "blocked_gate",
-      "automation_incident",
-      "material_exception",
-      "finance_exception",
-      "untriaged_lead",
-      "lead_triage_unknown",
+    expect(lanes.map((lane) => lane.id)).toEqual([
+      "work_stopped",
+      "operating_exceptions",
+      "lead_attention",
     ]);
-    expect(groups[1]?.exceptions.map((exception) => exception.id)).toEqual([
+    expect(lanes[0]?.exceptions.map((exception) => exception.id)).toEqual([
       "gate_first",
       "gate_later",
+      "checkin_blocked",
     ]);
     expect(validJobId("JOB-A")).toBe(true);
     expect(validJobId("../../not-a-job")).toBe(false);
     expect(formatOwnerDate("2026-02-30")).toBe("Date unavailable");
+    expect(
+      formatOwnerDate("2026-07-10 10:05:00", {
+        locale: "en-CA",
+        timeZone: "America/Edmonton",
+      }),
+    ).toMatch(/Jul 10, 2026 · 10:05/);
+    expect(
+      formatOwnerDate("2026-07-10T12:00:00.000Z", {
+        locale: "en-CA",
+        timeZone: "America/Edmonton",
+      }),
+    ).toMatch(/6:00/);
   });
 });

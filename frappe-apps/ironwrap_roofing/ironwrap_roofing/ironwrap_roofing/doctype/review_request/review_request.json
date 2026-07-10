@@ -13,12 +13,16 @@
     "status",
     "channel",
     "prepared_at",
+    "eligibility_checked_by",
+    "eligibility_checked_at",
+    "quiet_hours_ok",
     "approved_by",
     "approved_at",
     "stop_conditions_json",
     "eligibility_notes",
     "consent_basis",
     "review_link",
+    "sent_at",
     "notes"
   ],
   "fields": [
@@ -28,12 +32,16 @@
     { "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Status", "options": "Blocked\nEligible\nApproved\nSent\nStopped", "reqd": 1 },
     { "fieldname": "channel", "fieldtype": "Select", "label": "Channel", "options": "Google\nEmail\nSMS\nOther" },
     { "fieldname": "prepared_at", "fieldtype": "Datetime", "in_list_view": 1, "in_standard_filter": 1, "label": "Prepared At" },
-    { "fieldname": "approved_by", "fieldtype": "Data", "label": "Approved By" },
+    { "fieldname": "eligibility_checked_by", "fieldtype": "Link", "label": "Eligibility Checked By", "options": "User", "read_only": 1 },
+    { "fieldname": "eligibility_checked_at", "fieldtype": "Datetime", "label": "Eligibility Checked At", "read_only": 1 },
+    { "default": "0", "fieldname": "quiet_hours_ok", "fieldtype": "Check", "label": "Quiet Hours Check Passed" },
+    { "fieldname": "approved_by", "fieldtype": "Link", "label": "Approved By", "options": "User" },
     { "fieldname": "approved_at", "fieldtype": "Datetime", "label": "Approved At" },
     { "fieldname": "stop_conditions_json", "fieldtype": "Code", "label": "Stop Conditions JSON", "options": "JSON" },
     { "fieldname": "eligibility_notes", "fieldtype": "Small Text", "label": "Eligibility Notes" },
     { "fieldname": "consent_basis", "fieldtype": "Data", "label": "Consent Basis" },
     { "fieldname": "review_link", "fieldtype": "Data", "label": "Review Link" },
+    { "fieldname": "sent_at", "fieldtype": "Datetime", "label": "Sent At" },
     { "fieldname": "notes", "fieldtype": "Small Text", "label": "Notes" }
   ],
   "index_web_pages_for_search": 0,
@@ -46,7 +54,11 @@
   "naming_rule": "By fieldname",
   "owner": "Administrator",
   "permissions": [
-    { "create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1 }
+    {"create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Owner", "write": 1},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Closeout", "write": 1},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Sales"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support"}
   ],
   "sort_field": "modified",
   "sort_order": "DESC",

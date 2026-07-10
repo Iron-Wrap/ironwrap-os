@@ -1,1 +1,1 @@
-recursive-include ironwrap_roofing *.json *.js *.py *.txt
+recursive-include ironwrap_roofing *.css *.json *.js *.py *.txt

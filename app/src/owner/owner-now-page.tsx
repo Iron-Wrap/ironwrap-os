@@ -1,31 +1,33 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { AlertTriangle, ChevronRight, CircleGauge, Clock3 } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronRight,
+  CircleGauge,
+  ClipboardCheck,
+  Clock3,
+  PackageCheck,
+  RotateCcw,
+  ShieldCheck,
+  UsersRound,
+  type LucideIcon,
+} from "lucide-react";
 
 import { useSession } from "../auth/session-context";
+import { Button } from "../components/ui/button";
 import { RoleGuard } from "../components/role-guard";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
 import type { OwnerException, OwnerNowResponse } from "./owner-contracts";
 import { loadOwnerNow } from "./owner-api";
 import {
+  buildDecisionLanes,
+  canOpenJob,
   formatOwnerDate,
-  groupOwnerExceptions,
+  humanizeSource,
+  humanizeStaleField,
+  mctbEvidenceLabel,
   severityPriority,
-  type ExceptionGroup,
-  validJobId,
+  type OwnerDateFormatOptions,
 } from "./owner-now-utils";
-
-const summaryMetrics = [
-  { key: "field_blockers", label: "Crew-reported stops", tone: "text-danger" },
-  { key: "blocked_gates", label: "Blocked gates", tone: "text-danger" },
-  { key: "open_incidents", label: "Incidents", tone: "text-warning" },
-  { key: "material_exceptions", label: "Materials", tone: "text-warning" },
-  { key: "finance_exceptions", label: "Finance", tone: "text-info" },
-  { key: "untriaged_leads", label: "Untriaged leads", tone: "text-ok" },
-  { key: "lead_triage_unknown", label: "Triage data quality", tone: "text-warning" },
-  { key: "mctb_unproven_due", label: "MCTB proof overdue", tone: "text-danger" },
-] as const;
 
 export function OwnerNowPage() {
   return (
@@ -41,141 +43,481 @@ function OwnerNowContent() {
     queryKey: ["owner-now", session.tenant.id, session.user.id],
     queryFn: () => loadOwnerNow(),
   });
-
-  if (query.isPending) return <LoadingState label="Loading the office decision queue…" />;
-  if (query.isError) {
-    return <ErrorState message={messageFor(query.error)} onRetry={() => void query.refetch()} />;
-  }
-
   const model = query.data;
-  const groups = groupOwnerExceptions(model.exceptions);
+
+  if (!model && query.isPending) return <OwnerNowSkeleton />;
+  if (!model && query.isError) return <OwnerNowError onRetry={() => void query.refetch()} />;
+  if (!model) return <OwnerNowSkeleton />;
+
   return (
-    <section className="space-y-6">
-      <header className="border-b border-border pb-6">
+    <OwnerNowScreen
+      model={model}
+      locale={{ locale: session.tenant.locale, timeZone: session.tenant.time_zone }}
+      refreshFailed={query.isError}
+      onRetry={() => void query.refetch()}
+    />
+  );
+}
+
+function OwnerNowScreen({
+  model,
+  locale,
+  refreshFailed,
+  onRetry,
+}: {
+  model: OwnerNowResponse;
+  locale: OwnerDateFormatOptions;
+  refreshFailed: boolean;
+  onRetry: () => void;
+}) {
+  const dueTimingAvailable = !model.stale_fields.includes("exceptions.due_at");
+  const lanes = buildDecisionLanes(model.exceptions, { dueTimingAvailable });
+  const hasDataLimits =
+    model.source_updated_at === null ||
+    model.partial_sources.length > 0 ||
+    model.stale_fields.length > 0;
+  const generatedAt = safeFormattedDate(model.read_model_generated_at, locale);
+
+  return (
+    <section className="mx-auto max-w-6xl space-y-6 pb-4">
+      <header className="border-b border-border pb-5 sm:pb-6">
         <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-          <div className="max-w-3xl">
-            <div className="mb-4 flex size-12 items-center justify-center rounded-xl bg-foreground text-background">
-              <CircleGauge className="size-6 text-accent" aria-hidden="true" />
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
+              <CircleGauge className="size-5 text-accent" aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                Now
+              </h1>
+              <p className="mt-1 text-sm leading-6 text-muted sm:text-base">
+                {model.summary.active_jobs} active{" "}
+                {model.summary.active_jobs === 1 ? "job" : "jobs"}
+                {generatedAt ? <> · Read generated {generatedAt}</> : null}
+              </p>
             </div>
-            <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-              Office decision queue
-            </p>
-            <h1 className="mt-2 text-3xl font-black tracking-[-0.04em] sm:text-4xl">Owner Now</h1>
-            <p className="mt-3 max-w-2xl text-base leading-7 text-muted">
-              Work-stopping gates and exceptions come before schedules, reports, or broad lists.
-            </p>
           </div>
-          <div
-            className="rounded-xl border bg-surface-raised px-4 py-3 shadow-sm"
-            aria-label="Active jobs"
-          >
-            <p className="text-2xl font-black tracking-[-0.04em]">{model.summary.active_jobs}</p>
-            <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
-              Active jobs
-            </p>
-          </div>
+          <p className="hidden max-w-sm text-sm leading-6 text-muted sm:block sm:text-right">
+            The decision board shows verified exceptions first. It does not infer missing impact,
+            approvals, or follow-up.
+          </p>
         </div>
-        <ReadModelStatus model={model} />
       </header>
 
-      <Summary model={model} />
+      {refreshFailed ? <RefreshWarning onRetry={onRetry} /> : null}
 
-      {groups.length === 0 ? (
-        <EmptyState
-          title="No current exceptions"
-          message="This read model did not return a blocked gate, incident, material, finance, untriaged lead, or triage-data-quality exception. No sample work is shown here."
-        />
-      ) : (
-        <div className="space-y-8">
-          {groups.map((group) => (
-            <ExceptionSection key={group.kind} group={group} />
-          ))}
-        </div>
-      )}
+      <DataConfidence model={model} locale={locale} compact className="lg:hidden" />
+
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start">
+        <main className="min-w-0 space-y-8">
+          <DecisionSummary model={model} />
+          {lanes.length > 0 ? (
+            <div className="space-y-9">
+              {lanes.map((lane) => (
+                <DecisionLane
+                  key={lane.id}
+                  lane={lane}
+                  allowedActions={model.allowed_actions}
+                  dueTimingAvailable={dueTimingAvailable}
+                  locale={locale}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyDecisionBoard limited={hasDataLimits} generatedAt={generatedAt} />
+          )}
+        </main>
+        <aside className="hidden lg:block">
+          <DataConfidence model={model} locale={locale} />
+        </aside>
+      </div>
     </section>
   );
 }
 
-function ReadModelStatus({ model }: { model: OwnerNowResponse }) {
-  const hasStaleFields = model.stale_fields.length > 0;
-  const sourceUnavailable = model.source_updated_at === null;
-  const hasPartialSources = model.partial_sources.length > 0;
-  const needsAttention = hasStaleFields || sourceUnavailable || hasPartialSources;
+function DecisionSummary({ model }: { model: OwnerNowResponse }) {
+  const signals = [
+    {
+      label: "Work stopped",
+      value: model.summary.field_blockers + model.summary.blocked_gates,
+      detail: "Crew reports and gate locks",
+      tone: "text-danger",
+      dot: "bg-danger",
+    },
+    {
+      label: "Needs review",
+      value:
+        model.summary.open_incidents +
+        model.summary.material_exceptions +
+        model.summary.finance_exceptions,
+      detail: "Operations, materials, and finance",
+      tone: "text-warning",
+      dot: "bg-warning",
+    },
+    {
+      label: "Lead attention",
+      value: model.summary.untriaged_leads + model.summary.lead_triage_unknown,
+      detail: "Triage state and acknowledgement evidence",
+      tone: "text-info",
+      dot: "bg-info",
+    },
+  ];
   return (
-    <div
-      className={
-        needsAttention
-          ? "mt-6 flex gap-3 rounded-xl border border-warning/30 bg-warning-soft px-4 py-3 text-sm"
-          : "mt-6 flex gap-3 rounded-xl border border-ok/30 bg-ok-soft px-4 py-3 text-sm"
-      }
-      role="status"
-      aria-live="polite"
-    >
-      {needsAttention ? (
-        <AlertTriangle className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
-      ) : (
-        <Clock3 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
-      )}
-      <div className="min-w-0 space-y-1">
-        <p className="font-bold">
-          {sourceUnavailable
-            ? "Source update time is unavailable."
-            : `Source updated ${formatOwnerDate(model.source_updated_at)}.`}
-        </p>
-        <p className="text-muted">
-          Read model generated {formatOwnerDate(model.read_model_generated_at)}.
-        </p>
-        {hasStaleFields ? (
-          <p className="break-words text-muted">Stale fields: {model.stale_fields.join(", ")}.</p>
-        ) : null}
-        {hasPartialSources ? (
-          <p className="break-words text-muted">
-            Some totals are lower bounds because these sources reached their query limit:{" "}
-            {model.partial_sources.map(humanizeSource).join(", ")}.
-          </p>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function Summary({ model }: { model: OwnerNowResponse }) {
-  return (
-    <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5" aria-label="Exception totals">
-      {summaryMetrics.map((metric) => (
-        <div key={metric.key} className="rounded-xl border bg-surface-raised px-4 py-4 shadow-sm">
-          <dt className="text-xs font-extrabold uppercase tracking-[0.11em] text-muted">
-            {metric.label}
+    <dl className="grid grid-cols-3 border-y border-border" aria-label="Current operating signals">
+      {signals.map((signal, index) => (
+        <div
+          key={signal.label}
+          className={`min-h-20 px-3 py-3 sm:min-h-24 sm:px-5 sm:py-4 ${index > 0 ? "border-l border-border" : ""}`}
+        >
+          <dt className="flex items-center gap-2 text-sm font-semibold text-muted">
+            <span className={`size-2 rounded-full ${signal.dot}`} aria-hidden="true" />
+            {signal.label}
           </dt>
-          <dd className={`mt-2 text-2xl font-black tracking-[-0.04em] ${metric.tone}`}>
-            {model.summary[metric.key]}
+          <dd
+            className={`mt-1 text-xl font-black tracking-[-0.03em] sm:mt-2 sm:text-2xl ${signal.tone}`}
+          >
+            {signal.value}
           </dd>
+          <p className="mt-1 hidden text-sm leading-5 text-muted sm:block">{signal.detail}</p>
         </div>
       ))}
     </dl>
   );
 }
 
-function ExceptionSection({ group }: { group: ExceptionGroup }) {
+function DecisionLane({
+  lane,
+  allowedActions,
+  dueTimingAvailable,
+  locale,
+}: {
+  lane: ReturnType<typeof buildDecisionLanes>[number];
+  allowedActions: readonly string[];
+  dueTimingAvailable: boolean;
+  locale: OwnerDateFormatOptions;
+}) {
+  const headingId = `owner-decision-lane-${lane.id}`;
   return (
-    <section aria-labelledby={`owner-exceptions-${group.kind}`}>
-      <div className="mb-3 flex items-baseline justify-between gap-4">
-        <h2
-          id={`owner-exceptions-${group.kind}`}
-          className="text-lg font-black tracking-[-0.025em] sm:text-xl"
-        >
-          {group.title}
-        </h2>
-        <p className="text-sm font-bold text-muted">
-          {group.exceptions.length} {group.exceptions.length === 1 ? "item" : "items"}
+    <section aria-labelledby={headingId}>
+      <header className="flex flex-wrap items-end justify-between gap-3 pb-3">
+        <div>
+          <h2
+            id={headingId}
+            className="text-xl font-black tracking-[-0.025em] text-balance sm:text-2xl"
+          >
+            {lane.title}
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-muted">{lane.description}</p>
+        </div>
+        <p className="text-sm font-semibold text-muted">
+          {lane.exceptions.length} {lane.exceptions.length === 1 ? "record" : "records"}
         </p>
-      </div>
-      <div className="grid gap-4 xl:grid-cols-2">
-        {group.exceptions.map((exception) => (
-          <ExceptionCard
-            key={`${group.kind}:${exception.id}`}
+      </header>
+      <ol className="border-y border-border divide-y divide-border">
+        {lane.exceptions.map((exception) => (
+          <DecisionRow
+            key={`${lane.id}:${exception.id}`}
             exception={exception}
-            tone={group.tone}
+            allowedActions={allowedActions}
+            dueTimingAvailable={dueTimingAvailable}
+            locale={locale}
+          />
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function DecisionRow({
+  exception,
+  allowedActions,
+  dueTimingAvailable,
+  locale,
+}: {
+  exception: OwnerException;
+  allowedActions: readonly string[];
+  dueTimingAvailable: boolean;
+  locale: OwnerDateFormatOptions;
+}) {
+  const state = stateFor(exception);
+  const StateIcon = state.Icon;
+  const jobIsAvailable = canOpenJob(allowedActions, exception);
+  const occurredAt = safeFormattedDate(exception.occurred_at, locale);
+  const dueAt = dueTimingAvailable ? safeFormattedDate(exception.due_at, locale) : null;
+  const receivedAt = safeFormattedDate(exception.received_at, locale);
+
+  return (
+    <li className="py-4 sm:py-5">
+      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+        <div className="flex min-w-0 gap-3">
+          <span
+            className={`mt-0.5 grid size-9 shrink-0 place-items-center rounded-md ${state.iconSurface}`}
+          >
+            <StateIcon className={`size-4 ${state.iconTone}`} aria-hidden="true" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <p className="font-bold tracking-[-0.015em] text-pretty">{exception.title}</p>
+              <span
+                className={`inline-flex items-center gap-1.5 text-sm font-semibold ${state.labelTone}`}
+              >
+                <span className={`size-1.5 rounded-full ${state.dot}`} aria-hidden="true" />
+                {state.label}
+              </span>
+            </div>
+            {exception.why ? (
+              <p className="mt-1.5 max-w-3xl text-sm leading-6 text-muted">{exception.why}</p>
+            ) : null}
+            <dl className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm leading-5 text-muted">
+              {jobIsAvailable ? <Metadata label="Job" value={exception.job_id} /> : null}
+              {occurredAt ? <Metadata label="Recorded" value={occurredAt} /> : null}
+              {receivedAt && receivedAt !== occurredAt ? (
+                <Metadata label="Received" value={receivedAt} />
+              ) : null}
+              {dueAt ? <Metadata label="Due" value={dueAt} /> : null}
+            </dl>
+            <LeadAcknowledgementEvidence exception={exception} locale={locale} />
+          </div>
+        </div>
+        {jobIsAvailable ? (
+          <Link
+            to="/jobs/$jobId"
+            params={{ jobId: exception.job_id }}
+            className="inline-flex min-h-14 items-center justify-center gap-2 rounded-lg bg-foreground px-4 text-sm font-bold text-background transition-colors hover:bg-foreground/88 focus-visible:outline-offset-3 sm:mt-0"
+            aria-label={`Open job packet for ${exception.job_id}`}
+          >
+            Open job packet
+            <ChevronRight className="size-5" aria-hidden="true" />
+          </Link>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
+function Metadata({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="sr-only">{label}</dt>
+      <dd>
+        <span className="font-semibold text-foreground">{label}:</span> {value}
+      </dd>
+    </div>
+  );
+}
+
+function LeadAcknowledgementEvidence({
+  exception,
+  locale,
+}: {
+  exception: OwnerException;
+  locale: OwnerDateFormatOptions;
+}) {
+  const deadlineAt = safeFormattedDate(exception.mctb?.deadline_at ?? null, locale);
+  const observedAt = safeFormattedDate(exception.mctb?.observed_at ?? null, locale);
+  const state = exception.mctb ? mctbEvidenceLabel(exception.mctb.state) : null;
+  if (!state && !deadlineAt && !observedAt) return null;
+  return (
+    <details className="mt-3 border-t border-border pt-1">
+      <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 text-sm font-semibold text-foreground [&::-webkit-details-marker]:hidden">
+        <span>Acknowledgement evidence</span>
+        <ChevronRight className="size-5 shrink-0 text-muted" aria-hidden="true" />
+      </summary>
+      <div className="border-l border-border pb-3 pl-3 text-sm leading-6">
+        {state ? <p className="font-semibold text-foreground">{state}</p> : null}
+        {deadlineAt || observedAt ? (
+          <dl className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-muted">
+            {deadlineAt ? <Metadata label="Deadline" value={deadlineAt} /> : null}
+            {observedAt ? <Metadata label="Observed" value={observedAt} /> : null}
+          </dl>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
+function DataConfidence({
+  model,
+  locale,
+  compact = false,
+  className = "",
+}: {
+  model: OwnerNowResponse;
+  locale: OwnerDateFormatOptions;
+  compact?: boolean;
+  className?: string;
+}) {
+  const sourceUpdatedAt = safeFormattedDate(model.source_updated_at, locale);
+  const generatedAt = safeFormattedDate(model.read_model_generated_at, locale);
+  const warnings = [
+    ...model.stale_fields.map(humanizeStaleField),
+    ...(model.partial_sources.length > 0
+      ? [`Counts are lower bounds for ${model.partial_sources.map(humanizeSource).join(", ")}.`]
+      : []),
+  ];
+  const limited = !sourceUpdatedAt || warnings.length > 0;
+  const statusIcon = limited ? (
+    <AlertTriangle className="size-4 shrink-0 text-warning" aria-hidden="true" />
+  ) : (
+    <Clock3 className="size-4 shrink-0 text-ok" aria-hidden="true" />
+  );
+  const detail = (
+    <>
+      <dl className="mt-3 space-y-2 text-sm leading-5 text-muted">
+        <div>
+          <dt className="font-semibold text-foreground">Source update</dt>
+          <dd>{sourceUpdatedAt ?? "Unavailable"}</dd>
+        </div>
+        <div>
+          <dt className="font-semibold text-foreground">Queue generated</dt>
+          <dd>{generatedAt ?? "Unavailable"}</dd>
+        </div>
+      </dl>
+      {warnings.length > 0 ? (
+        <ul className="mt-4 space-y-2 border-t border-warning/30 pt-3 text-sm leading-5 text-muted">
+          {warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-4 border-t border-border pt-3 text-sm leading-5 text-muted">
+          No source-limit or stale-field warning was returned.
+        </p>
+      )}
+    </>
+  );
+
+  if (compact) {
+    return (
+      <details
+        className={`rounded-lg ${limited ? "bg-warning-soft" : "bg-surface-muted"} ${className}`}
+      >
+        <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm [&::-webkit-details-marker]:hidden">
+          <span className="flex items-center gap-2 font-bold tracking-[-0.015em]">
+            {statusIcon}
+            Data confidence
+          </span>
+          <span className="text-right text-muted">
+            {sourceUpdatedAt
+              ? warnings.length > 0
+                ? `${warnings.length} limits`
+                : "No limits"
+              : "Source unavailable"}
+          </span>
+        </summary>
+        <div className="border-t border-border px-4 pb-4">{detail}</div>
+      </details>
+    );
+  }
+
+  return (
+    <section
+      className={`rounded-lg ${limited ? "bg-warning-soft" : "bg-surface-muted"} p-4 ${className}`}
+      aria-label="Data confidence"
+      role={limited ? "status" : undefined}
+    >
+      <div className="flex items-center gap-2">
+        {statusIcon}
+        <h2 className="font-bold tracking-[-0.015em]">Data confidence</h2>
+      </div>
+      {detail}
+    </section>
+  );
+}
+
+function RefreshWarning({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div
+      className="flex flex-col gap-3 border-y border-warning/35 bg-warning-soft px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+      role="status"
+    >
+      <p className="text-sm leading-6">
+        <span className="font-bold">Showing the previous read.</span>{" "}
+        <span className="text-muted">
+          Refresh failed, so this board may not include the newest source state.
+        </span>
+      </p>
+      <Button variant="outline" size="compact" onClick={onRetry}>
+        <RotateCcw aria-hidden="true" />
+        Retry queue
+      </Button>
+    </div>
+  );
+}
+
+function EmptyDecisionBoard({
+  limited,
+  generatedAt,
+}: {
+  limited: boolean;
+  generatedAt: string | null;
+}) {
+  const title = limited
+    ? "No exceptions were returned from available sources"
+    : "No exceptions in this read model";
+  return (
+    <section className="border-y border-border py-8" aria-live="polite">
+      <div className="flex max-w-xl gap-3">
+        <span className="grid size-10 shrink-0 place-items-center rounded-md bg-surface-muted text-muted">
+          <CircleGauge className="size-5" aria-hidden="true" />
+        </span>
+        <div>
+          <h2 className="text-xl font-black tracking-[-0.025em]">{title}</h2>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            {limited
+              ? "Keep the data-confidence details visible before treating this as a clear operating state."
+              : "The queue contains no blocked gates, field work-stops, operating exceptions, or lead-attention records."}
+            {generatedAt ? ` Read generated ${generatedAt}.` : ""}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function OwnerNowError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <section className="mx-auto max-w-2xl border-y border-danger/35 py-8" role="alert">
+      <div className="flex gap-3">
+        <span className="grid size-10 shrink-0 place-items-center rounded-md bg-danger-soft text-danger">
+          <AlertTriangle className="size-5" aria-hidden="true" />
+        </span>
+        <div>
+          <h1 className="text-xl font-black tracking-[-0.025em]">Current queue unavailable</h1>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            The current queue could not load. Retrying does not change jobs or acknowledgements.
+          </p>
+          <Button className="mt-5" variant="outline" onClick={onRetry}>
+            <RotateCcw aria-hidden="true" />
+            Retry queue
+          </Button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function OwnerNowSkeleton() {
+  return (
+    <section
+      className="mx-auto max-w-6xl space-y-6"
+      aria-busy="true"
+      aria-label="Loading current decision queue"
+    >
+      <div className="h-20 border-b border-border bg-surface-muted/70" />
+      <div className="grid border-y border-border sm:grid-cols-3">
+        {[0, 1, 2].map((index) => (
+          <div
+            key={index}
+            className={`min-h-24 bg-surface-muted/60 ${index > 0 ? "border-t border-border sm:border-t-0 sm:border-l" : ""}`}
+          />
+        ))}
+      </div>
+      <div className="space-y-0 border-y border-border">
+        {[0, 1, 2].map((index) => (
+          <div
+            key={index}
+            className={`min-h-28 bg-surface-muted/45 ${index > 0 ? "border-t border-border" : ""}`}
           />
         ))}
       </div>
@@ -183,138 +525,84 @@ function ExceptionSection({ group }: { group: ExceptionGroup }) {
   );
 }
 
-function ExceptionCard({ exception, tone }: { exception: OwnerException; tone: string }) {
-  const jobId = validJobId(exception.job_id) ? exception.job_id : null;
-  const occurredAt = safeFormattedDate(exception.occurred_at);
-  const leadException =
-    exception.kind === "untriaged_lead" || exception.kind === "lead_triage_unknown";
-  return (
-    <Card className={`border-l-4 ${tone}`}>
-      <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <span className={severityClass(exception.severity)}>
-            {severityLabel(exception.severity)}
-          </span>
-          <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-sm font-semibold text-muted">
-            {occurredAt && occurredAt !== "Date unavailable" ? (
-              <span>Recorded {occurredAt}</span>
-            ) : null}
-            <span>
-              {exception.due_at
-                ? `Due ${formatOwnerDate(exception.due_at)}`
-                : "Due date unavailable"}
-            </span>
-          </div>
-        </div>
-        <CardTitle className="mt-3">{exception.title}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-2 text-sm leading-6">
-          <p>
-            <span className="font-extrabold">Why: </span>
-            <span className="text-muted">{exception.why ?? "Reason unavailable."}</span>
-          </p>
-          <p>
-            <span className="font-extrabold">Next: </span>
-            <span className="text-muted">
-              {exception.next_action ?? "No verified next action was returned."}
-            </span>
-          </p>
-        </div>
-        {leadException ? <LeadMctbEvidence exception={exception} /> : null}
-        {jobId ? (
-          <Link
-            to="/jobs/$jobId"
-            params={{ jobId }}
-            className="inline-flex min-h-12 items-center gap-2 rounded-lg px-3 font-bold text-info underline decoration-info/35 underline-offset-4 transition-colors hover:bg-info-soft focus-visible:no-underline"
-            aria-label={`Open job ${exception.job_id}`}
-          >
-            Open job
-            <ChevronRight className="size-5" aria-hidden="true" />
-          </Link>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
-function LeadMctbEvidence({ exception }: { exception: OwnerException }) {
-  const receivedAt = safeFormattedDate(exception.received_at);
-  const deadlineAt = safeFormattedDate(exception.mctb?.deadline_at ?? null);
-  const observedAt = safeFormattedDate(exception.mctb?.observed_at ?? null);
-  const evidence = exception.mctb ? mctbEvidenceLabel(exception.mctb.state) : null;
-  if (!evidence && !receivedAt && !deadlineAt && !observedAt) return null;
-  return (
-    <section
-      className="rounded-lg border border-info/25 bg-info-soft px-3 py-3 text-sm"
-      aria-label="MCTB evidence"
-    >
-      <p className="font-extrabold">MCTB evidence</p>
-      {evidence ? <p className="mt-1 text-muted">{evidence}</p> : null}
-      {receivedAt || deadlineAt || observedAt ? (
-        <dl className="mt-3 grid gap-2 sm:grid-cols-3">
-          {receivedAt ? <EvidenceTime label="Received" value={receivedAt} /> : null}
-          {deadlineAt ? <EvidenceTime label="Deadline" value={deadlineAt} /> : null}
-          {observedAt ? <EvidenceTime label="Observed" value={observedAt} /> : null}
-        </dl>
-      ) : null}
-    </section>
-  );
-}
-
-function EvidenceTime({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-xs font-extrabold uppercase tracking-[0.1em] text-muted">{label}</dt>
-      <dd className="mt-1 font-semibold">{value}</dd>
-    </div>
-  );
-}
-
-function severityLabel(value: string | null): string {
-  return value?.trim() || "Severity unavailable";
-}
-
-function severityClass(value: string | null): string {
-  switch (severityPriority(value)) {
-    case 0:
-    case 1:
-      return "rounded-full bg-danger-soft px-3 py-1 text-xs font-extrabold text-danger";
-    case 2:
-      return "rounded-full bg-warning-soft px-3 py-1 text-xs font-extrabold text-warning";
-    case 3:
-      return "rounded-full bg-ok-soft px-3 py-1 text-xs font-extrabold text-ok";
+function stateFor(exception: OwnerException): {
+  label: string;
+  Icon: LucideIcon;
+  iconSurface: string;
+  iconTone: string;
+  labelTone: string;
+  dot: string;
+} {
+  switch (exception.kind) {
+    case "field_blocker":
+    case "blocked_gate":
+      return {
+        label: "Work stopped",
+        Icon: AlertTriangle,
+        iconSurface: "bg-danger-soft",
+        iconTone: "text-danger",
+        labelTone: "text-danger",
+        dot: "bg-danger",
+      };
+    case "automation_incident":
+      return severityPriority(exception.severity) <= 1
+        ? {
+            label: "Needs review",
+            Icon: CircleGauge,
+            iconSurface: "bg-danger-soft",
+            iconTone: "text-danger",
+            labelTone: "text-danger",
+            dot: "bg-danger",
+          }
+        : {
+            label: "Needs review",
+            Icon: CircleGauge,
+            iconSurface: "bg-warning-soft",
+            iconTone: "text-warning",
+            labelTone: "text-warning",
+            dot: "bg-warning",
+          };
+    case "material_exception":
+      return {
+        label: "Materials review",
+        Icon: PackageCheck,
+        iconSurface: "bg-warning-soft",
+        iconTone: "text-warning",
+        labelTone: "text-warning",
+        dot: "bg-warning",
+      };
+    case "finance_exception":
+      return {
+        label: "Finance review",
+        Icon: ClipboardCheck,
+        iconSurface: "bg-info-soft",
+        iconTone: "text-info",
+        labelTone: "text-info",
+        dot: "bg-info",
+      };
+    case "untriaged_lead":
+    case "lead_triage_unknown":
+      return {
+        label: "Lead attention",
+        Icon: UsersRound,
+        iconSurface: "bg-info-soft",
+        iconTone: "text-info",
+        labelTone: "text-info",
+        dot: "bg-info",
+      };
     default:
-      return "rounded-full bg-surface-muted px-3 py-1 text-xs font-extrabold text-muted";
+      return {
+        label: "Needs review",
+        Icon: ShieldCheck,
+        iconSurface: "bg-surface-muted",
+        iconTone: "text-foreground",
+        labelTone: "text-foreground",
+        dot: "bg-foreground",
+      };
   }
 }
 
-function humanizeSource(value: string): string {
-  return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function safeFormattedDate(value: string | null): string | null {
-  const formatted = value ? formatOwnerDate(value) : null;
+function safeFormattedDate(value: string | null, locale: OwnerDateFormatOptions): string | null {
+  const formatted = value ? formatOwnerDate(value, locale) : null;
   return formatted === "Date unavailable" ? null : formatted;
-}
-
-function mctbEvidenceLabel(state: NonNullable<OwnerException["mctb"]>["state"]): string {
-  switch (state) {
-    case "provider_accepted_within_sla":
-      return "provider accepted within 60s";
-    case "provider_accepted_late":
-      return "provider accepted after 60s";
-    case "no_eligible_channel":
-      return "no eligible auto-ack channel";
-    case "awaiting_proof":
-      return "awaiting provider proof";
-    case "unproven_after_sla":
-      return "no provider proof after 60s";
-    case "time_unavailable":
-      return "intake time unavailable";
-  }
-}
-
-function messageFor(error: unknown): string {
-  return error instanceof Error ? error.message : "The office decision queue could not be loaded.";
 }

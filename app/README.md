@@ -20,8 +20,12 @@ data.
   remains a supplemental scalable asset.
 - A durable IndexedDB outbox with Blob support, stable `device_action_id`, idempotency headers,
   CSRF-at-send, exponential retry, conflict retention, and server-confirmed completion.
-- Route placeholders for Today, Job, Check-in, Owner Now, Sales, customer Portal, and Settings.
-  Their feature content belongs to later North Star slices.
+- A locally contract-tested, read-only Owner Now decision board: work-stops, operating exceptions,
+  and lead attention are separated into proof-safe lanes; data limits stay visible; and job packets
+  open only when the BFF grants `job.read`. It does not invent delivery, follow-up, approvals, or
+  financial impact.
+- Route placeholders for the later Sales and customer Portal slices. Today, Job, Check-in, Owner
+  Now, and Settings have their implemented North Star foundations.
 
 ## Run it
 

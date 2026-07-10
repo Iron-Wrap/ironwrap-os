@@ -19,7 +19,7 @@ capability only.
 | Hermes agent layer | 8 runtime-filtered roles, 122 MCP tools, receipt-bound approved-write contract |
 | Deploy/ops | Contract-validated production configuration, pinned runtime lock, encrypted Frappe/D1 recovery, launch runbook |
 | Competitive truth | 10 exceeded / 7 covered / 19 open, adversarially audited |
-| Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, and P2's read-only Owner Now queue are locally implemented and contract-tested. Owner Now shows verified crew work-stops, gated/finance/material exceptions, untriaged/unknown lead state, and provider-acceptance MCTB evidence without claiming delivery or human follow-up. Live backend/browser/device proof, P2 approvals, and P3-P5 remain open; Frappe Control Center is the truthful fallback. |
+| Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, and P2's read-only Owner Now decision board are locally implemented and contract-tested. Owner Now separates work-stops, operating exceptions, and lead attention; exposes source freshness/lower bounds; gates job-packet access on BFF capability; and labels MCTB only as provider acceptance, late/unproven/no-channel evidence. It never claims delivery or human follow-up. Live backend/browser/device proof, P2 approvals, and P3-P5 remain open; Frappe Control Center is the truthful fallback. |
 
 Every "their UX beats ours" row in the scorecard (boards, mobile app, omnichannel inbox,
 homeowner widget) lands in this one missing layer. That makes the UI the highest-leverage
@@ -158,9 +158,12 @@ synced later with zero loss; crew member with no training completes it on first 
 
 Screens: Now (blocked jobs, unpaid, untriaged leads, triage-data quality; heartbeat remains a gate), Job drill-down, Approvals inbox
 (pending Hermes dry-runs rendered as diff cards with approve/reject).
-Repository checkpoint: the role-scoped, read-only **Now** queue is implemented locally. It starts
-with verified crew work-stops and gates, exposes material/finance/automation exceptions, keeps
-untriaged leads separate from bus transport state, and labels MCTB only as provider acceptance,
+Repository checkpoint: the role-scoped, read-only **Now** decision board is implemented locally.
+It turns the current proof-safe payload into three compact signals and ordered lanes for verified
+crew work-stops/gates, operating exceptions, and lead attention. It exposes stale and bounded
+source truth rather than repeating unavailable due/action copy on every row, formats timestamps in
+the tenant time zone, and renders job access only when `job.read` is in the BFF response. It keeps
+untriaged leads separate from bus transport state and labels MCTB only as provider acceptance,
 late/unproven/no-channel evidence. Approvals, heartbeat, live source freshness, and the phone
 acceptance gate remain open.
 Beats: JN Insights ("AWFUL" per their own users) and gives the agent layer a human surface

@@ -5,7 +5,7 @@ import {
   createRouter,
   redirect,
 } from "@tanstack/react-router";
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 
 import { AuthBoundary } from "./auth/auth-boundary";
 import { DevicePairingConsume } from "./auth/device-pairing-consume";
@@ -16,12 +16,15 @@ import { AppShell } from "./components/app-shell";
 import { CheckInPage, JobPage, TodayPage } from "./field/field-pages";
 import {
   NotFoundPage,
-  OwnerNowPage,
   PortalLinkRequiredPage,
   PortalPage,
   SalesPage,
   SettingsPage,
 } from "./pages/placeholders";
+
+const OwnerNowPage = lazy(async () => ({
+  default: (await import("./owner/owner-now-page")).OwnerNowPage,
+}));
 
 const rootRoute = createRootRoute({
   component: Outlet,
@@ -119,8 +122,36 @@ const jobCheckInRoute = createRoute({
 const ownerRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/owner",
-  component: OwnerNowPage,
+  component: OwnerRoute,
 });
+
+function OwnerRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <OwnerNowPage />
+    </Suspense>
+  );
+}
+
+function OwnerRouteSkeleton() {
+  return (
+    <section
+      className="mx-auto max-w-6xl space-y-6"
+      aria-busy="true"
+      aria-label="Loading current decision queue"
+    >
+      <div className="h-20 border-b border-border bg-surface-muted/70" />
+      <div className="grid border-y border-border sm:grid-cols-3">
+        {[0, 1, 2].map((index) => (
+          <div
+            key={index}
+            className={`min-h-24 bg-surface-muted/60 ${index > 0 ? "border-t border-border sm:border-t-0 sm:border-l" : ""}`}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
 
 const salesRoute = createRoute({
   getParentRoute: () => authenticatedRoute,

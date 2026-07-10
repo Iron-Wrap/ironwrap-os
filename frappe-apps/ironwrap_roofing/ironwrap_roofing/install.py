@@ -30,16 +30,23 @@ def ensure_roles() -> None:
         ).insert(ignore_permissions=True)
 
 
+def reconcile_site_contract() -> None:
+    """Idempotently repair roles and invalidate stale permission metadata."""
+
+    ensure_roles()
+    frappe.clear_cache()
+
+
 def before_install() -> None:
     """Create app roles before initial DocType permission synchronization."""
 
-    ensure_roles()
+    reconcile_site_contract()
 
 
 def before_migrate() -> None:
     """Ensure upgraded sites have roles before DocType permissions are reloaded."""
 
-    ensure_roles()
+    reconcile_site_contract()
 
 
 def after_install() -> None:
@@ -47,3 +54,9 @@ def after_install() -> None:
 
     frappe.db.commit()
     frappe.clear_cache()
+
+
+def after_migrate() -> None:
+    """Reconcile permissions again after DocType metadata has been installed."""
+
+    reconcile_site_contract()

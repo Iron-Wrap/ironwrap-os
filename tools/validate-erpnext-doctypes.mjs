@@ -515,6 +515,106 @@ const specs = [
   },
 ];
 
+const extendedContracts = {
+  "Evidence Item": {
+    requiredFields: ["device_action_id", "proof_owner", "proof_slot", "content_checksum", "checksum_algorithm", "content_type", "content_length", "capture_actor", "captured_at", "latitude", "longitude", "location_accuracy_m", "sync_state", "verified_at", "verification_source", "correction_of", "correction_reason"],
+    fieldContracts: {
+      device_action_id: { fieldtype: "Data", unique: 1 },
+      content_checksum: { fieldtype: "Data" },
+      sync_state: { fieldtype: "Select", reqd: 1 },
+    },
+  },
+  "Field Check-in": {
+    requiredFields: ["device_action_id", "job_assignment", "crew_profile", "capture_actor", "capture_started_at", "capture_completed_at", "sync_state", "verified_at", "latitude", "longitude", "location_accuracy_m", "blocker_flag", "blocker_category", "blocker_summary", "voice_evidence", "correction_of", "correction_reason"],
+    fieldContracts: { device_action_id: { fieldtype: "Data", unique: 1 } },
+  },
+  "Production Gate State": {
+    requiredFields: ["owner_user", "assigned_at", "due_at"],
+  },
+  "Roof Job": {
+    requiredFields: ["workflow_profile", "locale_policy_version", "locale_policy_snapshot_json"],
+    fieldContracts: { locale_policy_snapshot_json: { fieldtype: "Code", options: "JSON" } },
+  },
+  "Customer Quote": {
+    requiredFields: ["quote_version", "price_book_version", "pricing_effective_at", "subtotal", "tax_amount", "tax_code", "tax_rate", "tax_policy_snapshot_json", "deposit_amount", "amount_due", "amount_paid", "balance_due", "payment_status", "payment_due_date", "payment_truth_source", "payment_truth_at", "contract_acceptance", "supersedes", "correction_reason"],
+    fieldContracts: { tax_policy_snapshot_json: { fieldtype: "Code", options: "JSON" } },
+  },
+  "Payment Milestone": {
+    requiredFields: ["milestone_version", "currency", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due", "due_date", "payment_status", "price_book_version", "tax_code", "tax_rate", "tax_policy_snapshot_json", "truth_source", "truth_at", "supersedes", "correction_reason"],
+    fieldContracts: { tax_policy_snapshot_json: { fieldtype: "Code", options: "JSON" } },
+  },
+};
+
+for (const spec of specs) {
+  const extension = extendedContracts[spec.name];
+  if (!extension) continue;
+  spec.requiredFields.push(...extension.requiredFields);
+  spec.fieldContracts = { ...(spec.fieldContracts ?? {}), ...(extension.fieldContracts ?? {}) };
+}
+
+specs.push(
+  {
+    name: "Crew Member", dir: "crew_member", child: true,
+    requiredFields: ["crew_user", "crew_role", "active", "mobile_phone", "joined_on", "left_on", "certification_summary", "notes"],
+  },
+  {
+    name: "Change Order Item", dir: "change_order_item", child: true,
+    requiredFields: ["item_type", "description", "quantity", "unit", "unit_price", "line_total", "tax_code", "source_ref", "customer_visible"],
+  },
+  {
+    name: "Safety Acknowledgement", dir: "safety_acknowledgement", child: true,
+    requiredFields: ["acknowledged_by", "acknowledged_at", "acknowledgement_method", "device_action_id", "evidence_item", "role_on_job", "notes"],
+  },
+  {
+    name: "Crew Profile", dir: "crew_profile", idField: "crew_profile_id",
+    requiredFields: ["crew_profile_id", "crew_name", "status", "crew_type", "primary_lead", "default_workflow_profile", "home_region", "timezone", "members", "safety_contact_name", "safety_contact_phone", "insurance_expiry", "wcb_expiry", "notes"],
+  },
+  {
+    name: "Job Assignment", dir: "job_assignment", idField: "assignment_id",
+    requiredFields: ["assignment_id", "roof_job", "assignment_type", "status", "crew_profile", "assigned_user", "scheduled_start", "scheduled_end", "assigned_by", "assigned_at", "accepted_at", "started_at", "completed_at", "blocker_reason", "supersedes", "correction_reason", "notes"],
+  },
+  {
+    name: "Change Order", dir: "change_order", idField: "change_order_id",
+    requiredFields: ["change_order_id", "roof_job", "customer_quote", "change_number", "version", "status", "title", "reason", "scope_delta", "currency", "subtotal", "tax_amount", "total_amount", "price_book_version", "tax_policy_snapshot_json", "items", "requested_by", "requested_at", "approved_by", "approved_at", "contract_acceptance", "accepted_at", "supersedes", "correction_reason", "notes"],
+    fieldContracts: { tax_policy_snapshot_json: { fieldtype: "Code", options: "JSON" } },
+  },
+  {
+    name: "Safety Plan", dir: "safety_plan", idField: "safety_plan_id",
+    requiredFields: ["safety_plan_id", "roof_job", "version", "status", "effective_date", "prepared_by", "prepared_at", "hazard_summary", "controls", "emergency_plan", "ppe_requirements", "weather_limits", "evidence_item", "acknowledgements", "approved_by", "approved_at", "supersedes", "correction_reason", "notes"],
+  },
+  {
+    name: "Job Compliance Record", dir: "job_compliance_record", idField: "compliance_record_id",
+    requiredFields: ["compliance_record_id", "roof_job", "jurisdiction", "record_type", "authority_name", "external_reference", "status", "required_before_gate", "applied_at", "effective_date", "expiry_date", "inspected_at", "evidence_item", "owner_user", "due_date", "waived_by", "waived_at", "waiver_reason", "supersedes", "correction_reason", "notes"],
+  },
+  {
+    name: "Communication Consent", dir: "communication_consent", idField: "consent_id",
+    requiredFields: ["consent_id", "customer", "lead_envelope", "roof_job", "channel", "purpose", "status", "jurisdiction", "consent_basis", "source_system", "source_reference", "captured_by", "captured_at", "effective_from", "expires_at", "proof_evidence", "revoked_at", "supersedes", "correction_reason", "notes"],
+  },
+  {
+    name: "Customer Decision", dir: "customer_decision", idField: "decision_id",
+    requiredFields: ["decision_id", "roof_job", "customer", "decision_type", "status", "decision_value", "decision_summary", "source_channel", "decided_at", "captured_by", "evidence_item", "option_package", "change_order", "supersedes", "correction_reason", "notes"],
+  },
+  {
+    name: "Contract Acceptance", dir: "contract_acceptance", idField: "acceptance_id",
+    requiredFields: ["acceptance_id", "roof_job", "customer", "customer_quote", "change_order", "contract_version", "status", "signer_name", "signer_email", "signer_ip", "accepted_at", "acceptance_method", "evidence_item", "terms_hash", "document_checksum", "source_system", "provider_reference", "captured_by", "supersedes", "correction_reason", "notes"],
+  },
+  {
+    name: "Integration Reconciliation", dir: "integration_reconciliation", idField: "reconciliation_id",
+    requiredFields: ["reconciliation_id", "roof_job", "system_name", "entity_type", "external_entity_id", "local_doctype", "local_name", "direction", "status", "detected_at", "source_version", "source_amount", "local_amount", "currency", "diff_json", "source_payload_hash", "local_payload_hash", "last_attempt_at", "attempt_count", "resolution_action", "resolved_by", "resolved_at", "resolution_evidence", "automation_incident", "supersedes", "correction_reason", "notes"],
+    fieldContracts: { diff_json: { fieldtype: "Code", options: "JSON" } },
+  },
+  {
+    name: "Tenant Export Run", dir: "tenant_export_run", idField: "export_run_id",
+    requiredFields: ["export_run_id", "tenant", "status", "requested_by", "requested_at", "started_at", "completed_at", "scope_json", "manifest_key", "manifest_checksum", "archive_key", "archive_checksum", "record_count", "evidence_count", "byte_count", "encryption_key_ref", "failure_reason", "supersedes", "correction_reason", "notes"],
+    fieldContracts: {
+      scope_json: { fieldtype: "Code", options: "JSON", reqd: 1 },
+      manifest_key: { fieldtype: "Data", read_only: 1 },
+      archive_key: { fieldtype: "Data", read_only: 1 },
+      encryption_key_ref: { fieldtype: "Data", read_only: 1 },
+    },
+  },
+);
+
 const appRoot = "frappe-apps/ironwrap_roofing/ironwrap_roofing";
 const doctypePath = join(root, doctypeRoot);
 const expectedDirs = specs.map((spec) => spec.dir).sort();
@@ -524,12 +624,12 @@ const discoveredDirs = readdirSync(doctypePath, { withFileTypes: true })
   .filter((dir) => existsSync(join(doctypePath, dir, `${dir}.json`)))
   .sort();
 
-assert.equal(specs.length, 33, "the product contract must contain exactly 33 DocTypes");
-assert.equal(specs.filter((spec) => spec.child).length, 4, "expected four child-table DocTypes");
-assert.equal(specs.filter((spec) => !spec.child).length, 29, "expected 29 top-level DocTypes");
+assert.equal(specs.length, 46, "the product contract must contain exactly 46 DocTypes");
+assert.equal(specs.filter((spec) => spec.child).length, 7, "expected seven child-table DocTypes");
+assert.equal(specs.filter((spec) => !spec.child).length, 39, "expected 39 top-level DocTypes");
 assert.equal(new Set(specs.map((spec) => spec.name)).size, specs.length, "duplicate DocType name in validator");
 assert.equal(new Set(expectedDirs).size, specs.length, "duplicate DocType directory in validator");
-assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 33-type product contract");
+assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 46-type product contract");
 
 const pythonContracts = readPythonContracts();
 assert.deepEqual(
@@ -741,28 +841,38 @@ function validateRuntimeWiring() {
     before_install: "ironwrap_roofing.install.before_install",
     after_install: "ironwrap_roofing.install.after_install",
     before_migrate: "ironwrap_roofing.install.before_migrate",
+    after_migrate: "ironwrap_roofing.install.after_migrate",
   };
   for (const [hook, target] of Object.entries(hookContracts)) {
     const assignment = new RegExp(`^${hook}\\s*=\\s*["']${target}["']\\s*$`, "m");
     assert.match(hooks, assignment, `${hook} must reconcile IronWrap roles through ${target}`);
   }
+  assert.match(hooks, /doc_events\s*=\s*\{/, "hooks.py must register delete protection");
+  assert.match(
+    hooks,
+    /"on_trash"\s*:\s*"ironwrap_roofing\.document_validation\.deny_business_document_delete"/,
+    "every owned top-level record must deny delete at runtime",
+  );
 
   const install = readFileSync(paths.install, "utf8");
   assert.match(install, /from\s+ironwrap_roofing\.access_control\s+import\s+IRONWRAP_ROLES/);
   assert.match(install, /def\s+ensure_roles\s*\(\s*\)/, "install.py must expose idempotent role reconciliation");
+  assert.match(install, /def\s+reconcile_site_contract\s*\(\s*\)/, "install.py must expose site-contract reconciliation");
   assert.match(install, /for\s+role_name\s+in\s+IRONWRAP_ROLES/, "role reconciliation must cover every canonical role");
   assert.match(install, /def\s+before_install\s*\(\s*\)/, "install.py must expose before_install");
   assert.match(install, /def\s+before_migrate\s*\(\s*\)/, "install.py must expose before_migrate");
   assert.match(install, /def\s+after_install\s*\(\s*\)/, "install.py must expose after_install");
+  assert.match(install, /def\s+after_migrate\s*\(\s*\)/, "install.py must expose after_migrate");
   assert.equal(
-    [...install.matchAll(/^\s+ensure_roles\(\)\s*$/gm)].length,
-    2,
-    "initial install and migrations must both run role reconciliation",
+    [...install.matchAll(/^\s+reconcile_site_contract\(\)\s*$/gm)].length,
+    3,
+    "initial install and both migration phases must run site-contract reconciliation",
   );
 
   const adapter = readFileSync(paths.documentValidation, "utf8");
   assert.match(adapter, /from\s+ironwrap_roofing\.domain_policy\s+import\s+PolicyViolation,\s+validate_record/);
   assert.match(adapter, /def\s+validate_business_document\s*\(/, "shared Frappe validation adapter is missing");
+  assert.match(adapter, /def\s+deny_business_document_delete\s*\(/, "append-only delete guard is missing");
 }
 
-console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (29 top-level + 4 child)`);
+console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (39 top-level + 7 child)`);

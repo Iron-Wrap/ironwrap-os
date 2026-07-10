@@ -190,9 +190,9 @@ export async function handleAuthenticatedRoute(
       return appJson({ error: "forbidden" }, 403);
     }
     try {
-      return appJson(await buildOwnerNowReadModel(env, auth));
+      return privateAppJson(await buildOwnerNowReadModel(env, auth));
     } catch {
-      return appJson({ error: "upstream_unavailable" }, 502);
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
     }
   }
   return appJson({ error: "not_found" }, 404);
@@ -250,4 +250,10 @@ function appJson(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+}
+
+function privateAppJson(body: unknown, status = 200): Response {
+  const response = appJson(body, status);
+  response.headers.set("cache-control", "private, no-store");
+  return response;
 }

@@ -175,6 +175,25 @@ The known live-account contract uses contact type `Customer`, job type `Retail`,
 attribution stays on the canonical envelope and temporary bridge tags. After a mapping fix, use
 targeted replay for each affected envelope.
 
+## Lead Triage And MCTB Evidence
+
+`Lead Envelope.status` is bridge transport only. It must never be used as proof that a homeowner
+was contacted or that a lead was triaged. The operating state is separate:
+
+1. New Worker-created leads are `Untriaged`; migrated legacy rows are `Unknown` and require
+   explicit review rather than being counted as new.
+2. Mark a lead `Triaged` only through the receipt-bound Hermes dry-run/approval/write path, with
+   a concise disposition. That patch must not alter transport status or a Communication Event.
+3. `lead_ack_receipts` is append-only and records only a Gmail provider-acceptance identifier,
+   failed attempt, or no eligible channel. It is not delivery, read, consent, or human-follow-up
+   proof.
+4. The 60-second MCTB timer starts from the owned D1 intake timestamp. Treat an absent receipt as
+   **unproven**, a late receipt as **late**, and an unavailable channel as an operator exception.
+   Never call any of these states “sent” or “delivered.”
+5. If provider acceptance is not proven by the deadline, open/continue an Automation Incident,
+   preserve the raw envelope, investigate Gmail/credential/route state, and record the recovery
+   evidence before closing it.
+
 ## Data Ownership And Recovery
 
 | Store | Role | Recovery property |
@@ -208,8 +227,9 @@ deploy/backup-to-r2.sh
 `workers-bus/node_modules/.bin/wrangler` 4.x version and an exact generated config for account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It performs `d1 export --remote`, imports the SQL into an
-isolated SQLite file, runs integrity checks, and requires all 18 production tables before
-packaging, encrypting, uploading immutably, and remotely checking the generation. It prints the
+isolated SQLite file, runs integrity checks, and requires all 19 production tables and four named
+trigger-to-table bindings before packaging, encrypting, uploading immutably, and remotely
+checking the generation. It prints the
 exact committed `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Do not list-and-select latest in
 a script, infer a prefix, or restore a generation without `IRONWRAP-D1-BACKUP-COMPLETE`.
 Both D1 scripts unset any inherited generic `CLOUDFLARE_API_TOKEN`; Wrangler receives only
@@ -227,9 +247,17 @@ The D1 required-table allowlist is release state, not a static assumption: `enve
 `audit_log`, `dead_letter`, `source_counts`, `heartbeat`, `quickbooks_webhook_receipts`,
 `dedup_claims`, `replay_requests`, `field_actions`, `field_action_media`, `app_users`,
 `app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`,
-`app_action_throttles`, `app_device_pairings`, and `app_devices`. Every migration that adds a persistent table must
+`app_action_throttles`, `app_device_pairings`, `app_devices`, and `lead_ack_receipts`. Every migration that adds a persistent table must
 advance both scripts, manifest expectation, readiness contract, and executable tests before that
 migration can deploy.
+
+The required trigger bindings are `validate_source_count_insert` and
+`validate_source_count_update` on `source_counts`, plus
+`prevent_lead_ack_receipts_update` and `prevent_lead_ack_receipts_delete` on
+`lead_ack_receipts`. The receipt triggers must also be `BEFORE UPDATE` / `BEFORE DELETE` and
+raise `ABORT, 'lead_ack_receipts_immutable'`; a matching name and table alone does not pass
+backup or recovery verification. A migration that adds or changes a persistent invariant trigger
+must advance the same recovery contract and tests.
 
 Daily verification:
 
@@ -250,7 +278,9 @@ deploy/restore-d1-from-r2.sh
 
 The script verifies ciphertext checksum before decryption, validates the exact source manifest,
 imports into isolated SQLite, checks integrity, and records a local row count for every required
-table. It deletes its plaintext workspace on success, failure, or signal.
+table plus the exact four trigger-to-table bindings. It also checks the receipt trigger SQL for
+the required `BEFORE UPDATE` / `BEFORE DELETE` abort semantics. It deletes its plaintext
+workspace on success, failure, or signal.
 
 Monthly isolated restore drill:
 
@@ -275,7 +305,8 @@ export D1_RESTORE_MODE=verify
    The script rejects production name or UUID, mismatched confirmation, a different account, or
    any nonempty target. It imports through a generated exact target config, then queries every
    required table on the target and compares the complete table-to-row-count map against local
-   SQLite. Any mismatch fails the drill even if Wrangler returned success.
+   SQLite, then compares the exact trigger-to-table inventory and receipt-trigger SQL semantics.
+   Any mismatch fails the drill even if Wrangler returned success.
 3. Copy the Frappe generation to a restricted restore host; verify ciphertext before decryption.
 4. Decrypt with the offline `age` identity and extract into a mode-0700 temporary directory.
 5. Read `IRONWRAP-BACKUP-MANIFEST.txt`; start the recorded digest-pinned image in an isolated
@@ -382,7 +413,7 @@ Weekly:
 
 Monthly:
 
-- Run the exact-prefix D1 remote row-count-parity drill and isolated Frappe restore; record both RTO results and the current R2 denied-delete evidence.
+- Run the exact-prefix D1 remote table-row-count, trigger-inventory, and receipt-semantics parity drill and isolated Frappe restore; record both RTO results and the current R2 denied-delete evidence.
 - Audit secret age and purpose separation; complete pending rotations.
 - Run all repository validators and `node tools/production-readiness.mjs contract` on the intended
   next release commit.

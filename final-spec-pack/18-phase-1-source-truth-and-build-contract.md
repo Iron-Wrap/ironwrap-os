@@ -30,8 +30,8 @@ last-known evidence until the named admin revalidates them:
   shared business validation, installed role matrix, packaging, and pure Python tests.
 - Worker operations: separate `/health` and `/ready`, authenticated
   `/admin/status`, and approved/audited targeted replay.
-- Hermes/MCP: eight role profiles, eleven skills, 118 implemented source tools (111 Frappe: 69 reads,
-  21 dry-runs, 21 approved writes; plus 7 bus), runtime role filtering, and required dry-run
+- Hermes/MCP: eight role profiles, eleven skills, 122 implemented source tools (115 Frappe: 71 reads,
+  22 dry-runs, 22 approved writes; plus 7 bus), runtime role filtering, and required dry-run
   pairs for every granted approved write.
 - Deployment/recovery: exact runtime lock, digest-pinned Frappe-only image build,
   contract-validated local production configuration, encrypted/verified Frappe and D1 recovery protocols,
@@ -138,8 +138,8 @@ of it or treat Frappe/Hermes availability as a prerequisite for raw capture.
 | P1.11 | Connect signed QuickBooks webhook. | Signature/receipt tests implemented; admin open | Valid receipt accepted/idempotent, invalid signature rejected, status visible. |
 | P1.12 | Implement D1-to-Frappe consumer contract. | Repository implemented | Idempotent Lead Envelope/Customer/Property/Job/session/measurement/evidence/gate mirrors pass fixture and live proof. |
 | P1.13 | Implement proprietary Frappe-only operating core. | Repository implemented; site proof open | Exactly 46 DocTypes, policy/RBAC and atomic safety tests, plain-Frappe install/migrate, no `erpnext`. |
-| P1.14 | Implement Hermes tool boundary. | Repository implemented; runtime proof open | Eight roles and 118 tools validate; runtime role/actor scope, verified proof, preview receipt, signed approval, single-claim write, and audit cannot be skipped. |
-| P1.15 | Expose owner exception truth. | Frappe Control Center built; React owner cockpit open | `/admin/status`, MCP, and Control Center show readiness, heartbeat, dead/stuck/Frappe/replay/audit/QB facts; live role testing and React cockpit remain open. |
+| P1.14 | Implement Hermes tool boundary. | Repository implemented; runtime proof open | Eight roles and 122 tools validate; runtime role/actor scope, verified proof, preview receipt, signed approval, single-claim write, and audit cannot be skipped. |
+| P1.15 | Expose owner exception truth. | Frappe Control Center and React Owner Now built locally; live proof open | `/admin/status`, MCP, Control Center, and Owner Now show readiness, exception/MCTB/triage truth; live role testing, browser/device, and provider-receipt proof remain open. |
 | P1.16 | Update recovery/launch SOPs and train operators. | Repository/local verification implemented; acceptance open | Operator completes status diagnosis, targeted replay, incident record, exact Frappe/D1 restore, and GHL no-touch drill on isolated/live-shaped infrastructure. |
 
 ## Frappe Phase 1 Contract
@@ -198,10 +198,10 @@ Implemented bus tools:
 - `list_recent_envelopes`, `get_envelope`, `list_dead_letters`
 - `dry_run_replay`, `request_replay` (one envelope only)
 
-The compatibility-named `erpnext-roofing-mcp` implements 111 Frappe tools: 69 bounded
-reads plus 21 deterministic dry-run/request families for gates, takeoff, supplier,
+The compatibility-named `erpnext-roofing-mcp` implements 115 Frappe tools: 71 bounded
+reads plus 22 deterministic dry-run/request families for gates, takeoff, supplier,
 proposal, assignment, change order, safety, compliance, consent, decision, reconciliation,
-export, closeout, comms, and market watch. With seven bus tools, the inventory is 118.
+lead triage, export, closeout, comms, and market watch. With seven bus tools, the inventory is 122.
 `tools/validate-hermes-config.mjs` proves the full inventory against eight role allowlists,
 runtime filtering, and the dry-run pair for every granted request tool.
 

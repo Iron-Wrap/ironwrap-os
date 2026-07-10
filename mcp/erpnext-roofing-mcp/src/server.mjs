@@ -39,6 +39,7 @@ const REQUEST_TO_DRY_RUN = Object.freeze({
   request_create_warranty_packet: "dry_run_warranty_packet",
   request_create_review_request: "dry_run_review_request",
   request_record_communication_event: "dry_run_communication_event",
+  request_mark_lead_triaged: "dry_run_mark_lead_triaged",
   request_add_market_watch_item: "dry_run_market_watch_item",
 });
 
@@ -258,6 +259,24 @@ const COMMUNICATION_EVENT_FIELDS = [
   "status",
   "recipient_ref",
   "event_ts",
+  "modified",
+];
+
+const LEAD_TRIAGE_FIELDS = [
+  "name",
+  "envelope_id",
+  "source",
+  "event_ts",
+  "status",
+  "intent_queue",
+  "triage_status",
+  "triaged_by",
+  "triaged_at",
+  "triage_summary",
+  "contact_name",
+  "contact_phone",
+  "contact_email",
+  "job_ref",
   "modified",
 ];
 
@@ -840,6 +859,24 @@ export function buildMaterialTakeoffStatusPatch(nextStatus, reason, approvedBy, 
   return patch;
 }
 
+// A lead triage is a local operating annotation. It must never change the
+// transport state which the bus owns, and it must never create/update a
+// Communication Event (a separate, consent-gated record-only command).
+export function buildLeadTriagePatch({ triageSummary, triagedBy, nowIso }) {
+  const summary = typeof triageSummary === "string" ? triageSummary.trim() : "";
+  if (!summary) throw new Error("lead_triage_summary_required");
+  if (summary.length > 2000) throw new Error("lead_triage_summary_too_long");
+  const approvedActor = typeof triagedBy === "string" ? triagedBy.trim() : "";
+  if (!approvedActor) throw new Error("lead_triage_approved_actor_required");
+  if (!Number.isFinite(Date.parse(nowIso))) throw new Error("lead_triage_server_time_invalid");
+  return {
+    triage_status: "Triaged",
+    triaged_by: approvedActor,
+    triaged_at: nowIso,
+    triage_summary: summary,
+  };
+}
+
 export function proposalPackIdForRoofJob(roofJobId) {
   return `proposal:${roofJobId}`;
 }
@@ -1325,6 +1362,11 @@ export function buildMarketWatchItemDraft({
 }
 
 const IdSchema = z.string().min(1).max(140);
+
+export const LeadTriageInputSchema = z.object({
+  lead_envelope_id: IdSchema,
+  triage_summary: z.string().trim().min(1).max(2000),
+}).strict();
 const IsoDateTimeSchema = z.string().datetime({ offset: true });
 const DateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -2321,6 +2363,126 @@ export function buildServer(config) {
       inputSchema: { envelope_id: z.string().min(1) },
     },
     async ({ envelope_id }) => text(await erpGet(config, resourcePath("Lead Envelope", envelope_id))),
+  );
+
+  server.registerTool(
+    "list_untriaged_lead_envelopes",
+    {
+      title: "List Untriaged Lead Envelopes",
+      description: "Read bounded Lead Envelope rows whose local operating triage is not yet Triaged. Bus transport status remains read-only context.",
+      inputSchema: z.object({
+        limit: z.number().int().min(1).max(100).optional(),
+      }).strict(),
+    },
+    async ({ limit = 25 }) => text({
+      data: await listResources(config, "Lead Envelope", {
+        fields: LEAD_TRIAGE_FIELDS,
+        filters: [["Lead Envelope", "triage_status", "!=", "Triaged"]],
+        limit,
+        orderBy: "event_ts desc",
+      }),
+    }),
+  );
+
+  server.registerTool(
+    "list_communication_events_for_lead",
+    {
+      title: "List Communication Events For Lead",
+      description: "Read bounded Communication Event history for one exact Lead Envelope. This is history only and never sends a message.",
+      inputSchema: z.object({
+        lead_envelope_id: IdSchema,
+        limit: z.number().int().min(1).max(100).optional(),
+      }).strict(),
+    },
+    async ({ lead_envelope_id, limit = 25 }) => text({
+      data: await listResources(config, "Communication Event", {
+        fields: COMMUNICATION_EVENT_FIELDS,
+        filters: [["Communication Event", "lead_envelope", "=", lead_envelope_id]],
+        limit,
+        orderBy: "event_ts desc",
+      }),
+    }),
+  );
+
+  server.registerTool(
+    "dry_run_mark_lead_triaged",
+    {
+      title: "Dry Run Mark Lead Triaged",
+      description: "Preview one local Lead Envelope triage annotation without changing bus transport status or any Communication Event.",
+      inputSchema: LeadTriageInputSchema,
+    },
+    async ({ lead_envelope_id, triage_summary }) => {
+      const before = await readResource(config, "Lead Envelope", lead_envelope_id);
+      const patch = buildLeadTriagePatch({
+        triageSummary: triage_summary,
+        triagedBy: config.approverId,
+        nowIso: new Date().toISOString(),
+      });
+      return text({
+        would_write: false,
+        required_tool: "request_mark_lead_triaged",
+        target: { doctype: "Lead Envelope", name: lead_envelope_id },
+        before: summarizeLeadTriage(before),
+        patch,
+        transport_status_unchanged: before.status ?? "",
+        communication_events_mutated: false,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_mark_lead_triaged",
+    {
+      title: "Request Mark Lead Triaged",
+      description: "Approved-write: mark one Lead Envelope triaged with an approved local summary and record a Hermes Run audit row. It never changes bus transport status or Communication Events.",
+      inputSchema: approvedWriteInputSchema(LeadTriageInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const before = await readResource(config, "Lead Envelope", args.lead_envelope_id);
+      const patch = buildLeadTriagePatch({
+        triageSummary: args.triage_summary,
+        triagedBy: args.approved_by,
+        nowIso: now,
+      });
+      const dryRun = {
+        target: { doctype: "Lead Envelope", name: args.lead_envelope_id },
+        before: summarizeLeadTriage(before),
+        patch,
+        transport_status_unchanged: before.status ?? "",
+        communication_events_mutated: false,
+      };
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_mark_lead_triaged",
+        target: { doctype: "Lead Envelope", name: args.lead_envelope_id },
+        leadEnvelope: args.lead_envelope_id,
+        dryRun,
+        beforeSummary: summarizeLeadTriage(before),
+        // The command derives the immutable triaged_at timestamp in Frappe.
+        // Record its returned value rather than the preview's local timestamp.
+        afterSummary: (result) => summarizeLeadTriageCommandResult(before, result),
+        // A generic Lead Envelope PUT cannot transition triage. The narrow
+        // Frappe command locks and verifies the already-created Approved Run.
+        execute: () => erpPost(
+          config,
+          "/api/method/ironwrap_roofing.lead_triage_api.mark_lead_triaged",
+          {
+            lead_envelope_id: args.lead_envelope_id,
+            hermes_run_id: args.run_id,
+          },
+        ),
+        responseExtra: {
+          updated: true,
+          lead_envelope_id: args.lead_envelope_id,
+          communication_events_mutated: false,
+        },
+      }));
+    },
   );
 
   server.registerTool(
@@ -5570,11 +5732,14 @@ export async function executeAuditedWrite(config, {
   try {
     const result = await execute();
     mutationApplied = true;
+    const resolvedAfterSummary = typeof afterSummary === "function"
+      ? afterSummary(result)
+      : afterSummary;
     const completedAt = new Date().toISOString();
     const auditError = await finalizeHermesRun(config, runId, {
       approval_status: "Executed",
       result_status: "OK",
-      after_target_ids: JSON.stringify(afterSummary),
+      after_target_ids: JSON.stringify(resolvedAfterSummary),
       result_json: JSON.stringify(result),
       mutation_applied: 1,
       audit_event_id: `audit:${runId}`,
@@ -5594,7 +5759,7 @@ export async function executeAuditedWrite(config, {
       await erpPut(config, resourcePath("Hermes Run", runId), {
         approval_status: "Audit Failed",
         result_status: "Error",
-        after_target_ids: JSON.stringify(afterSummary),
+        after_target_ids: JSON.stringify(resolvedAfterSummary),
         result_json: JSON.stringify(result),
         error: auditError,
         mutation_applied: 1,
@@ -5981,6 +6146,33 @@ function summarizeCommunicationEvent(event) {
     status: event.status,
     event_ts: event.event_ts ?? "",
   };
+}
+
+function summarizeLeadTriage(envelope) {
+  if (!envelope) return null;
+  return {
+    name: envelope.name,
+    envelope_id: envelope.envelope_id,
+    source: envelope.source ?? "",
+    event_ts: envelope.event_ts ?? "",
+    // The bus owns this state. It is audit/read context, never part of a triage patch.
+    transport_status: envelope.status ?? "",
+    triage_status: envelope.triage_status ?? "Unknown",
+    triaged_by: envelope.triaged_by ?? "",
+    triaged_at: envelope.triaged_at ?? "",
+    triage_summary: envelope.triage_summary ?? "",
+  };
+}
+
+function summarizeLeadTriageCommandResult(before, result) {
+  const payload = result?.message ?? result ?? {};
+  const leadEnvelope = payload?.lead_envelope;
+  // Frappe's command returns only the immutable triage decision. Preserve the
+  // existing owned transport context while using its server-derived timestamp.
+  return summarizeLeadTriage({
+    ...before,
+    ...(leadEnvelope && typeof leadEnvelope === "object" ? leadEnvelope : {}),
+  });
 }
 
 function summarizeSupplierQuote(quote) {

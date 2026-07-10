@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pushToErpNext } from "../src/erpnext.ts";
+import { pushToErpNext, syncLeadTransportToErpNext } from "../src/erpnext.ts";
 import type { EnvelopeRecord } from "../src/core.ts";
 
 const rec: EnvelopeRecord = {
@@ -64,6 +64,7 @@ test("pushToErpNext: creates Lead Envelope, Roofing Property, and Roof Job", asy
   assert.equal(calls[0].init.headers?.["authorization" as never], "token key:secret");
   const leadBody = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/resource/Lead%20Envelope"))?.init.body));
   assert.equal(leadBody.envelope_id, rec.envelope_id);
+  assert.equal(leadBody.triage_status, "Untriaged");
   assert.equal(leadBody.jobnimbus_contact_id, "C-1");
   assert.equal(leadBody.jobnimbus_job_id, "J-1");
 
@@ -89,6 +90,68 @@ test("pushToErpNext: creates Lead Envelope, Roofing Property, and Roof Job", asy
   assert.deepEqual(gateBodies.map((g) => g.gate), ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"]);
   assert.ok(gateBodies.every((g) => g.roof_job === "RJ-0001" && g.state === "Blocked"));
   assert.ok(gateBodies.every((g) => typeof g.blocker_reason === "string" && g.blocker_reason.length > 0));
+});
+
+test("pushToErpNext: retry never resets existing human-owned operational records", async (t) => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    if (url.includes("/api/resource/Lead%20Envelope?")) return json({ data: [{ name: "LE-TRIAGED" }] });
+    if (url.endsWith("/api/resource/Lead%20Envelope/LE-TRIAGED")) return json({ data: { name: "LE-TRIAGED" } });
+    if (url.includes("/api/resource/Roofing%20Property?")) return json({ data: [{ name: "RP-TRIAGED" }] });
+    if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-TRIAGED" }] });
+    if (url.includes("/api/resource/Production%20Gate%20State?")) return json({ data: [{ name: "gate" }] });
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  await pushToErpNext({
+    ERPNEXT_ENABLED: "true", ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "key", ERPNEXT_API_SECRET: "secret",
+  } as never, { ...rec, status: "pushed", jn_contact_id: "C-2", jn_job_id: "J-2" });
+
+  const leadUpdate = calls.find((call) => call.url.endsWith("/api/resource/Lead%20Envelope/LE-TRIAGED"));
+  assert.ok(leadUpdate);
+  const body = JSON.parse(String(leadUpdate.init.body));
+  assert.equal(body.status, "pushed");
+  for (const forbidden of ["triage_status", "triaged_by", "triaged_at", "triage_summary"]) {
+    assert.equal(Object.hasOwn(body, forbidden), false, `${forbidden} must remain human-owned`);
+  }
+  const protectedDoctypes = ["Roofing%20Property", "Roof%20Job", "Production%20Gate%20State"];
+  assert.equal(
+    calls.some((call) => protectedDoctypes.some((doctype) => call.url.endsWith(`/api/resource/${doctype}`) ||
+      call.url.includes(`/api/resource/${doctype}/`))),
+    false,
+    "retry must not overwrite property, job, or gate business state",
+  );
+});
+
+test("syncLeadTransportToErpNext: mirrors only bridge identifiers into the existing job", async (t) => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    if (url.includes("/api/resource/Lead%20Envelope?")) return json({ data: [{ name: "LE-1" }] });
+    if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-1" }] });
+    if (url.endsWith("/api/resource/Lead%20Envelope/LE-1")) return json({ data: { name: "LE-1" } });
+    if (url.endsWith("/api/resource/Roof%20Job/RJ-1")) return json({ data: { name: "RJ-1" } });
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  const result = await syncLeadTransportToErpNext({
+    ERPNEXT_ENABLED: "true", ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "key", ERPNEXT_API_SECRET: "secret",
+  } as never, { ...rec, status: "pushed" }, { contactId: "C-9", jobId: "J-9", jobNumber: "26-0009", reused: false });
+
+  assert.deepEqual(result, { name: "LE-1", roofJobName: "RJ-1" });
+  const leadBody = JSON.parse(String(calls.find((call) => call.url.endsWith("/api/resource/Lead%20Envelope/LE-1"))?.init.body));
+  const jobBody = JSON.parse(String(calls.find((call) => call.url.endsWith("/api/resource/Roof%20Job/RJ-1"))?.init.body));
+  assert.deepEqual(jobBody, {
+    job_number: "26-0009", jobnimbus_contact_id: "C-9", jobnimbus_job_id: "J-9",
+  });
+  for (const forbidden of ["triage_status", "triaged_by", "triaged_at", "triage_summary"]) {
+    assert.equal(Object.hasOwn(leadBody, forbidden), false, `${forbidden} must remain human-owned`);
+  }
 });
 
 test("pushToErpNext: captures instant estimate sessions as review-gated ERPNext rows", async (t) => {

@@ -38,10 +38,24 @@ const specs = [
       "event_ts",
       "status",
       "intent_queue",
+      "triage_status",
+      "triaged_by",
+      "triaged_at",
+      "triage_summary",
       "payload_json",
       "jobnimbus_contact_id",
       "jobnimbus_job_id",
     ],
+    fieldContracts: {
+      triage_status: {
+        fieldtype: "Select",
+        options: "Unknown\nUntriaged\nTriaged",
+        default: "Unknown",
+      },
+      triaged_by: { fieldtype: "Link", options: "User" },
+      triaged_at: { fieldtype: "Datetime" },
+      triage_summary: { fieldtype: "Small Text" },
+    },
   },
   {
     name: "Roofing Customer",
@@ -817,6 +831,13 @@ function validateController(spec, fields) {
     1,
     `${spec.name} controller must call shared validation exactly once`,
   );
+  if (spec.dir === "lead_envelope") {
+    assert.match(
+      source,
+      /validate_lead_envelope_triage_mutation\s*\(\s*self\s*\)/,
+      "Lead Envelope controller must reject generic triage mutations before shared policy validation",
+    );
+  }
   assert.ok(pythonContracts.identityKinds.includes(spec.dir), `${spec.name} has no identity policy`);
   for (const fieldName of pythonContracts.identityFields[spec.dir] ?? []) {
     assert.ok(fields.has(fieldName), `${spec.name} identity policy references missing field ${fieldName}`);

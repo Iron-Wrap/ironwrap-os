@@ -19,6 +19,14 @@ SAFETY_PLAN_CONTROLLER_PATH = (
     / "safety_plan"
     / "safety_plan.py"
 )
+LEAD_ENVELOPE_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "lead_envelope"
+    / "lead_envelope.py"
+)
 
 
 class FakeValidationError(Exception):
@@ -241,6 +249,62 @@ class DocumentValidationAdapterTests(unittest.TestCase):
 
         controller = SAFETY_PLAN_CONTROLLER_PATH.read_text(encoding="utf-8")
         self.assertIn("validate_safety_plan_frozen_content(self)", controller)
+
+    def test_lead_triage_requires_the_approved_command_context(self) -> None:
+        adapter, _ = self.load_adapter()
+        original = {
+            "name": "lead:1",
+            "envelope_id": "lead:1",
+            "status": "pending_jn_push",
+            "triage_status": "Untriaged",
+            "triaged_by": "",
+            "triaged_at": "",
+            "triage_summary": "",
+        }
+        transport_only = {**original, "status": "pushed"}
+        adapter.validate_lead_envelope_triage_mutation(
+            FakeDocument(transport_only, previous=original)
+        )
+
+        triaged = {
+            **transport_only,
+            "triage_status": "Triaged",
+            "triaged_by": "owner@example.com",
+            "triaged_at": "2026-07-10 18:00:00",
+            "triage_summary": "Urgent active leak; verify address before outreach.",
+        }
+        with self.assertRaisesRegex(FakeValidationError, "approved Hermes command"):
+            adapter.validate_lead_envelope_triage_mutation(
+                FakeDocument(triaged, previous=transport_only)
+            )
+        with adapter.lead_triage_transition_context(
+            "lead:1",
+            "run-lead-triage-0001",
+            "owner@example.com",
+            "2026-07-10 18:00:00",
+            "Urgent active leak; verify address before outreach.",
+        ):
+            adapter.validate_lead_envelope_triage_mutation(
+                FakeDocument(triaged, previous=transport_only)
+            )
+        with (
+            adapter.lead_triage_transition_context(
+                "lead:1",
+                "run-lead-triage-0001",
+                "owner@example.com",
+                "2026-07-10 18:00:00",
+                "Different summary",
+            ),
+            self.assertRaisesRegex(FakeValidationError, "did not match"),
+        ):
+            adapter.validate_lead_envelope_triage_mutation(
+                FakeDocument(triaged, previous=transport_only)
+            )
+        with self.assertRaisesRegex(FakeValidationError, "approved Hermes command"):
+            adapter.validate_lead_envelope_triage_mutation(FakeDocument(triaged))
+
+        controller = LEAD_ENVELOPE_CONTROLLER_PATH.read_text(encoding="utf-8")
+        self.assertIn("validate_lead_envelope_triage_mutation(self)", controller)
 
 
 if __name__ == "__main__":

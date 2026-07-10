@@ -17,7 +17,7 @@ materials → completion → invoice → review, on a portable owned-data spine.
 | `final-spec-pack/` | **The spec** — 19 numbered chapters (`README.md` is the index). The source of truth for the target system. | Authoritative |
 | `workers-bus/` | **The integration bus** — a Cloudflare Worker (fetch + queue + scheduled) that is the owned data layer + Make-bus replacement. Builds + tests green. | Buildable |
 | `frappe-apps/ironwrap_roofing/` | **Frappe-only operating core**: proprietary custom Frappe app (46 DocTypes: 39 top-level records plus 7 child tables), server policy/RBAC, atomic safety acknowledgement RPC, and a read-only exception-first Control Center. Zero GPL link targets (only Frappe core `User`); ERPNext removed 2026-07-09 for 100% IP. Contract-validated; erpnext-* tool/env naming retained for compatibility. | Buildable |
-| `mcp/` | **Hermes tool surface** — `ironwrap-bus-mcp` (7 bus tools) and `erpnext-roofing-mcp` (111 role-filtered Frappe tools: 69 reads, 21 dry-runs, 21 approved writes). Frappe writes require bound preview and human-approval receipts. | Buildable |
+| `mcp/` | **Hermes tool surface** — `ironwrap-bus-mcp` (7 bus tools) and `erpnext-roofing-mcp` (115 role-filtered Frappe tools: 71 reads, 22 dry-runs, 22 approved writes). Frappe writes require bound preview and human-approval receipts. | Buildable |
 | `hermes/` | **Agent runtime layer** — `agents/roles.json` (per-role MCP tool allowlists, source of truth), agent profiles, `mcp-servers.json`, and the `skills/` procedure packs. | Buildable |
 | `config/tenants/` | **White-label tenant configs** — one JSON per contractor (brands, geography, gates, agents), secrets by env-var name only. Validated. | Buildable |
 | `deploy/` | **Launch kit** (free-tier path): app-repo split script, frappe_docker apps.json template, Cloudflare Tunnel config, R2 backup cron script, env inventory. Runbook: `docs/LAUNCH-RUNBOOK.md`; live-spine proof: `tools/launch-proof.mjs`. | Buildable |
@@ -41,8 +41,9 @@ materials → completion → invoice → review, on a portable owned-data spine.
 - **Integration bus** = Make (on the **Core** plan, ~$9/mo, already subscribed) **or** the
   `workers-bus/` Cloudflare Worker. Recommended hybrid: Worker does the heavy lifting; keep the
   Make Core seat for native connectors + observability.
-- **Instant-ack / MCTB** is the headline: <60s touch, 24/7. Interim (pre-A2P) ack = email +
-  owner alert; the prospect-SMS leg switches on at A2P approval.
+- **Instant-ack / MCTB** is the headline: provider acceptance within 60 seconds is tracked as
+  evidence, not delivery or human-follow-up proof. Interim (pre-A2P) ack = email + owner alert;
+  the prospect-SMS leg switches on at A2P approval.
 - **Storage = Google Drive Shared Drives** for the human job-folder archive (R2 holds raw).
   OneDrive is a migration source / temporary legacy archive only.
 - **Email = Google Workspace brand mailboxes** for IronWrap (`sales@` with `info@`/`quote@`

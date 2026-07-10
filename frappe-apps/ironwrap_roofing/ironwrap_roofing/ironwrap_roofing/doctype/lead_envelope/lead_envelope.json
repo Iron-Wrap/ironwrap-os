@@ -12,6 +12,10 @@
     "event_ts",
     "status",
     "intent_queue",
+    "triage_status",
+    "triaged_by",
+    "triaged_at",
+    "triage_summary",
     "contact_section",
     "contact_name",
     "contact_phone",
@@ -65,6 +69,31 @@
       "fieldtype": "Data",
       "in_standard_filter": 1,
       "label": "Intent Queue"
+    },
+    {
+      "default": "Unknown",
+      "fieldname": "triage_status",
+      "fieldtype": "Select",
+      "in_list_view": 1,
+      "in_standard_filter": 1,
+      "label": "Triage Status",
+      "options": "Unknown\nUntriaged\nTriaged"
+    },
+    {
+      "fieldname": "triaged_by",
+      "fieldtype": "Link",
+      "label": "Triaged By",
+      "options": "User"
+    },
+    {
+      "fieldname": "triaged_at",
+      "fieldtype": "Datetime",
+      "label": "Triaged At"
+    },
+    {
+      "fieldname": "triage_summary",
+      "fieldtype": "Small Text",
+      "label": "Triage Summary"
     },
     {
       "fieldname": "contact_section",

@@ -309,7 +309,7 @@ shapes are:
   "read_model_generated_at": "2026-07-10T10:00:01.000Z",
   "stale_fields": ["exceptions.next_action"],
   "permissions": ["session:read", "jobs:read:any", "owner:read"],
-  "allowed_actions": ["job.read", "gate.read", "evidence.read", "checkin.read", "lead.read", "incident.read", "finance_exception.read", "material_exception.read"],
+  "allowed_actions": ["job.read", "lead.read", "lead_triage.read", "field_blocker.read", "incident.read", "finance_exception.read", "material_exception.read"],
   "exceptions": [{
     "id": "gate_...",
     "kind": "blocked_gate",
@@ -318,14 +318,23 @@ shapes are:
     "why": "Underlayment proof missing",
     "next_action": null,
     "job_id": "ROOF-JOB-0001",
-    "due_at": "2026-07-11 12:00:00"
+    "occurred_at": null,
+    "due_at": "2026-07-11 12:00:00",
+    "received_at": null,
+    "bus_status": null,
+    "triage_status": null,
+    "mctb": null
   }],
+  "partial_sources": [],
   "summary": {
     "active_jobs": 7,
+    "field_blockers": 0,
     "blocked_gates": 1,
     "open_incidents": 0,
     "finance_exceptions": 0,
-    "new_leads": 2,
+    "untriaged_leads": 2,
+    "lead_triage_unknown": 0,
+    "mctb_unproven_due": 0,
     "material_exceptions": 0
   }
 }

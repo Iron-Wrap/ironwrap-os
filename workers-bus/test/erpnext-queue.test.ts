@@ -25,16 +25,25 @@ const rec: EnvelopeRecord = {
   updated_at: "2026-07-08T10:00:00.000Z",
 };
 
-test("queue: JobNimbus success then ERPNext Lead Envelope sync marks envelope pushed", async (t) => {
+test("queue: Frappe lead visibility precedes JobNimbus and transport sync marks envelope pushed", async (t) => {
   const fetches: Array<{ url: string; init: RequestInit }> = [];
+  let leadCreated = false;
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     fetches.push({ url, init: init ?? {} });
     if (url.includes("app.jobnimbus.com/api1") && (init?.method ?? "GET") === "GET") return json({ results: [] });
     if (url.endsWith("/contacts")) return json({ jnid: "C-1" });
     if (url.endsWith("/jobs")) return json({ jnid: "J-1", number: "26-0001" });
-    if (url.includes("/api/resource/Lead%20Envelope?")) return json({ data: [] });
-    if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-0001" } });
+    if (url.includes("/api/resource/Lead%20Envelope?")) {
+      return json({ data: leadCreated ? [{ name: "LE-0001" }] : [] });
+    }
+    if (url.endsWith("/api/resource/Lead%20Envelope")) {
+      leadCreated = true;
+      return json({ data: { name: "LE-0001" } });
+    }
+    if (url.endsWith("/api/resource/Lead%20Envelope/LE-0001") && init?.method === "PUT") {
+      return json({ data: { name: "LE-0001" } });
+    }
     if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [] });
     if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-0001" } });
     if (url.includes("/api/resource/Production%20Gate%20State?")) return json({ data: [] });
@@ -90,6 +99,16 @@ test("queue: JobNimbus success then ERPNext Lead Envelope sync marks envelope pu
   assert.ok(fetches.some((f) => f.url.endsWith("/api/resource/Lead%20Envelope")));
   assert.ok(fetches.some((f) => f.url.endsWith("/api/resource/Roof%20Job")));
   assert.equal(fetches.filter((f) => f.url.endsWith("/api/resource/Production%20Gate%20State")).length, 7);
+  const initialLeadWrite = fetches.findIndex((f) => f.url.endsWith("/api/resource/Lead%20Envelope"));
+  const firstJobNimbusCall = fetches.findIndex((f) => f.url.includes("app.jobnimbus.com/api1"));
+  assert.ok(initialLeadWrite >= 0 && initialLeadWrite < firstJobNimbusCall, "Frappe must exist before bridge delivery");
+  const initialLead = JSON.parse(String(fetches[initialLeadWrite]?.init.body));
+  assert.equal(initialLead.triage_status, "Untriaged");
+  const transportSync = fetches.find((f) => f.url.endsWith("/api/resource/Lead%20Envelope/LE-0001"));
+  assert.equal(transportSync?.init.method, "PUT");
+  const transportBody = JSON.parse(String(transportSync?.init.body));
+  assert.equal(transportBody.status, "pushed");
+  assert.equal(Object.hasOwn(transportBody, "triage_status"), false);
   assert.ok(writes.some((w) => w.sql.includes("erpnext_roof_job_id") && w.args.includes("LE-0001") && w.args.includes("RJ-0001")));
   assert.ok(writes.some((w) => w.sql.includes("UPDATE envelopes SET status") && w.args.includes("pushed")));
   assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") && w.args.includes("erpnext_push")));

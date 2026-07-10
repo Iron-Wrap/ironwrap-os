@@ -6,10 +6,13 @@ import {
   type FrappeFilter,
   type FrappeRow,
 } from "./frappe-read.ts";
+import { listLeadMctbEvidence, type LeadAckReceipt } from "./store.ts";
 
 const ACTIVE_JOB_STATUSES = ["Won", "In Production"] as const;
 export const ACTIVE_ASSIGNMENT_STATUSES = ["Assigned", "Accepted", "In Progress", "Blocked"] as const;
 const FIELD_PACKET_PROOF_PAGE_SIZE = 100;
+const OWNER_NOW_SOURCE_LIMIT = 50;
+const MCTB_SLA_MS = 60_000;
 
 interface ReadModelEnvelope {
   version: number;
@@ -156,16 +159,40 @@ export interface OwnerNowReadModel extends ReadModelEnvelope {
     why: string | null;
     next_action: string | null;
     job_id: string | null;
+    occurred_at: string | null;
     due_at: string | null;
+    received_at: string | null;
+    bus_status: string | null;
+    triage_status: string | null;
+    mctb: MctbStatus | null;
   }>;
+  /** Sources that reached the bounded query limit; displayed totals are lower bounds. */
+  partial_sources: string[];
   summary: {
     active_jobs: number;
+    field_blockers: number;
     blocked_gates: number;
     open_incidents: number;
     finance_exceptions: number;
-    new_leads: number;
+    untriaged_leads: number;
+    lead_triage_unknown: number;
+    mctb_unproven_due: number;
     material_exceptions: number;
   };
+}
+
+export interface MctbStatus {
+  state:
+    | "provider_accepted_within_sla"
+    | "provider_accepted_late"
+    | "no_eligible_channel"
+    | "awaiting_proof"
+    | "unproven_after_sla"
+    | "time_unavailable";
+  deadline_at: string | null;
+  observed_at: string | null;
+  channel: "email" | null;
+  proof_kind: "provider_receipt" | null;
 }
 
 export async function activeAssignmentForJob(
@@ -427,50 +454,110 @@ export async function buildJobProofReadModel(
   };
 }
 
-export async function buildOwnerNowReadModel(env: AppEnv, auth: AuthContext): Promise<OwnerNowReadModel> {
+export async function buildOwnerNowReadModel(
+  env: AppEnv,
+  auth: AuthContext,
+  now = new Date(),
+): Promise<OwnerNowReadModel> {
   if (auth.session.role !== "owner" && auth.session.role !== "ops") throw new Error("owner_scope_required");
-  const [jobs, gates, incidents, payments, leads, supplierOrders] = await Promise.all([
-    listFrappeResource(env, "Roof Job", [["Roof Job", "job_status", "in", [...ACTIVE_JOB_STATUSES]]], 50),
-    listFrappeResource(env, "Production Gate State", [["Production Gate State", "state", "=", "Blocked"]], 50),
-    listFrappeResource(env, "Automation Incident", [["Automation Incident", "status", "in", ["Open", "Acknowledged"]]], 50),
-    listFrappeResource(env, "Payment Milestone", [["Payment Milestone", "status", "in", ["Webhook Seen", "Needs Review"]]], 50),
-    listFrappeResource(env, "Lead Envelope", [["Lead Envelope", "status", "in", ["received", "pending_jn_push"]]], 50),
-    listFrappeResource(env, "Supplier Order", [["Supplier Order", "status", "in", ["Needs Review", "Shortage"]]], 50),
+  const [jobs, fieldBlockers, gates, incidents, payments, untriagedLeads, unknownTriageLeads, supplierOrders] = await Promise.all([
+    listFrappeResource(env, "Roof Job", [["Roof Job", "job_status", "in", [...ACTIVE_JOB_STATUSES]]], OWNER_NOW_SOURCE_LIMIT),
+    listFrappeResource(env, "Field Check-in", [
+      ["Field Check-in", "blocker_flag", "=", 1],
+      ["Field Check-in", "status", "in", ["Received", "Needs Review"]],
+      ["Field Check-in", "sync_state", "=", "Verified"],
+    ], OWNER_NOW_SOURCE_LIMIT),
+    listFrappeResource(env, "Production Gate State", [["Production Gate State", "state", "=", "Blocked"]], OWNER_NOW_SOURCE_LIMIT),
+    listFrappeResource(env, "Automation Incident", [["Automation Incident", "status", "in", ["Open", "Acknowledged"]]], OWNER_NOW_SOURCE_LIMIT),
+    listFrappeResource(env, "Payment Milestone", [["Payment Milestone", "status", "in", ["Webhook Seen", "Needs Review"]]], OWNER_NOW_SOURCE_LIMIT),
+    listFrappeResource(env, "Lead Envelope", [["Lead Envelope", "triage_status", "=", "Untriaged"]], OWNER_NOW_SOURCE_LIMIT),
+    listFrappeResource(env, "Lead Envelope", [["Lead Envelope", "triage_status", "=", "Unknown"]], OWNER_NOW_SOURCE_LIMIT),
+    listFrappeResource(env, "Supplier Order", [["Supplier Order", "status", "in", ["Needs Review", "Shortage"]]], OWNER_NOW_SOURCE_LIMIT),
   ]);
+  const leadRows = [...untriagedLeads, ...unknownTriageLeads];
+  const leadIds = leadRows.map((row) => text(row.envelope_id) ?? text(row.name)).filter(notNull);
+  const leadEvidence = await listLeadMctbEvidence(env, leadIds);
+  const envelopeById = new Map(leadEvidence.envelopes.map((row) => [row.envelope_id, row]));
+  const receiptsByEnvelope = new Map<string, LeadAckReceipt[]>();
+  for (const receipt of leadEvidence.receipts) {
+    const current = receiptsByEnvelope.get(receipt.envelope_id) ?? [];
+    current.push(receipt);
+    receiptsByEnvelope.set(receipt.envelope_id, current);
+  }
+  const leadException = (row: FrappeRow, kind: "untriaged_lead" | "lead_triage_unknown") => {
+    const id = text(row.envelope_id) ?? text(row.name);
+    if (!id) return [];
+    const owned = envelopeById.get(id);
+    const receivedAt = owned?.received_at ?? null;
+    const source = text(row.source);
+    const triageStatus = text(row.triage_status) ?? "Unknown";
+    const mctb = mctbStatus(receivedAt, receiptsByEnvelope.get(id) ?? [], now);
+    const titlePrefix = kind === "untriaged_lead" ? "Untriaged lead" : "Lead triage is unknown";
+    return exceptionRow(row, {
+      id,
+      kind,
+      severity: null,
+      title: text(row.contact_name) ? `${titlePrefix}: ${text(row.contact_name)}` : titlePrefix,
+      why: [source, owned?.bus_status ?? text(row.status)].filter(notNull).join(" · ") || null,
+      jobId: text(row.job_ref),
+      occurredAt: receivedAt ?? text(row.event_ts),
+      receivedAt,
+      busStatus: owned?.bus_status ?? text(row.status),
+      triageStatus,
+      mctb,
+    });
+  };
+  const untriagedExceptions = untriagedLeads.flatMap((row) => leadException(row, "untriaged_lead"));
+  const unknownTriageExceptions = unknownTriageLeads.flatMap((row) => leadException(row, "lead_triage_unknown"));
   const exceptions: OwnerNowReadModel["exceptions"] = [
+    ...fieldBlockers.flatMap((row) => exceptionRow(row, {
+      id: text(row.checkin_id) ?? text(row.name), kind: "field_blocker", severity: null,
+      title: `${text(row.blocker_category) ?? "Field"} work-stop reported`, why: text(row.blocker_summary),
+      jobId: text(row.roof_job), occurredAt: text(row.submitted_at),
+    })),
     ...gates.flatMap((row) => exceptionRow(row, {
       id: text(row.gate_id) ?? text(row.name), kind: "blocked_gate", severity: null,
       title: `${text(row.gate) ?? "Production"} gate blocked`, why: text(row.blocker_reason),
-      jobId: text(row.roof_job), dueAt: text(row.due_at),
+      jobId: text(row.roof_job), occurredAt: text(row.assigned_at), dueAt: text(row.due_at),
     })),
     ...incidents.flatMap((row) => exceptionRow(row, {
       id: text(row.incident_id) ?? text(row.name), kind: "automation_incident", severity: text(row.severity),
       title: text(row.summary) ?? "Automation incident", why: text(row.category), jobId: text(row.roof_job),
-    })),
-    ...payments.flatMap((row) => exceptionRow(row, {
-      id: text(row.payment_milestone_id) ?? text(row.name), kind: "finance_exception", severity: null,
-      title: `${text(row.milestone_type) ?? "Payment"} needs review`, why: text(row.notes) ?? text(row.status),
-      jobId: text(row.roof_job), dueAt: text(row.due_date),
-    })),
-    ...leads.flatMap((row) => exceptionRow(row, {
-      id: text(row.envelope_id) ?? text(row.name), kind: "new_lead", severity: null,
-      title: text(row.contact_name) ? `New lead: ${text(row.contact_name)}` : "New lead",
-      why: text(row.intent_queue) ?? text(row.source), jobId: text(row.job_ref),
+      occurredAt: text(row.detected_at),
     })),
     ...supplierOrders.flatMap((row) => exceptionRow(row, {
       id: text(row.supplier_order_id) ?? text(row.name), kind: "material_exception", severity: null,
       title: `Supplier order ${text(row.status) ?? "needs review"}`, why: text(row.delivery_notes),
-      jobId: text(row.roof_job), dueAt: text(row.requested_delivery_date),
+      jobId: text(row.roof_job), occurredAt: text(row.prepared_at), dueAt: text(row.requested_delivery_date),
     })),
+    ...payments.flatMap((row) => exceptionRow(row, {
+      id: text(row.payment_milestone_id) ?? text(row.name), kind: "finance_exception", severity: null,
+      title: `${text(row.milestone_type) ?? "Payment"} needs review`, why: text(row.notes) ?? text(row.status),
+      jobId: text(row.roof_job), occurredAt: text(row.event_ts), dueAt: text(row.due_date),
+    })),
+    ...untriagedExceptions,
+    ...unknownTriageExceptions,
   ];
+  const ownerSources: Array<readonly [string, FrappeRow[]]> = [
+    ["active_jobs", jobs], ["field_blockers", fieldBlockers], ["blocked_gates", gates],
+    ["automation_incidents", incidents], ["finance_exceptions", payments], ["untriaged_leads", untriagedLeads],
+    ["lead_triage_unknown", unknownTriageLeads],
+    ["material_exceptions", supplierOrders],
+  ];
+  const partialSources = ownerSources.flatMap(([name, rows]) => rows.length === OWNER_NOW_SOURCE_LIMIT ? [name] : []);
   const stale = ["exceptions.next_action"];
   if (exceptions.some((row) => row.due_at === null)) stale.push("exceptions.due_at");
+  if (partialSources.length > 0) stale.push("exceptions.partial_sources");
   return {
-    ...envelope(auth, [...jobs, ...gates, ...incidents, ...payments, ...leads, ...supplierOrders], stale),
+    ...envelope(auth, [...jobs, ...fieldBlockers, ...gates, ...incidents, ...payments, ...leadRows, ...supplierOrders], stale),
     exceptions,
+    partial_sources: partialSources,
     summary: {
-      active_jobs: jobs.length, blocked_gates: gates.length, open_incidents: incidents.length,
-      finance_exceptions: payments.length, new_leads: leads.length, material_exceptions: supplierOrders.length,
+      active_jobs: jobs.length, field_blockers: fieldBlockers.length, blocked_gates: gates.length, open_incidents: incidents.length,
+      finance_exceptions: payments.length,
+      untriaged_leads: untriagedExceptions.length, lead_triage_unknown: unknownTriageExceptions.length,
+      mctb_unproven_due: untriagedExceptions.filter((row) => mctbMissedSla(row.mctb)).length,
+      material_exceptions: supplierOrders.length,
     },
   };
 }
@@ -626,19 +713,81 @@ function envelope(auth: AuthContext, rows: FrappeRow[], staleFields: string[]): 
     allowed_actions: auth.session.role === "field"
       ? ["job.read.assigned", "field.checkin.create", "field.evidence.create"]
       : [
-        "job.read", "lead.read", "incident.read", "finance_exception.read", "material_exception.read",
+        "job.read", "lead.read", "lead_triage.read", "field_blocker.read", "incident.read", "finance_exception.read", "material_exception.read",
       ],
   };
 }
 
 function exceptionRow(
   _row: FrappeRow,
-  input: { id: string | null; kind: string; severity: string | null; title: string; why: string | null; jobId: string | null; dueAt?: string | null },
+  input: {
+    id: string | null;
+    kind: string;
+    severity: string | null;
+    title: string;
+    why: string | null;
+    jobId: string | null;
+    occurredAt?: string | null;
+    dueAt?: string | null;
+    receivedAt?: string | null;
+    busStatus?: string | null;
+    triageStatus?: string | null;
+    mctb?: MctbStatus | null;
+  },
 ): OwnerNowReadModel["exceptions"] {
   return input.id ? [{
     id: input.id, kind: input.kind, severity: input.severity, title: input.title, why: input.why,
-    next_action: null, job_id: input.jobId, due_at: input.dueAt ?? null,
+    next_action: null, job_id: input.jobId, occurred_at: input.occurredAt ?? null, due_at: input.dueAt ?? null,
+    received_at: input.receivedAt ?? null, bus_status: input.busStatus ?? null,
+    triage_status: input.triageStatus ?? null, mctb: input.mctb ?? null,
   }] : [];
+}
+
+export function mctbStatus(
+  receivedAt: string | null,
+  receipts: readonly LeadAckReceipt[],
+  now: Date = new Date(),
+): MctbStatus {
+  const receivedMs = receivedAt ? Date.parse(receivedAt) : Number.NaN;
+  if (!Number.isFinite(receivedMs)) {
+    return {
+      state: "time_unavailable", deadline_at: null, observed_at: null,
+      channel: null, proof_kind: null,
+    };
+  }
+  const deadlineMs = receivedMs + MCTB_SLA_MS;
+  const deadlineAt = new Date(deadlineMs).toISOString();
+  const accepted = receipts.find((receipt) => receipt.outcome === "provider_accepted");
+  if (accepted) {
+    const observedMs = Date.parse(accepted.observed_at);
+    if (Number.isFinite(observedMs)) {
+      return {
+        state: observedMs <= deadlineMs ? "provider_accepted_within_sla" : "provider_accepted_late",
+        deadline_at: deadlineAt,
+        observed_at: accepted.observed_at,
+        channel: accepted.channel === "email" ? "email" : null,
+        proof_kind: "provider_receipt",
+      };
+    }
+  }
+  const noChannel = receipts.find((receipt) => receipt.outcome === "no_eligible_channel");
+  if (noChannel) {
+    return {
+      state: "no_eligible_channel", deadline_at: deadlineAt, observed_at: noChannel.observed_at,
+      channel: null, proof_kind: null,
+    };
+  }
+  return {
+    state: now.getTime() <= deadlineMs ? "awaiting_proof" : "unproven_after_sla",
+    deadline_at: deadlineAt,
+    observed_at: null,
+    channel: null,
+    proof_kind: null,
+  };
+}
+
+function mctbMissedSla(mctb: MctbStatus | null): boolean {
+  return mctb?.state === "provider_accepted_late" || mctb?.state === "unproven_after_sla";
 }
 
 function newestModified(rows: FrappeRow[]): string | null {

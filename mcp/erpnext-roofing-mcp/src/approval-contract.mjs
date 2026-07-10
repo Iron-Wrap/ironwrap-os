@@ -22,6 +22,7 @@ const VOLATILE_PREVIEW_FIELDS = new Set([
   "requested_at",
   "run_ts",
   "submitted_at",
+  "triaged_at",
   "updated_at",
   "verified_at",
 ]);

@@ -32,6 +32,10 @@ data.
   the verified Proof Stream precede collapsible supporting records. The mobile capture control is
   64 px and appears only for an active assignment with the BFF's `field.checkin.create` capability;
   blocker capture records the condition but cannot open or waive a gate.
+- A camera-and-voice-first Check-in: selection is reviewable and removable before it is saved,
+  blocker reporting is explicit, notes and location remain optional, and the visible outbox state
+  distinguishes device save, queued work, upload, verification, and attention without implying
+  delivery or onsite proof.
 - Route placeholders for the later Sales and customer Portal slices. Today, Job, Check-in, Owner
   Now, and Settings have their implemented North Star foundations.
 

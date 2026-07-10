@@ -13,15 +13,15 @@ import {
   Mic,
   PackageCheck,
   Phone,
+  X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { useSession } from "../auth/session-context";
 import { getDeviceSecret } from "../auth/device-credential";
 import { OutboxStateBadge } from "../components/outbox-state-badge";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
 import { getOutboxAction, queueOutboxAction, saveOutboxAction } from "../storage/outbox";
 import { flushOutbox } from "../storage/outbox-processor";
@@ -1070,6 +1070,8 @@ export function CheckInPage() {
 function CheckInFlow({ jobId }: { jobId: string }) {
   const session = useSession();
   const queryClient = useQueryClient();
+  const stepPanelRef = useRef<HTMLElement>(null);
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const jobQuery = useQuery({
     queryKey: ["job", session.tenant.id, session.user.id, jobId],
     queryFn: () => loadJob(session, jobId),
@@ -1094,6 +1096,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAction, setSavedAction] = useState<OutboxAction | null>(null);
+  const lastScrollStep = useRef(step);
 
   useEffect(() => {
     if (!savedAction || savedAction.state === "verified" || savedAction.state === "needs_attention")
@@ -1105,6 +1108,16 @@ function CheckInFlow({ jobId }: { jobId: string }) {
     }, 1000);
     return () => window.clearInterval(interval);
   }, [savedAction]);
+
+  useEffect(() => {
+    if (lastScrollStep.current === step) return;
+    lastScrollStep.current = step;
+    const panel = stepPanelRef.current;
+    if (!panel || typeof panel.scrollIntoView !== "function") return;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    panel.scrollIntoView({ block: "start", behavior: reduceMotion ? "auto" : "smooth" });
+    stepHeadingRef.current?.focus({ preventScroll: true });
+  }, [step]);
 
   if (session.user.role !== "field") {
     return (
@@ -1121,6 +1134,14 @@ function CheckInFlow({ jobId }: { jobId: string }) {
       <ErrorState message={messageFor(jobQuery.error)} onRetry={() => void jobQuery.refetch()} />
     );
   const model = jobQuery.data;
+  if (!model.allowed_actions.includes("field.checkin.create")) {
+    return (
+      <ErrorState
+        title="Field capture is not permitted"
+        message="This packet does not grant the current field account permission to create a check-in. Return to the job packet and refresh before trying again."
+      />
+    );
+  }
   const assignmentId = model.assignment?.id;
   if (!assignmentId) {
     return (
@@ -1134,9 +1155,10 @@ function CheckInFlow({ jobId }: { jobId: string }) {
 
   function choosePhotos(files: FileList | null) {
     const next = files ? [...files] : [];
-    const error = validateMedia([...next, ...(voice ? [voice] : [])]);
+    const combined = [...photos, ...next];
+    const error = validateMedia([...combined, ...(voice ? [voice] : [])]);
     setFormError(error);
-    if (!error) setPhotos(next);
+    if (!error) setPhotos(combined);
   }
 
   function chooseVoice(files: FileList | null) {
@@ -1146,10 +1168,19 @@ function CheckInFlow({ jobId }: { jobId: string }) {
     if (!error) setVoice(next);
   }
 
+  function removePhoto(index: number) {
+    setPhotos((current) => current.filter((_, currentIndex) => currentIndex !== index));
+    setFormError(null);
+  }
+
+  function removeVoice() {
+    setVoice(null);
+    setFormError(null);
+  }
+
   function requestLocation() {
     if (!navigator.geolocation) {
       setLocationPermissionState("unavailable");
-      setFormError("Location is not available on this device. You can continue without it.");
       return;
     }
     navigator.geolocation.getCurrentPosition(
@@ -1160,15 +1191,17 @@ function CheckInFlow({ jobId }: { jobId: string }) {
           accuracy: position.coords.accuracy,
         });
         setLocationPermissionState("granted");
-        setFormError(null);
       },
       (error) => {
         setLocation(null);
         setLocationPermissionState(error.code === error.PERMISSION_DENIED ? "denied" : "error");
-        setFormError("Location was not captured. You can continue without it.");
       },
       { enableHighAccuracy: true, timeout: 10_000, maximumAge: 60_000 },
     );
+  }
+
+  function moveToStep(nextStep: number) {
+    setStep(nextStep);
   }
 
   async function save() {
@@ -1235,59 +1268,50 @@ function CheckInFlow({ jobId }: { jobId: string }) {
     }
   }
 
+  const selectedMedia = [...photos, ...(voice ? [voice] : [])];
+  const saveMessage =
+    navigator.onLine && session.csrf_token !== "offline-session-no-csrf"
+      ? "Saves on this device first, then sends while the app stays open."
+      : "Saves on this device and queues when this app is open.";
+
   return (
     <RoleGuard surface="field">
-      <section className="mx-auto max-w-3xl space-y-6">
-        <PageHeader
-          eyebrow={model.job.job_number ?? "Assigned job"}
-          title="Field check-in"
-          description={model.job.address ?? "Address unavailable"}
-        />
-        <ol className="grid grid-cols-3 gap-2" aria-label="Check-in progress">
-          {["Capture", "Details", "Saved"].map((label, index) => (
-            <li
-              key={label}
-              className={
-                index + 1 <= step
-                  ? "rounded-lg bg-accent px-2 py-3 text-center text-sm font-black text-accent-foreground"
-                  : "rounded-lg bg-surface-muted px-2 py-3 text-center text-sm font-bold text-muted"
-              }
-            >
-              {index + 1}. {label}
-            </li>
-          ))}
-        </ol>
+      <section className="mx-auto max-w-3xl space-y-7 pb-16 lg:pb-4">
+        <CheckInHeader model={model} step={step} />
+        <CheckInProgress step={step} />
         {formError ? (
           <div
-            className="rounded-lg border border-danger/30 bg-danger-soft p-4 font-bold text-danger"
+            className="border border-danger/35 bg-danger-soft p-4 font-bold leading-6 text-danger"
             role="alert"
           >
             {formError}
           </div>
         ) : null}
         {step === 1 ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>Capture proof</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <label className="block text-sm font-extrabold" htmlFor="proof-slot">
-                Proof slot
-              </label>
-              <select
-                id="proof-slot"
-                className="min-h-16 w-full rounded-lg border bg-surface px-4 text-lg font-bold"
-                value={proofSlot}
-                onChange={(event) => setProofSlot(event.target.value)}
+          <section
+            ref={stepPanelRef}
+            className="scroll-mt-32 border border-border bg-surface-raised"
+            aria-labelledby="capture-evidence-heading"
+          >
+            <header className="border-b border-border px-4 py-4 sm:px-5">
+              <p className="text-sm font-semibold text-muted">Camera and voice before typing</p>
+              <h2
+                ref={stepHeadingRef}
+                id="capture-evidence-heading"
+                tabIndex={-1}
+                className="mt-1 text-2xl font-black tracking-[-0.03em]"
               >
-                {PROOF_SLOTS.map((slot) => (
-                  <option key={slot}>{slot}</option>
-                ))}
-              </select>
-              <label className="grid min-h-16 cursor-pointer place-items-center rounded-lg border-2 border-dashed bg-surface p-4 text-center text-lg font-black">
-                <span className="flex items-center gap-2">
+                Capture what you see
+              </h2>
+            </header>
+            <div className="space-y-4 p-4 sm:p-5">
+              <label className="grid min-h-20 cursor-pointer place-items-center border-2 border-foreground bg-foreground px-4 text-center text-background focus-within:outline focus-within:outline-3 focus-within:outline-info focus-within:outline-offset-3">
+                <span className="flex items-center gap-2 text-lg font-black">
                   <Camera aria-hidden="true" />
-                  Add photos
+                  Take photos
+                </span>
+                <span className="mt-1 text-sm font-semibold text-background/75">
+                  Up to 12 media files per check-in
                 </span>
                 <input
                   className="sr-only"
@@ -1298,13 +1322,13 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                   onChange={(event) => choosePhotos(event.target.files)}
                 />
               </label>
-              <p className="text-sm text-muted" role="status">
-                {photos.length} photo{photos.length === 1 ? "" : "s"} saved for this action
-              </p>
-              <label className="grid min-h-16 cursor-pointer place-items-center rounded-lg border-2 border-dashed bg-surface p-4 text-center text-lg font-black">
+              <label className="grid min-h-16 cursor-pointer place-items-center border border-border bg-surface px-4 text-center text-lg font-black focus-within:outline focus-within:outline-3 focus-within:outline-info focus-within:outline-offset-3">
                 <span className="flex items-center gap-2">
                   <Mic aria-hidden="true" />
-                  Optional voice note
+                  Add voice note
+                </span>
+                <span className="mt-1 text-sm font-semibold text-muted">
+                  Optional internal audio attachment
                 </span>
                 <input
                   className="sr-only"
@@ -1314,55 +1338,100 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                   onChange={(event) => chooseVoice(event.target.files)}
                 />
               </label>
-              <p className="rounded-lg bg-info-soft p-3 text-sm font-bold text-info">
-                All field media starts internal. This flow cannot mark it customer-safe.
+              <CaptureReview
+                photos={photos}
+                voice={voice}
+                onRemovePhoto={removePhoto}
+                onRemoveVoice={removeVoice}
+              />
+              <details className="border border-border">
+                <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-4 font-bold [&::-webkit-details-marker]:hidden">
+                  <span>Evidence type</span>
+                  <span className="text-sm text-muted">{proofSlot}</span>
+                </summary>
+                <div className="border-t border-border p-4">
+                  <label className="block text-sm font-bold" htmlFor="proof-slot">
+                    Change evidence type
+                  </label>
+                  <select
+                    id="proof-slot"
+                    className="mt-3 min-h-16 w-full border bg-surface px-4 text-lg font-bold"
+                    value={proofSlot}
+                    onChange={(event) => setProofSlot(event.target.value)}
+                  >
+                    {PROOF_SLOTS.map((slot) => (
+                      <option key={slot}>{slot}</option>
+                    ))}
+                  </select>
+                </div>
+              </details>
+              <p className="border-l-4 border-info pl-3 text-sm font-semibold leading-6 text-info">
+                Selected media remains internal. It is only in this form until device save; keep
+                this page open.
               </p>
+            </div>
+            <CheckInActionBar
+              message={
+                selectedMedia.length
+                  ? "Review selected evidence, then add any needed detail."
+                  : "You can continue with a note or a blocker report instead of media."
+              }
+            >
               <Button
                 type="button"
                 size="field"
                 fullWidth
                 variant="accent"
-                onClick={() => setStep(2)}
+                onClick={() => moveToStep(2)}
               >
-                Continue <ChevronRight aria-hidden="true" />
+                Continue to review
+                <ChevronRight aria-hidden="true" />
               </Button>
-            </CardContent>
-          </Card>
+            </CheckInActionBar>
+          </section>
         ) : null}
         {step === 2 ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>Details and blockers</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <label className="block font-extrabold" htmlFor="field-notes">
-                Field note
-              </label>
-              <textarea
-                id="field-notes"
-                className="min-h-32 w-full rounded-lg border bg-surface p-4 text-base"
-                maxLength={2000}
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                placeholder="What changed or was completed?"
-              />
-              <label className="flex min-h-16 items-center gap-4 rounded-lg border bg-surface px-4 text-lg font-black">
-                <input
-                  className="size-6"
-                  type="checkbox"
-                  checked={blocker}
-                  onChange={(event) => setBlocker(event.target.checked)}
-                />
-                Work is blocked
-              </label>
+          <section
+            ref={stepPanelRef}
+            className="scroll-mt-32 border border-border bg-surface-raised"
+            aria-labelledby="capture-detail-heading"
+          >
+            <header className="border-b border-border px-4 py-4 sm:px-5">
+              <p className="text-sm font-semibold text-muted">
+                Only add what the packet does not already prove
+              </p>
+              <h2
+                ref={stepHeadingRef}
+                id="capture-detail-heading"
+                tabIndex={-1}
+                className="mt-1 text-2xl font-black tracking-[-0.03em]"
+              >
+                Record the condition
+              </h2>
+            </header>
+            <div className="space-y-4 p-4 sm:p-5">
+              <Button
+                type="button"
+                size="field"
+                fullWidth
+                variant={blocker ? "danger" : "outline"}
+                onClick={() => {
+                  setBlocker((current) => !current);
+                  if (blocker) setBlockerSummary("");
+                }}
+              >
+                <AlertTriangle aria-hidden="true" />
+                {blocker ? "Close blocker report" : "Report a blocker"}
+              </Button>
               {blocker ? (
-                <div className="space-y-4 rounded-lg border border-danger/30 bg-danger-soft p-4">
-                  <label className="block font-extrabold" htmlFor="blocker-category">
+                <div className="space-y-4 border border-danger/35 bg-danger-soft p-4">
+                  <p className="font-black text-danger">Describe what is holding work.</p>
+                  <label className="block font-bold" htmlFor="blocker-category">
                     Blocker type
                   </label>
                   <select
                     id="blocker-category"
-                    className="min-h-16 w-full rounded-lg border bg-surface px-4 text-lg font-bold"
+                    className="min-h-16 w-full border bg-surface px-4 text-lg font-bold"
                     value={blockerCategory}
                     onChange={(event) => setBlockerCategory(event.target.value)}
                   >
@@ -1370,38 +1439,52 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                       <option key={category}>{category}</option>
                     ))}
                   </select>
-                  <label className="block font-extrabold" htmlFor="blocker-summary">
+                  <label className="block font-bold" htmlFor="blocker-summary">
                     What must happen next?
                   </label>
                   <textarea
                     id="blocker-summary"
-                    className="min-h-28 w-full rounded-lg border bg-surface p-4"
+                    className="min-h-28 w-full border bg-surface p-4"
                     maxLength={1000}
                     value={blockerSummary}
                     onChange={(event) => setBlockerSummary(event.target.value)}
                   />
                 </div>
               ) : null}
-              <Button
-                type="button"
-                size="field"
-                fullWidth
-                variant="outline"
-                onClick={requestLocation}
-              >
-                <MapPin aria-hidden="true" />
-                {location ? "Location captured" : "Add device location"}
-              </Button>
+              <details className="border border-border">
+                <summary className="min-h-16 cursor-pointer px-4 py-4 font-bold">
+                  Add field note (optional)
+                </summary>
+                <div className="border-t border-border p-4">
+                  <label className="block font-bold" htmlFor="field-notes">
+                    What changed or was completed?
+                  </label>
+                  <textarea
+                    id="field-notes"
+                    className="mt-3 min-h-32 w-full border bg-surface p-4 text-base"
+                    maxLength={2000}
+                    value={notes}
+                    onChange={(event) => setNotes(event.target.value)}
+                  />
+                </div>
+              </details>
+              <LocationCapture
+                location={location}
+                permissionState={locationPermissionState}
+                onRequest={requestLocation}
+              />
+            </div>
+            <CheckInActionBar message={saveMessage}>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Button
                   type="button"
                   size="field"
                   fullWidth
                   variant="outline"
-                  onClick={() => setStep(1)}
+                  onClick={() => moveToStep(1)}
                 >
                   <ChevronLeft aria-hidden="true" />
-                  Back
+                  Back to capture
                 </Button>
                 <Button
                   type="button"
@@ -1415,54 +1498,237 @@ function CheckInFlow({ jobId }: { jobId: string }) {
                   Save on device
                 </Button>
               </div>
-            </CardContent>
-          </Card>
+            </CheckInActionBar>
+          </section>
         ) : null}
         {step === 3 && savedAction ? (
-          <Card aria-live="polite">
-            <CardHeader>
-              <div className="flex items-center justify-between gap-4">
-                <CardTitle>Check-in saved</CardTitle>
-                <OutboxStateBadge state={savedAction.state} />
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="leading-7 text-muted">
-                {savedAction.state === "verified"
-                  ? "R2 and Frappe verified this exact device action."
-                  : savedAction.state === "needs_attention"
-                    ? "Nothing was deleted. The office can review this preserved action and its media."
-                    : "It remains on this device and will retry safely while the app is open."}
-              </p>
-              <Button asChild size="field" fullWidth variant="accent">
-                <Link to="/jobs/$jobId" params={{ jobId }}>
-                  Return to job
-                </Link>
-              </Button>
-            </CardContent>
-          </Card>
+          <section ref={stepPanelRef} className="scroll-mt-32">
+            <CheckInSaved action={savedAction} jobId={jobId} headingRef={stepHeadingRef} />
+          </section>
         ) : null}
       </section>
     </RoleGuard>
   );
 }
 
-function PageHeader({
-  eyebrow,
-  title,
-  description,
-}: {
-  eyebrow: string;
-  title: string;
-  description: string;
-}) {
+function CheckInHeader({ model, step }: { model: JobResponse; step: number }) {
   return (
-    <header>
-      <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">{eyebrow}</p>
-      <h1 className="mt-2 text-3xl font-black tracking-[-0.04em] sm:text-4xl">{title}</h1>
-      <p className="mt-3 text-base leading-7 text-muted">{description}</p>
+    <header className="border-b border-border pb-5 sm:pb-6">
+      <p className="text-sm font-semibold text-muted">{model.job.job_number ?? "Assigned job"}</p>
+      <h1 className="mt-1 text-3xl font-black tracking-[-0.04em] sm:text-4xl">Capture evidence</h1>
+      <p className="mt-2 text-base leading-7 text-muted">
+        {model.job.address ?? "Address unavailable"}
+      </p>
+      <p className="mt-4 text-sm font-semibold text-muted">
+        Step {step} of 3 · {step === 1 ? "Capture" : step === 2 ? "Record condition" : "Saved"}
+      </p>
     </header>
   );
+}
+
+function CheckInProgress({ step }: { step: number }) {
+  return (
+    <ol className="grid grid-cols-3 border-y border-border" aria-label="Check-in progress">
+      {["Capture", "Record", "Saved"].map((label, index) => {
+        const active = index + 1 === step;
+        const complete = index + 1 < step;
+        return (
+          <li
+            key={label}
+            className={`min-h-14 px-2 py-3 text-center text-sm font-bold ${index > 0 ? "border-l border-border" : ""} ${active ? "border-b-4 border-accent text-foreground" : complete ? "text-ok" : "text-muted"}`}
+            aria-current={active ? "step" : undefined}
+          >
+            <span className="block text-xs font-extrabold uppercase tracking-[0.08em]">
+              {index + 1}
+            </span>
+            <span className="mt-0.5 block">{label}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function CaptureReview({
+  photos,
+  voice,
+  onRemovePhoto,
+  onRemoveVoice,
+}: {
+  photos: File[];
+  voice: File | null;
+  onRemovePhoto: (index: number) => void;
+  onRemoveVoice: () => void;
+}) {
+  const items = [
+    ...photos.map((file, index) => ({
+      id: `photo:${file.name}:${file.lastModified}:${index}`,
+      kind: "Photo",
+      file,
+      remove: () => onRemovePhoto(index),
+    })),
+    ...(voice
+      ? [
+          {
+            id: `voice:${voice.name}:${voice.lastModified}`,
+            kind: "Voice note",
+            file: voice,
+            remove: onRemoveVoice,
+          },
+        ]
+      : []),
+  ];
+  const totalBytes = items.reduce((total, item) => total + item.file.size, 0);
+  return (
+    <section className="border border-border" aria-labelledby="selected-evidence-heading">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <h3 id="selected-evidence-heading" className="font-black">
+          Selected evidence
+        </h3>
+        <p className="text-sm font-semibold text-muted">
+          {items.length} of 12 items · {formatBytes(totalBytes)} of 24 MB
+        </p>
+      </header>
+      {items.length === 0 ? (
+        <p className="px-4 py-4 text-sm leading-6 text-muted">
+          No media selected. A field note or blocker report can still be saved in the next step.
+        </p>
+      ) : (
+        <ul className="divide-y divide-border">
+          {items.map((item) => (
+            <li key={item.id} className="flex items-center justify-between gap-3 px-4 py-3">
+              <div className="min-w-0">
+                <p className="font-bold">{item.kind}</p>
+                <p className="truncate text-sm text-muted">
+                  {item.file.name || `${item.kind} attachment`}
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="default"
+                variant="ghost"
+                onClick={item.remove}
+                aria-label={`Remove ${item.file.name || item.kind}`}
+              >
+                <X aria-hidden="true" />
+                Remove
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function CheckInActionBar({ message, children }: { message: string; children: ReactNode }) {
+  return (
+    <div className="border-t border-border bg-surface-raised p-3 sm:p-4">
+      <p className="pb-2 text-xs font-semibold leading-5 text-muted">{message}</p>
+      {children}
+    </div>
+  );
+}
+
+function LocationCapture({
+  location,
+  permissionState,
+  onRequest,
+}: {
+  location: { latitude: number; longitude: number; accuracy: number } | null;
+  permissionState: "not_requested" | "granted" | "denied" | "unavailable" | "error";
+  onRequest: () => void;
+}) {
+  const status = locationStatus(location, permissionState);
+  return (
+    <details className="border border-border">
+      <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-4 font-bold [&::-webkit-details-marker]:hidden">
+        <span>Add device location (optional)</span>
+        <span className="text-sm text-muted">
+          {permissionState === "granted" ? "Captured" : "Optional"}
+        </span>
+      </summary>
+      <div className="border-t border-border p-4">
+        <p className="text-sm leading-6 text-muted">
+          The app records this device's approximate coordinates and accuracy with this check-in. It
+          does not prove a crew was onsite.
+        </p>
+        <Button
+          type="button"
+          size="field"
+          fullWidth
+          variant="outline"
+          className="mt-4"
+          onClick={onRequest}
+        >
+          <MapPin aria-hidden="true" />
+          {permissionState === "granted" ? "Refresh device location" : "Add device location"}
+        </Button>
+        <p className="mt-3 text-sm font-semibold leading-6 text-muted" role="status">
+          {status}
+        </p>
+      </div>
+    </details>
+  );
+}
+
+function CheckInSaved({
+  action,
+  jobId,
+  headingRef,
+}: {
+  action: OutboxAction;
+  jobId: string;
+  headingRef: RefObject<HTMLHeadingElement | null>;
+}) {
+  return (
+    <section className="border-2 border-foreground bg-surface-raised p-4 sm:p-5" aria-live="polite">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold text-muted">Device evidence state</p>
+          <h2
+            ref={headingRef}
+            tabIndex={-1}
+            className="mt-1 text-2xl font-black tracking-[-0.03em]"
+          >
+            Check-in saved
+          </h2>
+        </div>
+        <OutboxStateBadge state={action.state} />
+      </div>
+      <p className="mt-4 leading-7 text-muted">
+        {action.state === "verified"
+          ? "R2 and Frappe verified this exact device action."
+          : action.state === "needs_attention"
+            ? "Nothing was deleted. This preserved action and its media need review before another attempt."
+            : "This action is saved on this device. While the app stays open, it queues and retries safely when it can."}
+      </p>
+      <Button asChild size="field" fullWidth variant="accent" className="mt-5">
+        <Link to="/jobs/$jobId" params={{ jobId }}>
+          Return to job packet
+        </Link>
+      </Button>
+    </section>
+  );
+}
+
+function locationStatus(
+  location: { latitude: number; longitude: number; accuracy: number } | null,
+  permissionState: "not_requested" | "granted" | "denied" | "unavailable" | "error",
+): string {
+  if (location && permissionState === "granted")
+    return `Location captured · approximate accuracy ${Math.round(location.accuracy)} m.`;
+  if (permissionState === "denied") return "Location was not shared because permission was denied.";
+  if (permissionState === "unavailable") return "Location is not available on this device.";
+  if (permissionState === "error")
+    return "Location could not be captured. You can continue without it.";
+  return "No device location added.";
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatFieldDay(value: string, options: FieldDateOptions): string {

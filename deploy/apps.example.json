@@ -1,6 +1,6 @@
 [
   {
-    "url": "https://<GITHUB_READ_TOKEN>@github.com/ironwrap/ironwrap_roofing.git",
-    "branch": "main"
+    "url": "https://github.com/ironwrap/ironwrap_roofing.git",
+    "branch": "<IRONWRAP_APP_RELEASE_TAG>"
   }
 ]

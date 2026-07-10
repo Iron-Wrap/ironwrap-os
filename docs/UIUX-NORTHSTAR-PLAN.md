@@ -146,14 +146,16 @@ gate count as a review-only work stop. The Job packet now leads with the physica
 actual blocker detail, read-only safety/access context, a permission-and-assignment-gated proof
 capture path, then verified proof and collapsible supporting records. It does not infer safety
 clearance, packet completeness, a gate override, or a separate authoritative checklist from the
-currently gate-derived `required_proof` payload. Three-step Check-in, IndexedDB packets/outbox,
-upload verification, bounded proof rendering, and device-bound QR access are implemented and
-locally tested. Real iOS/Android, weak-signal, process-kill, storage, multi-tab, accessibility,
-and timing proof remain open.
+currently gate-derived `required_proof` payload. Check-in is now camera-and-voice first: selected
+media is reviewable and removable before the device save, blocker reporting is deliberate, notes
+and location are optional, and the outbox state remains exact about local save, queue, upload,
+verification, and attention. IndexedDB packets/outbox, upload verification, bounded proof
+rendering, and device-bound QR access are implemented and locally tested. Real iOS/Android,
+weak-signal, process-kill, storage, multi-tab, accessibility, and timing proof remain open.
 
 Screens: Today (assigned jobs as a chronological run sheet), Job (physical gate locks, safety/access
-brief, Proof Stream, and supporting packet records), Check-in stepper (photos, voice note, blocker
-flag, submit), all offline-first.
+brief, Proof Stream, and supporting packet records), Check-in (camera/voice capture, selected-media
+review, deliberate blocker escalation, optional note/location, and device-first save), all offline-first.
 The assigned scope, measurements, materials, changes, safety plan, and proof checklist are visibly
 prefetched before departure. Media capture is designed and tested for 30-400 photos per job; the
 proof viewer handles more than 1,000 items without losing scroll/filter/selection state.

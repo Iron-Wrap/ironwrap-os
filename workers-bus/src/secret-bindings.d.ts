@@ -1,0 +1,30 @@
+/**
+ * Secret binding names are part of the Worker compile-time contract, but their values are not.
+ *
+ * Wrangler augments `Env` from a developer's `.dev.vars` when that file exists. CI and clean
+ * production build hosts deliberately have no secret values, so those names must be declared
+ * independently of local state. Runtime presence is still enforced by readiness checks.
+ */
+interface Env {
+  INGEST_TOKEN: string;
+  ADMIN_TOKEN: string;
+  JOBNIMBUS_API_KEY: string;
+  GOOGLE_SERVICE_ACCOUNT_JSON: string;
+  QB_WEBHOOK_TOKEN: string;
+  ERPNEXT_API_KEY: string;
+  ERPNEXT_API_SECRET: string;
+  APP_AUTH_PEPPER: string;
+}
+
+declare namespace Cloudflare {
+  interface Env {
+    INGEST_TOKEN: string;
+    ADMIN_TOKEN: string;
+    JOBNIMBUS_API_KEY: string;
+    GOOGLE_SERVICE_ACCOUNT_JSON: string;
+    QB_WEBHOOK_TOKEN: string;
+    ERPNEXT_API_KEY: string;
+    ERPNEXT_API_SECRET: string;
+    APP_AUTH_PEPPER: string;
+  }
+}

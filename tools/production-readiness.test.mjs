@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -19,6 +19,25 @@ const RESTORE = path.join(DEFAULT_REPO_ROOT, "deploy/restore-from-r2.sh");
 const D1_BACKUP = path.join(DEFAULT_REPO_ROOT, "deploy/backup-d1-to-r2.sh");
 const D1_RESTORE = path.join(DEFAULT_REPO_ROOT, "deploy/restore-d1-from-r2.sh");
 const BUILD = path.join(DEFAULT_REPO_ROOT, "deploy/build-production-image.sh");
+const APPROVAL_PUBLIC_KEY = generateKeyPairSync("ed25519").publicKey.export({
+  type: "spki",
+  format: "pem",
+});
+
+function validApprovalPublicKeyOptions() {
+  return {
+    statApprovalPublicKey: async () => ({ isFile: () => true }),
+    readApprovalPublicKey: async () => APPROVAL_PUBLIC_KEY,
+  };
+}
+
+async function writeApprovalPublicKeyFixture(t) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-approval-key-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = path.join(root, "approval-public.pem");
+  await writeFile(file, APPROVAL_PUBLIC_KEY, { mode: 0o600 });
+  return file;
+}
 
 async function writeExecutable(file, source) {
   await writeFile(file, source);
@@ -567,6 +586,11 @@ function validLiveEnv() {
     IRONWRAP_BUS_WRITE_ENABLED: "false",
     ERPNEXT_WRITE_ENABLED: "false",
     HERMES_WRITE_TOKEN: "approval_1d9a84f620be4c7a936820d5ef31",
+    HERMES_AGENT_ROLE: "owner-operator",
+    HERMES_ACTOR_USER: "owner@ironwrapexteriors.com",
+    HERMES_APPROVER_ID: "owner@ironwrapexteriors.com",
+    HERMES_DRY_RUN_SIGNING_KEY: "dry_run_0a9e8f7d6c5b4a392817161514131211",
+    HERMES_APPROVAL_PUBLIC_KEY_FILE: "/run/secrets/hermes-approval-public.pem",
     IRONWRAP_BUS_REQUEST_TIMEOUT_MS: "10000",
     ERPNEXT_REQUEST_TIMEOUT_MS: "10000",
     BUS_BASE_URL: "https://bus.ironwrapexteriors.com",
@@ -638,9 +662,32 @@ test("contract mode rejects an overridable container pin", async (t) => {
 });
 
 test("live-env mode accepts a complete locked production environment", async () => {
-  const result = await validateLiveEnv({ env: validLiveEnv() });
+  const result = await validateLiveEnv({ env: validLiveEnv(), ...validApprovalPublicKeyOptions() });
   assert.equal(result.ok, true, renderHuman(result));
   assert.equal(result.summary.failed, 0);
+});
+
+test("live-env mode requires a readable Ed25519 approval public key", async () => {
+  const env = validLiveEnv();
+  const malformed = await validateLiveEnv({
+    env,
+    statApprovalPublicKey: async () => ({ isFile: () => true }),
+    readApprovalPublicKey: async () => "not a PEM public key",
+  });
+  assert.equal(malformed.ok, false);
+  assert.equal(malformed.checks.find((item) => item.id === "live.hermes.approval_public_key")?.status, "fail");
+
+  const rsaPublicKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).publicKey.export({
+    type: "spki",
+    format: "pem",
+  });
+  const wrongType = await validateLiveEnv({
+    env,
+    statApprovalPublicKey: async () => ({ isFile: () => true }),
+    readApprovalPublicKey: async () => rsaPublicKey,
+  });
+  assert.equal(wrongType.ok, false);
+  assert.equal(wrongType.checks.find((item) => item.id === "live.hermes.approval_public_key")?.status, "fail");
 });
 
 test("live-env mode refuses to trust an invalid repository contract", async (t) => {
@@ -652,7 +699,7 @@ test("live-env mode refuses to trust an invalid repository contract", async (t) 
   lock.policy.erpnext = "allowed";
   await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
 
-  const result = await validateLiveEnv({ env: validLiveEnv(), repoRoot: root });
+  const result = await validateLiveEnv({ env: validLiveEnv(), repoRoot: root, ...validApprovalPublicKeyOptions() });
   assert.equal(result.ok, false);
   assert.equal(result.checks.find((item) => item.id === "live.contract")?.status, "fail");
 });
@@ -665,7 +712,7 @@ test("live-env mode fails closed on placeholders, HTTP URLs, and implicit gates"
   env.IRONWRAP_BUS_REQUEST_TIMEOUT_MS = "0";
   env.BACKUP_AGE_RECIPIENT = "<age-recipient>";
 
-  const result = await validateLiveEnv({ env });
+  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
   assert.equal(result.ok, false);
   for (const id of [
     "live.env.ERPNEXT_API_SECRET",
@@ -685,7 +732,7 @@ test("live-env mode aligns backup inputs with the executable backup contract", a
   env.FRAPPE_SITE = "other.ironwrapexteriors.com";
   env.HERMES_WRITE_TOKEN = env.ERPNEXT_API_SECRET;
 
-  const result = await validateLiveEnv({ env });
+  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
   assert.equal(result.ok, false);
   for (const id of [
     "live.backup.endpoint",
@@ -707,7 +754,7 @@ test("live-env mode binds D1 recovery to exact source, separated authority, and 
   env.D1_RESTORE_TARGET_DATABASE_ID = "f0674848-13df-4422-9896-8ba2719663b8";
   env.D1_RESTORE_CONFIRMATION = "RESTORE_D1:unsafe";
 
-  const result = await validateLiveEnv({ env });
+  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
   assert.equal(result.ok, false);
   for (const id of [
     "live.d1.source.id",
@@ -731,7 +778,7 @@ test("validator output never includes supplied secret values", async () => {
   env.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY = secretValue;
   env.ERPNEXT_BASE_URL = `https://${secretValue}@os.ironwrapexteriors.com`;
 
-  const result = await validateLiveEnv({ env });
+  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
   assert.equal(result.ok, false);
   assert.equal(JSON.stringify(result).includes(secretValue), false);
   assert.equal(renderHuman(result).includes(secretValue), false);
@@ -749,8 +796,9 @@ test("CLI emits machine-readable JSON and an accurate exit code", () => {
   assert.equal(result.summary.failed, 0);
 });
 
-test("live-env CLI supports JSON and human output modes", () => {
-  const env = { ...process.env, ...validLiveEnv() };
+test("live-env CLI supports JSON and human output modes", async (t) => {
+  const approvalPublicKeyFile = await writeApprovalPublicKeyFixture(t);
+  const env = { ...process.env, ...validLiveEnv(), HERMES_APPROVAL_PUBLIC_KEY_FILE: approvalPublicKeyFile };
   const jsonRun = spawnSync(process.execPath, [TOOL, "live-env", "--json"], {
     cwd: DEFAULT_REPO_ROOT,
     encoding: "utf8",
@@ -770,9 +818,16 @@ test("live-env CLI supports JSON and human output modes", () => {
   assert.match(humanRun.stdout, /READY: \d+ passed, 0 failed/);
 });
 
-test("live-env CLI fails closed without printing a supplied secret", () => {
+test("live-env CLI fails closed without printing a supplied secret", async (t) => {
   const secretValue = "cli-secret-that-must-never-be-printed";
-  const env = { ...process.env, ...validLiveEnv(), ERPNEXT_API_SECRET: secretValue, ERPNEXT_BASE_URL: `https://${secretValue}@os.ironwrapexteriors.com` };
+  const approvalPublicKeyFile = await writeApprovalPublicKeyFixture(t);
+  const env = {
+    ...process.env,
+    ...validLiveEnv(),
+    HERMES_APPROVAL_PUBLIC_KEY_FILE: approvalPublicKeyFile,
+    ERPNEXT_API_SECRET: secretValue,
+    ERPNEXT_BASE_URL: `https://${secretValue}@os.ironwrapexteriors.com`,
+  };
   const run = spawnSync(process.execPath, [TOOL, "live-env", "--json"], {
     cwd: DEFAULT_REPO_ROOT,
     encoding: "utf8",

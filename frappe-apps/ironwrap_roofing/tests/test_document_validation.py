@@ -11,6 +11,14 @@ from unittest.mock import patch
 ADAPTER_PATH = (
     Path(__file__).resolve().parents[1] / "ironwrap_roofing" / "document_validation.py"
 )
+SAFETY_PLAN_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "safety_plan"
+    / "safety_plan.py"
+)
 
 
 class FakeValidationError(Exception):
@@ -124,6 +132,115 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         self.assertTrue(
             all(filters == {"roof_job": "job-1"} for _, filters, _ in calls)
         )
+
+    def test_safety_acknowledgements_require_the_atomic_append_context(self) -> None:
+        adapter, _ = self.load_adapter()
+        original = {
+            "name": "safety:job-1:v1",
+            "acknowledgements": [
+                {
+                    "acknowledged_by": "lead@example.com",
+                    "acknowledged_at": "2026-07-10 07:30:00",
+                    "acknowledgement_method": "QR Device Pairing",
+                    "device_action_id": "field-ack-0001",
+                    "evidence_item": "evidence:safety:lead-1",
+                    "role_on_job": "Direct assignment · Production",
+                    "notes": "Reviewed.",
+                }
+            ],
+        }
+        appended = {
+            **original,
+            "acknowledgements": [
+                *original["acknowledgements"],
+                {
+                    "acknowledged_by": "crew@example.com",
+                    "acknowledged_at": "2026-07-10 07:31:00",
+                    "acknowledgement_method": "QR Device Pairing",
+                    "device_action_id": "field-ack-0002",
+                    "evidence_item": "evidence:safety:crew-1",
+                    "role_on_job": "Crew assignment · Installer · Production",
+                    "notes": "Reviewed.",
+                },
+            ],
+        }
+        with self.assertRaisesRegex(FakeValidationError, "atomic safety"):
+            adapter.validate_safety_acknowledgement_mutation(
+                FakeDocument(appended, previous=original)
+            )
+        with adapter.safety_acknowledgement_append_context(
+            "safety:job-1:v1", "field-ack-0002"
+        ):
+            adapter.validate_safety_acknowledgement_mutation(
+                FakeDocument(appended, previous=original)
+            )
+
+        replacement = {
+            **appended,
+            "acknowledgements": [
+                {**original["acknowledgements"][0], "notes": "Forged replacement"},
+                appended["acknowledgements"][1],
+            ],
+        }
+        with (
+            adapter.safety_acknowledgement_append_context(
+                "safety:job-1:v1", "field-ack-0002"
+            ),
+            self.assertRaisesRegex(FakeValidationError, "did not match"),
+        ):
+            adapter.validate_safety_acknowledgement_mutation(
+                FakeDocument(replacement, previous=original)
+            )
+
+        controller = SAFETY_PLAN_CONTROLLER_PATH.read_text(encoding="utf-8")
+        self.assertIn("validate_safety_acknowledgement_mutation(self)", controller)
+
+    def test_ready_safety_plan_content_and_status_are_frozen_outside_atomic_append(
+        self,
+    ) -> None:
+        adapter, _ = self.load_adapter()
+        ready = {
+            "name": "safety:job-1:v1",
+            "safety_plan_id": "safety:job-1:v1",
+            "roof_job": "job-1",
+            "version": 1,
+            "status": "Ready",
+            "hazard_summary": "Fall exposure.",
+            "controls": "Tie-off.",
+            "emergency_plan": "Call 911.",
+            "ppe_requirements": "Harness.",
+            "weather_limits": "Stop above wind threshold.",
+            "notes": "Original approved safety plan.",
+        }
+        with self.assertRaisesRegex(FakeValidationError, "content is immutable"):
+            adapter.validate_safety_plan_frozen_content(
+                FakeDocument(
+                    {**ready, "hazard_summary": "Rewritten after approval."},
+                    previous=ready,
+                )
+            )
+        with self.assertRaisesRegex(FakeValidationError, "status is immutable"):
+            adapter.validate_safety_plan_frozen_content(
+                FakeDocument({**ready, "status": "Superseded"}, previous=ready)
+            )
+
+        acknowledged = {**ready, "status": "Acknowledged"}
+        with adapter.safety_acknowledgement_append_context(
+            "safety:job-1:v1", "field-ack-0002"
+        ):
+            adapter.validate_safety_plan_frozen_content(
+                FakeDocument(acknowledged, previous=ready)
+            )
+
+        draft = {**ready, "status": "Draft"}
+        adapter.validate_safety_plan_frozen_content(
+            FakeDocument(
+                {**draft, "status": "Ready", "notes": "Prepared."}, previous=draft
+            )
+        )
+
+        controller = SAFETY_PLAN_CONTROLLER_PATH.read_text(encoding="utf-8")
+        self.assertIn("validate_safety_plan_frozen_content(self)", controller)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,12 @@ Drafts completion, warranty, and review-request records. A review request is onl
 - list_payment_milestones_for_job
 - get_scope_clause
 - list_scope_clauses_for_job
+- get_job_compliance_record
+- list_job_compliance_records_for_job
+- get_customer_decision
+- list_customer_decisions_for_job
+- get_contract_acceptance
+- list_contract_acceptances_for_job
 - check_consent
 - check_quiet_hours
 
@@ -43,7 +49,10 @@ Drafts completion, warranty, and review-request records. A review request is onl
   performs any actual send. Check `check_consent` and `check_quiet_hours` before drafting one.
 - Read payment milestones to confirm closeout readiness, but do not mutate accounting; that
   stays with QuickBooks.
+- Confirm required compliance records, evidence-backed customer decisions, and provider-created
+  Contract Acceptance rows before closeout. All three surfaces are read-only for this role;
+  Contract Acceptance has no write tool anywhere in Hermes.
 - Skill packs: `field-closeout` for photo requirements and completion/warranty readiness;
   `alberta-compliance` for CASL/privacy stop conditions on review requests.
-- Human approval: all three writes are review-gated, need the write env var plus
-  `HERMES_WRITE_TOKEN`, and record a Hermes Run row.
+- Human approval: all three Frappe writes are review-gated, need the write env var plus matching
+  preview and signed human-approval receipts, and record a Hermes Run row.

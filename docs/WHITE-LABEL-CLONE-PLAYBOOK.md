@@ -75,7 +75,9 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    `bench --site <tenant-site> install-app ironwrap_roofing`.
 3. Sanity: `node tools/validate-erpnext-doctypes.mjs` in the repo confirms the DocType
    pack shape (prints `ok 26`); on the site, confirm the IronWrap Roofing DocTypes exist.
-4. Create a tenant-scoped API key/secret pair for the bus and MCP (never the IronWrap pair).
+4. Create a tenant-scoped API key/secret pair for the bus, plus a separate pair for every
+   Hermes MCP actor. Each MCP pair must be issued to exactly that process's
+   `HERMES_ACTOR_USER`; never use the bus pair to attest an actor action.
 5. Never adopt frappe/press (AGPL, Frappe Cloud's control plane): per-tenant provisioning
    stays on IronWrap's own scripts (`config/tenants/` + validators + this playbook).
 
@@ -96,13 +98,16 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 
 Run tenant-dedicated MCP server processes with tenant-only env:
 
-- `mcp/erpnext-roofing-mcp`: `ERPNEXT_BASE_URL`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`,
-  `ERPNEXT_WRITE_ENABLED`, `HERMES_WRITE_TOKEN`.
+- `mcp/erpnext-roofing-mcp`: `ERPNEXT_BASE_URL`, an `ERPNEXT_API_KEY` /
+  `ERPNEXT_API_SECRET` pair belonging to exactly `HERMES_ACTOR_USER`,
+  `ERPNEXT_WRITE_ENABLED`, `HERMES_DRY_RUN_SIGNING_KEY`, and
+  `HERMES_APPROVAL_PUBLIC_KEY_FILE`.
 - `mcp/ironwrap-bus-mcp`: `IRONWRAP_BUS_BASE_URL`, `IRONWRAP_ADMIN_TOKEN`,
   `IRONWRAP_BUS_WRITE_ENABLED`, `IRONWRAP_BUS_WRITE_TOKEN`.
 
 Defaults for a new tenant: write flags off (`ERPNEXT_WRITE_ENABLED` unset/false) until the
-tenant passes the approved-write proof. `HERMES_WRITE_TOKEN` is minted per tenant. The
+tenant passes the approved-write proof. `HERMES_DRY_RUN_SIGNING_KEY` is unique per tenant and the
+approval broker public key plus bound approver identity are configured per isolated runtime. The
 Hermes profile (memory, skills, tool allowlist) is created fresh; never point two tenants'
 profiles at the same MCP process or token.
 

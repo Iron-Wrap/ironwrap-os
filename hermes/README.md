@@ -26,6 +26,9 @@ Two MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, pe
   deterministic policy checks (`check_consent`, `check_quiet_hours`), dry-run previews, and
   review-gated `request_*` writes. Its legacy name is retained for deployment compatibility.
 
+The validated implemented-source inventory is **118 tools** across both servers: the bus contributes 7;
+the Frappe server contributes **111 (69 reads, 21 dry-runs, 21 approved writes)**.
+
 ## Tool filtering per agent role
 
 `hermes/agents/roles.json` is the source of truth for which MCP tools each of the eight
@@ -33,10 +36,12 @@ agent roles may call. Each role declares `reads`, `dry_run`, `approved_write`, a
 `forbidden`. The eight per-role profiles under `hermes/agents/*.md` are derived from it.
 
 `hermes/mcp-servers.json` `tool_filter` arrays are the UNION of each bucket across the roles
-that use that server; the per-role narrowing is enforced from `roles.json`, not from the
-manifest. `tools/validate-hermes-config.mjs` validates `roles.json` against the live tool
-inventory parsed from both server sources and enforces the safety contract at config level
-(see below).
+that use that server for host discovery only. The Frappe MCP server itself requires
+`HERMES_AGENT_ROLE` and `HERMES_ACTOR_USER`, loads canonical `roles.json`, and registers only
+that role's tools. Its Frappe API key pair must belong to exactly `HERMES_ACTOR_USER`, not a
+shared service principal; Field Companion calls are additionally checked against an active assignment.
+`tools/validate-hermes-config.mjs` validates the source/runtime contract against the implemented-source tool
+inventory (see below).
 
 ## Mutation contract
 
@@ -46,23 +51,36 @@ Every write follows the same sequence, with no step skippable:
 read -> propose -> dry_run -> policy_check -> human_approval -> write -> audit_event
 ```
 
-No tool can send a customer message or mutate accounting. Every approved write requires
-`ERPNEXT_WRITE_ENABLED=true` (or `IRONWRAP_BUS_WRITE_ENABLED=true` for the bus) plus the
-`HERMES_WRITE_TOKEN` passed as `approval_token`. The caller supplies a stable unique `run_id` for
-the approved intent: exact retries reuse it; different intents never do. Frappe writes record a
-Hermes Run row, while bus replay records envelope-scoped recovery and approval context in its audit log.
+No tool can send a customer message or mutate accounting. Frappe approved writes require
+`ERPNEXT_WRITE_ENABLED=true`, a role/actor-bound short-lived `dry_run_receipt`, and an
+independently Ed25519-signed `approval_receipt` for the exact mutation, approver, actor, and
+Frappe site. `HERMES_APPROVER_ID` binds the broker key to the required approver principal. The caller supplies a stable unique `run_id`; the first successful Hermes Run create
+is the mutation claim, and any in-flight or failed claim fails closed instead of resuming. The bus
+retains its separate `IRONWRAP_BUS_WRITE_ENABLED` plus `HERMES_WRITE_TOKEN` replay gate. Frappe
+writes record Hermes Run rows; bus replay records envelope-scoped recovery and approval context.
+
+Additional hard boundaries in the committed 46-DocType model:
+
+- Crew Profile and Contract Acceptance are read-only. No Hermes tool signs, accepts, or
+  rejects on a customer's behalf.
+- Assignment, change-order draft, safety-plan, customer-decision, consent, and export-request
+  corrections append/supersede history instead of silently overwriting it.
+- Safety acknowledgement uses a locked Frappe append command, is device-bound and verified-evidence-backed,
+  derives active assignment role server-side, and leaves generic child-table replacement unavailable.
+- Reconciliation resolution changes only the reconciliation record; QuickBooks remains
+  accounting truth. Tenant export creates only a Requested row, never an archive or key.
 
 ## Security model
 
 - **Command approval**: mutations are `request_*` tools that draft or set review-gated
   status only; a human approves before any effect lands.
-- **Allowlists**: each agent role is confined to the exact tools in its `roles.json` entry.
-  Anything outside the allowlist is unavailable to that role.
+- **Runtime allowlists**: each Frappe MCP process is configured with one canonical role and registers
+  only its exact `roles.json` tools. Anything outside is absent from that process.
 - **Gateway user allowlist**: only allowlisted users reach the Hermes messaging/API gateway.
-- **MCP tool filtering**: the `tool_filter` in `hermes/mcp-servers.json` scopes each server
-  to the union of role-granted tools; the server never exposes a god tool.
-- **Write-token gating**: approved writes are inert unless the server write-enable env var is
-  true AND `HERMES_WRITE_TOKEN` is supplied as `approval_token`.
+- **Field scope**: Field Companion reads and writes require an active direct or active-crew Job Assignment;
+  its Roof Job response is a safe field projection.
+- **Receipt gating**: Frappe writes are inert unless the write flag is true, the preview receipt matches
+  current deterministic policy output, and a separate human approval signature matches the exact request.
 - **Per-tenant isolation**: one Hermes profile per contractor (isolated site / profile /
   namespace). The Support/Admin role explicitly forbids cross-tenant access.
 
@@ -79,11 +97,12 @@ auto-send:
 
 - Nightly market-watch: read `list_market_watch_items`, draft gaps via
   `dry_run_market_watch_item`, surface for human review.
-- Reconcile digest: read `list_payment_milestones_for_job` mirrors and summarize unmatched
-  items for the Finance Reconciler to action.
+- Reconcile digest: read payment mirrors and `list_integration_reconciliations_for_job`, then
+  preview an evidence-backed resolution for a human to approve. The command never mutates accounting.
 
-Background runs still obey the mutation contract: they may read and dry-run, but any write
-requires the write-enable env var plus `HERMES_WRITE_TOKEN` and a human approval.
+Background runs still obey the mutation contract: they may read and dry-run, but a Frappe write
+needs the write-enable env var plus matching preview and human-approval receipts. Bus replay uses
+its separate write token gate.
 
 ## Running the validator
 
@@ -91,7 +110,9 @@ requires the write-enable env var plus `HERMES_WRITE_TOKEN` and a human approval
 node tools/validate-hermes-config.mjs
 ```
 
-It parses the live tool inventory from both server sources, checks that every tool referenced
+It parses the implemented tool inventory from both server sources, checks that every tool referenced
 in `roles.json` exists, that reads are read-only, dry-runs are previews, approved-writes are
 `request_*` mutations each paired with its dry-run counterpart in the same role, and that all
 eight blueprint roles are present with no duplicate grants.
+It also freezes the 118-tool inventory, enforces Contract Acceptance as read-only, checks
+least-privilege boundaries for field/finance roles, and validates manifest union exactness.

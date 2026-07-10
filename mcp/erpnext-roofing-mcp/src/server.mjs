@@ -1,7 +1,73 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import {
+  approvedArgs,
+  digest,
+  parseToolPayload,
+  semanticPreview,
+  signDryRunReceipt,
+  verifyApprovalReceipt,
+  verifyDryRunReceipt,
+} from "./approval-contract.mjs";
+
+const DEFAULT_ROLE_POLICY_PATH = fileURLToPath(
+  new URL("../../../hermes/agents/roles.json", import.meta.url),
+);
+
+const REQUEST_TO_DRY_RUN = Object.freeze({
+  request_update_gate: "dry_run_update_gate",
+  request_create_material_takeoff: "dry_run_material_takeoff",
+  request_update_material_takeoff_status: "dry_run_update_material_takeoff_status",
+  request_create_supplier_order: "dry_run_supplier_order",
+  request_create_supplier_quote: "dry_run_supplier_quote",
+  request_create_proposal_evidence_pack: "dry_run_proposal_evidence_pack",
+  request_create_job_assignment: "dry_run_job_assignment",
+  request_create_change_order: "dry_run_change_order",
+  request_transition_change_order: "dry_run_change_order_transition",
+  request_create_safety_plan: "dry_run_safety_plan",
+  request_record_safety_acknowledgement: "dry_run_safety_acknowledgement",
+  request_record_job_compliance: "dry_run_job_compliance_record",
+  request_record_customer_decision: "dry_run_customer_decision",
+  request_record_communication_consent: "dry_run_communication_consent",
+  request_resolve_reconciliation: "dry_run_reconciliation_resolution",
+  request_tenant_export: "dry_run_tenant_export",
+  request_create_completion_packet: "dry_run_completion_packet",
+  request_create_warranty_packet: "dry_run_warranty_packet",
+  request_create_review_request: "dry_run_review_request",
+  request_record_communication_event: "dry_run_communication_event",
+  request_add_market_watch_item: "dry_run_market_watch_item",
+});
+
+const FIELD_RECORD_TOOL_REFERENCES = Object.freeze({
+  get_field_check_in: ["Field Check-in", "checkin_id"],
+  get_evidence_item: ["Evidence Item", "evidence_id"],
+  get_job_assignment: ["Job Assignment", "assignment_id"],
+  get_safety_plan: ["Safety Plan", "safety_plan_id"],
+  get_job_compliance_record: ["Job Compliance Record", "compliance_record_id"],
+  get_visual_property_model: ["Visual Property Model", "visual_model_id"],
+  get_roof_area: ["Roof Area", "roof_area_id"],
+});
+
+const FIELD_ROOF_JOB_FIELDS = [
+  "name",
+  "roof_job_id",
+  "job_number",
+  "status",
+  "job_type",
+  "address_line1",
+  "city",
+  "province",
+  "postal_code",
+  "access_notes",
+  "safety_notes",
+  "scheduled_start",
+  "scheduled_end",
+  "modified",
+];
 
 const GateStateSchema = z.enum(["Blocked", "Ready", "Waived", "Done"]);
 const MaterialTakeoffStatusSchema = z.enum(["Needs Review", "Approved", "Rejected"]);
@@ -334,16 +400,311 @@ const WHITE_LABEL_TENANT_FIELDS = [
   "modified",
 ];
 
+const CREW_PROFILE_FIELDS = [
+  "name",
+  "crew_profile_id",
+  "crew_name",
+  "status",
+  "crew_type",
+  "primary_lead",
+  "default_workflow_profile",
+  "home_region",
+  "timezone",
+  "insurance_expiry",
+  "wcb_expiry",
+  "modified",
+];
+
+const JOB_ASSIGNMENT_FIELDS = [
+  "name",
+  "assignment_id",
+  "roof_job",
+  "assignment_type",
+  "status",
+  "crew_profile",
+  "assigned_user",
+  "scheduled_start",
+  "scheduled_end",
+  "assigned_by",
+  "assigned_at",
+  "accepted_at",
+  "started_at",
+  "completed_at",
+  "blocker_reason",
+  "supersedes",
+  "modified",
+];
+
+const CHANGE_ORDER_FIELDS = [
+  "name",
+  "change_order_id",
+  "roof_job",
+  "customer_quote",
+  "change_number",
+  "version",
+  "status",
+  "title",
+  "reason",
+  "scope_delta",
+  "currency",
+  "subtotal",
+  "tax_amount",
+  "total_amount",
+  "price_book_version",
+  "tax_policy_snapshot_json",
+  "items",
+  "requested_by",
+  "requested_at",
+  "approved_by",
+  "approved_at",
+  "contract_acceptance",
+  "accepted_at",
+  "supersedes",
+  "modified",
+];
+
+const CHANGE_ORDER_ITEM_FIELDS = [
+  "item_type",
+  "description",
+  "quantity",
+  "unit",
+  "unit_price",
+  "line_total",
+  "tax_code",
+  "source_ref",
+  "customer_visible",
+];
+
+const SAFETY_PLAN_FIELDS = [
+  "name",
+  "safety_plan_id",
+  "roof_job",
+  "version",
+  "status",
+  "effective_date",
+  "prepared_by",
+  "prepared_at",
+  "hazard_summary",
+  "controls",
+  "emergency_plan",
+  "ppe_requirements",
+  "weather_limits",
+  "evidence_item",
+  "acknowledgements",
+  "approved_by",
+  "approved_at",
+  "supersedes",
+  "modified",
+];
+
+const SAFETY_ACKNOWLEDGEMENT_FIELDS = [
+  "name",
+  "idx",
+  "acknowledged_by",
+  "acknowledged_at",
+  "acknowledgement_method",
+  "device_action_id",
+  "evidence_item",
+  "role_on_job",
+  "notes",
+];
+
+const JOB_COMPLIANCE_RECORD_FIELDS = [
+  "name",
+  "compliance_record_id",
+  "roof_job",
+  "jurisdiction",
+  "record_type",
+  "authority_name",
+  "external_reference",
+  "status",
+  "required_before_gate",
+  "applied_at",
+  "effective_date",
+  "expiry_date",
+  "inspected_at",
+  "evidence_item",
+  "owner_user",
+  "due_date",
+  "waived_by",
+  "waived_at",
+  "waiver_reason",
+  "supersedes",
+  "modified",
+];
+
+const COMMUNICATION_CONSENT_FIELDS = [
+  "name",
+  "consent_id",
+  "customer",
+  "lead_envelope",
+  "roof_job",
+  "channel",
+  "purpose",
+  "status",
+  "jurisdiction",
+  "consent_basis",
+  "source_system",
+  "source_reference",
+  "captured_by",
+  "captured_at",
+  "effective_from",
+  "expires_at",
+  "proof_evidence",
+  "revoked_at",
+  "supersedes",
+  "modified",
+];
+
+const CUSTOMER_DECISION_FIELDS = [
+  "name",
+  "decision_id",
+  "roof_job",
+  "customer",
+  "decision_type",
+  "status",
+  "decision_value",
+  "decision_summary",
+  "source_channel",
+  "decided_at",
+  "captured_by",
+  "evidence_item",
+  "option_package",
+  "change_order",
+  "supersedes",
+  "modified",
+];
+
+const CONTRACT_ACCEPTANCE_FIELDS = [
+  "name",
+  "acceptance_id",
+  "roof_job",
+  "customer",
+  "customer_quote",
+  "change_order",
+  "contract_version",
+  "status",
+  "accepted_at",
+  "acceptance_method",
+  "evidence_item",
+  "terms_hash",
+  "document_checksum",
+  "source_system",
+  "provider_reference",
+  "supersedes",
+  "modified",
+];
+
+const INTEGRATION_RECONCILIATION_FIELDS = [
+  "name",
+  "reconciliation_id",
+  "roof_job",
+  "system_name",
+  "entity_type",
+  "external_entity_id",
+  "local_doctype",
+  "local_name",
+  "direction",
+  "status",
+  "detected_at",
+  "source_version",
+  "source_amount",
+  "local_amount",
+  "currency",
+  "diff_json",
+  "source_payload_hash",
+  "local_payload_hash",
+  "last_attempt_at",
+  "attempt_count",
+  "resolution_action",
+  "resolved_by",
+  "resolved_at",
+  "resolution_evidence",
+  "automation_incident",
+  "supersedes",
+  "modified",
+];
+
+const TENANT_EXPORT_RUN_FIELDS = [
+  "name",
+  "export_run_id",
+  "tenant",
+  "status",
+  "requested_by",
+  "requested_at",
+  "started_at",
+  "completed_at",
+  "scope_json",
+  "record_count",
+  "evidence_count",
+  "byte_count",
+  "failure_reason",
+  "supersedes",
+  "modified",
+];
+
 export function configFromEnv(env = process.env) {
   const baseUrl = normalizeFrappeBaseUrl(env.ERPNEXT_BASE_URL, env.ERPNEXT_ALLOW_INSECURE_LOCAL === "true");
   const apiKey = env.ERPNEXT_API_KEY;
   const apiSecret = env.ERPNEXT_API_SECRET;
   const writeEnabled = env.ERPNEXT_WRITE_ENABLED === "true";
-  const writeToken = env.HERMES_WRITE_TOKEN;
+  const rolePolicy = loadRolePolicy(env.HERMES_ROLE_POLICY_PATH || DEFAULT_ROLE_POLICY_PATH);
+  const agentRole = env.HERMES_AGENT_ROLE;
+  const actorUser = env.HERMES_ACTOR_USER;
+  const approverId = env.HERMES_APPROVER_ID;
+  const runtimeRole = rolePolicy.roles?.[agentRole];
   if (!apiKey) throw new Error("ERPNEXT_API_KEY is required");
   if (!apiSecret) throw new Error("ERPNEXT_API_SECRET is required");
+  if (!runtimeRole) throw new Error("HERMES_AGENT_ROLE must name a role in roles.json");
+  if (!actorUser) throw new Error("HERMES_ACTOR_USER is required");
+  if (writeEnabled && (!env.HERMES_DRY_RUN_SIGNING_KEY || env.HERMES_DRY_RUN_SIGNING_KEY.length < 32)) {
+    throw new Error("HERMES_DRY_RUN_SIGNING_KEY must be at least 32 characters when writes are enabled");
+  }
+  const approvalPublicKey = env.HERMES_APPROVAL_PUBLIC_KEY_FILE
+    ? readFileSync(env.HERMES_APPROVAL_PUBLIC_KEY_FILE, "utf8")
+    : env.HERMES_APPROVAL_PUBLIC_KEY;
+  if (writeEnabled && !approvalPublicKey) {
+    throw new Error("HERMES_APPROVAL_PUBLIC_KEY_FILE or HERMES_APPROVAL_PUBLIC_KEY is required when writes are enabled");
+  }
+  if (writeEnabled && !approverId) {
+    throw new Error("HERMES_APPROVER_ID is required when writes are enabled");
+  }
   const requestTimeoutMs = parseRequestTimeout(env.ERPNEXT_REQUEST_TIMEOUT_MS);
-  return { baseUrl, apiKey, apiSecret, writeEnabled, writeToken, requestTimeoutMs };
+  return {
+    baseUrl,
+    apiKey,
+    apiSecret,
+    writeEnabled,
+    requestTimeoutMs,
+    agentRole,
+    agentRoleTitle: runtimeRole.title,
+    actorUser,
+    approverId,
+    allowedTools: roleTools(runtimeRole),
+    dryRunSigningKey: env.HERMES_DRY_RUN_SIGNING_KEY,
+    approvalPublicKey,
+  };
+}
+
+export function loadRolePolicy(policyPath = DEFAULT_ROLE_POLICY_PATH) {
+  let policy;
+  try {
+    policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  } catch (err) {
+    throw new Error(`hermes_role_policy_unreadable:${String(err).slice(0, 180)}`);
+  }
+  if (!policy || typeof policy !== "object" || !policy.roles || typeof policy.roles !== "object") {
+    throw new Error("hermes_role_policy_invalid");
+  }
+  return policy;
+}
+
+function roleTools(role) {
+  return [...new Set([
+    ...(role.reads ?? []),
+    ...(role.dry_run ?? []),
+    ...(role.approved_write ?? []),
+  ])];
 }
 
 export async function erpRequest(config, method, path, body) {
@@ -433,10 +794,12 @@ export function resourceListPath(doctype, { fields, filters, limit = 25, orderBy
   return `/api/resource/${encodeURIComponent(doctype)}?${params.toString()}`;
 }
 
-export function assertWriteApproved(config, approvalToken) {
+export function assertWriteApproved(config, args = {}) {
   if (!config.writeEnabled) throw new Error("erpnext_write_disabled");
-  if (!config.writeToken) throw new Error("hermes_write_token_required");
-  if (approvalToken !== config.writeToken) throw new Error("approval_token_invalid");
+  if (!config.dryRunSigningKey) throw new Error("hermes_dry_run_signing_key_required");
+  if (!config.approvalPublicKey) throw new Error("hermes_approval_public_key_required");
+  if (!args.dry_run_receipt) throw new Error("dry_run_receipt_required");
+  if (!args.approval_receipt) throw new Error("approval_receipt_required");
 }
 
 export function buildGateUpdatePatch(nextState, reason, approvedBy, nowIso) {
@@ -961,6 +1324,801 @@ export function buildMarketWatchItemDraft({
   };
 }
 
+const IdSchema = z.string().min(1).max(140);
+const IsoDateTimeSchema = z.string().datetime({ offset: true });
+const DateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const JobAssignmentInputSchema = z.object({
+  assignment_id: IdSchema.optional(),
+  roof_job_id: IdSchema,
+  assignment_type: z.enum(["Inspection", "Estimate", "Production", "Quality", "Closeout", "Service"]),
+  status: z.enum(["Proposed", "Assigned"]).optional(),
+  crew_profile_id: IdSchema.optional(),
+  assigned_user: IdSchema.optional(),
+  scheduled_start: IsoDateTimeSchema.optional(),
+  scheduled_end: IsoDateTimeSchema.optional(),
+  assigned_by: IdSchema,
+  supersedes: IdSchema.optional(),
+  correction_reason: z.string().min(1).max(2000).optional(),
+  notes: z.string().max(2000).optional(),
+}).strict();
+
+const ChangeOrderItemInputSchema = z.object({
+  item_type: z.enum(["Material", "Labour", "Equipment", "Allowance", "Tax", "Other"]),
+  description: z.string().min(1).max(1000),
+  quantity: z.number().positive().finite(),
+  unit: z.string().min(1).max(40),
+  unit_price: z.number().nonnegative().finite(),
+  tax_code: z.string().max(80).optional(),
+  source_ref: z.string().min(1).max(140),
+  customer_visible: z.boolean().optional(),
+}).strict();
+
+export const ChangeOrderDraftInputSchema = z.object({
+  change_order_id: IdSchema.optional(),
+  roof_job_id: IdSchema,
+  customer_quote_id: IdSchema.optional(),
+  change_number: z.string().min(1).max(80),
+  version: z.number().int().min(1).max(100).optional(),
+  title: z.string().min(1).max(140),
+  reason: z.string().min(1).max(2000),
+  scope_delta: z.string().min(1).max(8000),
+  currency: z.enum(["CAD", "USD"]).optional(),
+  tax_amount: z.number().nonnegative().finite(),
+  price_book_version: z.string().min(1).max(120),
+  tax_policy_snapshot: z.record(z.unknown()).refine(
+    (snapshot) => Object.keys(snapshot).length > 0,
+    "tax_policy_snapshot_required",
+  ),
+  items: z.array(ChangeOrderItemInputSchema).min(1).max(100),
+  requested_by: IdSchema,
+  supersedes: IdSchema.optional(),
+  correction_reason: z.string().min(1).max(2000).optional(),
+  notes: z.string().max(2000).optional(),
+}).strict();
+
+export const ChangeOrderTransitionInputSchema = z.object({
+  change_order_id: IdSchema,
+  roof_job_id: IdSchema,
+  next_status: z.enum(["Draft", "Needs Review", "Approved", "Presented", "Superseded"]),
+  reason: z.string().min(1).max(2000).optional(),
+  evidence_item_id: IdSchema.optional(),
+}).strict();
+
+export const SafetyPlanInputSchema = z.object({
+  safety_plan_id: IdSchema.optional(),
+  roof_job_id: IdSchema,
+  version: z.number().int().min(1).max(100).optional(),
+  status: z.enum(["Draft", "Ready"]).optional(),
+  effective_date: DateSchema.optional(),
+  prepared_by: IdSchema,
+  hazard_summary: z.string().min(1).max(8000),
+  controls: z.string().min(1).max(8000),
+  emergency_plan: z.string().min(1).max(8000),
+  ppe_requirements: z.string().min(1).max(8000),
+  weather_limits: z.string().min(1).max(8000),
+  evidence_item_id: IdSchema.optional(),
+  supersedes: IdSchema.optional(),
+  correction_reason: z.string().min(1).max(2000).optional(),
+  notes: z.string().max(2000).optional(),
+}).strict();
+
+export const SafetyAcknowledgementInputSchema = z.object({
+  safety_plan_id: IdSchema,
+  roof_job_id: IdSchema,
+  acknowledged_by: IdSchema,
+  acknowledgement_method: z.enum([
+    "QR Device Pairing",
+    "E-signature",
+    "In Person",
+  ]),
+  device_action_id: z.string().min(8).max(140),
+  evidence_item_id: IdSchema,
+  role_on_job: z.string().max(140).optional(),
+  notes: z.string().max(2000).optional(),
+}).strict();
+
+export const JobComplianceRecordInputSchema = z.object({
+  compliance_record_id: IdSchema.optional(),
+  roof_job_id: IdSchema,
+  jurisdiction: z.string().min(1).max(140),
+  record_type: z.enum(["Permit", "Licence", "Inspection", "HOA", "Utility", "Other"]),
+  authority_name: z.string().min(1).max(140),
+  external_reference: z.string().max(140).optional(),
+  status: z.enum(["Required", "Applied", "Approved", "Passed", "Failed", "Expired", "Waived", "Superseded"]),
+  required_before_gate: z.enum(["Proposal", "Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"]),
+  applied_at: IsoDateTimeSchema.optional(),
+  effective_date: DateSchema.optional(),
+  expiry_date: DateSchema.optional(),
+  inspected_at: IsoDateTimeSchema.optional(),
+  evidence_item_id: IdSchema.optional(),
+  owner_user: IdSchema,
+  due_date: DateSchema.optional(),
+  waiver_reason: z.string().min(1).max(2000).optional(),
+  supersedes: IdSchema.optional(),
+  correction_reason: z.string().min(1).max(2000).optional(),
+  notes: z.string().max(2000).optional(),
+}).strict();
+
+export const CustomerDecisionInputSchema = z.object({
+  decision_id: IdSchema.optional(),
+  roof_job_id: IdSchema,
+  customer_id: IdSchema,
+  decision_type: z.enum(["Option Selection", "Scope Approval", "Change Order", "Material Selection", "Schedule", "Other"]),
+  decision_value: z.string().min(1).max(140),
+  decision_summary: z.string().min(1).max(2000),
+  source_channel: z.string().min(1).max(140),
+  decided_at: IsoDateTimeSchema,
+  captured_by: IdSchema,
+  evidence_item_id: IdSchema,
+  option_package_id: IdSchema.optional(),
+  change_order_id: IdSchema.optional(),
+  supersedes: IdSchema.optional(),
+  correction_reason: z.string().min(1).max(2000).optional(),
+  notes: z.string().max(2000).optional(),
+}).strict();
+
+const CommunicationConsentBaseShape = {
+  consent_id: IdSchema.optional(),
+  customer_id: IdSchema.optional(),
+  lead_envelope_id: IdSchema.optional(),
+  roof_job_id: IdSchema.optional(),
+  channel: z.enum(["Email", "SMS", "Phone", "WhatsApp"]),
+  purpose: z.enum(["Estimate Follow-up", "Job Updates", "Marketing", "Review Request", "Collections", "Other"]),
+  jurisdiction: z.string().min(1).max(140),
+  consent_basis: z.enum(["Express", "Written", "Contract", "Existing Business Relationship", "Other"]),
+  source_system: z.string().min(1).max(140),
+  source_reference: z.string().min(1).max(140),
+  captured_by: IdSchema,
+  captured_at: IsoDateTimeSchema,
+  effective_from: IsoDateTimeSchema,
+  expires_at: IsoDateTimeSchema.optional(),
+  notes: z.string().max(2000).optional(),
+};
+
+export const CommunicationConsentInputSchema = z.discriminatedUnion("status", [
+  z.object({
+    ...CommunicationConsentBaseShape,
+    status: z.literal("Granted"),
+    proof_evidence_id: IdSchema,
+    revoked_at: IsoDateTimeSchema.optional(),
+    supersedes: IdSchema.optional(),
+    correction_reason: z.string().min(1).max(2000).optional(),
+  }).strict(),
+  z.object({
+    ...CommunicationConsentBaseShape,
+    status: z.literal("Revoked"),
+    proof_evidence_id: IdSchema.optional(),
+    revoked_at: IsoDateTimeSchema,
+    supersedes: IdSchema,
+    correction_reason: z.string().min(1).max(2000),
+  }).strict(),
+  z.object({
+    ...CommunicationConsentBaseShape,
+    status: z.literal("Superseded"),
+    proof_evidence_id: IdSchema.optional(),
+    revoked_at: IsoDateTimeSchema.optional(),
+    supersedes: IdSchema,
+    correction_reason: z.string().min(1).max(2000),
+  }).strict(),
+  z.object({
+    ...CommunicationConsentBaseShape,
+    status: z.enum(["Denied", "Expired"]),
+    proof_evidence_id: IdSchema.optional(),
+    revoked_at: IsoDateTimeSchema.optional(),
+    supersedes: IdSchema.optional(),
+    correction_reason: z.string().min(1).max(2000).optional(),
+  }).strict(),
+]);
+
+export const ReconciliationResolutionInputSchema = z.object({
+  reconciliation_id: IdSchema,
+  roof_job_id: IdSchema.optional(),
+  next_status: z.enum(["Resolved", "Ignored"]),
+  resolution_action: z.string().min(1).max(2000),
+  resolution_evidence_id: IdSchema,
+  notes: z.string().max(2000).optional(),
+}).strict();
+
+export const TenantExportInputSchema = z.object({
+  export_run_id: IdSchema,
+  tenant_id: IdSchema,
+  scope: z.object({
+    include: z.array(z.enum([
+      "business_records",
+      "evidence_manifest",
+      "audit_records",
+      "configuration",
+    ])).min(1).max(4),
+    format: z.literal("jsonl").optional(),
+    include_binary_evidence: z.boolean().optional(),
+  }).strict(),
+  supersedes: IdSchema.optional(),
+  correction_reason: z.string().min(1).max(2000).optional(),
+  notes: z.string().max(2000).optional(),
+}).strict();
+
+export function approvedWriteInputSchema(baseSchema) {
+  const approvalShape = {
+    request_text: z.string().min(1).max(4000),
+    approved_by: z.string().min(1).max(140),
+    run_id: z.string().min(8).max(128),
+    dry_run_receipt: z.string().min(32).max(4096),
+    approval_receipt: z.string().min(32).max(8192),
+  };
+  if (baseSchema instanceof z.ZodDiscriminatedUnion) {
+    return z.discriminatedUnion(
+      baseSchema.discriminator,
+      baseSchema.options.map((option) => option.extend(approvalShape).strict()),
+    );
+  }
+  return baseSchema.extend(approvalShape).strict();
+}
+
+export function jobAssignmentIdFor({
+  roofJobId,
+  assignmentType,
+  crewProfileId,
+  assignedUser,
+  scheduledStart,
+  supersedes,
+}) {
+  return `assignment:${slugify([
+    roofJobId,
+    assignmentType,
+    crewProfileId ?? assignedUser,
+    scheduledStart ?? "unscheduled",
+    supersedes ?? "initial",
+  ].join(":"))}`;
+}
+
+export function buildJobAssignmentDraft({
+  assignmentId,
+  roofJobId,
+  assignmentType,
+  status = "Assigned",
+  crewProfileId,
+  assignedUser,
+  scheduledStart,
+  scheduledEnd,
+  assignedBy,
+  supersedes,
+  correctionReason,
+  notes,
+  nowIso,
+} = {}) {
+  if (!roofJobId) throw new Error("roof_job_id_required");
+  if (Boolean(crewProfileId) === Boolean(assignedUser)) {
+    throw new Error("assignment_requires_exactly_one_target");
+  }
+  if (scheduledStart && scheduledEnd && Date.parse(scheduledEnd) <= Date.parse(scheduledStart)) {
+    throw new Error("assignment_schedule_invalid");
+  }
+  if (supersedes && !str(correctionReason)) throw new Error("correction_reason_required");
+  return {
+    assignment_id: assignmentId ?? jobAssignmentIdFor({
+      roofJobId,
+      assignmentType,
+      crewProfileId,
+      assignedUser,
+      scheduledStart,
+      supersedes,
+    }),
+    roof_job: roofJobId,
+    assignment_type: assignmentType,
+    status,
+    ...(crewProfileId ? { crew_profile: crewProfileId } : {}),
+    ...(assignedUser ? { assigned_user: assignedUser } : {}),
+    ...(scheduledStart ? { scheduled_start: scheduledStart } : {}),
+    ...(scheduledEnd ? { scheduled_end: scheduledEnd } : {}),
+    assigned_by: assignedBy,
+    assigned_at: nowIso,
+    ...(supersedes ? { supersedes, correction_reason: correctionReason.trim() } : {}),
+    notes: notes ?? "",
+  };
+}
+
+export function buildChangeOrderDraft({
+  changeOrderId,
+  roofJobId,
+  customerQuoteId,
+  changeNumber,
+  version = 1,
+  title,
+  reason,
+  scopeDelta,
+  currency = "CAD",
+  taxAmount,
+  priceBookVersion,
+  taxPolicySnapshot,
+  items = [],
+  requestedBy,
+  supersedes,
+  correctionReason,
+  notes,
+  nowIso,
+} = {}) {
+  if (!roofJobId) throw new Error("roof_job_id_required");
+  if (!items.length) throw new Error("change_order_items_required");
+  if (!Number.isFinite(taxAmount) || taxAmount < 0) throw new Error("change_order_tax_invalid");
+  if (!taxPolicySnapshot || Array.isArray(taxPolicySnapshot)
+    || typeof taxPolicySnapshot !== "object" || !Object.keys(taxPolicySnapshot).length) {
+    throw new Error("tax_policy_snapshot_required");
+  }
+  if (supersedes && !str(correctionReason)) throw new Error("correction_reason_required");
+  const normalizedItems = items.map((item) => {
+    if (!Number.isFinite(item.quantity) || item.quantity <= 0
+      || !Number.isFinite(item.unit_price) || item.unit_price < 0) {
+      throw new Error("change_order_item_amount_invalid");
+    }
+    return {
+      item_type: item.item_type,
+      description: item.description.trim(),
+      quantity: item.quantity,
+      unit: item.unit.trim(),
+      unit_price: item.unit_price,
+      line_total: roundMoney(item.quantity * item.unit_price),
+      tax_code: item.tax_code ?? "",
+      source_ref: item.source_ref.trim(),
+      customer_visible: item.customer_visible === false ? 0 : 1,
+    };
+  });
+  const subtotal = roundMoney(normalizedItems.reduce((sum, item) => sum + item.line_total, 0));
+  return {
+    change_order_id: changeOrderId ?? `change:${slugify(`${roofJobId}:${changeNumber}:v${version}`)}`,
+    roof_job: roofJobId,
+    ...(customerQuoteId ? { customer_quote: customerQuoteId } : {}),
+    change_number: changeNumber,
+    version,
+    status: "Draft",
+    title: title.trim(),
+    reason: reason.trim(),
+    scope_delta: scopeDelta.trim(),
+    currency,
+    subtotal,
+    tax_amount: roundMoney(taxAmount),
+    total_amount: roundMoney(subtotal + taxAmount),
+    price_book_version: priceBookVersion,
+    tax_policy_snapshot_json: JSON.stringify(taxPolicySnapshot),
+    items: normalizedItems,
+    requested_by: requestedBy,
+    requested_at: nowIso,
+    ...(supersedes ? { supersedes, correction_reason: correctionReason.trim() } : {}),
+    notes: notes ?? "",
+  };
+}
+
+export function buildChangeOrderTransitionPatch(
+  before = {},
+  nextStatus,
+  reason,
+  approvedBy,
+  nowIso,
+  evidenceItemId,
+) {
+  if (["Accepted", "Rejected"].includes(nextStatus)) {
+    throw new Error("customer_contract_transition_forbidden");
+  }
+  const current = before.status;
+  const allowed = {
+    Draft: ["Needs Review", "Superseded"],
+    "Needs Review": ["Draft", "Approved", "Superseded"],
+    Approved: ["Presented", "Superseded"],
+    Presented: ["Superseded"],
+  };
+  if (!allowed[current]?.includes(nextStatus)) {
+    throw new Error(`change_order_transition_invalid:${current ?? "missing"}->${nextStatus}`);
+  }
+  if (nextStatus === "Presented" && !evidenceItemId) {
+    throw new Error("change_order_presentation_evidence_required");
+  }
+  if (["Draft", "Superseded"].includes(nextStatus) && !str(reason)) {
+    throw new Error("change_order_transition_reason_required");
+  }
+  const patch = { status: nextStatus };
+  if (nextStatus === "Approved") {
+    patch.approved_by = approvedBy;
+    patch.approved_at = nowIso;
+  }
+  if (nextStatus === "Draft") {
+    patch.approved_by = "";
+    patch.approved_at = "";
+    patch.correction_reason = reason.trim();
+  }
+  if (nextStatus === "Superseded") patch.correction_reason = reason.trim();
+  return patch;
+}
+
+export function buildSafetyPlanDraft({
+  safetyPlanId,
+  roofJobId,
+  version = 1,
+  status = "Draft",
+  effectiveDate,
+  preparedBy,
+  hazardSummary,
+  controls,
+  emergencyPlan,
+  ppeRequirements,
+  weatherLimits,
+  evidenceItemId,
+  supersedes,
+  correctionReason,
+  notes,
+  nowIso,
+} = {}) {
+  if (!roofJobId) throw new Error("roof_job_id_required");
+  if (status === "Ready" && !effectiveDate) throw new Error("safety_plan_effective_date_required");
+  if (status === "Ready" && !evidenceItemId) throw new Error("safety_plan_evidence_required");
+  if (supersedes && !str(correctionReason)) throw new Error("correction_reason_required");
+  return {
+    safety_plan_id: safetyPlanId ?? `safety:${slugify(`${roofJobId}:v${version}`)}`,
+    roof_job: roofJobId,
+    version,
+    status,
+    ...(effectiveDate ? { effective_date: effectiveDate } : {}),
+    prepared_by: preparedBy,
+    prepared_at: nowIso,
+    hazard_summary: hazardSummary.trim(),
+    controls: controls.trim(),
+    emergency_plan: emergencyPlan.trim(),
+    ppe_requirements: ppeRequirements.trim(),
+    weather_limits: weatherLimits.trim(),
+    ...(evidenceItemId ? { evidence_item: evidenceItemId } : {}),
+    acknowledgements: [],
+    ...(supersedes ? { supersedes, correction_reason: correctionReason.trim() } : {}),
+    notes: notes ?? "",
+  };
+}
+
+export function buildSafetyAcknowledgementPatch({
+  safetyPlan = {},
+  roofJobId,
+  acknowledgedBy,
+  acknowledgementMethod,
+  deviceActionId,
+  evidenceItemId,
+  roleOnJob,
+  notes,
+  nowIso,
+} = {}) {
+  assertLinkedRoofJob(roofJobId, safetyPlan, "safety_plan");
+  if (!evidenceItemId) throw new Error("safety_acknowledgement_evidence_required");
+  if (!["QR Device Pairing", "E-signature", "In Person"].includes(acknowledgementMethod)) {
+    throw new Error("safety_acknowledgement_method_invalid");
+  }
+  if (!["Ready", "Acknowledged"].includes(safetyPlan.status)) {
+    throw new Error("safety_plan_ready_required");
+  }
+  const acknowledgements = Array.isArray(safetyPlan.acknowledgements)
+    ? safetyPlan.acknowledgements.map((row) => pickAllowedFields(row, SAFETY_ACKNOWLEDGEMENT_FIELDS))
+    : [];
+  if (typeof deviceActionId !== "string" || deviceActionId.length < 8) {
+    throw new Error("safety_acknowledgement_device_action_required");
+  }
+  if (deviceActionId.length > 140) throw new Error("safety_acknowledgement_device_action_too_long");
+  const priorForUser = acknowledgements.find((row) => row.acknowledged_by === acknowledgedBy);
+  if (priorForUser) {
+    const exactReplay = priorForUser.device_action_id === deviceActionId
+      && priorForUser.evidence_item === evidenceItemId
+      && priorForUser.acknowledgement_method === acknowledgementMethod;
+    if (!exactReplay) throw new Error("safety_acknowledgement_user_conflict");
+  } else {
+    const priorForDevice = acknowledgements.find((row) => row.device_action_id === deviceActionId);
+    if (priorForDevice) throw new Error("safety_acknowledgement_device_conflict");
+    acknowledgements.push({
+      acknowledged_by: acknowledgedBy,
+      acknowledged_at: nowIso,
+      acknowledgement_method: acknowledgementMethod,
+      ...(deviceActionId ? { device_action_id: deviceActionId } : {}),
+      evidence_item: evidenceItemId,
+      ...(roleOnJob ? { role_on_job: roleOnJob } : {}),
+      notes: notes ?? "",
+    });
+  }
+  return { status: "Acknowledged", acknowledgements };
+}
+
+export function buildComplianceRecordDraft({
+  complianceRecordId,
+  roofJobId,
+  jurisdiction,
+  recordType,
+  authorityName,
+  externalReference,
+  status,
+  requiredBeforeGate,
+  appliedAt,
+  effectiveDate,
+  expiryDate,
+  inspectedAt,
+  evidenceItemId,
+  ownerUser,
+  dueDate,
+  waiverReason,
+  supersedes,
+  correctionReason,
+  notes,
+  approvedBy,
+  nowIso,
+} = {}) {
+  if (!roofJobId) throw new Error("roof_job_id_required");
+  if (status === "Applied" && !appliedAt) throw new Error("compliance_applied_at_required");
+  if (["Approved", "Passed", "Failed", "Expired"].includes(status) && !str(externalReference)) {
+    throw new Error("compliance_external_reference_required");
+  }
+  if (["Passed", "Failed"].includes(status) && !inspectedAt) {
+    throw new Error("compliance_inspected_at_required");
+  }
+  if (status === "Waived" && !str(waiverReason)) throw new Error("compliance_waiver_reason_required");
+  if (["Approved", "Passed", "Failed", "Expired", "Waived"].includes(status) && !evidenceItemId) {
+    throw new Error("compliance_evidence_required");
+  }
+  if (supersedes && !str(correctionReason)) throw new Error("correction_reason_required");
+  return {
+    compliance_record_id: complianceRecordId
+      ?? `compliance:${slugify(`${roofJobId}:${recordType}:${authorityName}`)}`,
+    roof_job: roofJobId,
+    jurisdiction: jurisdiction.trim(),
+    record_type: recordType,
+    authority_name: authorityName.trim(),
+    external_reference: externalReference ?? "",
+    status,
+    required_before_gate: requiredBeforeGate,
+    ...(appliedAt ? { applied_at: appliedAt } : {}),
+    ...(effectiveDate ? { effective_date: effectiveDate } : {}),
+    ...(expiryDate ? { expiry_date: expiryDate } : {}),
+    ...(inspectedAt ? { inspected_at: inspectedAt } : {}),
+    ...(evidenceItemId ? { evidence_item: evidenceItemId } : {}),
+    owner_user: ownerUser,
+    ...(dueDate ? { due_date: dueDate } : {}),
+    ...(status === "Waived" ? {
+      waived_by: approvedBy,
+      waived_at: nowIso,
+      waiver_reason: waiverReason.trim(),
+    } : {}),
+    ...(supersedes ? { supersedes, correction_reason: correctionReason.trim() } : {}),
+    notes: notes ?? "",
+  };
+}
+
+export function assertComplianceTransition(currentStatus, nextStatus) {
+  if (!currentStatus || currentStatus === nextStatus) return;
+  const allowed = {
+    Required: ["Applied", "Waived", "Superseded"],
+    Applied: ["Approved", "Failed", "Expired", "Superseded"],
+    Approved: ["Passed", "Failed", "Expired", "Superseded"],
+    Passed: ["Expired", "Superseded"],
+    Failed: ["Applied", "Superseded"],
+    Expired: ["Applied", "Superseded"],
+    Waived: ["Superseded"],
+    Superseded: [],
+  };
+  if (!allowed[currentStatus]?.includes(nextStatus)) {
+    throw new Error(`compliance_transition_invalid:${currentStatus}->${nextStatus}`);
+  }
+}
+
+export function buildCustomerDecisionDraft({
+  decisionId,
+  roofJobId,
+  customerId,
+  decisionType,
+  decisionValue,
+  decisionSummary,
+  sourceChannel,
+  decidedAt,
+  capturedBy,
+  evidenceItemId,
+  optionPackageId,
+  changeOrderId,
+  supersedes,
+  correctionReason,
+  notes,
+} = {}) {
+  if (!roofJobId) throw new Error("roof_job_id_required");
+  if (!customerId) throw new Error("customer_id_required");
+  if (!evidenceItemId) throw new Error("customer_decision_evidence_required");
+  if (decisionType === "Option Selection" && !optionPackageId) {
+    throw new Error("option_package_id_required");
+  }
+  if (decisionType === "Change Order" && !changeOrderId) throw new Error("change_order_id_required");
+  if (supersedes && !str(correctionReason)) throw new Error("correction_reason_required");
+  return {
+    decision_id: decisionId ?? `decision:${slugify(`${roofJobId}:${decisionType}:${decidedAt}`)}`,
+    roof_job: roofJobId,
+    customer: customerId,
+    decision_type: decisionType,
+    status: "Recorded",
+    decision_value: decisionValue.trim(),
+    decision_summary: decisionSummary.trim(),
+    source_channel: sourceChannel.trim(),
+    decided_at: decidedAt,
+    captured_by: capturedBy,
+    evidence_item: evidenceItemId,
+    ...(optionPackageId ? { option_package: optionPackageId } : {}),
+    ...(changeOrderId ? { change_order: changeOrderId } : {}),
+    ...(supersedes ? { supersedes, correction_reason: correctionReason.trim() } : {}),
+    notes: notes ?? "",
+  };
+}
+
+export function buildCommunicationConsentDraft({
+  consentId,
+  customerId,
+  leadEnvelopeId,
+  roofJobId,
+  channel,
+  purpose,
+  status,
+  jurisdiction,
+  consentBasis,
+  sourceSystem,
+  sourceReference,
+  capturedBy,
+  capturedAt,
+  effectiveFrom,
+  expiresAt,
+  proofEvidenceId,
+  revokedAt,
+  supersedes,
+  correctionReason,
+  notes,
+} = {}) {
+  if (!customerId && !leadEnvelopeId && !roofJobId) throw new Error("consent_subject_required");
+  if (status === "Granted" && !proofEvidenceId) throw new Error("consent_proof_required");
+  if (status === "Revoked") {
+    if (!revokedAt) throw new Error("consent_revoked_at_required");
+    if (!supersedes) throw new Error("consent_revocation_supersedes_required");
+    if (!str(correctionReason)) throw new Error("correction_reason_required");
+  }
+  if (status === "Superseded" && !supersedes) {
+    throw new Error("consent_superseded_link_required");
+  }
+  if (supersedes && !str(correctionReason)) throw new Error("correction_reason_required");
+  return {
+    consent_id: consentId ?? `consent:${slugify(`${customerId ?? leadEnvelopeId ?? roofJobId}:${channel}:${purpose}:${capturedAt}`)}`,
+    ...(customerId ? { customer: customerId } : {}),
+    ...(leadEnvelopeId ? { lead_envelope: leadEnvelopeId } : {}),
+    ...(roofJobId ? { roof_job: roofJobId } : {}),
+    channel,
+    purpose,
+    status,
+    jurisdiction: jurisdiction.trim(),
+    consent_basis: consentBasis,
+    source_system: sourceSystem.trim(),
+    source_reference: sourceReference.trim(),
+    captured_by: capturedBy,
+    captured_at: capturedAt,
+    effective_from: effectiveFrom,
+    ...(expiresAt ? { expires_at: expiresAt } : {}),
+    ...(proofEvidenceId ? { proof_evidence: proofEvidenceId } : {}),
+    ...(revokedAt ? { revoked_at: revokedAt } : {}),
+    ...(supersedes ? { supersedes, correction_reason: correctionReason.trim() } : {}),
+    notes: notes ?? "Record-only consent evidence. This record does not send a message.",
+  };
+}
+
+export function buildReconciliationResolutionPatch(before = {}, {
+  nextStatus,
+  resolutionAction,
+  resolutionEvidenceId,
+  resolvedBy,
+  notes,
+  nowIso,
+} = {}) {
+  if (!str(resolutionAction)) throw new Error("reconciliation_resolution_action_required");
+  if (!resolutionEvidenceId) throw new Error("reconciliation_resolution_evidence_required");
+  const allowed = {
+    Pending: ["Ignored"],
+    Mismatch: ["Resolved", "Ignored"],
+  };
+  if (!allowed[before.status]?.includes(nextStatus)) {
+    throw new Error(`reconciliation_transition_invalid:${before.status ?? "missing"}->${nextStatus}`);
+  }
+  const attemptCount = Number(before.attempt_count ?? 0);
+  if (!Number.isInteger(attemptCount) || attemptCount < 0) {
+    throw new Error("reconciliation_attempt_count_invalid");
+  }
+  return {
+    status: nextStatus,
+    resolution_action: resolutionAction.trim(),
+    resolution_evidence: resolutionEvidenceId,
+    resolved_by: resolvedBy,
+    resolved_at: nowIso,
+    last_attempt_at: nowIso,
+    attempt_count: attemptCount + 1,
+    notes: notes ?? "Reconciliation record only. No accounting or external-system mutation was performed.",
+  };
+}
+
+export function buildTenantExportRequestDraft({
+  exportRunId,
+  tenantId,
+  scope,
+  requestedBy,
+  supersedes,
+  correctionReason,
+  notes,
+  nowIso,
+  runId,
+} = {}) {
+  if (supersedes && !str(correctionReason)) throw new Error("correction_reason_required");
+  const allowedIncludes = new Set([
+    "business_records",
+    "evidence_manifest",
+    "audit_records",
+    "configuration",
+  ]);
+  if (!Array.isArray(scope?.include) || !scope.include.length
+    || scope.include.some((value) => !allowedIncludes.has(value))) {
+    throw new Error("tenant_export_scope_invalid");
+  }
+  if (scope.format !== undefined && scope.format !== "jsonl") {
+    throw new Error("tenant_export_format_invalid");
+  }
+  const normalizedScope = {
+    include: [...new Set(scope.include)].sort(),
+    format: scope.format ?? "jsonl",
+    include_binary_evidence: scope.include_binary_evidence ?? false,
+    excludes: ["credentials", "session_tokens", "encryption_key_material"],
+  };
+  return {
+    export_run_id: exportRunId ?? `export:${slugify(`${tenantId}:${runId}`)}`,
+    tenant: tenantId,
+    status: "Requested",
+    requested_by: requestedBy,
+    requested_at: nowIso,
+    scope_json: JSON.stringify(normalizedScope),
+    ...(supersedes ? { supersedes, correction_reason: correctionReason.trim() } : {}),
+    notes: notes ?? "Export request only. A separate audited worker produces and encrypts the archive.",
+  };
+}
+
+export function assertLinkedRoofJob(expectedRoofJob, record, label = "record") {
+  if (!expectedRoofJob) throw new Error("roof_job_id_required");
+  if (!record?.roof_job) throw new Error(`${label}_roof_job_missing`);
+  if (record.roof_job !== expectedRoofJob) {
+    throw new Error(`${label}_roof_job_mismatch:${record.roof_job}:${expectedRoofJob}`);
+  }
+}
+
+export function assertRoofJobCustomer(roofJob, customerId) {
+  if (!roofJob?.customer) throw new Error("roof_job_customer_missing");
+  if (roofJob.customer !== customerId) {
+    throw new Error(`roof_job_customer_mismatch:${roofJob.customer}:${customerId}`);
+  }
+}
+
+export function assertConsentLineage(prior, args) {
+  const checks = [
+    ["customer", args.customer_id],
+    ["lead_envelope", args.lead_envelope_id],
+    ["roof_job", args.roof_job_id],
+    ["channel", args.channel],
+    ["purpose", args.purpose],
+  ];
+  for (const [field, expected] of checks) {
+    if (expected && prior?.[field] !== expected) {
+      throw new Error(`consent_lineage_mismatch:${field}`);
+    }
+  }
+}
+
+export function assertCorrectionVersion(next, prior, label) {
+  const nextVersion = Number(next?.version);
+  const priorVersion = Number(prior?.version);
+  if (!Number.isInteger(nextVersion) || !Number.isInteger(priorVersion)
+    || nextVersion <= priorVersion) {
+    throw new Error(`${label}_version_must_increase`);
+  }
+}
+
+function roundMoney(value) {
+  if (!Number.isFinite(value)) throw new Error("money_value_invalid");
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
 function slugify(value) {
   return String(value ?? "")
     .toLowerCase()
@@ -974,21 +2132,185 @@ function str(v) {
 }
 
 export function redactApprovalArgs(args) {
-  const { approval_token: _approvalToken, ...safeArgs } = args;
+  const safeArgs = approvedArgs(args);
+  delete safeArgs.__hermes_actor_user;
   return safeArgs;
 }
 
+function resolveRuntimeConfig(config = {}) {
+  const rolePolicy = config.rolePolicy ?? loadRolePolicy(config.rolePolicyPath ?? DEFAULT_ROLE_POLICY_PATH);
+  const agentRole = config.agentRole ?? "owner-operator";
+  const role = rolePolicy.roles?.[agentRole];
+  if (!role) throw new Error("hermes_agent_role_unknown");
+  return {
+    ...config,
+    agentRole,
+    agentRoleTitle: config.agentRoleTitle ?? role.title,
+    actorUser: config.actorUser ?? "test-owner@example.com",
+    approverId: config.approverId ?? "test-owner@example.com",
+    allowedTools: config.allowedTools ?? roleTools(role),
+    siteId: config.siteId ?? digest({ frappe_base_url: config.baseUrl ?? "" }),
+  };
+}
+
+function createAuthorizedRegistrar(mcpServer, config) {
+  const handlers = new Map();
+  const allowedTools = new Set(config.allowedTools);
+  const rawRegisterTool = mcpServer.registerTool.bind(mcpServer);
+
+  return {
+    registerTool(name, definition, handler) {
+      handlers.set(name, handler);
+      if (!allowedTools.has(name)) return;
+      rawRegisterTool(name, definition, async (args) => {
+        await authorizeToolInvocation(config, name, args);
+        if (name.startsWith("dry_run_")) {
+          return attachDryRunReceipt(config, name, args, await handler(args));
+        }
+        if (Object.hasOwn(REQUEST_TO_DRY_RUN, name)) {
+          await assertApprovedWriteContract(config, name, args, handlers);
+        }
+        return handler({ ...args, __hermes_actor_user: config.actorUser });
+      });
+    },
+  };
+}
+
+async function authorizeToolInvocation(config, toolName, args) {
+  assertActorFieldsBound(config, args);
+  if (config.agentRole !== "field-companion") return;
+  const roofJobId = await roofJobForFieldTool(config, toolName, args);
+  if (!roofJobId) throw new Error(`field_assignment_scope_missing_job:${toolName}`);
+  await assertActorAssignedToRoofJob(config, roofJobId);
+}
+
+function assertActorFieldsBound(config, args = {}) {
+  for (const field of ["acknowledged_by", "assigned_by", "captured_by", "prepared_by", "requested_by"]) {
+    if (args[field] !== undefined && args[field] !== config.actorUser) {
+      throw new Error(`actor_field_mismatch:${field}`);
+    }
+  }
+}
+
+async function roofJobForFieldTool(config, toolName, args = {}) {
+  if (args.roof_job_id) return args.roof_job_id;
+  if (toolName === "get_roof_job") return args.roof_job_id;
+  const reference = FIELD_RECORD_TOOL_REFERENCES[toolName];
+  if (!reference) return null;
+  const [doctype, idArg] = reference;
+  const record = await readResource(config, doctype, args[idArg]);
+  return record.roof_job ?? null;
+}
+
+async function assertActorAssignedToRoofJob(config, roofJobId) {
+  const assignments = await listResources(config, "Job Assignment", {
+    fields: ["name", "roof_job", "status", "assigned_user", "crew_profile"],
+    filters: [["Job Assignment", "roof_job", "=", roofJobId]],
+    limit: 100,
+    orderBy: "modified desc",
+  });
+  const activeAssignments = assignments.filter((assignment) => ["Assigned", "Accepted", "In Progress"].includes(assignment.status));
+  for (const assignment of activeAssignments) {
+    if (assignment.assigned_user === config.actorUser) return;
+    if (!assignment.crew_profile) continue;
+    const crew = await readResource(config, "Crew Profile", assignment.crew_profile);
+    const member = Array.isArray(crew.members)
+      && crew.members.some((row) => row.crew_user === config.actorUser && Number(row.active) === 1);
+    if (crew.status === "Active" && (crew.primary_lead === config.actorUser || member)) return;
+  }
+  throw new Error(`field_assignment_required:${roofJobId}`);
+}
+
+function dryRunArgs(args = {}) {
+  const previewArgs = approvedArgs(args);
+  delete previewArgs.request_text;
+  delete previewArgs.approved_by;
+  delete previewArgs.run_id;
+  return previewArgs;
+}
+
+function attachDryRunReceipt(config, dryRunTool, args, result) {
+  if (!config.dryRunSigningKey) return result;
+  const writeTool = Object.entries(REQUEST_TO_DRY_RUN)
+    .find(([, pairedDryRun]) => pairedDryRun === dryRunTool)?.[0];
+  if (!writeTool) return result;
+  const payload = parseToolPayload(result);
+  const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+  const dryRunReceipt = signDryRunReceipt(config.dryRunSigningKey, {
+    dry_run_tool: dryRunTool,
+    write_tool: writeTool,
+    agent_role: config.agentRole,
+    actor_user: config.actorUser,
+    site_id: config.siteId,
+    args_digest: digest(dryRunArgs(args)),
+    preview_digest: digest(semanticPreview(payload)),
+    issued_at: new Date().toISOString(),
+    expires_at: expiresAt,
+  });
+  return text({
+    ...payload,
+    approval_request: {
+      write_tool: writeTool,
+      dry_run_tool: dryRunTool,
+      agent_role: config.agentRole,
+      actor_user: config.actorUser,
+      site_id: config.siteId,
+      dry_run_receipt: dryRunReceipt,
+      expires_at: expiresAt,
+      note: "A separately authenticated human approver must issue the matching approval_receipt for the exact approved-write arguments.",
+    },
+  });
+}
+
+async function assertApprovedWriteContract(config, writeTool, args, handlers) {
+  if (!config.writeEnabled) throw new Error("erpnext_write_disabled");
+  const dryRunTool = REQUEST_TO_DRY_RUN[writeTool];
+  const dryRunHandler = handlers.get(dryRunTool);
+  if (!dryRunHandler) throw new Error(`paired_dry_run_not_registered:${dryRunTool}`);
+  if (!args.dry_run_receipt) throw new Error("dry_run_receipt_required");
+  if (!args.approval_receipt) throw new Error("approval_receipt_required");
+  if (args.approved_by !== config.approverId) throw new Error("approval_approver_identity_mismatch");
+  const previewArgs = dryRunArgs(args);
+  const currentPreview = parseToolPayload(await dryRunHandler(previewArgs));
+  verifyDryRunReceipt(config.dryRunSigningKey, args.dry_run_receipt, {
+    dry_run_tool: dryRunTool,
+    write_tool: writeTool,
+    agent_role: config.agentRole,
+    actor_user: config.actorUser,
+    site_id: config.siteId,
+    args_digest: digest(previewArgs),
+    preview_digest: digest(semanticPreview(currentPreview)),
+  });
+  verifyApprovalReceipt(config.approvalPublicKey, args.approval_receipt, {
+    write_tool: writeTool,
+    dry_run_receipt: args.dry_run_receipt,
+    agent_role: config.agentRole,
+    actor_user: config.actorUser,
+    site_id: config.siteId,
+    run_id: args.run_id,
+    approved_by: config.approverId,
+    args_digest: digest(approvedArgs(args)),
+  });
+}
+
 export function buildServer(config) {
-  const server = new McpServer({ name: "erpnext-roofing-mcp", version: "0.2.0" });
+  config = resolveRuntimeConfig(config);
+  const mcpServer = new McpServer({ name: "erpnext-roofing-mcp", version: "0.2.0" });
+  const server = createAuthorizedRegistrar(mcpServer, config);
 
   server.registerTool(
     "get_roof_job",
     {
       title: "Get Roof Job",
-      description: "Read one IronWrap Roof Job by roof_job_id/name.",
+      description: "Read one IronWrap Roof Job by roof_job_id/name. Field sessions receive the assignment-scoped safe projection only.",
       inputSchema: { roof_job_id: z.string().min(1) },
     },
-    async ({ roof_job_id }) => text(await erpGet(config, resourcePath("Roof Job", roof_job_id))),
+    async ({ roof_job_id }) => {
+      const job = await readResource(config, "Roof Job", roof_job_id);
+      return text(config.agentRole === "field-companion"
+        ? { data: sanitizeResource(job, FIELD_ROOF_JOB_FIELDS) }
+        : { data: job });
+    },
   );
 
   server.registerTool(
@@ -1299,12 +2621,13 @@ export function buildServer(config) {
         limit: z.number().int().min(1).max(100).optional(),
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
-        approval_token: z.string().min(1),
         run_id: z.string().min(8).max(128),
+        dry_run_receipt: z.string().min(32).max(4096),
+        approval_receipt: z.string().min(32).max(8192),
       },
     },
     async (args) => {
-      assertWriteApproved(config, args.approval_token);
+      assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
       const { draft, measurementReport } = await buildMaterialTakeoffDraftFromErp(config, args.roof_job_id, {
@@ -1328,7 +2651,7 @@ export function buildServer(config) {
         runId,
         now,
         args,
-        agentRole: "Estimator Assistant",
+        agentRole: config.agentRoleTitle,
         toolName: "request_create_material_takeoff",
         target: { doctype: "Material Takeoff", name: draft.takeoff_id },
         roofJob: args.roof_job_id,
@@ -1376,12 +2699,13 @@ export function buildServer(config) {
         reason: z.string().max(2000).optional(),
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
-        approval_token: z.string().min(1),
         run_id: z.string().min(8).max(128),
+        dry_run_receipt: z.string().min(32).max(4096),
+        approval_receipt: z.string().min(32).max(8192),
       },
     },
     async (args) => {
-      assertWriteApproved(config, args.approval_token);
+      assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
       const before = await readResource(config, "Material Takeoff", args.takeoff_id);
@@ -1395,7 +2719,7 @@ export function buildServer(config) {
         runId,
         now,
         args,
-        agentRole: "Estimator Assistant",
+        agentRole: config.agentRoleTitle,
         toolName: "request_update_material_takeoff_status",
         target: { doctype: "Material Takeoff", name: args.takeoff_id },
         roofJob: before.roof_job,
@@ -1451,12 +2775,13 @@ export function buildServer(config) {
         requested_delivery_date: z.string().min(1).optional(),
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
-        approval_token: z.string().min(1),
         run_id: z.string().min(8).max(128),
+        dry_run_receipt: z.string().min(32).max(4096),
+        approval_receipt: z.string().min(32).max(8192),
       },
     },
     async (args) => {
-      assertWriteApproved(config, args.approval_token);
+      assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
       const { draft, materialTakeoff } = await buildSupplierOrderDraftFromErp(config, args.material_takeoff_id, {
@@ -1480,7 +2805,7 @@ export function buildServer(config) {
         runId,
         now,
         args,
-        agentRole: "Production Controller",
+        agentRole: config.agentRoleTitle,
         toolName: "request_create_supplier_order",
         target: { doctype: "Supplier Order", name: draft.supplier_order_id },
         roofJob: draft.roof_job,
@@ -1527,12 +2852,13 @@ export function buildServer(config) {
         limit: z.number().int().min(1).max(100).optional(),
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
-        approval_token: z.string().min(1),
         run_id: z.string().min(8).max(128),
+        dry_run_receipt: z.string().min(32).max(4096),
+        approval_receipt: z.string().min(32).max(8192),
       },
     },
     async (args) => {
-      assertWriteApproved(config, args.approval_token);
+      assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
       const { draft, measurements, evidence } = await buildProposalDraftFromErp(config, args.roof_job_id, {
@@ -1552,7 +2878,7 @@ export function buildServer(config) {
         runId,
         now,
         args,
-        agentRole: "Estimator Assistant",
+        agentRole: config.agentRoleTitle,
         toolName: "request_create_proposal_evidence_pack",
         target: { doctype: "Proposal Evidence Pack", name: draft.pack_id },
         roofJob: args.roof_job_id,
@@ -1600,12 +2926,13 @@ export function buildServer(config) {
         reason: z.string().max(2000).optional(),
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
-        approval_token: z.string().min(1),
         run_id: z.string().min(8).max(128),
+        dry_run_receipt: z.string().min(32).max(4096),
+        approval_receipt: z.string().min(32).max(8192),
       },
     },
     async (args) => {
-      assertWriteApproved(config, args.approval_token);
+      assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
       const before = await readResource(config, "Production Gate State", args.gate_id);
@@ -1619,7 +2946,7 @@ export function buildServer(config) {
         runId,
         now,
         args,
-        agentRole: "Production Controller",
+        agentRole: config.agentRoleTitle,
         toolName: "request_update_gate",
         target: { doctype: "Production Gate State", name: args.gate_id },
         roofJob: before.roof_job,
@@ -1698,6 +3025,137 @@ export function buildServer(config) {
     listName: "list_scope_clauses_for_job",
     fields: SCOPE_CLAUSE_FIELDS,
   });
+
+  server.registerTool(
+    "get_crew_profile",
+    {
+      title: "Get Crew Profile",
+      description: "Read one allowlisted Crew Profile. Member, safety-contact phone, and free-form note fields are not exposed.",
+      inputSchema: z.object({ crew_profile_id: IdSchema }).strict(),
+    },
+    async ({ crew_profile_id }) => text({
+      data: sanitizeResource(await readResource(config, "Crew Profile", crew_profile_id), CREW_PROFILE_FIELDS),
+    }),
+  );
+
+  server.registerTool(
+    "list_crew_profiles",
+    {
+      title: "List Crew Profiles",
+      description: "Read a bounded site-local Crew Profile list, optionally filtered by lifecycle status.",
+      inputSchema: z.object({
+        status: z.enum(["Active", "Inactive", "Suspended"]).optional(),
+        limit: z.number().int().min(1).max(25).optional(),
+      }).strict(),
+    },
+    async ({ status, limit = 25 }) => text({
+      data: (await listResources(config, "Crew Profile", {
+        fields: CREW_PROFILE_FIELDS,
+        ...(status ? { filters: [["Crew Profile", "status", "=", status]] } : {}),
+        limit,
+        orderBy: "modified desc",
+      })).map((row) => sanitizeResource(row, CREW_PROFILE_FIELDS)),
+    }),
+  );
+
+  registerStrictJobReadPair(server, config, {
+    doctype: "Job Assignment",
+    idArg: "assignment_id",
+    getName: "get_job_assignment",
+    listName: "list_job_assignments_for_job",
+    fields: JOB_ASSIGNMENT_FIELDS,
+    orderBy: "assigned_at desc",
+  });
+  registerStrictJobReadPair(server, config, {
+    doctype: "Change Order",
+    idArg: "change_order_id",
+    getName: "get_change_order",
+    listName: "list_change_orders_for_job",
+    fields: CHANGE_ORDER_FIELDS,
+    childFields: { items: CHANGE_ORDER_ITEM_FIELDS },
+  });
+  registerStrictJobReadPair(server, config, {
+    doctype: "Safety Plan",
+    idArg: "safety_plan_id",
+    getName: "get_safety_plan",
+    listName: "list_safety_plans_for_job",
+    fields: SAFETY_PLAN_FIELDS,
+    childFields: { acknowledgements: SAFETY_ACKNOWLEDGEMENT_FIELDS },
+  });
+  registerStrictJobReadPair(server, config, {
+    doctype: "Job Compliance Record",
+    idArg: "compliance_record_id",
+    getName: "get_job_compliance_record",
+    listName: "list_job_compliance_records_for_job",
+    fields: JOB_COMPLIANCE_RECORD_FIELDS,
+  });
+  registerStrictJobReadPair(server, config, {
+    doctype: "Communication Consent",
+    idArg: "consent_id",
+    getName: "get_communication_consent",
+    listName: "list_communication_consents_for_job",
+    fields: COMMUNICATION_CONSENT_FIELDS,
+    orderBy: "captured_at desc",
+  });
+  registerStrictJobReadPair(server, config, {
+    doctype: "Customer Decision",
+    idArg: "decision_id",
+    getName: "get_customer_decision",
+    listName: "list_customer_decisions_for_job",
+    fields: CUSTOMER_DECISION_FIELDS,
+    orderBy: "decided_at desc",
+  });
+
+  // Contract Acceptance is intentionally read-only. Hermes cannot sign, accept,
+  // decline, void, or otherwise impersonate a customer.
+  registerStrictJobReadPair(server, config, {
+    doctype: "Contract Acceptance",
+    idArg: "acceptance_id",
+    getName: "get_contract_acceptance",
+    listName: "list_contract_acceptances_for_job",
+    fields: CONTRACT_ACCEPTANCE_FIELDS,
+    orderBy: "accepted_at desc",
+  });
+  registerStrictJobReadPair(server, config, {
+    doctype: "Integration Reconciliation",
+    idArg: "reconciliation_id",
+    getName: "get_integration_reconciliation",
+    listName: "list_integration_reconciliations_for_job",
+    fields: INTEGRATION_RECONCILIATION_FIELDS,
+    orderBy: "detected_at desc",
+  });
+
+  server.registerTool(
+    "get_tenant_export_run",
+    {
+      title: "Get Tenant Export Run",
+      description: "Read one allowlisted Tenant Export Run without archive keys or encryption-key references.",
+      inputSchema: z.object({ export_run_id: IdSchema }).strict(),
+    },
+    async ({ export_run_id }) => text({
+      data: sanitizeResource(await readResource(config, "Tenant Export Run", export_run_id), TENANT_EXPORT_RUN_FIELDS),
+    }),
+  );
+
+  server.registerTool(
+    "list_tenant_export_runs_for_tenant",
+    {
+      title: "List Tenant Export Runs For Tenant",
+      description: "Read a bounded export-run list for one exact site-local tenant.",
+      inputSchema: z.object({
+        tenant_id: IdSchema,
+        limit: z.number().int().min(1).max(25).optional(),
+      }).strict(),
+    },
+    async ({ tenant_id, limit = 25 }) => text({
+      data: (await listResources(config, "Tenant Export Run", {
+        fields: TENANT_EXPORT_RUN_FIELDS,
+        filters: [["Tenant Export Run", "tenant", "=", tenant_id]],
+        limit,
+        orderBy: "requested_at desc",
+      })).map((row) => sanitizeResource(row, TENANT_EXPORT_RUN_FIELDS)),
+    }),
+  );
 
   server.registerTool(
     "get_price_book_rule",
@@ -1847,6 +3305,1300 @@ export function buildServer(config) {
   );
 
   server.registerTool(
+    "dry_run_job_assignment",
+    {
+      title: "Dry Run Job Assignment",
+      description: "Preview one append-only Job Assignment without writing. Corrections must supersede the prior assignment.",
+      inputSchema: JobAssignmentInputSchema,
+    },
+    async (args) => {
+      const now = new Date().toISOString();
+      const draft = jobAssignmentDraftFromArgs(args, now);
+      if (args.crew_profile_id) {
+        const crew = await readResource(config, "Crew Profile", args.crew_profile_id);
+        if (crew.status !== "Active") throw new Error("active_crew_profile_required");
+      }
+      if (args.supersedes) {
+        const prior = await assertLinkedResourceForJob(
+          config,
+          "Job Assignment",
+          args.supersedes,
+          args.roof_job_id,
+          "superseded_assignment",
+        );
+        if ((prior.assignment_id ?? prior.name) === draft.assignment_id) {
+          throw new Error("assignment_correction_requires_new_id");
+        }
+      }
+      const before = await readResourceOrNull(config, "Job Assignment", draft.assignment_id);
+      return text({
+        would_write: false,
+        required_tool: "request_create_job_assignment",
+        target: { doctype: "Job Assignment", name: draft.assignment_id },
+        append_only: true,
+        blocked_existing: Boolean(before),
+        ...(before ? { blocked_reason: "assignment_append_only" } : {}),
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_create_job_assignment",
+    {
+      title: "Request Create Job Assignment",
+      description: "Approved-write: append one Job Assignment and record a Hermes Run. Existing assignments are never silently overwritten.",
+      inputSchema: approvedWriteInputSchema(JobAssignmentInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const runId = args.run_id;
+      const draft = jobAssignmentDraftFromArgs(args, now);
+      if (args.crew_profile_id) {
+        const crew = await readResource(config, "Crew Profile", args.crew_profile_id);
+        if (crew.status !== "Active") throw new Error("active_crew_profile_required");
+      }
+      if (args.supersedes) {
+        const prior = await assertLinkedResourceForJob(
+          config,
+          "Job Assignment",
+          args.supersedes,
+          args.roof_job_id,
+          "superseded_assignment",
+        );
+        if ((prior.assignment_id ?? prior.name) === draft.assignment_id) {
+          throw new Error("assignment_correction_requires_new_id");
+        }
+      }
+      const before = await readResourceOrNull(config, "Job Assignment", draft.assignment_id);
+      const dryRun = {
+        target: { doctype: "Job Assignment", name: draft.assignment_id },
+        operation: before ? "blocked_existing" : "create",
+        append_only: true,
+        draft,
+      };
+      return text(await executeAuditedWrite(config, {
+        runId,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_create_job_assignment",
+        target: { doctype: "Job Assignment", name: draft.assignment_id },
+        roofJob: args.roof_job_id,
+        dryRun,
+        beforeSummary: summarizeRecord(before, ["name", "assignment_id", "roof_job", "status", "supersedes"]),
+        afterSummary: summarizeRecord(draft, ["assignment_id", "roof_job", "status", "supersedes"]),
+        execute: createOnlyExecutor(
+          config,
+          "Job Assignment",
+          before,
+          draft,
+          "assignment_append_only",
+        ),
+        responseExtra: { created: true, assignment_id: draft.assignment_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_change_order",
+    {
+      title: "Dry Run Change Order",
+      description: "Preview one append-only Change Order draft with computed totals. It never presents, accepts, rejects, or sends a contract.",
+      inputSchema: ChangeOrderDraftInputSchema,
+    },
+    async (args) => {
+      const now = new Date().toISOString();
+      const draft = changeOrderDraftFromArgs(args, now);
+      if (args.customer_quote_id) {
+        await assertLinkedResourceForJob(
+          config,
+          "Customer Quote",
+          args.customer_quote_id,
+          args.roof_job_id,
+          "customer_quote",
+        );
+      }
+      if (args.supersedes) {
+        const prior = await assertLinkedResourceForJob(
+          config,
+          "Change Order",
+          args.supersedes,
+          args.roof_job_id,
+          "superseded_change_order",
+        );
+        if ((prior.change_order_id ?? prior.name) === draft.change_order_id) {
+          throw new Error("change_order_correction_requires_new_id");
+        }
+        assertCorrectionVersion(draft, prior, "change_order_correction");
+      }
+      const before = await readResourceOrNull(config, "Change Order", draft.change_order_id);
+      return text({
+        would_write: false,
+        required_tool: "request_create_change_order",
+        target: { doctype: "Change Order", name: draft.change_order_id },
+        append_only: true,
+        blocked_existing: Boolean(before),
+        ...(before ? { blocked_reason: "change_order_append_only" } : {}),
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_create_change_order",
+    {
+      title: "Request Create Change Order",
+      description: "Approved-write: append one Change Order draft and audit it. It cannot accept, reject, sign, or send for a customer.",
+      inputSchema: approvedWriteInputSchema(ChangeOrderDraftInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const runId = args.run_id;
+      const draft = changeOrderDraftFromArgs(args, now);
+      if (args.customer_quote_id) {
+        await assertLinkedResourceForJob(
+          config,
+          "Customer Quote",
+          args.customer_quote_id,
+          args.roof_job_id,
+          "customer_quote",
+        );
+      }
+      if (args.supersedes) {
+        const prior = await assertLinkedResourceForJob(
+          config,
+          "Change Order",
+          args.supersedes,
+          args.roof_job_id,
+          "superseded_change_order",
+        );
+        if ((prior.change_order_id ?? prior.name) === draft.change_order_id) {
+          throw new Error("change_order_correction_requires_new_id");
+        }
+        assertCorrectionVersion(draft, prior, "change_order_correction");
+      }
+      const before = await readResourceOrNull(config, "Change Order", draft.change_order_id);
+      return text(await executeAuditedWrite(config, {
+        runId,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_create_change_order",
+        target: { doctype: "Change Order", name: draft.change_order_id },
+        roofJob: args.roof_job_id,
+        dryRun: {
+          target: { doctype: "Change Order", name: draft.change_order_id },
+          operation: before ? "blocked_existing" : "create",
+          append_only: true,
+          draft,
+        },
+        beforeSummary: summarizeRecord(before, ["name", "change_order_id", "roof_job", "version", "status"]),
+        afterSummary: summarizeRecord(draft, ["change_order_id", "roof_job", "version", "status", "total_amount"]),
+        execute: createOnlyExecutor(
+          config,
+          "Change Order",
+          before,
+          draft,
+          "change_order_append_only",
+        ),
+        responseExtra: { created: true, change_order_id: draft.change_order_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_change_order_transition",
+    {
+      title: "Dry Run Change Order Transition",
+      description: "Preview one internal Change Order review transition. Customer accept/reject transitions are forbidden.",
+      inputSchema: ChangeOrderTransitionInputSchema,
+    },
+    async ({ change_order_id, roof_job_id, next_status, reason, evidence_item_id }) => {
+      const before = await readResource(config, "Change Order", change_order_id);
+      assertLinkedRoofJob(roof_job_id, before, "change_order");
+      const patch = buildChangeOrderTransitionPatch(
+        before,
+        next_status,
+        reason,
+        undefined,
+        undefined,
+        evidence_item_id,
+      );
+      if (evidence_item_id) {
+        await assertLinkedResourceForJob(
+          config,
+          "Evidence Item",
+          evidence_item_id,
+          roof_job_id,
+          "change_order_transition_evidence",
+          { proofSlots: ["Change Order"], evidenceTypes: ["Signed Document", "Email"] },
+        );
+      }
+      return text({
+        would_write: false,
+        required_tool: "request_transition_change_order",
+        target: { doctype: "Change Order", name: change_order_id },
+        before: summarizeRecord(before, ["name", "change_order_id", "roof_job", "status"]),
+        patch,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_transition_change_order",
+    {
+      title: "Request Transition Change Order",
+      description: "Approved-write: move one Change Order through internal review states only. Customer acceptance and rejection are impossible here.",
+      inputSchema: approvedWriteInputSchema(ChangeOrderTransitionInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const before = await readResource(config, "Change Order", args.change_order_id);
+      assertLinkedRoofJob(args.roof_job_id, before, "change_order");
+      const patch = buildChangeOrderTransitionPatch(
+        before,
+        args.next_status,
+        args.reason,
+        args.approved_by,
+        now,
+        args.evidence_item_id,
+      );
+      if (args.evidence_item_id) {
+        await assertLinkedResourceForJob(
+          config,
+          "Evidence Item",
+          args.evidence_item_id,
+          args.roof_job_id,
+          "change_order_transition_evidence",
+          { proofSlots: ["Change Order"], evidenceTypes: ["Signed Document", "Email"] },
+        );
+      }
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_transition_change_order",
+        target: { doctype: "Change Order", name: args.change_order_id },
+        roofJob: args.roof_job_id,
+        linkedEvidence: args.evidence_item_id,
+        dryRun: {
+          target: { doctype: "Change Order", name: args.change_order_id },
+          before: summarizeRecord(before, ["name", "change_order_id", "roof_job", "status"]),
+          patch,
+        },
+        beforeSummary: summarizeRecord(before, ["name", "change_order_id", "roof_job", "status"]),
+        afterSummary: summarizeRecord({ ...before, ...patch }, [
+          "name",
+          "change_order_id",
+          "roof_job",
+          "status",
+          "approved_by",
+          "approved_at",
+        ]),
+        execute: () => erpPut(config, resourcePath("Change Order", args.change_order_id), patch),
+        responseExtra: { updated: true, change_order_id: args.change_order_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_safety_plan",
+    {
+      title: "Dry Run Safety Plan",
+      description: "Preview one append-only Safety Plan. Ready plans require evidence and approval; corrections supersede history.",
+      inputSchema: SafetyPlanInputSchema,
+    },
+    async (args) => {
+      const now = new Date().toISOString();
+      const draft = safetyPlanDraftFromArgs(args, now);
+      if (args.evidence_item_id) {
+        await assertLinkedResourceForJob(
+          config,
+          "Evidence Item",
+          args.evidence_item_id,
+          args.roof_job_id,
+          "safety_plan_evidence",
+          { proofSlots: ["Safety"] },
+        );
+      }
+      if (args.supersedes) {
+        const prior = await assertLinkedResourceForJob(
+          config,
+          "Safety Plan",
+          args.supersedes,
+          args.roof_job_id,
+          "superseded_safety_plan",
+        );
+        if ((prior.safety_plan_id ?? prior.name) === draft.safety_plan_id) {
+          throw new Error("safety_plan_correction_requires_new_id");
+        }
+        assertCorrectionVersion(draft, prior, "safety_plan_correction");
+      }
+      const before = await readResourceOrNull(config, "Safety Plan", draft.safety_plan_id);
+      return text({
+        would_write: false,
+        required_tool: "request_create_safety_plan",
+        target: { doctype: "Safety Plan", name: draft.safety_plan_id },
+        append_only: true,
+        blocked_existing: Boolean(before),
+        ...(before ? { blocked_reason: "safety_plan_append_only" } : {}),
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_create_safety_plan",
+    {
+      title: "Request Create Safety Plan",
+      description: "Approved-write: append one Draft or evidence-backed Ready Safety Plan and record a Hermes Run.",
+      inputSchema: approvedWriteInputSchema(SafetyPlanInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const draft = safetyPlanDraftFromArgs(args, now);
+      if (draft.status === "Ready") {
+        draft.approved_by = args.approved_by;
+        draft.approved_at = now;
+      }
+      if (args.evidence_item_id) {
+        await assertLinkedResourceForJob(
+          config,
+          "Evidence Item",
+          args.evidence_item_id,
+          args.roof_job_id,
+          "safety_plan_evidence",
+          { proofSlots: ["Safety"] },
+        );
+      }
+      if (args.supersedes) {
+        const prior = await assertLinkedResourceForJob(
+          config,
+          "Safety Plan",
+          args.supersedes,
+          args.roof_job_id,
+          "superseded_safety_plan",
+        );
+        if ((prior.safety_plan_id ?? prior.name) === draft.safety_plan_id) {
+          throw new Error("safety_plan_correction_requires_new_id");
+        }
+        assertCorrectionVersion(draft, prior, "safety_plan_correction");
+      }
+      const before = await readResourceOrNull(config, "Safety Plan", draft.safety_plan_id);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_create_safety_plan",
+        target: { doctype: "Safety Plan", name: draft.safety_plan_id },
+        roofJob: args.roof_job_id,
+        linkedEvidence: args.evidence_item_id,
+        dryRun: {
+          target: { doctype: "Safety Plan", name: draft.safety_plan_id },
+          operation: before ? "blocked_existing" : "create",
+          append_only: true,
+          draft,
+        },
+        beforeSummary: summarizeRecord(before, ["name", "safety_plan_id", "roof_job", "version", "status"]),
+        afterSummary: summarizeRecord(draft, ["safety_plan_id", "roof_job", "version", "status", "evidence_item"]),
+        execute: createOnlyExecutor(
+          config,
+          "Safety Plan",
+          before,
+          draft,
+          "safety_plan_append_only",
+        ),
+        responseExtra: { created: true, safety_plan_id: draft.safety_plan_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_safety_acknowledgement",
+    {
+      title: "Dry Run Safety Acknowledgement",
+      description: "Preview one evidence-backed safety acknowledgement. The Frappe atomic command derives the actor's role from the locked active assignment; only QR pairing, e-signature, or in-person evidence is accepted.",
+      inputSchema: SafetyAcknowledgementInputSchema,
+    },
+    async (args) => {
+      const now = new Date().toISOString();
+      const [safetyPlan] = await Promise.all([
+        readResource(config, "Safety Plan", args.safety_plan_id),
+        assertLinkedResourceForJob(
+          config,
+          "Evidence Item",
+          args.evidence_item_id,
+          args.roof_job_id,
+          "safety_acknowledgement_evidence",
+          safetyAcknowledgementEvidencePolicy(args.acknowledgement_method),
+        ),
+      ]);
+      const patch = buildSafetyAcknowledgementPatch({
+        safetyPlan,
+        roofJobId: args.roof_job_id,
+        acknowledgedBy: args.acknowledged_by,
+        acknowledgementMethod: args.acknowledgement_method,
+        deviceActionId: args.device_action_id,
+        evidenceItemId: args.evidence_item_id,
+        roleOnJob: undefined,
+        notes: args.notes,
+        nowIso: now,
+      });
+      return text({
+        would_write: false,
+        required_tool: "request_record_safety_acknowledgement",
+        target: { doctype: "Safety Plan", name: args.safety_plan_id },
+        before: summarizeRecord(safetyPlan, ["name", "safety_plan_id", "roof_job", "status"]),
+        patch,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_record_safety_acknowledgement",
+    {
+      title: "Request Record Safety Acknowledgement",
+      description: "Approved-write: invoke the atomic Frappe acknowledgement command. It locks the plan, derives active assignment role, rejects generic child-table replacement, and audits the result.",
+      inputSchema: approvedWriteInputSchema(SafetyAcknowledgementInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const [safetyPlan] = await Promise.all([
+        readResource(config, "Safety Plan", args.safety_plan_id),
+        assertLinkedResourceForJob(
+          config,
+          "Evidence Item",
+          args.evidence_item_id,
+          args.roof_job_id,
+          "safety_acknowledgement_evidence",
+          safetyAcknowledgementEvidencePolicy(args.acknowledgement_method),
+        ),
+      ]);
+      const patch = buildSafetyAcknowledgementPatch({
+        safetyPlan,
+        roofJobId: args.roof_job_id,
+        acknowledgedBy: args.acknowledged_by,
+        acknowledgementMethod: args.acknowledgement_method,
+        deviceActionId: args.device_action_id,
+        evidenceItemId: args.evidence_item_id,
+        roleOnJob: undefined,
+        notes: args.notes,
+        nowIso: now,
+      });
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_record_safety_acknowledgement",
+        target: { doctype: "Safety Plan", name: args.safety_plan_id },
+        roofJob: args.roof_job_id,
+        linkedEvidence: args.evidence_item_id,
+        dryRun: {
+          target: { doctype: "Safety Plan", name: args.safety_plan_id },
+          before: summarizeRecord(safetyPlan, ["name", "safety_plan_id", "roof_job", "status"]),
+          patch,
+        },
+        beforeSummary: {
+          ...summarizeRecord(safetyPlan, ["name", "safety_plan_id", "roof_job", "status"]),
+          acknowledgement_count: Array.isArray(safetyPlan.acknowledgements)
+            ? safetyPlan.acknowledgements.length
+            : 0,
+        },
+        afterSummary: {
+          ...summarizeRecord({ ...safetyPlan, ...patch }, [
+            "name",
+            "safety_plan_id",
+            "roof_job",
+            "status",
+          ]),
+          acknowledgement_count: patch.acknowledgements.length,
+        },
+        execute: () => erpPost(
+          config,
+          "/api/method/ironwrap_roofing.safety_acknowledgement_api.append_safety_acknowledgement",
+          {
+            safety_plan_id: args.safety_plan_id,
+            roof_job_id: args.roof_job_id,
+            actor_user: config.actorUser,
+            acknowledgement_method: args.acknowledgement_method,
+            device_action_id: args.device_action_id,
+            evidence_item_id: args.evidence_item_id,
+            notes: args.notes ?? "",
+          },
+        ),
+        responseExtra: {
+          appended: true,
+          safety_plan_id: args.safety_plan_id,
+          acknowledgement_count: patch.acknowledgements.length,
+        },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_job_compliance_record",
+    {
+      title: "Dry Run Job Compliance Record",
+      description: "Preview one evidence-gated Job Compliance Record create or legal status transition without writing.",
+      inputSchema: JobComplianceRecordInputSchema,
+    },
+    async (args) => {
+      const now = new Date().toISOString();
+      const draft = complianceDraftFromArgs(args, now);
+      if (args.evidence_item_id) {
+        await assertLinkedResourceForJob(
+          config,
+          "Evidence Item",
+          args.evidence_item_id,
+          args.roof_job_id,
+          "compliance_evidence",
+          { proofSlots: ["Access", "Safety", "Materials", "Completion", "Other"] },
+        );
+      }
+      if (args.supersedes) {
+        const prior = await assertLinkedResourceForJob(
+          config,
+          "Job Compliance Record",
+          args.supersedes,
+          args.roof_job_id,
+          "superseded_compliance_record",
+        );
+        if ((prior.compliance_record_id ?? prior.name) === draft.compliance_record_id) {
+          throw new Error("compliance_correction_requires_new_id");
+        }
+      }
+      const before = await readResourceOrNull(
+        config,
+        "Job Compliance Record",
+        draft.compliance_record_id,
+      );
+      if (before) {
+        assertLinkedRoofJob(args.roof_job_id, before, "compliance_record");
+        assertComplianceTransition(before.status, draft.status);
+        assertImmutableFields(
+          before,
+          draft,
+          ["roof_job", "jurisdiction", "record_type", "authority_name", "required_before_gate"],
+          "compliance_record",
+        );
+      }
+      return text({
+        would_write: false,
+        required_tool: "request_record_job_compliance",
+        target: { doctype: "Job Compliance Record", name: draft.compliance_record_id },
+        operation: before ? "update_status" : "create",
+        before: summarizeRecord(before, [
+          "name",
+          "compliance_record_id",
+          "roof_job",
+          "status",
+          "required_before_gate",
+        ]),
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_record_job_compliance",
+    {
+      title: "Request Record Job Compliance",
+      description: "Approved-write: create or transition one evidence-gated compliance record and record a Hermes Run.",
+      inputSchema: approvedWriteInputSchema(JobComplianceRecordInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const draft = complianceDraftFromArgs(args, now);
+      if (args.evidence_item_id) {
+        await assertLinkedResourceForJob(
+          config,
+          "Evidence Item",
+          args.evidence_item_id,
+          args.roof_job_id,
+          "compliance_evidence",
+          { proofSlots: ["Access", "Safety", "Materials", "Completion", "Other"] },
+        );
+      }
+      if (args.supersedes) {
+        const prior = await assertLinkedResourceForJob(
+          config,
+          "Job Compliance Record",
+          args.supersedes,
+          args.roof_job_id,
+          "superseded_compliance_record",
+        );
+        if ((prior.compliance_record_id ?? prior.name) === draft.compliance_record_id) {
+          throw new Error("compliance_correction_requires_new_id");
+        }
+      }
+      const before = await readResourceOrNull(
+        config,
+        "Job Compliance Record",
+        draft.compliance_record_id,
+      );
+      if (before) {
+        assertLinkedRoofJob(args.roof_job_id, before, "compliance_record");
+        assertComplianceTransition(before.status, draft.status);
+        assertImmutableFields(
+          before,
+          draft,
+          ["roof_job", "jurisdiction", "record_type", "authority_name", "required_before_gate"],
+          "compliance_record",
+        );
+      }
+      const operation = before ? "update_status" : "create";
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_record_job_compliance",
+        target: { doctype: "Job Compliance Record", name: draft.compliance_record_id },
+        roofJob: args.roof_job_id,
+        linkedEvidence: args.evidence_item_id,
+        dryRun: {
+          target: { doctype: "Job Compliance Record", name: draft.compliance_record_id },
+          operation,
+          before: summarizeRecord(before, [
+            "name",
+            "compliance_record_id",
+            "roof_job",
+            "status",
+            "required_before_gate",
+          ]),
+          draft,
+        },
+        beforeSummary: summarizeRecord(before, [
+          "name",
+          "compliance_record_id",
+          "roof_job",
+          "status",
+          "required_before_gate",
+        ]),
+        afterSummary: summarizeRecord(draft, [
+          "compliance_record_id",
+          "roof_job",
+          "status",
+          "required_before_gate",
+          "evidence_item",
+        ]),
+        execute: before
+          ? () => erpPut(config, resourcePath("Job Compliance Record", draft.compliance_record_id), draft)
+          : () => erpPost(config, "/api/resource/Job%20Compliance%20Record", draft),
+        responseExtra: {
+          upserted: true,
+          operation,
+          compliance_record_id: draft.compliance_record_id,
+        },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_customer_decision",
+    {
+      title: "Dry Run Customer Decision",
+      description: "Preview an append-only evidence-backed Customer Decision record. It cannot sign or accept a contract.",
+      inputSchema: CustomerDecisionInputSchema,
+    },
+    async (args) => {
+      const draft = customerDecisionDraftFromArgs(args);
+      assertRoofJobCustomer(
+        await readResource(config, "Roof Job", args.roof_job_id),
+        args.customer_id,
+      );
+      await assertLinkedResourceForJob(
+        config,
+        "Evidence Item",
+        args.evidence_item_id,
+        args.roof_job_id,
+        "customer_decision_evidence",
+        customerDecisionEvidencePolicy(args.decision_type),
+      );
+      if (args.option_package_id) {
+        await assertLinkedResourceForJob(
+          config,
+          "Option Package",
+          args.option_package_id,
+          args.roof_job_id,
+          "option_package",
+        );
+      }
+      if (args.change_order_id) {
+        await assertLinkedResourceForJob(
+          config,
+          "Change Order",
+          args.change_order_id,
+          args.roof_job_id,
+          "change_order",
+        );
+      }
+      if (args.supersedes) {
+        const prior = await assertLinkedResourceForJob(
+          config,
+          "Customer Decision",
+          args.supersedes,
+          args.roof_job_id,
+          "superseded_customer_decision",
+        );
+        if ((prior.decision_id ?? prior.name) === draft.decision_id) {
+          throw new Error("customer_decision_correction_requires_new_id");
+        }
+      }
+      const before = await readResourceOrNull(config, "Customer Decision", draft.decision_id);
+      return text({
+        would_write: false,
+        required_tool: "request_record_customer_decision",
+        target: { doctype: "Customer Decision", name: draft.decision_id },
+        append_only: true,
+        blocked_existing: Boolean(before),
+        ...(before ? { blocked_reason: "customer_decision_append_only" } : {}),
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_record_customer_decision",
+    {
+      title: "Request Record Customer Decision",
+      description: "Approved-write: append evidence of a decision already made by a customer. It cannot accept, decline, or sign for them.",
+      inputSchema: approvedWriteInputSchema(CustomerDecisionInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const draft = customerDecisionDraftFromArgs(args);
+      assertRoofJobCustomer(
+        await readResource(config, "Roof Job", args.roof_job_id),
+        args.customer_id,
+      );
+      await assertLinkedResourceForJob(
+        config,
+        "Evidence Item",
+        args.evidence_item_id,
+        args.roof_job_id,
+        "customer_decision_evidence",
+        customerDecisionEvidencePolicy(args.decision_type),
+      );
+      if (args.option_package_id) {
+        await assertLinkedResourceForJob(
+          config,
+          "Option Package",
+          args.option_package_id,
+          args.roof_job_id,
+          "option_package",
+        );
+      }
+      if (args.change_order_id) {
+        await assertLinkedResourceForJob(
+          config,
+          "Change Order",
+          args.change_order_id,
+          args.roof_job_id,
+          "change_order",
+        );
+      }
+      if (args.supersedes) {
+        const prior = await assertLinkedResourceForJob(
+          config,
+          "Customer Decision",
+          args.supersedes,
+          args.roof_job_id,
+          "superseded_customer_decision",
+        );
+        if ((prior.decision_id ?? prior.name) === draft.decision_id) {
+          throw new Error("customer_decision_correction_requires_new_id");
+        }
+      }
+      const before = await readResourceOrNull(config, "Customer Decision", draft.decision_id);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_record_customer_decision",
+        target: { doctype: "Customer Decision", name: draft.decision_id },
+        roofJob: args.roof_job_id,
+        linkedEvidence: args.evidence_item_id,
+        dryRun: {
+          target: { doctype: "Customer Decision", name: draft.decision_id },
+          operation: before ? "blocked_existing" : "create",
+          append_only: true,
+          draft,
+        },
+        beforeSummary: summarizeRecord(before, [
+          "name",
+          "decision_id",
+          "roof_job",
+          "status",
+          "evidence_item",
+        ]),
+        afterSummary: summarizeRecord(draft, [
+          "decision_id",
+          "roof_job",
+          "status",
+          "decision_type",
+          "evidence_item",
+        ]),
+        execute: createOnlyExecutor(
+          config,
+          "Customer Decision",
+          before,
+          draft,
+          "customer_decision_append_only",
+        ),
+        responseExtra: { created: true, decision_id: draft.decision_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_communication_consent",
+    {
+      title: "Dry Run Communication Consent",
+      description: "Preview one append-only consent evidence record. No customer communication is sent.",
+      inputSchema: CommunicationConsentInputSchema,
+    },
+    async (args) => {
+      const draft = communicationConsentDraftFromArgs(args);
+      if (args.roof_job_id && args.customer_id) {
+        assertRoofJobCustomer(
+          await readResource(config, "Roof Job", args.roof_job_id),
+          args.customer_id,
+        );
+      }
+      if (args.proof_evidence_id) {
+        if (args.roof_job_id) {
+          await assertLinkedResourceForJob(
+            config,
+            "Evidence Item",
+            args.proof_evidence_id,
+            args.roof_job_id,
+            "consent_evidence",
+            consentEvidencePolicy(args),
+          );
+        } else {
+          await assertVerifiedEvidenceResource(
+            config,
+            args.proof_evidence_id,
+            "consent_evidence",
+            consentEvidencePolicy(args),
+          );
+        }
+      }
+      if (args.supersedes) {
+        const prior = await readResource(config, "Communication Consent", args.supersedes);
+        assertConsentLineage(prior, args);
+        if ((prior.consent_id ?? prior.name) === draft.consent_id) {
+          throw new Error("communication_consent_correction_requires_new_id");
+        }
+      }
+      const before = await readResourceOrNull(config, "Communication Consent", draft.consent_id);
+      return text({
+        would_write: false,
+        required_tool: "request_record_communication_consent",
+        target: { doctype: "Communication Consent", name: draft.consent_id },
+        append_only: true,
+        sends_message: false,
+        blocked_existing: Boolean(before),
+        ...(before ? { blocked_reason: "communication_consent_append_only" } : {}),
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_record_communication_consent",
+    {
+      title: "Request Record Communication Consent",
+      description: "Approved-write: append one consent evidence record and audit it. This tool never sends a message.",
+      inputSchema: approvedWriteInputSchema(CommunicationConsentInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const draft = communicationConsentDraftFromArgs(args);
+      if (args.roof_job_id && args.customer_id) {
+        assertRoofJobCustomer(
+          await readResource(config, "Roof Job", args.roof_job_id),
+          args.customer_id,
+        );
+      }
+      if (args.proof_evidence_id) {
+        if (args.roof_job_id) {
+          await assertLinkedResourceForJob(
+            config,
+            "Evidence Item",
+            args.proof_evidence_id,
+            args.roof_job_id,
+            "consent_evidence",
+            consentEvidencePolicy(args),
+          );
+        } else {
+          await assertVerifiedEvidenceResource(
+            config,
+            args.proof_evidence_id,
+            "consent_evidence",
+            consentEvidencePolicy(args),
+          );
+        }
+      }
+      if (args.supersedes) {
+        const prior = await readResource(config, "Communication Consent", args.supersedes);
+        assertConsentLineage(prior, args);
+        if ((prior.consent_id ?? prior.name) === draft.consent_id) {
+          throw new Error("communication_consent_correction_requires_new_id");
+        }
+      }
+      const before = await readResourceOrNull(config, "Communication Consent", draft.consent_id);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_record_communication_consent",
+        target: { doctype: "Communication Consent", name: draft.consent_id },
+        roofJob: args.roof_job_id,
+        leadEnvelope: args.lead_envelope_id,
+        linkedEvidence: args.proof_evidence_id,
+        dryRun: {
+          target: { doctype: "Communication Consent", name: draft.consent_id },
+          operation: before ? "blocked_existing" : "create",
+          append_only: true,
+          sends_message: false,
+          draft,
+        },
+        beforeSummary: summarizeRecord(before, [
+          "name",
+          "consent_id",
+          "roof_job",
+          "channel",
+          "purpose",
+          "status",
+        ]),
+        afterSummary: summarizeRecord(draft, [
+          "consent_id",
+          "roof_job",
+          "channel",
+          "purpose",
+          "status",
+          "proof_evidence",
+        ]),
+        execute: createOnlyExecutor(
+          config,
+          "Communication Consent",
+          before,
+          draft,
+          "communication_consent_append_only",
+        ),
+        responseExtra: { created: true, consent_id: draft.consent_id, sends_message: false },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_reconciliation_resolution",
+    {
+      title: "Dry Run Reconciliation Resolution",
+      description: "Preview an evidence-backed reconciliation resolution record. No accounting or external system is mutated.",
+      inputSchema: ReconciliationResolutionInputSchema,
+    },
+    async (args) => {
+      const reconciliation = await readResource(
+        config,
+        "Integration Reconciliation",
+        args.reconciliation_id,
+      );
+      if (args.roof_job_id) {
+        assertLinkedRoofJob(args.roof_job_id, reconciliation, "integration_reconciliation");
+      }
+      if (reconciliation.roof_job) {
+        await assertLinkedResourceForJob(
+          config,
+          "Evidence Item",
+          args.resolution_evidence_id,
+          reconciliation.roof_job,
+          "reconciliation_resolution_evidence",
+          { proofSlots: ["Payment"], evidenceTypes: ["Invoice", "PDF", "Email"] },
+        );
+      } else {
+        await assertVerifiedEvidenceResource(
+          config,
+          args.resolution_evidence_id,
+          "reconciliation_resolution_evidence",
+          { proofSlots: ["Payment"], evidenceTypes: ["Invoice", "PDF", "Email"] },
+        );
+      }
+      const patch = buildReconciliationResolutionPatch(reconciliation, {
+        nextStatus: args.next_status,
+        resolutionAction: args.resolution_action,
+        resolutionEvidenceId: args.resolution_evidence_id,
+        resolvedBy: "dry-run",
+        notes: args.notes,
+        nowIso: new Date().toISOString(),
+      });
+      return text({
+        would_write: false,
+        required_tool: "request_resolve_reconciliation",
+        target: {
+          doctype: "Integration Reconciliation",
+          name: args.reconciliation_id,
+        },
+        accounting_mutation: false,
+        external_system_mutation: false,
+        before: summarizeRecord(reconciliation, [
+          "name",
+          "reconciliation_id",
+          "roof_job",
+          "system_name",
+          "entity_type",
+          "status",
+        ]),
+        patch,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_resolve_reconciliation",
+    {
+      title: "Request Resolve Reconciliation",
+      description: "Approved-write: record an evidence-backed reconciliation resolution and Hermes Run. No accounting or external system is mutated.",
+      inputSchema: approvedWriteInputSchema(ReconciliationResolutionInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const reconciliation = await readResource(
+        config,
+        "Integration Reconciliation",
+        args.reconciliation_id,
+      );
+      if (args.roof_job_id) {
+        assertLinkedRoofJob(args.roof_job_id, reconciliation, "integration_reconciliation");
+      }
+      if (reconciliation.roof_job) {
+        await assertLinkedResourceForJob(
+          config,
+          "Evidence Item",
+          args.resolution_evidence_id,
+          reconciliation.roof_job,
+          "reconciliation_resolution_evidence",
+          { proofSlots: ["Payment"], evidenceTypes: ["Invoice", "PDF", "Email"] },
+        );
+      } else {
+        await assertVerifiedEvidenceResource(
+          config,
+          args.resolution_evidence_id,
+          "reconciliation_resolution_evidence",
+          { proofSlots: ["Payment"], evidenceTypes: ["Invoice", "PDF", "Email"] },
+        );
+      }
+      const patch = buildReconciliationResolutionPatch(reconciliation, {
+        nextStatus: args.next_status,
+        resolutionAction: args.resolution_action,
+        resolutionEvidenceId: args.resolution_evidence_id,
+        resolvedBy: args.approved_by,
+        notes: args.notes,
+        nowIso: now,
+      });
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_resolve_reconciliation",
+        target: {
+          doctype: "Integration Reconciliation",
+          name: args.reconciliation_id,
+        },
+        roofJob: reconciliation.roof_job,
+        linkedEvidence: args.resolution_evidence_id,
+        dryRun: {
+          target: {
+            doctype: "Integration Reconciliation",
+            name: args.reconciliation_id,
+          },
+          operation: "record_resolution",
+          accounting_mutation: false,
+          external_system_mutation: false,
+          before: summarizeRecord(reconciliation, [
+            "name",
+            "reconciliation_id",
+            "roof_job",
+            "system_name",
+            "entity_type",
+            "status",
+          ]),
+          patch,
+        },
+        beforeSummary: summarizeRecord(reconciliation, [
+          "name",
+          "reconciliation_id",
+          "roof_job",
+          "system_name",
+          "entity_type",
+          "status",
+          "attempt_count",
+        ]),
+        afterSummary: summarizeRecord({ ...reconciliation, ...patch }, [
+          "name",
+          "reconciliation_id",
+          "roof_job",
+          "system_name",
+          "entity_type",
+          "status",
+          "attempt_count",
+          "resolution_evidence",
+        ]),
+        execute: () => erpPut(
+          config,
+          resourcePath("Integration Reconciliation", args.reconciliation_id),
+          patch,
+        ),
+        responseExtra: {
+          updated: true,
+          reconciliation_id: args.reconciliation_id,
+          accounting_mutation: false,
+          external_system_mutation: false,
+        },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_tenant_export",
+    {
+      title: "Dry Run Tenant Export Request",
+      description: "Preview an append-only Tenant Export Run request. This tool does not build or expose an archive.",
+      inputSchema: TenantExportInputSchema,
+    },
+    async (args) => {
+      const tenant = await readResource(config, "White-Label Tenant", args.tenant_id);
+      if ((tenant.tenant_id ?? tenant.name) !== args.tenant_id) {
+        throw new Error("tenant_export_tenant_mismatch");
+      }
+      if (args.supersedes) {
+        const prior = await readResource(config, "Tenant Export Run", args.supersedes);
+        if (prior.tenant !== args.tenant_id) throw new Error("tenant_export_supersedes_tenant_mismatch");
+        if ((prior.export_run_id ?? prior.name) === args.export_run_id) {
+          throw new Error("tenant_export_correction_requires_new_id");
+        }
+      }
+      const draft = buildTenantExportRequestDraft({
+        exportRunId: args.export_run_id,
+        tenantId: args.tenant_id,
+        scope: args.scope,
+        requestedBy: "dry-run",
+        supersedes: args.supersedes,
+        correctionReason: args.correction_reason,
+        notes: args.notes,
+        nowIso: new Date().toISOString(),
+        runId: "dry-run-preview",
+      });
+      const before = await readResourceOrNull(config, "Tenant Export Run", draft.export_run_id);
+      return text({
+        would_write: false,
+        required_tool: "request_tenant_export",
+        target: { doctype: "Tenant Export Run", name: draft.export_run_id },
+        append_only: true,
+        archive_created: false,
+        blocked_existing: Boolean(before),
+        ...(before ? { blocked_reason: "tenant_export_request_append_only" } : {}),
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_tenant_export",
+    {
+      title: "Request Tenant Export",
+      description: "Approved-write: append one audited Tenant Export Run in Requested state. A separate worker must produce the encrypted archive.",
+      inputSchema: approvedWriteInputSchema(TenantExportInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const tenant = await readResource(config, "White-Label Tenant", args.tenant_id);
+      if ((tenant.tenant_id ?? tenant.name) !== args.tenant_id) {
+        throw new Error("tenant_export_tenant_mismatch");
+      }
+      if (args.supersedes) {
+        const prior = await readResource(config, "Tenant Export Run", args.supersedes);
+        if (prior.tenant !== args.tenant_id) throw new Error("tenant_export_supersedes_tenant_mismatch");
+        if ((prior.export_run_id ?? prior.name) === args.export_run_id) {
+          throw new Error("tenant_export_correction_requires_new_id");
+        }
+      }
+      const draft = buildTenantExportRequestDraft({
+        exportRunId: args.export_run_id,
+        tenantId: args.tenant_id,
+        scope: args.scope,
+        requestedBy: args.approved_by,
+        supersedes: args.supersedes,
+        correctionReason: args.correction_reason,
+        notes: args.notes,
+        nowIso: now,
+        runId: args.run_id,
+      });
+      const before = await readResourceOrNull(config, "Tenant Export Run", draft.export_run_id);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_tenant_export",
+        target: { doctype: "Tenant Export Run", name: draft.export_run_id },
+        dryRun: {
+          target: { doctype: "Tenant Export Run", name: draft.export_run_id },
+          operation: before ? "blocked_existing" : "create_request",
+          append_only: true,
+          archive_created: false,
+          draft,
+        },
+        beforeSummary: summarizeRecord(before, [
+          "name",
+          "export_run_id",
+          "tenant",
+          "status",
+          "requested_at",
+        ]),
+        afterSummary: summarizeRecord(draft, [
+          "export_run_id",
+          "tenant",
+          "status",
+          "requested_at",
+          "supersedes",
+        ]),
+        execute: createOnlyExecutor(
+          config,
+          "Tenant Export Run",
+          before,
+          draft,
+          "tenant_export_request_append_only",
+        ),
+        responseExtra: {
+          created: true,
+          export_run_id: draft.export_run_id,
+          archive_created: false,
+        },
+      }));
+    },
+  );
+
+  server.registerTool(
     "dry_run_completion_packet",
     {
       title: "Dry Run Completion Packet",
@@ -1883,12 +4635,13 @@ export function buildServer(config) {
         limit: z.number().int().min(1).max(100).optional(),
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
-        approval_token: z.string().min(1),
         run_id: z.string().min(8).max(128),
+        dry_run_receipt: z.string().min(32).max(4096),
+        approval_receipt: z.string().min(32).max(8192),
       },
     },
     async (args) => {
-      assertWriteApproved(config, args.approval_token);
+      assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
       const { draft, checkIns, evidence } = await buildCompletionPacketDraftFromErp(config, args.roof_job_id, {
@@ -1902,7 +4655,7 @@ export function buildServer(config) {
         runId,
         now,
         args,
-        agentRole: "Field Companion",
+        agentRole: config.agentRoleTitle,
         toolName: "request_create_completion_packet",
         target: { doctype: "Completion Packet", name: draft.completion_packet_id },
         roofJob: args.roof_job_id,
@@ -1914,7 +4667,17 @@ export function buildServer(config) {
         },
         beforeSummary: summarizeCompletionPacket(before),
         afterSummary: summarizeCompletionPacket({ ...(before ?? {}), ...draft, name: draft.completion_packet_id }),
-        execute: upsertDraftExecutor(config, "Completion Packet", draft.completion_packet_id, draft, before),
+        // The field role is scoped by a mutable Job Assignment. Re-check it in
+        // the executor, immediately before the mutation, so a revocation after
+        // the request-level authorization cannot produce a completion packet.
+        execute: fieldAssignmentBoundUpsertExecutor(
+          config,
+          args.roof_job_id,
+          "Completion Packet",
+          draft.completion_packet_id,
+          draft,
+          before,
+        ),
         responseExtra: { upserted: true, operation, completion_packet_id: draft.completion_packet_id },
       }));
     },
@@ -1967,12 +4730,13 @@ export function buildServer(config) {
         coverage_years: z.number().int().min(0).max(100).optional(),
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
-        approval_token: z.string().min(1),
         run_id: z.string().min(8).max(128),
+        dry_run_receipt: z.string().min(32).max(4096),
+        approval_receipt: z.string().min(32).max(8192),
       },
     },
     async (args) => {
-      assertWriteApproved(config, args.approval_token);
+      assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
       const completionPacket = await readResource(config, "Completion Packet", args.completion_packet_id);
@@ -1991,7 +4755,7 @@ export function buildServer(config) {
         runId,
         now,
         args,
-        agentRole: "Closeout Agent",
+        agentRole: config.agentRoleTitle,
         toolName: "request_create_warranty_packet",
         target: { doctype: "Warranty Packet", name: draft.warranty_packet_id },
         roofJob: draft.roof_job,
@@ -2053,12 +4817,13 @@ export function buildServer(config) {
         limit: z.number().int().min(1).max(100).optional(),
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
-        approval_token: z.string().min(1),
         run_id: z.string().min(8).max(128),
+        dry_run_receipt: z.string().min(32).max(4096),
+        approval_receipt: z.string().min(32).max(8192),
       },
     },
     async (args) => {
-      assertWriteApproved(config, args.approval_token);
+      assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
       const { draft, completionPacket, paymentMilestones } = await buildReviewRequestDraftFromErp(config, args.roof_job_id, {
@@ -2075,7 +4840,7 @@ export function buildServer(config) {
         runId,
         now,
         args,
-        agentRole: "Closeout Agent",
+        agentRole: config.agentRoleTitle,
         toolName: "request_create_review_request",
         target: { doctype: "Review Request", name: draft.review_request_id },
         roofJob: args.roof_job_id,
@@ -2124,12 +4889,13 @@ export function buildServer(config) {
         ...communicationEventInputSchema(),
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
-        approval_token: z.string().min(1),
         run_id: z.string().min(8).max(128),
+        dry_run_receipt: z.string().min(32).max(4096),
+        approval_receipt: z.string().min(32).max(8192),
       },
     },
     async (args) => {
-      assertWriteApproved(config, args.approval_token);
+      assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
       const draft = await buildCommunicationEventDraftFromArgs(args, now);
@@ -2139,7 +4905,7 @@ export function buildServer(config) {
         runId,
         now,
         args,
-        agentRole: "Lead Concierge",
+        agentRole: config.agentRoleTitle,
         toolName: "request_record_communication_event",
         target: { doctype: "Communication Event", name: draft.communication_event_id },
         roofJob: draft.roof_job,
@@ -2195,12 +4961,13 @@ export function buildServer(config) {
         ...supplierQuoteInputSchema(),
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
-        approval_token: z.string().min(1),
         run_id: z.string().min(8).max(128),
+        dry_run_receipt: z.string().min(32).max(4096),
+        approval_receipt: z.string().min(32).max(8192),
       },
     },
     async (args) => {
-      assertWriteApproved(config, args.approval_token);
+      assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
       const { draft, materialTakeoff } = await buildSupplierQuoteDraftFromErp(config, args, now);
@@ -2210,7 +4977,7 @@ export function buildServer(config) {
         runId,
         now,
         args,
-        agentRole: "Production Controller",
+        agentRole: config.agentRoleTitle,
         toolName: "request_create_supplier_quote",
         target: { doctype: "Supplier Quote", name: draft.supplier_quote_id },
         roofJob: draft.roof_job,
@@ -2259,12 +5026,13 @@ export function buildServer(config) {
         ...marketWatchInputSchema(),
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
-        approval_token: z.string().min(1),
         run_id: z.string().min(8).max(128),
+        dry_run_receipt: z.string().min(32).max(4096),
+        approval_receipt: z.string().min(32).max(8192),
       },
     },
     async (args) => {
-      assertWriteApproved(config, args.approval_token);
+      assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
       const draft = buildMarketWatchItemDraft({ ...marketWatchDraftArgs(args), nowIso: now });
@@ -2274,7 +5042,7 @@ export function buildServer(config) {
         runId,
         now,
         args,
-        agentRole: "Owner Operator",
+        agentRole: config.agentRoleTitle,
         toolName: "request_add_market_watch_item",
         target: { doctype: "Market Watch Item", name: draft.watch_id },
         dryRun: { target: { doctype: "Market Watch Item", name: draft.watch_id }, operation, draft },
@@ -2286,7 +5054,7 @@ export function buildServer(config) {
     },
   );
 
-  return server;
+  return mcpServer;
 }
 
 // Registers the standard get-by-id plus list-for-job read pair for one DocType.
@@ -2314,6 +5082,69 @@ function registerReadPair(server, config, { doctype, idArg, getName, listName, f
       orderBy,
     }))),
   );
+}
+
+// New operating-model reads are stricter than the legacy read helpers: inputs reject
+// unknown keys, list reads require one exact Roof Job, and output is reduced to the
+// declared field allowlist (including nested child-row allowlists where needed).
+function registerStrictJobReadPair(server, config, {
+  doctype,
+  idArg,
+  getName,
+  listName,
+  fields,
+  childFields = {},
+  orderBy = "modified desc",
+}) {
+  const listFields = fields.filter((field) => !Object.hasOwn(childFields, field));
+  server.registerTool(
+    getName,
+    {
+      title: `Get ${doctype}`,
+      description: `Read one allowlisted IronWrap OS ${doctype} by ${idArg}/name.`,
+      inputSchema: z.object({ [idArg]: IdSchema }).strict(),
+    },
+    async (args) => text({
+      data: sanitizeResource(await readResource(config, doctype, args[idArg]), fields, childFields),
+    }),
+  );
+  server.registerTool(
+    listName,
+    {
+      title: `List ${doctype}s For Job`,
+      description: `Read a bounded allowlisted ${doctype} list for one exact Roof Job.`,
+      inputSchema: z.object({
+        roof_job_id: IdSchema,
+        limit: z.number().int().min(1).max(100).optional(),
+      }).strict(),
+    },
+    async ({ roof_job_id, limit = 25 }) => text({
+      data: (await listResources(config, doctype, {
+        fields: listFields,
+        filters: [[doctype, "roof_job", "=", roof_job_id]],
+        limit,
+        orderBy,
+      })).map((row) => sanitizeResource(row, listFields)),
+    }),
+  );
+}
+
+function sanitizeResource(record, fields, childFields = {}) {
+  const clean = pickAllowedFields(record, fields);
+  for (const [field, rowFields] of Object.entries(childFields)) {
+    clean[field] = Array.isArray(record?.[field])
+      ? record[field].map((row) => pickAllowedFields(row, rowFields))
+      : [];
+  }
+  return clean;
+}
+
+function pickAllowedFields(record, fields) {
+  const clean = {};
+  for (const field of fields) {
+    if (record && Object.hasOwn(record, field)) clean[field] = record[field];
+  }
+  return clean;
 }
 
 function communicationEventInputSchema() {
@@ -2389,6 +5220,225 @@ function marketWatchDraftArgs(args) {
   };
 }
 
+function jobAssignmentDraftFromArgs(args, nowIso) {
+  return buildJobAssignmentDraft({
+    assignmentId: args.assignment_id,
+    roofJobId: args.roof_job_id,
+    assignmentType: args.assignment_type,
+    status: args.status,
+    crewProfileId: args.crew_profile_id,
+    assignedUser: args.assigned_user,
+    scheduledStart: args.scheduled_start,
+    scheduledEnd: args.scheduled_end,
+    assignedBy: args.assigned_by,
+    supersedes: args.supersedes,
+    correctionReason: args.correction_reason,
+    notes: args.notes,
+    nowIso,
+  });
+}
+
+function changeOrderDraftFromArgs(args, nowIso) {
+  return buildChangeOrderDraft({
+    changeOrderId: args.change_order_id,
+    roofJobId: args.roof_job_id,
+    customerQuoteId: args.customer_quote_id,
+    changeNumber: args.change_number,
+    version: args.version,
+    title: args.title,
+    reason: args.reason,
+    scopeDelta: args.scope_delta,
+    currency: args.currency,
+    taxAmount: args.tax_amount,
+    priceBookVersion: args.price_book_version,
+    taxPolicySnapshot: args.tax_policy_snapshot,
+    items: args.items,
+    requestedBy: args.requested_by,
+    supersedes: args.supersedes,
+    correctionReason: args.correction_reason,
+    notes: args.notes,
+    nowIso,
+  });
+}
+
+function safetyPlanDraftFromArgs(args, nowIso) {
+  return buildSafetyPlanDraft({
+    safetyPlanId: args.safety_plan_id,
+    roofJobId: args.roof_job_id,
+    version: args.version,
+    status: args.status,
+    effectiveDate: args.effective_date,
+    preparedBy: args.prepared_by,
+    hazardSummary: args.hazard_summary,
+    controls: args.controls,
+    emergencyPlan: args.emergency_plan,
+    ppeRequirements: args.ppe_requirements,
+    weatherLimits: args.weather_limits,
+    evidenceItemId: args.evidence_item_id,
+    supersedes: args.supersedes,
+    correctionReason: args.correction_reason,
+    notes: args.notes,
+    nowIso,
+  });
+}
+
+function complianceDraftFromArgs(args, nowIso) {
+  return buildComplianceRecordDraft({
+    complianceRecordId: args.compliance_record_id,
+    roofJobId: args.roof_job_id,
+    jurisdiction: args.jurisdiction,
+    recordType: args.record_type,
+    authorityName: args.authority_name,
+    externalReference: args.external_reference,
+    status: args.status,
+    requiredBeforeGate: args.required_before_gate,
+    appliedAt: args.applied_at,
+    effectiveDate: args.effective_date,
+    expiryDate: args.expiry_date,
+    inspectedAt: args.inspected_at,
+    evidenceItemId: args.evidence_item_id,
+    ownerUser: args.owner_user,
+    dueDate: args.due_date,
+    waiverReason: args.waiver_reason,
+    supersedes: args.supersedes,
+    correctionReason: args.correction_reason,
+    notes: args.notes,
+    approvedBy: args.approved_by,
+    nowIso,
+  });
+}
+
+function customerDecisionDraftFromArgs(args) {
+  return buildCustomerDecisionDraft({
+    decisionId: args.decision_id,
+    roofJobId: args.roof_job_id,
+    customerId: args.customer_id,
+    decisionType: args.decision_type,
+    decisionValue: args.decision_value,
+    decisionSummary: args.decision_summary,
+    sourceChannel: args.source_channel,
+    decidedAt: args.decided_at,
+    capturedBy: args.captured_by,
+    evidenceItemId: args.evidence_item_id,
+    optionPackageId: args.option_package_id,
+    changeOrderId: args.change_order_id,
+    supersedes: args.supersedes,
+    correctionReason: args.correction_reason,
+    notes: args.notes,
+  });
+}
+
+function communicationConsentDraftFromArgs(args) {
+  return buildCommunicationConsentDraft({
+    consentId: args.consent_id,
+    customerId: args.customer_id,
+    leadEnvelopeId: args.lead_envelope_id,
+    roofJobId: args.roof_job_id,
+    channel: args.channel,
+    purpose: args.purpose,
+    status: args.status,
+    jurisdiction: args.jurisdiction,
+    consentBasis: args.consent_basis,
+    sourceSystem: args.source_system,
+    sourceReference: args.source_reference,
+    capturedBy: args.captured_by,
+    capturedAt: args.captured_at,
+    effectiveFrom: args.effective_from,
+    expiresAt: args.expires_at,
+    proofEvidenceId: args.proof_evidence_id,
+    revokedAt: args.revoked_at,
+    supersedes: args.supersedes,
+    correctionReason: args.correction_reason,
+    notes: args.notes,
+  });
+}
+
+async function assertLinkedResourceForJob(config, doctype, name, roofJobId, label, evidencePolicy = {}) {
+  if (!name) return null;
+  const record = await readResource(config, doctype, name);
+  assertLinkedRoofJob(roofJobId, record, label);
+  if (doctype === "Evidence Item") assertVerifiedEvidence(record, label, evidencePolicy);
+  return record;
+}
+
+async function assertVerifiedEvidenceResource(config, evidenceId, label, evidencePolicy = {}) {
+  const evidence = await readResource(config, "Evidence Item", evidenceId);
+  assertVerifiedEvidence(evidence, label, evidencePolicy);
+  return evidence;
+}
+
+export function assertVerifiedEvidence(evidence, label, {
+  proofSlots = [],
+  evidenceTypes = [],
+} = {}) {
+  if (evidence?.sync_state !== "Verified") throw new Error(`${label}_evidence_not_verified`);
+  if (evidence?.checksum_algorithm !== "SHA-256"
+    || !/^[a-f0-9]{64}$/i.test(String(evidence?.content_checksum ?? ""))) {
+    throw new Error(`${label}_evidence_checksum_invalid`);
+  }
+  if (!evidence?.verified_at || !evidence?.verification_source) {
+    throw new Error(`${label}_evidence_verification_provenance_required`);
+  }
+  if (!evidence?.source_uri && !evidence?.r2_key && !evidence?.drive_file_id) {
+    throw new Error(`${label}_evidence_source_required`);
+  }
+  if (!evidence?.proof_slot) throw new Error(`${label}_evidence_proof_slot_required`);
+  if (proofSlots.length && !proofSlots.includes(evidence.proof_slot)) {
+    throw new Error(`${label}_evidence_proof_slot_invalid`);
+  }
+  if (evidenceTypes.length && !evidenceTypes.includes(evidence.evidence_type)) {
+    throw new Error(`${label}_evidence_type_invalid`);
+  }
+}
+
+function customerDecisionEvidencePolicy(decisionType) {
+  if (decisionType === "Scope Approval") {
+    return { proofSlots: ["Contract"], evidenceTypes: ["Signed Document", "Email"] };
+  }
+  if (decisionType === "Change Order") {
+    return { proofSlots: ["Change Order"], evidenceTypes: ["Signed Document", "Email"] };
+  }
+  return {
+    proofSlots: ["Communication", "Contract"],
+    evidenceTypes: ["Signed Document", "Email", "Voice Note"],
+  };
+}
+
+function consentEvidencePolicy(args) {
+  return {
+    proofSlots: args.consent_basis === "Contract" ? ["Contract", "Communication"] : ["Communication"],
+    evidenceTypes: ["Signed Document", "Email", "Voice Note"],
+  };
+}
+
+function safetyAcknowledgementEvidencePolicy(method) {
+  if (method === "QR Device Pairing") {
+    return { proofSlots: ["Safety"], evidenceTypes: ["Photo"] };
+  }
+  if (method === "E-signature") {
+    return { proofSlots: ["Safety"], evidenceTypes: ["Signed Document"] };
+  }
+  return { proofSlots: ["Safety"], evidenceTypes: ["Photo", "Field Note", "PDF", "Signed Document"] };
+}
+
+function createOnlyExecutor(config, doctype, before, draft, errorCode) {
+  return async () => {
+    if (before) throw new Error(errorCode);
+    return await erpPost(config, `/api/resource/${encodeURIComponent(doctype)}`, draft);
+  };
+}
+
+function summarizeRecord(record, fields) {
+  if (!record) return null;
+  return pickAllowedFields(record, fields);
+}
+
+function assertImmutableFields(before, next, fields, label) {
+  if (!before) return;
+  const changed = fields.filter((field) => before[field] !== next[field]);
+  if (changed.length) throw new Error(`${label}_identity_immutable:${changed.join(",")}`);
+}
+
 async function readResource(config, doctype, name) {
   const res = await erpGet(config, resourcePath(doctype, name));
   return res.data ?? {};
@@ -2418,9 +5468,9 @@ async function finalizeHermesRun(config, runId, patch) {
 }
 
 // Shared approved-write flow: audit row BEFORE the mutation, execute, finalize the audit,
-// mark the run failed on error. A caller-supplied run_id is the idempotency key: retries
-// can resume a failed/incomplete run, while a completed run returns its stored result
-// without applying the mutation again.
+// mark the run failed on error. A caller-supplied run_id is a single-use mutation claim:
+// only the request which successfully creates its Hermes Run may execute. Later retries
+// either receive the completed result or fail closed, never resume an uncertain mutation.
 export async function executeAuditedWrite(config, {
   runId,
   now,
@@ -2455,16 +5505,14 @@ export async function executeAuditedWrite(config, {
         `run_id_mutation_already_applied_audit_failed:${runId}:incident=${existingRun.audit_incident_id ?? "unknown"}`,
       );
     }
-    if (["Denied", "Blocked"].includes(existingRun.approval_status)) {
-      throw new Error(`run_id_not_retryable:${runId}:${existingRun.approval_status}`);
-    }
+    throw new Error(`run_id_claimed_not_replayable:${runId}:${existingRun.approval_status ?? "unknown"}`);
   }
 
   const auditDraft = {
     run_id: runId,
     run_ts: now,
     agent_role: agentRole,
-    requested_by: args.approved_by,
+    requested_by: args.__hermes_actor_user ?? args.approved_by,
     request_text: args.request_text,
     target_doctype: target.doctype,
     target_name: target.name,
@@ -2477,11 +5525,11 @@ export async function executeAuditedWrite(config, {
     dry_run_json: JSON.stringify(dryRun),
     policy_check_json: JSON.stringify({
       allowed: true,
-      checks: ["tool_input_schema", "deterministic_builder", "human_approval_token", "doctype_validate_hook"],
+      checks: ["tool_input_schema", "deterministic_builder", "signed_dry_run_receipt", "signed_human_approval_receipt", "doctype_validate_hook"],
       target,
     }),
     policy_checked_at: now,
-    policy_checked_by: args.approved_by,
+    policy_checked_by: args.__hermes_actor_user ?? args.approved_by,
     approval_status: "Approved",
     approved_by: args.approved_by,
     approved_at: now,
@@ -2494,8 +5542,8 @@ export async function executeAuditedWrite(config, {
     try {
       await erpPost(config, "/api/resource/Hermes%20Run", auditDraft);
     } catch (err) {
-      // Two identical retries can race on the unique run_id. Re-read and accept
-      // only if the existing row describes this exact approved operation.
+      // The unique run_id creation is the atomic mutation claim. A losing concurrent
+      // caller may replay a completed run but must never continue an in-flight one.
       if (!String(err).includes("erpnext_http_409")) throw err;
       existingRun = await readResourceOrNull(config, "Hermes Run", runId);
       if (!existingRun) throw err;
@@ -2514,16 +5562,8 @@ export async function executeAuditedWrite(config, {
           `run_id_mutation_already_applied_audit_failed:${runId}:incident=${existingRun.audit_incident_id ?? "unknown"}`,
         );
       }
+      throw new Error(`run_id_claimed_not_replayable:${runId}:${existingRun.approval_status ?? "unknown"}`);
     }
-  } else {
-    await erpPut(config, resourcePath("Hermes Run", runId), {
-      ...auditDraft,
-      error: "",
-      result_status: "",
-      result_json: "",
-      completed_at: "",
-      mutation_applied: 0,
-    });
   }
 
   let mutationApplied = false;
@@ -2675,6 +5715,16 @@ function upsertDraftExecutor(config, doctype, name, draft, before) {
   return before
     ? () => erpPut(config, resourcePath(doctype, name), draft)
     : () => erpPost(config, `/api/resource/${encodeURIComponent(doctype)}`, draft);
+}
+
+function fieldAssignmentBoundUpsertExecutor(config, roofJobId, doctype, name, draft, before) {
+  const execute = upsertDraftExecutor(config, doctype, name, draft, before);
+  return async () => {
+    if (config.agentRole === "field-companion") {
+      await assertActorAssignedToRoofJob(config, roofJobId);
+    }
+    return await execute();
+  };
 }
 
 async function buildProposalDraftFromErp(config, roofJobId, { packId, limit = 25, nowIso } = {}) {

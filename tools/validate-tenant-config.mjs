@@ -131,6 +131,13 @@ for (const { file, doc } of tenants) {
   }
 
   assert.equal(doc.agents?.approval_policy, "dry_run_then_human_approval", `${file} agents.approval_policy mismatch`);
+  const writeGuards = doc.agents?.write_guard_envs;
+  assert.ok(Array.isArray(writeGuards), `${file} agents.write_guard_envs must be an array`);
+  for (const guard of ["ERPNEXT_WRITE_ENABLED", "HERMES_DRY_RUN_SIGNING_KEY", "HERMES_APPROVAL_PUBLIC_KEY_FILE"]) {
+    assert.ok(writeGuards.includes(guard), `${file} agents.write_guard_envs missing ${guard}`);
+  }
+  assert.ok(!writeGuards.includes("HERMES_WRITE_TOKEN"),
+    `${file} Frappe write guards must not use the bus replay token`);
 
   const brands = doc.brand?.brands;
   assert.ok(Array.isArray(brands) && brands.length > 0, `${file} brand.brands must be a non-empty array`);

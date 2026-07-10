@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createPublicKey } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +38,11 @@ const REQUIRED_ENV_NAMES = [
   "IRONWRAP_BUS_WRITE_ENABLED",
   "ERPNEXT_WRITE_ENABLED",
   "HERMES_WRITE_TOKEN",
+  "HERMES_AGENT_ROLE",
+  "HERMES_ACTOR_USER",
+  "HERMES_APPROVER_ID",
+  "HERMES_DRY_RUN_SIGNING_KEY",
+  "HERMES_APPROVAL_PUBLIC_KEY_FILE",
   "IRONWRAP_BUS_REQUEST_TIMEOUT_MS",
   "ERPNEXT_REQUEST_TIMEOUT_MS",
   "BUS_BASE_URL",
@@ -82,6 +88,7 @@ const SECRET_ENV_NAMES = [
   "ERPNEXT_API_SECRET",
   "IRONWRAP_ADMIN_TOKEN",
   "HERMES_WRITE_TOKEN",
+  "HERMES_DRY_RUN_SIGNING_KEY",
   "INGEST_TOKEN",
   "ADMIN_TOKEN",
   "D1_BACKUP_API_TOKEN",
@@ -368,7 +375,13 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   return finish("contract", checks);
 }
 
-export async function validateLiveEnv({ env = process.env, repoRoot = DEFAULT_REPO_ROOT } = {}) {
+export async function validateLiveEnv({
+  env = process.env,
+  repoRoot = DEFAULT_REPO_ROOT,
+  statApprovalPublicKey = stat,
+  readApprovalPublicKey = readFile,
+  parseApprovalPublicKey = createPublicKey,
+} = {}) {
   const checks = [];
   const contract = await validateContract({ repoRoot });
   checks.push(check("live.contract", contract.ok, "repository deployment contract passes", "repository deployment contract must pass before live environment validation"));
@@ -405,6 +418,7 @@ export async function validateLiveEnv({ env = process.env, repoRoot = DEFAULT_RE
     ERPNEXT_API_SECRET: 16,
     IRONWRAP_ADMIN_TOKEN: 24,
     HERMES_WRITE_TOKEN: 32,
+    HERMES_DRY_RUN_SIGNING_KEY: 32,
     INGEST_TOKEN: 24,
     ADMIN_TOKEN: 24,
     D1_BACKUP_API_TOKEN: 24,
@@ -421,6 +435,7 @@ export async function validateLiveEnv({ env = process.env, repoRoot = DEFAULT_RE
     env.ADMIN_TOKEN,
     env.INGEST_TOKEN,
     env.HERMES_WRITE_TOKEN,
+    env.HERMES_DRY_RUN_SIGNING_KEY,
     env.D1_BACKUP_API_TOKEN,
     env.RCLONE_CONFIG_R2_ACCESS_KEY_ID,
     env.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
@@ -437,6 +452,49 @@ export async function validateLiveEnv({ env = process.env, repoRoot = DEFAULT_RE
   checks.push(check("live.secret.d1_restore_ephemeral", restoreTokenStateSafe, restoreTokenUnset ? "D1 restore write token is not persisted in verification mode" : "remote drill token is valid and separated from backup authority", "D1_RESTORE_API_TOKEN must be unset for verify or a valid just-in-time token distinct from D1 backup and R2 credentials for remote"));
 
   checks.push(check("live.gate.integration", env.ERPNEXT_ENABLED === "true", "Frappe integration is explicitly enabled", "ERPNEXT_ENABLED must equal true for production readiness"));
+  checks.push(check(
+    "live.hermes.role",
+    ["owner-operator", "lead-concierge", "estimator-assistant", "production-controller", "field-companion", "finance-reconciler", "closeout-agent", "support-admin"].includes(env.HERMES_AGENT_ROLE),
+    "HERMES_AGENT_ROLE is canonical",
+    "HERMES_AGENT_ROLE must be one of the eight canonical roles",
+  ));
+  checks.push(check(
+    "live.hermes.actor",
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(env.HERMES_ACTOR_USER ?? ""),
+    "HERMES_ACTOR_USER is a concrete principal (its API-token binding is enforced by Frappe)",
+    "HERMES_ACTOR_USER must be a concrete email-like Frappe principal",
+  ));
+  checks.push(check(
+    "live.hermes.approver",
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(env.HERMES_APPROVER_ID ?? ""),
+    "HERMES_APPROVER_ID is a concrete principal",
+    "HERMES_APPROVER_ID must be the principal bound to the approval signing key",
+  ));
+  const approvalPublicKeyPath = env.HERMES_APPROVAL_PUBLIC_KEY_FILE ?? "";
+  const approvalPublicKeyPathSafe = /^\/[A-Za-z0-9_./-]+$/.test(approvalPublicKeyPath);
+  checks.push(check(
+    "live.hermes.approval_public_key_path",
+    approvalPublicKeyPathSafe,
+    "approval public-key file is an absolute safe path",
+    "HERMES_APPROVAL_PUBLIC_KEY_FILE must be an absolute safe path",
+  ));
+  let approvalPublicKeyValid = false;
+  if (approvalPublicKeyPathSafe) {
+    try {
+      const metadata = await statApprovalPublicKey(approvalPublicKeyPath);
+      const pem = await readApprovalPublicKey(approvalPublicKeyPath, "utf8");
+      const parsed = parseApprovalPublicKey(pem);
+      approvalPublicKeyValid = Boolean(metadata?.isFile?.()) && parsed.asymmetricKeyType === "ed25519";
+    } catch {
+      approvalPublicKeyValid = false;
+    }
+  }
+  checks.push(check(
+    "live.hermes.approval_public_key",
+    approvalPublicKeyValid,
+    "approval public-key file is readable and parses as an Ed25519 public key",
+    "HERMES_APPROVAL_PUBLIC_KEY_FILE must be a readable regular file containing an Ed25519 public key",
+  ));
   for (const name of ["IRONWRAP_BUS_WRITE_ENABLED", "ERPNEXT_WRITE_ENABLED"]) {
     checks.push(check(`live.gate.${name}`, env[name] === "true" || env[name] === "false", `${name} is explicit`, `${name} must equal true or false explicitly`));
   }

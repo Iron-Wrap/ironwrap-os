@@ -1,6 +1,6 @@
 {
   "version": "0.2.0",
-  "description": "Machine-readable Hermes agent role tool allowlists. Source of truth for MCP tool filtering. Validated against the live MCP tool inventory by tools/validate-hermes-config.mjs. Every approved_write tool must carry its dry_run counterpart in the same role (read -> dry_run -> approval -> write -> audit). No tool in this repo can send a customer message or mutate accounting; approved-write tools only draft or set review-gated status and always record a Hermes Run audit row.",
+  "description": "Machine-readable Hermes agent role tool allowlists. Source of truth for MCP tool filtering. Validated against the implemented MCP source inventory by tools/validate-hermes-config.mjs. Every approved_write tool must carry its dry_run counterpart in the same role (read -> dry_run -> approval -> write -> audit). No tool in this repo can send a customer message or mutate accounting; Frappe writes record Hermes Run rows and bus replay records its envelope-scoped audit trail.",
   "servers": {
     "ironwrap-bus-mcp": "Bus readiness and operating truth plus envelope-scoped, approved dead-letter recovery.",
     "erpnext-roofing-mcp": "IronWrap OS Frappe operating core: read, deterministic policy checks, and review-gated approved writes (legacy server name retained for compatibility)."
@@ -30,6 +30,16 @@
         "get_roof_area", "list_roof_areas_for_job",
         "get_option_package", "list_option_packages_for_job",
         "get_scope_clause", "list_scope_clauses_for_job",
+        "get_crew_profile", "list_crew_profiles",
+        "get_job_assignment", "list_job_assignments_for_job",
+        "get_change_order", "list_change_orders_for_job",
+        "get_safety_plan", "list_safety_plans_for_job",
+        "get_job_compliance_record", "list_job_compliance_records_for_job",
+        "get_communication_consent", "list_communication_consents_for_job",
+        "get_customer_decision", "list_customer_decisions_for_job",
+        "get_contract_acceptance", "list_contract_acceptances_for_job",
+        "get_integration_reconciliation", "list_integration_reconciliations_for_job",
+        "get_tenant_export_run", "list_tenant_export_runs_for_tenant",
         "get_automation_incident", "list_automation_incidents",
         "get_white_label_tenant", "list_white_label_tenants",
         "list_market_watch_items", "check_consent", "check_quiet_hours",
@@ -39,6 +49,10 @@
         "dry_run_replay",
         "dry_run_update_gate", "dry_run_material_takeoff", "dry_run_update_material_takeoff_status",
         "dry_run_supplier_order", "dry_run_supplier_quote", "dry_run_proposal_evidence_pack",
+        "dry_run_job_assignment", "dry_run_change_order", "dry_run_change_order_transition",
+        "dry_run_safety_plan", "dry_run_safety_acknowledgement", "dry_run_job_compliance_record",
+        "dry_run_customer_decision", "dry_run_communication_consent",
+        "dry_run_reconciliation_resolution", "dry_run_tenant_export",
         "dry_run_completion_packet", "dry_run_warranty_packet", "dry_run_review_request",
         "dry_run_communication_event", "dry_run_market_watch_item"
       ],
@@ -46,6 +60,10 @@
         "request_replay",
         "request_update_gate", "request_create_material_takeoff", "request_update_material_takeoff_status",
         "request_create_supplier_order", "request_create_supplier_quote", "request_create_proposal_evidence_pack",
+        "request_create_job_assignment", "request_create_change_order", "request_transition_change_order",
+        "request_create_safety_plan", "request_record_safety_acknowledgement", "request_record_job_compliance",
+        "request_record_customer_decision", "request_record_communication_consent",
+        "request_resolve_reconciliation", "request_tenant_export",
         "request_create_completion_packet", "request_create_warranty_packet", "request_create_review_request",
         "request_record_communication_event", "request_add_market_watch_item"
       ],
@@ -56,16 +74,17 @@
     },
     "lead-concierge": {
       "title": "Lead Concierge",
-      "summary": "Handles new leads and first response drafts. Never promises price or makes legal claims.",
+      "summary": "Handles new leads, first-response records, and evidence-backed consent history. Never sends a message, promises price, or makes legal claims.",
       "reads": [
         "list_recent_envelopes", "get_envelope",
         "get_lead_envelope", "get_roof_job",
         "get_instant_estimate_session", "list_instant_estimate_sessions_for_job",
         "get_communication_event", "list_communication_events_for_job",
+        "get_communication_consent", "list_communication_consents_for_job",
         "check_consent", "check_quiet_hours"
       ],
-      "dry_run": ["dry_run_communication_event"],
-      "approved_write": ["request_record_communication_event"],
+      "dry_run": ["dry_run_communication_event", "dry_run_communication_consent"],
+      "approved_write": ["request_record_communication_event", "request_record_communication_consent"],
       "forbidden": [
         "Price promises or binding quotes (no estimate/takeoff write tools granted)",
         "Legal claims or warranty commitments"
@@ -73,7 +92,7 @@
     },
     "estimator-assistant": {
       "title": "Estimator Assistant",
-      "summary": "Drafts takeoff, scope, supplier quote, and proposal proof from approved measurement evidence. Never sets final price without estimator approval.",
+      "summary": "Drafts takeoff, scope, supplier quote, change-order, and proposal proof from approved evidence. Customer decisions are evidence records only; Contract Acceptance stays read-only.",
       "reads": [
         "get_roof_job",
         "get_measurement_report", "list_measurement_reports_for_job",
@@ -86,15 +105,20 @@
         "get_visual_property_model", "list_visual_property_models_for_job",
         "get_roof_area", "list_roof_areas_for_job",
         "get_option_package", "list_option_packages_for_job",
-        "get_scope_clause", "list_scope_clauses_for_job"
+        "get_scope_clause", "list_scope_clauses_for_job",
+        "get_change_order", "list_change_orders_for_job",
+        "get_customer_decision", "list_customer_decisions_for_job",
+        "get_contract_acceptance", "list_contract_acceptances_for_job"
       ],
       "dry_run": [
         "dry_run_material_takeoff", "dry_run_update_material_takeoff_status",
-        "dry_run_supplier_quote", "dry_run_proposal_evidence_pack"
+        "dry_run_supplier_quote", "dry_run_proposal_evidence_pack",
+        "dry_run_change_order", "dry_run_change_order_transition", "dry_run_customer_decision"
       ],
       "approved_write": [
         "request_create_material_takeoff", "request_update_material_takeoff_status",
-        "request_create_supplier_quote", "request_create_proposal_evidence_pack"
+        "request_create_supplier_quote", "request_create_proposal_evidence_pack",
+        "request_create_change_order", "request_transition_change_order", "request_record_customer_decision"
       ],
       "forbidden": [
         "Production gate changes (Production Controller scope)",
@@ -104,7 +128,7 @@
     },
     "production-controller": {
       "title": "Production Controller",
-      "summary": "Manages gates and supplier orders. Cannot move a job to production if a hard gate fails.",
+      "summary": "Manages gates, assignments, safety plans, compliance records, and supplier orders. Cannot move a job to production if a hard gate fails.",
       "reads": [
         "get_roof_job", "list_job_gates", "list_blocked_jobs",
         "get_material_takeoff", "list_material_takeoffs_for_job",
@@ -112,12 +136,23 @@
         "get_supplier_quote", "list_supplier_quotes_for_job",
         "get_field_check_in", "list_field_check_ins_for_job",
         "get_measurement_report",
+        "get_crew_profile", "list_crew_profiles",
+        "get_job_assignment", "list_job_assignments_for_job",
+        "get_change_order", "list_change_orders_for_job",
+        "get_safety_plan", "list_safety_plans_for_job",
+        "get_job_compliance_record", "list_job_compliance_records_for_job",
         "get_visual_property_model", "list_visual_property_models_for_job",
         "get_roof_area", "list_roof_areas_for_job",
         "get_scope_clause", "list_scope_clauses_for_job"
       ],
-      "dry_run": ["dry_run_update_gate", "dry_run_supplier_order"],
-      "approved_write": ["request_update_gate", "request_create_supplier_order"],
+      "dry_run": [
+        "dry_run_update_gate", "dry_run_supplier_order", "dry_run_job_assignment",
+        "dry_run_safety_plan", "dry_run_safety_acknowledgement", "dry_run_job_compliance_record"
+      ],
+      "approved_write": [
+        "request_update_gate", "request_create_supplier_order", "request_create_job_assignment",
+        "request_create_safety_plan", "request_record_safety_acknowledgement", "request_record_job_compliance"
+      ],
       "forbidden": [
         "Starting a job while a required gate is Blocked (gate logic and human approval enforce this)",
         "Estimator pricing or customer communication"
@@ -125,16 +160,19 @@
     },
     "field-companion": {
       "title": "Field Companion",
-      "summary": "Turns field check-ins and photo/voice evidence into a completion draft. Cannot delete evidence or bypass the completion gate.",
+      "summary": "Reads assigned work and safety/compliance requirements, records evidence-backed safety acknowledgements, and drafts completion from field evidence.",
       "reads": [
         "get_roof_job", "list_job_gates",
         "get_field_check_in", "list_field_check_ins_for_job",
         "get_evidence_item", "list_evidence_for_job",
+        "get_job_assignment", "list_job_assignments_for_job",
+        "get_safety_plan", "list_safety_plans_for_job",
+        "get_job_compliance_record", "list_job_compliance_records_for_job",
         "get_visual_property_model", "list_visual_property_models_for_job",
         "get_roof_area", "list_roof_areas_for_job"
       ],
-      "dry_run": ["dry_run_completion_packet"],
-      "approved_write": ["request_create_completion_packet"],
+      "dry_run": ["dry_run_completion_packet", "dry_run_safety_acknowledgement"],
+      "approved_write": ["request_create_completion_packet", "request_record_safety_acknowledgement"],
       "forbidden": [
         "Deleting evidence (no delete tool exists)",
         "Bypassing the completion gate (completion packet requires photo evidence and stays review-gated)"
@@ -142,17 +180,19 @@
     },
     "finance-reconciler": {
       "title": "Finance Reconciler",
-      "summary": "Reads payment/invoice mirror truth for reconciliation. Read-only until a reconciliation-task tool exists; no accounting mutation.",
+      "summary": "Reads payment/invoice mirror truth and records evidence-backed reconciliation resolutions. Never mutates accounting or an external system.",
       "reads": [
         "get_roof_job",
         "get_payment_milestone", "list_payment_milestones_for_job",
         "get_price_book_rule", "list_price_book_rules",
-        "get_option_package", "list_option_packages_for_job"
+        "get_option_package", "list_option_packages_for_job",
+        "get_change_order", "list_change_orders_for_job",
+        "get_integration_reconciliation", "list_integration_reconciliations_for_job"
       ],
-      "dry_run": [],
-      "approved_write": [],
+      "dry_run": ["dry_run_reconciliation_resolution"],
+      "approved_write": ["request_resolve_reconciliation"],
       "forbidden": [
-        "Final invoice or payment mutation without approval (QuickBooks stays accounting truth; no write tool granted)"
+        "Final invoice or payment mutation (QuickBooks stays accounting truth; the granted resolution tool changes only the reconciliation record)"
       ]
     },
     "closeout-agent": {
@@ -165,6 +205,9 @@
         "get_review_request", "list_review_requests_for_job",
         "get_payment_milestone", "list_payment_milestones_for_job",
         "get_scope_clause", "list_scope_clauses_for_job",
+        "get_job_compliance_record", "list_job_compliance_records_for_job",
+        "get_customer_decision", "list_customer_decisions_for_job",
+        "get_contract_acceptance", "list_contract_acceptances_for_job",
         "check_consent", "check_quiet_hours"
       ],
       "dry_run": ["dry_run_completion_packet", "dry_run_warranty_packet", "dry_run_review_request"],
@@ -175,16 +218,24 @@
     },
     "support-admin": {
       "title": "Support/Admin Agent",
-      "summary": "Diagnoses failed automations and maintains the market-watch radar. Single-site isolation prevents cross-tenant access.",
+      "summary": "Diagnoses failed automations, records reconciliation resolutions, requests audited tenant exports, and maintains the market-watch radar. Single-site isolation prevents cross-tenant access.",
       "reads": [
         "get_bus_readiness", "get_operational_status", "list_recent_envelopes", "get_envelope", "list_dead_letters",
         "get_hermes_run", "list_hermes_runs_for_job",
         "get_automation_incident", "list_automation_incidents",
         "get_white_label_tenant", "list_white_label_tenants",
+        "get_integration_reconciliation", "list_integration_reconciliations_for_job",
+        "get_tenant_export_run", "list_tenant_export_runs_for_tenant",
         "list_market_watch_items"
       ],
-      "dry_run": ["dry_run_replay", "dry_run_market_watch_item"],
-      "approved_write": ["request_replay", "request_add_market_watch_item"],
+      "dry_run": [
+        "dry_run_replay", "dry_run_market_watch_item",
+        "dry_run_reconciliation_resolution", "dry_run_tenant_export"
+      ],
+      "approved_write": [
+        "request_replay", "request_add_market_watch_item",
+        "request_resolve_reconciliation", "request_tenant_export"
+      ],
       "forbidden": [
         "Cross-tenant access (each tenant runs an isolated site/profile/namespace)"
       ]

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import {
   assertWriteApproved,
   buildGateUpdatePatch,
@@ -22,26 +23,59 @@ import {
   supplierOrderIdForTakeoff,
 } from "../src/server.mjs";
 
-test("configFromEnv requires ERPNext URL and token parts", () => {
+const { publicKey: approvalPublicKey } = generateKeyPairSync("ed25519");
+const APPROVAL_PUBLIC_KEY = approvalPublicKey.export({ type: "spki", format: "pem" });
+const ROLE_ENV = {
+  HERMES_AGENT_ROLE: "owner-operator",
+  HERMES_ACTOR_USER: "owner@example.com",
+  HERMES_APPROVER_ID: "owner@example.com",
+};
+
+test("configFromEnv requires ERPNext credentials, runtime role binding, and receipt keys", () => {
   assert.throws(() => configFromEnv({}), /ERPNEXT_BASE_URL/);
   assert.throws(() => configFromEnv({ ERPNEXT_BASE_URL: "https://erp.example" }), /ERPNEXT_API_KEY/);
   assert.throws(() => configFromEnv({
     ERPNEXT_BASE_URL: "https://erp.example",
     ERPNEXT_API_KEY: "key",
   }), /ERPNEXT_API_SECRET/);
-  assert.deepEqual(configFromEnv({
+  assert.throws(() => configFromEnv({
     ERPNEXT_BASE_URL: "https://erp.example/",
     ERPNEXT_API_KEY: "key",
     ERPNEXT_API_SECRET: "secret",
-  }), { baseUrl: "https://erp.example", apiKey: "key", apiSecret: "secret", writeEnabled: false, writeToken: undefined, requestTimeoutMs: 10_000 });
-  assert.deepEqual(configFromEnv({
+  }), /HERMES_AGENT_ROLE/);
+  const readOnly = configFromEnv({
+    ERPNEXT_BASE_URL: "https://erp.example/",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
+    ...ROLE_ENV,
+  });
+  assert.equal(readOnly.baseUrl, "https://erp.example");
+  assert.equal(readOnly.writeEnabled, false);
+  assert.equal(readOnly.agentRole, "owner-operator");
+  assert.equal(readOnly.actorUser, "owner@example.com");
+  assert.ok(readOnly.allowedTools.includes("request_update_gate"));
+
+  assert.throws(() => configFromEnv({
     ERPNEXT_BASE_URL: "https://erp.example/",
     ERPNEXT_API_KEY: "key",
     ERPNEXT_API_SECRET: "secret",
     ERPNEXT_WRITE_ENABLED: "true",
-    HERMES_WRITE_TOKEN: "approve",
+    ...ROLE_ENV,
+  }), /HERMES_DRY_RUN_SIGNING_KEY/);
+  const writable = configFromEnv({
+    ERPNEXT_BASE_URL: "https://erp.example/",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
+    ERPNEXT_WRITE_ENABLED: "true",
+    ...ROLE_ENV,
+    HERMES_DRY_RUN_SIGNING_KEY: "a".repeat(32),
+    HERMES_APPROVAL_PUBLIC_KEY: APPROVAL_PUBLIC_KEY,
     ERPNEXT_REQUEST_TIMEOUT_MS: "2500",
-  }), { baseUrl: "https://erp.example", apiKey: "key", apiSecret: "secret", writeEnabled: true, writeToken: "approve", requestTimeoutMs: 2500 });
+  });
+  assert.equal(writable.requestTimeoutMs, 2500);
+  assert.equal(writable.dryRunSigningKey, "a".repeat(32));
+  assert.equal(writable.approvalPublicKey, APPROVAL_PUBLIC_KEY);
+  assert.equal(writable.approverId, "owner@example.com");
 });
 
 test("Frappe endpoint configuration is HTTPS-only and timeout-bounded", () => {
@@ -142,6 +176,52 @@ test("executeAuditedWrite returns a completed run without repeating the mutation
   assert.equal(result.replayed, true);
   assert.equal(result.audit_finalized, true);
   assert.equal(result.result.data.state, "Ready");
+  assert.equal(executeCount, 0);
+});
+
+test("executeAuditedWrite never executes a run another caller has already claimed", async (t) => {
+  let executeCount = 0;
+  t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ data: {
+    run_id: "hr_inflight_1",
+    agent_role: "Owner Operator",
+    tool_name: "request_update_gate",
+    target_doctype: "Production Gate State",
+    target_name: "gate_1",
+    tool_args_json: JSON.stringify({
+      run_id: "hr_inflight_1",
+      gate_id: "gate_1",
+      request_text: "approved gate transition",
+      approved_by: "owner@example.com",
+    }),
+    approval_status: "Approved",
+    result_status: "",
+    mutation_applied: 0,
+  } }), { headers: { "content-type": "application/json" } }));
+
+  await assert.rejects(() => executeAuditedWrite({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+  }, {
+    runId: "hr_inflight_1",
+    now: "2026-07-10T10:00:00.000Z",
+    args: {
+      run_id: "hr_inflight_1",
+      gate_id: "gate_1",
+      request_text: "approved gate transition",
+      approved_by: "owner@example.com",
+    },
+    agentRole: "Owner Operator",
+    toolName: "request_update_gate",
+    target: { doctype: "Production Gate State", name: "gate_1" },
+    dryRun: { patch: { state: "Ready" } },
+    beforeSummary: { state: "Blocked" },
+    afterSummary: { state: "Ready" },
+    execute: async () => {
+      executeCount += 1;
+      return { data: { name: "gate_1" } };
+    },
+  }), /run_id_claimed_not_replayable/);
   assert.equal(executeCount, 0);
 });
 
@@ -380,10 +460,19 @@ test("resource paths encode Frappe DocTypes, names, fields, and filters", () => 
 });
 
 test("write approval and gate patch helpers enforce narrow mutation rules", () => {
-  assert.throws(() => assertWriteApproved({ writeEnabled: false }, "x"), /erpnext_write_disabled/);
-  assert.throws(() => assertWriteApproved({ writeEnabled: true }, "x"), /hermes_write_token_required/);
-  assert.throws(() => assertWriteApproved({ writeEnabled: true, writeToken: "right" }, "wrong"), /approval_token_invalid/);
-  assert.doesNotThrow(() => assertWriteApproved({ writeEnabled: true, writeToken: "right" }, "right"));
+  assert.throws(() => assertWriteApproved({ writeEnabled: false }, {}), /erpnext_write_disabled/);
+  assert.throws(() => assertWriteApproved({ writeEnabled: true }, {}), /hermes_dry_run_signing_key_required/);
+  assert.throws(() => assertWriteApproved({ writeEnabled: true, dryRunSigningKey: "a".repeat(32) }, {}), /hermes_approval_public_key_required/);
+  assert.throws(() => assertWriteApproved({
+    writeEnabled: true,
+    dryRunSigningKey: "a".repeat(32),
+    approvalPublicKey: APPROVAL_PUBLIC_KEY,
+  }, {}), /dry_run_receipt_required/);
+  assert.doesNotThrow(() => assertWriteApproved({
+    writeEnabled: true,
+    dryRunSigningKey: "a".repeat(32),
+    approvalPublicKey: APPROVAL_PUBLIC_KEY,
+  }, { dry_run_receipt: "receipt", approval_receipt: "receipt" }));
 
   assert.deepEqual(buildGateUpdatePatch("Ready", "old reason"), { state: "Ready", blocker_reason: "" });
   assert.deepEqual(buildGateUpdatePatch("Blocked", "waiting on deposit"), { state: "Blocked", blocker_reason: "waiting on deposit" });

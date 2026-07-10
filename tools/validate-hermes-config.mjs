@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Validates hermes/agents/roles.json against the LIVE MCP tool inventory parsed from the
+// Validates hermes/agents/roles.json against the implemented MCP source inventory parsed from the
 // two server sources, and enforces the Hermes safety contract at config level:
 //   - every referenced tool actually exists in a server
 //   - reads are read-only, dry_run are previews, approved_write are request_* mutations
@@ -19,18 +19,20 @@ const servers = {
   "erpnext-roofing-mcp": "mcp/erpnext-roofing-mcp/src/server.mjs",
 };
 
-// Live inventory: tool names from every registration path in the servers, i.e.
+// Implemented-source inventory: tool names from every registration path in the servers, i.e.
 // direct server.registerTool("<name>", ...) plus the registerReadPair helper that
 // registers a get/list pair via getName:/listName: fields.
 const inventory = new Set();
 const toolServer = new Map();
 const requestDefinitions = new Map();
+const serverSources = new Map();
 const REGISTRATION_PATTERNS = [
   /registerTool\(\s*"([a-z0-9_]+)"/g,
   /\b(?:getName|listName):\s*"([a-z0-9_]+)"/g,
 ];
 for (const [name, rel] of Object.entries(servers)) {
   const src = readFileSync(join(root, rel), "utf8");
+  serverSources.set(name, src);
   let count = 0;
   for (const pattern of REGISTRATION_PATTERNS) {
     for (const m of src.matchAll(pattern)) {
@@ -42,7 +44,12 @@ for (const [name, rel] of Object.entries(servers)) {
     }
   }
   for (const match of src.matchAll(/server\.registerTool\(\s*"(request_[a-z0-9_]+)"([\s\S]*?)\n\s*\},\n\s*async\s*\(/g)) {
-    requestDefinitions.set(match[1], match[2]);
+    const nextRegistration = src.indexOf("server.registerTool(", match.index + match[0].length);
+    requestDefinitions.set(match[1], {
+      definition: match[2],
+      block: src.slice(match.index, nextRegistration === -1 ? src.length : nextRegistration),
+      server: name,
+    });
   }
   assert.ok(count > 0, `no tools parsed from ${rel}`);
 }
@@ -55,17 +62,62 @@ assert.equal(reads.size + dryRuns.size + requests.size, inventory.size,
   "every tool must be a read (get/list/check), a dry_run, or a request");
 
 // The approval/audit identity is part of every mutation's public contract. A write without a
-// caller-supplied stable run_id cannot be retried safely; a write without an approver or token
-// cannot prove that the review gate was crossed.
+// caller-supplied stable run_id cannot be retried safely; a write without a server-issued
+// dry-run receipt and an independently signed human approval receipt cannot prove the review
+// gate was crossed.
 assert.deepEqual(new Set(requestDefinitions.keys()), requests,
   "every request_* tool must be a directly inspectable registerTool definition");
-for (const [tool, definition] of requestDefinitions) {
-  assert.match(definition, /\brun_id\s*:/, `${tool} must require a caller-supplied run_id`);
-  assert.match(definition, /\bapproved_by\s*:/, `${tool} must require approved_by`);
-  assert.match(definition, /\bapproval_token\s*:/, `${tool} must require approval_token`);
-  assert.doesNotMatch(definition, /run_id\s*:[^\n]*optional\s*\(/,
-    `${tool}.run_id must not be optional`);
+const frappeSource = serverSources.get("erpnext-roofing-mcp");
+const approvedHelper = frappeSource.match(
+  /export function approvedWriteInputSchema\(baseSchema\)[\s\S]*?return baseSchema\.extend\(approvalShape\)\.strict\(\);\n\}/,
+)?.[0];
+assert.ok(approvedHelper, "approvedWriteInputSchema must remain directly inspectable");
+assert.match(approvedHelper, /request_text:\s*z\.string\(\)\.min\(1\)\.max\(4000\)/);
+assert.match(approvedHelper, /approved_by:\s*z\.string\(\)\.min\(1\)\.max\(140\)/);
+assert.match(approvedHelper, /run_id:\s*z\.string\(\)\.min\(8\)\.max\(128\)/);
+assert.match(approvedHelper, /dry_run_receipt:\s*z\.string\(\)\.min\(32\)\.max\(4096\)/);
+assert.match(approvedHelper, /approval_receipt:\s*z\.string\(\)\.min\(32\)\.max\(8192\)/);
+assert.match(approvedHelper, /option\.extend\(approvalShape\)\.strict\(\)/,
+  "approved discriminated schemas must reject unknown keys");
+for (const [tool, { definition, block, server }] of requestDefinitions) {
+  const usesApprovedSchema = /inputSchema:\s*approvedWriteInputSchema\(/.test(definition);
+  if (!usesApprovedSchema) {
+    assert.match(definition, /\brun_id\s*:/, `${tool} must require a caller-supplied run_id`);
+    assert.match(definition, /\bapproved_by\s*:/, `${tool} must require approved_by`);
+    if (server === "erpnext-roofing-mcp") {
+      assert.match(definition, /\bdry_run_receipt\s*:/, `${tool} must require dry_run_receipt`);
+      assert.match(definition, /\bapproval_receipt\s*:/, `${tool} must require approval_receipt`);
+    } else {
+      assert.match(definition, /\bapproval_token\s*:/, `${tool} must retain the bus replay approval token`);
+    }
+    assert.doesNotMatch(definition, /run_id\s*:[^\n]*optional\s*\(/,
+      `${tool}.run_id must not be optional`);
+  }
+  if (server === "erpnext-roofing-mcp") {
+    assert.match(block, /assertWriteApproved\(config,\s*args\)/,
+      `${tool} must enforce the server write-enable and receipt-key gate`);
+    assert.match(block, /executeAuditedWrite\(/,
+      `${tool} must use the audited Frappe write executor`);
+  }
 }
+assert.match(frappeSource, /const REQUEST_TO_DRY_RUN = Object\.freeze/,
+  "Frappe MCP must own an explicit runtime request-to-dry-run pairing map");
+assert.match(frappeSource, /function createAuthorizedRegistrar\(/,
+  "Frappe MCP must register tools through runtime role authorization");
+assert.match(frappeSource, /if \(!allowedTools\.has\(name\)\) return;/,
+  "Frappe MCP must omit tools not granted to the configured role");
+assert.match(frappeSource, /verifyDryRunReceipt\(/,
+  "Frappe MCP must verify a server-issued preview receipt before a write");
+assert.match(frappeSource, /verifyApprovalReceipt\(/,
+  "Frappe MCP must verify an independently signed human approval receipt before a write");
+assert.match(frappeSource, /site_id: config\.siteId/,
+  "preview and approval receipts must be bound to the target Frappe site");
+assert.match(frappeSource, /HERMES_AGENT_ROLE must name a role in roles\.json/,
+  "Frappe MCP runtime must require a named role from canonical roles.json");
+assert.match(frappeSource, /HERMES_APPROVER_ID is required when writes are enabled/,
+  "Frappe MCP runtime must bind its approval key to one configured approver identity");
+assert.match(frappeSource, /approval_approver_identity_mismatch/,
+  "Frappe MCP must reject an approved_by identity not bound to the approval key");
 
 // Canonical approved-write -> dry_run pairing. Names are not purely mechanical
 // (request_create_material_takeoff pairs with dry_run_material_takeoff), so the map is
@@ -83,6 +135,16 @@ const WRITE_PAIRS = {
   request_create_review_request: "dry_run_review_request",
   request_record_communication_event: "dry_run_communication_event",
   request_add_market_watch_item: "dry_run_market_watch_item",
+  request_create_job_assignment: "dry_run_job_assignment",
+  request_create_change_order: "dry_run_change_order",
+  request_transition_change_order: "dry_run_change_order_transition",
+  request_create_safety_plan: "dry_run_safety_plan",
+  request_record_safety_acknowledgement: "dry_run_safety_acknowledgement",
+  request_record_job_compliance: "dry_run_job_compliance_record",
+  request_record_customer_decision: "dry_run_customer_decision",
+  request_record_communication_consent: "dry_run_communication_consent",
+  request_resolve_reconciliation: "dry_run_reconciliation_resolution",
+  request_tenant_export: "dry_run_tenant_export",
 };
 assert.deepEqual(
   new Set(Object.keys(WRITE_PAIRS)), requests,
@@ -91,6 +153,65 @@ assert.deepEqual(
 for (const [req, dry] of Object.entries(WRITE_PAIRS)) {
   assert.ok(dryRuns.has(dry), `${req} maps to missing dry_run tool ${dry}`);
 }
+
+const NEW_STRICT_READS = new Set([
+  "get_crew_profile", "list_crew_profiles",
+  "get_job_assignment", "list_job_assignments_for_job",
+  "get_change_order", "list_change_orders_for_job",
+  "get_safety_plan", "list_safety_plans_for_job",
+  "get_job_compliance_record", "list_job_compliance_records_for_job",
+  "get_communication_consent", "list_communication_consents_for_job",
+  "get_customer_decision", "list_customer_decisions_for_job",
+  "get_contract_acceptance", "list_contract_acceptances_for_job",
+  "get_integration_reconciliation", "list_integration_reconciliations_for_job",
+  "get_tenant_export_run", "list_tenant_export_runs_for_tenant",
+]);
+for (const tool of NEW_STRICT_READS) {
+  assert.ok(reads.has(tool), `missing committed-model strict read: ${tool}`);
+  assert.equal(toolServer.get(tool), "erpnext-roofing-mcp", `${tool} must belong to the Frappe server`);
+}
+
+const frappeTools = new Set([...inventory].filter((tool) => toolServer.get(tool) === "erpnext-roofing-mcp"));
+assert.equal(frappeTools.size, 111, "Frappe MCP inventory must stay at the reviewed 111-tool contract");
+assert.equal([...frappeTools].filter((tool) => reads.has(tool)).length, 69,
+  "Frappe MCP must expose 69 read tools");
+assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 21,
+  "Frappe MCP must expose 21 dry-run tools");
+assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 21,
+  "Frappe MCP must expose 21 approved-write tools");
+assert.equal(inventory.size, 118, "two-server Hermes inventory must stay at 118 tools");
+
+// Contract Acceptance is evidence produced by the customer/provider, never an agent mutation.
+assert.ok(reads.has("get_contract_acceptance") && reads.has("list_contract_acceptances_for_job"),
+  "Contract Acceptance must remain inspectable");
+assert.ok(![...dryRuns, ...requests].some((tool) => tool.includes("contract_acceptance")),
+  "Contract Acceptance must not have dry-run or approved-write tools");
+assert.doesNotMatch(frappeSource, /target:\s*\{\s*doctype:\s*"Contract Acceptance"/,
+  "no approved write may target Contract Acceptance");
+assert.ok(reads.has("get_crew_profile") && reads.has("list_crew_profiles"),
+  "Crew Profile must remain inspectable");
+assert.ok(![...dryRuns, ...requests].some((tool) => tool.includes("crew_profile")),
+  "Crew Profile must not have dry-run or approved-write tools");
+assert.doesNotMatch(frappeSource, /target:\s*\{\s*doctype:\s*"Crew Profile"/,
+  "no approved write may target Crew Profile");
+for (const [tool, meta] of requestDefinitions) {
+  if (meta.server !== "erpnext-roofing-mcp") continue;
+  assert.doesNotMatch(tool, /(?:send|invoice|payment)/,
+    `${tool} must not expose customer-send or accounting mutation semantics`);
+}
+assert.doesNotMatch(
+  frappeSource,
+  /target:\s*\{\s*doctype:\s*"(?:Payment Milestone|Sales Invoice|Payment Entry|Purchase Invoice)"/,
+  "no approved write may target accounting mirror or accounting doctypes",
+);
+assert.match(frappeSource, /function assertVerifiedEvidence\(/,
+  "evidence-backed commands must require verified evidence provenance");
+assert.match(frappeSource, /evidence\?\.sync_state !== "Verified"/,
+  "evidence-backed commands must reject queued, rejected, and superseded evidence");
+assert.match(frappeSource, /function assertActorAssignedToRoofJob\(/,
+  "Field Companion reads must be checked against an active assignment");
+assert.doesNotMatch(frappeSource, /approval_token/,
+  "Frappe MCP must not retain the shared approval-token mutation path");
 
 const REQUIRED_ROLES = [
   "owner-operator", "lead-concierge", "estimator-assistant", "production-controller",
@@ -127,6 +248,60 @@ for (const [roleName, role] of Object.entries(config.roles)) {
       `${label} grants ${tool} but is missing its dry_run counterpart ${pair}`);
   }
   assert.ok(role.forbidden.length > 0, `${label} must state at least one forbidden boundary`);
+
+  const profile = readFileSync(join(root, `hermes/agents/${roleName}.md`), "utf8");
+  const profileTools = (heading, nextHeading) => {
+    const start = profile.indexOf(`## ${heading}`);
+    const end = profile.indexOf(`## ${nextHeading}`, start + 1);
+    assert.ok(start >= 0 && end > start, `${label} profile is missing ${heading}`);
+    return new Set([...profile.slice(start, end).matchAll(/^- ([a-z0-9_]+)$/gm)].map((m) => m[1]));
+  };
+  assert.deepEqual(profileTools("Reads", "Dry-run"), new Set(role.reads),
+    `${label} Markdown read list must exactly match roles.json`);
+  assert.deepEqual(profileTools("Dry-run (preview)", "Approved-write"), new Set(role.dry_run),
+    `${label} Markdown dry-run list must exactly match roles.json`);
+  assert.deepEqual(profileTools("Approved-write", "Forbidden"), new Set(role.approved_write),
+    `${label} Markdown approved-write list must exactly match roles.json`);
+}
+
+const fieldCompanionTools = new Set([
+  ...config.roles["field-companion"].reads,
+  ...config.roles["field-companion"].dry_run,
+  ...config.roles["field-companion"].approved_write,
+]);
+for (const forbiddenTool of [
+  "get_change_order", "list_change_orders_for_job",
+  "get_customer_decision", "list_customer_decisions_for_job",
+  "get_communication_consent", "list_communication_consents_for_job",
+  "get_contract_acceptance", "list_contract_acceptances_for_job",
+  "get_integration_reconciliation", "list_integration_reconciliations_for_job",
+  "get_tenant_export_run", "list_tenant_export_runs_for_tenant",
+  "request_create_change_order", "request_transition_change_order",
+  "request_record_customer_decision", "request_record_communication_consent",
+  "request_resolve_reconciliation", "request_tenant_export",
+]) {
+  assert.ok(!fieldCompanionTools.has(forbiddenTool),
+    `field-companion must not receive commercial/admin tool ${forbiddenTool}`);
+}
+
+const financeTools = new Set([
+  ...config.roles["finance-reconciler"].reads,
+  ...config.roles["finance-reconciler"].dry_run,
+  ...config.roles["finance-reconciler"].approved_write,
+]);
+for (const forbiddenTool of [
+  "get_crew_profile", "list_crew_profiles",
+  "get_job_assignment", "list_job_assignments_for_job",
+  "get_safety_plan", "list_safety_plans_for_job",
+  "get_job_compliance_record", "list_job_compliance_records_for_job",
+  "get_communication_consent", "list_communication_consents_for_job",
+  "get_customer_decision", "list_customer_decisions_for_job",
+  "get_contract_acceptance", "list_contract_acceptances_for_job",
+  "get_tenant_export_run", "list_tenant_export_runs_for_tenant",
+  "request_tenant_export",
+]) {
+  assert.ok(!financeTools.has(forbiddenTool),
+    `finance-reconciler must not receive field/customer/admin tool ${forbiddenTool}`);
 }
 
 // The launch manifest (hermes/mcp-servers.json) is the tool-filtering security boundary Hermes
@@ -168,4 +343,4 @@ for (const [serverName, spec] of Object.entries(manifest.mcpServers)) {
   }
 }
 
-console.log(`ok ${roleNames.length} Hermes agent roles + manifest validated against ${inventory.size} live MCP tools`);
+console.log(`ok ${roleNames.length} Hermes agent roles + manifest validated against ${inventory.size} implemented MCP tools`);

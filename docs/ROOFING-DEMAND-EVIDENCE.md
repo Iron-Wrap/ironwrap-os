@@ -9,15 +9,16 @@ field crews, bookkeepers, subcontractors, and customers
 
 ## 1. Decision
 
-The evidence supports the UI/UX North Star, with one important boundary:
+The evidence supports the workflow problems in the UI/UX North Star, with one important boundary:
 
 > IronWrap OS should not become another broad roofing CRM. It should be the owned, offline,
 > evidence-first operating layer that makes lead ownership, estimate provenance, production
 > readiness, field proof, accounting reconciliation, and closeout exceptions impossible to hide.
 
-The Frappe Desk Control Center remains a truthful back-office fallback. The installable PWA is the
-product surface. Proof Stream, physical gate locks, role-shaped home screens, and an exception-first
-owner cockpit are demand-backed choices.
+The Frappe Desk Control Center remains a truthful back-office fallback. The installable PWA,
+Proof Stream, physical gate locks, role-shaped homes, and exception-first owner cockpit are
+**IronWrap product responses** to those problems. Operators did not directly request those exact
+solutions. They remain hypotheses until the automated and human protocols in this document pass.
 
 ## 2. Freshness and provenance policy
 
@@ -26,72 +27,80 @@ This research deliberately avoids turning an old complaint or vendor promise int
 | Evidence class | Treatment |
 | --- | --- |
 | 2025-01-10 through 2026-07-10 owner/operator discussions | Primary demand evidence |
-| Verified 2025-2026 G2/Capterra/App Store reviews | Primary when the reviewer role and workflow are clear |
-| Live 2026 jobs and freelance requests | Primary willingness-to-pay evidence |
+| Verified 2025-2026 G2/Capterra/App Store reviews | Primary only when role, workflow, incentive status, and independence are clear |
+| Current paid roles | Economic corroboration only while the exact posting remains live and duties/pay are visible |
 | Current government/regulator pages | Product constraint, not demand evidence |
-| Current official vendor/help pages | Existence and feature verification only; never scored as demand |
+| Current official vendor/help pages | Existence and feature verification only; never counted as independent demand |
 | Older material | Longitudinal corroboration only; never used to establish current product state |
-| Vendor employees, founders, affiliates, or obvious promotional replies | Tagged and excluded from independent scoring |
+| Vendor employees, founders, affiliates, incentivized reviews, or obvious promotional replies | Tagged and excluded from independent confidence |
+| Expired, redirected, deleted, or role/geography-ambiguous sources | Removed, downweighted, or explicitly labelled; never silently inferred |
 
 Reddit identity cannot be independently verified. Confidence comes from triangulating the same
-workflow across fresh discussions, verified reviews, paid work, and regulatory source material.
-Confidence is **high on workflow shape** and **medium on market prevalence**. The scores below are
-qualitative prioritization, not market-size statistics.
+workflow across fresh independent discussions and non-incentivized verified reviews. All dates in
+the ledger use UTC. Geography, role, spend, and company size are stated only when the source itself
+supports them. Regulatory material validates constraints, not demand.
 
-## 3. Ranked opportunity clusters
+## 3. Opportunity clusters after provenance review
 
-Each score is the demand-mining sum of frequency, intensity, recurrence, money, niche clarity,
-workaround strength, incumbent dissatisfaction, MVP simplicity, distribution, and urgency. Each
-criterion is scored from 1 to 5.
+The earlier exact totals are suspended. They were not reproducible because they lacked
+criterion-by-criterion values, source IDs, independent-source counts, geographic coverage, and
+vendor/incentive exclusions. Exact demand-mining scores may return only with a source-level appendix
+for frequency, intensity, recurrence, money, niche clarity, workaround strength, incumbent
+dissatisfaction, MVP simplicity, distribution, and urgency.
 
-| Opportunity | Score | Product implication |
-| --- | ---: | --- |
-| Offline field proof, safety, and dispute evidence | 48/50 | P1 must prove lossless weak-signal capture at roofing photo volume |
-| Production gates, materials, and sold-to-production handoff | 48/50 | Scheduling is a readiness runway, not a calendar |
-| Lead ownership and immediate, consent-aware follow-up | 48/50 | Every lead has one owner, an age timer, a next action, and a complete contact trail |
-| Unified communication and customer-safe proof | 47/50 | Changes, replies, approvals, and evidence belong to one job chronology |
-| Traceable estimating, repricing, and takeoff | 46/50 | Every number needs source, version, confidence, and human approval |
-| Role-specific cockpit and truthful reporting | 46/50 | Owner, coordinator, estimator, bookkeeper, PM, and crew get materially different homes |
-| Portability, simple adoption, and owned recovery | 45/50 | Export/restore and stable IDs are product features from P0 |
-| QuickBooks reconciliation, receivables, and closeout | 44/50 | QuickBooks remains the ledger; IronWrap owns exceptions and proof |
+| Opportunity | Workflow-shape confidence | Product implication / validation boundary |
+| --- | --- | --- |
+| Offline field proof, safety, and dispute evidence | Strong | P1 must still prove lossless weak-signal capture at roofing photo volume on real devices |
+| Production gates, materials, and sold-to-production handoff | Strong | Scheduling is a readiness runway; crew/work-order/material features alone are incumbent parity |
+| Portability, simple adoption, and owned recovery | Strong | Export/restore and stable IDs remain P0 product contracts |
+| Traceable estimating, repricing, and takeoff | Medium-high | Every number needs source, version, confidence, and human approval |
+| Lead ownership and immediate follow-up | Medium | One owner, age, and next action are supported hypotheses; consent-awareness comes from policy |
+| Unified communication and customer-safe proof | Medium | One chronology is supported; the exact customer-safe surface requires operator validation |
+| QuickBooks reconciliation, receivables, and closeout | Medium | Keep QuickBooks as ledger and test accounting-sync and closeout as separate clusters |
+| Role-specific cockpit and truthful reporting | Low-medium | Treat role-shaped homes as a UI hypothesis until owner/coordinator/crew protocols pass |
 
-## 4. Fresh evidence ledger
+## 4. Fresh independent evidence ledger
 
-The wording below is paraphrased unless a short phrase is inside quotation marks.
+The wording is paraphrased. “Geography unstated” means the source did not prove a country; it is not
+silently treated as U.S. evidence. A Reddit role is self-described and identity remains unverified.
 
-| Date | Geography / role | Fresh signal | Consequence / spend | Source |
+| Date (UTC) | Proven context | Fresh signal | Provenance / use | Source |
 | --- | --- | --- | --- | --- |
-| 2025-04-16 | Canada, small roofing office manager | Wants CRM, estimates, and client payments that are effective and cost-effective in Canada | Active SaaS buyer; U.S.-first assumptions create payment and localization risk | [Canadian Software](https://www.reddit.com/r/Roofing/comments/1k08z18/canadian_software/) |
-| 2026-01-15 | Canada, roofing owner | Has used Jobber, Housecall Pro, and JobNimbus; fears maintaining 3-5 tools and moving hundreds or thousands of clients later | Existing subscription spend and strong migration-lock-in cost | [Best CRM/management software](https://www.reddit.com/r/Roofing/comments/1qdamkm/best_crmmanagement_software_for_roofing_companies/) |
-| 2026-06-16 | U.S./North American roofers | Multiple independent replies reject “another CRM” and emphasize depth, reliability, and the maintenance burden of custom software | Strong current counter-signal against generic feature breadth or an unmaintainable bespoke stack | [What CRM do you use?](https://www.reddit.com/r/RoofingSales/comments/1u6zlxg/what_crm_do_you_use/) |
-| 2026-05-17 | U.S. door-to-door roofing seller/subcontractor | Wants only lead details, reminders, and a few roof-condition photos; full measurement, finance, and install suites get in the way | Segment-specific simplicity and progressive disclosure matter more than one universal workflow | [Simple lead tracking](https://www.reddit.com/r/RoofingSales/comments/1tfncto/is_there_any_best_roofing_software_that_just/) |
-| 2025-08-28 | Pennsylvania, roofing owner around $6M revenue | Reports roughly $5,000/month across AccuLynx and add-ons and is ready to migrate | Direct high-ticket willingness to pay and churn risk | [Unhappy with current CRM](https://www.reddit.com/r/Roofing/comments/1n1yvrp/unhappy_with_current_crm/) |
-| 2025-08-28 | U.S., independent roofing-software user | Reports low-reception failures, missed automations, glitches, and costly switching | Field reliability and migration become operating risk | [Same CRM discussion](https://www.reddit.com/r/Roofing/comments/1n1yvrp/unhappy_with_current_crm/) |
-| 2025-12-09 | U.S. construction PM, verified review | Reports incorrect profit-margin calculations that support could not correct | Estimate error directly threatens margin | [JobNimbus reviews](https://www.capterra.com/p/126797/JobNimbus/reviews/) |
-| 2026-06-02 | Roofing operator | Used a paid service to migrate 5.5 years of AccuLynx data and still lost detail | Explicit paid demand for complete portability | [Switching CRMs](https://www.reddit.com/r/Roofing/comments/1scc5oz/switching_crms_any_tips_on_data_migration/) |
-| 2026-04-03 | U.S. roofing operation, about 1,000 jobs/year | Roofr CSV feeds linked Excel sheets, then final cost/scope is copied into the CRM | Recurring rekeying, identity drift, and aggregate-material blind spots | [JobNimbus workflow discussion](https://www.reddit.com/r/RoofingSales/comments/1sb0fad/starting_a_business_using_job_nimbus_and_could/) |
-| 2026-03-14 | Roofers and supervisors | Report 30-400 photos per job; photos resolve disputes, while text-to-sales-to-Drive filing fails | Evidence protects collections and liability; manual filing consumes paid time | [Before/after photos](https://www.reddit.com/r/Roofing/comments/1rt8abb/roofers_do_you_guys_consistently_take_beforeafter/) |
-| 2025-11-17 | Construction administrator, verified review | CompanyCam saves transfer work but roughly $100/month strains a small budget | Clear value with SMB price sensitivity | [CompanyCam reviews](https://www.capterra.com/p/171143/CompanyCam/reviews/) |
-| 2026-03-06 | Busy roofing contractor | Hand measurement becomes too slow; peers still field-verify despite paying per report | Speed has value, but remote measurements cannot become binding truth | [Roof measuring](https://www.reddit.com/r/Roofing/comments/1rmtbrw/roof_measuring/) |
-| 2025-03-28 | U.S., sole estimator | Reports losing a $30,000 project after a competitor presented a stronger onsite proposal while his Excel estimate arrived next day | Direct revenue loss from slow, weak proposal delivery | [Proposal software](https://www.reddit.com/r/RoofingSales/comments/1jm5khz/suggestions_for_proposal_software/) |
-| 2025-07-19 | U.S. rural roofing sales users | Report measurement results without pitch, forcing manual work or abandonment | Incomplete geometry risks bids, materials, and margin | [Roofing software](https://www.reddit.com/r/RoofingSales/comments/1m41njr/roofing_software/) |
-| 2026-07-09 | Roofing production operator | Says lead CRMs do not adequately manage installs; needs crew, duration, waiting work, materials, and reminders | Explicit current product request tied to daily production | [Production scheduling](https://www.reddit.com/r/Roofing/comments/1urx9kj/production_scheduling_software/) |
-| 2026-04-26 | Roofing PM/scheduler, up to five installs/day | Material-order delays and office/field miscommunication are disrupting workflow | Active request for order/delivery coordination | [Material ordering advice](https://www.reddit.com/r/Roofing/comments/1swhh07/looking_for_material_ordering_advice/) |
-| 2026-06 | Calgary, Great Canadian Roofing and Siding | Funds a full-time coordinator for schedules, materials, and crews | Payroll proves recurring operational value | [Production Coordinator](https://www.ziprecruiter.com/c/Great-Canadian-Roofing-and-Siding/Job/Production-Coordinator/-in-Calgary%2CAB?jid=164ac70bf004c1bb) |
-| 2026 | Calgary, Superior Roofing | Offers CA$20-23/hour for schedules, suppliers, photos, permits, costing, changes, and billing | 25-40 paid hours/week for information flow | [Office/production role](https://ca.indeed.com/viewjob?jk=4cf8b7254e72e502) |
-| 2026-01-23 | Roofing owner/operator, about 18 years | Audits stalled boards because good leads lose ownership and next actions | Lost acquisition spend and owner intervention | [Good leads fade](https://www.reddit.com/r/RoofingSales/comments/1qksee5/hard_truth_after_reviewing_a_bunch_of_roofing/) |
-| 2025-04-19 | Roofing-company respondent | Pays about $80/month for a human answering service; multiple roofers distrust AI reception | Counter-signal: assist humans, do not force deceptive voice AI | [Missed calls](https://www.reddit.com/r/Roofing/comments/1k2i7yh/roofers_honest_question_do_missed_calls_actually/) |
-| 2026-02-05 | Roofing JobNimbus operation | Configured boards and QuickBooks still leave jobs in limbo; seeks paid workflow-audit help | Software presence does not create ownership or next-action discipline | [CRM audit request](https://www.reddit.com/r/CRMSoftware/comments/1qwo13t/has_anyone_worked_with_a_roofing_crm_audit_company/) |
-| 2026-05-11 | North American restoration user, verified review | Thousands of job photos/documents make JobNimbus lag | Evidence scale degrades field and office throughput | [JobNimbus G2](https://www.g2.com/products/jobnimbus/reviews) |
-| 2026-04-17 | Roofing PM, verified review | Repricing an old AccuLynx estimate against current pricing is difficult | Slow re-quotes and stale-cost margin risk | [AccuLynx reviews](https://www.capterra.com/p/116187/Acculynx/reviews/) |
-| 2026-04-20 | Roofing operations manager, verified review | Owner, PM, and operations roles need different information | Generic dashboards create navigation and training debt | [AccuLynx reviews](https://www.capterra.com/p/116187/Acculynx/reviews/) |
-| 2026-04-07 | Roofing bookkeeper, verified review | Reports slow AccuLynx-to-QuickBooks synchronization | Invoice freshness becomes uncertain and creates reconciliation labour | [AccuLynx G2](https://www.g2.com/products/acculynx/reviews) |
-| 2026-02-11 | Roofing president, verified review | Could not promptly obtain a complete archive of photos, contracts, and communications after cancellation | Vendor exit can strand years of operational evidence | [AccuLynx G2](https://www.g2.com/products/acculynx/reviews) |
-| 2026-06/07 | U.S. roofing buyers | Repeatedly hire estimators, supplement specialists, executive assistants, and QuickBooks help | Ongoing spend from $5-$25/hour and percentage-of-recovery compensation | [Estimator](https://www.upwork.com/freelance-jobs/apply/Roofing-Construction-Estimator_~022002882524858192345/), [supplements](https://www.upwork.com/freelance-jobs/apply/Roofing-Supplement-Specialist-Needed_~022009313043042923040/), [operations](https://www.upwork.com/freelance-jobs/apply/Executive-Assistant-Needed-for-Insurance-Roofing-Company_~022013724508415547391/) |
-| Live 2026 | U.S. roofing production managers | Roles coordinate crews, materials, permits, dumpsters, photos, job costs, customers, and punch lists | $50,000-$120,000 salaries show the workflow's economic weight | [Texas](https://www.indeed.com/viewjob?jk=aec8d8a055ddbf6c), [Missouri](https://www.indeed.com/viewjob?jk=583ee9f5eba0e89b), [Virginia](https://www.indeed.com/viewjob?jk=9731015c8a12bd37) |
-| 2025-10-07 | Wisconsin roofing subcontractor | Reports $8,427.11 unpaid across three jobs despite revised invoices and messages | Receivables ambiguity escalates to lien/legal work | [GC has not paid](https://www.reddit.com/r/Contractor/comments/1o0bdxh/gc_hasnt_paid_what_do_i_do/) |
-| 2026-05-19 | California roofing customer | Repeated leak visits and photos did not produce a durable warranty resolution | Poor closeout/proof creates repeat work, dispute, and reputation risk | [Roof repair dispute](https://www.reddit.com/r/Roofing/comments/1tho51w/roof_repair_dispute_with_contractor/) |
-| 2026-04-05 | Canadian small-business owner | Finds CASL consent basis, timestamps, expiry, and unsubscribe records difficult | Compliance uncertainty creates legal and workflow cost | [CASL discussion](https://www.reddit.com/r/SmallBusinessCanada/comments/1sdibwh/ca_crtccasl_compliance/) |
+| 2025-04-16 | Canada; small roofing office manager | Wants cost-effective Canadian CRM, estimating, and client-payment support | Independent primary; Canadian localization | [Canadian Software](https://www.reddit.com/r/Roofing/comments/1k08z18/canadian_software/) |
+| 2026-01-15 | Canada; small roofing owner | Has used Jobber, Housecall Pro, and JobNimbus; fears later migration across hundreds or thousands of clients | Independent primary; portability and adoption | [CRM/management software](https://www.reddit.com/r/Roofing/comments/1qdamkm/best_crmmanagement_software_for_roofing_companies/) |
+| 2026-06-16 | Geography unstated; RoofingSales commenters | Several non-disclosed commenters reject “another CRM” | Independent counter-signal only; disclosed Roofr/JobNimbus replies about depth and maintenance are vendor context | [What CRM do you use?](https://www.reddit.com/r/RoofingSales/comments/1u6zlxg/what_crm_do_you_use/) |
+| 2026-05-17 | Geography unstated; one-person door seller who subcontracts installation | Wants lead details, reminders, and a few roof-condition photos without measurement/finance/install-suite overhead | Independent OP, downweighted because replies are heavily promotional; progressive disclosure | [Simple lead tracking](https://www.reddit.com/r/RoofingSales/comments/1tfncto/is_there_any_best_roofing_software_that_just/) |
+| 2025-08-28 | Pennsylvania; roofing owner around $6M revenue | Reports roughly $5,000/month across AccuLynx and add-ons and is ready to migrate | Independent primary; spend and churn risk | [Unhappy with current CRM](https://www.reddit.com/r/Roofing/comments/1n1yvrp/unhappy_with_current_crm/) |
+| 2025-08-28 | Geography unstated; roofing-software commenter | Reports reception failures, missed automations, glitches, and costly switching | Independent commenter; field reliability and migration risk | [Same CRM discussion](https://www.reddit.com/r/Roofing/comments/1n1yvrp/unhappy_with_current_crm/) |
+| 2026-04-04 | Geography unstated; roofing operator | Has 5.5 years of AccuLynx records and is concerned about preserving them during a switch | Independent OP; portability | [Switching CRMs](https://www.reddit.com/r/Roofing/comments/1scc5oz/switching_crms_any_tips_on_data_migration/) |
+| 2026-04-04 | Geography unstated; separate commenter in the same thread | Paid for migration help and still reports incomplete detail transfer | Independent commenter; explicit migration spend; kept separate from the OP | [Same migration thread](https://www.reddit.com/r/Roofing/comments/1scc5oz/switching_crms_any_tips_on_data_migration/) |
+| 2026-04-03 | Geography unstated; self-described operation around 1,000 jobs/year | Roofr CSV feeds linked sheets before final cost/scope is copied back into CRM | Independent primary; rekeying and identity drift | [JobNimbus workflow](https://www.reddit.com/r/RoofingSales/comments/1sb0fad/starting_a_business_using_job_nimbus_and_could/) |
+| 2026-03-14 | Geography unstated; roofers/supervisors | Report 30–400 photos per job, dispute value, and failed text-to-sales-to-Drive filing | Independent primary; evidence volume and ownership | [Before/after photos](https://www.reddit.com/r/Roofing/comments/1rt8abb/roofers_do_you_guys_consistently_take_beforeafter/) |
+| 2026-03-06 | Geography unstated; busy roofing contractor/commenters | Hand measurement is slow; paid remote reports still receive field verification | Independent primary; measurement speed with human verification | [Roof measuring](https://www.reddit.com/r/Roofing/comments/1rmtbrw/roof_measuring/) |
+| 2025-03-28 | Pacific Northwest; sole estimator; country unstated | Reports losing a $30,000 project after a competitor presented onsite while his Excel estimate arrived next day | Independent primary; proposal speed and presentation | [Proposal software](https://www.reddit.com/r/RoofingSales/comments/1jm5khz/suggestions_for_proposal_software/) |
+| 2025-07-19 | Geography unstated; roofing-sales commenters | Report measurement results without pitch, creating manual work or abandonment | Independent commenter signal, downweighted; incomplete geometry | [Roofing software](https://www.reddit.com/r/RoofingSales/comments/1m41njr/roofing_software/) |
+| 2026-07-09 | Geography unstated; roofing production operator | Requests install scheduling by crew, duration/timeline, waiting work, and reminders | Independent primary; materials are not attributed to this OP | [Production scheduling](https://www.reddit.com/r/Roofing/comments/1urx9kj/production_scheduling_software/) |
+| 2026-04-26 | Geography unstated; roofing PM/scheduler, up to five installs/day | Material delays and office/field miscommunication disrupt work | Independent primary; materials and production handoff | [Material ordering](https://www.reddit.com/r/Roofing/comments/1swhh07/looking_for_material_ordering_advice/) |
+| 2026-01-23 | Geography unstated; roofing owner/operator, about 18 years | Reviews calls and lead histories to identify follow-up breakdowns | Independent OP; excludes a deleted commenter’s separate board claims | [Lead-history review](https://www.reddit.com/r/RoofingSales/comments/1qksee5/hard_truth_after_reviewing_a_bunch_of_roofing/) |
+| 2025-04-18 | Geography unstated; independent roofing-company replies | One respondent reports about $80/month for human answering; several reject AI reception | Independent replies only; the product-building OP is excluded | [Missed calls](https://www.reddit.com/r/Roofing/comments/1k2i7yh/roofers_honest_question_do_missed_calls_actually/) |
+| 2026-02-05 | Geography unstated; JobNimbus roofing operation | Configured workflows, boards, and QuickBooks still leave stagnant jobs/leads; seeks outside expertise | Independent OP; no explicit willingness-to-pay claim | [CRM audit request](https://www.reddit.com/r/CRMSoftware/comments/1qwo13t/has_anyone_worked_with_a_roofing_crm_audit_company/) |
+| 2026-05-11 | Geography unstated; validated restoration-software review | Thousands of job photos/documents make JobNimbus lag | Organic validated review; evidence scale | [JobNimbus G2](https://www.g2.com/products/jobnimbus/reviews) |
+| 2026-04-07 | Geography unstated; verified roofing bookkeeper review | Reports slow AccuLynx-to-QuickBooks synchronization | Independent verified review; accounting freshness | [AccuLynx G2](https://www.g2.com/products/acculynx/reviews) |
+| 2026-02-11 | Geography unstated; verified roofing president review | Could not promptly obtain a complete photo/contract/communication archive after cancellation | Independent verified review; owned exit | [AccuLynx G2](https://www.g2.com/products/acculynx/reviews) |
+| Verified live 2026-07-10 | Virginia; roofing production manager role | Coordinates crews, suppliers, schedules, field/office communication, quality, and production; listed at $85,000–$120,000 | Current paid-role corroboration, not buyer speech | [Virginia role](https://www.indeed.com/viewjob?jk=9731015c8a12bd37) |
+| 2025-10-07 | Wisconsin; gutter subcontractor working for a roofing contractor | Reports $8,427.11 unpaid across three jobs despite revised invoices and messages | Independent adjacent-trade primary; receivables | [GC has not paid](https://www.reddit.com/r/Contractor/comments/1o0bdxh/gc_hasnt_paid_what_do_i_do/) |
+| 2026-05-19 | California; roofing customer | Repeated leak visits and photos did not produce durable warranty resolution | Independent customer primary; closeout/warranty | [Roof repair dispute](https://www.reddit.com/r/Roofing/comments/1tho51w/roof_repair_dispute_with_contractor/) |
+
+### Evidence retained outside cluster confidence
+
+| Evidence | Reason excluded or downweighted |
+| --- | --- |
+| 2025-12-09 JobNimbus Capterra construction-project-management review | Cross-trade corroboration only; country and roofing role are not established |
+| 2025-11-17 CompanyCam construction-administrator review | Non-incentivized cross-trade price-sensitivity signal, not roofing demand |
+| 2026-04-17 and 2026-04-20 AccuLynx Capterra reviews | Both are marked `Vendor Referred - Incentive Offered`; not independent cluster evidence |
+| 2026-04-05 Canadian CASL discussion | Generic small-business discussion; not roofing, and official guidance is the policy source |
+| Two Calgary roles and Texas/Missouri production roles | Expired on the 2026-07-10 recheck; retained only as historical role corroboration |
+| Three Upwork postings | Current URLs redirect to generic category/job pages and no longer prove date, geography, duties, or pay; removed |
 
 ## 5. Current-state verification
 
@@ -100,15 +109,15 @@ is not presented as current truth.
 
 | Current market fact, verified 2026-07-10 | IronWrap consequence |
 | --- | --- |
-| [CompanyCam documents offline photo/video queues, cached checklists, and automatic reconnect sync](https://help.companycam.com/en/articles/6828443-access-offline-mode) (updated 2026-04-10) | Offline capture is table stakes. IronWrap must add explicit local/queued/uploading/verified truth and assigned-job prefetch. |
-| [JobNimbus now markets its mobile app as able to work offline](https://www.jobnimbus.com/product/mobile) | A 2025 user's “no offline” complaint is not used as a current feature claim. Real-device weak-signal proof remains required. |
-| [Roofr shipped a mobile PWA and active material-order status automation in 2026](https://roofr.com/release-notes) | “It is a PWA” is not differentiation. Gate integrity, provenance, and offline durability must be better. |
+| [CompanyCam documents offline photo/video queues, cached checklists, and automatic reconnect sync](https://help.companycam.com/en/articles/6828443-access-offline-mode) (updated 2026-04-10), with at most 60 recent, starred, or assigned projects cached | Offline capture is table stakes. IronWrap must add explicit local/queued/uploading/verified truth and bounded assigned-job prefetch. |
+| [JobNimbus now markets offline mobile work and subcontractor access](https://www.jobnimbus.com/product/mobile) to assigned job details/tasks/photo upload without financial or private data | A 2025 user's “no offline” complaint is not a current feature claim. Assigned, redacted crew access is parity; weak-signal proof remains required. |
+| [Roofr's 2026 release notes document a mobile PWA, signed-proposal work orders, crew assignment, reminders, and material-status automation](https://roofr.com/release-notes) | Those features are parity. Differentiation must come from gate integrity, provenance, offline durability, and owned recovery. |
 | [Roofr currently connects proposals, supplier pricing, and material orders](https://roofr.com/material-ordering) | IronWrap must preserve source pricing, verified scope, discrepancies, substitutions, and install impact rather than merely generate an order. |
 | [AccuLynx currently provides mobile photos, estimates, communications, and crew access](https://acculynx.com/roofing-app/) | Basic mobile job access and photo galleries are parity, not the product thesis. |
-| [Jobber's new QuickBooks Online integration is available in Canada and the U.S.](https://help.getjobber.com/hc/en-us/articles/10485704193687-How-to-Connect-Jobber-and-QuickBooks-Online-NEW-QuickBooks-Integration) (updated 2026-04-08) | Connected accounting is parity. IronWrap differentiates on idempotency, diffs, freshness, exceptions, and audit truth. |
+| [Jobber's new QuickBooks Online integration](https://help.getjobber.com/hc/en-us/articles/10485704193687-How-to-Connect-Jobber-and-QuickBooks-Online-NEW-QuickBooks-Integration) is gradually rolling out to select accounts, on select plans in Canada and the U.S. (updated 2026-04-08) | Connected accounting is parity. IronWrap differentiates on idempotency, diffs, freshness, exceptions, and audit truth. |
 
 All named incumbents still operate. Their pages above verify current existence/capability only and
-are excluded from demand scores.
+are excluded from independent cluster confidence.
 
 ## 6. Product acceptance contracts
 
@@ -190,17 +199,17 @@ These are current legal/operational constraints, not inferred market demand.
 | Gate | Required product behaviour | Source |
 | --- | --- | --- |
 | CASL | Store consent basis, source, timestamp, scope, relevant event/expiry, revocation, suppression, sender identity, and unsubscribe proof; show why each outbound action is permitted | [Government of Canada consent guidance](https://ised-isde.canada.ca/site/canada-anti-spam-legislation/en/getting-consent-send-email) |
-| Alberta fall protection | Cache the versioned site plan offline; record pre-work review/acknowledgement and updates when conditions change | [Alberta OHS Code, Part 9](https://search-ohs-laws.alberta.ca/legislation/occupational-health-and-safety-code/part-9-fall-protection/) |
+| Alberta fall protection | Law requires a qualifying site plan, availability at the work site, pre-work worker review, and updates when conditions change. Versioning, offline caching, and acknowledgement evidence are IronWrap implementation controls. | [Alberta OHS Code, Part 9](https://search-ohs-laws.alberta.ca/legislation/occupational-health-and-safety-code/part-9-fall-protection/) |
 | Alberta prepaid contracting | Validate applicable licence and contract template before deposit acceptance; retain required records | [Alberta prepaid-contracting licence](https://www.alberta.ca/prepaid-contracting-licence) |
 | Alberta rule-change watch | Revalidate licence, contract, cancellation, and retention policy before each production release; Alberta opened a direct-selling/prepaid-contracting modernization engagement in May 2026, but has not replaced the current rules | [Alberta 2026 engagement](https://www.alberta.ca/direct-selling-and-prepaid-contracting-engagement) |
-| Alberta PIPA | Establish reasonable purpose, notice/consent, access control, retention, and deletion policy for customer/employee photos and data | [Alberta OIPC overview](https://oipc.ab.ca/overview-privacy-laws/) |
-| U.S.-bound SMS | Use a separate policy adapter and registration state; CASL cannot substitute for U.S. A2P rules | [Current A2P 10DLC guidance](https://help.twilio.com/articles/1260800720410-What-is-A2P-10DLC) |
+| Alberta PIPA | Enforce reasonable purpose, notice/consent, access, and protection for customer/employee photos and data. Retention/deletion schedules are explicit IronWrap policy controls pending record-specific legal review. | [Alberta OIPC overview](https://oipc.ab.ca/overview-privacy-laws/) |
+| U.S.-bound SMS | Use a separate policy adapter and registration state; CASL cannot substitute for U.S. A2P rules | [Current A2P 10DLC guidance](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc) |
 
 ## 8. Counter-signals and non-goals
 
-- Do not build an undifferentiated all-in-one CRM. Fresh June 2026 roofer replies explicitly
-  reject another generic CRM; operators prioritize depth, reliability, and low maintenance over
-  feature sprawl.
+- Do not build an undifferentiated all-in-one CRM. Fresh independent June 2026 replies reject
+  another generic CRM. Separate disclosed Roofr and JobNimbus employees in that thread emphasized
+  depth, reliability, and maintenance; that vendor perspective is context, not independent demand.
 - Do not treat residential retail, insurance/storm, commercial, service/repair, and door-to-door
   subcontracting as one workflow. Use tenant and segment policy with progressive disclosure.
 - Do not make photos a generic gallery. They are evidence with identity, provenance, audience,

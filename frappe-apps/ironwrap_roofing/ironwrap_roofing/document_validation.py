@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 import frappe
@@ -37,6 +39,42 @@ CORRECTION_TARGETS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "tenant_export_run": ("supersedes", "Tenant Export Run", ("tenant",)),
 }
 
+SAFETY_ACKNOWLEDGEMENT_FIELDS = (
+    "acknowledged_by",
+    "acknowledged_at",
+    "acknowledgement_method",
+    "device_action_id",
+    "evidence_item",
+    "role_on_job",
+    "notes",
+)
+SAFETY_ACKNOWLEDGEMENT_DEVICE_ACTION_INDEX = SAFETY_ACKNOWLEDGEMENT_FIELDS.index(
+    "device_action_id"
+)
+SAFETY_PLAN_FROZEN_FIELDS = (
+    "safety_plan_id",
+    "roof_job",
+    "version",
+    "effective_date",
+    "prepared_by",
+    "prepared_at",
+    "hazard_summary",
+    "controls",
+    "emergency_plan",
+    "ppe_requirements",
+    "weather_limits",
+    "evidence_item",
+    "approved_by",
+    "approved_at",
+    "supersedes",
+    "correction_reason",
+    "notes",
+)
+_ATOMIC_SAFETY_ACKNOWLEDGEMENT_APPEND: ContextVar[tuple[str, str] | None] = ContextVar(
+    "ironwrap_atomic_safety_acknowledgement_append",
+    default=None,
+)
+
 
 def _as_dict(document: Any) -> Any:
     if document is None:
@@ -48,6 +86,115 @@ def _as_dict(document: Any) -> Any:
 def _previous(document: Any) -> Any:
     getter = getattr(document, "get_doc_before_save", None)
     return _as_dict(getter()) if callable(getter) else None
+
+
+def _acknowledgement_snapshot(document: Any) -> tuple[tuple[str, ...], ...]:
+    rows = document.get("acknowledgements") or []
+    return tuple(
+        tuple(
+            "" if row.get(field) is None else str(row.get(field))
+            for field in SAFETY_ACKNOWLEDGEMENT_FIELDS
+        )
+        for row in rows
+    )
+
+
+def _safety_plan_content_snapshot(document: Any) -> tuple[str, ...]:
+    return tuple(
+        "" if document.get(field) is None else str(document.get(field))
+        for field in SAFETY_PLAN_FROZEN_FIELDS
+    )
+
+
+@contextmanager
+def safety_acknowledgement_append_context(safety_plan_id: str, device_action_id: str):
+    """Authorize exactly one server-side acknowledgement append for one save.
+
+    This ContextVar is never populated from the request payload, so a generic
+    REST/Desk document update cannot opt into the child-table mutation path.
+    """
+
+    token = _ATOMIC_SAFETY_ACKNOWLEDGEMENT_APPEND.set(
+        (safety_plan_id, device_action_id)
+    )
+    try:
+        yield
+    finally:
+        _ATOMIC_SAFETY_ACKNOWLEDGEMENT_APPEND.reset(token)
+
+
+def validate_safety_acknowledgement_mutation(document: Any) -> None:
+    """Permit only the atomic RPC to append one immutable acknowledgement row."""
+
+    current = _acknowledgement_snapshot(document)
+    previous_document = _previous(document)
+    previous = (
+        _acknowledgement_snapshot(previous_document)
+        if previous_document is not None
+        else ()
+    )
+    if current == previous:
+        return
+    if previous_document is None:
+        frappe.throw(
+            "Safety Plan acknowledgements can only be appended through the atomic safety acknowledgement command.",
+            exc=frappe.ValidationError,
+        )
+    context = _ATOMIC_SAFETY_ACKNOWLEDGEMENT_APPEND.get()
+    if not context:
+        frappe.throw(
+            "Safety Plan acknowledgements can only be appended through the atomic safety acknowledgement command.",
+            exc=frappe.ValidationError,
+        )
+    safety_plan_id, device_action_id = context
+    if (
+        document.get("name") != safety_plan_id
+        or len(current) != len(previous) + 1
+        or current[: len(previous)] != previous
+        or current[-1][SAFETY_ACKNOWLEDGEMENT_DEVICE_ACTION_INDEX] != device_action_id
+    ):
+        frappe.throw(
+            "Safety Plan acknowledgement mutation did not match the authorized atomic append.",
+            exc=frappe.ValidationError,
+        )
+
+
+def validate_safety_plan_frozen_content(document: Any) -> None:
+    """Prevent generic REST/Desk rewrites once a Safety Plan is ready to use.
+
+    A Ready/Acknowledged plan is an auditable safety artifact.  Corrections use
+    a new plan with ``supersedes``; the sole in-place transition is the atomic
+    command's Ready -> Acknowledged acknowledgement append.
+    """
+
+    previous_document = _previous(document)
+    if previous_document is None:
+        return
+    previous_status = previous_document.get("status")
+    current_status = document.get("status")
+    if previous_status not in {"Ready", "Acknowledged"}:
+        return
+    if _safety_plan_content_snapshot(document) != _safety_plan_content_snapshot(
+        previous_document
+    ):
+        frappe.throw(
+            "Ready or Acknowledged Safety Plan content is immutable; create a superseding plan instead.",
+            exc=frappe.ValidationError,
+        )
+    if current_status == previous_status:
+        return
+    context = _ATOMIC_SAFETY_ACKNOWLEDGEMENT_APPEND.get()
+    if (
+        context
+        and context[0] == document.get("name")
+        and previous_status == "Ready"
+        and current_status == "Acknowledged"
+    ):
+        return
+    frappe.throw(
+        "Ready or Acknowledged Safety Plan status is immutable; create a superseding plan instead.",
+        exc=frappe.ValidationError,
+    )
 
 
 def _value(doctype: str, name: str | None, field: str) -> Any:

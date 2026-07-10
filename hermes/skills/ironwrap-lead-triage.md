@@ -10,17 +10,17 @@ Qualify a new lead, score urgency, attribute its source, and flag missing inform
 
 ## Inputs
 - Bus: `list_recent_envelopes`, `get_envelope` (canonical envelope, raw payload, source).
-- ERPNext: `get_lead_envelope` (Lead Envelope), `get_roof_job` (Roof Job), `get_instant_estimate_session` / `list_instant_estimate_sessions_for_job` (Instant Estimate Session).
+- Frappe: `get_lead_envelope` (Lead Envelope), `get_roof_job` (Roof Job), `get_instant_estimate_session` / `list_instant_estimate_sessions_for_job` (Instant Estimate Session).
 - Comms history: `list_communication_events_for_job`, plus `check_consent` / `check_quiet_hours` before any draft.
 
 ## Procedure
 1. Read the raw envelope with `get_envelope`; note channel, brand (ironwrap vs iroof by sender_domain), timestamp, and consent field.
-2. Read the mapped `get_lead_envelope` and any linked `get_roof_job` to confirm the bus event became an ERPNext record. If counts do not match, flag a reconcile gap; do not invent records.
+2. Read the mapped `get_lead_envelope` and any linked `get_roof_job` to confirm the bus event became an IronWrap OS Frappe record. If counts do not match, flag a reconcile gap; do not invent records.
 3. Classify service type against tenant services (roofing, metal_roofing, siding, gutters, soffit_fascia) and set urgency (emergency leak / active damage = high).
 4. Attribute source from the envelope (organic, GBP, ad, referral, form) and record the brand.
 5. Run a missing-info check: name, address/service area (Edmonton / Greater Edmonton / Alberta), contact method, consent basis, service, and any Instant Estimate Session link. List every gap explicitly.
 6. If a first-response draft is warranted: call `check_consent` (channel + consent_basis) and `check_quiet_hours` first. Then `dry_run_communication_event` to preview the policy-gated draft.
-7. On human approval, call `request_record_communication_event` with `request_text`, `approved_by`, and `approval_token` (HERMES_WRITE_TOKEN). The record is Draft or Blocked, never Sent, and writes a Hermes Run audit row.
+7. On human approval, call `request_record_communication_event` with `request_text`, `approved_by`, and `dry_run_receipt` plus a signed `approval_receipt`. The record is Draft or Blocked, never Sent, and writes a Hermes Run audit row.
 8. Hand the owner: qualification summary, urgency, source, missing-info list, and (if drafted) the Communication Event id for a human to send.
 
 ## Guardrails

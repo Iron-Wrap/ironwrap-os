@@ -1,8 +1,8 @@
 # Hermes/Frappe Proof Pack
 
 Status: repository proof packet; no live deployment claim.
-Date: 2026-07-08. Updated 2026-07-10: 33-DocType Frappe-only application, operational safety,
-idempotent MCP writes, and pinned deployment/recovery contract.
+Date: 2026-07-08. Updated 2026-07-10: 46-DocType Frappe-only application, atomic safety acknowledgement,
+runtime-governed MCP writes, Field Companion PWA, and pinned deployment/recovery contract.
 
 This collapses the artificial blockers from the Hermes/ERPNext blocker audit.
 It defines the owned path that gradually replaces JobNimbus/GHL bridge duties as each live proof
@@ -37,7 +37,7 @@ is never installed. ERPNext was removed 2026-07-09 for 100% IP ownership; the ap
 IronWrap IP on the MIT Frappe framework, with fixtures committed as DocType JSON. The only
 non-custom Link target is Frappe core `User`.
 
-Exactly 33 DocTypes are committed: 29 top-level objects and four child tables.
+Exactly 46 DocTypes are committed: 39 top-level objects and seven child tables.
 
 | DocType | Kind | Purpose / principal links |
 | --- | --- | --- |
@@ -74,6 +74,19 @@ Exactly 33 DocTypes are committed: 29 top-level objects and four child tables.
 | Automation Incident | top-level | Operational failure, severity, owner, resolution, and correlation |
 | Market Watch Item | top-level | Sourced competitor/product gap and disposition |
 | White-Label Tenant | top-level | Site-per-company identity, namespace, brand, and policy config |
+| Crew Profile | top-level | Active crew, member, safety, and workflow profile |
+| Job Assignment | top-level | Append-only direct/crew assignment lifecycle |
+| Change Order | top-level | Versioned internal scope/price change draft |
+| Change Order Item | child | Scoped quantity/price/approval line item |
+| Safety Plan | top-level | Versioned safety evidence and acknowledgement parent |
+| Safety Acknowledgement | child | Atomic device-bound acknowledgement evidence |
+| Crew Member | child | Active crew membership and role |
+| Job Compliance Record | top-level | Permit/licence/inspection/waiver truth |
+| Communication Consent | top-level | Append-only consent/revocation evidence |
+| Customer Decision | top-level | Evidence-backed decision record, never signature impersonation |
+| Contract Acceptance | top-level | Customer/provider acceptance evidence, Hermes read-only |
+| Integration Reconciliation | top-level | External-mirror discrepancy and resolution record |
+| Tenant Export Run | top-level | Requested export audit record |
 
 Every top-level object has a unique field-based identity and a controller that calls the shared
 server-side validation adapter. The pure policy layer validates strict JSON, immutable/write-once
@@ -115,7 +128,7 @@ Current implementation checkpoint:
 - D1 proof fields: `workers-bus/migrations/0002_erpnext_consumer.sql` and
   `workers-bus/migrations/0003_erpnext_operating_core.sql`; operational schema, replay audit, and
   run-id ledger are extended by ordered migrations `0007` through `0010`.
-- Frappe app contract: `frappe-apps/ironwrap_roofing` carries all 33 blueprint DocTypes, shared
+- Frappe app contract: `frappe-apps/ironwrap_roofing` carries all 46 blueprint DocTypes, shared
   policy/controllers, site roles/permissions, install/migrate hooks, and package discovery proof.
 - Contract validator: `node tools/validate-erpnext-doctypes.mjs`.
 - Worker operational truth: `GET /health` is liveness, `GET /ready` queries D1 schema and verifies
@@ -129,8 +142,8 @@ Current implementation checkpoint:
   replay requires exact hard confirmation and is unavailable to Hermes. The replay-request ledger
   makes an exact completed `run_id` retry read-only, rejects changed intent/approver/reason, exposes
   concurrent in-progress requests, and permits safe retry of a failed rolled-back request.
-- MCP wrappers: `mcp/ironwrap-bus-mcp` exposes 7 tools and `mcp/erpnext-roofing-mcp` exposes 71;
-  the role/manifest validator currently proves 78 implemented tools across eight roles.
+- MCP wrappers: `mcp/ironwrap-bus-mcp` exposes 7 tools and `mcp/erpnext-roofing-mcp` exposes 111;
+  the role/manifest validator currently proves 118 implemented tools across eight roles.
 - Measurement bridge: `/ingest/measurement` now stores raw input first, then
   mirrors parsed report metadata and child measurement values into Frappe
   `Measurement Report` plus a linked `Evidence Item` when `ERPNEXT_ENABLED=true`.
@@ -142,13 +155,14 @@ Current implementation checkpoint:
 - Production gate bootstrap: Roof Job sync creates missing `Production Gate State`
   rows for Deposit, Materials, Safety, Access, Weather, Crew, and Completion.
   Existing rows are not overwritten on retry.
-- Domain spine (2026-07-10): all 33 DocTypes are exact-contract validated. Review Requests apply
+- Domain spine (2026-07-10): all 46 DocTypes are exact-contract validated. Review Requests apply
   deterministic completion/payment/consent stops; Communication Events apply CASL-style consent
   and quiet hours and remain record-only; field intake accepts voice notes/transcripts as Evidence
   Items; supplier, proposal, production, and closeout transitions validate upstream evidence.
 - Approved Frappe writes share one audited helper. Production URLs require HTTPS, requests have a
-  bounded timeout, redirects fail, and every request tool requires a stable `run_id`. Reusing a
-  completed run returns its recorded result. Target failure ends `Failed`; a mutation followed by
+  bounded timeout, redirects fail, and every request tool requires canonical role/actor, verified
+  evidence, a stable `run_id`, current dry-run receipt, and separately signed human approval receipt.
+  Reusing a completed run returns recorded truth; an in-flight claim never re-executes. Target failure ends `Failed`; a mutation followed by
   audit-finalization failure ends `Audit Failed` with `mutation_applied=true`, correlation/result
   evidence, and `audit_incident_id`, with best-effort Automation Incident creation.
 - White-label/ops (2026-07-08): tenant configs in `config/tenants/` validated by
@@ -225,9 +239,9 @@ The bus replay is the exception to the Frappe row type: it records the same run/
 proof in the D1 audit ledger. Bulk replay is admin-only with a separate hard confirmation.
 
 Proof gate: run Hermes against fixture-backed MCP tools first. The first Frappe approved-write
-proof is `request_update_gate`, guarded by `ERPNEXT_WRITE_ENABLED=true` plus
-`HERMES_WRITE_TOKEN`, a required stable `run_id`, and a `Hermes Run` before/after record. Retry
-the same completed `run_id` and prove the stored result returns with no repeated target mutation.
+proof is `request_update_gate`, guarded by `ERPNEXT_WRITE_ENABLED=true`, runtime role/actor,
+a signed preview receipt, human approval receipt, stable `run_id`, and a Hermes Run before/after
+record. Retry the same completed `run_id` and prove stored truth returns with no repeated target mutation.
 
 ## Measurement Proof
 
@@ -397,13 +411,13 @@ These are not artificial and should stay visible:
 | A2P 10DLC / Canadian carrier registration | legal business details plus provider approval |
 | Website form cutover | website host/CMS/agency access and real test lead |
 | Make scenario resave/retirement | Make UI and owner confirmation |
-| Jotform live forms/webhooks/mobile offline test | Jotform account and device test |
+| Field Companion real-device/offline test (Jotform bridge optional) | iOS/Android devices, weak-signal/kill/storage proof, and live backend |
 | QuickBooks Payments/webhook/OAuth | Webhook receiver has signed-payload replay receipts; QuickBooks admin/OAuth still required for payment detail reads |
 | Google DKIM/DMARC and Microsoft mirror shutdown | Google/Microsoft admin plus owner signoff |
 | Cloudflare token rotation | Cloudflare account authority |
 | Historical OneDrive migration | Microsoft/Google access plus legacy mapping |
 | Compliance/legal notices | lawyer/owner approval |
-| Operator UI | Custom exception-first cockpit/portal still absent; Frappe Desk is the current fallback |
+| Operator UI | Frappe Control Center exists in source; React owner cockpit and customer portal remain absent; live role/device proof remains open |
 
 These are launch/product gates, not reasons to weaken repository contracts. Keep them open until
 the named external evidence exists.

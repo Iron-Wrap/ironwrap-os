@@ -4,7 +4,11 @@ Narrow MCP server for the proprietary IronWrap OS Frappe app. The `erpnext-*`
 name is retained only for compatibility; ERPNext is not installed or linked.
 
 This server is the Hermes command surface over IronWrap OS business truth. It uses
-Frappe token auth and exposes read tools plus token-gated approved-write tools:
+Frappe token auth. The implemented source contract is **111 tools: 69 reads, 21 dry-runs, and 21
+approved writes**. The manifest in `hermes/mcp-servers.json` is the exact source-registration
+inventory; deployed runtime proof remains a launch gate.
+
+Baseline reads and command pairs:
 
 - `get_roof_job`
 - `get_lead_envelope`
@@ -71,16 +75,42 @@ Frappe token auth and exposes read tools plus token-gated approved-write tools:
 - `dry_run_market_watch_item`
 - `request_add_market_watch_item`
 
+Committed 46-DocType operating-model additions:
+
+- `get_crew_profile` / `list_crew_profiles` (strictly read-only)
+- `get_job_assignment` / `list_job_assignments_for_job`
+- `get_change_order` / `list_change_orders_for_job`
+- `get_safety_plan` / `list_safety_plans_for_job`
+- `get_job_compliance_record` / `list_job_compliance_records_for_job`
+- `get_communication_consent` / `list_communication_consents_for_job`
+- `get_customer_decision` / `list_customer_decisions_for_job`
+- `get_contract_acceptance` / `list_contract_acceptances_for_job` (strictly read-only)
+- `get_integration_reconciliation` / `list_integration_reconciliations_for_job`
+- `get_tenant_export_run` / `list_tenant_export_runs_for_tenant`
+- `dry_run_job_assignment` / `request_create_job_assignment`
+- `dry_run_change_order` / `request_create_change_order`
+- `dry_run_change_order_transition` / `request_transition_change_order`
+- `dry_run_safety_plan` / `request_create_safety_plan`
+- `dry_run_safety_acknowledgement` / `request_record_safety_acknowledgement`
+- `dry_run_job_compliance_record` / `request_record_job_compliance`
+- `dry_run_customer_decision` / `request_record_customer_decision`
+- `dry_run_communication_consent` / `request_record_communication_consent`
+- `dry_run_reconciliation_resolution` / `request_resolve_reconciliation`
+- `dry_run_tenant_export` / `request_tenant_export`
+
 Estimator intake enters IronWrap OS through the Worker `POST /ingest/estimate` route first. This MCP
 server reads the resulting `Instant Estimate Session` rows and can draft downstream takeoff/proposal
 work, but it does not accept raw public estimator submissions itself.
 
-Write tools are disabled unless `ERPNEXT_WRITE_ENABLED=true` and
-`HERMES_WRITE_TOKEN` are set. Every request requires a caller-supplied stable
-`run_id`, approver, request text, and approval token. The token is redacted from
-the `Hermes Run` audit payload. An exact completed retry returns the stored
-result; an `Audit Failed` run proves the target mutation happened and is never
-reapplied.
+Frappe write tools are disabled unless `ERPNEXT_WRITE_ENABLED=true`. Every MCP
+process must also bind one canonical `HERMES_AGENT_ROLE` and `HERMES_ACTOR_USER`;
+the server registers only that role's `roles.json` allowlist. An approved request
+needs a stable `run_id`, request text, approver, a short-lived server-issued
+`dry_run_receipt`, and an independently signed `approval_receipt` for the exact
+arguments, role, actor, and Frappe site. Receipt fields are redacted from the
+`Hermes Run` audit payload. Creating the unique `Hermes Run` is the one mutation
+claim: a completed exact retry returns stored truth; an in-flight, failed, or
+audit-failed claim never re-executes the mutation.
 
 Current approved-write tools:
 
@@ -115,17 +145,50 @@ Current approved-write tools:
   never sends a message; sending stays a human action.
 - `request_add_market_watch_item` creates or updates one `Market Watch Item`
   for the market-defense loop.
+- `request_create_job_assignment` appends one assignment. Schedule or crew corrections
+  require a new id, `supersedes`, and a written reason.
+- `request_create_change_order` appends a Draft change-order version;
+  `request_transition_change_order` permits internal review transitions only. Neither tool
+  can accept, reject, sign, or send for a customer; marking Presented requires linked evidence
+  that a human/provider already performed the presentation.
+- `request_create_safety_plan` appends a plan; Ready requires linked evidence.
+  `request_record_safety_acknowledgement` invokes a locked Frappe command, rather than a
+  generic parent update. It derives an active assignment role, requires verified safety
+  proof owned/captured by the actor, and preserves exact device-action replay.
+- `request_record_job_compliance` creates or legally transitions an evidence-gated
+  compliance record without bypassing production gates.
+- `request_record_customer_decision` appends evidence of a decision already made by a
+  customer. `Contract Acceptance` has no write tool.
+- `request_record_communication_consent` appends record-only consent history. Granted
+  requires proof; Revoked/Superseded require explicit lineage and correction reason.
+- `request_resolve_reconciliation` updates only an Integration Reconciliation record; it
+  never mutates QuickBooks, payment, invoice, or another external system.
+- `request_tenant_export` appends only a Requested Tenant Export Run. A separate audited
+  worker creates/encrypts the archive, excluding credentials, sessions, and key material.
+  The same caller-supplied `export_run_id` must be used in dry-run and approved request.
 
 Required environment:
 
 ```bash
 ERPNEXT_BASE_URL=https://erp.example.com
+# Per-actor Frappe token: its API user must exactly equal HERMES_ACTOR_USER.
 ERPNEXT_API_KEY=...
 ERPNEXT_API_SECRET=...
 ERPNEXT_WRITE_ENABLED=false
-HERMES_WRITE_TOKEN=...
+HERMES_AGENT_ROLE=owner-operator
+HERMES_ACTOR_USER=owner@example.com
+HERMES_APPROVER_ID=owner@example.com
+HERMES_DRY_RUN_SIGNING_KEY=<at-least-32-byte-host-secret>
+HERMES_APPROVAL_PUBLIC_KEY_FILE=/run/secrets/hermes-approval-public.pem
 ERPNEXT_REQUEST_TIMEOUT_MS=10000
 ```
+
+The separate approval broker holds the Ed25519 private key. It signs a bounded
+approval request with `node tools/issue-hermes-approval.mjs`; the MCP server holds
+only the public key. For an atomic safety acknowledgement, the Frappe API token
+must belong to exactly `HERMES_ACTOR_USER`; a shared integration/service account
+is rejected. Run one MCP process per actor and never reuse the Worker's Frappe
+integration credential for that process.
 
 Production URLs must use HTTPS. Plain HTTP is rejected unless the hostname is
 localhost and `ERPNEXT_ALLOW_INSECURE_LOCAL=true` is explicitly set for local

@@ -155,6 +155,10 @@ npm run deploy
 Set `ERPNEXT_ENABLED="true"` in the deployed Worker configuration. Then prove both health
 surfaces:
 
+The Worker pair is a dedicated integration credential. Do not mount it in Hermes: every Hermes
+MCP process needs its own Frappe API pair issued to exactly its `HERMES_ACTOR_USER`, so the
+atomic safety acknowledgement command cannot impersonate a field actor.
+
 ```bash
 curl --fail --silent --show-error "$BUS_BASE_URL/health"
 curl --fail --silent --show-error "$BUS_BASE_URL/ready"

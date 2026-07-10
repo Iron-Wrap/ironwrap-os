@@ -16,8 +16,8 @@ materials → completion → invoice → review, on a portable owned-data spine.
 |---|---|---|
 | `final-spec-pack/` | **The spec** — 19 numbered chapters (`README.md` is the index). The source of truth for the target system. | Authoritative |
 | `workers-bus/` | **The integration bus** — a Cloudflare Worker (fetch + queue + scheduled) that is the owned data layer + Make-bus replacement. Builds + tests green. | Buildable |
-| `frappe-apps/ironwrap_roofing/` | **Frappe-only operating core**: proprietary custom Frappe app (33 DocTypes: 29 top-level records plus 4 child tables), server policy/RBAC, and a read-only exception-first Control Center. Zero GPL link targets (only Frappe core `User`); ERPNext removed 2026-07-09 for 100% IP. Contract-validated; erpnext-* tool/env naming retained for compatibility. | Buildable |
-| `mcp/` | **Hermes tool surface** — `ironwrap-bus-mcp` (bus read + replay) and `erpnext-roofing-mcp` (read + deterministic policy checks + review-gated approved writes). Tests green. | Buildable |
+| `frappe-apps/ironwrap_roofing/` | **Frappe-only operating core**: proprietary custom Frappe app (46 DocTypes: 39 top-level records plus 7 child tables), server policy/RBAC, atomic safety acknowledgement RPC, and a read-only exception-first Control Center. Zero GPL link targets (only Frappe core `User`); ERPNext removed 2026-07-09 for 100% IP. Contract-validated; erpnext-* tool/env naming retained for compatibility. | Buildable |
+| `mcp/` | **Hermes tool surface** — `ironwrap-bus-mcp` (7 bus tools) and `erpnext-roofing-mcp` (111 role-filtered Frappe tools: 69 reads, 21 dry-runs, 21 approved writes). Frappe writes require bound preview and human-approval receipts. | Buildable |
 | `hermes/` | **Agent runtime layer** — `agents/roles.json` (per-role MCP tool allowlists, source of truth), agent profiles, `mcp-servers.json`, and the `skills/` procedure packs. | Buildable |
 | `config/tenants/` | **White-label tenant configs** — one JSON per contractor (brands, geography, gates, agents), secrets by env-var name only. Validated. | Buildable |
 | `deploy/` | **Launch kit** (free-tier path): app-repo split script, frappe_docker apps.json template, Cloudflare Tunnel config, R2 backup cron script, env inventory. Runbook: `docs/LAUNCH-RUNBOOK.md`; live-spine proof: `tools/launch-proof.mjs`. | Buildable |
@@ -51,7 +51,7 @@ materials → completion → invoice → review, on a portable owned-data spine.
 - **SMS** = JobNimbus Engage (needs fresh A2P 10DLC + Canadian carrier registration first).
 - **Phone AI** = JobNimbus AssistAI (behind a written eval gate) → managed Retell → managed-OSS
   (LiveKit/Pipecat) → voicemail floor. The 4-vendor DIY voice stack stays killed.
-- **Field photos/geo** = Jotform "Jobsite Photo" form (device GPS at submit, offline).
+- **Field photos/geo** = owned Field Companion PWA (offline-first photo, voice, blocker, and GPS check-ins with server-verified replay). Jotform "Jobsite Photo" remains a temporary bridge. Local implementation is green; real-device proof remains open.
 - **e-sign** = owned proposal evidence pack first as it matures; JobNimbus native can bridge while
   the owned proposal flow is incomplete (and dies with the JobNimbus retirement). DocuSeal is
   retired permanently (AGPL, not even a fallback); the replacement is a commercial e-sign API
@@ -98,9 +98,9 @@ npx wrangler deploy --dry-run    # validate config + bundle
 ## Working with `hermes/`, `mcp/`, and the validators
 
 ```bash
-node tools/validate-erpnext-doctypes.mjs   # DocType JSON contract (33 DocTypes)
+node tools/validate-erpnext-doctypes.mjs   # DocType JSON contract (46 DocTypes)
 node tools/validate-tenant-config.mjs      # white-label tenant configs, no secrets, isolation
-node tools/validate-hermes-config.mjs      # agent roles vs LIVE MCP tool inventory + safety contract
+node tools/validate-hermes-config.mjs      # agent roles vs implemented MCP source inventory + safety contract
 (cd mcp/erpnext-roofing-mcp && npm test)   # pure-logic builders + policy checks
 (cd mcp/ironwrap-bus-mcp && npm test)      # bus read/replay wrappers
 ```
@@ -112,8 +112,10 @@ node tools/validate-hermes-config.mjs      # agent roles vs LIVE MCP tool invent
 - **The mutation contract is universal:** `read → propose → dry_run → policy_check →
   human_approval → write → audit_event`. No tool sends a customer message or mutates accounting;
   comms and review requests are record-only, and every approved write records a `Hermes Run` row.
-- Approved writes are double-gated: `ERPNEXT_WRITE_ENABLED=true` (or `IRONWRAP_BUS_WRITE_ENABLED`)
-  **plus** the `HERMES_WRITE_TOKEN` passed as `approval_token`. Skill packs live in `hermes/skills/`.
+- Frappe approved writes are double-gated: `ERPNEXT_WRITE_ENABLED=true` **plus** a current
+  server-issued `dry_run_receipt` and separately signed `approval_receipt` bound to role, actor,
+  approver, site, and exact args. Bus replay retains its separate `HERMES_WRITE_TOKEN` gate.
+  Skill packs live in `hermes/skills/`.
 
 ## Conventions & guardrails
 

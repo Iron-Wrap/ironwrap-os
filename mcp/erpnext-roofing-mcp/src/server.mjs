@@ -224,30 +224,188 @@ const MARKET_WATCH_ITEM_FIELDS = [
   "modified",
 ];
 
+const PRICE_BOOK_RULE_FIELDS = [
+  "name",
+  "price_rule_id",
+  "rule_name",
+  "rule_type",
+  "status",
+  "service_type",
+  "material_system",
+  "unit",
+  "unit_cost",
+  "unit_price",
+  "currency",
+  "effective_from",
+  "effective_to",
+  "modified",
+];
+
+const VISUAL_PROPERTY_MODEL_FIELDS = [
+  "name",
+  "visual_model_id",
+  "roof_job",
+  "roofing_property",
+  "provider",
+  "provider_model_id",
+  "model_uri",
+  "status",
+  "confidence",
+  "needs_review",
+  "source_evidence",
+  "captured_at",
+  "modified",
+];
+
+const ROOF_AREA_FIELDS = [
+  "name",
+  "roof_area_id",
+  "roof_job",
+  "roofing_property",
+  "area_name",
+  "status",
+  "area_sqft",
+  "pitch",
+  "facet_count",
+  "penetration_count",
+  "edge_length_ft",
+  "measurement_report",
+  "visual_model",
+  "needs_review",
+  "modified",
+];
+
+const OPTION_PACKAGE_FIELDS = [
+  "name",
+  "option_package_id",
+  "roof_job",
+  "package_name",
+  "tier",
+  "status",
+  "material_system",
+  "price_delta",
+  "currency",
+  "warranty_summary",
+  "modified",
+];
+
+const SCOPE_CLAUSE_FIELDS = [
+  "name",
+  "scope_clause_id",
+  "roof_job",
+  "clause_type",
+  "title",
+  "version",
+  "status",
+  "customer_visible",
+  "modified",
+];
+
+const AUTOMATION_INCIDENT_FIELDS = [
+  "name",
+  "incident_id",
+  "status",
+  "severity",
+  "source_system",
+  "category",
+  "summary",
+  "roof_job",
+  "lead_envelope",
+  "record_ref",
+  "correlation_id",
+  "detected_at",
+  "assigned_to",
+  "resolved_at",
+  "modified",
+];
+
+const WHITE_LABEL_TENANT_FIELDS = [
+  "name",
+  "tenant_id",
+  "status",
+  "site_hostname",
+  "legal_name",
+  "primary_brand",
+  "owner_user",
+  "support_email",
+  "data_residency",
+  "isolation_model",
+  "activated_at",
+  "modified",
+];
+
 export function configFromEnv(env = process.env) {
-  const baseUrl = env.ERPNEXT_BASE_URL?.replace(/\/+$/, "");
+  const baseUrl = normalizeFrappeBaseUrl(env.ERPNEXT_BASE_URL, env.ERPNEXT_ALLOW_INSECURE_LOCAL === "true");
   const apiKey = env.ERPNEXT_API_KEY;
   const apiSecret = env.ERPNEXT_API_SECRET;
   const writeEnabled = env.ERPNEXT_WRITE_ENABLED === "true";
   const writeToken = env.HERMES_WRITE_TOKEN;
-  if (!baseUrl) throw new Error("ERPNEXT_BASE_URL is required");
   if (!apiKey) throw new Error("ERPNEXT_API_KEY is required");
   if (!apiSecret) throw new Error("ERPNEXT_API_SECRET is required");
-  return { baseUrl, apiKey, apiSecret, writeEnabled, writeToken };
+  const requestTimeoutMs = parseRequestTimeout(env.ERPNEXT_REQUEST_TIMEOUT_MS);
+  return { baseUrl, apiKey, apiSecret, writeEnabled, writeToken, requestTimeoutMs };
 }
 
 export async function erpRequest(config, method, path, body) {
-  const res = await fetch(config.baseUrl + path, {
-    method,
-    headers: {
-      accept: "application/json",
-      authorization: `token ${config.apiKey}:${config.apiSecret}`,
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`erpnext_http_${res.status}: ${(await res.text()).slice(0, 300)}`);
-  return await res.json();
+  const timeoutMs = config.requestTimeoutMs ?? 10_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(config.baseUrl + path, {
+      method,
+      redirect: "error",
+      signal: controller.signal,
+      headers: {
+        accept: "application/json",
+        authorization: `token ${config.apiKey}:${config.apiSecret}`,
+        "user-agent": "ironwrap-erpnext-roofing-mcp/0.2",
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    if (controller.signal.aborted) throw new Error(`erpnext_timeout_${timeoutMs}ms`);
+    throw new Error(`erpnext_network_error: ${String(err).slice(0, 240)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const responseText = await res.text();
+  if (!res.ok) throw new Error(`erpnext_http_${res.status}: ${res.statusText || "request_failed"}`);
+  if (!responseText) return {};
+  try {
+    return JSON.parse(responseText);
+  } catch {
+    throw new Error(`erpnext_invalid_json_${res.status}`);
+  }
+}
+
+export function normalizeFrappeBaseUrl(raw, allowInsecureLocal = false) {
+  if (!raw) throw new Error("ERPNEXT_BASE_URL is required");
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("ERPNEXT_BASE_URL must be an absolute URL");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error("ERPNEXT_BASE_URL must not contain credentials, query, or fragment");
+  }
+  const local = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(allowInsecureLocal && local && url.protocol === "http:")) {
+    throw new Error("ERPNEXT_BASE_URL must use HTTPS (HTTP is allowed only for explicit local development)");
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+}
+
+export function parseRequestTimeout(raw) {
+  if (raw === undefined || raw === "") return 10_000;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1_000 || value > 60_000) {
+    throw new Error("ERPNEXT_REQUEST_TIMEOUT_MS must be an integer from 1000 to 60000");
+  }
+  return value;
 }
 
 export async function erpGet(config, path) {
@@ -821,7 +979,7 @@ export function redactApprovalArgs(args) {
 }
 
 export function buildServer(config) {
-  const server = new McpServer({ name: "erpnext-roofing-mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "erpnext-roofing-mcp", version: "0.2.0" });
 
   server.registerTool(
     "get_roof_job",
@@ -837,7 +995,7 @@ export function buildServer(config) {
     "get_lead_envelope",
     {
       title: "Get Lead Envelope",
-      description: "Read one ERPNext Lead Envelope by envelope_id/name.",
+      description: "Read one IronWrap OS Lead Envelope by envelope_id/name.",
       inputSchema: { envelope_id: z.string().min(1) },
     },
     async ({ envelope_id }) => text(await erpGet(config, resourcePath("Lead Envelope", envelope_id))),
@@ -902,7 +1060,7 @@ export function buildServer(config) {
     "get_measurement_report",
     {
       title: "Get Measurement Report",
-      description: "Read one ERPNext Measurement Report by measurement_id/name.",
+      description: "Read one IronWrap OS Measurement Report by measurement_id/name.",
       inputSchema: { measurement_id: z.string().min(1) },
     },
     async ({ measurement_id }) => text(await erpGet(config, resourcePath("Measurement Report", measurement_id))),
@@ -927,7 +1085,7 @@ export function buildServer(config) {
     "get_material_takeoff",
     {
       title: "Get Material Takeoff",
-      description: "Read one ERPNext Material Takeoff by takeoff_id/name.",
+      description: "Read one IronWrap OS Material Takeoff by takeoff_id/name.",
       inputSchema: { takeoff_id: z.string().min(1) },
     },
     async ({ takeoff_id }) => text(await erpGet(config, resourcePath("Material Takeoff", takeoff_id))),
@@ -952,7 +1110,7 @@ export function buildServer(config) {
     "get_supplier_order",
     {
       title: "Get Supplier Order",
-      description: "Read one ERPNext Supplier Order by supplier_order_id/name.",
+      description: "Read one IronWrap OS Supplier Order by supplier_order_id/name.",
       inputSchema: { supplier_order_id: z.string().min(1) },
     },
     async ({ supplier_order_id }) => text(await erpGet(config, resourcePath("Supplier Order", supplier_order_id))),
@@ -977,7 +1135,7 @@ export function buildServer(config) {
     "get_instant_estimate_session",
     {
       title: "Get Instant Estimate Session",
-      description: "Read one ERPNext Instant Estimate Session by estimate_session_id/name.",
+      description: "Read one IronWrap OS Instant Estimate Session by estimate_session_id/name.",
       inputSchema: { estimate_session_id: z.string().min(1) },
     },
     async ({ estimate_session_id }) => text(await erpGet(config, resourcePath("Instant Estimate Session", estimate_session_id))),
@@ -1002,7 +1160,7 @@ export function buildServer(config) {
     "get_evidence_item",
     {
       title: "Get Evidence Item",
-      description: "Read one ERPNext Evidence Item by evidence_id/name.",
+      description: "Read one IronWrap OS Evidence Item by evidence_id/name.",
       inputSchema: { evidence_id: z.string().min(1) },
     },
     async ({ evidence_id }) => text(await erpGet(config, resourcePath("Evidence Item", evidence_id))),
@@ -1027,7 +1185,7 @@ export function buildServer(config) {
     "get_field_check_in",
     {
       title: "Get Field Check-in",
-      description: "Read one ERPNext Field Check-in by checkin_id/name.",
+      description: "Read one IronWrap OS Field Check-in by checkin_id/name.",
       inputSchema: { checkin_id: z.string().min(1) },
     },
     async ({ checkin_id }) => text(await erpGet(config, resourcePath("Field Check-in", checkin_id))),
@@ -1052,7 +1210,7 @@ export function buildServer(config) {
     "get_proposal_evidence_pack",
     {
       title: "Get Proposal Evidence Pack",
-      description: "Read one ERPNext Proposal Evidence Pack by pack_id/name.",
+      description: "Read one IronWrap OS Proposal Evidence Pack by pack_id/name.",
       inputSchema: { pack_id: z.string().min(1) },
     },
     async ({ pack_id }) => text(await erpGet(config, resourcePath("Proposal Evidence Pack", pack_id))),
@@ -1077,7 +1235,7 @@ export function buildServer(config) {
     "get_payment_milestone",
     {
       title: "Get Payment Milestone",
-      description: "Read one ERPNext Payment Milestone by payment_milestone_id/name.",
+      description: "Read one IronWrap OS Payment Milestone by payment_milestone_id/name.",
       inputSchema: { payment_milestone_id: z.string().min(1) },
     },
     async ({ payment_milestone_id }) => text(await erpGet(config, resourcePath("Payment Milestone", payment_milestone_id))),
@@ -1102,7 +1260,7 @@ export function buildServer(config) {
     "dry_run_material_takeoff",
     {
       title: "Dry Run Material Takeoff",
-      description: "Preview a review-gated Material Takeoff from ERPNext Measurement Report values without writing to ERPNext.",
+      description: "Preview a review-gated Material Takeoff from IronWrap OS Measurement Report values without writing.",
       inputSchema: {
         roof_job_id: z.string().min(1),
         measurement_report_id: z.string().min(1).optional(),
@@ -1142,7 +1300,7 @@ export function buildServer(config) {
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
         approval_token: z.string().min(1),
-        run_id: z.string().min(1).optional(),
+        run_id: z.string().min(8).max(128),
       },
     },
     async (args) => {
@@ -1187,7 +1345,7 @@ export function buildServer(config) {
     "dry_run_update_material_takeoff_status",
     {
       title: "Dry Run Update Material Takeoff Status",
-      description: "Preview a Material Takeoff review-status update without writing to ERPNext.",
+      description: "Preview a Material Takeoff review-status update without writing.",
       inputSchema: {
         takeoff_id: z.string().min(1),
         next_status: MaterialTakeoffStatusSchema,
@@ -1219,7 +1377,7 @@ export function buildServer(config) {
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
         approval_token: z.string().min(1),
-        run_id: z.string().min(1).optional(),
+        run_id: z.string().min(8).max(128),
       },
     },
     async (args) => {
@@ -1254,7 +1412,7 @@ export function buildServer(config) {
     "dry_run_supplier_order",
     {
       title: "Dry Run Supplier Order",
-      description: "Preview a review-gated Supplier Order draft from an approved Material Takeoff without writing to ERPNext.",
+      description: "Preview a review-gated Supplier Order draft from an approved Material Takeoff without writing.",
       inputSchema: {
         material_takeoff_id: z.string().min(1),
         supplier_order_id: z.string().min(1).optional(),
@@ -1294,7 +1452,7 @@ export function buildServer(config) {
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
         approval_token: z.string().min(1),
-        run_id: z.string().min(1).optional(),
+        run_id: z.string().min(8).max(128),
       },
     },
     async (args) => {
@@ -1339,7 +1497,7 @@ export function buildServer(config) {
     "dry_run_proposal_evidence_pack",
     {
       title: "Dry Run Proposal Evidence Pack",
-      description: "Preview the draft Proposal Evidence Pack assembled from job evidence without writing to ERPNext.",
+      description: "Preview the draft Proposal Evidence Pack assembled from job evidence without writing.",
       inputSchema: {
         roof_job_id: z.string().min(1),
         pack_id: z.string().min(1).optional(),
@@ -1370,7 +1528,7 @@ export function buildServer(config) {
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
         approval_token: z.string().min(1),
-        run_id: z.string().min(1).optional(),
+        run_id: z.string().min(8).max(128),
       },
     },
     async (args) => {
@@ -1411,7 +1569,7 @@ export function buildServer(config) {
     "dry_run_update_gate",
     {
       title: "Dry Run Update Gate",
-      description: "Preview one Production Gate State update without writing to ERPNext.",
+      description: "Preview one Production Gate State update without writing.",
       inputSchema: {
         gate_id: z.string().min(1),
         next_state: GateStateSchema,
@@ -1443,7 +1601,7 @@ export function buildServer(config) {
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
         approval_token: z.string().min(1),
-        run_id: z.string().min(1).optional(),
+        run_id: z.string().min(8).max(128),
       },
     },
     async (args) => {
@@ -1512,6 +1670,130 @@ export function buildServer(config) {
     listName: "list_supplier_quotes_for_job",
     fields: SUPPLIER_QUOTE_FIELDS,
   });
+  registerReadPair(server, config, {
+    doctype: "Visual Property Model",
+    idArg: "visual_model_id",
+    getName: "get_visual_property_model",
+    listName: "list_visual_property_models_for_job",
+    fields: VISUAL_PROPERTY_MODEL_FIELDS,
+  });
+  registerReadPair(server, config, {
+    doctype: "Roof Area",
+    idArg: "roof_area_id",
+    getName: "get_roof_area",
+    listName: "list_roof_areas_for_job",
+    fields: ROOF_AREA_FIELDS,
+  });
+  registerReadPair(server, config, {
+    doctype: "Option Package",
+    idArg: "option_package_id",
+    getName: "get_option_package",
+    listName: "list_option_packages_for_job",
+    fields: OPTION_PACKAGE_FIELDS,
+  });
+  registerReadPair(server, config, {
+    doctype: "Scope Clause",
+    idArg: "scope_clause_id",
+    getName: "get_scope_clause",
+    listName: "list_scope_clauses_for_job",
+    fields: SCOPE_CLAUSE_FIELDS,
+  });
+
+  server.registerTool(
+    "get_price_book_rule",
+    {
+      title: "Get Price Book Rule",
+      description: "Read one owned Price Book Rule by price_rule_id/name.",
+      inputSchema: { price_rule_id: z.string().min(1) },
+    },
+    async ({ price_rule_id }) => text(await erpGet(config, resourcePath("Price Book Rule", price_rule_id))),
+  );
+
+  server.registerTool(
+    "list_price_book_rules",
+    {
+      title: "List Price Book Rules",
+      description: "Read approved/review pricing rules, optionally filtered by status and service type.",
+      inputSchema: {
+        status: z.enum(["Draft", "Needs Review", "Approved", "Retired"]).optional(),
+        service_type: z.string().min(1).max(140).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ status, service_type, limit = 25 }) => {
+      const filters = [];
+      if (status) filters.push(["Price Book Rule", "status", "=", status]);
+      if (service_type) filters.push(["Price Book Rule", "service_type", "=", service_type]);
+      return text(await erpGet(config, resourceListPath("Price Book Rule", {
+        fields: PRICE_BOOK_RULE_FIELDS,
+        ...(filters.length ? { filters } : {}),
+        limit,
+        orderBy: "effective_from desc",
+      })));
+    },
+  );
+
+  server.registerTool(
+    "get_automation_incident",
+    {
+      title: "Get Automation Incident",
+      description: "Read one owned Automation Incident by incident_id/name.",
+      inputSchema: { incident_id: z.string().min(1) },
+    },
+    async ({ incident_id }) => text(await erpGet(config, resourcePath("Automation Incident", incident_id))),
+  );
+
+  server.registerTool(
+    "list_automation_incidents",
+    {
+      title: "List Automation Incidents",
+      description: "Read incident recovery truth, optionally filtered by status or severity.",
+      inputSchema: {
+        status: z.enum(["Open", "Acknowledged", "Resolved", "Closed"]).optional(),
+        severity: z.enum(["Low", "Medium", "High", "Critical"]).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ status, severity, limit = 25 }) => {
+      const filters = [];
+      if (status) filters.push(["Automation Incident", "status", "=", status]);
+      if (severity) filters.push(["Automation Incident", "severity", "=", severity]);
+      return text(await erpGet(config, resourceListPath("Automation Incident", {
+        fields: AUTOMATION_INCIDENT_FIELDS,
+        ...(filters.length ? { filters } : {}),
+        limit,
+        orderBy: "detected_at desc",
+      })));
+    },
+  );
+
+  server.registerTool(
+    "get_white_label_tenant",
+    {
+      title: "Get White-Label Tenant",
+      description: "Read one site-local White-Label Tenant configuration by tenant_id/name.",
+      inputSchema: { tenant_id: z.string().min(1) },
+    },
+    async ({ tenant_id }) => text(await erpGet(config, resourcePath("White-Label Tenant", tenant_id))),
+  );
+
+  server.registerTool(
+    "list_white_label_tenants",
+    {
+      title: "List White-Label Tenants",
+      description: "Read site-local tenant lifecycle metadata. Site isolation still limits a production site to one Active tenant.",
+      inputSchema: {
+        status: z.enum(["Draft", "Provisioning", "Active", "Suspended", "Retired"]).optional(),
+        limit: z.number().int().min(1).max(25).optional(),
+      },
+    },
+    async ({ status, limit = 10 }) => text(await erpGet(config, resourceListPath("White-Label Tenant", {
+      fields: WHITE_LABEL_TENANT_FIELDS,
+      ...(status ? { filters: [["White-Label Tenant", "status", "=", status]] } : {}),
+      limit,
+      orderBy: "modified desc",
+    }))),
+  );
 
   server.registerTool(
     "list_market_watch_items",
@@ -1568,7 +1850,7 @@ export function buildServer(config) {
     "dry_run_completion_packet",
     {
       title: "Dry Run Completion Packet",
-      description: "Preview a review-gated Completion Packet assembled from field check-ins and photo evidence without writing to ERPNext.",
+      description: "Preview a review-gated Completion Packet assembled from field check-ins and photo evidence without writing.",
       inputSchema: {
         roof_job_id: z.string().min(1),
         completion_packet_id: z.string().min(1).optional(),
@@ -1602,7 +1884,7 @@ export function buildServer(config) {
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
         approval_token: z.string().min(1),
-        run_id: z.string().min(1).optional(),
+        run_id: z.string().min(8).max(128),
       },
     },
     async (args) => {
@@ -1642,7 +1924,7 @@ export function buildServer(config) {
     "dry_run_warranty_packet",
     {
       title: "Dry Run Warranty Packet",
-      description: "Preview a Warranty Packet draft from an approved, warranty-ready Completion Packet without writing to ERPNext.",
+      description: "Preview a Warranty Packet draft from an approved, warranty-ready Completion Packet without writing.",
       inputSchema: {
         completion_packet_id: z.string().min(1),
         warranty_packet_id: z.string().min(1).optional(),
@@ -1686,7 +1968,7 @@ export function buildServer(config) {
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
         approval_token: z.string().min(1),
-        run_id: z.string().min(1).optional(),
+        run_id: z.string().min(8).max(128),
       },
     },
     async (args) => {
@@ -1726,7 +2008,7 @@ export function buildServer(config) {
     "dry_run_review_request",
     {
       title: "Dry Run Review Request",
-      description: "Preview a Review Request with deterministic stop conditions (completion, payment evidence, consent) without writing to ERPNext.",
+      description: "Preview a Review Request with deterministic stop conditions (completion, payment evidence, consent) without writing.",
       inputSchema: {
         roof_job_id: z.string().min(1),
         review_request_id: z.string().min(1).optional(),
@@ -1772,7 +2054,7 @@ export function buildServer(config) {
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
         approval_token: z.string().min(1),
-        run_id: z.string().min(1).optional(),
+        run_id: z.string().min(8).max(128),
       },
     },
     async (args) => {
@@ -1818,7 +2100,7 @@ export function buildServer(config) {
     "dry_run_communication_event",
     {
       title: "Dry Run Communication Event",
-      description: "Preview a policy-gated Communication Event record (consent plus quiet hours) without writing to ERPNext. Never sends anything.",
+      description: "Preview a policy-gated Communication Event record (consent plus quiet hours) without writing. Never sends anything.",
       inputSchema: communicationEventInputSchema(),
     },
     async (args) => {
@@ -1843,7 +2125,7 @@ export function buildServer(config) {
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
         approval_token: z.string().min(1),
-        run_id: z.string().min(1).optional(),
+        run_id: z.string().min(8).max(128),
       },
     },
     async (args) => {
@@ -1885,7 +2167,7 @@ export function buildServer(config) {
     "dry_run_supplier_quote",
     {
       title: "Dry Run Supplier Quote",
-      description: "Preview a review-gated Supplier Quote draft from an approved Material Takeoff without writing to ERPNext.",
+      description: "Preview a review-gated Supplier Quote draft from an approved Material Takeoff without writing.",
       inputSchema: supplierQuoteInputSchema(),
     },
     async (args) => {
@@ -1914,7 +2196,7 @@ export function buildServer(config) {
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
         approval_token: z.string().min(1),
-        run_id: z.string().min(1).optional(),
+        run_id: z.string().min(8).max(128),
       },
     },
     async (args) => {
@@ -1954,7 +2236,7 @@ export function buildServer(config) {
     "dry_run_market_watch_item",
     {
       title: "Dry Run Market Watch Item",
-      description: "Preview a Market Watch Item (competitor change and required response) without writing to ERPNext.",
+      description: "Preview a Market Watch Item (competitor change and required response) without writing.",
       inputSchema: marketWatchInputSchema(),
     },
     async (args) => {
@@ -1978,7 +2260,7 @@ export function buildServer(config) {
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
         approval_token: z.string().min(1),
-        run_id: z.string().min(1).optional(),
+        run_id: z.string().min(8).max(128),
       },
     },
     async (args) => {
@@ -2013,7 +2295,7 @@ function registerReadPair(server, config, { doctype, idArg, getName, listName, f
     getName,
     {
       title: `Get ${doctype}`,
-      description: `Read one ERPNext ${doctype} by ${idArg}/name.`,
+      description: `Read one IronWrap OS ${doctype} by ${idArg}/name.`,
       inputSchema: { [idArg]: z.string().min(1) },
     },
     async (args) => text(await erpGet(config, resourcePath(doctype, args[idArg]))),
@@ -2136,9 +2418,10 @@ async function finalizeHermesRun(config, runId, patch) {
 }
 
 // Shared approved-write flow: audit row BEFORE the mutation, execute, finalize the audit,
-// mark the run failed on error. Every request_* tool funnels through here so the
-// read -> dry_run -> approval -> write -> audit contract cannot drift per tool.
-async function executeAuditedWrite(config, {
+// mark the run failed on error. A caller-supplied run_id is the idempotency key: retries
+// can resume a failed/incomplete run, while a completed run returns its stored result
+// without applying the mutation again.
+export async function executeAuditedWrite(config, {
   runId,
   now,
   args,
@@ -2154,7 +2437,30 @@ async function executeAuditedWrite(config, {
   execute,
   responseExtra = {},
 }) {
-  await erpPost(config, "/api/resource/Hermes%20Run", {
+  const safeArgs = redactApprovalArgs(args);
+  let existingRun = await readResourceOrNull(config, "Hermes Run", runId);
+  if (existingRun) {
+    assertHermesRunIdentity(existingRun, { runId, agentRole, toolName, target, safeArgs });
+    if (existingRun.approval_status === "Executed" && existingRun.result_status === "OK") {
+      return {
+        run_id: runId,
+        ...responseExtra,
+        replayed: true,
+        audit_finalized: true,
+        result: parseStoredJson(existingRun.result_json),
+      };
+    }
+    if (existingRun.approval_status === "Audit Failed" && Number(existingRun.mutation_applied) === 1) {
+      throw new Error(
+        `run_id_mutation_already_applied_audit_failed:${runId}:incident=${existingRun.audit_incident_id ?? "unknown"}`,
+      );
+    }
+    if (["Denied", "Blocked"].includes(existingRun.approval_status)) {
+      throw new Error(`run_id_not_retryable:${runId}:${existingRun.approval_status}`);
+    }
+  }
+
+  const auditDraft = {
     run_id: runId,
     run_ts: now,
     agent_role: agentRole,
@@ -2167,37 +2473,201 @@ async function executeAuditedWrite(config, {
     ...(linkedEvidence ? { linked_evidence: linkedEvidence } : {}),
     capability_level: "Approved-write",
     tool_name: toolName,
-    tool_args_json: JSON.stringify(redactApprovalArgs(args)),
+    tool_args_json: JSON.stringify(safeArgs),
     dry_run_json: JSON.stringify(dryRun),
+    policy_check_json: JSON.stringify({
+      allowed: true,
+      checks: ["tool_input_schema", "deterministic_builder", "human_approval_token", "doctype_validate_hook"],
+      target,
+    }),
+    policy_checked_at: now,
+    policy_checked_by: args.approved_by,
     approval_status: "Approved",
     approved_by: args.approved_by,
     approved_at: now,
     before_target_ids: JSON.stringify(beforeSummary),
-  });
+    request_correlation_id: runId,
+    mutation_applied: 0,
+  };
 
+  if (!existingRun) {
+    try {
+      await erpPost(config, "/api/resource/Hermes%20Run", auditDraft);
+    } catch (err) {
+      // Two identical retries can race on the unique run_id. Re-read and accept
+      // only if the existing row describes this exact approved operation.
+      if (!String(err).includes("erpnext_http_409")) throw err;
+      existingRun = await readResourceOrNull(config, "Hermes Run", runId);
+      if (!existingRun) throw err;
+      assertHermesRunIdentity(existingRun, { runId, agentRole, toolName, target, safeArgs });
+      if (existingRun.approval_status === "Executed" && existingRun.result_status === "OK") {
+        return {
+          run_id: runId,
+          ...responseExtra,
+          replayed: true,
+          audit_finalized: true,
+          result: parseStoredJson(existingRun.result_json),
+        };
+      }
+      if (existingRun.approval_status === "Audit Failed" && Number(existingRun.mutation_applied) === 1) {
+        throw new Error(
+          `run_id_mutation_already_applied_audit_failed:${runId}:incident=${existingRun.audit_incident_id ?? "unknown"}`,
+        );
+      }
+    }
+  } else {
+    await erpPut(config, resourcePath("Hermes Run", runId), {
+      ...auditDraft,
+      error: "",
+      result_status: "",
+      result_json: "",
+      completed_at: "",
+      mutation_applied: 0,
+    });
+  }
+
+  let mutationApplied = false;
   try {
     const result = await execute();
+    mutationApplied = true;
+    const completedAt = new Date().toISOString();
     const auditError = await finalizeHermesRun(config, runId, {
       approval_status: "Executed",
       result_status: "OK",
       after_target_ids: JSON.stringify(afterSummary),
       result_json: JSON.stringify(result),
+      mutation_applied: 1,
+      audit_event_id: `audit:${runId}`,
+      request_correlation_id: runId,
+      completed_at: completedAt,
     });
+    if (auditError) {
+      const expectedIncidentId = `incident:audit:${runId}`;
+      const incidentId = await recordAuditFinalizationIncident(config, {
+        runId,
+        now,
+        roofJob,
+        toolName,
+        target,
+        auditError,
+      });
+      await erpPut(config, resourcePath("Hermes Run", runId), {
+        approval_status: "Audit Failed",
+        result_status: "Error",
+        after_target_ids: JSON.stringify(afterSummary),
+        result_json: JSON.stringify(result),
+        error: auditError,
+        mutation_applied: 1,
+        audit_incident_id: incidentId ?? expectedIncidentId,
+        request_correlation_id: runId,
+        completed_at: completedAt,
+      }).catch(() => {});
+      throw new Error(
+        `audit_finalize_failed:${runId}:incident=${incidentId ?? expectedIncidentId}:${auditError}`,
+      );
+    }
     return {
       run_id: runId,
       ...responseExtra,
-      audit_finalized: auditError === null,
-      ...(auditError ? { audit_error: auditError } : {}),
+      replayed: false,
+      audit_finalized: true,
       result,
     };
   } catch (err) {
-    await erpPut(config, resourcePath("Hermes Run", runId), {
-      approval_status: "Failed",
-      result_status: "Error",
-      error: String(err).slice(0, 500),
-    }).catch(() => {});
+    if (!mutationApplied) {
+      await erpPut(config, resourcePath("Hermes Run", runId), {
+        approval_status: "Failed",
+        result_status: "Error",
+        error: String(err).slice(0, 500),
+        completed_at: new Date().toISOString(),
+        mutation_applied: 0,
+      }).catch(() => {});
+    }
     throw err;
   }
+}
+
+function assertHermesRunIdentity(existing, { runId, agentRole, toolName, target, safeArgs }) {
+  const mismatches = [];
+  if (existing.run_id && existing.run_id !== runId) mismatches.push("run_id");
+  if (existing.agent_role && existing.agent_role !== agentRole) mismatches.push("agent_role");
+  if (existing.tool_name && existing.tool_name !== toolName) mismatches.push("tool_name");
+  if (existing.target_doctype && existing.target_doctype !== target.doctype) mismatches.push("target_doctype");
+  if (existing.target_name && existing.target_name !== target.name) mismatches.push("target_name");
+  if (existing.tool_args_json && canonicalJson(parseStoredJson(existing.tool_args_json)) !== canonicalJson(safeArgs)) {
+    mismatches.push("tool_args");
+  }
+  if (mismatches.length) throw new Error(`run_id_conflict:${runId}:${mismatches.join(",")}`);
+}
+
+async function recordAuditFinalizationIncident(config, {
+  runId,
+  now,
+  roofJob,
+  toolName,
+  target,
+  auditError,
+}) {
+  const incidentId = `incident:audit:${runId}`;
+  const draft = buildAuditFinalizationIncidentDraft({
+    incidentId,
+    runId,
+    now,
+    roofJob,
+    toolName,
+    target,
+    auditError,
+  });
+  try {
+    const before = await readResourceOrNull(config, "Automation Incident", incidentId);
+    if (before) await erpPut(config, resourcePath("Automation Incident", incidentId), draft);
+    else await erpPost(config, "/api/resource/Automation%20Incident", draft);
+    return incidentId;
+  } catch {
+    return null;
+  }
+}
+
+export function buildAuditFinalizationIncidentDraft({
+  incidentId,
+  runId,
+  now,
+  roofJob,
+  toolName,
+  target,
+  auditError,
+}) {
+  return {
+    incident_id: incidentId,
+    severity: "High",
+    status: "Open",
+    source_system: "erpnext-roofing-mcp",
+    category: "Audit Finalization",
+    summary: `Approved write completed but Hermes Run ${runId} could not be finalized`,
+    details: JSON.stringify({ tool_name: toolName, target, audit_error: auditError }).slice(0, 4000),
+    ...(roofJob ? { roof_job: roofJob } : {}),
+    record_ref: `Hermes Run:${runId}`,
+    correlation_id: runId,
+    detected_at: now,
+  };
+}
+
+function parseStoredJson(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 // Shared upsert executor for request_create_* tools that write a full draft document.

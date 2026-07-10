@@ -1,13 +1,15 @@
 {
-  "version": "0.1.0",
-  "note": "Launch/config manifest for the two MCP servers Hermes connects to. tool_filter arrays are the UNION of each bucket across every agent role in hermes/agents/roles.json that uses the server; per-role narrowing is enforced from roles.json, not here. Every approved_write tool is gated: it does nothing unless the server's write-enable env var is true (IRONWRAP_BUS_WRITE_ENABLED for the bus, ERPNEXT_WRITE_ENABLED for erpnext) AND the caller passes HERMES_WRITE_TOKEN as approval_token, and each write records a Hermes Run audit row. env values are placeholders resolved from the Hermes host environment; never commit real secret values.",
+  "version": "0.2.0",
+  "note": "Launch/config manifest for the two MCP servers Hermes connects to. tool_filter arrays are the UNION of each bucket across every agent role in hermes/agents/roles.json that uses the server; per-role narrowing is enforced from roles.json, not here. Every approved_write tool is gated: it does nothing unless the server's write-enable env var is true (IRONWRAP_BUS_WRITE_ENABLED for the bus, ERPNEXT_WRITE_ENABLED for the legacy-named Frappe server) AND the caller passes HERMES_WRITE_TOKEN as approval_token. Frappe writes record Hermes Run rows; bus replay records the envelope-scoped recovery in the bus audit log. env values are placeholders resolved from the Hermes host environment; never commit real secret values.",
   "mcpServers": {
     "ironwrap-bus-mcp": {
       "command": "node",
       "args": ["mcp/ironwrap-bus-mcp/src/server.mjs"],
-      "description": "Read-only bus truth plus the approved-write dead-letter replay proof.",
+      "description": "Bus readiness and operating truth plus approved, envelope-scoped dead-letter recovery.",
       "tool_filter": {
         "read": [
+          "get_bus_readiness",
+          "get_operational_status",
           "list_recent_envelopes",
           "get_envelope",
           "list_dead_letters"
@@ -23,13 +25,14 @@
         "IRONWRAP_BUS_BASE_URL": "${IRONWRAP_BUS_BASE_URL}",
         "IRONWRAP_ADMIN_TOKEN": "${IRONWRAP_ADMIN_TOKEN}",
         "IRONWRAP_BUS_WRITE_ENABLED": "${IRONWRAP_BUS_WRITE_ENABLED}",
+        "IRONWRAP_BUS_REQUEST_TIMEOUT_MS": "${IRONWRAP_BUS_REQUEST_TIMEOUT_MS}",
         "HERMES_WRITE_TOKEN": "${HERMES_WRITE_TOKEN}"
       }
     },
     "erpnext-roofing-mcp": {
       "command": "node",
       "args": ["mcp/erpnext-roofing-mcp/src/server.mjs"],
-      "description": "ERPNext roofing operating core: read, deterministic policy checks, and review-gated approved writes.",
+      "description": "IronWrap OS Frappe operating core: read, deterministic policy checks, and review-gated approved writes; legacy server/env names retained for compatibility.",
       "tool_filter": {
         "read": [
           "get_roof_job",
@@ -62,6 +65,20 @@
           "list_review_requests_for_job",
           "get_communication_event",
           "list_communication_events_for_job",
+          "get_price_book_rule",
+          "list_price_book_rules",
+          "get_visual_property_model",
+          "list_visual_property_models_for_job",
+          "get_roof_area",
+          "list_roof_areas_for_job",
+          "get_option_package",
+          "list_option_packages_for_job",
+          "get_scope_clause",
+          "list_scope_clauses_for_job",
+          "get_automation_incident",
+          "list_automation_incidents",
+          "get_white_label_tenant",
+          "list_white_label_tenants",
           "list_market_watch_items",
           "check_consent",
           "check_quiet_hours",
@@ -100,6 +117,7 @@
         "ERPNEXT_API_KEY": "${ERPNEXT_API_KEY}",
         "ERPNEXT_API_SECRET": "${ERPNEXT_API_SECRET}",
         "ERPNEXT_WRITE_ENABLED": "${ERPNEXT_WRITE_ENABLED}",
+        "ERPNEXT_REQUEST_TIMEOUT_MS": "${ERPNEXT_REQUEST_TIMEOUT_MS}",
         "HERMES_WRITE_TOKEN": "${HERMES_WRITE_TOKEN}"
       }
     }

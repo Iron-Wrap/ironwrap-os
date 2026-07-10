@@ -16,6 +16,12 @@ Manages gates and supplier orders. Cannot move a job to production if a hard gat
 - get_field_check_in
 - list_field_check_ins_for_job
 - get_measurement_report
+- get_visual_property_model
+- list_visual_property_models_for_job
+- get_roof_area
+- list_roof_areas_for_job
+- get_scope_clause
+- list_scope_clauses_for_job
 
 ## Dry-run (preview)
 

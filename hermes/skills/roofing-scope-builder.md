@@ -8,7 +8,9 @@ Draft the scope of work for a roof job: inclusions, exclusions, risk clauses, an
 - A takeoff or measurement is approved and the job needs its inclusions, exclusions, and risk language written down.
 
 ## Inputs
-- ERPNext: `get_roof_job`, `get_measurement_report` / `list_measurement_reports_for_job`, `get_material_takeoff` / `list_material_takeoffs_for_job`, `list_evidence_for_job` (Evidence Item, note `customer_safe`).
+- IronWrap OS: Roof Job, Measurement Report, Material Takeoff, customer-safe Evidence Item,
+  `get_scope_clause` / `list_scope_clauses_for_job`, and `get_option_package` /
+  `list_option_packages_for_job`.
 - Tenant policy: `proposal.options_model` (good_better_best), `services`, `production.gates`.
 
 ## Procedure
@@ -17,7 +19,9 @@ Draft the scope of work for a roof job: inclusions, exclusions, risk clauses, an
 3. Draft exclusions explicitly: permits, structural repair, deck replacement beyond allowance, hidden damage, and anything not measured or approved.
 4. Draft risk clauses: access constraints, weather dependency, unforeseen substrate, and material lead-time risk.
 5. Build good/better/best option packages per `proposal.options_model`, describing material tier, warranty difference, and upgrade scope, with no committed price.
-6. This skill produces draft scope text only. It has no dedicated write tool; the scope narrative feeds the Proposal Proof Pack skill, which assembles the Proposal Evidence Pack under approval.
+6. Compare against existing Scope Clause and Option Package records so the draft does not silently
+   fork approved language. This skill has no scope/option write tool; the narrative feeds the
+   Proposal Proof Pack skill, which assembles the Proposal Evidence Pack under approval.
 7. Flag any clause that lacks evidence or requires an estimator pricing/substitution decision; do not resolve it silently.
 
 ## Guardrails

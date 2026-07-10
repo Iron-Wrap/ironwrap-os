@@ -17,6 +17,16 @@ Drafts takeoff, scope, supplier quote, and proposal proof from approved measurem
 - list_proposal_evidence_packs_for_job
 - get_instant_estimate_session
 - list_instant_estimate_sessions_for_job
+- get_price_book_rule
+- list_price_book_rules
+- get_visual_property_model
+- list_visual_property_models_for_job
+- get_roof_area
+- list_roof_areas_for_job
+- get_option_package
+- list_option_packages_for_job
+- get_scope_clause
+- list_scope_clauses_for_job
 
 ## Dry-run (preview)
 

@@ -10,6 +10,10 @@ Turns field check-ins and photo/voice evidence into a completion draft. Cannot d
 - list_field_check_ins_for_job
 - get_evidence_item
 - list_evidence_for_job
+- get_visual_property_model
+- list_visual_property_models_for_job
+- get_roof_area
+- list_roof_areas_for_job
 
 ## Dry-run (preview)
 

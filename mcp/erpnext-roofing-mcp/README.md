@@ -1,8 +1,9 @@
 # erpnext-roofing-mcp
 
-Narrow MCP server for the IronWrap ERPNext/Frappe roofing app.
+Narrow MCP server for the proprietary IronWrap OS Frappe app. The `erpnext-*`
+name is retained only for compatibility; ERPNext is not installed or linked.
 
-This server is the first Hermes proof surface over ERPNext truth. It uses
+This server is the Hermes command surface over IronWrap OS business truth. It uses
 Frappe token auth and exposes read tools plus token-gated approved-write tools:
 
 - `get_roof_job`
@@ -38,6 +39,13 @@ Frappe token auth and exposes read tools plus token-gated approved-write tools:
 - `get_supplier_quote`
 - `list_supplier_quotes_for_job`
 - `list_market_watch_items`
+- `get_price_book_rule` / `list_price_book_rules`
+- `get_visual_property_model` / `list_visual_property_models_for_job`
+- `get_roof_area` / `list_roof_areas_for_job`
+- `get_option_package` / `list_option_packages_for_job`
+- `get_scope_clause` / `list_scope_clauses_for_job`
+- `get_automation_incident` / `list_automation_incidents`
+- `get_white_label_tenant` / `list_white_label_tenants`
 - `check_consent`
 - `check_quiet_hours`
 - `dry_run_update_gate`
@@ -63,13 +71,16 @@ Frappe token auth and exposes read tools plus token-gated approved-write tools:
 - `dry_run_market_watch_item`
 - `request_add_market_watch_item`
 
-Estimator intake enters ERPNext through the Worker `POST /ingest/estimate` route first. This MCP
+Estimator intake enters IronWrap OS through the Worker `POST /ingest/estimate` route first. This MCP
 server reads the resulting `Instant Estimate Session` rows and can draft downstream takeoff/proposal
 work, but it does not accept raw public estimator submissions itself.
 
 Write tools are disabled unless `ERPNEXT_WRITE_ENABLED=true` and
-`HERMES_WRITE_TOKEN` are set. The caller must provide the approval token, and
-the token is redacted from the `Hermes Run` audit payload.
+`HERMES_WRITE_TOKEN` are set. Every request requires a caller-supplied stable
+`run_id`, approver, request text, and approval token. The token is redacted from
+the `Hermes Run` audit payload. An exact completed retry returns the stored
+result; an `Audit Failed` run proves the target mutation happened and is never
+reapplied.
 
 Current approved-write tools:
 
@@ -113,7 +124,12 @@ ERPNEXT_API_KEY=...
 ERPNEXT_API_SECRET=...
 ERPNEXT_WRITE_ENABLED=false
 HERMES_WRITE_TOKEN=...
+ERPNEXT_REQUEST_TIMEOUT_MS=10000
 ```
+
+Production URLs must use HTTPS. Plain HTTP is rejected unless the hostname is
+localhost and `ERPNEXT_ALLOW_INSECURE_LOCAL=true` is explicitly set for local
+development.
 
 Run locally:
 

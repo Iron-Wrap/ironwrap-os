@@ -37,7 +37,38 @@
         "start_hour": 9,
         "end_hour": 20,
         "timezone": "America/Edmonton"
-      }
+      },
+      "consent_ledger": {
+        "basis_required": true,
+        "source_timestamp_required": true,
+        "scope_required": true,
+        "expiry_or_relevant_event_required": true,
+        "revocation_and_suppression_required": true
+      },
+      "prepaid_contracting": {
+        "licence_gate_required": true,
+        "licence_id_env": "ALBERTA_PREPAID_CONTRACTOR_LICENCE_ID",
+        "contract_template_gate_required": true,
+        "record_retention_years": 3
+      },
+      "fall_protection": {
+        "site_plan_policy_required": true,
+        "offline_plan_required": true,
+        "worker_acknowledgement_required": true
+      },
+      "privacy_law": "Alberta PIPA"
+    }
+  },
+  "locale": {
+    "language_tag": "en-CA",
+    "currency": "CAD",
+    "timezone": "America/Edmonton",
+    "tax": {
+      "country_code": "CA",
+      "province_code": "AB",
+      "gst_rate_bps": 500,
+      "provincial_sales_tax_rate_bps": 0,
+      "source": "https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/gst-hst-businesses/charge-collect-which-rate.html"
     }
   },
   "services": ["roofing", "metal_roofing", "siding", "gutters", "soffit_fascia"],
@@ -72,6 +103,15 @@
       "before": 4,
       "progress": 6,
       "completion": 8
+    },
+    "proof_scale": {
+      "capture_items_per_job": 400,
+      "viewer_items_per_job": 1051,
+      "server_verification_required": true
+    },
+    "assigned_packet": {
+      "offline_required": true,
+      "includes": ["scope", "measurements", "materials", "change_orders", "safety_plan", "proof_checklist"]
     }
   },
   "communications": {
@@ -130,5 +170,12 @@
     ],
     "watch_cadence_days": 30,
     "escalation_owner": "owner"
+  },
+  "data_ownership": {
+    "canonical_job_identity_required": true,
+    "full_export_required": true,
+    "checksum_manifest_required": true,
+    "restore_drill_required": true,
+    "export_includes": ["raw_payloads", "business_records", "photos", "contracts", "communications", "audit_history"]
   }
 }

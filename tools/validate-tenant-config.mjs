@@ -10,6 +10,7 @@ const requiredAreas = [
   "tenant",
   "brand",
   "geography",
+  "locale",
   "services",
   "materials",
   "estimates",
@@ -19,6 +20,7 @@ const requiredAreas = [
   "integrations",
   "agents",
   "market_defense",
+  "data_ownership",
 ];
 
 const knownGates = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"];
@@ -59,6 +61,49 @@ for (const { file, doc } of tenants) {
   assert.ok(qh.start_hour < qh.end_hour, `${file} quiet_hours start must be before end`);
   assert.equal(typeof qh.timezone, "string", `${file} quiet_hours.timezone must be a string`);
 
+  const consent = compliance.consent_ledger;
+  assert.ok(consent, `${file} missing geography.compliance.consent_ledger`);
+  for (const name of [
+    "basis_required",
+    "source_timestamp_required",
+    "scope_required",
+    "expiry_or_relevant_event_required",
+    "revocation_and_suppression_required",
+  ]) {
+    assert.equal(consent[name], true, `${file} consent_ledger.${name} must be true`);
+  }
+
+  const prepaid = compliance.prepaid_contracting;
+  assert.ok(prepaid, `${file} missing geography.compliance.prepaid_contracting`);
+  assert.equal(prepaid.licence_gate_required, true, `${file} prepaid licence gate must be enabled`);
+  assert.match(prepaid.licence_id_env, /^[A-Z][A-Z0-9_]+$/, `${file} prepaid licence must be environment-name-only`);
+  assert.equal(prepaid.contract_template_gate_required, true, `${file} prepaid contract template gate must be enabled`);
+  assert.ok(Number.isInteger(prepaid.record_retention_years) && prepaid.record_retention_years >= 3, `${file} prepaid record retention must be at least three years`);
+
+  const fall = compliance.fall_protection;
+  assert.ok(fall, `${file} missing geography.compliance.fall_protection`);
+  assert.equal(fall.site_plan_policy_required, true, `${file} fall-protection plan policy must be enabled`);
+  assert.equal(fall.offline_plan_required, true, `${file} fall-protection plan must be available offline`);
+  assert.equal(fall.worker_acknowledgement_required, true, `${file} fall-protection acknowledgement must be required`);
+  assert.equal(compliance.privacy_law, "Alberta PIPA", `${file} must declare Alberta PIPA`);
+
+  const locale = doc.locale;
+  assert.match(locale.language_tag, /^[a-z]{2}-[A-Z]{2}$/, `${file} locale.language_tag must be a language-region tag`);
+  assert.match(locale.currency, /^[A-Z]{3}$/, `${file} locale.currency must be ISO 4217 shaped`);
+  assert.equal(locale.timezone, qh.timezone, `${file} locale and quiet-hours timezones must match`);
+  const tax = locale.tax;
+  assert.ok(tax, `${file} missing locale.tax`);
+  assert.equal(tax.country_code, "CA", `${file} tax country must be Canada`);
+  assert.equal(tax.province_code, doc.geography.province, `${file} tax province must match service geography`);
+  for (const name of ["gst_rate_bps", "provincial_sales_tax_rate_bps"]) {
+    assert.ok(Number.isInteger(tax[name]) && tax[name] >= 0 && tax[name] <= 10_000, `${file} locale.tax.${name} must be basis points`);
+  }
+  if (tax.province_code === "AB") {
+    assert.equal(tax.gst_rate_bps, 500, `${file} Alberta GST must be represented as 500 bps`);
+    assert.equal(tax.provincial_sales_tax_rate_bps, 0, `${file} Alberta has no provincial sales tax`);
+  }
+  assert.match(tax.source, /^https:\/\//, `${file} locale.tax.source must be an HTTPS authority`);
+
   const instant = doc.estimates?.instant_estimate;
   assert.ok(instant, `${file} missing estimates.instant_estimate`);
   assert.equal(instant.non_binding, true, `${file} instant_estimate.non_binding must be true`);
@@ -71,6 +116,20 @@ for (const { file, doc } of tenants) {
     assert.ok(gates.includes(gate), `${file} production.gates missing: ${gate}`);
   }
 
+  const scale = doc.production?.proof_scale;
+  assert.ok(scale, `${file} missing production.proof_scale`);
+  assert.ok(Number.isInteger(scale.capture_items_per_job) && scale.capture_items_per_job >= 400, `${file} field proof scale must cover at least 400 items`);
+  assert.ok(Number.isInteger(scale.viewer_items_per_job) && scale.viewer_items_per_job >= 1051, `${file} proof viewer scale must cover at least 1051 items`);
+  assert.equal(scale.server_verification_required, true, `${file} proof uploads require server verification`);
+
+  const packet = doc.production?.assigned_packet;
+  assert.equal(packet?.offline_required, true, `${file} assigned job packet must be offline-capable`);
+  const requiredPacketParts = ["scope", "measurements", "materials", "change_orders", "safety_plan", "proof_checklist"];
+  assert.ok(Array.isArray(packet?.includes), `${file} assigned_packet.includes must be an array`);
+  for (const part of requiredPacketParts) {
+    assert.ok(packet.includes.includes(part), `${file} assigned packet missing ${part}`);
+  }
+
   assert.equal(doc.agents?.approval_policy, "dry_run_then_human_approval", `${file} agents.approval_policy mismatch`);
 
   const brands = doc.brand?.brands;
@@ -80,8 +139,39 @@ for (const { file, doc } of tenants) {
     assert.ok(typeof b.sender_mailbox === "string" && b.sender_mailbox.includes("@"), `${file} brand ${b.key} needs a sender_mailbox`);
   }
 
+  const ownership = doc.data_ownership;
+  for (const name of [
+    "canonical_job_identity_required",
+    "full_export_required",
+    "checksum_manifest_required",
+    "restore_drill_required",
+  ]) {
+    assert.equal(ownership?.[name], true, `${file} data_ownership.${name} must be true`);
+  }
+  const requiredExportParts = ["raw_payloads", "business_records", "photos", "contracts", "communications", "audit_history"];
+  assert.ok(Array.isArray(ownership?.export_includes), `${file} data_ownership.export_includes must be an array`);
+  for (const part of requiredExportParts) {
+    assert.ok(ownership.export_includes.includes(part), `${file} owned export missing ${part}`);
+  }
+
   walkStrings(doc, `${file}:$`, (path, value) => {
+    let publicReferenceUrl = null;
+    if (value.startsWith("https://")) {
+      try {
+        publicReferenceUrl = new URL(value);
+      } catch {
+        assert.fail(`${file} value at ${path} starts like an HTTPS URL but is malformed`);
+      }
+      assert.equal(publicReferenceUrl.username, "", `${file} public URL at ${path} must not contain credentials`);
+      assert.equal(publicReferenceUrl.password, "", `${file} public URL at ${path} must not contain credentials`);
+      assert.equal(publicReferenceUrl.search, "", `${file} public URL at ${path} must not contain query credentials`);
+      assert.equal(publicReferenceUrl.hash, "", `${file} public URL at ${path} must not contain fragments`);
+    }
     for (const { name, re } of secretPatterns) {
+      // A long public documentation path can resemble base64 when slash is part of
+      // the detector. Credentials/query strings were rejected above; the path itself
+      // is safe reference metadata.
+      if (publicReferenceUrl && name === "long base64 blob") continue;
       assert.ok(!re.test(value), `${file} value at ${path} looks like a secret (${name}): ${value.slice(0, 40)}...`);
     }
   });

@@ -51,6 +51,8 @@ estimator/configurator
 | Partial-write repair (pending_jn_push→pushed, retry sweep) | `queue` handler + `scheduled` retry sweep |
 | Dead-letter on a redundant channel (email, not SMS-only) | DLQ consumer → `notify.sendOwnerAlert`; dead-letter rows keep a redacted payload pointer |
 | Daily reconciliation w/ independent ground-truth + heartbeat | `index.ts:runReconcile` + `source_counts` table |
+| Fail-closed readiness + operator status | `/ready` probes D1/schema/bindings/config; `/admin/status` reports heartbeat, queue/dead-letter/Frappe/audit/QB signals |
+| Safe dead-letter recovery | targeted replay by `envelope_id`; confirmed bulk replay; recovery is marked only after that envelope completes |
 | Idempotent record handoff, kill switch, logging | `external_id`=envelope_id; `JOBNIMBUS_ENABLED` flag; `audit_log` |
 | Intent → owner queue routing (spec 16) | `core.ts:classifyIntent` |
 | ERPNext bridge proof | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
@@ -66,8 +68,9 @@ src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, est
 src/estimates.ts   Owned estimator/configurator intake; idempotent by project/key; no JobNimbus/GHL queue
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
+src/operations.ts  readiness, operational status, and dead-letter replay safety orchestration
 src/index.ts       the Worker: fetch + queue + scheduled
-migrations/0001_init.sql   D1 schema; 0002/0003 add ERPNext proof fields; 0004 adds estimator idempotency; 0005 adds QuickBooks webhook replay receipts; 0006 adds generic lead dedup claims
+migrations/0001_init.sql   D1 schema; 0002–0006 add operating proof/idempotency state; 0007–0010 add operational safety, replay approval evidence, and the run-id ledger
 test/core.test.ts  zero-dep self-test (`node --test`)
 ```
 
@@ -108,10 +111,12 @@ npx wrangler deploy
 | POST | `/ingest/estimate` | `Bearer INGEST_TOKEN` | ingest public estimator/configurator payloads into owned R2/D1 and ERPNext without a JobNimbus/GHL queue dependency; accepts stable project ids or `Idempotency-Key`/`X-Idempotency-Key` for retry-safe replay |
 | POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos, file them to Google Drive, and optionally sync ERPNext Evidence Items |
 | POST | `/ingest/measurement` | `Bearer INGEST_TOKEN` | ingest RoofRuler/AppliCad measurement metadata/report files |
-| GET | `/health` | — | liveness |
+| GET | `/health` | — | backward-compatible, dependency-free liveness probe (`{"ok":true}`) |
+| GET | `/ready` | — | detailed public readiness booleans; never returns secret values |
+| GET | `/admin/status?audit_limit=20` | `Bearer ADMIN_TOKEN` | latest heartbeat, open dead letters, pending/stuck/Frappe/replay-ledger counts, 24h audit failures, and latest QB receipt freshness |
 | POST | `/admin/reconcile` | `Bearer ADMIN_TOKEN` | run reconciliation now |
-| POST | `/admin/source-count` | `Bearer ADMIN_TOKEN` | record independent ground-truth count `{day?,channel,count}` |
-| POST | `/admin/replay` | `Bearer ADMIN_TOKEN` | re-drive dead-lettered envelopes |
+| POST | `/admin/source-count` | `Bearer ADMIN_TOKEN` | record `{day?,channel,count}`; day is a real UTC `YYYY-MM-DD`, channel is an ingest source, count is an integer from 0–1,000,000 |
+| POST | `/admin/replay` | `Bearer ADMIN_TOKEN` | targeted or explicitly confirmed bulk dead-letter replay; both require non-secret human-approval evidence (below) |
 | GET | `/admin/envelopes?limit=50` | `Bearer ADMIN_TOKEN` | read recent bus envelopes for owner/Hermes diagnostics |
 | GET | `/admin/envelope/:id` | `Bearer ADMIN_TOKEN` | read one canonical bus envelope |
 | GET | `/admin/dead-letter?limit=50` | `Bearer ADMIN_TOKEN` | read unrecovered dead-letter rows |
@@ -121,6 +126,24 @@ Point the website forms, GBP, and AssistAI call-completed webhook at `/ingest/:s
 (website → `/ingest/website`, AssistAI/voicemail → `/ingest/phone`, etc.). Feed the daily
 independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
 `/admin/source-count` so reconciliation can detect a lead that never reached the bus.
+Every HTTP response carries no-store, content/type/frame/referrer/permissions/HSTS hardening
+and matching `X-Request-Id` / `X-Correlation-Id` headers. A safe caller-supplied correlation
+id is preserved; otherwise the Worker generates one.
+
+Replay mutation bodies are strict and require `run_id` (3–128 safe identifier characters),
+`approved_by` (3–128 characters), and `reason` (10–500 characters). Targeted example:
+`{"envelope_id":"ow_…","run_id":"hermes-run-…","approved_by":"owner@example.com","reason":"Cause verified fixed; approved for replay."}`.
+Bulk example: `{"all":true,"confirm":"REPLAY_ALL_OPEN_DEAD_LETTERS","run_id":"hermes-run-…","approved_by":"owner@example.com","reason":"Cause verified fixed; approved for bulk replay."}`.
+The approval context is stored in `audit_log`; bearer/approval tokens are never accepted in the
+JSON body or persisted.
+
+`run_id` is also the replay idempotency key. The first request atomically binds it to the exact
+selection (`targeted` + envelope id, or `bulk`) plus `approved_by` and normalized `reason` in
+`replay_requests`. An exact retry after completion returns the stored `{matched,requeued}` outcome
+with `"replayed":true` and never queues or audits again. Reusing the run id for a different intent
+returns `409 replay_run_id_conflict`; a concurrent exact request returns
+`409 replay_run_in_progress`. A queue-publication failure rolls the envelope claim back and marks
+the ledger attempt failed, so the same exact request can CAS the ledger into a new safe attempt.
 
 ## ⚠️ Confirm before production (the honest seams)
 

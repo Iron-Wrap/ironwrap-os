@@ -8,8 +8,16 @@
 import {
   ALLOWED_SOURCES, type Source, type EnvelopeRecord,
   newEnvelopeId, normalizeEnvelope, dedupKey, validateInbound, classifyIntent, reconcileDiff, parseBody,
+  validateSourceCount,
 } from "./core.ts";
 import * as store from "./store.ts";
+import {
+  BULK_REPLAY_CONFIRMATION,
+  executeReplayRequest,
+  getOperationalStatus,
+  getReadiness,
+  validateReplayApprovalContext,
+} from "./operations.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
 import { pushToErpNext } from "./erpnext.ts";
 import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
@@ -25,64 +33,13 @@ const safeJson = (s: string): Record<string, unknown> => { try { return JSON.par
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(req.url);
+    const requestId = requestIdFor(req);
     try {
-      if (req.method === "GET" && url.pathname === "/health") {
-        return json({ ok: true });
-      }
-      // Jobsite-photo intake (Phase 3) — checked before the generic /ingest/:source match.
-      if (req.method === "POST" && url.pathname === "/ingest/photo") {
-        if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
-        if (Number(req.headers.get("content-length") ?? "0") > MAX_BODY_BYTES) return json({ error: "payload_too_large" }, 413);
-        const text = await req.text();
-        if (text.length > MAX_BODY_BYTES) return json({ error: "payload_too_large" }, 413);
-        return await handlePhotoIngest(env, text, req.headers.get("content-type"));
-      }
-      // Measurement-report intake (Phase 3) — also before the generic /ingest/:source match.
-      if (req.method === "POST" && url.pathname === "/ingest/measurement") {
-        if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
-        const body = await readBounded(req);
-        if (body === null) return json({ error: "payload_too_large" }, 413);
-        return await handleMeasurementIngest(env, body, req.headers.get("content-type"));
-      }
-      // Estimator/configurator handoff: own the lead/session first; do not depend on JobNimbus/GHL.
-      if (req.method === "POST" && url.pathname === "/ingest/estimate") {
-        if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
-        const body = await readBounded(req);
-        if (body === null) return json({ error: "payload_too_large" }, 413);
-        return await handleEstimateIngest(
-          env,
-          body,
-          req.headers.get("content-type"),
-          req.headers.get("idempotency-key") ?? req.headers.get("x-idempotency-key"),
-        );
-      }
-      const ingest = url.pathname.match(/^\/ingest\/([a-z]+)$/);
-      if (req.method === "POST" && ingest) {
-        if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
-        return await handleIngest(req, env, ctx, ingest[1]);
-      }
-      if (url.pathname.startsWith("/admin/")) {
-        if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN)) return json({ error: "unauthorized" }, 401);
-        if (req.method === "GET" && url.pathname === "/admin/envelopes") return json(await handleListEnvelopes(env, url));
-        if (req.method === "GET" && url.pathname.startsWith("/admin/envelope/")) return json(await handleGetEnvelope(env, url));
-        if (req.method === "GET" && url.pathname === "/admin/dead-letter") return json(await handleListDeadLetters(env, url));
-        if (req.method === "POST" && url.pathname === "/admin/reconcile") return json(await runReconcile(env));
-        if (req.method === "POST" && url.pathname === "/admin/source-count") return await handleSourceCount(req, env);
-        if (req.method === "POST" && url.pathname === "/admin/replay") return json(await replayDeadLetter(env));
-      }
-      // (Proposal e-sign route removed 2026-07-02: JobNimbus native e-sign is confirmed
-      // sufficient; DocuSeal stays benched as the escape hatch — see final-spec-pack/00.)
-      // QuickBooks webhook — authenticity is the Intuit signature, not a bearer token.
-      if (req.method === "POST" && url.pathname === "/webhook/quickbooks") {
-        const body = await readBounded(req);
-        if (body === null) return json({ error: "payload_too_large" }, 413);
-        return await handleQuickbooksWebhook(env, body, req.headers.get("intuit-signature"));
-      }
-      return json({ error: "not_found" }, 404);
+      const response = await routeRequest(req, env, ctx);
+      return withResponseHeaders(response, requestId);
     } catch (err) {
-      log({ at: "fetch", error: String(err) });
-      return json({ error: "internal" }, 500);
+      log({ at: "fetch", request_id: requestId, error: String(err) });
+      return withResponseHeaders(json({ error: "internal" }, 500), requestId);
     }
   },
 
@@ -105,6 +62,70 @@ export default {
     else ctx.waitUntil(retrySweep(env)); // the frequent cron
   },
 } satisfies ExportedHandler<Env, { envelope_id: string }>;
+
+async function routeRequest(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const url = new URL(req.url);
+  // Preserve the original cheap liveness contract for platform health checks. Readiness is
+  // intentionally separate because it can fail while the isolate itself is healthy.
+  if (req.method === "GET" && url.pathname === "/health") return json({ ok: true });
+  if (req.method === "GET" && url.pathname === "/ready") {
+    const readiness = await getReadiness(env);
+    return json(readiness, readiness.ok ? 200 : 503);
+  }
+  // Jobsite-photo intake (Phase 3) — checked before the generic /ingest/:source match.
+  if (req.method === "POST" && url.pathname === "/ingest/photo") {
+    if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
+    if (Number(req.headers.get("content-length") ?? "0") > MAX_BODY_BYTES) return json({ error: "payload_too_large" }, 413);
+    const text = await req.text();
+    if (text.length > MAX_BODY_BYTES) return json({ error: "payload_too_large" }, 413);
+    return await handlePhotoIngest(env, text, req.headers.get("content-type"));
+  }
+  // Measurement-report intake (Phase 3) — also before the generic /ingest/:source match.
+  if (req.method === "POST" && url.pathname === "/ingest/measurement") {
+    if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
+    const body = await readBounded(req);
+    if (body === null) return json({ error: "payload_too_large" }, 413);
+    return await handleMeasurementIngest(env, body, req.headers.get("content-type"));
+  }
+  // Estimator/configurator handoff: own the lead/session first; do not depend on JobNimbus/GHL.
+  if (req.method === "POST" && url.pathname === "/ingest/estimate") {
+    if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
+    const body = await readBounded(req);
+    if (body === null) return json({ error: "payload_too_large" }, 413);
+    return await handleEstimateIngest(
+      env,
+      body,
+      req.headers.get("content-type"),
+      req.headers.get("idempotency-key") ?? req.headers.get("x-idempotency-key"),
+    );
+  }
+  const ingest = url.pathname.match(/^\/ingest\/([a-z]+)$/);
+  if (req.method === "POST" && ingest) {
+    if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
+    return await handleIngest(req, env, ctx, ingest[1]);
+  }
+  if (url.pathname.startsWith("/admin/")) {
+    if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN)) return json({ error: "unauthorized" }, 401);
+    if (req.method === "GET" && url.pathname === "/admin/envelopes") return json(await handleListEnvelopes(env, url));
+    if (req.method === "GET" && url.pathname.startsWith("/admin/envelope/")) return json(await handleGetEnvelope(env, url));
+    if (req.method === "GET" && url.pathname === "/admin/dead-letter") return json(await handleListDeadLetters(env, url));
+    if (req.method === "GET" && url.pathname === "/admin/status") {
+      return json(await getOperationalStatus(env, clampLimit(url.searchParams.get("audit_limit"), 20, 100)));
+    }
+    if (req.method === "POST" && url.pathname === "/admin/reconcile") return json(await runReconcile(env));
+    if (req.method === "POST" && url.pathname === "/admin/source-count") return await handleSourceCount(req, env);
+    if (req.method === "POST" && url.pathname === "/admin/replay") return await handleReplay(req, env);
+  }
+  // (Proposal e-sign route removed 2026-07-02: JobNimbus native e-sign is confirmed
+  // sufficient; DocuSeal stays benched as the escape hatch — see final-spec-pack/00.)
+  // QuickBooks webhook — authenticity is the Intuit signature, not a bearer token.
+  if (req.method === "POST" && url.pathname === "/webhook/quickbooks") {
+    const body = await readBounded(req);
+    if (body === null) return json({ error: "payload_too_large" }, 413);
+    return await handleQuickbooksWebhook(env, body, req.headers.get("intuit-signature"));
+  }
+  return json({ error: "not_found" }, 404);
+}
 
 // ---------------------------------------------------------------------------- ingest
 
@@ -177,7 +198,10 @@ async function handleIngest(req: Request, env: Env, ctx: ExecutionContext, sourc
 async function handlePush(env: Env, envelopeId: string): Promise<void> {
   const rec = await store.getEnvelope(env, envelopeId);
   if (!rec) throw new Error("envelope_missing");
-  if (rec.status === "pushed" || rec.status === "reconciled") return; // idempotent re-delivery
+  if (rec.status === "pushed" || rec.status === "reconciled") {
+    await store.markDeadLettersRecovered(env, envelopeId);
+    return; // idempotent re-delivery also closes any stale open recovery row for this envelope only
+  }
   let r: Awaited<ReturnType<typeof pushToJobNimbus>>;
   try {
     r = await pushToJobNimbus(env, rec);
@@ -239,6 +263,7 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     jn_contact_id: r.contactId,
     jn_job_id: r.jobId ?? null,
   });
+  await store.markDeadLettersRecovered(env, envelopeId);
 }
 
 async function handleDead(env: Env, envelopeId: string): Promise<void> {
@@ -299,15 +324,78 @@ async function runReconcile(env: Env): Promise<{ day: string; rows: ReturnType<t
   return { day, rows, openDeadLetter: openDlq };
 }
 
-async function replayDeadLetter(env: Env): Promise<{ requeued: number }> {
-  // Re-drive every dead envelope back through the JobNimbus push.
-  const res = await env.DB.prepare(`SELECT envelope_id FROM envelopes WHERE status = 'dead' LIMIT 500`)
-    .all<{ envelope_id: string }>();
-  const ids = (res.results ?? []).map((r) => r.envelope_id);
-  for (const id of ids) await store.setStatus(env, id, "pending_jn_push");
-  if (ids.length) await env.JN_QUEUE.sendBatch(ids.map((id) => ({ body: { envelope_id: id } })));
-  await env.DB.prepare(`UPDATE dead_letter SET recovered = 1 WHERE recovered = 0`).run();
-  return { requeued: ids.length };
+async function handleReplay(req: Request, env: Env): Promise<Response> {
+  const rawBody = await readBounded(req);
+  if (rawBody === null) return json({ error: "payload_too_large" }, 413);
+
+  let body: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(rawBody) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not_object");
+    body = parsed as Record<string, unknown>;
+  } catch {
+    return json({ error: "invalid_json" }, 400);
+  }
+
+  if (body.all === true) {
+    if (body.envelope_id !== undefined) return json({ error: "ambiguous_replay_selection" }, 400);
+    if (hasUnexpectedFields(body, ["all", "confirm", "run_id", "approved_by", "reason"])) {
+      return json({ error: "unexpected_replay_field" }, 400);
+    }
+    if (body.confirm !== BULK_REPLAY_CONFIRMATION) {
+      return json({
+        error: "bulk_confirmation_required",
+        confirmation: BULK_REPLAY_CONFIRMATION,
+      }, 400);
+    }
+    const approval = validateReplayApprovalContext(body);
+    if (!approval.ok) return json({ error: "invalid_approval_context", fields: approval.fields }, 400);
+    const replay = await executeReplayRequest(env, { all: true }, approval.value);
+    if (replay.kind === "run_id_conflict") {
+      return json({ error: "replay_run_id_conflict", run_id: approval.value.run_id }, 409);
+    }
+    if (replay.kind === "in_progress") {
+      return json({ error: "replay_run_in_progress", run_id: approval.value.run_id }, 409);
+    }
+    return json({
+      matched: replay.matched,
+      requeued: replay.requeued,
+      run_id: approval.value.run_id,
+      replayed: replay.replayed,
+    });
+  }
+
+  if (body.all !== undefined && body.all !== false) return json({ error: "invalid_all_flag" }, 400);
+  if (hasUnexpectedFields(body, ["all", "envelope_id", "run_id", "approved_by", "reason"])) {
+    return json({ error: "unexpected_replay_field" }, 400);
+  }
+  if (typeof body.envelope_id !== "string" ||
+      !/^ow_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.envelope_id)) {
+    return json({ error: "invalid_envelope_id" }, 400);
+  }
+
+  const approval = validateReplayApprovalContext(body);
+  if (!approval.ok) return json({ error: "invalid_approval_context", fields: approval.fields }, 400);
+  const replay = await executeReplayRequest(env, { all: false, envelopeId: body.envelope_id }, approval.value);
+  if (replay.kind === "run_id_conflict") {
+    return json({ error: "replay_run_id_conflict", run_id: approval.value.run_id }, 409);
+  }
+  if (replay.kind === "in_progress") {
+    return json({ error: "replay_run_in_progress", run_id: approval.value.run_id }, 409);
+  }
+  if (replay.matched === 0) {
+    return json({ error: "dead_letter_not_replayable", run_id: approval.value.run_id, replayed: false }, 404);
+  }
+  if (replay.requeued === 0) {
+    return json({ error: "dead_letter_replay_conflict", run_id: approval.value.run_id, replayed: false }, 409);
+  }
+  return json({
+    matched: replay.matched,
+    requeued: replay.requeued,
+    envelope_id: body.envelope_id,
+    run_id: approval.value.run_id,
+    replayed: replay.replayed,
+  });
 }
 
 async function handleListEnvelopes(env: Env, url: URL): Promise<{ envelopes: ReturnType<typeof adminEnvelope>[] }> {
@@ -337,12 +425,33 @@ function clampLimit(raw: string | null, fallback: number, max: number): number {
   return Number.isInteger(n) && n > 0 ? Math.min(n, max) : fallback;
 }
 
+function hasUnexpectedFields(body: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const allowedSet = new Set(allowed);
+  return Object.keys(body).some((key) => !allowedSet.has(key));
+}
+
 async function handleSourceCount(req: Request, env: Env): Promise<Response> {
-  const body = (await req.json()) as { day?: string; channel?: string; count?: number };
-  if (!body.channel || typeof body.count !== "number") return json({ error: "bad_request" }, 400);
-  const day = body.day ?? new Date().toISOString().slice(0, 10);
-  await store.putSourceCount(env, day, body.channel, body.count);
-  return json({ ok: true, day, channel: body.channel, count: body.count });
+  const rawBody = await readBounded(req);
+  if (rawBody === null) return json({ error: "payload_too_large" }, 413);
+
+  let body: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(rawBody) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not_object");
+    body = parsed as Record<string, unknown>;
+  } catch {
+    return json({ error: "invalid_json" }, 400);
+  }
+
+  const validation = validateSourceCount(
+    body.day === undefined ? new Date().toISOString().slice(0, 10) : body.day,
+    body.channel,
+    body.count,
+  );
+  if (!validation.ok) return json({ error: validation.reason }, 400);
+
+  await store.putSourceCount(env, validation.day, validation.channel, validation.count);
+  return json({ ok: true, day: validation.day, channel: validation.channel, count: validation.count });
 }
 
 // ---------------------------------------------------------------------------- helpers
@@ -375,5 +484,34 @@ function constantTimeEqual(a: string, b: string | undefined): boolean {
 }
 
 function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
+function requestIdFor(req: Request): string {
+  for (const supplied of [req.headers.get("x-correlation-id"), req.headers.get("x-request-id")]) {
+    if (supplied && /^[A-Za-z0-9._:-]{8,128}$/.test(supplied)) return supplied;
+  }
+  return crypto.randomUUID();
+}
+
+function withResponseHeaders(response: Response, requestId: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "no-store");
+  headers.set("content-security-policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+  headers.set("permissions-policy", "accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()");
+  headers.set("referrer-policy", "no-referrer");
+  headers.set("strict-transport-security", "max-age=31536000");
+  headers.set("x-content-type-options", "nosniff");
+  headers.set("x-frame-options", "DENY");
+  headers.set("x-request-id", requestId);
+  headers.set("x-correlation-id", requestId);
+  headers.set("x-robots-tag", "noindex, nofollow");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }

@@ -4,10 +4,13 @@
 # Node / build
 node_modules/
 dist/
+.lazyweb/
 
 # Python
 __pycache__/
 *.pyc
+build/
+*.egg-info/
 
 # Cloudflare / Wrangler (workers-bus)
 .wrangler/

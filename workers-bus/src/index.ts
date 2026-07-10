@@ -26,6 +26,8 @@ import { handleMeasurementIngest } from "./measurements.ts";
 import { handleEstimateIngest } from "./estimates.ts";
 import { handleQuickbooksWebhook } from "./quickbooks.ts";
 import { ensureJobFolder, googleConfigured } from "./google.ts";
+import { handleAdminAppUserProvision, handleAppApi } from "./app-api.ts";
+import { pruneAuthRecords } from "./app-auth-store.ts";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
@@ -58,7 +60,12 @@ export default {
   },
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    if (controller.cron === "0 14 * * *") ctx.waitUntil(runReconcile(env).then(() => {}));
+    if (controller.cron === "0 14 * * *") {
+      ctx.waitUntil(Promise.all([
+        runReconcile(env),
+        pruneAuthRecords(env).catch((error) => log({ at: "auth_prune", error: String(error) })),
+      ]).then(() => {}));
+    }
     else ctx.waitUntil(retrySweep(env)); // the frequent cron
   },
 } satisfies ExportedHandler<Env, { envelope_id: string }>;
@@ -72,6 +79,7 @@ async function routeRequest(req: Request, env: Env, ctx: ExecutionContext): Prom
     const readiness = await getReadiness(env);
     return json(readiness, readiness.ok ? 200 : 503);
   }
+  if (url.pathname.startsWith("/api/v1/")) return await handleAppApi(req, env, ctx);
   // Jobsite-photo intake (Phase 3) — checked before the generic /ingest/:source match.
   if (req.method === "POST" && url.pathname === "/ingest/photo") {
     if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
@@ -115,9 +123,12 @@ async function routeRequest(req: Request, env: Env, ctx: ExecutionContext): Prom
     if (req.method === "POST" && url.pathname === "/admin/reconcile") return json(await runReconcile(env));
     if (req.method === "POST" && url.pathname === "/admin/source-count") return await handleSourceCount(req, env);
     if (req.method === "POST" && url.pathname === "/admin/replay") return await handleReplay(req, env);
+    if (req.method === "POST" && url.pathname === "/admin/app-users") {
+      return await handleAdminAppUserProvision(req, env);
+    }
   }
-  // (Proposal e-sign route removed 2026-07-02: JobNimbus native e-sign is confirmed
-  // sufficient; DocuSeal stays benched as the escape hatch — see final-spec-pack/00.)
+  // No proposal mutation route: owned click-to-accept is the keeper path; a commercial e-sign
+  // API may bridge while it matures. DocuSeal/Documenso remain permanently rejected.
   // QuickBooks webhook — authenticity is the Intuit signature, not a bearer token.
   if (req.method === "POST" && url.pathname === "/webhook/quickbooks") {
     const body = await readBounded(req);
@@ -499,7 +510,7 @@ function requestIdFor(req: Request): string {
 
 function withResponseHeaders(response: Response, requestId: string): Response {
   const headers = new Headers(response.headers);
-  headers.set("cache-control", "no-store");
+  if (!headers.has("cache-control")) headers.set("cache-control", "no-store");
   headers.set("content-security-policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
   headers.set("permissions-policy", "accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()");
   headers.set("referrer-policy", "no-referrer");

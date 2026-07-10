@@ -1,6 +1,8 @@
 // operations.ts — production-facing readiness, status, and dead-letter recovery orchestration.
 
 import * as store from "./store.ts";
+import { appBffConfigured } from "./app-auth.ts";
+import type { AppEnv } from "./app-types.ts";
 
 export const BULK_REPLAY_CONFIRMATION = "REPLAY_ALL_OPEN_DEAD_LETTERS";
 const HEARTBEAT_FRESHNESS_HOURS = 36;
@@ -11,9 +13,6 @@ const MAX_CLOCK_SKEW_SECONDS = 5 * 60;
 
 interface ExtendedEnv {
   ERPNEXT_ENABLED?: string;
-  ERPNEXT_BASE_URL?: string;
-  ERPNEXT_API_KEY?: string;
-  ERPNEXT_API_SECRET?: string;
 }
 
 export interface ReplayApprovalContext {
@@ -38,6 +37,7 @@ export interface ReadinessReport {
     notification_configuration: boolean;
     jobnimbus_configuration: boolean;
     frappe_configuration: boolean;
+    app_bff_configuration: boolean;
   };
 }
 
@@ -81,7 +81,7 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
   const db = runtime.DB as { prepare?: unknown } | undefined;
   const raw = runtime.RAW as { put?: unknown } | undefined;
   const queue = runtime.JN_QUEUE as { send?: unknown; sendBatch?: unknown } | undefined;
-  const extended = env as Env & ExtendedEnv;
+  const extended = env as AppEnv & ExtendedEnv;
 
   const checks: ReadinessReport["checks"] = {
     d1: false,
@@ -93,11 +93,15 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
       nonEmpty(env.GOOGLE_SERVICE_ACCOUNT_JSON) && nonEmpty(env.FROM_EMAIL) &&
       nonEmpty(env.OWNER_ALERT_EMAIL) && nonEmpty(env.BACKUP_ALERT_EMAIL),
     jobnimbus_configuration: env.JOBNIMBUS_ENABLED !== "true" || nonEmpty(env.JOBNIMBUS_API_KEY),
-    frappe_configuration: String(extended.ERPNEXT_ENABLED ?? "false") !== "true" || (
+    frappe_configuration: (
+      String(extended.ERPNEXT_ENABLED ?? "false") !== "true" &&
+      String(extended.APP_BFF_ENABLED ?? "false") !== "true"
+    ) || (
       nonEmpty(extended.ERPNEXT_BASE_URL) &&
       nonEmpty(extended.ERPNEXT_API_KEY) &&
       nonEmpty(extended.ERPNEXT_API_SECRET)
     ),
+    app_bff_configuration: appBffConfigured(extended),
   };
 
   if (typeof db?.prepare === "function") {

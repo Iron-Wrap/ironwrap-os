@@ -339,11 +339,15 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
     `SELECT
        COALESCE(SUM(CASE WHEN type = 'table' AND name IN
          ('envelopes','audit_log','dead_letter','source_counts','heartbeat',
-          'quickbooks_webhook_receipts','dedup_claims','replay_requests') THEN 1 ELSE 0 END), 0) AS table_count,
+          'quickbooks_webhook_receipts','dedup_claims','replay_requests','app_users',
+          'app_magic_links','app_sessions','app_auth_throttles','app_auth_audit') THEN 1 ELSE 0 END), 0) AS table_count,
        COALESCE(SUM(CASE WHEN type = 'index' AND name IN
          ('idx_dead_letter_open_envelope','idx_audit_result_ts','idx_envelopes_operational',
           'idx_envelopes_erpnext_error_open','idx_heartbeat_ran_at','idx_qb_receipts_last_seen',
-          'idx_audit_run_id','idx_replay_requests_status_updated')
+          'idx_audit_run_id','idx_replay_requests_status_updated',
+          'idx_app_users_tenant_role_active','idx_app_magic_links_user_expiry',
+          'idx_app_sessions_user_expiry','idx_app_auth_throttles_expiry',
+          'idx_app_auth_audit_tenant_created')
          THEN 1 ELSE 0 END), 0) AS index_count,
        COALESCE(SUM(CASE WHEN type = 'trigger' AND name IN
          ('validate_source_count_insert','validate_source_count_update') THEN 1 ELSE 0 END), 0) AS trigger_count
@@ -361,7 +365,12 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             q.last_seen_at, q.events_count, q.replay_count,
             c.dedup_key,
             rr.run_id AS replay_run_id, rr.selection AS replay_selection,
-            rr.status AS replay_status, rr.attempt_count AS replay_attempt_count
+            rr.status AS replay_status, rr.attempt_count AS replay_attempt_count,
+            au.user_id AS app_user_id, au.tenant_id AS app_tenant_id, au.role AS app_role,
+            ml.token_hash AS magic_link_hash, ml.expires_at AS magic_link_expires_at,
+            aps.session_hash AS app_session_hash, aps.expires_at AS app_session_expires_at,
+            at.key_hash AS auth_throttle_hash, at.attempts AS auth_throttle_attempts,
+            aa.event AS auth_audit_event, aa.outcome AS auth_audit_outcome
      FROM envelopes e
      LEFT JOIN audit_log a ON 1 = 0
      LEFT JOIN dead_letter d ON 1 = 0
@@ -370,10 +379,15 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN quickbooks_webhook_receipts q ON 1 = 0
      LEFT JOIN dedup_claims c ON 1 = 0
      LEFT JOIN replay_requests rr ON 1 = 0
+     LEFT JOIN app_users au ON 1 = 0
+     LEFT JOIN app_magic_links ml ON 1 = 0
+     LEFT JOIN app_sessions aps ON 1 = 0
+     LEFT JOIN app_auth_throttles at ON 1 = 0
+     LEFT JOIN app_auth_audit aa ON 1 = 0
      LIMIT 0`,
   ).all();
-  return Number(artifacts?.table_count ?? 0) === 8 &&
-    Number(artifacts?.index_count ?? 0) === 8 &&
+  return Number(artifacts?.table_count ?? 0) === 13 &&
+    Number(artifacts?.index_count ?? 0) === 13 &&
     Number(artifacts?.trigger_count ?? 0) === 2;
 }
 

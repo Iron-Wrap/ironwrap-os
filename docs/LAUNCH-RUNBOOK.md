@@ -1,141 +1,269 @@
-# IronWrap OS Launch Runbook (free-tier path)
+# IronWrap OS Launch Runbook
 
-Copy-paste guide from zero to a live end-to-end system at $0 incremental hosting cost.
-Companion files live in `deploy/`. Steady-state operations: `docs/OPERATIONS-RUNBOOK.md`.
-Second-tenant cloning: `docs/WHITE-LABEL-CLONE-PLAYBOOK.md`.
+Production-candidate deployment guide for the owned Worker + Frappe + Hermes path.
+Companion files live in `deploy/`; steady-state recovery is in
+`docs/OPERATIONS-RUNBOOK.md`.
 
-Version-sensitive commands are marked "verify against the frappe_docker README"; the
-repo pins nothing about frappe_docker, so trust upstream docs over this file if they differ.
+## Truth Boundary
 
-## 0. What the owner must provide (nothing else blocks)
+The repository contains a locked, testable deployment contract. It does not prove that a
+host, Cloudflare account, Frappe site, Hermes runtime, backups, or real source cutovers are
+currently live. Keep these evidence classes separate:
+
+| Evidence class | Required proof |
+| --- | --- |
+| Repository | CI, `production-readiness.mjs contract`, source tests, pinned runtime lock |
+| Deployment | Image digest, site/app install output, Worker migration/deploy output |
+| Runtime | `/ready`, `/admin/status`, Frappe login, Hermes read/write smoke tests |
+| Admin/source | Account ownership, rotated secrets, website/Make/Jotform/QB cutover |
+
+Never mark launch complete from repository checks alone.
+
+## 0. Required Access And Inputs
 
 | Item | Why |
-|---|---|
-| Oracle Cloud account (Always Free; card required, $0 spend) or any always-on Ubuntu 22+ box | Hosts the Frappe site + Hermes. Free tier is 2 OCPU / 12 GB as of 2026-06, enough for both |
-| An empty private GitHub repo `ironwrap/ironwrap_roofing` | frappe_docker image builds clone apps from git URLs; the monorepo subdir is split into it |
-| Cloudflare DNS access for the chosen hostname (e.g. `os.ironwrapexteriors.com`) | Free Tunnel ingress |
-| Website/CMS access | Source cutover (step 8) |
-| One QuickBooks OAuth consent click | Payment detail reads (step 8) |
+| --- | --- |
+| Linux host meeting `deploy/runtime-lock.json` minimums | Runs Frappe and Hermes |
+| Private app repository and release tag | Supplies the proprietary app without embedding credentials in the image definition |
+| Container registry | Publishes the release image and yields an immutable digest |
+| Cloudflare account for the configured Worker, D1, R2, Queues, DNS, and Tunnel | Owns intake, storage, recovery, and ingress |
+| Frappe hostname and DNS authority | Serves the operating core over HTTPS |
+| Offline `age` recipient and dedicated R2 backup credentials | Encrypts and stores recoverable backups |
+| Website/Make/Jotform/QuickBooks admin access | Proves real-source cutover |
+| Dedicated Frappe, bus, Hermes-approval, ingest, and backup credentials | Keeps privileges separated by purpose |
 
-## 1. VM
+The host floor is locked at Ubuntu 22.04+, 2 CPU cores, 8 GiB RAM, 80 GiB free disk,
+Node.js 20+, and either `x86_64` or `aarch64`. Capacity is a floor, not a sizing promise.
 
-Oracle: create a VM.Standard.A1.Flex instance (2 OCPU, 12 GB, Ubuntu 22.04, 100+ GB boot).
-Then:
+## 1. Prove The Repository Contract
+
+From a clean checkout of the release commit:
 
 ```bash
-sudo apt-get update && sudo apt-get install -y docker.io docker-compose-v2 git rclone
-sudo usermod -aG docker $USER  # re-login after
+node tools/production-readiness.mjs contract
+node --test tools/production-readiness.test.mjs
 ```
 
-## 2. Publish the app repo (one time, from the dev machine)
+The contract checks the exact Frappe, frappe_docker, and Hermes tags/commits; digest-pinned
+base images; Frappe-only policy; credential-free app manifest; strict deploy scripts;
+encrypted backup protocol; and the environment-name inventory. A failure blocks image build.
+
+## 2. Prepare And Prove The Host
+
+Install Docker with Compose v2, Git, Node.js, `age`, `curl`, `jq`, `openssl`, `rclone`,
+`sha256sum`, and `tar`. Ensure the Docker daemon is reachable by the deployment account and
+the host clock is synchronized. Then run:
+
+```bash
+deploy/host-preflight.sh
+```
+
+The preflight reads only `deploy/runtime-lock.json`; it accepts no command-line configuration
+and does not print the environment. Do not continue until every host check passes.
+
+## 3. Publish A Tagged App Release
+
+The application repository must be private, credential-free in `apps.json`, and addressed by
+an immutable release tag. Split the monorepo app, inspect the resulting commit, test it, and tag
+that exact commit in the app repository:
 
 ```bash
 APP_REPO_URL=https://github.com/ironwrap/ironwrap_roofing.git deploy/split-app-repo.sh
 ```
 
-Re-run after any DocType change to sync the split repo before rebuilding the image.
+Copy `deploy/apps.example.json` to a secret file outside the checkout and replace
+`<IRONWRAP_APP_RELEASE_TAG>` with the release tag. The JSON URL must stay
+`https://github.com/ironwrap/ironwrap_roofing.git`; private-repository credentials belong in
+an optional BuildKit credential file, never in the URL or Git history.
 
-## 3. Frappe site (Frappe-only; NEVER install the erpnext app)
+## 4. Build And Publish The Locked Frappe-Only Image
 
-On the VM (verify build-arg names against the frappe_docker README):
+Check out frappe_docker at the exact commit in `deploy/runtime-lock.json` and leave that checkout
+pristine. The build script refuses a dirty or mismatched checkout and rejects ERPNext:
 
 ```bash
-git clone https://github.com/frappe/frappe_docker && cd frappe_docker
-# apps.json from deploy/apps.example.json with a real read token
-export APPS_JSON_BASE64=$(base64 -w0 apps.json)
-docker build --build-arg=APPS_JSON_BASE64=$APPS_JSON_BASE64 \
-  -t ironwrap-os:latest -f images/layered/Containerfile .
-# Bring up mariadb/redis/backend/frontend per the frappe_docker compose docs,
-# using image ironwrap-os:latest, then:
-docker exec <backend> bench new-site os.ironwrapexteriors.com --admin-password '<choose>'
-docker exec <backend> bench --site os.ironwrapexteriors.com install-app ironwrap_roofing
+export FRAPPE_DOCKER_DIR=/opt/src/frappe_docker
+export APPS_JSON_FILE=/run/secrets/ironwrap-apps.json
+export GIT_CREDENTIALS_FILE=/run/secrets/github.credentials
+export IRONWRAP_APP_COMMIT=<40-character-app-commit>
+export IRONWRAP_IMAGE_REF=registry.example.com/ironwrap/os:2026.07.10.1
+deploy/build-production-image.sh
+docker push "$IRONWRAP_IMAGE_REF"
 ```
 
-Create the API credentials the Worker and MCP servers use: Frappe Desk > User >
-API Access (an api_key/api_secret pair for a dedicated `bus@` service user with
-System Manager role). Record them only in secret stores.
+Record the pushed image as a registry digest such as
+`registry.example.com/ironwrap/os@sha256:...`. Deployment and backup evidence must use this
+digest, never `latest` or an unqualified tag.
 
-## 4. Free HTTPS ingress (Cloudflare Tunnel)
+## 5. Create The Frappe Site
+
+Use the compose topology from the pinned frappe_docker checkout, replacing the backend/frontend
+image with the digest-pinned IronWrap image. Persist MariaDB, sites, logs, and Redis according to
+the pinned upstream configuration. Create the site and install only the proprietary app:
 
 ```bash
-curl -fsSL https://pkg.cloudflare.com/install.sh | sudo bash && sudo apt-get install -y cloudflared
-cloudflared tunnel login
+docker exec <backend> bench new-site os.ironwrapexteriors.com --admin-password '<from-secret-store>'
+docker exec <backend> bench --site os.ironwrapexteriors.com install-app ironwrap_roofing
+docker exec <backend> bench --site os.ironwrapexteriors.com list-apps
+```
+
+Log in with each IronWrap role, open the `IronWrap OS` Workspace and `IronWrap Control Center`,
+and prove the role sees only permitted records. Exercise a populated job, no-job empty state,
+unreachable Worker readiness state, and source-record navigation. The cockpit is read-only; a
+button or network call that mutates a business record blocks launch.
+
+`list-apps` must contain `frappe` and `ironwrap_roofing` and must not contain `erpnext`.
+Create a dedicated non-interactive API user for the Worker/MCP path with the minimum IronWrap
+roles required by its tools. Do not reuse the Administrator account. Store its API key and secret
+only in the Worker and MCP secret stores.
+
+## 6. Configure HTTPS Ingress
+
+Create a Cloudflare Tunnel, route the production hostname, and install a filled copy of
+`deploy/cloudflared-config.example.yml` outside the repository. The template routes only the
+named Frappe hostname to local port 8080 and fails closed with a 404 fallback.
+
+```bash
 cloudflared tunnel create ironwrap-os
 cloudflared tunnel route dns ironwrap-os os.ironwrapexteriors.com
-sudo cp deploy/cloudflared-config.example.yml /etc/cloudflared/config.yml  # fill UUID
-sudo cloudflared service install && sudo systemctl enable --now cloudflared
+sudo install -m 0600 /secure/cloudflared-config.yml /etc/cloudflared/config.yml
+sudo cloudflared service install
+sudo systemctl enable --now cloudflared
 ```
 
-## 5. Wire the Worker to the site
+Prove HTTPS from outside the host before storing the URL in Worker or MCP configuration.
+
+## 7. Migrate And Deploy The Worker
+
+Set Frappe credentials with `wrangler secret put`, enable the Frappe consumer, apply every D1
+migration, and deploy from the release commit:
 
 ```bash
 cd workers-bus
-npx wrangler secret put ERPNEXT_BASE_URL     # https://os.ironwrapexteriors.com
+npm ci
+npm run typegen
+npm test
+npm run typecheck
+npm run deploy -- --dry-run
+npx wrangler secret put ERPNEXT_BASE_URL
 npx wrangler secret put ERPNEXT_API_KEY
 npx wrangler secret put ERPNEXT_API_SECRET
-# then set ERPNEXT_ENABLED="true" in wrangler.jsonc vars and deploy
-npx wrangler deploy
+npm run db:migrate
+npm run deploy
 ```
 
-## 6. Launch proof (gates 1-2)
+Set `ERPNEXT_ENABLED="true"` in the deployed Worker configuration. Then prove both health
+surfaces:
 
 ```bash
-node tools/launch-proof.mjs                    # dry run: prints the plan
+curl --fail --silent --show-error "$BUS_BASE_URL/health"
+curl --fail --silent --show-error "$BUS_BASE_URL/ready"
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$BUS_BASE_URL/admin/status"
+docker exec <backend> bench --site os.ironwrapexteriors.com set-config \
+  ironwrap_bus_base_url "$BUS_BASE_URL"
+```
+
+`/health` proves isolate liveness only. `/ready` queries the D1 operational schema and checks that
+R2/Queue bindings plus auth, notification, JobNimbus, and enabled-Frappe configuration are
+present; it does not contact every downstream service. `/admin/status` is the authenticated
+operating view for heartbeat freshness, queue/dead-letter counts, Frappe
+errors, failed/stuck replay requests, audit failures, and QuickBooks receipt freshness.
+The non-secret site config lets the Control Center show the public `/ready` result; it never
+stores or uses the Worker admin token.
+
+## 8. Configure Hermes And MCP
+
+Install Hermes at the tag and commit in `deploy/runtime-lock.json`. Register only the two MCP
+servers in `hermes/mcp-servers.json`; role tool filters come from
+`hermes/agents/roles.json`. MCP base URLs must be production HTTPS URLs. Plain HTTP is accepted
+only for explicit localhost development.
+
+Keep both write flags false for the first read-only smoke test:
+
+```bash
+node tools/validate-hermes-config.mjs
+```
+
+Ask the owner-operator profile for bus readiness, operational status, and blocked jobs. Confirm
+that no mutation or `Hermes Run` was created. For the approved-write proof, enable only the one
+required write surface, use a stable unique `run_id`, execute the matching dry-run, obtain human
+approval, and invoke the request tool with the approval token. Repeating the same completed
+Frappe `run_id` must return its recorded result without repeating the business mutation.
+
+## 9. Run Repository And Live-Environment Readiness
+
+Copy `deploy/env.example` to a root-owned file outside the repository, fill it from secret
+stores, and export it without printing values. Then run:
+
+```bash
+node tools/production-readiness.mjs live-env
+node tools/production-readiness.mjs all
+```
+
+`live-env` checks configuration shape, immutable runtime pins, digest-pinned image identity,
+HTTPS URLs, explicit write gates, credential separation, and backup inputs. It does not call the
+live services; the HTTP and application smoke tests in this runbook remain mandatory.
+
+## 10. Prove The End-To-End Intake Slice
+
+```bash
+node tools/launch-proof.mjs
 BUS_BASE_URL=... INGEST_TOKEN=... ADMIN_TOKEN=... node tools/launch-proof.mjs --execute
 ```
 
-Pass criteria: script prints LIVE/PROVEN, and in Frappe Desk the fixture shows
-Lead Envelope, Roofing Customer/Property, Roof Job, and all 7 Production Gate
-State rows. Archive the fixture records afterward. Run `POST /admin/reconcile`
-and confirm the heartbeat.
+Archive the output with the release commit and image digest. Verify the fixture in D1/R2 and in
+Frappe as Lead Envelope, Roofing Customer/Property, Roof Job, and seven Production Gate State
+rows. Run `POST /admin/reconcile`, then confirm `/admin/status` reports the new heartbeat and no
+unexplained gaps. Remove or clearly label fixture records after proof.
 
-## 7. Hermes (gates 3-4)
+## 11. Cut Over Real Sources
 
-On the same VM, install the Hermes runtime per its docs
-(https://hermes-agent.nousresearch.com/docs/), export the env block from
-`deploy/env.example`, and register the two MCP servers from
-`hermes/mcp-servers.json` (tool filtering per role comes from
-`hermes/agents/roles.json`; validate with `node tools/validate-hermes-config.mjs`).
+| Source | Runtime proof |
+| --- | --- |
+| Website | Real consented submission reaches `/ingest/website`, raw R2, D1, Frappe, ack, and temporary JobNimbus bridge |
+| 3D estimator | Repeated `/ingest/estimate` idempotency key returns the original session and remains review-gated |
+| Jotform field intake | Device submission reaches `/ingest/photo`, Drive/R2, evidence, and check-in with photos plus one voice note |
+| RoofRuler/AppliCad | `/ingest/measurement` stores raw source and source-referenced values; uncertain values remain review-gated |
+| QuickBooks | Valid signed webhook receipt is visible in `/admin/status`; invalid signature is rejected |
 
-- Gate 3 proof: with `ERPNEXT_WRITE_ENABLED=false`, ask an owner-operator profile
-  question ("what jobs are blocked and why") and confirm it answers from live reads only.
-- Gate 4 proof: set `ERPNEXT_WRITE_ENABLED=true` plus `HERMES_WRITE_TOKEN`, run
-  `dry_run_update_gate` on the fixture job, approve, run `request_update_gate`,
-  and confirm the Hermes Run audit row (before + Executed).
+JobNimbus and GHL remain bridges until each replacement slice has live evidence. SMS remains
+record-only until A2P/carrier approval. QuickBooks remains accounting truth.
 
-## 8. Real-source cutover (gates 5, 9, and payment visibility)
+## 12. Backups And Restore Drill
 
-| Source | Action |
-|---|---|
-| Website form | POST to `/ingest/website` with the ingest bearer (see `docs/WEBSITE-INTEGRATION.md`) |
-| 3D estimator | POST submit/save to `/ingest/estimate` (idempotent by project id) |
-| Jotform photo/voice | Point the webhook at `/ingest/photo`; device test with photos and one voice note |
-| RoofRuler email | Forward parsed reports to `/ingest/measurement` via the existing Make Core seat or a free Gmail Apps Script |
-| QuickBooks | Owner completes OAuth consent; webhook receiver is already live |
-
-## 9. Backups and monitoring ($0)
+Fill the backup block from `deploy/env.example`; `IRONWRAP_OS_IMAGE` must be the deployed image
+digest and `BACKUP_AGE_RECIPIENT` must be an offline public recipient. Schedule:
 
 ```bash
-# cron on the VM (env block from deploy/env.example):
-15 9 * * * /home/ubuntu/ironwrap-ops/deploy/backup-to-r2.sh >> /var/log/ironwrap-backup.log 2>&1
+15 9 * * * /opt/ironwrap/deploy/backup-to-r2.sh >> /var/log/ironwrap-backup.log 2>&1
 ```
 
-- UptimeRobot (free) on `GET /health` (bus) and the site hostname.
-- The daily reconcile digest email IS the heartbeat; if it stops arriving, escalate
-  per `docs/OPERATIONS-RUNBOOK.md`.
+The script creates a complete Frappe backup set, packages a restore manifest, encrypts locally,
+uploads immutably, verifies the remote objects, publishes `IRONWRAP-BACKUP-COMPLETE` last, and
+only then applies retention. A prefix without that marker is incomplete and must never be used
+for restore. At expiry, retention removes the marker before deleting the encrypted data one hour
+later, so a committed marker can never point at already-deleted backup content.
 
-## 10. Gate scorecard for launch week
+Before launch, restore the newest completed prefix to a labelled container using the recorded
+image digest. Its Docker network must be internal and its ports must not be published. The target
+keeps its own database configuration and credentials; `deploy/restore-from-r2.sh` merges only the
+source Frappe encryption key and never installs the source `site_config_backup.json`. Verify the
+database/public/private files, log in, open sample jobs/evidence, and record restore duration and
+artifact checksums. A successful upload without this restore drill is not backup proof.
 
-| Gate | Proof artifact |
-|---|---|
-| 1 Intake spine | `launch-proof.mjs --execute` passes on production traffic |
-| 2 ERP operating core | Fixture Roof Job + 7 gates visible in Frappe Desk |
-| 3 Read-only Hermes | Owner question answered from live truth, zero writes |
-| 4 Approved-write | One `request_update_gate` with a full Hermes Run audit trail |
-| 5 Instant estimate | Real estimator submit lands a review-gated session |
-| 6-8 Proposal/supplier/gates | First real job: takeoff -> supplier quote/order -> proposal pack (Frappe print format PDF) |
-| 9 Field proof | Real crew photos + one voice note land as evidence + check-in |
-| 10 Closeout | Completion packet -> warranty draft -> review request (Eligible, human-sent) |
+## 13. Launch Gate Record
 
-E-sign interim: email the proposal PDF, capture the signed scan as an Evidence Item
-with `customer_signoff_ref`. SMS stays record-only until the A2P task completes.
+| Gate | Repository evidence | Required live evidence |
+| --- | --- | --- |
+| Intake spine | Worker tests, typecheck, dry-run bundle | Real source reaches R2, D1, Frappe, ack, bridge, reconcile |
+| Operating core | 33 DocTypes, policy/RBAC tests, Workspace/Control Center package proof | App installed on plain Frappe; fixture, per-role cockpit, empty/error/readiness, and source-navigation checks pass |
+| Read-only Hermes | Role/manifest and MCP tests | Owner query uses live truth with zero writes |
+| Approved write | Dry-run/request contracts and idempotency tests | One human-approved mutation and complete `Hermes Run` audit |
+| Recovery | Readiness/status/replay/backup tests | Targeted replay, alert recovery, and isolated restore drill |
+| Real sources | Intake contracts | Website, estimator, field, measurement, and QB admin proofs |
+
+Record commit, image digest, Worker deployment version, migration state, Frappe site/app versions,
+Hermes version, proof outputs, approver, and any failed/skipped checks. Launch is blocked while a
+required live artifact is absent.

@@ -14,6 +14,8 @@ const REQUIRED_DEPLOY_FILES = [
   "deploy/cloudflared-config.example.yml",
   "deploy/backup-to-r2.sh",
   "deploy/restore-from-r2.sh",
+  "deploy/backup-d1-to-r2.sh",
+  "deploy/restore-d1-from-r2.sh",
   "deploy/build-production-image.sh",
   "deploy/host-preflight.sh",
 ];
@@ -50,6 +52,19 @@ const REQUIRED_ENV_NAMES = [
   "R2_BACKUP_BUCKET",
   "BACKUP_RETENTION_DAYS",
   "BACKUP_AGE_RECIPIENT",
+  "CLOUDFLARE_API_TOKEN",
+  "D1_PRODUCTION_ACCOUNT_ID",
+  "D1_PRODUCTION_DATABASE_NAME",
+  "D1_PRODUCTION_DATABASE_ID",
+  "D1_R2_BACKUP_BUCKET",
+  "D1_BACKUP_RETENTION_DAYS",
+  "D1_RESTORE_R2_COMPLETED_PREFIX",
+  "D1_RESTORE_AGE_IDENTITY_FILE",
+  "D1_RESTORE_MODE",
+  "D1_RESTORE_TARGET_ACCOUNT_ID",
+  "D1_RESTORE_TARGET_DATABASE_NAME",
+  "D1_RESTORE_TARGET_DATABASE_ID",
+  "D1_RESTORE_CONFIRMATION",
   "RESTORE_R2_COMPLETED_PREFIX",
   "RESTORE_AGE_IDENTITY_FILE",
   "RESTORE_TARGET_SITE",
@@ -57,7 +72,9 @@ const REQUIRED_ENV_NAMES = [
   "RESTORE_CONFIRMATION",
 ];
 
-const LIVE_REQUIRED_ENV_NAMES = REQUIRED_ENV_NAMES.filter((name) => name !== "RESTORE_CONFIRMATION");
+const LIVE_REQUIRED_ENV_NAMES = REQUIRED_ENV_NAMES.filter(
+  (name) => name !== "RESTORE_CONFIRMATION" && name !== "D1_RESTORE_CONFIRMATION",
+);
 
 const SECRET_ENV_NAMES = [
   "ERPNEXT_API_KEY",
@@ -66,6 +83,7 @@ const SECRET_ENV_NAMES = [
   "HERMES_WRITE_TOKEN",
   "INGEST_TOKEN",
   "ADMIN_TOKEN",
+  "CLOUDFLARE_API_TOKEN",
   "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
   "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
 ];
@@ -269,6 +287,15 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
     const value = envTemplate.values.get(name) ?? "";
     checks.push(check(`contract.env.secret.${name}`, /^<[^>]+>$/.test(value), `${name} is represented by a name-only placeholder`, `${name} must not contain a committed secret value`));
   }
+  const d1SourceTemplate = {
+    D1_PRODUCTION_ACCOUNT_ID: "7ee5775bc1ba46f05c5a65235b60e939",
+    D1_PRODUCTION_DATABASE_NAME: "ironwrap-bus",
+    D1_PRODUCTION_DATABASE_ID: "f0674848-13df-4422-9896-8ba2719663b8",
+    D1_RESTORE_TARGET_ACCOUNT_ID: "7ee5775bc1ba46f05c5a65235b60e939",
+  };
+  for (const [name, expected] of Object.entries(d1SourceTemplate)) {
+    checks.push(check(`contract.env.d1.${name}`, envTemplate.values.get(name) === expected, `${name} is pinned to the committed Cloudflare resource`, `${name} must match the committed Cloudflare account/database coordinate`));
+  }
   if (lock) {
     const exactTemplateValues = {
       FRAPPE_VERSION: lock.components?.frappe?.version,
@@ -305,6 +332,21 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   checks.push(check("contract.restore.execution", restore.includes('IRONWRAP-RESTORE-ENCRYPTION-KEY.json') && restore.includes('for filename in "$database_file" "$public_files_file" "$private_files_file" "$(basename "$sanitized_key_file")"') && !/docker cp[^\n]*site_config_backup/.test(restore) && restore.includes('json.dumps({"encryption_key":key}') && restore.includes('json.dumps({**current,"encryption_key":key}') && restore.includes('bench --site "$RESTORE_TARGET_SITE" restore') && restore.includes('bench --site "$RESTORE_TARGET_SITE" migrate'), "restore sends only backup artifacts plus a sanitized encryption key, preserves target-owned configuration, and migrates", "restore must exclude the source site configuration, merge only its encryption key into target-owned configuration, and run bench restore plus migrate"));
   checks.push(check("contract.restore.cleanup", restore.includes('docker exec "$RESTORE_TARGET_CONTAINER" rm -rf') && restore.includes('rm -rf -- "$WORK_DIR"') && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(restore), "restore cleans host and container plaintext on exit and signals", "restore must clean every plaintext staging location on success, failure, and signals"));
 
+  const d1Backup = contents.get("deploy/backup-d1-to-r2.sh") ?? "";
+  checks.push(check("contract.d1_backup.safety", d1Backup.includes("set -euo pipefail") && d1Backup.includes("set +x") && d1Backup.includes("umask 077") && d1Backup.includes("this command accepts no arguments") && d1Backup.includes("mktemp -d") && d1Backup.includes("flock -n") && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Backup), "D1 backup uses strict no-argv, no-tracing, private-temp, locking, and signal controls", "D1 backup lacks strict no-argv, no-tracing, private-temp, locking, or signal controls"));
+  checks.push(check("contract.d1_backup.source", d1Backup.includes('EXPECTED_ACCOUNT_ID="7ee5775bc1ba46f05c5a65235b60e939"') && d1Backup.includes('EXPECTED_DATABASE_NAME="ironwrap-bus"') && d1Backup.includes('EXPECTED_DATABASE_ID="f0674848-13df-4422-9896-8ba2719663b8"') && d1Backup.includes('"account_id": "$D1_PRODUCTION_ACCOUNT_ID"') && d1Backup.includes('"database_id": "$D1_PRODUCTION_DATABASE_ID"'), "D1 backup is bound to the exact production account, name, UUID, and generated config", "D1 backup must bind an exact generated config to the committed production D1 coordinates"));
+  checks.push(check("contract.d1_backup.wrangler", d1Backup.includes('workers-bus/node_modules/.bin/wrangler') && d1Backup.includes('workers-bus/package-lock.json') && d1Backup.includes('d1 export "$D1_PRODUCTION_DATABASE_NAME"') && d1Backup.includes("--remote --config") && d1Backup.includes("exact Wrangler 4 version"), "D1 backup uses the locked local Wrangler 4 remote export path", "D1 backup must use the exact workers-bus Wrangler 4 lock for remote export"));
+  checks.push(check("contract.d1_backup.validation", d1Backup.includes("sqlite3 -bail") && d1Backup.includes("PRAGMA integrity_check") && d1Backup.includes("app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit") && d1Backup.includes("IRONWRAP-D1-BACKUP-MANIFEST.txt") && d1Backup.includes("sql_sha256="), "D1 backup proves an isolated SQLite import, required core/auth tables, and a hashed manifest", "D1 backup must validate the exported SQL and bind it to a manifest before encryption"));
+  checks.push(check("contract.d1_backup.atomic", d1Backup.includes("age --encrypt") && d1Backup.includes("rclone copy") && d1Backup.includes("--immutable") && d1Backup.includes("rclone check") && d1Backup.includes("IRONWRAP-D1-BACKUP-COMPLETE") && d1Backup.indexOf("rclone check") < d1Backup.lastIndexOf("rclone copyto") && d1Backup.includes("remote_complete=1"), "D1 backup encrypts, uploads immutably, verifies, and commits its marker last", "D1 backup must encrypt and remotely verify immutable objects before publishing its completion marker"));
+  checks.push(check("contract.d1_backup.retention", d1Backup.includes("MARKER_RETENTION_HOURS") && d1Backup.includes("DATA_RETENTION_HOURS=$((MARKER_RETENTION_HOURS + 1))") && d1Backup.indexOf("**/IRONWRAP-D1-BACKUP-COMPLETE") < d1Backup.indexOf("**/*.age") && d1Backup.includes("remote_started == 1 && remote_complete == 0") && d1Backup.includes("rclone purge"), "D1 retention hides markers before data and incomplete generations are purged", "D1 retention and incomplete-upload cleanup must preserve atomic visibility"));
+
+  const d1Restore = contents.get("deploy/restore-d1-from-r2.sh") ?? "";
+  checks.push(check("contract.d1_restore.safety", d1Restore.includes("set -euo pipefail") && d1Restore.includes("set +x") && d1Restore.includes("umask 077") && d1Restore.includes("this command accepts no arguments") && d1Restore.includes('mode="${D1_RESTORE_MODE:-verify}"') && d1Restore.includes("mktemp -d") && d1Restore.includes("flock -n") && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Restore), "D1 restore defaults to local verification with strict no-argv, private-temp, lock, and signal controls", "D1 restore must default to verification and fail closed around argv, plaintext, concurrency, and signals"));
+  checks.push(check("contract.d1_restore.selection", d1Restore.includes("D1_RESTORE_R2_COMPLETED_PREFIX") && d1Restore.includes("IRONWRAP-D1-BACKUP-COMPLETE") && !/rclone\s+ls[fdj]?\b/.test(d1Restore), "D1 restore requires one exact marker-bearing prefix and never discovers latest", "D1 restore must never discover latest or accept an uncommitted generation"));
+  checks.push(check("contract.d1_restore.local", d1Restore.includes("sha256sum --check") && d1Restore.includes("age --decrypt") && d1Restore.indexOf("sha256sum --check") < d1Restore.indexOf("age --decrypt") && d1Restore.includes("sqlite3 -bail") && d1Restore.includes("PRAGMA integrity_check") && d1Restore.includes("no remote mutation performed"), "D1 restore cryptographically and structurally verifies locally before any remote mutation", "D1 restore must verify ciphertext, manifest, SQL import, integrity, and required tables locally first"));
+  checks.push(check("contract.d1_restore.remote", d1Restore.includes("ironwrap-restore-drill-") && d1Restore.includes("production D1 database can never be a restore target") && d1Restore.includes('RESTORE_D1:$D1_RESTORE_TARGET_DATABASE_NAME@$D1_RESTORE_TARGET_DATABASE_ID') && d1Restore.includes('"database_id": "$D1_RESTORE_TARGET_DATABASE_ID"') && d1Restore.includes("target must be an empty dedicated drill database") && d1Restore.includes("d1 execute"), "remote D1 restore is exact-target-confirmed, empty-target-only, account-bound, and production-denied", "remote D1 restore must generate exact target config and reject production, nonempty, or unconfirmed targets"));
+  checks.push(check("contract.d1_restore.cleanup", d1Restore.includes('rm -rf -- "$WORK_DIR"') && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Restore), "D1 restore removes decrypted plaintext on success, failure, and signals", "D1 restore must clean decrypted plaintext in every exit path"));
+
   const buildScript = contents.get("deploy/build-production-image.sh") ?? "";
   const hostScript = contents.get("deploy/host-preflight.sh") ?? "";
   checks.push(check("contract.scripts.strict", [buildScript, hostScript].every((script) => script.includes("set -euo pipefail") && script.includes("set +x")), "deployment scripts use strict mode with tracing disabled", "deployment scripts must use strict mode and disable tracing"));
@@ -314,7 +356,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   checks.push(check("contract.host.argv", hostScript.includes("no configuration values are accepted as arguments") && !/eval\s|printenv|\benv\b\s*$/m.test(hostScript), "host preflight refuses configuration in argv and does not dump the environment", "host preflight must refuse configuration arguments and avoid environment dumps"));
   checks.push(check("contract.host.lock", hostScript.includes("deploy/runtime-lock.json") && hostScript.includes('.policy.architecture == "frappe-only"') && hostScript.includes("CPU_MINIMUM") && hostScript.includes("NODE_MAJOR_MINIMUM"), "host preflight consumes the Frappe-only runtime lock", "host preflight must consume and validate runtime-lock host policy"));
 
-  for (const relative of ["deploy/backup-to-r2.sh", "deploy/restore-from-r2.sh", "deploy/build-production-image.sh", "deploy/host-preflight.sh"]) {
+  for (const relative of ["deploy/backup-to-r2.sh", "deploy/restore-from-r2.sh", "deploy/backup-d1-to-r2.sh", "deploy/restore-d1-from-r2.sh", "deploy/build-production-image.sh", "deploy/host-preflight.sh"]) {
     let executable = false;
     try { executable = Boolean((await stat(path.join(repoRoot, relative))).mode & 0o111); } catch { /* missing reported above */ }
     checks.push(check(`contract.executable.${relative}`, executable, `${relative} is executable`, `${relative} must be executable`));

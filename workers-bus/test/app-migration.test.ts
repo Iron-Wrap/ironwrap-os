@@ -61,3 +61,22 @@ test("0013 field upload throttles are bounded and user-scoped", async () => {
   assert.match(sql, /ON DELETE RESTRICT/);
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
+
+test("0014 QR pairing binds field sessions to revocable hashed device proofs", async () => {
+  const sql = await readFile(new URL("../migrations/0014_device_pairing.sql", import.meta.url), "utf8");
+  assert.match(sql, /ALTER TABLE app_sessions ADD COLUMN device_id TEXT/);
+  for (const table of ["app_device_pairings", "app_devices"]) {
+    assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+  }
+  for (const index of [
+    "idx_app_sessions_device_active",
+    "idx_app_device_pairings_user_expiry",
+    "idx_app_devices_tenant_user_active",
+  ]) {
+    assert.match(sql, new RegExp(`CREATE INDEX IF NOT EXISTS ${index}\\b`));
+  }
+  assert.match(sql, /device_proof_hash TEXT NOT NULL UNIQUE/);
+  assert.match(sql, /token_hash TEXT PRIMARY KEY/);
+  assert.doesNotMatch(sql, /raw_token|raw_session|device_proof[^_h]|pairing_token/i);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});

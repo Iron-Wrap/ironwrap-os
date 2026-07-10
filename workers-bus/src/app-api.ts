@@ -1,12 +1,17 @@
 import {
   appBffConfigured,
   authenticateAppRequest,
+  consumeDevicePairing,
   consumeMagicLink,
   expiredSessionCookie,
   logoutAppSession,
+  issueDevicePairing,
+  listDevicePairings,
+  listFieldPairingUsers,
   parseProvisionAppUser,
   provisionAppUser,
   requestMagicLink,
+  revokeDevicePairing,
   sessionPayload,
   unauthenticatedSessionPayload,
   validateAppOrigin,
@@ -44,6 +49,8 @@ export async function handleAppApi(
     response = await requestMagicLink(req, appEnv, ctx);
   } else if (req.method === "POST" && url.pathname === "/api/v1/auth/magic-link/consume") {
     response = await consumeMagicLink(req, appEnv);
+  } else if (req.method === "POST" && url.pathname === "/api/v1/auth/device-pairing/consume") {
+    response = await consumeDevicePairing(req, appEnv);
   } else {
     const auth = await authenticateAppRequest(req, appEnv);
     if (!auth) {
@@ -98,6 +105,41 @@ export async function handleAuthenticatedRoute(
   }
   if (req.method === "POST" && url.pathname === "/api/v1/auth/logout") {
     return await logoutAppSession(req, env, auth);
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/field-users") {
+    if (auth.session.role !== "owner" && auth.session.role !== "ops") {
+      return appJson({ error: "office_role_required" }, 403);
+    }
+    return appJson({ users: await listFieldPairingUsers(env, auth) });
+  }
+  if (url.pathname === "/api/v1/device-pairings") {
+    if (auth.session.role !== "owner" && auth.session.role !== "ops") {
+      return appJson({ error: "office_role_required" }, 403);
+    }
+    if (req.method === "GET") return appJson({ devices: await listDevicePairings(env, auth) });
+    if (req.method === "POST") {
+      const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+      if (!parsed.ok) return appJson({ error: parsed.error }, parsed.status);
+      if (!isRecord(parsed.value) || Object.keys(parsed.value).some((key) => key !== "field_user_id")) {
+        return appJson({ error: "unexpected_field" }, 400);
+      }
+      const fieldUserId = typeof parsed.value.field_user_id === "string" ? parsed.value.field_user_id : "";
+      const result = await issueDevicePairing(req, env, auth, fieldUserId);
+      return result.ok ? appJson({
+        pairing_url: result.pairing_url,
+        expires_at: result.expires_at,
+        field_user: result.field_user,
+      }) : appJson({ error: result.error }, result.status);
+    }
+  }
+  const revokeMatch = url.pathname.match(/^\/api\/v1\/device-pairings\/([^/]+)\/revoke$/);
+  if (req.method === "POST" && revokeMatch) {
+    const deviceId = decodedPathSegment(revokeMatch[1]);
+    if (!deviceId) return appJson({ error: "not_found" }, 404);
+    const result = await revokeDevicePairing(req, env, auth, deviceId);
+    return result.ok
+      ? appJson({ ok: true, device_id: result.device_id, revoked_at: result.revoked_at })
+      : appJson({ error: result.error }, result.status);
   }
   if (req.method === "GET" && url.pathname === "/api/v1/today") {
     try {
@@ -164,7 +206,7 @@ function withCors(response: Response, origin: string | null): Response {
   headers.set("access-control-allow-methods", "GET, POST, OPTIONS");
   headers.set(
     "access-control-allow-headers",
-    "Content-Type, X-CSRF-Token, X-Device-Action-Id, Idempotency-Key, X-Request-ID, X-Correlation-ID",
+    "Content-Type, X-CSRF-Token, X-IronWrap-Device-Proof, X-Device-Action-Id, Idempotency-Key, X-Request-ID, X-Correlation-ID",
   );
   headers.set("access-control-max-age", "600");
   headers.append("vary", "Origin");
@@ -181,6 +223,10 @@ function decodedPathSegment(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 async function readJson(

@@ -290,7 +290,7 @@ function assertNoSessionSecrets(value: unknown, path = "payload"): void {
   if (!value || typeof value !== "object") return;
   for (const [key, child] of Object.entries(value)) {
     if (
-      /^(csrf(_token)?|session(_token)?|access_token|refresh_token|authorization|cookie)$/i.test(
+      /^(csrf(_token)?|session(_token)?|access_token|refresh_token|authorization|cookie|device[_-]?(secret|proof))$/i.test(
         key,
       )
     ) {

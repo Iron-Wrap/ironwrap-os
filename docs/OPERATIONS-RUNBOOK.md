@@ -208,7 +208,7 @@ deploy/backup-to-r2.sh
 `workers-bus/node_modules/.bin/wrangler` 4.x version and an exact generated config for account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It performs `d1 export --remote`, imports the SQL into an
-isolated SQLite file, runs integrity checks, and requires all 16 production tables before
+isolated SQLite file, runs integrity checks, and requires all 18 production tables before
 packaging, encrypting, uploading immutably, and remotely checking the generation. It prints the
 exact committed `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Do not list-and-select latest in
 a script, infer a prefix, or restore a generation without `IRONWRAP-D1-BACKUP-COMPLETE`.
@@ -226,8 +226,8 @@ restore cannot observe a committed marker after its data was deleted.
 The D1 required-table allowlist is release state, not a static assumption: `envelopes`,
 `audit_log`, `dead_letter`, `source_counts`, `heartbeat`, `quickbooks_webhook_receipts`,
 `dedup_claims`, `replay_requests`, `field_actions`, `field_action_media`, `app_users`,
-`app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`, and
-`app_action_throttles`. Every migration that adds a persistent table must
+`app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`,
+`app_action_throttles`, `app_device_pairings`, and `app_devices`. Every migration that adds a persistent table must
 advance both scripts, manifest expectation, readiness contract, and executable tests before that
 migration can deploy.
 
@@ -302,6 +302,34 @@ so planned marker-first expiry can run. Separately archive the raw intake bucket
 delete-protection rule plus its denied-delete proof. `rclone --immutable`, repository tests, an
 unenforced policy document, or a dashboard screenshot without the denied-delete response does
 not prove this live gate.
+
+## Field Device Loss, Replacement, And Revocation
+
+This procedure applies only after the Field Companion BFF and the office **Crew devices** setting
+are deployed. It is intentionally an office action: a field account cannot issue, list, or revoke
+devices, and crew members never receive a passwordless magic-link session.
+
+1. Treat a lost or reassigned phone as a credential incident. Record the field user, device id,
+   reporter, and UTC time in the incident record. Do not copy a QR image, pairing URL, token, or
+   device proof into the record.
+2. An owner or operations user opens **Settings -> Crew devices**, identifies the active device,
+   and selects **Revoke lost device**. Confirm the resulting `device_id` and `revoked_at` response.
+3. Verify the device appears as revoked on a freshly loaded office list. The old device must fail a
+   current `/api/v1/session` request even if it still has its session cookie and local proof; a
+   screenshot of the button state is not enough.
+4. Preserve unsynced field work only from the physical device if it is recovered. Do not move its
+   IndexedDB data or device proof to a replacement handset. The owner decides whether any queued
+   proof is manually recovered as an evidence exception.
+5. On the replacement handset, install/open the PWA under office supervision. The office issues a
+   new short-lived QR; the handset creates a fresh local device proof and consumes the fragment
+   token with a POST. Verify the new device list row and one authorized Field Companion read.
+6. Close the incident only after the old device fails, the replacement succeeds, the relevant
+   D1/device audit evidence is retained, and no raw pairing credential appears in logs, chat, or
+   tickets.
+
+Local tests prove the protocol shape. The deployment/device proof remains a launch gate until the
+above steps are performed against the intended Worker, D1 database, and a real iOS or Android
+device.
 
 ## Secret Rotation
 

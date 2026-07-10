@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
+import { storeDeviceSecret } from "../auth/device-credential";
 import { resetDatabaseForTests } from "../storage/db";
 import { hasCachedJobPacket, loadJob, prefetchAssignedPackets } from "./field-cache";
 import type { JobResponse, TodayResponse } from "./field-contracts";
@@ -140,5 +141,22 @@ describe("field packet cache", () => {
       code: "offline_packet_unavailable",
     });
     expect(await hasCachedJobPacket(session, "JOB-Z")).toBe(false);
+  });
+
+  it("sends the current device proof for every field packet request without caching it in the packet", async () => {
+    await storeDeviceSecret("p".repeat(43));
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("X-IronWrap-Device-Proof")).toBe("p".repeat(43));
+      return Response.json(job("JOB-PROOF"));
+    });
+
+    await loadJob(session, "JOB-PROOF", fetcher);
+    const cached = await loadJob(
+      session,
+      "JOB-PROOF",
+      vi.fn<typeof fetch>().mockRejectedValue(new TypeError("offline")),
+    );
+    expect(JSON.stringify(cached)).not.toContain("p".repeat(43));
   });
 });

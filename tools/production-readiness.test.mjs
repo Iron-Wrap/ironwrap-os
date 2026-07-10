@@ -341,7 +341,7 @@ const REQUIRED_D1_TABLES = [
   "quickbooks_webhook_receipts", "dedup_claims", "replay_requests",
   "field_actions", "field_action_media",
   "app_users", "app_magic_links", "app_sessions", "app_auth_throttles", "app_auth_audit",
-  "app_action_throttles",
+  "app_action_throttles", "app_device_pairings", "app_devices",
 ];
 
 function d1Sql({ missingTable = "" } = {}) {

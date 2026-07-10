@@ -9,6 +9,7 @@ import { useStorageDurability } from "../storage/durability";
 import { useAppOpenOutboxSync, useOutboxSummary } from "../storage/use-outbox";
 import { Button } from "./ui/button";
 import { isOfflineSession } from "../auth/session";
+import { getDeviceSecret } from "../auth/device-credential";
 import { useSession } from "../auth/session-context";
 
 export function SystemStatus() {
@@ -18,10 +19,11 @@ export function SystemStatus() {
   const outboxPrincipal = { tenantId: session.tenant.id, userId: session.user.id };
   const outbox = useOutboxSummary(outboxPrincipal);
   const csrfToken = isOfflineSession(session) ? undefined : session.csrf_token;
+  const deviceProof = session.user.role === "field" ? getDeviceSecret : undefined;
   const canSync = online && Boolean(csrfToken);
   const storage = useStorageDurability();
   const storageWarning = storage.checked ? storage.warning : undefined;
-  useAppOpenOutboxSync(outboxPrincipal, csrfToken);
+  useAppOpenOutboxSync(outboxPrincipal, csrfToken, deviceProof);
   const {
     offlineReady: [offlineReady, setOfflineReady],
     needRefresh: [needRefresh, setNeedRefresh],
@@ -128,7 +130,7 @@ export function SystemStatus() {
                 <Button
                   size="compact"
                   variant="outline"
-                  onClick={() => void flushOutbox({ ...outboxPrincipal, csrfToken })}
+                  onClick={() => void flushOutbox({ ...outboxPrincipal, csrfToken, deviceProof })}
                 >
                   <UploadCloud aria-hidden="true" />
                   Sync now

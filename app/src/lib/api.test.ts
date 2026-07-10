@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { getDeviceSecret, storeDeviceSecret } from "../auth/device-credential";
 import { apiRequest, isRetryableApiError, retryAfterMilliseconds } from "./api";
 
 describe("apiRequest", () => {
@@ -36,6 +37,38 @@ describe("apiRequest", () => {
       status: 200,
       code: "invalid_response",
     });
+  });
+
+  it("adds device proof only when a device-bound request supplies it", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ value: "ready" }));
+
+    await apiRequest({
+      path: "/api/v1/readiness",
+      schema: z.object({ value: z.literal("ready") }),
+      deviceProof: async () => "device-proof-not-persisted",
+      fetcher,
+    });
+
+    const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("X-IronWrap-Device-Proof")).toBe("device-proof-not-persisted");
+  });
+
+  it("clears a rejected device proof without storing it in request state", async () => {
+    await storeDeviceSecret("d".repeat(43));
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ error: "unauthorized" }, { status: 401 }));
+
+    await expect(
+      apiRequest({
+        path: "/api/v1/today",
+        schema: z.unknown(),
+        deviceProof: getDeviceSecret,
+        fetcher,
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+
+    expect(await getDeviceSecret()).toBeUndefined();
   });
 
   it("preserves server error codes, request ids, and retry timing", async () => {

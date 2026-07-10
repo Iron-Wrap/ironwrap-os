@@ -601,7 +601,7 @@ Repository support means code/contracts/tests exist. It is not the same as a pas
 | Framework customization debt | Heavy framework forks make upgrades painful | Proprietary custom app on stock MIT Frappe, no framework fork |
 | License/commercial terms | ERPNext (GPL-3.0) dependency removed 2026-07-09; stack is MIT foundations (Frappe, Hermes, MCP SDK) plus the proprietary IronWrap app | Remaining legal gate is trademark hygiene and MIT notice preservation; one legal pass before the first external tenant |
 | Accounting mistakes | Payments, invoices, taxes are high-risk | QuickBooks remains source of truth; Hermes read/draft only |
-| Field adoption | Crew will reject slow tools | Field PWA is locally implemented: today, packet, proof stream, check-in, offline outbox, and server verification; real-device proof remains open |
+| Field adoption | Crew will reject slow tools | Field PWA is locally implemented: today, packet, proof stream, check-in, offline outbox, server verification, and device-bound QR pairing/revocation; real-device proof remains open |
 | Data migration | Old GHL/JobNimbus/Drive data may be messy | Import ledger, manual exception queue |
 | Tenant leakage | White-label product cannot mix customers | Site/profile/namespace isolation first |
 | Compliance | SMS/privacy/call recording/reviews vary by region | Policy skill plus deterministic consent gates |
@@ -646,7 +646,7 @@ The artificial blockers below are collapsed in
 | Accounting boundary | QuickBooks permanent truth vs a future owned accounting migration |
 | Proposal renderer | Frappe print formats, custom Frappe UI, or external PDF service |
 | Public estimate policy | Range logic, disclaimers, required fields, estimator-review threshold |
-| Product PWA acceptance | P0 shell/session/outbox and P1 Field Companion/BFF are locally implemented; complete QR pairing, live backend, browser/device gates, and P2-P5 owner/sales/portal/tenant protocols |
+| Product PWA acceptance | P0 shell/session/outbox, P1 Field Companion/BFF, and QR pairing/revocation are locally implemented; complete live backend, browser/device gates, and P2-P5 owner/sales/portal/tenant protocols |
 | Frappe fallback cockpit | Repository surface exists; prove live role filtering, Worker readiness reachability, empty/error states, responsive layout, and source-record navigation on the deployed site |
 | Measurement/visual provider strategy | RoofRuler/AppliCad only vs Eagleview/Hover/provider-agnostic ingest |
 | Supplier integration strategy | Manual supplier quote capture vs API/order integrations |

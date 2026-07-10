@@ -24,7 +24,7 @@ LOCK_FILE="$REPO_ROOT/workers-bus/package-lock.json"
 EXPECTED_ACCOUNT_ID="7ee5775bc1ba46f05c5a65235b60e939"
 EXPECTED_DATABASE_NAME="ironwrap-bus"
 EXPECTED_DATABASE_ID="f0674848-13df-4422-9896-8ba2719663b8"
-REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,quickbooks_webhook_receipts,dedup_claims,replay_requests,field_actions,field_action_media,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit,app_action_throttles"
+REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,quickbooks_webhook_receipts,dedup_claims,replay_requests,field_actions,field_action_media,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit,app_action_throttles,app_device_pairings,app_devices"
 
 required_env=(
   D1_PRODUCTION_ACCOUNT_ID

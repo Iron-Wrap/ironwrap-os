@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { clearSessionSnapshot, isOfflineSession } from "../auth/session";
+import { getDeviceSecret } from "../auth/device-credential";
 import { useSession } from "../auth/session-context";
 import { sessionQueryKey } from "../auth/session-query";
 import { apiCommand } from "../lib/api";
@@ -31,7 +32,11 @@ export function AppShell() {
     if (offlineSession) return;
     setSigningOut(true);
     try {
-      await apiCommand({ path: API_PATHS.logout, csrfToken: session.csrf_token });
+      await apiCommand({
+        path: API_PATHS.logout,
+        csrfToken: session.csrf_token,
+        deviceProof: session.user.role === "field" ? getDeviceSecret : undefined,
+      });
       await clearSessionSnapshot();
       queryClient.removeQueries({ queryKey: sessionQueryKey });
       await navigate({ to: "/", replace: true });

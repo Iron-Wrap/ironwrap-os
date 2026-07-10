@@ -8,8 +8,10 @@ import {
 import { useState } from "react";
 
 import { AuthBoundary } from "./auth/auth-boundary";
+import { DevicePairingConsume } from "./auth/device-pairing-consume";
 import { MagicLinkConsume } from "./auth/magic-link-consume";
 import { takeMagicLinkTokenFromWindow } from "./auth/magic-link-fragment";
+import { takePairingTokenFromWindow } from "./auth/pairing-fragment";
 import { AppShell } from "./components/app-shell";
 import { CheckInPage, JobPage, TodayPage } from "./field/field-pages";
 import {
@@ -40,11 +42,26 @@ const verifyRoute = createRoute({
   component: VerifyRoute,
 });
 
+const pairRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/auth/pair",
+  component: PairRoute,
+});
+
 function VerifyRoute() {
   const [token] = useState(() => takeMagicLinkTokenFromWindow());
   return (
     <main className="grid min-h-dvh place-items-center p-4">
       <MagicLinkConsume token={token} />
+    </main>
+  );
+}
+
+function PairRoute() {
+  const [token] = useState(() => takePairingTokenFromWindow());
+  return (
+    <main className="grid min-h-dvh place-items-center p-4">
+      <DevicePairingConsume token={token} />
     </main>
   );
 }
@@ -120,6 +137,7 @@ const settingsRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   verifyRoute,
+  pairRoute,
   portalRootRoute,
   portalRoute,
   authenticatedRoute.addChildren([

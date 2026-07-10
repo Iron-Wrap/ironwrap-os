@@ -1,4 +1,5 @@
 import type { AuthenticatedSession } from "../auth/session";
+import { getDeviceSecret } from "../auth/device-credential";
 import { ApiError, apiRequest, isRetryableApiError } from "../lib/api";
 import { getDatabase } from "../storage/db";
 import {
@@ -16,7 +17,12 @@ export async function loadToday(
 ): Promise<TodayResponse> {
   const key = cacheKey(session, "today");
   try {
-    const model = await apiRequest({ path: "/api/v1/today", schema: todayResponseSchema, fetcher });
+    const model = await apiRequest({
+      path: "/api/v1/today",
+      schema: todayResponseSchema,
+      fetcher,
+      deviceProof: proofFor(session),
+    });
     await cacheFieldModel(key, model, model.source_updated_at);
     return model;
   } catch (error) {
@@ -35,6 +41,7 @@ export async function loadJob(
       path: `/api/v1/jobs/${encodeURIComponent(jobId)}`,
       schema: jobResponseSchema,
       fetcher,
+      deviceProof: proofFor(session),
     });
     await cacheFieldModel(key, model, model.source_updated_at);
     return model;
@@ -44,6 +51,7 @@ export async function loadJob(
 }
 
 export async function loadProofPage(
+  session: AuthenticatedSession,
   jobId: string,
   cursor: string,
   fetcher: typeof fetch = fetch,
@@ -52,6 +60,7 @@ export async function loadProofPage(
     path: `/api/v1/jobs/${encodeURIComponent(jobId)}/proof?cursor=${encodeURIComponent(cursor)}`,
     schema: proofPageResponseSchema,
     fetcher,
+    deviceProof: proofFor(session),
   });
 }
 
@@ -115,6 +124,10 @@ export async function prefetchAssignedPackets(
 
 function cacheKey(session: AuthenticatedSession, suffix: string): string {
   return `${session.tenant.id}:${session.user.id}:${suffix}`;
+}
+
+function proofFor(session: AuthenticatedSession) {
+  return session.user.role === "field" ? getDeviceSecret : undefined;
 }
 
 async function offlineModel<T>(

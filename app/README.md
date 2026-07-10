@@ -51,22 +51,38 @@ outside its declared and working peer range. Lint and typecheck remain separate 
 
 Endpoint names are centralized in `src/lib/api-paths.ts`:
 
-| Method | Path                              | Purpose                                         |
-| ------ | --------------------------------- | ----------------------------------------------- |
-| `GET`  | `/api/v1/session`                 | Versioned tenant/session/RBAC read model        |
-| `POST` | `/api/v1/auth/magic-link/request` | Request a one-time link with `{email}`          |
-| `POST` | `/api/v1/auth/magic-link/consume` | Consume `{token}` after browser-side extraction |
-| `POST` | `/api/v1/auth/logout`             | Revoke the current session with `X-CSRF-Token`  |
+| Method         | Path                                  | Purpose                                                |
+| -------------- | ------------------------------------- | ------------------------------------------------------ |
+| `GET`          | `/api/v1/session`                     | Versioned tenant/session/RBAC read model               |
+| `POST`         | `/api/v1/auth/magic-link/request`     | Request a one-time link with `{email}`                 |
+| `POST`         | `/api/v1/auth/magic-link/consume`     | Consume `{token}` after browser-side extraction        |
+| `POST`         | `/api/v1/auth/device-pairing/consume` | Consume QR `{token, device_proof}` for Field Companion |
+| `GET`          | `/api/v1/field-users`                 | Owner/ops list of pairable active field users          |
+| `GET` / `POST` | `/api/v1/device-pairings`             | Owner/ops device list or QR issuance                   |
+| `POST`         | `/api/v1/device-pairings/:id/revoke`  | Revoke one lost or reassigned field device             |
+| `POST`         | `/api/v1/auth/logout`                 | Revoke the current session with `X-CSRF-Token`         |
 
 The session envelope is validated centrally with Zod in `src/auth/session.ts`. Unauthenticated
-responses are `200` with null user/tenant/session fields; an authenticated envelope includes the
-tenant, role, permissions, allowed actions, CSRF token, expiry, freshness timestamps, and explicit
-stale fields.
+responses are `200` with null user/session fields and public tenant presentation; an authenticated
+envelope includes the tenant, role, permissions, allowed actions, CSRF token, expiry, freshness
+timestamps, and explicit stale fields.
 
 Magic-link URLs use `/auth/verify#token=...`, not a query string and not a GET mutation. The app
 extracts the fragment and immediately removes it with `history.replaceState` before the token is
 POSTed. It is never placed in TanStack Query state, route search state, IndexedDB, or a URL sent to
 the server. Link scanners therefore cannot consume a sign-in token with a passive GET.
+
+Field crew cannot receive a magic-link session. An owner or operations user instead issues a
+short-lived `/auth/pair#token=...` QR from **Settings -> Crew devices**. The pairing fragment is
+scrubbed before a POST; a fresh 256-bit device proof stays only in memory until the Worker returns
+an authenticated `field` session, then persists in IndexedDB. Every field session, field read,
+outbox flush, and logout sends `X-IronWrap-Device-Proof` alongside the session cookie. The proof is
+never included in a session snapshot or outbox record. A failed/expired QR leaves an existing
+proof intact; a 401 or office revocation clears it and requires a fresh supervised QR.
+
+The Worker stores only hashes of pairing tokens and device proofs. Office users can list and revoke
+devices; crew users cannot issue, list, or revoke them. Pairing links never use a query string and
+are neither logged nor retained in a backup as reusable secrets.
 
 An online authenticated session is cached without its CSRF token until its server expiry so an
 already-provisioned crew device can reopen the offline shell. The offline marker cannot sign out

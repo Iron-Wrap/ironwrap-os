@@ -372,6 +372,10 @@ export async function logoutAppSession(req: Request, env: AppEnv, auth: AuthCont
   return response;
 }
 
+export function validAppCsrf(req: Request, auth: AuthContext): boolean {
+  return constantTimeEqual(req.headers.get("x-csrf-token") ?? "", auth.csrfToken);
+}
+
 export function expiredSessionCookie(): string {
   return `${APP_SESSION_COOKIE}=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; Secure; HttpOnly; SameSite=Strict; Priority=High`;
 }
@@ -493,7 +497,7 @@ function sessionEnvelopeForUser(
     tenant: publicTenant(env),
     permissions,
     allowed_actions: user.role === "field"
-      ? ["session.logout", "today.read", "job.read.assigned"]
+      ? ["session.logout", "today.read", "job.read.assigned", "field.checkin.create", "field.evidence.create"]
       : ["session.logout", "today.read", "job.read", "owner.now.read"],
     csrf_token: csrfToken,
     session_expires_at: expiresAt,

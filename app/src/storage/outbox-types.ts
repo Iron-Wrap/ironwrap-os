@@ -51,6 +51,8 @@ export interface OutboxVerification {
 
 export interface OutboxAction {
   deviceActionId: string;
+  tenantId: string;
+  userId: string;
   kind: string;
   endpoint: string;
   method: OutboxMethod;
@@ -64,7 +66,7 @@ export interface OutboxAction {
   lastError?: OutboxErrorDetail;
   conflict?: OutboxConflict;
   verification?: OutboxVerification;
-  version: 1;
+  version: 2;
 }
 
 export interface OutboxBlobRecord {
@@ -83,6 +85,8 @@ export interface OutboxAttachmentInput {
 
 export interface SaveOutboxActionInput {
   deviceActionId?: string;
+  tenantId: string;
+  userId: string;
   kind: string;
   endpoint: string;
   method?: OutboxMethod;
@@ -96,6 +100,7 @@ export interface OutboxSummary {
   uploading: number;
   verified: number;
   needsAttention: number;
+  unclaimed: number;
   pending: number;
   total: number;
 }

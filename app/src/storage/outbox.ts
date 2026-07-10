@@ -54,6 +54,8 @@ export async function saveOutboxAction(
   });
   const action: OutboxAction = {
     deviceActionId,
+    tenantId: input.tenantId.trim(),
+    userId: input.userId.trim(),
     kind: input.kind,
     endpoint: input.endpoint,
     method: input.method ?? "POST",
@@ -64,7 +66,7 @@ export async function saveOutboxAction(
     nextAttemptAt: now,
     createdAt: now,
     updatedAt: now,
-    version: 1,
+    version: 2,
   };
 
   const transaction = database.transaction(["outbox_actions", "outbox_blobs"], "readwrite");
@@ -123,11 +125,16 @@ export async function transitionOutboxAction(
   return updated;
 }
 
-export async function claimNextQueuedAction(now = Date.now()): Promise<OutboxAction | undefined> {
+export async function claimNextQueuedAction(
+  principal: { tenantId: string; userId: string },
+  now = Date.now(),
+): Promise<OutboxAction | undefined> {
   const database = await getDatabase();
   const transaction = database.transaction("outbox_actions", "readwrite");
   const store = transaction.objectStore("outbox_actions");
-  const candidates = await store.index("by_state").getAll("queued");
+  const candidates = await store
+    .index("by_principal_state")
+    .getAll([principal.tenantId, principal.userId, "queued"]);
   const candidate = candidates
     .filter((action) => action.nextAttemptAt <= now)
     .sort(
@@ -220,11 +227,16 @@ export async function requeueOutboxAction(
   });
 }
 
-export async function recoverInterruptedUploads(now = Date.now()): Promise<number> {
+export async function recoverInterruptedUploads(
+  principal: { tenantId: string; userId: string },
+  now = Date.now(),
+): Promise<number> {
   const database = await getDatabase();
   const transaction = database.transaction("outbox_actions", "readwrite");
   const store = transaction.objectStore("outbox_actions");
-  const interrupted = await store.index("by_state").getAll("uploading");
+  const interrupted = await store
+    .index("by_principal_state")
+    .getAll([principal.tenantId, principal.userId, "uploading"]);
   for (const action of interrupted) {
     await store.put({
       ...action,
@@ -250,6 +262,12 @@ export function assertTransition(current: OutboxState, next: OutboxState): void 
 }
 
 function assertOutboxInput(input: SaveOutboxActionInput): void {
+  if (!input.tenantId.trim() || input.tenantId.length > 64) {
+    throw new Error("Outbox tenant identity is required.");
+  }
+  if (!input.userId.trim() || input.userId.length > 128) {
+    throw new Error("Outbox user identity is required.");
+  }
   if (!input.kind.trim()) throw new Error("Outbox action kind is required.");
   if (
     !input.endpoint.startsWith("/api/v1/") ||

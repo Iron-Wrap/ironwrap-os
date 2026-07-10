@@ -13,14 +13,15 @@ import { useSession } from "../auth/session-context";
 
 export function SystemStatus() {
   const online = useOnlineStatus();
-  const outbox = useOutboxSummary();
   const install = useInstallPrompt();
   const session = useSession();
+  const outboxPrincipal = { tenantId: session.tenant.id, userId: session.user.id };
+  const outbox = useOutboxSummary(outboxPrincipal);
   const csrfToken = isOfflineSession(session) ? undefined : session.csrf_token;
   const canSync = online && Boolean(csrfToken);
   const storage = useStorageDurability();
   const storageWarning = storage.checked ? storage.warning : undefined;
-  useAppOpenOutboxSync(csrfToken);
+  useAppOpenOutboxSync(outboxPrincipal, csrfToken);
   const {
     offlineReady: [offlineReady, setOfflineReady],
     needRefresh: [needRefresh, setNeedRefresh],
@@ -36,6 +37,7 @@ export function SystemStatus() {
     (!csrfToken && outbox.pending > 0) ||
     outbox.uploading > 0 ||
     outbox.needsAttention > 0 ||
+    outbox.unclaimed > 0 ||
     Boolean(storageWarning) ||
     needRefresh ||
     offlineReady;
@@ -62,6 +64,11 @@ export function SystemStatus() {
         {outbox.needsAttention > 0 ? (
           <StatusPill tone="danger" icon={<ShieldAlert aria-hidden="true" />}>
             {outbox.needsAttention} need attention
+          </StatusPill>
+        ) : null}
+        {outbox.unclaimed > 0 ? (
+          <StatusPill tone="danger" icon={<ShieldAlert aria-hidden="true" />}>
+            {outbox.unclaimed} legacy {outbox.unclaimed === 1 ? "item" : "items"} isolated
           </StatusPill>
         ) : null}
         {storageWarning ? (
@@ -94,32 +101,34 @@ export function SystemStatus() {
             <p className="font-semibold">
               {outbox.needsAttention > 0
                 ? `${outbox.needsAttention} saved ${outbox.needsAttention === 1 ? "item needs" : "items need"} review. Nothing was discarded.`
-                : !online
-                  ? "Offline. New work stays on this device until you reconnect and keep the app open."
-                  : !csrfToken && outbox.pending > 0
-                    ? "Reconnect and verify this sign-in before syncing. Every saved item remains on this device."
-                    : outbox.uploading > 0
-                      ? "Syncing now. Keep IronWrap OS open until the server verifies every item."
-                      : storageWarning === "low_storage"
-                        ? "Device storage is low. Existing work stays intact; free space before a large photo run."
-                        : storageWarning === "persistence_denied"
-                          ? "This device did not grant durable storage. Capture still works, but sync saved work promptly."
-                          : storageWarning === "check_failed"
-                            ? "Device storage durability could not be verified. Capture still works; sync saved work promptly."
-                            : needRefresh
-                              ? "A safer, newer version of IronWrap OS is ready."
-                              : storage.checked && storage.persistent
-                                ? "Offline shell ready. This device granted durable storage for saved field work."
-                                : storage.checked && !storage.supported
-                                  ? "The app shell is available offline. This browser cannot report storage durability, so sync promptly."
-                                  : "The app shell is available offline. Save and sync field work as soon as signal returns."}
+                : outbox.unclaimed > 0
+                  ? `${outbox.unclaimed} older saved ${outbox.unclaimed === 1 ? "item predates" : "items predate"} account binding. They are isolated and will not sync under this user; keep this device for administrator recovery.`
+                  : !online
+                    ? "Offline. New work stays on this device until you reconnect and keep the app open."
+                    : !csrfToken && outbox.pending > 0
+                      ? "Reconnect and verify this sign-in before syncing. Every saved item remains on this device."
+                      : outbox.uploading > 0
+                        ? "Syncing now. Keep IronWrap OS open until the server verifies every item."
+                        : storageWarning === "low_storage"
+                          ? "Device storage is low. Existing work stays intact; free space before a large photo run."
+                          : storageWarning === "persistence_denied"
+                            ? "This device did not grant durable storage. Capture still works, but sync saved work promptly."
+                            : storageWarning === "check_failed"
+                              ? "Device storage durability could not be verified. Capture still works; sync saved work promptly."
+                              : needRefresh
+                                ? "A safer, newer version of IronWrap OS is ready."
+                                : storage.checked && storage.persistent
+                                  ? "Offline shell ready. This device granted durable storage for saved field work."
+                                  : storage.checked && !storage.supported
+                                    ? "The app shell is available offline. This browser cannot report storage durability, so sync promptly."
+                                    : "The app shell is available offline. Save and sync field work as soon as signal returns."}
             </p>
             <div className="flex flex-wrap gap-2">
               {canSync && outbox.pending > 0 && outbox.uploading === 0 ? (
                 <Button
                   size="compact"
                   variant="outline"
-                  onClick={() => void flushOutbox({ csrfToken })}
+                  onClick={() => void flushOutbox({ ...outboxPrincipal, csrfToken })}
                 >
                   <UploadCloud aria-hidden="true" />
                   Sync now

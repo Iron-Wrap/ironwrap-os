@@ -26,6 +26,8 @@ const verifiedResponseSchema = z.object({
 export interface FlushOutboxOptions {
   fetcher?: typeof fetch;
   csrfToken?: string | (() => string | undefined);
+  tenantId?: string;
+  userId?: string;
   now?: () => number;
   random?: () => number;
   maxActions?: number;
@@ -46,26 +48,37 @@ interface UploadFailure {
   conflict?: OutboxConflict;
 }
 
-let activeFlush: Promise<FlushOutboxResult> | undefined;
+const activeFlushes = new Map<string, Promise<FlushOutboxResult>>();
 
 export function flushOutbox(options: FlushOutboxOptions = {}): Promise<FlushOutboxResult> {
-  activeFlush ??= executeFlush(options).finally(() => {
-    activeFlush = undefined;
+  const principal = principalFrom(options);
+  if (!principal) return Promise.resolve(emptyResult());
+  const key = `${principal.tenantId}\u0000${principal.userId}`;
+  const active = activeFlushes.get(key);
+  if (active) return active;
+  const next = executeFlush(options, principal).finally(() => {
+    activeFlushes.delete(key);
   });
-  return activeFlush;
+  activeFlushes.set(key, next);
+  return next;
 }
 
 export async function initializeOutbox(
   options: FlushOutboxOptions = {},
 ): Promise<FlushOutboxResult> {
-  await recoverInterruptedUploads(options.now?.() ?? Date.now());
+  const principal = principalFrom(options);
+  if (!principal) return emptyResult();
+  await recoverInterruptedUploads(principal, options.now?.() ?? Date.now());
   return flushOutbox(options);
 }
 
-async function executeFlush(options: FlushOutboxOptions): Promise<FlushOutboxResult> {
+async function executeFlush(
+  options: FlushOutboxOptions,
+  principal: { tenantId: string; userId: string },
+): Promise<FlushOutboxResult> {
   const now = options.now ?? Date.now;
   const random = options.random ?? Math.random;
-  const result: FlushOutboxResult = { processed: 0, verified: 0, requeued: 0, needsAttention: 0 };
+  const result = emptyResult();
   const maxActions = options.maxActions ?? 50;
   const csrfToken =
     typeof options.csrfToken === "function" ? options.csrfToken() : options.csrfToken;
@@ -73,7 +86,7 @@ async function executeFlush(options: FlushOutboxOptions): Promise<FlushOutboxRes
   if (typeof navigator !== "undefined" && !navigator.onLine) return result;
 
   while (result.processed < maxActions && !options.signal?.aborted) {
-    const action = await claimNextQueuedAction(now());
+    const action = await claimNextQueuedAction(principal, now());
     if (!action) break;
     result.processed += 1;
     const withBlobs = await getOutboxActionWithBlobs(action.deviceActionId);
@@ -122,6 +135,16 @@ async function executeFlush(options: FlushOutboxOptions): Promise<FlushOutboxRes
   return result;
 }
 
+function principalFrom(options: FlushOutboxOptions): { tenantId: string; userId: string } | null {
+  const tenantId = options.tenantId?.trim();
+  const userId = options.userId?.trim();
+  return tenantId && userId ? { tenantId, userId } : null;
+}
+
+function emptyResult(): FlushOutboxResult {
+  return { processed: 0, verified: 0, requeued: 0, needsAttention: 0 };
+}
+
 async function uploadAction(
   action: OutboxAction,
   blobs: OutboxBlobRecord[],
@@ -139,7 +162,7 @@ async function uploadAction(
     "X-CSRF-Token": csrfToken,
   });
   let body: BodyInit;
-  if (action.attachments.length === 0) {
+  if (action.attachments.length === 0 && action.kind !== "field_checkin") {
     headers.set("Content-Type", "application/json");
     body = JSON.stringify({ device_action_id: action.deviceActionId, payload: action.payload });
   } else {

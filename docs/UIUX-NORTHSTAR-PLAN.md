@@ -139,9 +139,13 @@ Stream from live-shaped fixtures.
 
 ### P1: Field Companion (the crew app; biggest differentiator)
 
-Repository status: Today, Job, Proof Stream, three-step Check-in, IndexedDB packets/outbox,
+Repository status: Today is a server-ordered field run sheet, not a generic card grid: it keeps
+the tenant schedule time zone, distinguishes `checking` / `saving` / `saved` / `not saved` local
+packet availability, exposes an offline snapshot as a snapshot, and renders a blocked production
+gate count as a review-only work stop. It does not infer safety clearance, packet completeness,
+or a direct field capture action. Job, Proof Stream, three-step Check-in, IndexedDB packets/outbox,
 upload verification, bounded proof rendering, and device-bound QR access are implemented and
-locally green. Real iOS/Android, weak-signal, process-kill, storage, multi-tab, accessibility,
+locally tested. Real iOS/Android, weak-signal, process-kill, storage, multi-tab, accessibility,
 and timing proof remain open.
 
 Screens: Today (assigned jobs, one card each), Job (Proof Stream + gate locks), Check-in

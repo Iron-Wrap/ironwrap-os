@@ -19,6 +19,17 @@ describe("foundation UI states", () => {
     expect(button).toBeDisabled();
   });
 
+  it("slots one field-sized navigation action without creating a nested button", () => {
+    render(
+      <Button asChild size="field">
+        <a href="/jobs/JOB-1">Open job packet</a>
+      </Button>,
+    );
+    const link = screen.getByRole("link", { name: "Open job packet" });
+    expect(link).toHaveAttribute("href", "/jobs/JOB-1");
+    expect(link).toHaveClass("min-h-16");
+  });
+
   it("pairs outbox color with an icon and a visible state word", () => {
     render(<OutboxStateBadge state="needs_attention" />);
     const badge = screen.getByText("Needs attention");

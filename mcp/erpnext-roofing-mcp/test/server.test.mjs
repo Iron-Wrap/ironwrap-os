@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   assertWriteApproved,
   buildGateUpdatePatch,
+  buildAuditFinalizationIncidentDraft,
   buildMaterialTakeoffDraft,
   buildMaterialTakeoffStatusPatch,
   buildProposalEvidencePackDraft,
@@ -10,7 +11,10 @@ import {
   configFromEnv,
   erpGet,
   erpPut,
+  executeAuditedWrite,
   materialTakeoffIdForRoofJob,
+  normalizeFrappeBaseUrl,
+  parseRequestTimeout,
   proposalPackIdForRoofJob,
   redactApprovalArgs,
   resourceListPath,
@@ -29,14 +33,26 @@ test("configFromEnv requires ERPNext URL and token parts", () => {
     ERPNEXT_BASE_URL: "https://erp.example/",
     ERPNEXT_API_KEY: "key",
     ERPNEXT_API_SECRET: "secret",
-  }), { baseUrl: "https://erp.example", apiKey: "key", apiSecret: "secret", writeEnabled: false, writeToken: undefined });
+  }), { baseUrl: "https://erp.example", apiKey: "key", apiSecret: "secret", writeEnabled: false, writeToken: undefined, requestTimeoutMs: 10_000 });
   assert.deepEqual(configFromEnv({
     ERPNEXT_BASE_URL: "https://erp.example/",
     ERPNEXT_API_KEY: "key",
     ERPNEXT_API_SECRET: "secret",
     ERPNEXT_WRITE_ENABLED: "true",
     HERMES_WRITE_TOKEN: "approve",
-  }), { baseUrl: "https://erp.example", apiKey: "key", apiSecret: "secret", writeEnabled: true, writeToken: "approve" });
+    ERPNEXT_REQUEST_TIMEOUT_MS: "2500",
+  }), { baseUrl: "https://erp.example", apiKey: "key", apiSecret: "secret", writeEnabled: true, writeToken: "approve", requestTimeoutMs: 2500 });
+});
+
+test("Frappe endpoint configuration is HTTPS-only and timeout-bounded", () => {
+  assert.equal(normalizeFrappeBaseUrl("https://erp.example/site/"), "https://erp.example/site");
+  assert.equal(normalizeFrappeBaseUrl("http://127.0.0.1:8000", true), "http://127.0.0.1:8000");
+  assert.throws(() => normalizeFrappeBaseUrl("http://erp.example"), /must use HTTPS/);
+  assert.throws(() => normalizeFrappeBaseUrl("https://user:pass@erp.example"), /must not contain credentials/);
+  assert.equal(parseRequestTimeout(undefined), 10_000);
+  assert.equal(parseRequestTimeout("60000"), 60_000);
+  assert.throws(() => parseRequestTimeout("999"), /1000 to 60000/);
+  assert.throws(() => parseRequestTimeout("nope"), /1000 to 60000/);
 });
 
 test("erpGet sends Frappe token auth and parses JSON", async (t) => {
@@ -62,6 +78,261 @@ test("erpGet reports non-2xx ERPNext responses", async (t) => {
     apiKey: "key",
     apiSecret: "bad",
   }, "/api/resource/Roof%20Job/job%3Aow_1"), /erpnext_http_403/);
+});
+
+test("erpGet rejects a successful non-JSON response", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => new Response("<html>login</html>", { status: 200 }));
+  await assert.rejects(() => erpGet({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+  }, "/api/resource/Roof%20Job/job_1"), /erpnext_invalid_json_200/);
+});
+
+test("executeAuditedWrite returns a completed run without repeating the mutation", async (t) => {
+  let executeCount = 0;
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    assert.equal(init.method, "GET");
+    assert.equal(url, "https://erp.example/api/resource/Hermes%20Run/hr_retry_123");
+    return new Response(JSON.stringify({ data: {
+      run_id: "hr_retry_123",
+      agent_role: "Production Controller",
+      tool_name: "request_update_gate",
+      target_doctype: "Production Gate State",
+      target_name: "gate_1",
+      tool_args_json: JSON.stringify({
+        run_id: "hr_retry_123",
+        gate_id: "gate_1",
+        request_text: "approved gate transition",
+        approved_by: "owner@example.com",
+      }),
+      approval_status: "Executed",
+      result_status: "OK",
+      result_json: JSON.stringify({ data: { name: "gate_1", state: "Ready" } }),
+    } }), { headers: { "content-type": "application/json" } });
+  });
+
+  const result = await executeAuditedWrite({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+  }, {
+    runId: "hr_retry_123",
+    now: "2026-07-10T10:00:00.000Z",
+    args: {
+      run_id: "hr_retry_123",
+      gate_id: "gate_1",
+      request_text: "approved gate transition",
+      approved_by: "owner@example.com",
+      approval_token: "redacted",
+    },
+    agentRole: "Production Controller",
+    toolName: "request_update_gate",
+    target: { doctype: "Production Gate State", name: "gate_1" },
+    roofJob: "job_1",
+    dryRun: { patch: { state: "Ready" } },
+    beforeSummary: { state: "Blocked" },
+    afterSummary: { state: "Ready" },
+    execute: async () => {
+      executeCount += 1;
+      return { data: { name: "gate_1" } };
+    },
+  });
+
+  assert.equal(result.replayed, true);
+  assert.equal(result.audit_finalized, true);
+  assert.equal(result.result.data.state, "Ready");
+  assert.equal(executeCount, 0);
+});
+
+test("executeAuditedWrite never repeats a mutation whose audit finalization failed", async (t) => {
+  let executeCount = 0;
+  t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ data: {
+    run_id: "hr_audit_failed_1",
+    agent_role: "Production Controller",
+    tool_name: "request_update_gate",
+    target_doctype: "Production Gate State",
+    target_name: "gate_1",
+    tool_args_json: JSON.stringify({
+      run_id: "hr_audit_failed_1",
+      gate_id: "gate_1",
+      request_text: "approved gate transition",
+      approved_by: "owner@example.com",
+    }),
+    approval_status: "Audit Failed",
+    result_status: "Error",
+    mutation_applied: 1,
+    audit_incident_id: "incident:audit:hr_audit_failed_1",
+    result_json: JSON.stringify({ data: { name: "gate_1", state: "Ready" } }),
+  } }), { headers: { "content-type": "application/json" } }));
+
+  await assert.rejects(() => executeAuditedWrite({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+  }, {
+    runId: "hr_audit_failed_1",
+    now: "2026-07-10T10:00:00.000Z",
+    args: {
+      run_id: "hr_audit_failed_1",
+      gate_id: "gate_1",
+      request_text: "approved gate transition",
+      approved_by: "owner@example.com",
+      approval_token: "redacted",
+    },
+    agentRole: "Production Controller",
+    toolName: "request_update_gate",
+    target: { doctype: "Production Gate State", name: "gate_1" },
+    roofJob: "job_1",
+    dryRun: { patch: { state: "Ready" } },
+    beforeSummary: { state: "Blocked" },
+    afterSummary: { state: "Ready" },
+    execute: async () => {
+      executeCount += 1;
+      return { data: { name: "gate_1" } };
+    },
+  }), /run_id_mutation_already_applied_audit_failed:hr_audit_failed_1/);
+  assert.equal(executeCount, 0);
+});
+
+test("executeAuditedWrite records the complete Frappe policy and mutation audit contract", async (t) => {
+  const writes = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    if (init.method === "GET") {
+      return new Response(JSON.stringify({ error: "not_found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    writes.push({ url, method: init.method, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({ data: { name: "hr_policy_123", state: "Ready" } }), {
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+  const result = await executeAuditedWrite({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+  }, {
+    runId: "hr_policy_123",
+    now: "2026-07-10T10:00:00.000Z",
+    args: {
+      run_id: "hr_policy_123",
+      gate_id: "gate_1",
+      request_text: "approved gate transition",
+      approved_by: "owner@example.com",
+      approval_token: "must-never-be-audited",
+    },
+    agentRole: "Production Controller",
+    toolName: "request_update_gate",
+    target: { doctype: "Production Gate State", name: "gate_1" },
+    roofJob: "job_1",
+    dryRun: { patch: { state: "Ready" } },
+    beforeSummary: { state: "Blocked" },
+    afterSummary: { state: "Ready" },
+    execute: async () => ({ data: { name: "gate_1", state: "Ready" } }),
+  });
+
+  assert.equal(result.audit_finalized, true);
+  assert.equal(writes.length, 2);
+  const draft = writes[0].body;
+  assert.equal(writes[0].method, "POST");
+  assert.equal(JSON.parse(draft.policy_check_json).allowed, true);
+  assert.equal(draft.policy_checked_by, "owner@example.com");
+  assert.equal(draft.request_correlation_id, "hr_policy_123");
+  assert.equal(draft.mutation_applied, 0);
+  assert.equal(draft.tool_args_json.includes("must-never-be-audited"), false);
+
+  const completed = writes[1].body;
+  assert.equal(writes[1].method, "PUT");
+  assert.equal(completed.approval_status, "Executed");
+  assert.equal(completed.result_status, "OK");
+  assert.equal(completed.mutation_applied, 1);
+  assert.equal(completed.audit_event_id, "audit:hr_policy_123");
+  assert.equal(completed.request_correlation_id, "hr_policy_123");
+  assert.match(completed.completed_at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.deepEqual(JSON.parse(completed.after_target_ids), { state: "Ready" });
+});
+
+test("audit-finalization incidents match the owned Automation Incident schema", () => {
+  const draft = buildAuditFinalizationIncidentDraft({
+    incidentId: "incident:audit:hr_policy_123",
+    runId: "hr_policy_123",
+    now: "2026-07-10T10:00:00.000Z",
+    roofJob: "job_1",
+    toolName: "request_update_gate",
+    target: { doctype: "Production Gate State", name: "gate_1" },
+    auditError: "frappe timeout",
+  });
+  assert.equal(draft.severity, "High");
+  assert.equal(draft.record_ref, "Hermes Run:hr_policy_123");
+  assert.equal(draft.correlation_id, "hr_policy_123");
+  assert.equal("hermes_run" in draft, false);
+  assert.deepEqual(JSON.parse(draft.details).target, {
+    doctype: "Production Gate State",
+    name: "gate_1",
+  });
+});
+
+test("audit finalization failure preserves that the target mutation happened", async (t) => {
+  const writes = [];
+  let hermesPutCount = 0;
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    if (init.method === "GET") {
+      return new Response(JSON.stringify({ error: "not_found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    const body = JSON.parse(init.body);
+    writes.push({ url, method: init.method, body });
+    if (init.method === "PUT" && url.includes("Hermes%20Run")) {
+      hermesPutCount += 1;
+      if (hermesPutCount === 1) {
+        return new Response(JSON.stringify({ error: "audit store unavailable" }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+    return new Response(JSON.stringify({ data: { name: body.incident_id ?? "hr_audit_failure_1" } }), {
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+  await assert.rejects(() => executeAuditedWrite({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+  }, {
+    runId: "hr_audit_failure_1",
+    now: "2026-07-10T10:00:00.000Z",
+    args: {
+      run_id: "hr_audit_failure_1",
+      gate_id: "gate_1",
+      request_text: "approved gate transition",
+      approved_by: "owner@example.com",
+      approval_token: "redacted",
+    },
+    agentRole: "Production Controller",
+    toolName: "request_update_gate",
+    target: { doctype: "Production Gate State", name: "gate_1" },
+    roofJob: "job_1",
+    dryRun: { patch: { state: "Ready" } },
+    beforeSummary: { state: "Blocked" },
+    afterSummary: { state: "Ready" },
+    execute: async () => ({ data: { name: "gate_1", state: "Ready" } }),
+  }), /audit_finalize_failed:hr_audit_failure_1:incident=incident:audit:hr_audit_failure_1/);
+
+  const incident = writes.find((write) => write.url.endsWith("/api/resource/Automation%20Incident") && write.method === "POST");
+  assert.equal(incident.body.incident_id, "incident:audit:hr_audit_failure_1");
+  const auditFailed = writes.find((write) => write.body.approval_status === "Audit Failed");
+  assert.equal(auditFailed.body.result_status, "Error");
+  assert.equal(auditFailed.body.mutation_applied, 1);
+  assert.equal(auditFailed.body.audit_incident_id, "incident:audit:hr_audit_failure_1");
+  assert.deepEqual(JSON.parse(auditFailed.body.result_json), { data: { name: "gate_1", state: "Ready" } });
+  assert.equal(writes.some((write) => write.body.approval_status === "Failed"), false);
 });
 
 test("erpPut sends JSON body with Frappe token auth", async (t) => {

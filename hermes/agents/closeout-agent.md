@@ -13,6 +13,8 @@ Drafts completion, warranty, and review-request records. A review request is onl
 - list_review_requests_for_job
 - get_payment_milestone
 - list_payment_milestones_for_job
+- get_scope_clause
+- list_scope_clauses_for_job
 - check_consent
 - check_quiet_hours
 

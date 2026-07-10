@@ -24,6 +24,7 @@ const servers = {
 // registers a get/list pair via getName:/listName: fields.
 const inventory = new Set();
 const toolServer = new Map();
+const requestDefinitions = new Map();
 const REGISTRATION_PATTERNS = [
   /registerTool\(\s*"([a-z0-9_]+)"/g,
   /\b(?:getName|listName):\s*"([a-z0-9_]+)"/g,
@@ -40,6 +41,9 @@ for (const [name, rel] of Object.entries(servers)) {
       count++;
     }
   }
+  for (const match of src.matchAll(/server\.registerTool\(\s*"(request_[a-z0-9_]+)"([\s\S]*?)\n\s*\},\n\s*async\s*\(/g)) {
+    requestDefinitions.set(match[1], match[2]);
+  }
   assert.ok(count > 0, `no tools parsed from ${rel}`);
 }
 
@@ -49,6 +53,19 @@ const requests = new Set([...inventory].filter((t) => t.startsWith("request_")))
 // Sanity: the three buckets partition the inventory with nothing left over.
 assert.equal(reads.size + dryRuns.size + requests.size, inventory.size,
   "every tool must be a read (get/list/check), a dry_run, or a request");
+
+// The approval/audit identity is part of every mutation's public contract. A write without a
+// caller-supplied stable run_id cannot be retried safely; a write without an approver or token
+// cannot prove that the review gate was crossed.
+assert.deepEqual(new Set(requestDefinitions.keys()), requests,
+  "every request_* tool must be a directly inspectable registerTool definition");
+for (const [tool, definition] of requestDefinitions) {
+  assert.match(definition, /\brun_id\s*:/, `${tool} must require a caller-supplied run_id`);
+  assert.match(definition, /\bapproved_by\s*:/, `${tool} must require approved_by`);
+  assert.match(definition, /\bapproval_token\s*:/, `${tool} must require approval_token`);
+  assert.doesNotMatch(definition, /run_id\s*:[^\n]*optional\s*\(/,
+    `${tool}.run_id must not be optional`);
+}
 
 // Canonical approved-write -> dry_run pairing. Names are not purely mechanical
 // (request_create_material_takeoff pairs with dry_run_material_takeoff), so the map is

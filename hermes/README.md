@@ -1,8 +1,8 @@
 # Hermes Runtime for IronWrap OS
 
 Hermes is the operating brain for IronWrap OS, not the database. It reads broadly across
-system truth and writes only through narrow, review-gated command tools. ERPNext (roofing
-operating core) and the IronWrap bus stay the record of truth; Hermes never holds primary
+system truth and writes only through narrow, review-gated command tools. The proprietary
+IronWrap OS Frappe app (roofing operating core) and the IronWrap bus stay the record of truth; Hermes never holds primary
 state and never mutates a system of record with a free-form write.
 
 ## Layer role
@@ -11,7 +11,7 @@ state and never mutates a system of record with a free-form write.
   state and to draft mutations.
 - Every mutation is a `request_*` command tool that only drafts a record or sets a
   review-gated status. No tool sends a customer message and no tool mutates accounting.
-- Truth lives downstream: ERPNext for the roofing operating core, the bus for envelope and
+- Truth lives downstream: IronWrap OS (Frappe) for the roofing operating core, the bus for envelope and
   dead-letter truth, QuickBooks for accounting. Hermes reflects them; it does not replace them.
 
 ## MCP servers
@@ -19,12 +19,12 @@ state and never mutates a system of record with a free-form write.
 Two MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, per-server
 `tool_filter`, and env var names):
 
-- `mcp/ironwrap-bus-mcp/src/server.mjs`: read-only bus truth (`list_recent_envelopes`,
-  `get_envelope`, `list_dead_letters`) plus the approved-write dead-letter replay proof
-  (`dry_run_replay` / `request_replay`).
-- `mcp/erpnext-roofing-mcp/src/server.mjs`: ERPNext roofing operating core with reads,
+- `mcp/ironwrap-bus-mcp/src/server.mjs`: readiness and operational truth
+  (`get_bus_readiness`, `get_operational_status`), envelope/dead-letter reads, and approved,
+  envelope-scoped recovery (`dry_run_replay` / `request_replay`). Bulk replay is not exposed.
+- `mcp/erpnext-roofing-mcp/src/server.mjs`: IronWrap OS Frappe operating core with reads,
   deterministic policy checks (`check_consent`, `check_quiet_hours`), dry-run previews, and
-  review-gated `request_*` writes.
+  review-gated `request_*` writes. Its legacy name is retained for deployment compatibility.
 
 ## Tool filtering per agent role
 
@@ -48,7 +48,9 @@ read -> propose -> dry_run -> policy_check -> human_approval -> write -> audit_e
 
 No tool can send a customer message or mutate accounting. Every approved write requires
 `ERPNEXT_WRITE_ENABLED=true` (or `IRONWRAP_BUS_WRITE_ENABLED=true` for the bus) plus the
-`HERMES_WRITE_TOKEN` passed as `approval_token`, and records a Hermes Run audit row.
+`HERMES_WRITE_TOKEN` passed as `approval_token`. The caller supplies a stable unique `run_id` for
+the approved intent: exact retries reuse it; different intents never do. Frappe writes record a
+Hermes Run row, while bus replay records envelope-scoped recovery and approval context in its audit log.
 
 ## Security model
 
@@ -67,7 +69,7 @@ No tool can send a customer message or mutate accounting. Every approved write r
 ## Memory boundary
 
 Do NOT use Hermes memory as a CRM or system of record. Hermes memory is working context only.
-ERPNext and the bus are truth; if a fact matters, it belongs in a record there, reached
+IronWrap OS (Frappe) and the bus are truth; if a fact matters, it belongs in a record there, reached
 through a read tool, not in agent memory.
 
 ## Cron / background usage

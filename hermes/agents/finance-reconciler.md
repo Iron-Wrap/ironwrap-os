@@ -7,6 +7,10 @@ Reads payment/invoice mirror truth for reconciliation. Read-only until a reconci
 - get_roof_job
 - get_payment_milestone
 - list_payment_milestones_for_job
+- get_price_book_rule
+- list_price_book_rules
+- get_option_package
+- list_option_packages_for_job
 
 ## Dry-run (preview)
 

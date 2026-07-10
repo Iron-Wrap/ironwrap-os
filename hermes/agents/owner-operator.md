@@ -4,6 +4,8 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 
 ## Reads
 
+- get_bus_readiness
+- get_operational_status
 - list_recent_envelopes
 - get_envelope
 - list_dead_letters
@@ -37,6 +39,20 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - list_review_requests_for_job
 - get_communication_event
 - list_communication_events_for_job
+- get_price_book_rule
+- list_price_book_rules
+- get_visual_property_model
+- list_visual_property_models_for_job
+- get_roof_area
+- list_roof_areas_for_job
+- get_option_package
+- list_option_packages_for_job
+- get_scope_clause
+- list_scope_clauses_for_job
+- get_automation_incident
+- list_automation_incidents
+- get_white_label_tenant
+- list_white_label_tenants
 - list_market_watch_items
 - check_consent
 - check_quiet_hours
@@ -80,12 +96,15 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 
 ## Operating notes
 
-- Supervisory role: read the whole graph across bus and ERPNext, but always run the matching
+- Supervisory role: read the whole graph across the bus and IronWrap OS (Frappe), but always run the matching
   `dry_run_*` and inspect the diff before approving any `request_*` write.
 - Every approved write still needs the write-enable env var plus `HERMES_WRITE_TOKEN` as
-  `approval_token`; approval is per-mutation, not a blanket grant. Every ERPNext `request_*` write
-  lands a Hermes Run audit row; the one bus write (`request_replay`) is audited by the bus
-  dead-letter/reconcile trail instead.
+  `approval_token`; approval is per-mutation, not a blanket grant. Generate one stable, unique
+  `run_id` for the approved intent and reuse it only when retrying that exact intent. Every Frappe
+  `request_*` write lands a Hermes Run audit row; `request_replay` records its envelope and approval
+  context in the bus audit trail.
+- Start recovery with `get_bus_readiness` and `get_operational_status`. Replay exactly one reviewed
+  envelope with matching `dry_run_replay` / `request_replay`; Hermes is never granted bulk replay.
 - Use `check_consent` / `check_quiet_hours` before approving any `request_record_communication_event`;
   comms are record-only and never a send.
 - Draws on any skill pack for oversight, most often `production-gatekeeper` for gate calls,

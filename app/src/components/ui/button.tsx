@@ -53,16 +53,23 @@ export function Button({
   disabled,
   ...props
 }: ButtonProps): React.JSX.Element {
-  const Component = asChild ? Slot : "button";
+  const classes = cn(buttonVariants({ variant, size, fullWidth }), className);
+  if (asChild) {
+    return (
+      <Slot className={classes} aria-busy={busy || undefined} {...props}>
+        {children}
+      </Slot>
+    );
+  }
   return (
-    <Component
-      className={cn(buttonVariants({ variant, size, fullWidth }), className)}
-      disabled={asChild ? undefined : disabled || busy}
+    <button
+      className={classes}
+      disabled={disabled || busy}
       aria-busy={busy || undefined}
       {...props}
     >
       {busy ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : null}
       {children}
-    </Component>
+    </button>
   );
 }

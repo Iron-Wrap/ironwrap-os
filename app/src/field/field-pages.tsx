@@ -6,6 +6,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  CircleDashed,
   ClipboardCheck,
   HardHat,
   MapPin,
@@ -34,7 +35,7 @@ import {
   loadToday,
   prefetchAssignedPackets,
 } from "./field-cache";
-import type { JobResponse, ProofStreamItem } from "./field-contracts";
+import type { JobResponse, ProofStreamItem, TodayResponse } from "./field-contracts";
 import { GateChip } from "./gate-chip";
 import { ProofStream } from "./proof-stream";
 
@@ -75,120 +76,439 @@ const BLOCKER_CATEGORIES = [
   "Other",
 ];
 
+type PacketAvailability = "checking" | "saving" | "saved" | "not_saved" | "unavailable";
+type TodayJob = TodayResponse["jobs"][number];
+type FieldDateOptions = { locale?: string; timeZone?: string };
+
 export function TodayPage() {
   const session = useSession();
   const queryClient = useQueryClient();
-  const [packetReady, setPacketReady] = useState<Record<string, boolean>>({});
+  const [packetAvailability, setPacketAvailability] = useState<Record<string, PacketAvailability>>(
+    {},
+  );
+  const [packetRefreshCycle, setPacketRefreshCycle] = useState(0);
   const query = useQuery({
     queryKey: ["today", session.tenant.id, session.user.id],
     queryFn: () => loadToday(session),
   });
   const today = query.data;
+
+  useEffect(() => {
+    const retryPacketPreparation = () => {
+      if (navigator.onLine) setPacketRefreshCycle((cycle) => cycle + 1);
+    };
+    const retryWhenVisible = () => {
+      if (document.visibilityState === "visible") retryPacketPreparation();
+    };
+    window.addEventListener("online", retryPacketPreparation);
+    document.addEventListener("visibilitychange", retryWhenVisible);
+    return () => {
+      window.removeEventListener("online", retryPacketPreparation);
+      document.removeEventListener("visibilitychange", retryWhenVisible);
+    };
+  }, []);
+
   useEffect(() => {
     if (!today) return;
     let active = true;
-    void Promise.all(
-      today.jobs.map(async (job) => [job.id, await hasCachedJobPacket(session, job.id)] as const),
-    ).then((entries) => active && setPacketReady(Object.fromEntries(entries)));
-    if (navigator.onLine) {
-      void prefetchAssignedPackets(session, today, {
-        concurrency: 3,
-        onPacket(jobId, ready, model) {
-          if (!active) return;
-          setPacketReady((current) => ({ ...current, [jobId]: ready }));
-          if (model)
-            queryClient.setQueryData(["job", session.tenant.id, session.user.id, jobId], model);
-        },
-      });
-    }
+    const online = navigator.onLine;
+    void (async () => {
+      try {
+        const cached = await Promise.all(
+          today.jobs.map(
+            async (job) => [job.id, await hasCachedJobPacket(session, job.id)] as const,
+          ),
+        );
+        if (!active) return;
+        setPacketAvailability((current) => ({
+          ...current,
+          ...Object.fromEntries(
+            cached.map(([jobId, exists]) => [
+              jobId,
+              exists ? "saved" : online ? "saving" : "not_saved",
+            ]),
+          ),
+        }));
+        if (!online) return;
+        await prefetchAssignedPackets(session, today, {
+          concurrency: 3,
+          onPacket(jobId, saved, model) {
+            if (!active) return;
+            setPacketAvailability((current) => ({
+              ...current,
+              [jobId]: saved ? "saved" : "not_saved",
+            }));
+            if (model)
+              queryClient.setQueryData(["job", session.tenant.id, session.user.id, jobId], model);
+          },
+        });
+      } catch {
+        if (!active) return;
+        setPacketAvailability((current) => ({
+          ...current,
+          ...Object.fromEntries(today.jobs.map((job) => [job.id, "unavailable"])),
+        }));
+      }
+    })();
     return () => {
       active = false;
     };
-  }, [queryClient, session, today]);
+  }, [packetRefreshCycle, queryClient, session, today]);
+
   if (query.isPending) return <LoadingState label="Loading assigned work…" />;
   if (query.isError) {
     return <ErrorState message={messageFor(query.error)} onRetry={() => void query.refetch()} />;
   }
-  const offline = query.data.stale_fields.includes("offline.cached_packet");
-  const readyCount = query.data.jobs.filter((job) => packetReady[job.id]).length;
+  if (!today) return <LoadingState label="Loading assigned work…" />;
+  const offline = today.stale_fields.includes("offline.cached_packet");
+  const dateOptions = { locale: session.tenant.locale, timeZone: session.tenant.time_zone };
+  const availabilityFor = (job: TodayJob): PacketAvailability =>
+    packetAvailability[job.id] ?? "checking";
+  const savedPacketCount = today.jobs.filter((job) => availabilityFor(job) === "saved").length;
+  const hasCheckingPackets = today.jobs.some((job) => availabilityFor(job) === "checking");
+  const hasSavingPackets = today.jobs.some((job) => availabilityFor(job) === "saving");
+  const fieldCaptureAllowed =
+    session.user.role === "field" && today.allowed_actions.includes("field.checkin.create");
+  const dataLimits = today.stale_fields.filter((field) => field !== "offline.cached_packet");
+
   return (
-    <section className="space-y-6">
-      <PageHeader
-        eyebrow="Field and operations"
-        title="Today"
-        description={
-          offline ? "Offline packet from this device" : `Live assignments for ${query.data.date}`
-        }
+    <section className="mx-auto max-w-5xl space-y-7 pb-4">
+      <TodayDispatchHeader
+        date={today.date}
+        jobCount={today.jobs.length}
+        offline={offline}
+        generatedAt={today.read_model_generated_at}
+        dateOptions={dateOptions}
       />
-      {offline ? <OfflineNotice /> : null}
-      {query.data.jobs.length > 0 ? (
-        <div
-          className={
-            readyCount === query.data.jobs.length
-              ? "rounded-lg border border-ok/30 bg-ok-soft p-4 font-bold text-ok"
-              : "rounded-lg border border-warning/30 bg-warning-soft p-4 font-bold text-warning"
-          }
-          role="status"
-        >
-          {readyCount} of {query.data.jobs.length} job packets ready offline
-        </div>
+      {offline ? <OfflineScheduleNotice date={today.date} dateOptions={dateOptions} /> : null}
+      {dataLimits.length > 0 ? <TodayDataLimits fields={dataLimits} /> : null}
+      {today.jobs.length > 0 ? (
+        <PacketAvailabilityPanel
+          jobCount={today.jobs.length}
+          savedCount={savedPacketCount}
+          checking={hasCheckingPackets}
+          saving={hasSavingPackets}
+          offline={offline}
+        />
       ) : null}
-      {query.data.jobs.length === 0 ? (
+      {today.jobs.length === 0 ? (
         <EmptyState
-          title="No assigned work today"
-          message="Field jobs appear only from an active direct or crew Job Assignment. Office roles can still see active jobs awaiting assignment."
+          title={
+            session.user.role === "field"
+              ? "No job packets are assigned to this device today"
+              : "No active assignments were returned today"
+          }
+          message={
+            session.user.role === "field"
+              ? "Do not travel based on this screen. Ask the office to confirm an active assignment before leaving."
+              : "This list reflects only assignments available to your current role."
+          }
         />
       ) : (
-        <div className="grid gap-4 xl:grid-cols-2">
-          {query.data.jobs.map((job) => (
-            <Card key={job.id}>
-              <CardHeader>
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
-                      {job.job_number ?? job.id}
-                    </p>
-                    <CardTitle className="mt-1">{job.address ?? "Address unavailable"}</CardTitle>
-                  </div>
-                  {job.blocked_gate_count > 0 ? (
-                    <span className="rounded-full bg-danger-soft px-3 py-1 text-xs font-bold text-danger">
-                      {job.blocked_gate_count} blocked
-                    </span>
-                  ) : null}
-                </div>
-                <span
-                  className={
-                    packetReady[job.id]
-                      ? "text-xs font-extrabold text-ok"
-                      : "text-xs font-extrabold text-warning"
-                  }
-                >
-                  {packetReady[job.id] ? "Ready offline" : "Needs download"}
-                </span>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <dl className="grid gap-3 text-sm sm:grid-cols-2">
-                  <Fact label="Assignment" value={job.assignment?.type ?? "Awaiting assignment"} />
-                  <Fact label="Start" value={formatDate(job.scheduled_start)} />
-                </dl>
-                <p className="rounded-lg bg-surface-muted p-3 font-bold">Next: {job.next_action}</p>
-                <Button
-                  asChild
-                  size="field"
-                  fullWidth
-                  variant={job.blocked_gate_count ? "outline" : "accent"}
-                >
-                  <Link to="/jobs/$jobId" params={{ jobId: job.id }}>
-                    Open job packet
-                  </Link>
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        <section aria-labelledby="today-run-sheet-heading">
+          <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-4">
+            <div>
+              <p className="text-sm font-semibold text-muted">Departure and site preparation</p>
+              <h2
+                id="today-run-sheet-heading"
+                className="mt-1 text-2xl font-black tracking-[-0.03em] sm:text-3xl"
+              >
+                Run sheet
+              </h2>
+            </div>
+            <p className="text-sm font-semibold text-muted">
+              {today.jobs.length} {today.jobs.length === 1 ? "assignment" : "assignments"}
+            </p>
+          </header>
+          <ol className="divide-y divide-border">
+            {today.jobs.map((job) => (
+              <TodayJobRow
+                key={job.id}
+                job={job}
+                availability={availabilityFor(job)}
+                dateOptions={dateOptions}
+                fieldCaptureAllowed={fieldCaptureAllowed}
+                canRetryPacket={navigator.onLine}
+                onRetryPacket={() => setPacketRefreshCycle((cycle) => cycle + 1)}
+              />
+            ))}
+          </ol>
+        </section>
       )}
     </section>
   );
+}
+
+function TodayDispatchHeader({
+  date,
+  jobCount,
+  offline,
+  generatedAt,
+  dateOptions,
+}: {
+  date: string;
+  jobCount: number;
+  offline: boolean;
+  generatedAt: string;
+  dateOptions: FieldDateOptions;
+}) {
+  return (
+    <header className="border-b border-border pb-5 sm:pb-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold text-muted">Field dispatch</p>
+          <h1 className="mt-1 text-4xl font-black tracking-[-0.045em] sm:text-5xl">Today</h1>
+          <p className="mt-2 text-base leading-6 text-muted sm:text-lg">
+            {formatFieldDay(date, dateOptions)} · {jobCount} {jobCount === 1 ? "site" : "sites"}
+          </p>
+        </div>
+        <div
+          className={
+            offline
+              ? "flex min-h-12 items-center gap-2 border border-warning/35 bg-warning-soft px-3 text-sm font-bold text-warning"
+              : "flex min-h-12 items-center gap-2 border border-info/35 bg-info-soft px-3 text-sm font-bold text-info"
+          }
+          role="status"
+        >
+          {offline ? (
+            <AlertTriangle className="size-5" aria-hidden="true" />
+          ) : (
+            <ClipboardCheck className="size-5" aria-hidden="true" />
+          )}
+          <span>{offline ? "Offline snapshot" : "Current assignment read"}</span>
+        </div>
+      </div>
+      <p className="mt-4 text-sm leading-6 text-muted">
+        {offline ? "Saved schedule" : "Read generated"}{" "}
+        {formatFieldTimestamp(generatedAt, dateOptions)}
+      </p>
+    </header>
+  );
+}
+
+function OfflineScheduleNotice({
+  date,
+  dateOptions,
+}: {
+  date: string;
+  dateOptions: FieldDateOptions;
+}) {
+  return (
+    <div
+      className="flex items-start gap-3 border border-warning/35 bg-warning-soft p-4 text-warning"
+      role="status"
+    >
+      <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+      <p className="font-bold leading-6">
+        Offline snapshot for {formatFieldDay(date, dateOptions)}. Saved work remains queued;
+        reconnect before relying on a changed schedule.
+      </p>
+    </div>
+  );
+}
+
+function TodayDataLimits({ fields }: { fields: string[] }) {
+  return (
+    <details className="border border-border bg-surface-raised">
+      <summary className="min-h-14 cursor-pointer px-4 py-4 text-sm font-bold">
+        Some dispatch data may be limited
+      </summary>
+      <div className="border-t border-border px-4 py-4 text-sm leading-6 text-muted">
+        This read may be stale for {fields.map(humanizeFieldName).join(", ")}. Open the job packet
+        before relying on a field that may have changed.
+      </div>
+    </details>
+  );
+}
+
+function PacketAvailabilityPanel({
+  jobCount,
+  savedCount,
+  checking,
+  saving,
+  offline,
+}: {
+  jobCount: number;
+  savedCount: number;
+  checking: boolean;
+  saving: boolean;
+  offline: boolean;
+}) {
+  const state = checking
+    ? {
+        Icon: CircleDashed,
+        label: "Checking saved packets",
+        detail: "Packet availability is still being checked on this device.",
+        className: "border-info/35 bg-info-soft text-info",
+      }
+    : saving
+      ? {
+          Icon: CircleDashed,
+          label: "Saving packets for offline use",
+          detail: "Keep the app open while remaining site packets are being saved.",
+          className: "border-warning/35 bg-warning-soft text-warning",
+        }
+      : savedCount === jobCount
+        ? {
+            Icon: PackageCheck,
+            label: "Packets saved on this device",
+            detail: "Open the job packet for current gate and safety detail before work.",
+            className: "border-ok/35 bg-ok-soft text-ok",
+          }
+        : {
+            Icon: AlertTriangle,
+            label: offline
+              ? "Some packets are not saved on this device"
+              : "Some packets need saving",
+            detail: offline
+              ? "Reconnect to save missing packets before leaving for those sites."
+              : "The run sheet will retry preparation when this app reconnects or returns to the foreground.",
+            className: "border-warning/35 bg-warning-soft text-warning",
+          };
+  const StateIcon = state.Icon;
+  return (
+    <section className={`border p-4 sm:p-5 ${state.className}`} aria-label="Packet availability">
+      <div className="flex items-start gap-3">
+        <StateIcon className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+        <div>
+          <p className="font-black">{state.label}</p>
+          <p className="mt-1 text-sm leading-6">
+            {savedCount} of {jobCount} saved on this device.
+          </p>
+          <p className="mt-1 text-sm leading-6 opacity-90">{state.detail}</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function TodayJobRow({
+  job,
+  availability,
+  dateOptions,
+  fieldCaptureAllowed,
+  canRetryPacket,
+  onRetryPacket,
+}: {
+  job: TodayJob;
+  availability: PacketAvailability;
+  dateOptions: FieldDateOptions;
+  fieldCaptureAllowed: boolean;
+  canRetryPacket: boolean;
+  onRetryPacket: () => void;
+}) {
+  const blocked = job.blocked_gate_count > 0;
+  const actionLabel = blocked
+    ? "Review gate and packet"
+    : fieldCaptureAllowed
+      ? "Open job packet"
+      : "Review job packet";
+  const assignment = [job.assignment?.type, job.assignment?.status].filter(Boolean).join(" · ");
+  return (
+    <li className="py-5 sm:py-6">
+      <article className="grid gap-5 lg:grid-cols-[8rem_minmax(0,1fr)_15rem] lg:items-start">
+        <div className="border-b border-border pb-3 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-5">
+          <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">Scheduled</p>
+          <p className="mt-1 text-base font-black leading-6">
+            {formatFieldSchedule(job.scheduled_start, dateOptions)}
+          </p>
+          {job.scheduled_end ? (
+            <p className="mt-1 text-sm leading-5 text-muted">
+              to {formatFieldSchedule(job.scheduled_end, dateOptions)}
+            </p>
+          ) : null}
+        </div>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <p className="font-black tracking-[-0.02em]">{job.job_number ?? job.id}</p>
+            {job.status ? <p className="text-sm font-semibold text-muted">{job.status}</p> : null}
+          </div>
+          <h3 className="mt-1 text-xl font-black leading-7 tracking-[-0.025em] text-pretty sm:text-2xl">
+            {job.address ?? "Address unavailable"}
+          </h3>
+          {blocked ? (
+            <div className="mt-4 flex items-start gap-2 border-l-4 border-danger pl-3 text-danger">
+              <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+              <p className="font-black leading-6">
+                {job.blocked_gate_count}{" "}
+                {job.blocked_gate_count === 1 ? "gate blocks work" : "gates block work"}
+              </p>
+            </div>
+          ) : null}
+          <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+            <DispatchFact
+              label="Assignment"
+              value={assignment || "Assignment detail unavailable"}
+            />
+            <DispatchFact label="Status note" value={job.next_action} />
+          </dl>
+          <PacketAvailabilityBadge availability={availability} />
+        </div>
+        <div className="space-y-3 lg:pt-1">
+          <Button asChild size="field" fullWidth variant={blocked ? "outline" : "accent"}>
+            <Link to="/jobs/$jobId" params={{ jobId: job.id }}>
+              {actionLabel}
+              <ChevronRight aria-hidden="true" />
+            </Link>
+          </Button>
+          {canRetryPacket && (availability === "not_saved" || availability === "unavailable") ? (
+            <Button type="button" size="field" fullWidth variant="outline" onClick={onRetryPacket}>
+              Retry saving packet
+            </Button>
+          ) : null}
+        </div>
+      </article>
+    </li>
+  );
+}
+
+function DispatchFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs font-extrabold uppercase tracking-[0.1em] text-muted">{label}</dt>
+      <dd className="mt-1 font-semibold leading-6">{value}</dd>
+    </div>
+  );
+}
+
+function PacketAvailabilityBadge({ availability }: { availability: PacketAvailability }) {
+  const state = packetAvailabilityCopy(availability);
+  const Icon = state.Icon;
+  return (
+    <p
+      className={`mt-4 inline-flex min-h-9 items-center gap-2 text-sm font-bold ${state.className}`}
+    >
+      <Icon className="size-4 shrink-0" aria-hidden="true" />
+      {state.label}
+    </p>
+  );
+}
+
+function packetAvailabilityCopy(availability: PacketAvailability) {
+  switch (availability) {
+    case "saved":
+      return { Icon: PackageCheck, label: "Saved on this device", className: "text-ok" };
+    case "saving":
+      return {
+        Icon: CircleDashed,
+        label: "Saving packet for offline use",
+        className: "text-warning",
+      };
+    case "not_saved":
+      return {
+        Icon: AlertTriangle,
+        label: "Packet not saved on this device",
+        className: "text-warning",
+      };
+    case "unavailable":
+      return {
+        Icon: AlertTriangle,
+        label: "Packet availability could not be checked",
+        className: "text-warning",
+      };
+    default:
+      return { Icon: CircleDashed, label: "Checking packet availability", className: "text-info" };
+  }
 }
 
 export function JobPage() {
@@ -878,20 +1198,90 @@ function OfflineNotice() {
   );
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-xs font-extrabold uppercase tracking-[0.1em] text-muted">{label}</dt>
-      <dd className="mt-1 font-bold">{value}</dd>
-    </div>
-  );
-}
-
 function formatDate(value: string | null): string {
   if (!value || Number.isNaN(Date.parse(value))) return "Not scheduled";
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
     new Date(value),
   );
+}
+
+function formatFieldDay(value: string, options: FieldDateOptions): string {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return "Date unavailable";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  )
+    return "Date unavailable";
+  return formatWithLocale(
+    date,
+    options,
+    { weekday: "long", month: "short", day: "numeric", year: "numeric" },
+    "UTC",
+  );
+}
+
+function formatFieldTimestamp(value: string, options: FieldDateOptions): string {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return "time unavailable";
+  return formatWithLocale(new Date(parsed), options, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function formatFieldSchedule(value: string | null, options: FieldDateOptions): string {
+  if (!value) return "Not scheduled";
+  const floating = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?)?$/,
+  );
+  if (floating) {
+    const year = Number(floating[1]);
+    const month = Number(floating[2]);
+    const day = Number(floating[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (
+      date.getUTCFullYear() !== year ||
+      date.getUTCMonth() !== month - 1 ||
+      date.getUTCDate() !== day
+    )
+      return "Not scheduled";
+    const dateText = formatWithLocale(
+      date,
+      options,
+      { month: "short", day: "numeric", year: "numeric" },
+      "UTC",
+    );
+    return floating[4] && floating[5] ? `${dateText} · ${floating[4]}:${floating[5]}` : dateText;
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return "Not scheduled";
+  return formatWithLocale(new Date(parsed), options, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function formatWithLocale(
+  date: Date,
+  options: FieldDateOptions,
+  format: Intl.DateTimeFormatOptions,
+  fallbackTimeZone?: string,
+): string {
+  try {
+    return new Intl.DateTimeFormat(options.locale, {
+      ...format,
+      timeZone: fallbackTimeZone ?? options.timeZone,
+    }).format(date);
+  } catch {
+    return new Intl.DateTimeFormat(undefined, {
+      ...format,
+      timeZone: fallbackTimeZone,
+    }).format(date);
+  }
+}
+
+function humanizeFieldName(value: string): string {
+  return value.replace(/[._-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function messageFor(error: unknown): string {

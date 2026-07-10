@@ -24,6 +24,10 @@ data.
   and lead attention are separated into proof-safe lanes; data limits stay visible; and job packets
   open only when the BFF grants `job.read`. It does not invent delivery, follow-up, approvals, or
   financial impact.
+- A field-first Today run sheet: server order is preserved, schedules format in the tenant time
+  zone, and local packet availability visibly progresses from checking to saving, saved, or not
+  saved. A cached packet is never called complete or safety-cleared; a blocked gate can only open
+  the governed job packet for review.
 - Route placeholders for the later Sales and customer Portal slices. Today, Job, Check-in, Owner
   Now, and Settings have their implemented North Star foundations.
 

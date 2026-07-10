@@ -247,15 +247,16 @@ The D1 required-table allowlist is release state, not a static assumption: `enve
 `audit_log`, `dead_letter`, `source_counts`, `heartbeat`, `quickbooks_webhook_receipts`,
 `dedup_claims`, `replay_requests`, `field_actions`, `field_action_media`, `app_users`,
 `app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`,
-`app_action_throttles`, `app_device_pairings`, `app_devices`, and `lead_ack_receipts`. Every migration that adds a persistent table must
+`app_action_throttles`, `app_device_pairings`, `app_devices`, `lead_ack_receipts`,
+`approval_requests`, and `approval_request_events`. Every migration that adds a persistent table must
 advance both scripts, manifest expectation, readiness contract, and executable tests before that
 migration can deploy.
 
-The required trigger bindings are `validate_source_count_insert` and
-`validate_source_count_update` on `source_counts`, plus
-`prevent_lead_ack_receipts_update` and `prevent_lead_ack_receipts_delete` on
-`lead_ack_receipts`. The receipt triggers must also be `BEFORE UPDATE` / `BEFORE DELETE` and
-raise `ABORT, 'lead_ack_receipts_immutable'`; a matching name and table alone does not pass
+The required trigger bindings include source-count validation, immutable lead-ack receipts, and
+the approval ledger's transition, event-append, and immutable-evidence triggers. In particular,
+the approval-request binding trigger must reject `UPDATE` with
+`ABORT, 'approval_request_binding_immutable'`; approval-event update/delete triggers must reject
+with `ABORT, 'approval_request_events_immutable'`. A matching name and table alone does not pass
 backup or recovery verification. A migration that adds or changes a persistent invariant trigger
 must advance the same recovery contract and tests.
 

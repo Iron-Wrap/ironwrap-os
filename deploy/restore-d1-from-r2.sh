@@ -21,12 +21,13 @@ LOCK_FILE="$REPO_ROOT/workers-bus/package-lock.json"
 EXPECTED_ACCOUNT_ID="7ee5775bc1ba46f05c5a65235b60e939"
 EXPECTED_DATABASE_NAME="ironwrap-bus"
 EXPECTED_DATABASE_ID="f0674848-13df-4422-9896-8ba2719663b8"
-REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,quickbooks_webhook_receipts,dedup_claims,replay_requests,field_actions,field_action_media,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit,app_action_throttles,app_device_pairings,app_devices,lead_ack_receipts"
+REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,quickbooks_webhook_receipts,dedup_claims,replay_requests,field_actions,field_action_media,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit,app_action_throttles,app_device_pairings,app_devices,lead_ack_receipts,approval_requests,approval_request_events"
 # A recoverable export must retain both source-count validation and append-only
 # receipt evidence, bound to their intended tables.
-REQUIRED_TRIGGER_BINDINGS="validate_source_count_insert=source_counts,validate_source_count_update=source_counts,prevent_lead_ack_receipts_update=lead_ack_receipts,prevent_lead_ack_receipts_delete=lead_ack_receipts"
+REQUIRED_TRIGGER_BINDINGS="validate_source_count_insert=source_counts,validate_source_count_update=source_counts,prevent_lead_ack_receipts_update=lead_ack_receipts,prevent_lead_ack_receipts_delete=lead_ack_receipts,prevent_approval_request_binding_rewrite=approval_requests,enforce_approval_request_transition=approval_requests,enforce_approval_request_reconciliation=approval_requests,append_approval_request_created_event=approval_requests,append_approval_request_transition_event=approval_requests,append_approval_request_reconciliation_event=approval_requests,prevent_approval_request_event_update=approval_request_events,prevent_approval_request_event_delete=approval_request_events,prevent_approval_request_delete=approval_requests"
 REQUIRED_RECEIPT_TRIGGER_SEMANTICS="prevent_lead_ack_receipts_update=beforeupdateonlead_ack_receipts,prevent_lead_ack_receipts_delete=beforedeleteonlead_ack_receipts"
 RECEIPT_IMMUTABILITY_ABORT="raise(abort,'lead_ack_receipts_immutable')"
+REQUIRED_APPROVAL_TRIGGER_SEMANTICS="prevent_approval_request_binding_rewrite|beforeupdateonapproval_requests|raise(abort,'approval_request_binding_immutable'),prevent_approval_request_event_update|beforeupdateonapproval_request_events|raise(abort,'approval_request_events_immutable'),prevent_approval_request_event_delete|beforedeleteonapproval_request_events|raise(abort,'approval_request_events_immutable'),prevent_approval_request_delete|beforedeleteonapproval_requests|raise(abort,'approval_requests_append_only')"
 
 verify_receipt_trigger_semantics() {
   local database="$1"
@@ -41,6 +42,23 @@ verify_receipt_trigger_semantics() {
     normalized_sql="$(sqlite3 "$database" "SELECT lower(replace(replace(replace(replace(sql, char(10), ''), char(13), ''), char(9), ''), ' ', '')) FROM sqlite_master WHERE type='trigger' AND name='$trigger_name';")"
     if [[ "$normalized_sql" != *"$expected_prefix"* || "$normalized_sql" != *"$RECEIPT_IMMUTABILITY_ABORT"* ]]; then
       echo "error: $label does not enforce immutable receipt trigger semantics: $trigger_name" >&2
+      return 1
+    fi
+  done
+}
+
+verify_approval_trigger_semantics() {
+  local database="$1"
+  local label="$2"
+  local trigger_spec trigger_name expected_prefix expected_abort normalized_sql
+  local -a required_approval_trigger_semantics
+
+  IFS=',' read -r -a required_approval_trigger_semantics <<< "$REQUIRED_APPROVAL_TRIGGER_SEMANTICS"
+  for trigger_spec in "${required_approval_trigger_semantics[@]}"; do
+    IFS='|' read -r trigger_name expected_prefix expected_abort <<< "$trigger_spec"
+    normalized_sql="$(sqlite3 "$database" "SELECT lower(replace(replace(replace(replace(sql, char(10), ''), char(13), ''), char(9), ''), ' ', '')) FROM sqlite_master WHERE type='trigger' AND name='$trigger_name';")"
+    if [[ "$normalized_sql" != *"$expected_prefix"* || "$normalized_sql" != *"$expected_abort"* ]]; then
+      echo "error: $label does not enforce immutable approval-ledger trigger semantics: $trigger_name" >&2
       return 1
     fi
   done
@@ -385,6 +403,9 @@ done
 if ! verify_receipt_trigger_semantics "$verification_db" "restored D1 export"; then
   exit 1
 fi
+if ! verify_approval_trigger_semantics "$verification_db" "restored D1 export"; then
+  exit 1
+fi
 
 if [[ "$mode" == "verify" ]]; then
   echo "ok: selected D1 backup cryptographically and structurally verified locally; no remote mutation performed"
@@ -471,11 +492,14 @@ if ! node -e '
   const batches=Array.isArray(payload)?payload:[payload];
   if(!batches.length||batches.some((entry)=>entry?.success!==true)) process.exit(1);
   const rows=batches.flatMap((entry)=>Array.isArray(entry.results)?entry.results:[]);
-  const receiptSemantics=new Map([
-    ["prevent_lead_ack_receipts_update","beforeupdateonlead_ack_receipts"],
-    ["prevent_lead_ack_receipts_delete","beforedeleteonlead_ack_receipts"],
+  const immutableSemantics=new Map([
+    ["prevent_lead_ack_receipts_update",["beforeupdateonlead_ack_receipts","raise(abort,'lead_ack_receipts_immutable')"]],
+    ["prevent_lead_ack_receipts_delete",["beforedeleteonlead_ack_receipts","raise(abort,'lead_ack_receipts_immutable')"]],
+    ["prevent_approval_request_binding_rewrite",["beforeupdateonapproval_requests","raise(abort,'approval_request_binding_immutable')"]],
+    ["prevent_approval_request_event_update",["beforeupdateonapproval_request_events","raise(abort,'approval_request_events_immutable')"]],
+    ["prevent_approval_request_event_delete",["beforedeleteonapproval_request_events","raise(abort,'approval_request_events_immutable')"]],
+    ["prevent_approval_request_delete",["beforedeleteonapproval_requests","raise(abort,'approval_requests_append_only')"]],
   ]);
-  const receiptAbort="raise(abort,'lead_ack_receipts_immutable')";
   const expected=new Map(fs.readFileSync(process.argv[2],"utf8").trim().split("\n").filter(Boolean).map((line)=>{
     const at=line.indexOf("=");
     const name=line.slice(0,at); const table=line.slice(at+1);
@@ -485,10 +509,10 @@ if ! node -e '
   const actual=new Map();
   for(const row of rows){
     if(typeof row?.trigger_name!=="string"||typeof row?.table_name!=="string"||typeof row?.trigger_sql!=="string"||!row.trigger_name||!row.table_name||actual.has(row.trigger_name)) process.exit(1);
-    const expectedSemantic=receiptSemantics.get(row.trigger_name);
+    const expectedSemantic=immutableSemantics.get(row.trigger_name);
     if(expectedSemantic){
       const normalized=row.trigger_sql.toLowerCase().replace(/\s+/g,"");
-      if(!normalized.includes(expectedSemantic)||!normalized.includes(receiptAbort)) process.exit(1);
+      if(!normalized.includes(expectedSemantic[0])||!normalized.includes(expectedSemantic[1])) process.exit(1);
     }
     actual.set(row.trigger_name,row.table_name);
   }

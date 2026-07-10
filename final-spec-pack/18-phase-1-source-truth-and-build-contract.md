@@ -1,16 +1,22 @@
 # 18 - Phase 1 Source Truth And Build Contract
 
-Status: active build contract.
+Status: repository implementation checkpoint; live Phase 1 acceptance is open.
 
 This file is the authoritative first-phase contract for turning the current
-IronWrap stack into the ERPNext/Hermes end product. It starts from what exists
-now, not from a clean-room plan.
+IronWrap stack into the Frappe/Hermes end product. It starts from what exists,
+not from a clean-room plan. Legacy `erpnext-*` names refer to the plain Frappe
+site; the ERPNext application is removed and forbidden.
+
+Repository validation, deployment evidence, runtime health, and account/admin
+truth are distinct. This contract records implemented source capability and the
+remaining live acceptance gates without treating one as proof of another.
 
 ## Evidence Reviewed
 
-Current repo and local evidence checked on 2026-07-08:
+Repository evidence rechecked on 2026-07-10; external-account facts below remain
+last-known evidence until the named admin revalidates them:
 
-- Git branch: `codex/ironwrap-source-truth-cleanup`.
+- Task branch: `codex/hermes-end-product` (publication still depends on remote access).
 - Worker code: `workers-bus/src/index.ts`, `photos.ts`, `measurements.ts`,
   `quickbooks.ts`, `google.ts`, `jobnimbus.ts`, `store.ts`, and D1 migration.
 - Cloudflare config: `workers-bus/wrangler.jsonc`.
@@ -20,6 +26,14 @@ Current repo and local evidence checked on 2026-07-08:
 - Generated/provenance folders: `task1-spec/assets/` has 27 source artifacts;
   `output/` has 24 generated/audit artifacts.
 - AppliCad proof: `node tools/applicad-xml-proof.mjs --check` passes.
+- Frappe contract: exactly 33 DocTypes (29 top-level plus four child tables),
+  shared business validation, installed role matrix, packaging, and pure Python tests.
+- Worker operations: separate `/health` and `/ready`, authenticated
+  `/admin/status`, and approved/audited targeted replay.
+- Hermes/MCP: eight role profiles, eleven skills, 64 implemented tools, and
+  required dry-run pairs for every granted approved write.
+- Deployment/recovery: exact runtime lock, digest-pinned Frappe-only image build,
+  live-env shape verifier, encrypted/verified backup protocol, and restore runbook.
 - Code graph: Worker clusters show website ingest, photo ingest, measurement
   ingest, QuickBooks webhook, JobNimbus queue push, Google Drive filing,
   retry, reconcile, and dead-letter paths.
@@ -49,20 +63,22 @@ Current repo and local evidence checked on 2026-07-08:
 | Jotform | Connected account is `info@iroofalberta.ca`; Worker payload contract exists for jobsite photos. | Build/confirm live Jobsite Photo form and point to `POST /ingest/photo`. |
 | QuickBooks | QBO account exists under `info@ironwrapexteriors.com`; Worker signed webhook receiver exists. | Connect `QB_WEBHOOK_TOKEN` and Intuit webhook; defer OAuth read/status mirror until needed. |
 | SMS/phone | Worker does not send SMS. JobNimbus Engage is the SMS path after A2P approval. Twilio secrets exist as names only, but Worker must not use Twilio SMS. | Configure Engage/A2P; own portable DID only if AssistAI/voice routing needs it. |
-| Hermes/ERPNext | Strategy/proof docs exist; no ERPNext runtime app is in this repo yet. | Phase 1 builds the bridge contract first, then adds ERPNext app skeleton after the current bus feed is operating. |
+| Frappe/Hermes | Proprietary Frappe-only app, 33 DocTypes, server policy/RBAC, a standard Workspace plus read-only exception-first Control Center, two hardened MCP servers, eight Hermes roles, and pinned deploy/recovery source are present. | Keep Worker/D1/R2 as front door; install on plain Frappe, role-test the cockpit, and prove live reads plus one approved audited write. |
 
 ## Worker Surface That Already Exists
 
 | Method | Path | Current behavior |
 |---|---|---|
 | `GET` | `/health` | Liveness JSON. |
+| `GET` | `/ready` | D1 schema query plus R2/Queue binding and required-config presence; returns 503 on failure and does not prove downstream network reachability. |
 | `POST` | `/ingest/:source` | Bearer-auth lead intake for allowed source names; raw to R2, envelope to D1, dedup, Gmail instant ack, enqueue JobNimbus push. |
 | `POST` | `/ingest/photo` | Bearer-auth Jotform/photo intake; raw to R2, requires job number and photo URLs, files to Google Drive when configured, writes audit rows. |
 | `POST` | `/ingest/measurement` | Bearer-auth RoofRuler/AppliCad metadata/report intake; raw to R2, requires job number, captures structured measurements, files report to Google Drive when configured. |
 | `POST` | `/webhook/quickbooks` | Verifies Intuit `intuit-signature`, stores raw payload, records entity events; JobNimbus status mirror waits for QB OAuth. |
 | `POST` | `/admin/reconcile` | Admin-auth source-vs-landed reconciliation and heartbeat. |
 | `POST` | `/admin/source-count` | Admin-auth independent count input for reconciliation. |
-| `POST` | `/admin/replay` | Admin-auth requeue of dead envelopes. |
+| `GET` | `/admin/status` | Admin-auth heartbeat, queue/dead-letter, Frappe error, audit failure, and QB receipt view. |
+| `POST` | `/admin/replay` | Admin-auth approved replay. Envelope-scoped by default with compare-and-set; requires `run_id`, approver, and reason. Bulk requires exact hard confirmation. |
 | Queue | `ironwrap-jn-push` | Idempotent JobNimbus push. |
 | DLQ | `ironwrap-jn-dlq` | Dead-letter record and owner alert. |
 | Cron | retry/reconcile | Retry stuck pushes and write daily heartbeat. |
@@ -94,52 +110,59 @@ real source event
 -> Gmail instant ack / owner alert
 -> JobNimbus contact/job push
 -> Google Drive evidence folder
--> ERPNext-ready event contract
+-> Frappe Lead Envelope / Roofing Customer / Property / Roof Job / gates
 -> reconciliation heartbeat
+-> readiness and incident/replay evidence
 ```
 
-ERPNext and Hermes enter Phase 1 as contracts and skeletons, not as the first
-place live leads are written. The existing Worker path already protects leads;
-do not destabilize it by inserting ERPNext in front of the first live feed.
+Frappe and Hermes are implemented consumers/operators, never the first raw-event
+write. The Worker/D1/R2 path remains the source spine. Do not move intake in front
+of it or treat Frappe/Hermes availability as a prerequisite for raw capture.
 
 ## Exhaustive Phase 1 Work Items
 
-| ID | Work item | Acceptance proof |
-|---|---|---|
-| P1.1 | Switch/refresh Cloudflare auth for IronWrap account `7ee5775bc1ba46f05c5a65235b60e939`. | `wrangler whoami` shows an account that can read the configured D1/Queues; `wrangler d1 list` and `wrangler queues list` succeed for IronWrap. |
-| P1.2 | Revalidate deployed Worker, D1, R2, Queues, cron, and secret names. | Read-only inventory recorded; no secret values copied. |
-| P1.3 | Rotate shared JobNimbus API key and install a dedicated bus key. | `wrangler secret put JOBNIMBUS_API_KEY`; one test push still lands in JobNimbus. |
-| P1.4 | Feed one real website or Make lead into `/ingest/website`. | D1 envelope exists, raw R2 object exists, Gmail ack/owner alert sends, JobNimbus gets `bus:*` tag. |
-| P1.5 | Add source count for that lead and run reconcile. | `/admin/source-count` then `/admin/reconcile` shows no gap for that source/day. |
-| P1.6 | Freeze new GHL work. | Docs and Make notes state no new GHL mutations except rescue/disable actions. |
-| P1.7 | Retire or park GHL rescue scenarios after owner confirms no rerun. | Scenario list marks rescue as disabled/archived; JobNimbus count remains stable. |
-| P1.8 | Bridge RoofRuler scenario `4754599` to `/ingest/measurement` or replace with direct feed. | One RoofRuler sample event stores raw payload, captures measurements/report URL, files report, and records audit row. |
-| P1.9 | Keep disabled duplicate Google RoofRuler routing rule disabled unless dedup is added. | No duplicate Make executions for one RoofRuler report. |
-| P1.10 | Build/confirm Jotform Jobsite Photo form payload. | Payload includes JobNimbus job number plus photo URLs; Worker returns `uploaded > 0` when Drive is configured. |
-| P1.11 | Connect signed QuickBooks webhook. | Correct Intuit signature returns `{ok:true}`; bad signature returns 401; audit row records events. |
-| P1.12 | Define ERPNext sync contract from D1 events. | Field map exists for Lead Envelope, Roofing Property, Roof Job, Evidence Asset, Measurement Report, Communication Event, and Automation Incident. |
-| P1.13 | Create ERPNext/Frappe app skeleton only after P1.4 proves live intake. | App installs locally; DocTypes exist; no production lead path depends on it yet. |
-| P1.14 | Define Hermes tool boundary. | Hermes has no direct free-form write to ERPNext, QuickBooks, Drive, JobNimbus, or customer channels; tool names and approval rules are listed. |
-| P1.15 | Add owner exception view from D1. | Owner can see latest envelopes, dead letters, reconcile heartbeat, and failed file/webhook events. |
-| P1.16 | Update SOPs for the proven path. | Staff knows where a lead appears, what alert means, how to recover dead letters, and when not to touch GHL. |
+| ID | Work item | Repository state | Acceptance proof |
+| --- | --- | --- | --- |
+| P1.1 | Switch/refresh Cloudflare auth for IronWrap account `7ee5775bc1ba46f05c5a65235b60e939`. | External open | `wrangler whoami`, D1, R2, Queue, and Worker inventory succeed in the intended account. |
+| P1.2 | Revalidate deployed Worker, bindings, cron, migrations, and secret names. | External open | Read-only inventory plus `/ready` and `/admin/status`; no secret values copied. |
+| P1.3 | Rotate shared JobNimbus API key and install a dedicated bus key. | External open | Rotation evidence and one non-duplicate bridge push. |
+| P1.4 | Feed one real website or Make lead into `/ingest/website`. | Route/test implemented; live open | R2 raw, D1 envelope/audit, Frappe mirror, Gmail ack/alert, and temporary JobNimbus tag exist. |
+| P1.5 | Add independent source count and reconcile. | Route/test implemented; live open | Source-count plus reconcile shows no unexplained gap and `/admin/status` shows a fresh heartbeat. |
+| P1.6 | Freeze new GHL work. | Repository policy recorded; admin confirmation open | Make/GHL inventory states no new keeper mutations. |
+| P1.7 | Retire/park rescue scenarios after owner confirmation. | External open | Exported scenario map and owner-approved disable/archive evidence. |
+| P1.8 | Bridge RoofRuler scenario `4754599` to `/ingest/measurement` or replace it. | Ingest/sample proof implemented; source open | One real report stores raw, reviewed values, Drive file, Frappe report/evidence, and audit. |
+| P1.9 | Keep duplicate Google RoofRuler routing disabled unless dedup is proven. | External open | One report creates one canonical event/execution. |
+| P1.10 | Confirm Jotform Jobsite Photo payload and device flow. | Worker photo/voice contract implemented; device open | Job number, photos, voice note, Drive/R2, Evidence Item, and Field Check-in verified. |
+| P1.11 | Connect signed QuickBooks webhook. | Signature/receipt tests implemented; admin open | Valid receipt accepted/idempotent, invalid signature rejected, status visible. |
+| P1.12 | Implement D1-to-Frappe consumer contract. | Repository implemented | Idempotent Lead Envelope/Customer/Property/Job/session/measurement/evidence/gate mirrors pass fixture and live proof. |
+| P1.13 | Implement proprietary Frappe-only operating core. | Repository implemented; site proof open | Exactly 33 DocTypes, policy/RBAC tests, plain-Frappe install/migrate, no `erpnext`. |
+| P1.14 | Implement Hermes tool boundary. | Repository implemented; runtime proof open | Eight roles and 78 tools validate; reads are safe; dry-run/approval/write/audit cannot be skipped. |
+| P1.15 | Expose owner exception truth. | Backend implemented; UI open | `/admin/status` and MCP show readiness, heartbeat, dead/stuck/Frappe/replay/audit/QB facts; custom cockpit remains unbuilt. |
+| P1.16 | Update recovery/launch SOPs and train operators. | Repository runbooks implemented; acceptance open | Operator completes status diagnosis, targeted replay, incident record, backup restore, and GHL no-touch drill. |
 
-## ERPNext Phase 1 Contract
+## Frappe Phase 1 Contract
 
-Create an `ironwrap_roofing` app after the bus is operating. The skeleton should
-only consume bus facts; it should not become a second lead front door.
+`ironwrap_roofing` is implemented as a proprietary consumer/operating core on
+plain Frappe. It must never become the raw intake front door and must never install
+the ERPNext application.
 
-Minimum DocTypes:
+The exact implemented contract is 29 top-level DocTypes:
 
-- `Lead Envelope`
-- `Roofing Property`
-- `Roof Job`
-- `Evidence Asset`
-- `Measurement Report`
-- `Material Takeoff`
-- `Proposal Evidence Pack`
-- `Communication Event`
-- `Automation Incident`
-- `Agent Run`
+- `Automation Incident`, `Communication Event`, `Completion Packet`, `Customer Quote`
+- `Evidence Item`, `Field Check-in`, `Hermes Run`, `Instant Estimate Session`
+- `Lead Envelope`, `Market Watch Item`, `Material Takeoff`, `Measurement Report`
+- `Option Package`, `Payment Milestone`, `Price Book Rule`, `Production Gate State`
+- `Proposal Evidence Pack`, `Review Request`, `Roof Area`, `Roof Job`
+- `Roofing Customer`, `Roofing Property`, `Scope Clause`, `Supplier Order`
+- `Supplier Profile`, `Supplier Quote`, `Visual Property Model`, `Warranty Packet`
+- `White-Label Tenant`
+
+The four child DocTypes are `Material Takeoff Item`, `Measurement Value`,
+`Supplier Order Item`, and `Supplier Quote Item`.
+
+Every top-level controller delegates to shared business validation. The site
+installs eight least-privilege IronWrap roles; delete is disabled; only owned
+DocTypes and Frappe core `User` may be Link targets.
 
 Minimum sync event:
 
@@ -162,16 +185,22 @@ Minimum sync event:
 Hermes may read broad context and draft work. Hermes may write only through
 approved tools.
 
-Allowed first tools:
+Implemented bus tools:
 
-- `bus.search_envelopes`
-- `bus.get_envelope`
-- `bus.replay_dead_letter`
-- `erp.create_draft_roof_job`
-- `erp.attach_evidence_asset`
-- `measurement.parse_sample`
-- `comms.draft_customer_reply`
-- `ops.write_incident_note`
+- `get_bus_readiness`, `get_operational_status`
+- `list_recent_envelopes`, `get_envelope`, `list_dead_letters`
+- `dry_run_replay`, `request_replay` (one envelope only)
+
+The compatibility-named `erpnext-roofing-mcp` implements 57 Frappe tools: broad
+reads plus 11 deterministic dry-run/request families for gates, takeoff create/status,
+supplier order/quote, proposal, completion, warranty, review, communication record,
+and market watch. `tools/validate-hermes-config.mjs` proves all 78 tools against
+eight role allowlists and requires the dry-run pair for every granted request tool.
+
+Every request tool requires an explicit write flag, approval token, human approver,
+and stable `run_id`. A completed Frappe run returns its stored result on retry. A
+post-mutation audit failure is terminal `Audit Failed`, linked to incident/result
+evidence; it is never reported as a normal success.
 
 Hard bans in Phase 1:
 
@@ -179,7 +208,8 @@ Hard bans in Phase 1:
 - No direct accounting mutation.
 - No customer send without approval.
 - No deleting evidence.
-- No bypassing JobNimbus or ERPNext workflow gates.
+- No bypassing Frappe workflow/evidence gates.
+- No bulk replay through Hermes.
 - No silent mutation outside an audit row.
 
 ## Real Gates, Not Artificial Blockers
@@ -190,15 +220,18 @@ Hard bans in Phase 1:
 | JobNimbus shared key | Existing key was exposed during setup. | Rotate and install dedicated bus key. |
 | Make/GHL live UI state | No Make/GHL connector is exposed in this session, and live scenario edits can break production. | Use Make UI/browser account, export scenario map, then disable only after replacement proof. |
 | A2P/Engage | Automated SMS legally/operationally requires approval. | Submit/approve registration; until then use Gmail ack and owner alert. |
-| QuickBooks status mirror | Signed webhook exists, but OAuth read path is not built. | Connect webhook now; build OAuth mirror only after invoice/payment status is needed in JobNimbus/ERPNext. |
-| ERPNext runtime | No ERPNext app exists in repo. | Create skeleton after lead bus proof; keep bus as front door. |
+| QuickBooks status mirror | Signed webhook/receipt guard exists, but admin connection and OAuth reads are external. | Connect/replay a signed webhook, prove receipt status, then add reads only where required; QuickBooks remains truth. |
+| Git remote/CI publication | Repository work cannot be treated as published without remote authority and required checks. | Push the task branch, open/update PR, and pass protected CI. |
+| Frappe/Hermes deployment | Source is production-candidate but no host/site/runtime proof is implied. | Build the locked image, install/migrate plain Frappe, deploy locked Hermes, and archive smoke evidence. |
+| Recovery proof | Backup code is not a restore. | Complete encrypted backup plus isolated restore with recorded image digest, checksums, and duration. |
+| Operator UX | The `IronWrap OS` Workspace and permission-scoped `IronWrap Control Center` surface blocked gates, approvals, incidents, stale jobs, pipeline, job runway, evidence, and public bus readiness without mutating records. | Install and role-test it on the target Frappe site, including empty/error/readiness states and source-record navigation; keep standard lists/forms as fallback. |
 
 ## Definition Of Phase 1 Done
 
 Phase 1 is done when:
 
 - One real source event lands through `/ingest/website` and proves R2, D1,
-  Gmail ack, JobNimbus push, and reconciliation.
+  Gmail ack, Frappe mirror, temporary JobNimbus push, and reconciliation.
 - One measurement event lands through `/ingest/measurement` and proves raw
   storage, parsed values/report metadata, Drive filing, and audit logging.
 - One field photo event lands through `/ingest/photo` and proves raw storage,
@@ -206,5 +239,12 @@ Phase 1 is done when:
 - One QuickBooks signed webhook event is captured and audited.
 - GHL has no new front-door responsibility.
 - Make scenarios are tagged keep/bridge/retire with owner confirmation.
-- ERPNext app skeleton and Hermes tool boundary exist without owning live lead intake.
-- Owner exception view shows latest envelopes, dead letters, and heartbeat.
+- Plain-Frappe app installs with all 33 DocTypes and role/policy negative tests.
+- `/ready` passes and `/admin/status` shows fresh heartbeat with no unexplained
+  dead/stuck/Frappe/audit failure.
+- Read-only Hermes answers from live truth with zero writes; one approved Frappe
+  mutation has complete, idempotent `Hermes Run` evidence.
+- Owner exception truth shows readiness, recent envelopes, dead letters, heartbeat,
+  Frappe errors, audit failures, and QB receipt freshness; UI absence is explicitly accepted
+  or the cockpit slice is complete.
+- One targeted replay and one encrypted isolated restore drill are proven.

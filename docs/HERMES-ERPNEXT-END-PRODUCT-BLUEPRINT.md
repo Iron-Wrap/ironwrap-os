@@ -1,13 +1,18 @@
-# IronWrap OS Hermes + ERPNext End-Product Blueprint
+# IronWrap OS Hermes + Frappe End-Product Blueprint
 
-Status: strategy blueprint, not current implementation truth.
+Status: repository production candidate; deployment/runtime/admin proof is still required.
 
-Current repo truth is the Worker-owned bus plus temporary JobNimbus/GHL bridges, Google
-Workspace/Drive, QuickBooks, and the ERPNext/Hermes proof path described in `README.md`,
-`AGENTS.md`, `DELIVERY-PLAN.md`, and the `final-spec-pack/`. This document defines the
-candidate end product: IronWrap first, then
-a white-label operating system for similar roofing and exterior companies.
-The exhaustive first-phase bridge from current stack to ERPNext/Hermes is
+Current repository truth is the Worker-owned D1/R2 bus, the proprietary Frappe-only
+`ironwrap_roofing` operating core, the Hermes role/skill/MCP boundary, and a pinned deployment
+and recovery contract. JobNimbus/GHL remain temporary bridges, Google Workspace/Drive remain the
+human communication/archive path, and QuickBooks remains accounting truth. Legacy `erpnext-*`
+file, package, tool, and environment names are retained for compatibility and refer to the plain
+Frappe site; the ERPNext application is forbidden.
+
+This file is both the target product contract and the repository implementation map. It does not
+assert that the code is deployed, accounts are configured, real sources are cut over, backups are
+restorable, or operators have accepted the system. Those live gates are recorded separately in
+`docs/LAUNCH-RUNBOOK.md`, `docs/OPERATIONS-RUNBOOK.md`, and
 `final-spec-pack/18-phase-1-source-truth-and-build-contract.md`.
 
 Calendar estimates are intentionally omitted. Progress is framed as build slices, proof
@@ -46,6 +51,17 @@ record-only (no tool can send). Field intake now recognizes voice-note attachmen
 (`tools/validate-tenant-config.mjs`), a clone playbook (`docs/WHITE-LABEL-CLONE-PLAYBOOK.md`), and
 an operations runbook (`docs/OPERATIONS-RUNBOOK.md`) covering gates 11 and 13.
 
+Operational-safety checkpoint (2026-07-10): the Worker separates cheap liveness (`GET /health`)
+from D1-schema/binding/config readiness (`GET /ready`) and exposes authenticated aggregate
+operating truth at `GET /admin/status`. Readiness does not contact every downstream service;
+runtime probes and status evidence remain separate. Dead-letter recovery is envelope-scoped by
+default, compare-and-set safe, and requires bounded `run_id`, human approver, and reason evidence.
+Bulk recovery requires the exact hard confirmation and is intentionally not available to Hermes.
+Replay success and failure are written to the audit ledger. A D1 replay-request ledger binds `run_id` to the exact
+selection and approval identity: an exact completed retry returns the stored outcome without a
+second queue/audit mutation; changed intent conflicts; concurrent execution reports in-progress;
+and failed rolled-back attempts can reclaim the same run safely.
+
 Hermes runtime checkpoint (2026-07-09): the agent layer is codified under `hermes/`. Per-role MCP
 tool allowlists for all eight agent roles are the source of truth in `hermes/agents/roles.json`,
 with a human-readable profile per role, the launch/tool-filter manifest `hermes/mcp-servers.json`,
@@ -55,14 +71,43 @@ config level: every referenced tool exists, buckets are correctly typed, and no 
 is granted without its `dry_run` counterpart in the same role. No tool sends a customer message or
 mutates accounting.
 
-Frappe-only checkpoint (2026-07-09): the ERPNext (GPL-3.0) dependency is removed for 100% IP
+Frappe-only checkpoint (updated 2026-07-10): the ERPNext (GPL-3.0) dependency is removed for 100% IP
 ownership. `ironwrap_roofing` now deploys on a plain Frappe site (never install the erpnext app)
-and is proprietary IronWrap IP on the MIT Frappe framework. The app carries 26 DocTypes: Roofing
-Customer, Customer Quote, and Supplier Profile replace the former ERPNext Customer/Quotation/
-Supplier link targets, and the Roof Job lead/opportunity/project links are gone, leaving Frappe
-core `User` as the only non-custom Link target. The erpnext-* names (`erpnext-roofing-mcp`,
-`workers-bus/src/erpnext.ts`, `ERPNEXT_*` env vars, `tools/validate-erpnext-doctypes.mjs`) are
-retained for compatibility and refer to the Frappe site.
+and is proprietary IronWrap IP on the MIT Frappe framework. The app carries the complete
+33-DocType blueprint: 29 top-level business/audit objects plus four child tables. The seven
+previously missing objects are Price Book Rule, Visual Property Model, Roof Area, Option Package,
+Scope Clause, Automation Incident, and White-Label Tenant. Every top-level DocType uses a shared
+server-side policy adapter; identities/evidence have immutable or write-once rules; approvals,
+production, proposal, supplier, and closeout transitions fail closed; and site-local roles are
+installed from a least-privilege matrix with delete disabled. Frappe core `User` remains the only
+non-custom Link target.
+
+MCP/deploy checkpoint (2026-07-10): both MCP clients enforce production HTTPS, bounded timeouts,
+redirect refusal, and structured transport errors. Frappe approved writes require a stable
+`run_id`; a completed run returns its stored result without reapplying the business mutation.
+Audit finalization fails closed and distinguishes a non-mutating `Failed` run from an
+`Audit Failed` run where the target mutation applied and an Automation Incident must reconcile
+the audit. `deploy/runtime-lock.json` pins Frappe, frappe_docker, Hermes, and container digests;
+the build rejects floating/dirty/ERPNext inputs; backups are complete-set, locally encrypted,
+verified, marker-committed, and retention-gated. `tools/production-readiness.mjs` proves the
+repository contract separately from live environment shape.
+
+Operator-UI checkpoint (2026-07-10): the standard `IronWrap OS` Workspace now makes the owned
+records navigable and links to a role-scoped `IronWrap Control Center` Desk Page. The cockpit is
+read-only and exception-first: blocked gates, human reviews, Automation Incidents, stale jobs,
+permission-scoped pipeline counts, a focused job runway, production gates, evidence, and the
+Worker public readiness probe appear before generic lists. Every action opens its source record;
+mutations remain in the dry-run/approval/audit path. This is repository proof only until a plain
+Frappe site loads the Page and each role passes a live permission/empty/error-state smoke test.
+It is the back-office fallback, not the finished product UI.
+
+Product-layer checkpoint (2026-07-10): `docs/UIUX-NORTHSTAR-PLAN.md` is the binding product plan
+for the installable React PWA and Worker `/api/v1/*` BFF. `docs/ROOFING-DEMAND-EVIDENCE.md`
+grounds its acceptance contracts in fresh 2025-2026 Canadian/U.S. owner/operator discussions,
+verified reviews, paid roles, and current regulatory sources. The product signature is Proof
+Stream plus physical gate locks; canonical job identity, owned export/restore, locale policy,
+role-shaped read models, offline verified outbox, field proof, owner exceptions, traceable
+estimation, and customer-safe closeout are required slices rather than future polish.
 
 ## Research Basis
 
@@ -158,7 +203,7 @@ is a competitive durability bar, not a build plan.
 | Roofr-style instant estimates | Public estimate widget creates a qualified Lead Envelope, gives a range with assumptions, and never creates a binding price without review |
 | CompanyCam-style field AI | Field user can talk, snap, and submit; Hermes produces a checklist update, customer-safe summary, and evidence labels |
 | AccuLynx-style configurable production | Custom fields, appointment outcomes, job gates, production outcomes, and reports are configurable per tenant |
-| ServiceTitan-style end-to-end orchestration | One operator UX hides the backend stitching; bus/ERP/Hermes/QB failures are visible and recoverable |
+| ServiceTitan-style end-to-end orchestration | One operator UX hides the backend stitching; bus/Frappe/Hermes/QB failures are visible and recoverable |
 | Eagleview/Hover measurement and 3D pressure | System ingests third-party measurements, 3D/visual model links, material lists, and confidence metadata |
 | SumoQuote/JobNimbus proposal polish | Proposal Evidence Pack must be visually strong, option-based, proof-linked, and e-sign/payment ready |
 | GHL follow-up pressure | Comms automation must cover speed-to-lead, nurture, missed call, review, and reactivation with consent gates |
@@ -185,7 +230,7 @@ flowchart TD
   ERP --> MarketWatch["Competitor and feature watch"]
 
   Hermes["Hermes agent runtime"] --> MCPBus["bus MCP"]
-  Hermes --> MCPErp["ERPNext MCP"]
+  Hermes --> MCPErp["Frappe MCP (legacy erpnext-roofing-mcp name)"]
   Hermes --> MCPEvidence["evidence MCP"]
   Hermes --> MCPQb["QuickBooks status MCP"]
   Hermes --> MCPComms["comms MCP"]
@@ -206,7 +251,7 @@ flowchart TD
 | Frappe (IronWrap OS operating core) | Business workflow truth | Deterministic records, permissions, gates, and status |
 | Hermes | Intelligent operator | Reads broadly; writes only through approved command tools |
 | QuickBooks | Accounting truth | No final accounting mutation by Hermes without explicit approval |
-| Drive/R2 | Evidence | R2 raw, Drive human archive; neither replaces ERP workflow state |
+| Drive/R2 | Evidence | R2 raw, Drive human archive; neither replaces Frappe workflow state |
 | Google/Engage/email/voice | Communications | Customer-facing actions are policy-gated and logged |
 
 ## Frappe Product Model
@@ -234,7 +279,7 @@ Custom DocTypes:
 | Roofing Property | Address, structure, access, roof metadata, hazards |
 | Roof Job | Job wrapper tying Roofing Customer, Roofing Property, Customer Quote, files, and accounting refs |
 | Customer Quote | Owned commercial quote object; replaces ERPNext Quotation |
-| Evidence Asset | Photo, PDF, XML, transcript, email, signed document, invoice, or field note |
+| Evidence Item | Photo, PDF, XML, transcript, email, signed document, invoice, or field note |
 | Instant Estimate Session | Public estimate interaction, assumptions, selected options, range, and lead score |
 | Price Book Rule | Material/labor/option pricing rule with source, approval, and effective state |
 | Measurement Report | RoofRuler/AppliCad/EagleView-style report metadata and parsed quantities |
@@ -245,7 +290,7 @@ Custom DocTypes:
 | Proposal Evidence Pack | The proposal proof bundle shown to owner/customer |
 | Scope Clause | Included, excluded, assumption, risk, optional upgrade, warranty clause |
 | Payment Milestone | Deposit, progress, final, holdback, status mirror |
-| Production Gate | Deposit, material, WCB/safety, access, weather, crew, completion |
+| Production Gate State | Deposit, material, WCB/safety, access, weather, crew, completion |
 | Field Check-in | Crew update with photos, GPS/device metadata, notes, blockers |
 | Completion Packet | Completion photos, customer signoff, deficiency list, warranty readiness |
 | Warranty Packet | Final warranty terms, proof, dates, material system, exclusions |
@@ -254,10 +299,15 @@ Custom DocTypes:
 | Supplier Profile | Owned supplier master; replaces ERPNext Supplier |
 | Supplier Quote | Supplier, requested materials, price, validity, substitutions, delivery terms |
 | Supplier Order | Approved material order, delivery status, shortages, substitutions, received proof |
-| Hermes Run / Agent Run | Hermes prompt, tools, inputs, dry-run output, approval, write result, audit link |
+| Hermes Run | Hermes prompt, tools, inputs, dry-run output, approval, write result, audit link |
 | Automation Incident | Failed automation, stuck envelope, bad parse, policy block |
 | Market Watch Item | Competitor/product change, source link, risk level, required response |
 | White-Label Tenant | Customer/company config for future productization |
+
+The four child-table DocTypes are Measurement Value, Material Takeoff Item, Supplier Quote Item,
+and Supplier Order Item. Repository validation requires exactly these 33 DocTypes, exact field
+contracts, shared controllers for every top-level object, owned/Frappe-core Link targets only, and
+the canonical role matrix.
 
 ## Evidence Graph
 
@@ -267,9 +317,9 @@ Every important object links to evidence:
 
 ```text
 Lead Envelope
-  -> Contact / Property
+  -> Roofing Customer / Roofing Property
   -> Measurement Report
-  -> Evidence Assets
+  -> Evidence Items
   -> Material Takeoff
   -> Proposal Evidence Pack
   -> Payment Milestones
@@ -322,18 +372,22 @@ Hermes capabilities that matter:
 
 Build narrow MCP servers, not one giant god tool.
 
-| MCP server | Example tools |
-| --- | --- |
-| `ironwrap-bus-mcp` | Current read-only: `list_recent_envelopes`, `get_envelope`, `list_dead_letters`; current approved-write proof: `dry_run_replay`, `request_replay` |
-| `erpnext-roofing-mcp` | Current read-only: `get_roof_job`, `get_lead_envelope`, `list_job_gates`, `list_blocked_jobs`, `get_measurement_report`, `list_measurement_reports_for_job`, `get_material_takeoff`, `list_material_takeoffs_for_job`, `get_supplier_order`, `list_supplier_orders_for_job`, `get_supplier_quote`, `list_supplier_quotes_for_job`, `get_instant_estimate_session`, `list_instant_estimate_sessions_for_job`, `get_evidence_item`, `list_evidence_for_job`, `get_field_check_in`, `list_field_check_ins_for_job`, `get_proposal_evidence_pack`, `list_proposal_evidence_packs_for_job`, `get_payment_milestone`, `list_payment_milestones_for_job`, `get_completion_packet`, `list_completion_packets_for_job`, `get_warranty_packet`, `list_warranty_packets_for_job`, `get_review_request`, `list_review_requests_for_job`, `get_communication_event`, `list_communication_events_for_job`, `list_market_watch_items`, `check_consent`, `check_quiet_hours`, `get_hermes_run`, `list_hermes_runs_for_job`; current approved-write proof: `dry_run_update_gate`, `request_update_gate`, `dry_run_material_takeoff`, `request_create_material_takeoff`, `dry_run_update_material_takeoff_status`, `request_update_material_takeoff_status`, `dry_run_supplier_order`, `request_create_supplier_order`, `dry_run_supplier_quote`, `request_create_supplier_quote`, `dry_run_proposal_evidence_pack`, `request_create_proposal_evidence_pack`, `dry_run_completion_packet`, `request_create_completion_packet`, `dry_run_warranty_packet`, `request_create_warranty_packet`, `dry_run_review_request`, `request_create_review_request`, `dry_run_communication_event`, `request_record_communication_event`, `dry_run_market_watch_item`, `request_add_market_watch_item`; later: `draft_task`. The comms-policy, supplier-quote, closeout, and market-watch tool families currently live here; split into the narrower servers below when tool count or tenant isolation demands it |
-| `evidence-mcp` | `find_assets`, `get_evidence_pack`, `attach_asset_to_job`, `draft_customer_packet` |
-| `measurement-mcp` | `parse_measurement_report`, `compare_takeoff_versions`, `flag_missing_values` |
-| `instant-estimate-mcp` | `score_estimate_session`, `draft_range`, `flag_price_risk`, `request_quote_review` |
-| `supplier-mcp` | `list_supplier_quotes`, `compare_substitutions`, `dry_run_material_order`, `request_material_order` |
-| `qbo-status-mcp` | `get_invoice_status`, `get_payment_status`, `list_unmatched_payments` |
-| `comms-policy-mcp` | `draft_email`, `check_consent`, `check_quiet_hours`, `request_send` |
-| `market-watch-mcp` | `list_market_watch_items`, `add_market_watch_item`, `draft_response_gap` |
-| `tenant-admin-mcp` | `get_tenant_config`, `validate_tenant_readiness`, `dry_run_clone_template` |
+| MCP server | Repository state | Capability boundary |
+| --- | --- | --- |
+| `ironwrap-bus-mcp` | Implemented: 7 tools | Read readiness/status/envelopes/dead letters; preview and request one targeted replay. No bulk Hermes replay |
+| `erpnext-roofing-mcp` | Implemented under compatibility name: 57 tools | Read job/evidence/estimate/measurement/material/supplier/proposal/gate/payment/closeout/comms/market/audit truth; 11 deterministic dry-run/request write pairs |
+| `evidence-mcp` | Planned split | Evidence search, packet assembly, and approved attachment only |
+| `measurement-mcp` | Planned split | Deterministic parsing/comparison and review flags |
+| `instant-estimate-mcp` | Planned split | Range/qualification drafts and quote-review request |
+| `supplier-mcp` | Planned split | Quote comparison, substitution review, material-order request |
+| `qbo-status-mcp` | Planned read-only boundary | Invoice/payment status and unmatched-payment diagnostics; no accounting mutation |
+| `comms-policy-mcp` | Planned split | Draft, consent/quiet-hours check, and approved send boundary |
+| `market-watch-mcp` | Planned split | Watch-item read/write and response-gap draft |
+| `tenant-admin-mcp` | Planned split | Tenant readiness and clone dry-run; no cross-tenant data access |
+
+`tools/validate-hermes-config.mjs` currently validates all eight roles and the launch manifest
+against 78 implemented tools. It also rejects an approved-write grant that lacks the matching
+dry-run grant in the same role.
 
 Mutation pattern:
 
@@ -341,7 +395,10 @@ Mutation pattern:
 read -> propose -> dry_run -> policy_check -> human_approval -> write -> audit_event
 ```
 
-No direct free-form writes to ERPNext, QuickBooks, Drive, or customer channels.
+No direct free-form writes to Frappe, QuickBooks, Drive, or customer channels. Each approved
+Frappe request requires a stable `run_id`. Completed runs replay their stored result. A target
+mutation followed by audit-finalization failure becomes `Audit Failed`, not a false success, and
+must carry incident/correlation/result evidence for reconciliation.
 
 ### Hermes Skills
 
@@ -367,7 +424,7 @@ Codify procedures as skills:
 
 1. Homeowner enters address, service type, material interest, urgency, photos if available, and consent.
 2. Bus writes the raw session before any scoring or reply.
-3. ERPNext creates Instant Estimate Session, Lead Envelope, Contact, and Roofing Property.
+3. Frappe creates Instant Estimate Session, Lead Envelope, Roofing Customer, and Roofing Property.
 4. Hermes generates a range with explicit assumptions, exclusions, and confidence level.
 5. The system creates a qualified sales task and follow-up draft.
 6. Any displayed number is labeled as a non-binding range until estimator review.
@@ -379,13 +436,13 @@ assumption-backed range, and follow-up without bypassing review or data ownershi
 
 1. Lead enters website/call/form/email/ad.
 2. Bus writes envelope and raw payload.
-3. ERPNext creates/updates Lead Envelope, Lead, Contact, Roofing Property.
+3. Frappe creates/updates Lead Envelope, Roofing Customer, Roofing Property, and Roof Job.
 4. Hermes classifies urgency, service type, missing fields, source, brand.
 5. Hermes drafts first response and owner task.
 6. Human approval or configured safe-send sends response.
-7. Reconcile confirms source count, bus count, and ERP count.
+7. Reconcile confirms source count, bus count, and Frappe consumer state.
 
-Proof gate: a real lead can be traced from source event to bus envelope to ERPNext record to
+Proof gate: a real lead can be traced from source event to bus envelope to Frappe record to
 owner/customer communication.
 
 ### Qualification to Measurement
@@ -493,7 +550,7 @@ Move to centralized multi-tenant services only after the repeatable product shap
 
 The white-label product should be packaged as:
 
-- roofing CRM/ERP core
+- roofing operating core
 - proposal and evidence pack
 - field proof and closeout
 - AI owner/operator assistant
@@ -503,22 +560,24 @@ The white-label product should be packaged as:
 
 ## Maturity Gates
 
-| Gate | Name | Proof artifact |
-| --- | --- | --- |
-| 0 | Source truth | Current architecture, owners, secrets, and vendors documented without conflicts |
-| 1 | Intake spine | Real source event lands in bus, R2/D1, the Frappe site, and audit log |
-| 2 | Operating core | Lead, property, job, task, gate, evidence, and proposal records work in the Frappe app |
-| 3 | Read-only Hermes | Hermes answers owner questions from live system truth without writes |
-| 4 | Approved-write Hermes | Hermes can draft and execute one approved mutation with audit trail |
-| 5 | Instant estimate parity | Public widget creates qualified lead, non-binding range, assumptions, and follow-up |
-| 6 | Proposal proof | Measurement-to-proposal flow produces an evidence-backed, option-based packet |
-| 7 | Supplier/material readiness | Supplier quote/order/readiness state blocks or allows production accurately |
-| 8 | Production gatekeeper | Deposit/material/safety/completion gates block or allow work deterministically |
-| 9 | Field voice/photo proof | Field voice/photo update creates checklist, report, evidence, and job state |
-| 10 | Closeout truth | Invoice/payment/warranty/review readiness are visible and linked |
-| 11 | White-label clone | A second demo company runs with separate brand/config/data/tools |
-| 12 | Market defense loop | Competitor watch items map to covered/exceeded/open product gates |
-| 13 | Managed product | Tenant setup, monitoring, support, backups, billing, and incident playbooks exist |
+Repository support means code/contracts/tests exist. It is not the same as a passed live gate.
+
+| Gate | Name | Repository state | Required live/product proof |
+| --- | --- | --- | --- |
+| 0 | Source truth | Documented and contract-validated | Reconcile Cloudflare, Frappe, Hermes, QB, Drive, bridge, and admin inventory |
+| 1 | Intake spine | Worker route/storage/consumer/reconcile tests exist | One real source lands in R2, D1, Frappe, audit, ack, and bridge with zero gap |
+| 2 | Operating core | 33 DocTypes, shared policy, RBAC, and packaging tests exist | Install/migrate on plain Frappe; role-specific fixture workflow passes |
+| 3 | Read-only Hermes | Eight roles and 78-tool inventory validate | Hermes answers owner questions from live bus/Frappe truth with zero writes |
+| 4 | Approved-write Hermes | Dry-run/request, required `run_id`, idempotency, and audit-failure tests exist | One approved live mutation has complete `Hermes Run` and replay-safe retry proof |
+| 5 | Instant estimate parity | Owned idempotent ingest/session contract exists | Public widget, range policy, consent, owner follow-up, and estimator review pass |
+| 6 | Proposal proof | Evidence/takeoff/options/scope/quote/proposal records and tools exist | Customer-quality renderer plus selected e-sign path complete one signed packet |
+| 7 | Supplier/material readiness | Quote/order/substitution policy objects and tools exist | Real supplier values and readiness state correctly block/allow one job |
+| 8 | Production gatekeeper | Deterministic gate and Roof Job transition policies exist | Role-specific users cannot move an unsafe fixture/real job into production |
+| 9 | Field voice/photo proof | Photo/voice intake and evidence/check-in records exist | Crew device/offline workflow creates usable evidence, checklist, and job update |
+| 10 | Closeout truth | Completion/warranty/review/payment policy objects and tools exist | QB status, completion proof, warranty issue, and human-sent review reconcile |
+| 11 | White-label clone | Tenant object/config validator and clone playbook exist | Second isolated site/brand passes cross-tenant negative tests and full smoke proof |
+| 12 | Market defense loop | Market Watch object, role, tools, and skill exist | One sourced market change creates an approved product-gap disposition |
+| 13 | Managed product | Pinned deploy/readiness/backup/runbook contracts exist | Monitoring, incident drill, encrypted restore, support ownership, and billing are accepted |
 
 ## Risk Register
 
@@ -557,8 +616,8 @@ The artificial blockers below are collapsed in
 | Topic | Current Decision |
 | --- | --- |
 | ERPNext customization path | Frappe-only custom app; ERPNext removed entirely (2026-07-09) for 100% IP ownership. Never install the erpnext app. |
-| Roofing record model | Owned DocTypes only: Lead Envelope/Roof Job/Roofing Customer/Customer Quote/Supplier Profile plus the rest of the 26-DocType pack; the only non-custom Link target is Frappe core User. |
-| Bus-to-ERPNext sync | Worker/D1/R2 remains front door and source spine; the Frappe site (erpnext-* naming retained for compatibility) is added as a consumer after the current path is stable. |
+| Roofing record model | Exactly 33 owned DocTypes: 29 top-level objects plus four child tables; the only non-custom Link target is Frappe core User. |
+| Bus-to-Frappe sync | Worker/D1/R2 remains front door and source spine; the Frappe site consumes idempotent mirrors (`erpnext-*` names retained for compatibility). |
 | Hermes boundary | Read-only first, draft second, narrow approved-write third; no raw SQL/API freestyle writes. |
 | Measurement proof | Use the existing `/ingest/measurement` route and sample files; add deterministic extraction before OCR. |
 | Activepieces | Bench as future Make replacement candidate; do not switch the current live path now. |
@@ -569,30 +628,35 @@ The artificial blockers below are collapsed in
 
 | Decision | Needed to move |
 | --- | --- |
-| Frappe site hosting path | Self-hosted Docker or managed VPS; frappe/press (AGPL) is never adopted, provisioning stays on IronWrap scripts |
+| Production host/topology | Choose and document the host, registry, persistent volumes, database/Redis layout, and operations owner that satisfy the runtime lock |
 | Accounting boundary | QuickBooks permanent truth vs a future owned accounting migration |
 | Proposal renderer | Frappe print formats, custom Frappe UI, or external PDF service |
 | Public estimate policy | Range logic, disclaimers, required fields, estimator-review threshold |
-| Field surface | Frappe portal/PWA, Jotform bridge, or small custom mobile web app |
+| Product PWA acceptance | Architecture is selected in the North Star; prove P0-P5 browser/device gates and real crew/owner task protocols |
+| Frappe fallback cockpit | Repository surface exists; prove live role filtering, Worker readiness reachability, empty/error states, responsive layout, and source-record navigation on the deployed site |
 | Measurement/visual provider strategy | RoofRuler/AppliCad only vs Eagleview/Hover/provider-agnostic ingest |
 | Supplier integration strategy | Manual supplier quote capture vs API/order integrations |
-| Hermes runtime | VPS/Docker, hosted runner, or local first |
-| White-label isolation | site-per-company first, shared services later |
+| Hermes deployment | Run the locked Hermes release on the application host or an isolated host; define supervision, secrets, logs, and upgrade ownership |
+| White-label provisioning | Automate site-per-company creation, namespace validation, backups, and cross-tenant negative tests |
 | Support model | software only, managed operations, or hybrid |
 
-## Recommended Build Order By Proof
+## Remaining Proof Order
 
-1. Prove the Frappe app can hold the roofing record model without fighting the framework.
-2. Prove bus-to-Frappe-site sync with real envelopes and idempotency.
-3. Prove read-only Hermes over live bus/Frappe-site state.
-4. Prove one approved Hermes write with a full audit trail.
-5. Prove public instant estimate capture with idempotent retry, a non-binding range, and review gate.
-6. Prove measurement/3D/model ingest to approved takeoff values.
-7. Prove supplier quote/order readiness and substitutions.
-8. Prove measurement-to-proposal evidence pack.
-9. Prove production gates block unsafe job movement.
-10. Prove field voice/photo intake from phone to job record to Drive/R2.
-11. Prove closeout, warranty, invoice/payment visibility, and review readiness.
-12. Prove market-watch items can create product-gap decisions.
-13. Clone the stack for a second brand/demo tenant with isolated data.
-14. Package onboarding, monitoring, support, billing, and compliance playbooks.
+1. Run the complete repository CI and archive the release commit plus readiness-contract output.
+2. Build/publish the locked image, install/migrate a plain Frappe site, and run fixture/role proofs.
+3. Deploy Worker migrations and prove `/ready`, `/admin/status`, and targeted replay against the
+   intended account without mutating unrelated live records.
+4. Prove bus-to-Frappe sync with a real envelope and idempotent retry.
+5. Prove read-only Hermes and one approved Frappe write with a complete, replay-safe audit trail.
+6. Install and role-test the exception-first Control Center; keep standard Frappe lists/forms as
+   the truthful fallback and archive screenshots plus permission-negative evidence.
+7. Prove the PWA/BFF foundation: canonical identity, session/tenant/RBAC, role-shaped read models,
+   installability, offline shell/outbox, integration truth, and owned export/restore.
+8. Prove field, owner/approvals, sales/estimator, customer/widget, and white-label slices in the
+   North Star order, including the demand-backed automated and real-operator gates.
+9. Prove public estimate, measurement/model, supplier, proposal/e-sign, production, field, and
+   closeout domain paths end to end through the product surface.
+10. Run encrypted backup plus isolated restore, monitoring, incident, and secret-rotation drills.
+11. Clone a second site/brand and pass cross-tenant negative tests.
+12. Obtain operator/legal/admin acceptance for communications, accounting, support, billing, and
+    external-tenant packaging.

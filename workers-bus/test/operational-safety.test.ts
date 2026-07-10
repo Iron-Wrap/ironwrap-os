@@ -61,7 +61,7 @@ function fakeEnv(options: FakeOptions = {}) {
     sqlCalls.push({ sql, args });
     if (options.d1Throws && sql.includes("sqlite_master")) throw new Error("d1_unavailable");
     if (sql.includes("sqlite_master")) {
-      return { table_count: 8, index_count: options.missingSchemaArtifact ? 7 : 8, trigger_count: 2 };
+      return { table_count: 13, index_count: options.missingSchemaArtifact ? 12 : 13, trigger_count: 2 };
     }
     if (sql.includes("COUNT(*) AS n FROM dead_letter")) {
       return { n: deadLetters.filter((row) => row.recovered === 0).length };
@@ -265,6 +265,25 @@ function fakeEnv(options: FakeOptions = {}) {
   return { env, statuses, deadLetters, queue, audits, sourceCounts, sqlCalls, replayRequests };
 }
 
+function enableAppBff(env: Record<string, unknown>): void {
+  Object.assign(env, {
+    APP_BFF_ENABLED: "true",
+    APP_TENANT_ID: "ironwrap",
+    APP_TENANT_NAME: "IronWrap OS",
+    APP_TENANT_BRAND: "IronWrap",
+    APP_LOCALE: "en-CA",
+    APP_TIME_ZONE: "America/Edmonton",
+    APP_CURRENCY: "CAD",
+    APP_PUBLIC_ORIGIN: "https://app.example.com",
+    APP_ALLOWED_ORIGINS: "https://app.example.com",
+    APP_ALLOW_INSECURE_LOCAL: "false",
+    APP_AUTH_PEPPER: "readiness-test-pepper-longer-than-thirty-two-characters",
+    ERPNEXT_BASE_URL: "https://frappe.example.com",
+    ERPNEXT_API_KEY: "frappe-key",
+    ERPNEXT_API_SECRET: "frappe-secret",
+  });
+}
+
 const ctx = {} as never;
 const adminHeaders = { authorization: "Bearer admin-secret", "content-type": "application/json" };
 
@@ -336,6 +355,43 @@ test("readiness fails closed when the redundant alert path is not configured", a
   assert.equal(response.status, 503);
   assert.equal(body.ok, false);
   assert.equal(body.checks.notification_configuration, false);
+});
+
+test("readiness accepts a complete enabled app BFF configuration", async () => {
+  const { env } = fakeEnv();
+  enableAppBff(env);
+  const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  const body = await response.json() as { ok: boolean; checks: { app_bff_configuration: boolean } };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.checks.app_bff_configuration, true);
+});
+
+test("readiness fails closed for missing or malformed enabled app BFF metadata", async () => {
+  const cases: Array<[string, unknown]> = [
+    ["APP_TENANT_ID", "IronWrap"],
+    ["APP_TENANT_NAME", ""],
+    ["APP_TENANT_BRAND", ""],
+    ["APP_LOCALE", "en-ca"],
+    ["APP_TIME_ZONE", "Edmonton"],
+    ["APP_CURRENCY", "cad"],
+    ["APP_PUBLIC_ORIGIN", "http://app.example.com"],
+    ["APP_ALLOWED_ORIGINS", "https://other.example.com"],
+    ["APP_AUTH_PEPPER", "too-short"],
+    ["ERPNEXT_BASE_URL", "http://frappe.example.com"],
+  ];
+
+  for (const [key, invalidValue] of cases) {
+    const { env } = fakeEnv();
+    enableAppBff(env);
+    (env as Record<string, unknown>)[key] = invalidValue;
+    const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+    const body = await response.json() as { ok: boolean; checks: { app_bff_configuration: boolean } };
+    assert.equal(response.status, 503, key);
+    assert.equal(body.ok, false, key);
+    assert.equal(body.checks.app_bff_configuration, false, key);
+  }
 });
 
 test("request-id selection rejects unsafe correlation ids and preserves a safe fallback", async () => {

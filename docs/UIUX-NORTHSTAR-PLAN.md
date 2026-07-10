@@ -1,0 +1,244 @@
+# IronWrap OS Product Layer: Mobile-First North Star Plan
+
+Status: build plan, 2026-07-10. Builds on the verified competitive position in
+`docs/MARKET-DEFENSE-SCORECARD.md` and the audited substrate below. This is the plan for the
+layer users actually touch: mobile-first, crew-proof, and designed to subjectively beat
+JobNimbus, GoHighLevel, Roofr, and AccuLynx screen for screen.
+
+Fresh demand evidence, current-product verification, and the resulting acceptance contracts are
+maintained in `docs/ROOFING-DEMAND-EVIDENCE.md`. Primary demand scoring uses 2025-2026
+owner/operator discussions, verified reviews, and paid roles; vendor pages verify current
+capability only.
+
+## 1. Audit: what the substrate provides today (verified 2026-07-10)
+
+| Layer | State |
+| --- | --- |
+| Frappe operating core | 33 DocTypes (29 top + 4 child), the blueprint's full record model, contract-validated |
+| Worker bus | Intake/dedup/dead-letter/reconcile, geometry-verified measurements, `/health` `/ready` `/admin/status` |
+| Hermes agent layer | 8 roles, 78 filtered MCP tools, audited approved-write contract |
+| Deploy/ops | 116-check production contract, pinned runtime lock, encrypted backups, launch runbook |
+| Competitive truth | 10 exceeded / 7 covered / 19 open, adversarially audited |
+| Product UI | **The gap.** Only Frappe Desk plus the read-only, exception-first IronWrap Control Center Desk Page (back-office grade; truthful fallback, not mobile-first, not brandable to SOTA) |
+
+Every "their UX beats ours" row in the scorecard (boards, mobile app, omnichannel inbox,
+homeowner widget) lands in this one missing layer. That makes the UI the highest-leverage
+build remaining and the place the "subjectively outperforms" claim is won or lost.
+
+## 2. Design philosophy: evidence-first, thumb-first, zero-training
+
+The signature move nobody else has: the **Proof Stream**. Every job screen is organized
+around the evidence chain (lead, measurement, quote, gates, field proof, closeout, warranty)
+rendered as the job's visual spine. Competitors show activity logs; we show proof.
+The second signature: **Gates as physical locks**. Production state is a row of lock chips;
+a blocked gate visibly blocks the schedule button. The user never wonders why work can't start.
+
+### The ten dumb-proofing laws (enforced in every design review)
+
+1. One primary action per screen; it lives in the bottom thumb zone.
+2. Touch targets: 56px minimum, 64px on field surfaces (gloves).
+3. Camera and voice come before keyboard in the field; typing is the last resort.
+4. Anything that can be a choice, scan, or photo is never a text field.
+5. Offline is not an error: every field action queues in a local outbox with a visible
+   sync badge, and replays through the bus's existing idempotent routes.
+6. Undo everywhere, confirmation dialogs never: destructive actions are soft with a 10s undo.
+7. Every empty state teaches the single next action.
+8. Errors speak trade language and say what to do next; no codes, no jargon.
+9. Status is always color + icon + word (sunlight and colorblind safe, WCAG AA+).
+10. Any screen answers in three seconds: where am I, what is blocked, what is next.
+
+### Design system
+
+- Tokens: 8pt spacing grid, 4-step radius scale, 3-level elevation, motion 150-250ms with
+  standard easing, reduced-motion respected.
+- Type: Inter (UI) with tabular numerals for money and measurements; 16px base, 1.25 scale.
+- Color: high-contrast light-first (sunlight legibility on roofs), auto dark; gate semantics
+  (blocked/ready/waived/done) as the core palette, AA+ contrast everywhere.
+- Components: shadcn/ui base layer, then the IronWrap tier: GateChip, ProofCard, EvidenceTile,
+  MoneyRow, SyncBadge, BigAction, StepperForm, VoiceNoteButton, PhotoGrid.
+- White-label: all tokens resolve from `config/tenants/<tenant>.json` (brand colors, logo,
+  domains) so a second tenant is a config change, not a redesign.
+
+## 3. Architecture
+
+```text
+app/ (new monorepo dir)
+  Vite 8 + React 19.2 + TypeScript + Tailwind 4.3 + shadcn/ui
+  TanStack Router v1 + Query v5; vite-plugin-pwa; IndexedDB outbox
+  shipped as ONE Cloudflare Worker with static assets:
+    [assets] not_found_handling = "single-page-application"
+    run_worker_first = ["/api/*"]  (the BFF routes)
+workers-bus
+  gains /api/* BFF routes: session auth, per-surface read models
+  (aggregated Frappe reads), writes ONLY via the existing audited paths
+```
+
+Stack currency was verified against primary sources on 2026-07-10: Cloudflare's own
+guidance is to start new projects on Workers static assets, not Pages (all new platform
+investment is Workers-only), which collapses SPA + BFF into one deployment. Vite 8 runs
+the Rolldown bundler and needs Node 20.19+/22.12+; vite-plugin-pwa must pass a build on
+Vite 8 at scaffold time (temporary fallback: pin Vite 7). Workbox is maintenance-only, so
+it is consumed ONLY through vite-plugin-pwa, with Serwist (@serwist/vite) as the
+documented swap-in. TypeScript posture: 6.x as the repo default (tooling compatibility),
+TS 7 (native compiler) for type-check runs. shadcn current defaults apply: new-york
+style, OKLCH tokens, sonner for toasts.
+
+- **PWA, not native.** One codebase, installable on iOS/Android, offline-capable, zero app
+  store friction, and the crew installs it by scanning a QR. Native is a later option, not an
+  assumption: current JobNimbus and CompanyCam materials claim offline support, so the PWA earns
+  superiority only after real-device weak-signal, backgrounding, quota, and recovery proof.
+- **Worker as BFF.** The app never talks to Frappe directly. The Worker aggregates reads
+  into screen-shaped payloads (one request per screen), enforces auth, and reuses the
+  existing idempotent, audited write paths. The Hermes mutation contract stays intact:
+  nothing in the UI can bypass dry-run/approval for agent actions.
+- **Auth, dumb-proofed.** Office: email magic link. Crew: QR device pairing issued from the
+  office (device-bound token, role-scoped to Field Companion); nobody types a password on a
+  roof. On iOS, install + push opt-in + pairing happen as ONE supervised provisioning ritual
+  at the office (Safari's share-sheet install and the push permission tap are manual by
+  design). Customer portal: signed per-job links.
+- **Offline outbox, iOS-real.** Field actions (check-in, photos, voice, gate view) write to
+  IndexedDB first; the server already dedupes and replays safely. Verified WebKit constraint:
+  there is NO Background Sync API on iOS, so the outbox flushes only while the app is open.
+  Design: flush on launch, visibilitychange, and the online event; a visible "syncing, keep
+  the app open" state after submit; server-driven push nudges for stale devices. Installed
+  PWAs get ~60%-of-disk storage, exemption from the 7-day eviction, and navigator.storage
+  persistence. Photos use native input capture; getUserMedia is confined to voice notes on a
+  single route (known standalone re-prompt bugs). Device baseline: iOS 18.4+ (Declarative
+  Web Push). Verdict from primary sources: no native wrapper needed.
+- **Reuse with the owner's estimator.** Same React stack; extract shared design tokens into
+  a package once both apps stabilize so the estimator and OS feel like one product.
+
+## 4. Surface inventory and phases
+
+Each phase ends with its own proof gate: Playwright e2e in CI, screenshot + axe
+accessibility checks, a device video, and a multi-agent design-judge eval against the
+competitor's equivalent screen. No phase starts before the previous one's gate passes.
+
+### P0: Foundation (design system + shell + auth + BFF)
+
+Tokens, component tier, app shell with role-based navigation, session auth, `/api/*` read
+models for jobs/gates/evidence, outbox plumbing, CI wiring (build, Playwright, pinned
+@lhci/cli 0.15.x asserting category scores and metric values, not legacy audit ids).
+P0 also fixes the cross-system contracts that fresh roofing demand shows cannot be deferred:
+one canonical tenant/property/job identity; source/destination/freshness/mismatch truth for every
+integration; complete tenant export/restore; role-shaped read models; and Canada/U.S. currency,
+tax, consent, licence, and template policy.
+Proof gate: 95+ on the four current Lighthouse categories (performance, accessibility,
+best-practices, SEO; the PWA category was removed in Lighthouse 12) on a mid-range phone
+profile, PLUS an explicit Playwright installability check (valid manifest, registered
+service worker, offline response), login by QR pairing works, one job renders its Proof
+Stream from live-shaped fixtures.
+
+### P1: Field Companion (the crew app; biggest differentiator)
+
+Screens: Today (assigned jobs, one card each), Job (Proof Stream + gate locks), Check-in
+stepper (photos, voice note, blocker flag, submit), all offline-first.
+The assigned scope, measurements, materials, changes, safety plan, and proof checklist are visibly
+prefetched before departure. Media capture is designed and tested for 30-400 photos per job; the
+proof viewer handles more than 1,000 items without losing scroll/filter/selection state.
+Beats current mobile competitors on verified durability, evidence ownership, and server-confirmed
+sync truth rather than on an unverified claim that they lack offline mode.
+Proof gate: full check-in executed in airplane mode in 15 seconds and 4 taps or fewer,
+synced later with zero loss; crew member with no training completes it on first try.
+
+### P2: Owner Cockpit + Approvals Inbox
+
+Screens: Now (blocked jobs, unpaid, new leads, heartbeat), Job drill-down, Approvals inbox
+(pending Hermes dry-runs rendered as diff cards with approve/reject).
+Beats: JN Insights ("AWFUL" per their own users) and gives the agent layer a human surface
+nobody in the market has: governed AI with a one-thumb approval queue.
+Proof gate: "what is blocked and why" answered in one tap in under 3 seconds; one real
+approved write executed from the phone with its Hermes Run audit visible.
+
+### P3: Sales Desk + Estimator Workbench
+
+Sales: lead queue with source/consent context, quote status. Estimator (responsive,
+desktop-optimized): measurement verification view that renders the geometry engine's
+checks (declared vs recomputed, deviations highlighted), takeoff review, customer quote,
+proposal pack assembly. Repricing clones an immutable prior estimate against a versioned price
+book, shows every scope/price/tax/assumption delta, and retains all source references. Insurance
+supplements get a separate evidence lane rather than being forced through the retail flow.
+Beats: SmartEstimates on trust: JN auto-drafts from unverified numbers; we show the
+verification. Proof gate: measurement-to-proposal flow completed with every number
+traceable to its in-file source ref on screen.
+
+### P4: Customer Portal + Instant Estimate Widget
+
+Portal (signed links): proposal with options, progress (customer-safe evidence only),
+invoices, completion proof, payment receipt, and warranty packet. Closeout remains physically
+locked on final proof, punch resolution, payment, inspection/permit close, manufacturer detail,
+warranty registration, and signed completion. Widget: embeddable static JS posting to `/ingest/estimate`
+with the non-binding range UX.
+Beats: Roofr's $125-149/mo widget (ours is included) and GHL funnels on trust (proof,
+not marketing pressure). Proof gate: a homeowner completes an estimate and a customer
+accepts a proposal on a phone without instructions.
+
+### P5: White-label theming + tenant admin
+
+Theme resolution from tenant config, tenant admin surface (users, toggles, templates),
+demo tenant re-skinned end to end. Proof gate: second brand fully themed by config alone.
+
+## 5. "Subjectively outperform," measured
+
+| Benchmark | Target | Versus |
+| --- | --- | --- |
+| Field check-in | 15s, 4 taps or fewer, works offline with server-verified replay | Current competitors claim offline; IronWrap must prove zero-loss weak-signal recovery |
+| Owner "what is blocked" | 1 tap, under 3s | JN Insights: called "AWFUL" by its own users |
+| Cold load | LCP 2.0s or less under Lighthouse default mobile throttling (moto-g-class, 4G); CWV baseline is 2.5s, so this is a deliberate stretch | JN/GHL mobile lag complaints |
+| Lighthouse (performance/accessibility/best-practices/SEO) | 95+ each, enforced in CI via pinned @lhci/cli; installability proven separately in Playwright (PWA category removed in Lighthouse 12) | Not published by any competitor |
+| Responsiveness | Field INP under 200ms at p75 via web-vitals RUM; CI lab proxy TBT under 200ms (INP is not lab-measurable) | Unpublished by competitors |
+| Data loss under bad signal | Zero (outbox replay proof test) | JN documented mid-entry estimate loss |
+| Judge panel | Multi-agent design evals + one real crew, screen vs screen | JN/GHL/Roofr equivalents |
+| Training required | None: first-try task completion by a new crew member | Competitor onboarding courses |
+
+The eval harness is part of the build: each phase's judge eval and task-time runs are
+scripted and repeatable, so "subjectively better" is re-checkable after every change,
+not a one-time opinion.
+
+## 6. Absolute-best upgrades (adopted 2026-07-10)
+
+The base plan is excellent; these six deltas are what separate excellent from
+category-defining, and they are now part of the plan:
+
+1. **Local-first upgrade path (verified 2026-07-10).** The P0 outbox + query cache gives
+   90% of the feel; the ceiling is a true local-first replica. Verified verdict: none of
+   the named engines fit this backend today (PowerSync: Postgres/Mongo GA, no MariaDB/D1;
+   ElectricSQL and Zero: Postgres-only; Replicache: archived June 2026; Triplit:
+   community-only). So outbox + cache carries further than hoped, and the replayability
+   commitment becomes a TESTABLE P0 contract: every read model carries stable entity ids
+   and a monotonic cursor, every mutation has a client-generated idempotent id, and CI
+   proves a cold client rebuilds purely from cursors + replay. Watchlist: LiveStore
+   (Apache-2.0, the only Worker/DO/D1-native engine, pre-1.0) and TinyBase (MIT) as an
+   outbox-layer upgrade. All candidates pass the no-AGPL gate. Interaction budgets from
+   day one: field INP under 200ms at p75 via web-vitals RUM (CI lab proxy: TBT under
+   200ms), optimistic UI on every idempotent write, same-document View Transitions
+   (cross-browser since Firefox 144) behind a feature detect; cross-document transitions
+   are progressive enhancement only.
+2. **Voice as command, not just evidence.** P2 adds voice check-in: crew speaks ("twelve
+   squares done, need more screws tomorrow"), speech-to-structured drafts a check-in for
+   one-tap confirm. It lands through the governed draft path, which is why ours can ship
+   safely while JobNimbus Scout stays a freeform-write liability.
+3. **One product with the owner's estimator.** The estimator (separate React codebase) and
+   this app must not drift into two products. P0 deliverable: a written integration
+   contract (shared design tokens package, the estimator's payload contract on
+   `/ingest/estimate`, embed points in Estimator Workbench and Customer Portal).
+4. **Proactive surface.** PWA push notifications at P2: approvals pending, gate flips,
+   morning brief ("2 jobs blocked on materials, 1 quote expiring"), driven by Hermes cron
+   through the read-only roles. Competitors cannot copy this safely without our governance
+   layer.
+5. **Distinctiveness gate.** shadcn/ui is the headless base, never the look; the default
+   shadcn aesthetic is template-recognizable in 2026. Every phase's judge eval includes a
+   distinctiveness criterion (typography pairing, motion identity, the Proof Stream visual
+   language) so no screen ships looking like a template.
+6. **Real crews from week one.** Judge panels are proxies. P1 starts field sessions with
+   the actual crew in its first week, filmed task-completion, five-user protocol, weekly.
+   Nothing in this plan substitutes for live hours; speed-to-field is the truest maximizer
+   of "best."
+
+## 7. What this needs
+
+From the repo: nothing missing; the BFF reuses existing routes and auth tokens, and CI
+already runs Playwright-capable Node. From the owner: nothing until P1 field testing
+(a phone and one crew member) and the P4 widget embed (website access, already tracked).
+Build order starts at P0 immediately; every phase is verifiable locally per the
+launch runbook's truth-boundary rules before anything ships to the Oracle host.

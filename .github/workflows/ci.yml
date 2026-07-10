@@ -1,37 +1,72 @@
 name: CI
-# Enforces the contracts every PR claims: DocType JSON shape, Hermes role/manifest
-# safety (no approved-write without its dry_run pair), tenant-config isolation, and
-# all three test suites. workers-bus typecheck and wrangler dry-run stay local per
-# AGENTS.md: they need wrangler-generated Env types (gitignored).
+
 on:
   push:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            workers-bus/package-lock.json
+            mcp/erpnext-roofing-mcp/package-lock.json
+            mcp/ironwrap-bus-mcp/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-      - name: Validate DocType contract (26 DocTypes, Frappe-only link targets)
+      - name: Validate DocType contract (33 DocTypes, Frappe-only link targets)
         run: node tools/validate-erpnext-doctypes.mjs
-      - name: Validate Hermes roles + manifest against live MCP tool inventory
+      - name: Validate Hermes roles and manifest against the MCP tool inventory
         run: node tools/validate-hermes-config.mjs
-      - name: Validate tenant configs (no secrets, isolation)
+      - name: Validate tenant configs (no secrets, isolated namespaces)
         run: node tools/validate-tenant-config.mjs
+      - name: Prove deterministic AppliCad extraction
+        run: node tools/applicad-xml-proof.mjs --check
+
+      - name: Test Frappe application contracts without a site
+        working-directory: frappe-apps/ironwrap_roofing
+        run: python -m unittest discover -s tests -t .
 
       - name: Test erpnext-roofing-mcp
         run: npm ci --prefix mcp/erpnext-roofing-mcp && npm test --prefix mcp/erpnext-roofing-mcp
       - name: Test ironwrap-bus-mcp
         run: npm ci --prefix mcp/ironwrap-bus-mcp && npm test --prefix mcp/ironwrap-bus-mcp
-      - name: Test workers-bus (zero-dep node --test)
-        run: npm test --prefix workers-bus
 
-      - name: No em dashes in Hermes/agent-facing content
+      - name: Install Worker dependencies
+        run: npm ci --prefix workers-bus
+      - name: Generate Worker binding types
+        run: npm run typegen --prefix workers-bus
+      - name: Test Worker bus
+        run: npm test --prefix workers-bus
+      - name: Typecheck Worker bus
+        run: npm run typecheck --prefix workers-bus
+      - name: Bundle Worker without deploying
+        run: npm run deploy --prefix workers-bus -- --dry-run
+
+      - name: Test production-readiness verifier
+        run: node --test tools/production-readiness.test.mjs
+      - name: Validate repository production contract
+        run: node tools/production-readiness.mjs contract
+      - name: Validate shell syntax
+        run: find deploy workers-bus/scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+      - name: No em dashes in Hermes and agent-facing configuration
         run: |
           if grep -rl $'—' hermes/ config/ deploy/; then
             echo "em dash found in agent-facing content" >&2; exit 1

@@ -13,8 +13,6 @@ import {
   Mic,
   PackageCheck,
   Phone,
-  Ruler,
-  ShieldCheck,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -537,6 +535,14 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
   const [proof, setProof] = useState<ProofStreamItem[]>(model.proof_stream);
   const [cursor, setCursor] = useState(model.proof_page.next_cursor);
   const [loadingMore, setLoadingMore] = useState(false);
+  const dateOptions = { locale: session.tenant.locale, timeZone: session.tenant.time_zone };
+  const blockedGates = model.gates.filter((gate) => gate.state?.trim().toLowerCase() === "blocked");
+  const fieldCaptureAllowed =
+    session.user.role === "field" &&
+    model.assignment !== null &&
+    model.allowed_actions.includes("field.checkin.create");
+  const dataLimits = model.stale_fields.filter((field) => field !== "offline.cached_packet");
+
   async function loadOlder() {
     if (!cursor || loadingMore || offline) return;
     setLoadingMore(true);
@@ -551,72 +557,494 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
 
   return (
     <RoleGuard surface="field">
-      <section className="space-y-6">
+      <section className="mx-auto max-w-5xl space-y-7 pb-8 lg:pb-4">
         <Button asChild variant="ghost" size="compact">
           <Link to="/today">
             <ChevronLeft aria-hidden="true" />
             Today
           </Link>
         </Button>
-        <PageHeader
-          eyebrow={model.job.job_number ?? "Assigned job"}
-          title={model.job.address ?? "Job packet"}
-          description={[
-            model.job.service_type,
-            model.assignment?.type,
-            formatDate(model.assignment?.scheduled_start ?? null),
-          ]
-            .filter(Boolean)
-            .join(" · ")}
+        <JobPacketHeader model={model} offline={offline} dateOptions={dateOptions} />
+        {offline ? (
+          <JobOfflineNotice generatedAt={model.read_model_generated_at} dateOptions={dateOptions} />
+        ) : null}
+        {dataLimits.length > 0 ? <JobDataLimits fields={dataLimits} /> : null}
+        <WorkStatus model={model} blockedGates={blockedGates} dateOptions={dateOptions} />
+        <CaptureProofPanel
+          jobId={model.job.id}
+          blocked={blockedGates.length > 0}
+          fieldCaptureAllowed={fieldCaptureAllowed}
+          fieldRole={session.user.role === "field"}
         />
-        {offline ? <OfflineNotice /> : null}
-        <div className="flex flex-wrap gap-2">
-          {model.gates.map((gate) => (
-            <GateChip key={gate.id} name={gate.name ?? "Gate"} state={gate.state ?? "Unknown"} />
-          ))}
-        </div>
-        {model.assignment && session.user.role === "field" ? (
-          <Button asChild size="field" fullWidth variant="accent">
-            <Link to="/check-in/$jobId" params={{ jobId: model.job.id }}>
-              <Camera aria-hidden="true" />
-              Start check-in
-            </Link>
-          </Button>
-        ) : (
-          <EmptyState
-            title={
-              session.user.role === "field"
-                ? "Field action not assigned"
-                : "Read-only office packet"
-            }
-            message={
-              session.user.role === "field"
-                ? "This check-in requires your active direct or crew Job Assignment."
-                : "Office roles can review this packet, but only the assigned field account can capture proof."
-            }
-          />
-        )}
-        <ContactCard model={model} />
-        <PacketGrid model={model} />
+        <SafetyAndAccess model={model} dateOptions={dateOptions} />
         <section className="space-y-4" aria-labelledby="proof-stream-heading">
-          <div>
-            <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
-              Evidence ledger
-            </p>
-            <h2 id="proof-stream-heading" className="mt-1 text-2xl font-black">
+          <header className="border-b border-border pb-4">
+            <p className="text-sm font-semibold text-muted">Verified evidence only</p>
+            <h2
+              id="proof-stream-heading"
+              className="mt-1 text-2xl font-black tracking-[-0.03em] sm:text-3xl"
+            >
               Proof Stream
             </h2>
-          </div>
+          </header>
           <ProofStream
             items={proof}
             hasMore={Boolean(cursor) && !offline}
             loadingMore={loadingMore}
             onLoadMore={() => void loadOlder()}
+            locale={dateOptions.locale}
+            timeZone={dateOptions.timeZone}
           />
         </section>
+        <PacketDetails model={model} dateOptions={dateOptions} />
       </section>
     </RoleGuard>
   );
+}
+
+function JobPacketHeader({
+  model,
+  offline,
+  dateOptions,
+}: {
+  model: JobResponse;
+  offline: boolean;
+  dateOptions: FieldDateOptions;
+}) {
+  const assignment = [model.assignment?.type, model.assignment?.status].filter(Boolean).join(" · ");
+  return (
+    <header className="border-b border-border pb-5 sm:pb-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-muted">
+            {model.job.job_number ?? "Assigned job"}
+          </p>
+          <h1 className="mt-1 text-3xl font-black tracking-[-0.04em] text-pretty sm:text-4xl">
+            {model.job.address ?? "Job packet"}
+          </h1>
+        </div>
+        <p className="border border-border bg-surface-raised px-3 py-2 text-sm font-bold text-muted">
+          {offline ? "Offline packet" : "Packet read"}
+        </p>
+      </div>
+      <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">
+        <JobFact label="Service" value={model.job.service_type ?? "Service unavailable"} />
+        <JobFact label="Assignment" value={assignment || "Assignment detail unavailable"} />
+        <JobFact
+          label="Scheduled"
+          value={formatFieldSchedule(model.assignment?.scheduled_start ?? null, dateOptions)}
+        />
+      </dl>
+      <p className="mt-4 text-sm leading-6 text-muted">
+        {offline ? "Saved packet generated" : "Packet read generated"}{" "}
+        {formatFieldTimestamp(model.read_model_generated_at, dateOptions)} ·{" "}
+        {model.source_updated_at
+          ? `Source updated ${formatFieldTimestamp(model.source_updated_at, dateOptions)}`
+          : "Source update time unavailable"}
+      </p>
+    </header>
+  );
+}
+
+function JobOfflineNotice({
+  generatedAt,
+  dateOptions,
+}: {
+  generatedAt: string;
+  dateOptions: FieldDateOptions;
+}) {
+  return (
+    <div
+      className="flex items-start gap-3 border border-warning/35 bg-warning-soft p-4 text-warning"
+      role="status"
+    >
+      <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+      <p className="font-bold leading-6">
+        Offline packet from {formatFieldTimestamp(generatedAt, dateOptions)}. Capture can remain
+        queued on this device; reconnect before relying on changed gates, scope, or safety detail.
+      </p>
+    </div>
+  );
+}
+
+function JobDataLimits({ fields }: { fields: string[] }) {
+  return (
+    <details className="border border-border bg-surface-raised">
+      <summary className="min-h-14 cursor-pointer px-4 py-4 text-sm font-bold">
+        Some packet data may be limited
+      </summary>
+      <p className="border-t border-border px-4 py-4 text-sm leading-6 text-muted">
+        This read may be stale for {fields.map(humanizeFieldName).join(", ")}. Do not infer a
+        missing value or change a gate from this screen.
+      </p>
+    </details>
+  );
+}
+
+function WorkStatus({
+  model,
+  blockedGates,
+  dateOptions,
+}: {
+  model: JobResponse;
+  blockedGates: JobResponse["gates"];
+  dateOptions: FieldDateOptions;
+}) {
+  const blocked = blockedGates.length > 0;
+  return (
+    <section
+      aria-labelledby="work-status-heading"
+      className="border border-border bg-surface-raised"
+    >
+      <header className="border-b border-border px-4 py-4 sm:px-5">
+        <p className="text-sm font-semibold text-muted">Physical production locks</p>
+        <h2 id="work-status-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
+          Work status
+        </h2>
+      </header>
+      <div
+        className={
+          blocked ? "bg-danger-soft p-4 text-danger sm:p-5" : "bg-surface-muted p-4 sm:p-5"
+        }
+      >
+        <div className="flex items-start gap-3">
+          {blocked ? (
+            <AlertTriangle className="mt-0.5 size-6 shrink-0" aria-hidden="true" />
+          ) : (
+            <ClipboardCheck className="mt-0.5 size-6 shrink-0 text-info" aria-hidden="true" />
+          )}
+          <div>
+            <p className="text-lg font-black tracking-[-0.02em]">
+              {blocked
+                ? `${blockedGates.length} ${blockedGates.length === 1 ? "gate blocks" : "gates block"} scheduled work`
+                : model.job.current_gate_state
+                  ? `Reported gate state: ${model.job.current_gate_state}`
+                  : "No current gate state was returned"}
+            </p>
+            <p className="mt-1 text-sm leading-6 text-muted">
+              {blocked
+                ? "A proof capture can document the block; it cannot open, waive, or override a gate."
+                : "A reported gate state is not a safety clearance. Review the safety plan and packet detail before work."}
+            </p>
+          </div>
+        </div>
+      </div>
+      {model.gates.length > 0 ? (
+        <ol className="divide-y divide-border">
+          {model.gates.map((gate) => (
+            <li key={gate.id} className="px-4 py-4 sm:px-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <GateChip name={gate.name ?? "Production gate"} state={gate.state ?? "Unknown"} />
+                {gate.due_at ? (
+                  <p className="text-sm font-semibold text-muted">
+                    Due {formatFieldSchedule(gate.due_at, dateOptions)}
+                  </p>
+                ) : null}
+              </div>
+              {gate.blocker_reason ? (
+                <p className="mt-3 font-semibold leading-6">{gate.blocker_reason}</p>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </section>
+  );
+}
+
+function CaptureProofPanel({
+  jobId,
+  blocked,
+  fieldCaptureAllowed,
+  fieldRole,
+}: {
+  jobId: string;
+  blocked: boolean;
+  fieldCaptureAllowed: boolean;
+  fieldRole: boolean;
+}) {
+  if (!fieldCaptureAllowed) {
+    return (
+      <section
+        className="border border-border bg-surface-muted p-4 sm:p-5"
+        aria-labelledby="capture-boundary-heading"
+      >
+        <p className="text-sm font-semibold text-muted">Field evidence boundary</p>
+        <h2 id="capture-boundary-heading" className="mt-1 text-xl font-black tracking-[-0.025em]">
+          {fieldRole ? "Active assignment required" : "Read-only job packet"}
+        </h2>
+        <p className="mt-2 leading-6 text-muted">
+          {fieldRole
+            ? "This account does not have an active assignment with field capture permission for this job."
+            : "Only an assigned field account can capture proof from this packet."}
+        </p>
+      </section>
+    );
+  }
+  return (
+    <section
+      className="border-2 border-foreground bg-surface-raised p-4 sm:p-5"
+      aria-labelledby="capture-proof-heading"
+    >
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="max-w-2xl">
+          <p className="text-sm font-semibold text-muted">Internal evidence only</p>
+          <h2 id="capture-proof-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
+            {blocked ? "Document the blocked site" : "Document this site"}
+          </h2>
+          <p className="mt-2 leading-6 text-muted">
+            {blocked
+              ? "Capture the actual site condition or blocker. This does not change the work lock."
+              : "Capture photos, a voice note, or a field note after reviewing this packet."}
+          </p>
+        </div>
+        <Button
+          asChild
+          size="field"
+          variant={blocked ? "outline" : "accent"}
+          className="fixed inset-x-4 bottom-[calc(6rem+env(safe-area-inset-bottom))] z-40 lg:static lg:min-w-72"
+        >
+          <Link to="/check-in/$jobId" params={{ jobId }}>
+            <Camera aria-hidden="true" />
+            {blocked ? "Capture blocker proof" : "Capture job proof"}
+          </Link>
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function SafetyAndAccess({
+  model,
+  dateOptions,
+}: {
+  model: JobResponse;
+  dateOptions: FieldDateOptions;
+}) {
+  const safety = model.packet.safety_plan;
+  const contact = model.packet.contact;
+  const safetyFacts = safety
+    ? [
+        [
+          "Effective",
+          safety.effective_date ? formatFieldSchedule(safety.effective_date, dateOptions) : null,
+        ],
+        ["Hazards", safety.hazard_summary],
+        ["Controls", safety.controls],
+        ["PPE", safety.ppe_requirements],
+        ["Weather limits", safety.weather_limits],
+        ["Emergency plan", safety.emergency_plan],
+      ].filter((entry): entry is [string, string] => Boolean(entry[1]))
+    : [];
+  return (
+    <section aria-labelledby="safety-access-heading" className="space-y-4">
+      <header className="border-b border-border pb-4">
+        <p className="text-sm font-semibold text-muted">Packet detail before field capture</p>
+        <h2
+          id="safety-access-heading"
+          className="mt-1 text-2xl font-black tracking-[-0.03em] sm:text-3xl"
+        >
+          Safety and access
+        </h2>
+      </header>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <article className="border border-border bg-surface-raised p-4 sm:p-5">
+          <div className="flex items-start gap-3">
+            <HardHat className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
+            <div>
+              <p className="font-black">
+                Safety plan{safety?.version ? ` · v${safety.version}` : ""}
+              </p>
+              <p className="mt-1 text-sm leading-6 text-muted">
+                {safety?.status ?? "No safety plan was returned in this packet."}
+              </p>
+            </div>
+          </div>
+          {safetyFacts.length > 0 ? (
+            <dl className="mt-5 space-y-4">
+              {safetyFacts.map(([label, value]) => (
+                <JobFact key={label} label={label} value={value} />
+              ))}
+            </dl>
+          ) : (
+            <p className="mt-5 border-l-4 border-warning pl-3 text-sm font-semibold leading-6 text-warning">
+              No plan detail is available here. Its absence does not authorize field work.
+            </p>
+          )}
+        </article>
+        <article className="border border-border bg-surface-raised p-4 sm:p-5">
+          <div className="flex items-start gap-3">
+            <MapPin className="mt-0.5 size-5 shrink-0 text-info" aria-hidden="true" />
+            <div>
+              <p className="font-black">Job contact and access</p>
+              <p className="mt-1 text-sm leading-6 text-muted">
+                {contact?.display_name ?? "Contact name unavailable"}
+              </p>
+            </div>
+          </div>
+          {contact?.phone ? (
+            <Button asChild variant="outline" size="field" fullWidth className="mt-5">
+              <a href={`tel:${contact.phone}`}>
+                <Phone aria-hidden="true" />
+                Call job contact
+              </a>
+            </Button>
+          ) : (
+            <p className="mt-5 text-sm font-semibold text-muted">Phone unavailable</p>
+          )}
+          <div className="mt-5 border-t border-border pt-4">
+            <p className="text-xs font-extrabold uppercase tracking-[0.1em] text-muted">
+              Access instructions
+            </p>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              {contact?.access_instructions ??
+                "Access instructions were not returned in this packet."}
+            </p>
+          </div>
+        </article>
+      </div>
+    </section>
+  );
+}
+
+function PacketDetails({
+  model,
+  dateOptions,
+}: {
+  model: JobResponse;
+  dateOptions: FieldDateOptions;
+}) {
+  const materialCount =
+    model.packet.materials.takeoffs.length + model.packet.materials.supplier_orders.length;
+  return (
+    <section aria-labelledby="packet-details-heading" className="space-y-4">
+      <header className="border-b border-border pb-4">
+        <p className="text-sm font-semibold text-muted">Supporting packet records</p>
+        <h2
+          id="packet-details-heading"
+          className="mt-1 text-2xl font-black tracking-[-0.03em] sm:text-3xl"
+        >
+          Packet detail
+        </h2>
+      </header>
+      <div className="divide-y divide-border border-y border-border">
+        <PacketDetail title="Approved scope" count={model.packet.scope_clauses.length}>
+          {model.packet.scope_clauses.map((item) => (
+            <PacketEvidenceLine
+              key={item.id}
+              title={item.title ?? item.type ?? "Scope"}
+              detail={item.text}
+            />
+          ))}
+        </PacketDetail>
+        <PacketDetail title="Measurements" count={model.packet.measurements.length}>
+          {model.packet.measurements.map((item) => (
+            <PacketEvidenceLine
+              key={item.id}
+              title={item.provider ?? "Measurement"}
+              detail={joinKnown([
+                item.review_status,
+                item.parsed_at
+                  ? `Parsed ${formatFieldSchedule(item.parsed_at, dateOptions)}`
+                  : null,
+              ])}
+            />
+          ))}
+        </PacketDetail>
+        <PacketDetail title="Materials" count={materialCount}>
+          {model.packet.materials.takeoffs.map((item) => (
+            <PacketEvidenceLine
+              key={item.id}
+              title="Takeoff"
+              detail={joinKnown([
+                item.status,
+                item.prepared_at
+                  ? `Prepared ${formatFieldSchedule(item.prepared_at, dateOptions)}`
+                  : null,
+              ])}
+            />
+          ))}
+          {model.packet.materials.supplier_orders.map((item) => (
+            <PacketEvidenceLine
+              key={item.id}
+              title="Supplier order"
+              detail={joinKnown([
+                item.status,
+                item.delivery_notes,
+                item.requested_delivery_date
+                  ? `Requested ${formatFieldSchedule(item.requested_delivery_date, dateOptions)}`
+                  : null,
+              ])}
+            />
+          ))}
+        </PacketDetail>
+        <PacketDetail title="Change orders" count={model.packet.change_orders.length}>
+          {model.packet.change_orders.map((item) => (
+            <PacketEvidenceLine
+              key={item.id}
+              title={item.title ?? item.number ?? "Change order"}
+              detail={joinKnown([
+                item.status,
+                item.scope_delta,
+                item.version !== null ? `v${item.version}` : null,
+              ])}
+            />
+          ))}
+        </PacketDetail>
+      </div>
+    </section>
+  );
+}
+
+function PacketDetail({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count: number;
+  children: ReactNode;
+}) {
+  return (
+    <details>
+      <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-1 py-4 font-black [&::-webkit-details-marker]:hidden">
+        <span>{title}</span>
+        <span className="text-sm font-semibold text-muted">
+          {count} {count === 1 ? "record" : "records"}
+        </span>
+      </summary>
+      <div className="space-y-3 border-t border-border pb-5 pt-4">
+        {count ? (
+          children
+        ) : (
+          <p className="text-sm leading-6 text-muted">No records were returned in this packet.</p>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function PacketEvidenceLine({ title, detail }: { title: string; detail: string | null }) {
+  return (
+    <div className="border-b border-border pb-3 last:border-b-0 last:pb-0">
+      <p className="font-bold">{title}</p>
+      {detail ? <p className="mt-1 text-sm leading-6 text-muted">{detail}</p> : null}
+    </div>
+  );
+}
+
+function JobFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs font-extrabold uppercase tracking-[0.1em] text-muted">{label}</dt>
+      <dd className="mt-1 font-semibold leading-6">{value}</dd>
+    </div>
+  );
+}
+
+function joinKnown(values: Array<string | null>): string | null {
+  const known = values.filter((value): value is string => Boolean(value));
+  return known.length > 0 ? known.join(" · ") : null;
 }
 
 export function CheckInPage() {
@@ -1019,153 +1447,6 @@ function CheckInFlow({ jobId }: { jobId: string }) {
   );
 }
 
-function ContactCard({ model }: { model: JobResponse }) {
-  const contact = model.packet.contact;
-  if (!contact) return null;
-  return (
-    <Card>
-      <CardContent className="grid gap-4 pt-5 sm:grid-cols-2 sm:pt-6">
-        <div>
-          <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
-            Job contact
-          </p>
-          <p className="mt-1 text-lg font-black">{contact.display_name ?? "Name unavailable"}</p>
-        </div>
-        {contact.phone ? (
-          <Button asChild variant="outline" size="field" fullWidth>
-            <a href={`tel:${contact.phone}`}>
-              <Phone aria-hidden="true" />
-              Call approved number
-            </a>
-          </Button>
-        ) : (
-          <p className="text-sm text-muted">Phone unavailable</p>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function PacketGrid({ model }: { model: JobResponse }) {
-  return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <PacketCard
-        icon={<ClipboardCheck />}
-        title="Approved scope"
-        count={model.packet.scope_clauses.length}
-      >
-        {model.packet.scope_clauses.map((item) => (
-          <PacketLine key={item.id} title={item.title ?? item.type ?? "Scope"} detail={item.text} />
-        ))}
-      </PacketCard>
-      <PacketCard icon={<Ruler />} title="Measurements" count={model.packet.measurements.length}>
-        {model.packet.measurements.map((item) => (
-          <PacketLine
-            key={item.id}
-            title={item.provider ?? "Measurement"}
-            detail={item.review_status}
-          />
-        ))}
-      </PacketCard>
-      <PacketCard
-        icon={<PackageCheck />}
-        title="Materials"
-        count={
-          model.packet.materials.supplier_orders.length + model.packet.materials.takeoffs.length
-        }
-      >
-        {model.packet.materials.supplier_orders.map((item) => (
-          <PacketLine
-            key={item.id}
-            title={item.status ?? "Supplier order"}
-            detail={item.delivery_notes ?? item.requested_delivery_date}
-          />
-        ))}
-      </PacketCard>
-      <PacketCard
-        icon={<ShieldCheck />}
-        title="Safety plan"
-        count={model.packet.safety_plan ? 1 : 0}
-      >
-        {model.packet.safety_plan ? (
-          <PacketLine
-            title={model.packet.safety_plan.status ?? "Safety plan"}
-            detail={
-              model.packet.safety_plan.ppe_requirements ?? model.packet.safety_plan.hazard_summary
-            }
-          />
-        ) : null}
-      </PacketCard>
-      <PacketCard
-        icon={<HardHat />}
-        title="Change orders"
-        count={model.packet.change_orders.length}
-      >
-        {model.packet.change_orders.map((item) => (
-          <PacketLine
-            key={item.id}
-            title={item.title ?? item.number ?? "Change order"}
-            detail={item.scope_delta}
-          />
-        ))}
-      </PacketCard>
-      <PacketCard icon={<Camera />} title="Required proof" count={model.required_proof.length}>
-        {model.required_proof.map((item) => (
-          <PacketLine
-            key={item.id}
-            title={`${item.label} · ${item.state}`}
-            detail={item.blocker_reason}
-          />
-        ))}
-      </PacketCard>
-    </div>
-  );
-}
-
-function PacketCard({
-  icon,
-  title,
-  count,
-  children,
-}: {
-  icon: ReactNode;
-  title: string;
-  count: number;
-  children: ReactNode;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="flex items-center gap-2">
-            {icon}
-            {title}
-          </CardTitle>
-          <span className="rounded-full bg-surface-muted px-3 py-1 text-xs font-black">
-            {count}
-          </span>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {count ? (
-          children
-        ) : (
-          <p className="text-sm text-muted">No approved records in this packet.</p>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function PacketLine({ title, detail }: { title: string; detail: string | null }) {
-  return (
-    <div className="border-l-4 border-accent pl-3">
-      <p className="font-bold">{title}</p>
-      {detail ? <p className="mt-1 text-sm leading-6 text-muted">{detail}</p> : null}
-    </div>
-  );
-}
-
 function PageHeader({
   eyebrow,
   title,
@@ -1181,27 +1462,6 @@ function PageHeader({
       <h1 className="mt-2 text-3xl font-black tracking-[-0.04em] sm:text-4xl">{title}</h1>
       <p className="mt-3 text-base leading-7 text-muted">{description}</p>
     </header>
-  );
-}
-
-function OfflineNotice() {
-  return (
-    <div
-      className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning-soft p-4 text-warning"
-      role="status"
-    >
-      <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
-      <p className="font-bold">
-        Offline: showing the last packet opened on this device. Saved work remains queued.
-      </p>
-    </div>
-  );
-}
-
-function formatDate(value: string | null): string {
-  if (!value || Number.isNaN(Date.parse(value))) return "Not scheduled";
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
-    new Date(value),
   );
 }
 

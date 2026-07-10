@@ -28,6 +28,10 @@ data.
   zone, and local packet availability visibly progresses from checking to saving, saved, or not
   saved. A cached packet is never called complete or safety-cleared; a blocked gate can only open
   the governed job packet for review.
+- A gate-and-proof-first Job packet: physical work locks, the read-only safety/access brief, and
+  the verified Proof Stream precede collapsible supporting records. The mobile capture control is
+  64 px and appears only for an active assignment with the BFF's `field.checkin.create` capability;
+  blocker capture records the condition but cannot open or waive a gate.
 - Route placeholders for the later Sales and customer Portal slices. Today, Job, Check-in, Owner
   Now, and Settings have their implemented North Star foundations.
 

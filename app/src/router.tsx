@@ -13,7 +13,6 @@ import { MagicLinkConsume } from "./auth/magic-link-consume";
 import { takeMagicLinkTokenFromWindow } from "./auth/magic-link-fragment";
 import { takePairingTokenFromWindow } from "./auth/pairing-fragment";
 import { AppShell } from "./components/app-shell";
-import { CheckInPage, JobPage, TodayPage } from "./field/field-pages";
 import {
   NotFoundPage,
   PortalLinkRequiredPage,
@@ -24,6 +23,15 @@ import {
 
 const OwnerNowPage = lazy(async () => ({
   default: (await import("./owner/owner-now-page")).OwnerNowPage,
+}));
+const TodayPage = lazy(async () => ({
+  default: (await import("./field/field-pages")).TodayPage,
+}));
+const JobPage = lazy(async () => ({
+  default: (await import("./field/field-pages")).JobPage,
+}));
+const CheckInPage = lazy(async () => ({
+  default: (await import("./field/field-pages")).CheckInPage,
 }));
 
 const rootRoute = createRootRoute({
@@ -98,26 +106,64 @@ function AuthenticatedLayout() {
 const todayRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/today",
-  component: TodayPage,
+  component: TodayRoute,
 });
 
 const jobRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/jobs/$jobId",
-  component: JobPage,
+  component: JobRoute,
 });
 
 const checkInRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/check-in",
-  component: CheckInPage,
+  component: CheckInRoute,
 });
 
 const jobCheckInRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/check-in/$jobId",
-  component: CheckInPage,
+  component: CheckInRoute,
 });
+
+function TodayRoute() {
+  return (
+    <Suspense fallback={<FieldRouteSkeleton label="Loading assigned work" />}>
+      <TodayPage />
+    </Suspense>
+  );
+}
+
+function JobRoute() {
+  return (
+    <Suspense fallback={<FieldRouteSkeleton label="Loading field packet" />}>
+      <JobPage />
+    </Suspense>
+  );
+}
+
+function CheckInRoute() {
+  return (
+    <Suspense fallback={<FieldRouteSkeleton label="Loading field check-in" />}>
+      <CheckInPage />
+    </Suspense>
+  );
+}
+
+function FieldRouteSkeleton({ label }: { label: string }) {
+  return (
+    <section className="mx-auto max-w-5xl space-y-6" aria-busy="true" aria-label={label}>
+      <div className="h-11 w-28 bg-surface-muted/70" />
+      <div className="border-b border-border pb-6">
+        <div className="h-5 w-24 bg-surface-muted/70" />
+        <div className="mt-3 h-11 max-w-lg bg-surface-muted/70" />
+        <div className="mt-4 h-5 max-w-xl bg-surface-muted/70" />
+      </div>
+      <div className="h-44 border border-border bg-surface-muted/50" />
+    </section>
+  );
+}
 
 const ownerRoute = createRoute({
   getParentRoute: () => authenticatedRoute,

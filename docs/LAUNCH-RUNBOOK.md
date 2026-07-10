@@ -51,7 +51,7 @@ encrypted backup protocol; and the environment-name inventory. A failure blocks 
 ## 2. Prepare And Prove The Host
 
 Install Docker with Compose v2, Git, Node.js, `age`, `curl`, `jq`, `openssl`, `rclone`,
-`sha256sum`, and `tar`. Ensure the Docker daemon is reachable by the deployment account and
+`sha256sum`, `sqlite3`, and `tar`. Ensure the Docker daemon is reachable by the deployment account and
 the host clock is synchronized. Then run:
 
 ```bash
@@ -140,7 +140,7 @@ migration, and deploy from the release commit:
 
 ```bash
 cd workers-bus
-npm ci
+npm ci --ignore-scripts
 npm run typegen
 npm test
 npm run typecheck
@@ -233,20 +233,93 @@ record-only until A2P/carrier approval. QuickBooks remains accounting truth.
 
 ## 12. Backups And Restore Drill
 
-Fill the backup block from `deploy/env.example`; `IRONWRAP_OS_IMAGE` must be the deployed image
-digest and `BACKUP_AGE_RECIPIENT` must be an offline public recipient. Schedule:
+Fill only the nightly backup inputs from `deploy/env.example` in
+`/etc/ironwrap/backup.env`, owned by root and mode `0600`. `IRONWRAP_OS_IMAGE` must be the
+deployed image digest and `BACKUP_AGE_RECIPIENT` must be an offline public recipient.
+`D1_BACKUP_API_TOKEN` is the persisted read/export-only authority; keep it distinct from the
+backup-only R2 access/secret key pair. Never store `D1_RESTORE_API_TOKEN` in that file: inject
+its separate drill/write authority just-in-time for one remote restore and unset it afterward.
+Install the Worker lock before scheduling; both D1
+scripts refuse any Wrangler other than the exact 4.x version in that lock:
 
 ```bash
-15 9 * * * /opt/ironwrap/deploy/backup-to-r2.sh >> /var/log/ironwrap-backup.log 2>&1
+cd /opt/ironwrap/workers-bus
+npm ci --ignore-scripts
+./node_modules/.bin/wrangler --version
+cd /opt/ironwrap
+deploy/backup-d1-to-r2.sh
+deploy/backup-to-r2.sh
 ```
 
-The script creates a complete Frappe backup set, packages a restore manifest, encrypts locally,
-uploads immutably, verifies the remote objects, publishes `IRONWRAP-BACKUP-COMPLETE` last, and
-only then applies retention. A prefix without that marker is incomplete and must never be used
-for restore. At expiry, retention removes the marker before deleting the encrypted data one hour
-later, so a committed marker can never point at already-deleted backup content.
+The first manual run must succeed in that order. Schedule the canonical D1 export first and the
+Frappe operational backup 20 minutes later. They are independent jobs so a D1 failure cannot
+silently suppress the Frappe attempt:
 
-Before launch, restore the newest completed prefix to a labelled container using the recorded
+```bash
+CRON_TZ=UTC
+5 9 * * * /bin/bash -c 'set +x; set -a; . /etc/ironwrap/backup.env; set +a; exec /opt/ironwrap/deploy/backup-d1-to-r2.sh' >> /var/log/ironwrap-d1-backup.log 2>&1
+25 9 * * * /bin/bash -c 'set +x; set -a; . /etc/ironwrap/backup.env; set +a; exec /opt/ironwrap/deploy/backup-to-r2.sh' >> /var/log/ironwrap-frappe-backup.log 2>&1
+```
+
+`backup-d1-to-r2.sh` is bound to Cloudflare account
+`7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
+`f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
+the SQL into isolated SQLite, checks integrity and all 15 current core/auth/operational tables,
+packages manifest plus SQL, encrypts locally, uploads immutably, remotely checks the objects,
+and publishes `IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
+`d1/ironwrap-bus/<timestamp-pid-random>` prefix. Never discover or infer `latest`.
+Both D1 scripts unset any inherited generic `CLOUDFLARE_API_TOKEN` and expose only the applicable
+dedicated token to each Wrangler command.
+
+`backup-to-r2.sh` creates the Frappe database/site-config/public/private set and publishes
+`IRONWRAP-BACKUP-COMPLETE` last. For both protocols, a prefix without the correct marker is
+incomplete and forbidden for recovery. At expiry each protocol deletes its marker first and
+retains ciphertext/checksum for one additional hour, so visible completion cannot point at data
+already removed by scripted retention.
+
+Local D1 verification is the default and performs no Cloudflare mutation. Copy one exact prefix
+from the successful backup log into the environment, keep confirmation unset, and run:
+
+```bash
+export D1_RESTORE_R2_COMPLETED_PREFIX='d1/ironwrap-bus/<YYYYMMDDTHHMMSSZ-pid-random>'
+export D1_RESTORE_MODE=verify
+unset D1_RESTORE_API_TOKEN D1_RESTORE_CONFIRMATION
+deploy/restore-d1-from-r2.sh
+```
+
+For the launch remote drill, create a fresh empty D1 database named
+`ironwrap-restore-drill-<label>` in the same committed account and record its exact UUID. The
+name and UUID must both differ from production. Bind one approval to that exact pair; the script
+generates a target-only Wrangler config, rechecks emptiness, imports, then compares the complete
+table-to-row-count map for all 15 required tables with the locally verified SQLite export:
+
+```bash
+export D1_RESTORE_MODE=remote
+export D1_RESTORE_TARGET_ACCOUNT_ID=7ee5775bc1ba46f05c5a65235b60e939
+export D1_RESTORE_TARGET_DATABASE_NAME='ironwrap-restore-drill-launch'
+export D1_RESTORE_TARGET_DATABASE_ID='<different-non-production-d1-uuid>'
+export D1_RESTORE_API_TOKEN='<just-in-time-d1-drill-write-token>'
+export D1_RESTORE_CONFIRMATION="RESTORE_D1:${D1_RESTORE_TARGET_DATABASE_NAME}@${D1_RESTORE_TARGET_DATABASE_ID}"
+deploy/restore-d1-from-r2.sh
+unset D1_RESTORE_API_TOKEN D1_RESTORE_CONFIRMATION
+export D1_RESTORE_MODE=verify
+```
+
+Any new D1 migration that adds a persistent table must update the required-table allowlist in
+both D1 scripts and their readiness tests before deployment. The current 15 are `envelopes`,
+`audit_log`, `dead_letter`, `source_counts`, `heartbeat`, `quickbooks_webhook_receipts`,
+`dedup_claims`, `replay_requests`, `field_actions`, `field_action_media`, `app_users`,
+`app_magic_links`, `app_sessions`,
+`app_auth_throttles`, and `app_auth_audit`.
+
+Before launch, prove R2 delete protection in the live Cloudflare account. Archive the bucket-lock
+rule identifiers, protected backup prefixes, retention durations, and a denied deletion of a
+disposable locked canary. The lock period must cover the approved protection window but expire
+at least 24 hours before scripted retention deletion. Prove the raw intake bucket's separate
+retention/delete-protection policy too. Repository configuration, `--immutable`, or a dashboard
+screenshot without the denied-delete result is not this gate.
+
+Before launch, restore one explicitly selected completed Frappe prefix to a labelled container using the recorded
 image digest. Its Docker network must be internal and its ports must not be published. The target
 keeps its own database configuration and credentials; `deploy/restore-from-r2.sh` merges only the
 source Frappe encryption key and never installs the source `site_config_backup.json`. Verify the
@@ -258,10 +331,10 @@ artifact checksums. A successful upload without this restore drill is not backup
 | Gate | Repository evidence | Required live evidence |
 | --- | --- | --- |
 | Intake spine | Worker tests, typecheck, dry-run bundle | Real source reaches R2, D1, Frappe, ack, bridge, reconcile |
-| Operating core | 33 DocTypes, policy/RBAC tests, Workspace/Control Center package proof | App installed on plain Frappe; fixture, per-role cockpit, empty/error/readiness, and source-navigation checks pass |
+| Operating core | 46 DocTypes (39 top-level + 7 child), policy/RBAC tests, Workspace/Control Center package proof | App installed on plain Frappe; fixture, per-role cockpit, empty/error/readiness, and source-navigation checks pass |
 | Read-only Hermes | Role/manifest and MCP tests | Owner query uses live truth with zero writes |
 | Approved write | Dry-run/request contracts and idempotency tests | One human-approved mutation and complete `Hermes Run` audit |
-| Recovery | Readiness/status/replay/backup tests | Targeted replay, alert recovery, and isolated restore drill |
+| Recovery | Readiness/status/replay plus encrypted Frappe/D1 backup tests | Targeted replay, alerts, exact-prefix local verification, isolated Frappe and D1 restores, table row-count parity, and live R2 denied-delete proof |
 | Real sources | Intake contracts | Website, estimator, field, measurement, and QB admin proofs |
 
 Record commit, image digest, Worker deployment version, migration state, Frappe site/app versions,

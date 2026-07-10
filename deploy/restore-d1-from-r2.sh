@@ -9,6 +9,10 @@ if (( $# != 0 )); then
   echo "error: this command accepts no arguments; mode, configuration, and secrets are environment-only" >&2
   exit 64
 fi
+d1_backup_api_token="${D1_BACKUP_API_TOKEN:-}"
+d1_restore_api_token="${D1_RESTORE_API_TOKEN:-}"
+unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN D1_RESTORE_API_TOKEN
+set +a
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
@@ -17,7 +21,7 @@ LOCK_FILE="$REPO_ROOT/workers-bus/package-lock.json"
 EXPECTED_ACCOUNT_ID="7ee5775bc1ba46f05c5a65235b60e939"
 EXPECTED_DATABASE_NAME="ironwrap-bus"
 EXPECTED_DATABASE_ID="f0674848-13df-4422-9896-8ba2719663b8"
-REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit"
+REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,quickbooks_webhook_receipts,dedup_claims,replay_requests,field_actions,field_action_media,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit"
 mode="${D1_RESTORE_MODE:-verify}"
 
 if [[ "$mode" != "verify" && "$mode" != "remote" ]]; then
@@ -39,7 +43,6 @@ required_env=(
 )
 if [[ "$mode" == "remote" ]]; then
   required_env+=(
-    CLOUDFLARE_API_TOKEN
     D1_RESTORE_TARGET_ACCOUNT_ID
     D1_RESTORE_TARGET_DATABASE_NAME
     D1_RESTORE_TARGET_DATABASE_ID
@@ -111,7 +114,7 @@ done
 
 if [[ "$mode" == "remote" ]]; then
   if [[ ! -x "$WRANGLER" || ! -f "$LOCK_FILE" ]]; then
-    echo "error: install the workers-bus locked dependencies with npm ci before a remote D1 drill" >&2
+    echo "error: install the workers-bus locked dependencies with npm ci --ignore-scripts before a remote D1 drill" >&2
     exit 1
   fi
   locked_wrangler="$(node -e 'const l=require(process.argv[1]); const v=l.packages?.["node_modules/wrangler"]?.version; if(typeof v!=="string") process.exit(1); process.stdout.write(v)' "$LOCK_FILE")"
@@ -139,10 +142,15 @@ if [[ "$mode" == "remote" ]]; then
     echo "error: remote D1 confirmation is not bound to the exact non-production target" >&2
     exit 1
   fi
-  if [[ ! "$CLOUDFLARE_API_TOKEN" =~ ^[^[:space:]]{24,}$ || \
-        "$CLOUDFLARE_API_TOKEN" == "$RCLONE_CONFIG_R2_ACCESS_KEY_ID" || \
-        "$CLOUDFLARE_API_TOKEN" == "$RCLONE_CONFIG_R2_SECRET_ACCESS_KEY" ]]; then
-    echo "error: remote D1 API authority is malformed or reused as an R2 backup credential" >&2
+  if [[ ! "$d1_backup_api_token" =~ ^[^[:space:]]{24,}$ || \
+        ! "$d1_restore_api_token" =~ ^[^[:space:]]{24,}$ || \
+        "$d1_backup_api_token" == "$d1_restore_api_token" || \
+        "$d1_backup_api_token" == "$RCLONE_CONFIG_R2_ACCESS_KEY_ID" || \
+        "$d1_backup_api_token" == "$RCLONE_CONFIG_R2_SECRET_ACCESS_KEY" || \
+        "$d1_restore_api_token" == "$RCLONE_CONFIG_R2_ACCESS_KEY_ID" || \
+        "$d1_restore_api_token" == "$RCLONE_CONFIG_R2_SECRET_ACCESS_KEY" || \
+        "$RCLONE_CONFIG_R2_ACCESS_KEY_ID" == "$RCLONE_CONFIG_R2_SECRET_ACCESS_KEY" ]]; then
+    echo "error: D1 backup, D1 restore, and R2 backup authorities must be valid and pairwise distinct" >&2
     exit 1
   fi
 elif [[ -n "${D1_RESTORE_CONFIRMATION:-}" ]]; then
@@ -162,6 +170,8 @@ WORK_DIR="$(mktemp -d -t ironwrap-d1-restore.XXXXXXXX)"
 cleanup() {
   status=$?
   trap - EXIT
+  d1_backup_api_token=""
+  d1_restore_api_token=""
   rm -rf -- "$WORK_DIR"
   exit "$status"
 }
@@ -321,12 +331,20 @@ if [[ "$(sqlite3 "$verification_db" 'PRAGMA integrity_check;')" != "ok" ]]; then
   exit 1
 fi
 IFS=',' read -r -a required_tables <<< "$REQUIRED_TABLES"
+local_counts="$WORK_DIR/local-table-counts.txt"
+: > "$local_counts"
 for table_name in "${required_tables[@]}"; do
   present="$(sqlite3 "$verification_db" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='$table_name';")"
   if [[ "$present" != "1" ]]; then
     echo "error: restored D1 export is missing required core/auth table: $table_name" >&2
     exit 1
   fi
+  row_count="$(sqlite3 "$verification_db" "SELECT COUNT(*) FROM \"$table_name\";")"
+  if [[ ! "$row_count" =~ ^[0-9]+$ ]]; then
+    echo "error: restored D1 export returned an invalid row count for: $table_name" >&2
+    exit 1
+  fi
+  printf '%s=%s\n' "$table_name" "$row_count" >> "$local_counts"
 done
 
 if [[ "$mode" == "verify" ]]; then
@@ -350,7 +368,7 @@ EOF
 preflight_sql="$WORK_DIR/target-preflight.sql"
 printf "%s\n" "SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';" > "$preflight_sql"
 preflight_json="$WORK_DIR/target-preflight.json"
-"$WRANGLER" d1 execute "$D1_RESTORE_TARGET_DATABASE_NAME" --remote \
+CLOUDFLARE_API_TOKEN="$d1_restore_api_token" "$WRANGLER" d1 execute "$D1_RESTORE_TARGET_DATABASE_NAME" --remote \
   --config "$target_config" --file "$preflight_sql" --json > "$preflight_json"
 preflight_count="$(node -e 'const d=require(process.argv[1]); const a=Array.isArray(d)?d:[d]; if(!a.length||a.some(x=>x?.success!==true))process.exit(1); const n=a[0]?.results?.[0]?.table_count; if(!Number.isInteger(n))process.exit(1); process.stdout.write(String(n))' "$preflight_json")"
 if [[ "$preflight_count" != "0" ]]; then
@@ -358,16 +376,39 @@ if [[ "$preflight_count" != "0" ]]; then
   exit 1
 fi
 
-"$WRANGLER" d1 execute "$D1_RESTORE_TARGET_DATABASE_NAME" --remote \
+CLOUDFLARE_API_TOKEN="$d1_restore_api_token" "$WRANGLER" d1 execute "$D1_RESTORE_TARGET_DATABASE_NAME" --remote \
   --config "$target_config" --file "$package/$sql_file" >/dev/null
 verify_sql="$WORK_DIR/target-verify.sql"
-printf "%s\n" "SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('envelopes','audit_log','dead_letter','source_counts','heartbeat','app_users','app_magic_links','app_sessions','app_auth_throttles','app_auth_audit');" > "$verify_sql"
+{
+  first=1
+  for table_name in "${required_tables[@]}"; do
+    if (( first == 0 )); then printf ' UNION ALL '; fi
+    printf "SELECT '%s' AS table_name, COUNT(*) AS row_count FROM \"%s\"" "$table_name" "$table_name"
+    first=0
+  done
+  printf ';\n'
+} > "$verify_sql"
 verify_json="$WORK_DIR/target-verify.json"
-"$WRANGLER" d1 execute "$D1_RESTORE_TARGET_DATABASE_NAME" --remote \
+CLOUDFLARE_API_TOKEN="$d1_restore_api_token" "$WRANGLER" d1 execute "$D1_RESTORE_TARGET_DATABASE_NAME" --remote \
   --config "$target_config" --file "$verify_sql" --json > "$verify_json"
-remote_count="$(node -e 'const d=require(process.argv[1]); const a=Array.isArray(d)?d:[d]; if(!a.length||a.some(x=>x?.success!==true))process.exit(1); const n=a[0]?.results?.[0]?.table_count; if(!Number.isInteger(n))process.exit(1); process.stdout.write(String(n))' "$verify_json")"
-if [[ "$remote_count" != "10" ]]; then
-  echo "error: remote D1 restore target is missing required core/auth tables after import" >&2
+if ! node -e '
+  const fs=require("fs");
+  const payload=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+  const batches=Array.isArray(payload)?payload:[payload];
+  if(!batches.length||batches.some((entry)=>entry?.success!==true)) process.exit(1);
+  const rows=batches.flatMap((entry)=>Array.isArray(entry.results)?entry.results:[]);
+  const expected=new Map(fs.readFileSync(process.argv[2],"utf8").trim().split("\n").filter(Boolean).map((line)=>{
+    const at=line.indexOf("="); return [line.slice(0,at),Number(line.slice(at+1))];
+  }));
+  const actual=new Map();
+  for(const row of rows){
+    if(typeof row?.table_name!=="string"||!Number.isInteger(row?.row_count)||row.row_count<0||actual.has(row.table_name)) process.exit(1);
+    actual.set(row.table_name,row.row_count);
+  }
+  if(actual.size!==expected.size) process.exit(1);
+  for(const [name,count] of expected){ if(actual.get(name)!==count) process.exit(1); }
+' "$verify_json" "$local_counts"; then
+  echo "error: remote D1 restore table row counts differ from the locally verified export" >&2
   exit 1
 fi
 

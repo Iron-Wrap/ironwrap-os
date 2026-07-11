@@ -150,6 +150,11 @@ export const OFFICE_ESTIMATOR_READ_FIELDS = {
     "name", "pack_id", "roof_job", "quotation", "status", "prepared_at", "approved_at", "signed_at", "assumptions",
     "exclusions", "modified",
   ],
+  "Change Order": [
+    "name", "change_order_id", "roof_job", "customer_quote", "change_number", "version", "status", "title", "reason",
+    "scope_delta", "currency", "subtotal", "tax_amount", "total_amount", "price_book_version", "requested_at", "approved_at",
+    "accepted_at", "supersedes", "correction_reason", "modified",
+  ],
   "Scope Clause": [
     "name", "scope_clause_id", "roof_job", "clause_type", "title", "clause_text", "version", "status", "source_ref",
     "customer_visible", "approved_at", "modified",
@@ -225,6 +230,7 @@ const OFFICE_ESTIMATOR_FILTER_FIELDS: Readonly<Record<OfficeEstimatorDocType, Re
   "Material Takeoff": new Set(["roof_job", "measurement_report", "status"]),
   "Customer Quote": new Set(["roof_job", "status"]),
   "Proposal Evidence Pack": new Set(["roof_job", "quotation", "status"]),
+  "Change Order": new Set(["roof_job", "customer_quote", "status"]),
   "Scope Clause": new Set(["roof_job", "status"]),
 };
 

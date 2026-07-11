@@ -281,6 +281,52 @@ export interface SalesReadModel extends ReadModelEnvelope {
   }>;
 }
 
+export interface EstimatorQuoteProjection {
+  id: string;
+  version: number | null;
+  status: string | null;
+  price_book_version: string | null;
+  pricing_effective_at: string | null;
+  subtotal: number | null;
+  tax_amount: number | null;
+  tax_code: string | null;
+  tax_rate: number | null;
+  quote_total: number | null;
+  currency: string | null;
+  deposit_amount: number | null;
+  amount_due: number | null;
+  amount_paid: number | null;
+  balance_due: number | null;
+  payment_status: string | null;
+  payment_due_date: string | null;
+  valid_until: string | null;
+  prepared_at: string | null;
+  approved_at: string | null;
+  accepted_at: string | null;
+  scope_summary: string | null;
+  assumptions: string | null;
+  exclusions: string | null;
+  supersedes: string | null;
+  correction_reason: string | null;
+}
+
+export interface EstimatorQuoteRevisionDelta {
+  subtotal: number | null;
+  tax_amount: number | null;
+  quote_total: number | null;
+  deposit_amount: number | null;
+  amount_due: number | null;
+  balance_due: number | null;
+  price_book_version_changed: boolean;
+  pricing_effective_at_changed: boolean;
+  tax_code_changed: boolean;
+  tax_rate_changed: boolean;
+  currency_changed: boolean;
+  scope_summary_changed: boolean;
+  assumptions_changed: boolean;
+  exclusions_changed: boolean;
+}
+
 export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
   /** Sources that reached the bounded query limit; displayed history is a lower bound. */
   partial_sources: string[];
@@ -352,34 +398,27 @@ export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
       items_truncated: boolean;
     } | null;
   };
-  quote: {
-    id: string;
-    version: number | null;
-    status: string | null;
+  quote: EstimatorQuoteProjection | null;
+  pricing_snapshot: {
+    state: "recorded" | "review_required" | "expired" | "incomplete" | "unavailable";
+    quote_id: string | null;
+    quote_version: number | null;
     price_book_version: string | null;
     pricing_effective_at: string | null;
-    subtotal: number | null;
-    tax_amount: number | null;
-    tax_code: string | null;
-    tax_rate: number | null;
-    quote_total: number | null;
-    currency: string | null;
-    deposit_amount: number | null;
-    amount_due: number | null;
-    amount_paid: number | null;
-    balance_due: number | null;
-    payment_status: string | null;
-    payment_due_date: string | null;
     valid_until: string | null;
-    prepared_at: string | null;
-    approved_at: string | null;
-    accepted_at: string | null;
-    scope_summary: string | null;
-    assumptions: string | null;
-    exclusions: string | null;
-    supersedes: string | null;
-    correction_reason: string | null;
-  } | null;
+  };
+  quote_revision: {
+    state:
+      | "no_quote"
+      | "not_revised"
+      | "compared"
+      | "prior_quote_missing"
+      | "history_incomplete"
+      | "unlinked_revision"
+      | "invalid_lineage";
+    prior_quote: EstimatorQuoteProjection | null;
+    delta: EstimatorQuoteRevisionDelta | null;
+  };
   proposal: {
     id: string;
     quote_id: string | null;
@@ -390,6 +429,41 @@ export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
     assumptions: string | null;
     exclusions: string | null;
   } | null;
+  scope_changes: Array<{
+    id: string;
+    number: string | null;
+    version: number | null;
+    status: string | null;
+    title: string | null;
+    reason: string | null;
+    scope_delta: string | null;
+    quote_link: "selected_quote" | "other_quote" | "quote_unavailable" | "no_quote";
+    currency: string | null;
+    subtotal: number | null;
+    tax_amount: number | null;
+    total_amount: number | null;
+    price_book_version: string | null;
+    requested_at: string | null;
+    approved_at: string | null;
+    accepted_at: string | null;
+    correction_reason: string | null;
+  }>;
+  proposal_readiness: {
+    state: "ready" | "review_required" | "blocked" | "unavailable";
+    reasons: Array<
+      | "measurement_missing"
+      | "measurement_source_review_required"
+      | "takeoff_link_missing"
+      | "takeoff_not_approved"
+      | "quote_missing"
+      | "quote_snapshot_incomplete"
+      | "quote_not_approved"
+      | "scope_change_unresolved"
+      | "proposal_link_mismatch"
+      | "source_window_partial"
+      | "stale_source_detail"
+    >;
+  };
   scope_clauses: Array<{
     id: string;
     type: string | null;
@@ -991,7 +1065,7 @@ export async function buildEstimatorWorkbenchReadModel(
   const jobId = job ? text(job.name) : null;
   if (!job || !jobId) return null;
 
-  const [measurementRows, takeoffRows, quoteRows, proposalRows, scopeRows] = await Promise.all([
+  const [measurementRows, takeoffRows, quoteRows, proposalRows, changeOrderRows, scopeRows] = await Promise.all([
     listOfficeEstimatorFrappeResource(
       env,
       "Measurement Report",
@@ -1018,6 +1092,12 @@ export async function buildEstimatorWorkbenchReadModel(
     ),
     listOfficeEstimatorFrappeResource(
       env,
+      "Change Order",
+      [["Change Order", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
       "Scope Clause",
       [["Scope Clause", "roof_job", "=", jobId]],
       ESTIMATOR_SOURCE_LIMIT,
@@ -1035,6 +1115,12 @@ export async function buildEstimatorWorkbenchReadModel(
   const selectedProposalRow = selectedQuoteName
     ? latestRecord(proposalRows.filter((row) => text(row.quotation) === selectedQuoteName))
     : null;
+  const quote = estimatorQuote(selectedQuoteRow);
+  const pricingSnapshot = estimatorPricingSnapshot(quote);
+  const quoteRevision = estimatorQuoteRevision(selectedQuoteRow, quoteRows);
+  const scopeChanges = newestFirst(changeOrderRows).flatMap((row) =>
+    estimatorScopeChange(row, selectedQuoteName, quoteRows),
+  );
   const [measurementRead, takeoffRead] = await Promise.all([
     selectedMeasurementName
       ? safeEstimatorDetailRead(env, "Measurement Report", selectedMeasurementName)
@@ -1068,12 +1154,13 @@ export async function buildEstimatorWorkbenchReadModel(
     ["material_takeoffs", takeoffRows],
     ["customer_quotes", quoteRows],
     ["proposal_evidence_packs", proposalRows],
+    ["change_orders", changeOrderRows],
     ["scope_clauses", scopeRows],
   ];
   const partialSources = sourceRows.flatMap(([name, rows]) => rows.length === ESTIMATOR_SOURCE_LIMIT ? [name] : []);
   const base = envelope(
     auth,
-    [job, ...measurementRows, ...takeoffRows, ...quoteRows, ...proposalRows, ...scopeRows],
+    [job, ...measurementRows, ...takeoffRows, ...quoteRows, ...proposalRows, ...changeOrderRows, ...scopeRows],
     staleFields,
   );
   return {
@@ -1105,8 +1192,24 @@ export async function buildEstimatorWorkbenchReadModel(
       records: newestFirst(takeoffRows).flatMap(estimatorTakeoffSummary),
       selected: estimatorTakeoffSelection(selectedTakeoffRow, takeoffDetail),
     },
-    quote: estimatorQuote(selectedQuoteRow),
+    quote,
+    pricing_snapshot: pricingSnapshot,
+    quote_revision: quoteRevision,
     proposal: estimatorProposal(selectedProposalRow),
+    scope_changes: scopeChanges,
+    proposal_readiness: estimatorProposalReadiness({
+      geometry,
+      measurement: selectedMeasurementRow,
+      takeoff: selectedTakeoffRow,
+      takeoffDetail,
+      takeoffLineage: measurementToTakeoffLineage(selectedMeasurementRow, selectedTakeoffRow, takeoffRows),
+      quote,
+      pricingSnapshot,
+      proposalLineage: quoteToProposalLineage(selectedQuoteRow, selectedProposalRow, proposalRows),
+      scopeChanges,
+      partialSources,
+      staleFields,
+    }),
     scope_clauses: newestFirst(scopeRows).flatMap(estimatorScopeClause),
   };
 }
@@ -1658,7 +1761,7 @@ function estimatorTakeoffSelection(
   };
 }
 
-function estimatorQuote(row: FrappeRow | null): EstimatorWorkbenchReadModel["quote"] {
+function estimatorQuote(row: FrappeRow | null): EstimatorQuoteProjection | null {
   const id = row ? text(row.customer_quote_id) ?? text(row.name) : null;
   if (!row || !id) return null;
   return {
@@ -1688,6 +1791,190 @@ function estimatorQuote(row: FrappeRow | null): EstimatorWorkbenchReadModel["quo
     exclusions: text(row.exclusions),
     supersedes: text(row.supersedes),
     correction_reason: text(row.correction_reason),
+  };
+}
+
+function estimatorPricingSnapshot(
+  quote: EstimatorQuoteProjection | null,
+): EstimatorWorkbenchReadModel["pricing_snapshot"] {
+  if (!quote) {
+    return {
+      state: "unavailable",
+      quote_id: null,
+      quote_version: null,
+      price_book_version: null,
+      pricing_effective_at: null,
+      valid_until: null,
+    };
+  }
+  const complete = Boolean(quote.price_book_version && quote.pricing_effective_at);
+  const status = quote.status;
+  return {
+    state: !complete
+      ? "incomplete"
+      : status === "Expired"
+        ? "expired"
+        : status === "Approved" || status === "Accepted"
+          ? "recorded"
+          : "review_required",
+    quote_id: quote.id,
+    quote_version: quote.version,
+    price_book_version: quote.price_book_version,
+    pricing_effective_at: quote.pricing_effective_at,
+    valid_until: quote.valid_until,
+  };
+}
+
+function estimatorQuoteRevision(
+  current: FrappeRow | null,
+  quotes: FrappeRow[],
+): EstimatorWorkbenchReadModel["quote_revision"] {
+  if (!current) return { state: "no_quote", prior_quote: null, delta: null };
+  const supersedes = text(current.supersedes);
+  const currentVersion = optionalNumber(current.quote_version);
+  if (!supersedes) {
+    return {
+      state: currentVersion !== null && currentVersion > 1 ? "unlinked_revision" : "not_revised",
+      prior_quote: null,
+      delta: null,
+    };
+  }
+  const prior = quotes.find((row) => text(row.name) === supersedes) ?? null;
+  if (!prior) {
+    return {
+      state: quotes.length === ESTIMATOR_SOURCE_LIMIT ? "history_incomplete" : "prior_quote_missing",
+      prior_quote: null,
+      delta: null,
+    };
+  }
+  const priorVersion = optionalNumber(prior.quote_version);
+  if (currentVersion !== null && priorVersion !== null && priorVersion >= currentVersion) {
+    return { state: "invalid_lineage", prior_quote: estimatorQuote(prior), delta: null };
+  }
+  return {
+    state: "compared",
+    prior_quote: estimatorQuote(prior),
+    delta: estimatorQuoteRevisionDelta(current, prior),
+  };
+}
+
+function estimatorQuoteRevisionDelta(
+  current: FrappeRow,
+  prior: FrappeRow,
+): EstimatorQuoteRevisionDelta {
+  return {
+    subtotal: numberDelta(current.subtotal, prior.subtotal),
+    tax_amount: numberDelta(current.tax_amount, prior.tax_amount),
+    quote_total: numberDelta(current.quote_total, prior.quote_total),
+    deposit_amount: numberDelta(current.deposit_amount, prior.deposit_amount),
+    amount_due: numberDelta(current.amount_due, prior.amount_due),
+    balance_due: numberDelta(current.balance_due, prior.balance_due),
+    price_book_version_changed: valueChanged(current.price_book_version, prior.price_book_version),
+    pricing_effective_at_changed: valueChanged(current.pricing_effective_at, prior.pricing_effective_at),
+    tax_code_changed: valueChanged(current.tax_code, prior.tax_code),
+    tax_rate_changed: valueChanged(current.tax_rate, prior.tax_rate),
+    currency_changed: valueChanged(current.currency, prior.currency),
+    scope_summary_changed: valueChanged(current.scope_summary, prior.scope_summary),
+    assumptions_changed: valueChanged(current.assumptions, prior.assumptions),
+    exclusions_changed: valueChanged(current.exclusions, prior.exclusions),
+  };
+}
+
+function estimatorScopeChange(
+  row: FrappeRow,
+  selectedQuoteName: string | null,
+  quoteRows: FrappeRow[],
+): EstimatorWorkbenchReadModel["scope_changes"] {
+  const id = text(row.change_order_id) ?? text(row.name);
+  if (!id) return [];
+  const quoteName = text(row.customer_quote);
+  const quoteLink = !quoteName
+    ? "no_quote"
+    : quoteName === selectedQuoteName
+      ? "selected_quote"
+      : quoteRows.some((quote) => text(quote.name) === quoteName)
+        ? "other_quote"
+        : "quote_unavailable";
+  return [{
+    id,
+    number: text(row.change_number),
+    version: optionalNumber(row.version),
+    status: text(row.status),
+    title: text(row.title),
+    reason: text(row.reason),
+    scope_delta: text(row.scope_delta),
+    quote_link: quoteLink,
+    currency: text(row.currency),
+    subtotal: optionalNumber(row.subtotal),
+    tax_amount: optionalNumber(row.tax_amount),
+    total_amount: optionalNumber(row.total_amount),
+    price_book_version: text(row.price_book_version),
+    requested_at: text(row.requested_at),
+    approved_at: text(row.approved_at),
+    accepted_at: text(row.accepted_at),
+    correction_reason: text(row.correction_reason),
+  }];
+}
+
+function estimatorProposalReadiness({
+  geometry,
+  measurement,
+  takeoff,
+  takeoffDetail,
+  takeoffLineage,
+  quote,
+  pricingSnapshot,
+  proposalLineage,
+  scopeChanges,
+  partialSources,
+  staleFields,
+}: {
+  geometry: EstimatorGeometryProjection;
+  measurement: FrappeRow | null;
+  takeoff: FrappeRow | null;
+  takeoffDetail: FrappeRow | null;
+  takeoffLineage: EstimatorWorkbenchReadModel["lineage"]["measurement_to_takeoff"];
+  quote: EstimatorQuoteProjection | null;
+  pricingSnapshot: EstimatorWorkbenchReadModel["pricing_snapshot"];
+  proposalLineage: EstimatorWorkbenchReadModel["lineage"]["quote_to_proposal"];
+  scopeChanges: EstimatorWorkbenchReadModel["scope_changes"];
+  partialSources: string[];
+  staleFields: string[];
+}): EstimatorWorkbenchReadModel["proposal_readiness"] {
+  const reasons: EstimatorWorkbenchReadModel["proposal_readiness"]["reasons"] = [];
+  if (!measurement) reasons.push("measurement_missing");
+  else if (geometry.state !== "recomputed") reasons.push("measurement_source_review_required");
+  if (takeoffLineage !== "linked" || !takeoff || !takeoffDetail) reasons.push("takeoff_link_missing");
+  else if (text(takeoff.status) !== "Approved") reasons.push("takeoff_not_approved");
+  if (!quote) reasons.push("quote_missing");
+  else {
+    if (pricingSnapshot.state === "incomplete" || pricingSnapshot.state === "unavailable") {
+      reasons.push("quote_snapshot_incomplete");
+    }
+    if (quote.status !== "Approved" && quote.status !== "Accepted") reasons.push("quote_not_approved");
+  }
+  if (proposalLineage === "mismatch") reasons.push("proposal_link_mismatch");
+  if (scopeChanges.some((change) =>
+    change.quote_link === "selected_quote"
+      && ["Draft", "Needs Review", "Approved", "Presented"].includes(change.status ?? ""),
+  )) {
+    reasons.push("scope_change_unresolved");
+  }
+  if (partialSources.length > 0) reasons.push("source_window_partial");
+  if (staleFields.length > 0) reasons.push("stale_source_detail");
+  const unavailable = reasons.includes("source_window_partial") || reasons.includes("stale_source_detail");
+  const blocked = reasons.some((reason) =>
+    [
+      "measurement_missing",
+      "takeoff_link_missing",
+      "quote_missing",
+      "scope_change_unresolved",
+      "proposal_link_mismatch",
+    ].includes(reason),
+  );
+  return {
+    state: unavailable ? "unavailable" : blocked ? "blocked" : reasons.length > 0 ? "review_required" : "ready",
+    reasons,
   };
 }
 
@@ -1865,6 +2152,19 @@ function optionalNumber(value: unknown): number | null {
   if (value === null || value === undefined || (typeof value === "string" && !value.trim())) return null;
   const number = typeof value === "number" ? value : Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function numberDelta(current: unknown, prior: unknown): number | null {
+  const currentNumber = optionalNumber(current);
+  const priorNumber = optionalNumber(prior);
+  return currentNumber === null || priorNumber === null ? null : currentNumber - priorNumber;
+}
+
+function valueChanged(current: unknown, prior: unknown): boolean {
+  const currentText = text(current);
+  const priorText = text(prior);
+  if (currentText !== null || priorText !== null) return currentText !== priorText;
+  return optionalNumber(current) !== optionalNumber(prior);
 }
 
 function notNull<T>(value: T | null): value is T {

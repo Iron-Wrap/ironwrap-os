@@ -190,6 +190,19 @@ function workbenchModel(
       supersedes: "QUOTE-OLD",
       correction_reason: "Supplier price notice",
     },
+    pricing_snapshot: {
+      state: "review_required",
+      quote_id: "quote_a",
+      quote_version: 3,
+      price_book_version: "2026-07-11",
+      pricing_effective_at: "2026-07-11T12:00:00.000Z",
+      valid_until: "2026-07-25",
+    },
+    quote_revision: {
+      state: "prior_quote_missing",
+      prior_quote: null,
+      delta: null,
+    },
     proposal: {
       id: "pack_a",
       quote_id: "QUOTE-A",
@@ -199,6 +212,11 @@ function workbenchModel(
       signed_at: null,
       assumptions: "One existing layer.",
       exclusions: "Deck repairs excluded.",
+    },
+    scope_changes: [],
+    proposal_readiness: {
+      state: "review_required",
+      reasons: ["measurement_source_review_required", "takeoff_not_approved", "quote_not_approved"],
     },
     scope_clauses: [
       {
@@ -314,6 +332,116 @@ describe("EstimatorWorkbenchPage", () => {
     expect(
       screen.getByText(/proposal records were returned, but none link to the selected quote/i),
     ).toBeVisible();
+  });
+
+  it("shows a linked revision and unresolved customer scope decision without offering a repricing control", async () => {
+    const base = workbenchModel();
+    const priorQuote = {
+      ...base.quote!,
+      id: "quote_a",
+      version: 3,
+      quote_total: 12600,
+      subtotal: 12000,
+      tax_amount: 600,
+      deposit_amount: 2500,
+      amount_due: 2500,
+      balance_due: 12600,
+      scope_summary: "Replace roof system and flashings.",
+      assumptions: "One existing layer.",
+      exclusions: "Deck repairs excluded.",
+      price_book_version: "2026-07-11",
+      pricing_effective_at: "2026-07-11T12:00:00.000Z",
+      supersedes: "QUOTE-OLD",
+      correction_reason: null,
+    };
+    vi.mocked(loadEstimatorWorkbench).mockResolvedValue({
+      ...base,
+      quote: {
+        ...base.quote!,
+        id: "quote_b",
+        version: 4,
+        status: "Approved",
+        quote_total: 13020,
+        subtotal: 12400,
+        tax_amount: 620,
+        deposit_amount: 3000,
+        amount_due: 3000,
+        balance_due: 13020,
+        scope_summary: "Replace roof system, flashings, and one added ridge vent.",
+        assumptions: "One existing layer and clear driveway.",
+        exclusions: "Deck repairs excluded pending written change order.",
+        price_book_version: "2026-07-12",
+        pricing_effective_at: "2026-07-12T12:00:00.000Z",
+        supersedes: "QUOTE-A",
+        correction_reason: "Supplier price notice and revised ridge ventilation scope.",
+      },
+      pricing_snapshot: {
+        ...base.pricing_snapshot,
+        state: "recorded",
+        quote_id: "quote_b",
+        quote_version: 4,
+        price_book_version: "2026-07-12",
+        pricing_effective_at: "2026-07-12T12:00:00.000Z",
+      },
+      quote_revision: {
+        state: "compared",
+        prior_quote: priorQuote,
+        delta: {
+          subtotal: 400,
+          tax_amount: 20,
+          quote_total: 420,
+          deposit_amount: 500,
+          amount_due: 500,
+          balance_due: 420,
+          price_book_version_changed: true,
+          pricing_effective_at_changed: true,
+          tax_code_changed: false,
+          tax_rate_changed: false,
+          currency_changed: false,
+          scope_summary_changed: true,
+          assumptions_changed: true,
+          exclusions_changed: true,
+        },
+      },
+      scope_changes: [
+        {
+          id: "change_b",
+          number: "CO-02",
+          version: 1,
+          status: "Presented",
+          title: "Ridge ventilation addition",
+          reason: "Field ventilation condition needs customer decision.",
+          scope_delta: "Add ridge vent after written customer approval.",
+          quote_link: "selected_quote",
+          currency: "CAD",
+          subtotal: 400,
+          tax_amount: 20,
+          total_amount: 420,
+          price_book_version: "2026-07-12",
+          requested_at: "2026-07-12T10:00:00.000Z",
+          approved_at: "2026-07-12T10:30:00.000Z",
+          accepted_at: null,
+          correction_reason: null,
+        },
+      ],
+      proposal_readiness: {
+        state: "blocked",
+        reasons: ["scope_change_unresolved"],
+      },
+    });
+    renderWorkbench();
+
+    await screen.findByRole("heading", { name: "Commercial decision rail" });
+    expect(screen.getByText("Version comparison")).toBeVisible();
+    expect(screen.getByText(/Explicitly linked V3 → V4/i)).toBeVisible();
+    expect(screen.getByText("Scope change ledger")).toBeVisible();
+    expect(screen.getByText("Ridge ventilation addition")).toBeVisible();
+    expect(screen.getByText(/still needs its written customer decision/i)).toBeVisible();
+    expect(screen.getByText("Blocked")).toBeVisible();
+    expect(screen.getByText(/not a live supplier-price check/i)).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /reprice|refresh price|create quote|send proposal/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not ask the BFF for estimator records on a field device", async () => {

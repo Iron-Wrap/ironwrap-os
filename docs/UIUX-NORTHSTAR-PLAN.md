@@ -216,8 +216,13 @@ quote price-book/version state, proposal-record state, and attributable scope cl
 labels recomputation as source-file math, not field verification, and never infers a continuous
 chain: the selected takeoff must link to the selected Measurement Report and the proposal must link
 to the selected Customer Quote; mismatch and bounded-source uncertainty remain visible. It has no
-price, takeoff, proposal, signature, payment, or communication write control. Price-book/repricing diffs,
-proposal-pack assembly, insurance lane, and live source/browser/operator proof remain open.
+price, takeoff, proposal, signature, payment, or communication write control. Its local Commercial
+Decision Rail now compares a selected quote only to an explicitly superseded prior version, makes
+the captured price-book/effective-date snapshot distinct from a live supplier-price claim, isolates
+pending change orders by selected quote linkage, and exposes proposal-review stops. It cannot
+regenerate an amount, mutate a quote, prepare a proposal, send a customer message, or infer written
+customer agreement. Price-book source snapshots, governed quote revision, proposal-pack assembly,
+insurance lane, and live source/browser/operator proof remain open.
 Beats: SmartEstimates on trust: JN auto-drafts from unverified numbers; we show the
 verification. Proof gate: measurement-to-proposal flow completed with every number
 traceable to its in-file source ref on screen.

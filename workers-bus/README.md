@@ -151,7 +151,7 @@ npx wrangler deploy
 | GET | `/api/v1/jobs/:id` | session cookie | job, gate locks, and proof stream; an unassigned field lookup is indistinguishable from missing |
 | GET | `/api/v1/owner/now` | owner/ops session | exception-first blocked gate, incident, finance, lead, and material read model |
 | GET | `/api/v1/sales` | owner/ops session | bounded office Lead Envelope, estimate, quote, and communication-record review DTO; raw payloads and commercial-policy internals are excluded |
-| GET | `/api/v1/estimator/jobs/:id` | owner/ops session | bounded source-review DTO: server-recomputed retained geometry, persisted metric/takeoff source refs, quote/proposal/scope state, explicit measurement-to-takeoff and quote-to-proposal linkage; no raw key/XML/report URL/evidence JSON or mutation path |
+| GET | `/api/v1/estimator/jobs/:id` | owner/ops session | bounded source-review DTO: server-recomputed retained geometry, persisted metric/takeoff source refs, explicit measurement-to-takeoff and quote-to-proposal linkage, captured quote snapshot/revision comparison, and quote-attributed change-order review; no raw key/XML/report URL/evidence JSON or mutation path |
 | GET | `/api/v1/approvals` | owner/ops session | browser-safe approval inbox with server-issued capability names; never returns receipts, raw args, or broker output |
 | GET | `/api/v1/approvals/:id` | owner/ops session | one current approval DTO; re-evaluates pending expiry |
 | POST | `/api/v1/approvals/lead-triage` | owner/ops session + CSRF + idempotency key | fixed local-triage preparation path; not a generic tool proxy |

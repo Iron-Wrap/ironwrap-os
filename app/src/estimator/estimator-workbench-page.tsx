@@ -133,6 +133,8 @@ function EstimatorWorkbenchScreen({
         lineage={model.lineage}
       />
 
+      <CommercialDecisionRail model={model} locale={locale} />
+
       <MeasurementSource model={model} locale={locale} />
 
       <div className="grid min-w-0 items-start gap-7 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.85fr)]">
@@ -248,6 +250,118 @@ function proposalEvidenceStep(
       : "No proposal returned",
     tone: quote ? quoteTone(quote.status) : "bg-surface-muted text-muted",
   };
+}
+
+function CommercialDecisionRail({
+  model,
+  locale,
+}: {
+  model: EstimatorWorkbenchResponse;
+  locale: string;
+}) {
+  const selectedMeasurement = model.measurements.selected;
+  const sourceMath = selectedMeasurement
+    ? selectedMeasurement.geometry.state === "recomputed"
+      ? { detail: "Source math checked", tone: "bg-ok-soft text-ok" }
+      : selectedMeasurement.geometry.state === "needs_review"
+        ? { detail: "Source math needs review", tone: "bg-warning-soft text-warning" }
+        : { detail: "Source math unavailable", tone: "bg-surface-muted text-muted" }
+    : { detail: "No measurement returned", tone: "bg-surface-muted text-muted" };
+  const takeoff = takeoffDecisionStep(model);
+  const pricing = pricingDecisionStep(model.pricing_snapshot);
+  const proposal = proposalDecisionStep(model.proposal_readiness);
+  const steps = [
+    { label: "Measurement", ...sourceMath },
+    { label: "Takeoff", ...takeoff },
+    { label: "Price snapshot", ...pricing },
+    { label: "Proposal decision", ...proposal },
+  ];
+  return (
+    <section
+      className="border-y border-border py-5 sm:py-6"
+      aria-labelledby="decision-rail-heading"
+    >
+      <div className="px-4 sm:px-6">
+        <SectionHeading
+          id="decision-rail-heading"
+          icon={ShieldAlert}
+          title="Commercial decision rail"
+          description="A review gate for the selected quote version. It never refreshes a price, changes scope, or prepares customer communication."
+        />
+        <ol
+          className="mt-5 grid border-y border-border sm:grid-cols-4"
+          aria-label="Commercial decision gates"
+        >
+          {steps.map((step, index) => (
+            <li
+              key={step.label}
+              className={cn(
+                "min-h-24 px-3 py-4 sm:px-4",
+                index > 0 && "border-t border-border sm:border-t-0 sm:border-l",
+              )}
+            >
+              <p className="text-xs font-bold uppercase tracking-[0.09em] text-muted">
+                {step.label}
+              </p>
+              <span
+                className={cn(
+                  "mt-2 inline-flex min-h-7 items-center rounded-full px-2.5 text-xs font-bold",
+                  step.tone,
+                )}
+              >
+                {step.detail}
+              </span>
+            </li>
+          ))}
+        </ol>
+        <p className="mt-3 text-xs leading-5 text-muted">
+          Snapshot checked{" "}
+          {formatDate(model.read_model_generated_at, locale) ?? "at an unavailable time"}. A
+          recorded price book is evidence for this quote version, not a promise that supplier
+          pricing is live.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function takeoffDecisionStep(model: EstimatorWorkbenchResponse) {
+  if (model.lineage.measurement_to_takeoff !== "linked" || !model.takeoffs.selected) {
+    return model.lineage.measurement_to_takeoff === "unknown"
+      ? { detail: "Linkage incomplete", tone: "bg-warning-soft text-warning" }
+      : { detail: "No linked takeoff", tone: "bg-warning-soft text-warning" };
+  }
+  return model.takeoffs.selected.status === "Approved"
+    ? { detail: "Linked & approved", tone: "bg-ok-soft text-ok" }
+    : { detail: "Linked; review required", tone: "bg-warning-soft text-warning" };
+}
+
+function pricingDecisionStep(snapshot: EstimatorWorkbenchResponse["pricing_snapshot"]) {
+  const version =
+    snapshot.quote_version === null ? "Quote version unavailable" : `V${snapshot.quote_version}`;
+  if (snapshot.state === "recorded") {
+    return { detail: `${version} snapshot recorded`, tone: "bg-ok-soft text-ok" };
+  }
+  if (snapshot.state === "expired")
+    return { detail: `${version} expired`, tone: "bg-warning-soft text-warning" };
+  if (snapshot.state === "incomplete") {
+    return { detail: "Snapshot incomplete", tone: "bg-warning-soft text-warning" };
+  }
+  if (snapshot.state === "review_required") {
+    return { detail: `${version} needs review`, tone: "bg-warning-soft text-warning" };
+  }
+  return { detail: "No quote snapshot", tone: "bg-surface-muted text-muted" };
+}
+
+function proposalDecisionStep(readiness: EstimatorWorkbenchResponse["proposal_readiness"]) {
+  if (readiness.state === "ready")
+    return { detail: "Ready for proposal review", tone: "bg-ok-soft text-ok" };
+  if (readiness.state === "review_required") {
+    return { detail: "Review required", tone: "bg-warning-soft text-warning" };
+  }
+  if (readiness.state === "blocked")
+    return { detail: "Blocked by evidence", tone: "bg-warning-soft text-warning" };
+  return { detail: "Source window incomplete", tone: "bg-surface-muted text-muted" };
 }
 
 function MeasurementSource({
@@ -717,7 +831,16 @@ function CommercialRecord({
           {!quote ? (
             <EmptyInline message="No customer quote was returned." />
           ) : (
-            <QuoteLedger quote={quote} locale={locale} tenantCurrency={tenantCurrency} />
+            <>
+              <QuoteLedger quote={quote} locale={locale} tenantCurrency={tenantCurrency} />
+              <PricingSnapshot snapshot={model.pricing_snapshot} locale={locale} />
+              <QuoteRevisionLedger
+                quote={quote}
+                revision={model.quote_revision}
+                locale={locale}
+                tenantCurrency={tenantCurrency}
+              />
+            </>
           )}
         </div>
       </section>
@@ -761,6 +884,7 @@ function CommercialRecord({
               />
             </div>
           )}
+          <ProposalReadiness readiness={model.proposal_readiness} />
         </div>
       </section>
 
@@ -773,6 +897,11 @@ function CommercialRecord({
             description="Visible scope, assumptions, exclusions, and risks remain attributable."
           />
           <ScopeClauses clauses={model.scope_clauses} locale={locale} />
+          <ScopeChangeLedger
+            changes={model.scope_changes}
+            locale={locale}
+            tenantCurrency={tenantCurrency}
+          />
         </div>
       </section>
     </aside>
@@ -877,6 +1006,335 @@ function QuoteLedger({
         ) : null}
       </div>
     </div>
+  );
+}
+
+function PricingSnapshot({
+  snapshot,
+  locale,
+}: {
+  snapshot: EstimatorWorkbenchResponse["pricing_snapshot"];
+  locale: string;
+}) {
+  const tone =
+    snapshot.state === "recorded"
+      ? "bg-ok-soft text-ok"
+      : snapshot.state === "unavailable"
+        ? "bg-surface-muted text-muted"
+        : "bg-warning-soft text-warning";
+  const label =
+    snapshot.state === "recorded"
+      ? "Captured snapshot"
+      : snapshot.state === "expired"
+        ? "Quote expired"
+        : snapshot.state === "incomplete"
+          ? "Snapshot incomplete"
+          : snapshot.state === "review_required"
+            ? "Estimator review required"
+            : "No snapshot";
+  return (
+    <section
+      className="mt-6 border-y border-border py-4"
+      aria-labelledby="pricing-snapshot-heading"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p id="pricing-snapshot-heading" className="text-sm font-bold text-foreground">
+            Price snapshot
+          </p>
+          <p className="mt-1 text-xs leading-5 text-muted">
+            Captured with this quote version. It is not a live supplier-price check.
+          </p>
+        </div>
+        <StatusChip label={label} tone={tone} />
+      </div>
+      <dl className="mt-4 divide-y divide-border border-y border-border text-sm">
+        <RecordLine
+          label="Quote version"
+          value={
+            snapshot.quote_version === null ? "Not recorded" : `Version ${snapshot.quote_version}`
+          }
+        />
+        <RecordLine label="Price book" value={snapshot.price_book_version ?? "Not recorded"} />
+        <RecordLine
+          label="Captured effective"
+          value={formatDate(snapshot.pricing_effective_at, locale) ?? "Not recorded"}
+        />
+        <RecordLine
+          label="Quote valid until"
+          value={
+            formatDate(snapshot.valid_until, locale, { dateStyle: "medium" }) ?? "Not recorded"
+          }
+        />
+      </dl>
+    </section>
+  );
+}
+
+function QuoteRevisionLedger({
+  quote,
+  revision,
+  locale,
+  tenantCurrency,
+}: {
+  quote: NonNullable<EstimatorWorkbenchResponse["quote"]>;
+  revision: EstimatorWorkbenchResponse["quote_revision"];
+  locale: string;
+  tenantCurrency: string;
+}) {
+  const prior = revision.prior_quote;
+  const delta = revision.delta;
+  const currency = quote.currency ?? tenantCurrency;
+  if (revision.state !== "compared" || !prior || !delta) {
+    return (
+      <section className="mt-6 border-y border-border py-4" aria-labelledby="revision-heading">
+        <p id="revision-heading" className="text-sm font-bold text-foreground">
+          Version comparison
+        </p>
+        <p className="mt-2 text-sm leading-6 text-muted">
+          {quoteRevisionEmptyMessage(revision.state)}
+        </p>
+      </section>
+    );
+  }
+  const changedFacts = [
+    delta.price_book_version_changed ? "Price-book version changed" : null,
+    delta.pricing_effective_at_changed ? "Pricing-effective date changed" : null,
+    delta.tax_code_changed || delta.tax_rate_changed ? "Tax treatment changed" : null,
+    delta.currency_changed ? "Currency changed" : null,
+    delta.scope_summary_changed ? "Scope summary changed" : null,
+    delta.assumptions_changed ? "Assumptions changed" : null,
+    delta.exclusions_changed ? "Exclusions changed" : null,
+  ].filter((value): value is string => Boolean(value));
+  return (
+    <section className="mt-6 border-y border-border py-4" aria-labelledby="revision-heading">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p id="revision-heading" className="text-sm font-bold text-foreground">
+            Version comparison
+          </p>
+          <p className="mt-1 text-xs leading-5 text-muted">
+            Explicitly linked {prior.version === null ? "prior version" : `V${prior.version}`} →{" "}
+            {quote.version === null ? "selected version" : `V${quote.version}`}. No amount is
+            regenerated here.
+          </p>
+        </div>
+        <StatusChip label="Linked revision" tone="bg-ok-soft text-ok" />
+      </div>
+      <dl className="mt-4 divide-y divide-border border-y border-border text-sm">
+        <RevisionMoneyLine
+          label="Quote total"
+          before={prior.quote_total}
+          after={quote.quote_total}
+          delta={delta.quote_total}
+          locale={locale}
+          currency={currency}
+        />
+        <RevisionMoneyLine
+          label="Subtotal"
+          before={prior.subtotal}
+          after={quote.subtotal}
+          delta={delta.subtotal}
+          locale={locale}
+          currency={currency}
+        />
+        <RevisionMoneyLine
+          label="Tax"
+          before={prior.tax_amount}
+          after={quote.tax_amount}
+          delta={delta.tax_amount}
+          locale={locale}
+          currency={currency}
+        />
+        <RevisionMoneyLine
+          label="Deposit"
+          before={prior.deposit_amount}
+          after={quote.deposit_amount}
+          delta={delta.deposit_amount}
+          locale={locale}
+          currency={currency}
+        />
+      </dl>
+      {changedFacts.length > 0 ? (
+        <ul className="mt-4 space-y-1.5 text-xs font-semibold leading-5 text-warning">
+          {changedFacts.map((fact) => (
+            <li key={fact} className="flex gap-2">
+              <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              {fact}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-4 text-xs font-semibold text-muted">
+          No tracked price, tax, or scope fields changed.
+        </p>
+      )}
+      {quote.correction_reason ? (
+        <p className="mt-4 border-l-2 border-warning pl-3 text-sm leading-6 text-foreground">
+          {quote.correction_reason}
+        </p>
+      ) : null}
+      {delta.scope_summary_changed ? (
+        <div className="mt-4 space-y-3 border-t border-border pt-4 text-sm leading-6">
+          <p className="text-xs font-bold uppercase tracking-[0.09em] text-muted">Scope change</p>
+          <p className="text-muted">Before: {prior.scope_summary ?? "Not recorded"}</p>
+          <p className="text-foreground">Selected: {quote.scope_summary ?? "Not recorded"}</p>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function RevisionMoneyLine({
+  label,
+  before,
+  after,
+  delta,
+  locale,
+  currency,
+}: {
+  label: string;
+  before: number | null;
+  after: number | null;
+  delta: number | null;
+  locale: string;
+  currency: string;
+}) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 px-0 py-3">
+      <dt className="font-semibold text-muted">{label}</dt>
+      <dd className="text-right font-bold tabular-nums text-foreground">
+        {formatMoney(after, locale, currency) ?? "Not recorded"}
+      </dd>
+      <dd className="col-span-2 mt-1 text-xs text-muted">
+        {[
+          formatMoney(before, locale, currency) ?? "Before not recorded",
+          formatSignedMoney(delta, locale, currency),
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+      </dd>
+    </div>
+  );
+}
+
+function ScopeChangeLedger({
+  changes,
+  locale,
+  tenantCurrency,
+}: {
+  changes: EstimatorWorkbenchResponse["scope_changes"];
+  locale: string;
+  tenantCurrency: string;
+}) {
+  return (
+    <section className="mt-7 border-t border-border pt-5" aria-labelledby="scope-change-heading">
+      <SectionHeading
+        id="scope-change-heading"
+        icon={CircleAlert}
+        title="Scope change ledger"
+        description="Each change-order record declares its quote relationship and customer-decision state."
+      />
+      {changes.length === 0 ? (
+        <EmptyInline message="No change-order records were returned for this roof job." />
+      ) : (
+        <ol className="mt-5 divide-y divide-border border-y border-border">
+          {changes.map((change) => {
+            const currency = change.currency ?? tenantCurrency;
+            return (
+              <li key={change.id} className="py-4 first:pt-0 last:pb-0">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="font-bold text-foreground">{change.title ?? "Untitled change"}</p>
+                    <p className="mt-1 text-xs font-semibold text-muted">
+                      {[change.number, change.version === null ? null : `v${change.version}`]
+                        .filter(Boolean)
+                        .join(" · ") || "Change identity unavailable"}
+                    </p>
+                  </div>
+                  <StatusChip
+                    label={humanize(change.status) ?? "State unavailable"}
+                    tone={changeOrderTone(change.status)}
+                  />
+                </div>
+                <p className="mt-3 text-sm leading-6 text-foreground">
+                  {change.scope_delta ?? change.reason ?? "No scope delta was recorded."}
+                </p>
+                {change.reason ? (
+                  <p className="mt-2 text-sm leading-6 text-muted">{change.reason}</p>
+                ) : null}
+                <dl className="mt-3 divide-y divide-border border-y border-border text-sm">
+                  <RecordLine
+                    label="Quote relation"
+                    value={scopeChangeLinkCopy(change.quote_link)}
+                  />
+                  <RecordLine
+                    label="Commercial delta"
+                    value={formatMoney(change.total_amount, locale, currency) ?? "Not recorded"}
+                  />
+                  <RecordLine
+                    label="Customer accepted"
+                    value={formatDate(change.accepted_at, locale) ?? "Not recorded"}
+                  />
+                </dl>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function ProposalReadiness({
+  readiness,
+}: {
+  readiness: EstimatorWorkbenchResponse["proposal_readiness"];
+}) {
+  const tone =
+    readiness.state === "ready"
+      ? "bg-ok-soft text-ok"
+      : readiness.state === "unavailable"
+        ? "bg-surface-muted text-muted"
+        : "bg-warning-soft text-warning";
+  const label =
+    readiness.state === "ready"
+      ? "Ready for review"
+      : readiness.state === "review_required"
+        ? "Review required"
+        : readiness.state === "blocked"
+          ? "Blocked"
+          : "Source incomplete";
+  return (
+    <section
+      className="mt-6 border-t border-border pt-5"
+      aria-labelledby="proposal-readiness-heading"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p id="proposal-readiness-heading" className="text-sm font-bold text-foreground">
+            Proposal review gate
+          </p>
+          <p className="mt-1 text-xs leading-5 text-muted">
+            This gate does not create, approve, send, sign, or collect against a proposal.
+          </p>
+        </div>
+        <StatusChip label={label} tone={tone} />
+      </div>
+      {readiness.reasons.length > 0 ? (
+        <ul className="mt-4 divide-y divide-border border-y border-border text-sm">
+          {readiness.reasons.map((reason) => (
+            <li key={reason} className="py-3 leading-6 text-foreground">
+              {proposalReadinessCopy(reason)}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-4 text-sm leading-6 text-ok">
+          The bounded read model found no automatic stop condition. Human review remains required.
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -1213,6 +1671,64 @@ function proposalTone(status: string | null): string {
   return "bg-surface-muted text-muted";
 }
 
+function changeOrderTone(status: string | null): string {
+  if (status === "Accepted") return "bg-ok-soft text-ok";
+  if (status === "Approved" || status === "Presented") return "bg-info-soft text-info";
+  if (status === "Draft" || status === "Needs Review") return "bg-warning-soft text-warning";
+  if (status === "Rejected" || status === "Superseded") return "bg-surface-muted text-muted";
+  return "bg-surface-muted text-muted";
+}
+
+function quoteRevisionEmptyMessage(
+  state: EstimatorWorkbenchResponse["quote_revision"]["state"],
+): string {
+  if (state === "not_revised")
+    return "This selected quote does not declare an earlier version to compare.";
+  if (state === "unlinked_revision") {
+    return "This quote has a later version number but no explicit superseded quote link. Do not infer a prior baseline.";
+  }
+  if (state === "prior_quote_missing") {
+    return "The declared prior quote was not returned. Do not calculate or explain a revision delta.";
+  }
+  if (state === "history_incomplete") {
+    return "The quote history reached the safe source boundary, so the declared prior version cannot be verified.";
+  }
+  if (state === "invalid_lineage") {
+    return "The declared prior quote has an invalid version relationship. Commercial review must resolve it.";
+  }
+  return "No selected customer quote is available for version comparison.";
+}
+
+function scopeChangeLinkCopy(
+  link: EstimatorWorkbenchResponse["scope_changes"][number]["quote_link"],
+): string {
+  if (link === "selected_quote") return "Linked to selected quote";
+  if (link === "other_quote") return "Linked to another quote version";
+  if (link === "quote_unavailable") return "Quoted version was not returned";
+  return "No quote link recorded";
+}
+
+function proposalReadinessCopy(
+  reason: EstimatorWorkbenchResponse["proposal_readiness"]["reasons"][number],
+): string {
+  const copy = {
+    measurement_missing: "No selected measurement report anchors this review.",
+    measurement_source_review_required:
+      "Source-file math still needs review; this does not assert field verification.",
+    takeoff_link_missing: "No approved material takeoff is linked to the selected measurement.",
+    takeoff_not_approved: "The linked material takeoff has not reached Approved state.",
+    quote_missing: "No selected customer quote anchors proposal evidence.",
+    quote_snapshot_incomplete: "The selected quote lacks a complete captured price-book snapshot.",
+    quote_not_approved: "The selected quote is not Approved or Accepted.",
+    scope_change_unresolved:
+      "A change order linked to the selected quote still needs its written customer decision.",
+    proposal_link_mismatch: "Existing proposal evidence does not link to the selected quote.",
+    source_window_partial: "One or more bounded source windows are incomplete.",
+    stale_source_detail: "One or more selected source details are stale or unavailable.",
+  } satisfies Record<EstimatorWorkbenchResponse["proposal_readiness"]["reasons"][number], string>;
+  return copy[reason];
+}
+
 function formatMoney(value: number | null, locale: string, currency: string): string | null {
   if (value === null) return null;
   try {
@@ -1224,6 +1740,13 @@ function formatMoney(value: number | null, locale: string, currency: string): st
   } catch {
     return `${currency} ${value.toLocaleString(locale)}`;
   }
+}
+
+function formatSignedMoney(value: number | null, locale: string, currency: string): string | null {
+  if (value === null) return null;
+  const formatted = formatMoney(Math.abs(value), locale, currency);
+  if (!formatted) return null;
+  return `${value > 0 ? "+" : value < 0 ? "−" : "±"}${formatted}`;
 }
 
 function formatArea(value: number | null, locale: string): string {

@@ -153,10 +153,14 @@ report URLs, raw evidence JSON, customer messages, tax-policy snapshots, supplie
 generic Frappe record. Direct Frappe responses are byte- and child-row-capped; over-limit detail
 degrades to a stale/unavailable state. The workbench selects takeoffs only through their Measurement
 Report link and proposal packs only through their Customer Quote link, exposing mismatches rather
-than silently combining independent latest records. Source-file recomputation is visibly distinct from field verification; no
-price, takeoff, proposal, signature, payment, or communication mutation exists in this vertical.
-Repricing deltas, governed proposal assembly, insurance/supplement evidence, live Frappe/R2
-freshness, real-browser, and estimator/operator acceptance proof remain open.
+than silently combining independent latest records. The locally tested Commercial Decision Rail
+also compares only an explicit `supersedes` quote lineage, labels a price-book/effective-date record
+as a captured snapshot rather than live supplier pricing, and keeps pending Change Orders attributed
+to the selected quote or visibly separate. Source-file recomputation is visibly distinct from field
+verification; no price, takeoff, proposal, signature, payment, or communication mutation exists in
+this vertical. Governed quote revision, immutable price-rule snapshot binding, proposal assembly,
+insurance/supplement evidence, live Frappe/R2 freshness, real-browser, and estimator/operator
+acceptance proof remain open.
 
 ## Research Basis
 

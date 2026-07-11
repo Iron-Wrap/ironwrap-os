@@ -166,6 +166,95 @@ const proposalSchema = z
   })
   .strict();
 
+const pricingSnapshotSchema = z
+  .object({
+    state: z.enum(["recorded", "review_required", "expired", "incomplete", "unavailable"]),
+    quote_id: nullableText,
+    quote_version: z.number().int().nonnegative().nullable(),
+    price_book_version: nullableText,
+    pricing_effective_at: nullableText,
+    valid_until: nullableText,
+  })
+  .strict();
+
+const quoteRevisionDeltaSchema = z
+  .object({
+    subtotal: nullableNumber,
+    tax_amount: nullableNumber,
+    quote_total: nullableNumber,
+    deposit_amount: nullableNumber,
+    amount_due: nullableNumber,
+    balance_due: nullableNumber,
+    price_book_version_changed: z.boolean(),
+    pricing_effective_at_changed: z.boolean(),
+    tax_code_changed: z.boolean(),
+    tax_rate_changed: z.boolean(),
+    currency_changed: z.boolean(),
+    scope_summary_changed: z.boolean(),
+    assumptions_changed: z.boolean(),
+    exclusions_changed: z.boolean(),
+  })
+  .strict();
+
+const quoteRevisionSchema = z
+  .object({
+    state: z.enum([
+      "no_quote",
+      "not_revised",
+      "compared",
+      "prior_quote_missing",
+      "history_incomplete",
+      "unlinked_revision",
+      "invalid_lineage",
+    ]),
+    prior_quote: quoteSchema.nullable(),
+    delta: quoteRevisionDeltaSchema.nullable(),
+  })
+  .strict();
+
+const scopeChangeSchema = z
+  .object({
+    id: z.string().min(1),
+    number: nullableText,
+    version: z.number().int().nonnegative().nullable(),
+    status: nullableText,
+    title: nullableText,
+    reason: nullableText,
+    scope_delta: nullableText,
+    quote_link: z.enum(["selected_quote", "other_quote", "quote_unavailable", "no_quote"]),
+    currency: nullableText,
+    subtotal: nullableNumber,
+    tax_amount: nullableNumber,
+    total_amount: nullableNumber,
+    price_book_version: nullableText,
+    requested_at: nullableText,
+    approved_at: nullableText,
+    accepted_at: nullableText,
+    correction_reason: nullableText,
+  })
+  .strict();
+
+const proposalReadinessSchema = z
+  .object({
+    state: z.enum(["ready", "review_required", "blocked", "unavailable"]),
+    reasons: z.array(
+      z.enum([
+        "measurement_missing",
+        "measurement_source_review_required",
+        "takeoff_link_missing",
+        "takeoff_not_approved",
+        "quote_missing",
+        "quote_snapshot_incomplete",
+        "quote_not_approved",
+        "scope_change_unresolved",
+        "proposal_link_mismatch",
+        "source_window_partial",
+        "stale_source_detail",
+      ]),
+    ),
+  })
+  .strict();
+
 const scopeClauseSchema = z
   .object({
     id: z.string().min(1),
@@ -219,7 +308,11 @@ export const estimatorWorkbenchResponseSchema = envelopeSchema
       })
       .strict(),
     quote: quoteSchema.nullable(),
+    pricing_snapshot: pricingSnapshotSchema,
+    quote_revision: quoteRevisionSchema,
     proposal: proposalSchema.nullable(),
+    scope_changes: z.array(scopeChangeSchema),
+    proposal_readiness: proposalReadinessSchema,
     scope_clauses: z.array(scopeClauseSchema),
   })
   .strict();

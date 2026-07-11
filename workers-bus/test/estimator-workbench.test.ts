@@ -369,6 +369,127 @@ test("estimator workbench does not join a remeasurement to an unlinked takeoff o
   }
 });
 
+test("estimator workbench exposes immutable revision and scope-change decisions without pricing a new quote", async () => {
+  const dataset = {
+    ...rows,
+    "Measurement Report": [{ ...rows["Measurement Report"][0] }],
+    "Material Takeoff": [{ ...rows["Material Takeoff"][0], status: "Approved" }],
+    "Customer Quote": [
+      { ...rows["Customer Quote"][0], status: "Approved" },
+      {
+        ...rows["Customer Quote"][0],
+        name: "QUOTE-B",
+        customer_quote_id: "quote_b",
+        quote_version: 4,
+        status: "Approved",
+        price_book_version: "2026-07-12",
+        pricing_effective_at: "2026-07-12T10:00:00.000Z",
+        subtotal: 12400,
+        tax_amount: 620,
+        quote_total: 13020,
+        deposit_amount: 3000,
+        amount_due: 3000,
+        balance_due: 13020,
+        scope_summary: "Replace roof system, flashings, and one added ridge vent.",
+        assumptions: "One existing layer and clear driveway.",
+        exclusions: "Deck repairs excluded pending written change order.",
+        supersedes: "QUOTE-A",
+        correction_reason: "Supplier price notice and revised ridge ventilation scope.",
+        modified: "2026-07-14T10:00:00.000Z",
+      },
+    ],
+    "Proposal Evidence Pack": [{
+      ...rows["Proposal Evidence Pack"][0],
+      name: "PACK-B",
+      pack_id: "pack_b",
+      quotation: "QUOTE-B",
+      modified: "2026-07-14T10:00:00.000Z",
+    }],
+    "Change Order": [
+      {
+        name: "CHANGE-B",
+        change_order_id: "change_b",
+        roof_job: "JOB-A",
+        customer_quote: "QUOTE-B",
+        change_number: "CO-02",
+        version: 1,
+        status: "Presented",
+        title: "Ridge ventilation addition",
+        reason: "Field ventilation condition needs customer decision.",
+        scope_delta: "Add ridge vent after written customer approval.",
+        currency: "CAD",
+        subtotal: 400,
+        tax_amount: 20,
+        total_amount: 420,
+        price_book_version: "2026-07-12",
+        requested_at: "2026-07-14T10:00:00.000Z",
+        approved_at: "2026-07-14T10:30:00.000Z",
+        accepted_at: null,
+        correction_reason: null,
+        tax_policy_snapshot_json: "private-change-tax-policy",
+        notes: "private-change-note",
+        modified: "2026-07-14T10:00:00.000Z",
+      },
+      {
+        name: "CHANGE-A",
+        change_order_id: "change_a",
+        roof_job: "JOB-A",
+        customer_quote: "QUOTE-A",
+        change_number: "CO-01",
+        version: 1,
+        status: "Accepted",
+        title: "Prior scope decision",
+        reason: "Prior accepted condition.",
+        scope_delta: "Prior accepted scope change.",
+        currency: "CAD",
+        subtotal: 100,
+        tax_amount: 5,
+        total_amount: 105,
+        price_book_version: "2026-07-11",
+        requested_at: MODIFIED,
+        approved_at: MODIFIED,
+        accepted_at: MODIFIED,
+        correction_reason: null,
+        modified: MODIFIED,
+      },
+    ],
+  };
+  const mock = installFrappeMock(dataset);
+  try {
+    const verifiedGeometry = JSON.stringify({
+      source_xml: GEOMETRY_XML.replace('length="12"', 'length="10"'),
+    });
+    const model = await buildEstimatorWorkbenchReadModel(env(verifiedGeometry), auth("owner"), "JOB-A");
+    assert.ok(model);
+    assert.equal(model.measurements.selected?.geometry.state, "recomputed");
+    assert.equal(model.quote?.id, "quote_b");
+    assert.deepEqual(model.pricing_snapshot, {
+      state: "recorded",
+      quote_id: "quote_b",
+      quote_version: 4,
+      price_book_version: "2026-07-12",
+      pricing_effective_at: "2026-07-12T10:00:00.000Z",
+      valid_until: "2026-07-25",
+    });
+    assert.equal(model.quote_revision.state, "compared");
+    assert.equal(model.quote_revision.prior_quote?.id, "quote_a");
+    assert.equal(model.quote_revision.delta?.quote_total, 420);
+    assert.equal(model.quote_revision.delta?.scope_summary_changed, true);
+    assert.equal(model.scope_changes[0]?.quote_link, "selected_quote");
+    assert.equal(model.scope_changes[0]?.status, "Presented");
+    assert.equal(model.scope_changes[1]?.quote_link, "other_quote");
+    assert.deepEqual(model.proposal_readiness, {
+      state: "blocked",
+      reasons: ["scope_change_unresolved"],
+    });
+    const serialized = JSON.stringify(model);
+    assert.equal(serialized.includes("private-change-tax-policy"), false);
+    assert.equal(serialized.includes("private-change-note"), false);
+  } finally {
+    mock.restore();
+  }
+});
+
 test("estimator workbench fails closed when a direct report response exceeds the read boundary", async () => {
   const mock = installFrappeMock(rows, { oversizedMeasurementDetail: true });
   try {

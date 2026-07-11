@@ -1,8 +1,15 @@
 import type { AppEnv } from "./app-types.ts";
 
 export type FrappeDocType = keyof typeof FRAPPE_READ_FIELDS;
+export type OfficeSalesDocType = keyof typeof OFFICE_SALES_READ_FIELDS;
 export type FrappeFilter = readonly [
   doctype: FrappeDocType,
+  field: string,
+  operator: string,
+  value: unknown,
+];
+export type OfficeSalesFrappeFilter = readonly [
+  doctype: OfficeSalesDocType,
   field: string,
   operator: string,
   value: unknown,
@@ -80,6 +87,35 @@ export const FRAPPE_READ_FIELDS = {
   ],
 } as const;
 
+/**
+ * Sales is the only browser surface allowed to receive office contact and commercial context.
+ * It has its own static allowlist so Owner Now and Field Companion never fetch this data just
+ * because they happen to use the same Frappe integration credential.
+ */
+export const OFFICE_SALES_READ_FIELDS = {
+  "Lead Envelope": [
+    "name", "envelope_id", "source", "event_ts", "status", "intent_queue", "triage_status", "triage_summary",
+    "contact_name", "contact_phone", "contact_email", "job_ref", "modified",
+  ],
+  "Roof Job": [
+    "name", "roof_job_id", "job_number", "brand", "service_type", "job_status", "workflow_profile",
+    "lead_envelope", "customer", "quotation", "modified",
+  ],
+  "Instant Estimate Session": [
+    "name", "estimate_session_id", "lead_envelope", "roof_job", "source", "service_type", "status",
+    "range_low", "range_high", "estimate_total", "confidence", "review_required", "reviewed_at", "approved_at",
+    "assumptions", "exclusions", "modified",
+  ],
+  "Customer Quote": [
+    "name", "customer_quote_id", "roof_job", "quote_version", "status", "quote_total", "currency",
+    "valid_until", "payment_status", "prepared_at", "approved_at", "accepted_at", "scope_summary", "modified",
+  ],
+  "Communication Consent": [
+    "name", "consent_id", "customer", "lead_envelope", "roof_job", "channel", "purpose", "status",
+    "jurisdiction", "consent_basis", "captured_at", "effective_from", "expires_at", "revoked_at", "modified",
+  ],
+} as const;
+
 export function frappeReadConfigured(env: AppEnv): boolean {
   if (!env.ERPNEXT_API_KEY?.trim() || !env.ERPNEXT_API_SECRET?.trim()) return false;
   try {
@@ -110,6 +146,14 @@ const FILTER_FIELDS: Readonly<Record<FrappeDocType, ReadonlySet<string>>> = {
   "Supplier Order": new Set(["roof_job", "status"]),
 };
 
+const OFFICE_SALES_FILTER_FIELDS: Readonly<Record<OfficeSalesDocType, ReadonlySet<string>>> = {
+  "Lead Envelope": new Set(["name", "triage_status", "status"]),
+  "Roof Job": new Set(["name", "lead_envelope"]),
+  "Instant Estimate Session": new Set(["lead_envelope", "roof_job", "status"]),
+  "Customer Quote": new Set(["roof_job", "status"]),
+  "Communication Consent": new Set(["lead_envelope", "roof_job", "customer", "status"]),
+};
+
 const FILTER_OPERATORS = new Set(["=", "in", "like"]);
 
 export async function listFrappeResource(
@@ -128,10 +172,54 @@ export async function listFrappeResourcePage(
   limit = 50,
   offset = 0,
 ): Promise<FrappeRow[]> {
+  return await listFrappeResourcePageForContract(
+    env,
+    doctype,
+    filters,
+    limit,
+    offset,
+    FRAPPE_READ_FIELDS,
+    FILTER_FIELDS,
+  );
+}
+
+/**
+ * Deliberately narrow office-only lookup. This is not a generic field selector or an escape hatch
+ * around the field/owner read allowlist above.
+ */
+export async function listOfficeSalesFrappeResource(
+  env: AppEnv,
+  doctype: OfficeSalesDocType,
+  filters: readonly OfficeSalesFrappeFilter[] = [],
+  limit = 50,
+): Promise<FrappeRow[]> {
+  return await listFrappeResourcePageForContract(
+    env,
+    doctype,
+    filters,
+    limit,
+    0,
+    OFFICE_SALES_READ_FIELDS,
+    OFFICE_SALES_FILTER_FIELDS,
+  );
+}
+
+async function listFrappeResourcePageForContract(
+  env: AppEnv,
+  doctype: string,
+  filters: readonly (readonly [string, string, string, unknown])[],
+  limit: number,
+  offset: number,
+  fieldsByDocType: Readonly<Record<string, readonly string[]>>,
+  filterFieldsByDocType: Readonly<Record<string, ReadonlySet<string>>>,
+): Promise<FrappeRow[]> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("frappe_read_invalid_limit");
   if (!Number.isInteger(offset) || offset < 0 || offset > 100_000) throw new Error("frappe_read_invalid_offset");
+  const fields = fieldsByDocType[doctype];
+  const filterFields = filterFieldsByDocType[doctype];
+  if (!fields || !filterFields) throw new Error("frappe_read_doctype_not_allowed");
   for (const filter of filters) {
-    if (filter[0] !== doctype || !FILTER_FIELDS[doctype].has(filter[1]) || !FILTER_OPERATORS.has(filter[2])) {
+    if (filter[0] !== doctype || !filterFields.has(filter[1]) || !FILTER_OPERATORS.has(filter[2])) {
       throw new Error("frappe_read_filter_not_allowed");
     }
   }
@@ -139,7 +227,7 @@ export async function listFrappeResourcePage(
   const base = frappeBaseUrl(env);
   if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET) throw new Error("frappe_read_not_configured");
   const params = new URLSearchParams({
-    fields: JSON.stringify(FRAPPE_READ_FIELDS[doctype]),
+    fields: JSON.stringify(fields),
     filters: JSON.stringify(filters),
     order_by: "modified desc, name desc",
     limit_page_length: String(limit),
@@ -171,7 +259,7 @@ export async function listFrappeResourcePage(
       ? (decoded as { data?: unknown }).data
       : null;
     if (!Array.isArray(data)) throw new Error("frappe_read_invalid_shape");
-    return data.slice(0, limit).filter(isRecord).map((row) => projectRow(doctype, row));
+    return data.slice(0, limit).filter(isRecord).map((row) => projectRow(fields, row));
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw new Error("frappe_read_timeout");
     if (error instanceof Error && error.message.startsWith("frappe_read_")) throw error;
@@ -185,8 +273,8 @@ export function publicFrappeRow(row: FrappeRow): FrappeRow {
   return { ...row };
 }
 
-function projectRow(doctype: FrappeDocType, row: FrappeRow): FrappeRow {
-  const allowed = new Set<string>(FRAPPE_READ_FIELDS[doctype]);
+function projectRow(fields: readonly string[], row: FrappeRow): FrappeRow {
+  const allowed = new Set<string>(fields);
   const projected: FrappeRow = {};
   for (const [key, value] of Object.entries(row)) if (allowed.has(key)) projected[key] = value;
   return projected;

@@ -4,11 +4,12 @@ import {
   buildJobProofReadModel,
   buildJobReadModel,
   buildOwnerNowReadModel,
+  buildSalesReadModel,
   buildTodayReadModel,
   mctbStatus,
 } from "../src/app-read-models.ts";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
-import { FRAPPE_READ_FIELDS } from "../src/frappe-read.ts";
+import { FRAPPE_READ_FIELDS, OFFICE_SALES_READ_FIELDS } from "../src/frappe-read.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 
 const MODIFIED = "2026-07-10T11:00:00.000Z";
@@ -60,6 +61,9 @@ function job(name: string, number: string, property: string, customer: string) {
     roofing_property: property,
     customer,
     current_gate_state: "Materials: Blocked",
+    lead_envelope: null,
+    workflow_profile: "Residential Retail",
+    quotation: name === "JOB-A" ? "QUOTE-A" : null,
     modified: MODIFIED,
     _assign: JSON.stringify(["must-not-be-used@example.com"]),
     qb_invoice_ref: "financial-secret",
@@ -219,7 +223,28 @@ function rowsFor(doctype: string): Array<Record<string, unknown>> {
   if (doctype === "Lead Envelope") return [{
     name: "LEAD-A", envelope_id: "lead_a", status: "received", source: "website",
     event_ts: "2026-07-10T10:00:00.000Z", intent_queue: "Estimator", triage_status: "Untriaged",
-    contact_name: "Pat Prospect", job_ref: null, modified: MODIFIED,
+    triage_summary: "Hail repair inquiry, confirm site details before a final scope.",
+    contact_name: "Pat Prospect", contact_phone: "+14035559999", contact_email: "pat@example.com",
+    job_ref: "JOB-A", payload_json: "raw-intake-secret", raw_key: "r2-private-key", modified: MODIFIED,
+  }];
+  if (doctype === "Instant Estimate Session") return [{
+    name: "ESTIMATE-A", estimate_session_id: "estimate_a", lead_envelope: "LEAD-A", roof_job: "JOB-A",
+    source: "website", service_type: "Roofing", status: "Needs Review", range_low: 12_400, range_high: 15_900,
+    estimate_total: null, confidence: "Preliminary", review_required: 1, reviewed_at: null, approved_at: null,
+    assumptions: "Visible slope and access assumptions require verification.",
+    exclusions: "Not a final quote or contract.", payload_json: "private-estimate-json", modified: MODIFIED,
+  }];
+  if (doctype === "Customer Quote") return [{
+    name: "QUOTE-A", customer_quote_id: "quote_a", roof_job: "JOB-A", quote_version: 2,
+    status: "Needs Review", quote_total: 14_750, currency: "CAD", valid_until: "2026-07-20",
+    payment_status: "Not Due", prepared_at: MODIFIED, approved_at: null, accepted_at: null,
+    scope_summary: "Replace affected roof system.", tax_policy_snapshot_json: "private-tax-policy", modified: MODIFIED,
+  }];
+  if (doctype === "Communication Consent") return [{
+    name: "CONSENT-A", consent_id: "consent_a", customer: "CUSTOMER-A", lead_envelope: "LEAD-A", roof_job: "JOB-A",
+    channel: "Email", purpose: "Estimate Follow-up", status: "Granted", jurisdiction: "AB",
+    consent_basis: "Express", captured_at: MODIFIED, effective_from: MODIFIED, expires_at: null, revoked_at: null,
+    source_reference: "private-form-reference", notes: "private-consent-note", modified: MODIFIED,
   }];
   if (doctype === "Change Order") return [{
     name: "CHANGE-A", change_order_id: "change_a", roof_job: "JOB-A", change_number: "CO-1",
@@ -342,6 +367,121 @@ test("owner Now is an office-only, exception-first roofing read model", async ()
   }
 });
 
+test("Sales Desk receives a bounded office contract without widening Owner Now or leaking raw records", async () => {
+  const mock = installFrappeMock();
+  try {
+    const model = await buildSalesReadModel(env(), auth("ops", "ops@example.com"));
+    assert.deepEqual(model.summary, {
+      listed_leads: 1,
+      triage_unresolved: 1,
+      estimate_needs_review: 1,
+      quote_needs_review: 1,
+      quote_expired: 0,
+      no_linked_consent_record: 0,
+    });
+    assert.deepEqual(model.partial_sources, []);
+    assert.deepEqual(model.allowed_actions.at(-1), "sales.read");
+    assert.deepEqual(model.leads[0], {
+      id: "LEAD-A",
+      envelope_id: "lead_a",
+      source: "website",
+      received_at: "2026-07-10T10:00:00.000Z",
+      transport_status: "received",
+      intent_queue: "Estimator",
+      contact: {
+        display_name: "Pat Prospect",
+        phone: "+14035559999",
+        email: "pat@example.com",
+      },
+      triage: {
+        status: "Untriaged",
+        summary: "Hail repair inquiry, confirm site details before a final scope.",
+      },
+      job: {
+        id: "JOB-A",
+        job_number: "IW-1001",
+        status: "In Production",
+        service_type: "Roofing",
+        workflow_profile: "Residential Retail",
+      },
+      estimate: {
+        id: "estimate_a",
+        status: "Needs Review",
+        service_type: "Roofing",
+        range_low: 12_400,
+        range_high: 15_900,
+        estimate_total: null,
+        confidence: "Preliminary",
+        review_required: true,
+        reviewed_at: null,
+        approved_at: null,
+        assumptions: "Visible slope and access assumptions require verification.",
+        exclusions: "Not a final quote or contract.",
+      },
+      quote: {
+        id: "quote_a",
+        version: 2,
+        status: "Needs Review",
+        quote_total: 14_750,
+        currency: "CAD",
+        valid_until: "2026-07-20",
+        payment_status: "Not Due",
+        prepared_at: MODIFIED,
+        approved_at: null,
+        accepted_at: null,
+        scope_summary: "Replace affected roof system.",
+      },
+      consent: {
+        context: "recorded",
+        records: [{
+          id: "consent_a",
+          channel: "Email",
+          purpose: "Estimate Follow-up",
+          status: "Granted",
+          jurisdiction: "AB",
+          basis: "Express",
+          captured_at: MODIFIED,
+          effective_from: MODIFIED,
+          expires_at: null,
+          revoked_at: null,
+        }],
+      },
+      attention: ["triage_unresolved", "estimate_needs_review", "quote_needs_review"],
+    });
+    const serialized = JSON.stringify(model);
+    for (const secret of [
+      "raw-intake-secret", "r2-private-key", "private-estimate-json", "private-tax-policy",
+      "private-form-reference", "private-consent-note",
+    ]) assert.equal(serialized.includes(secret), false, `leaked ${secret}`);
+
+    const officeLeadRequest = mock.requests.find((request) =>
+      request.doctype === "Lead Envelope" && request.fields.includes("contact_phone"),
+    );
+    assert.ok(officeLeadRequest);
+    assert.deepEqual(officeLeadRequest?.fields, OFFICE_SALES_READ_FIELDS["Lead Envelope"]);
+    assert.equal(officeLeadRequest?.fields.includes("payload_json"), false);
+    const legacyJobReferenceRequest = mock.requests.find((request) =>
+      request.doctype === "Roof Job"
+      && request.filters.some((filter) => Array.isArray(filter) && filter[1] === "name" && filter[2] === "in"),
+    );
+    assert.deepEqual(legacyJobReferenceRequest?.filters, [["Roof Job", "name", "in", ["JOB-A"]]]);
+
+    const ownerModel = await buildOwnerNowReadModel(env(), auth("owner", "owner@example.com"));
+    assert.equal(ownerModel.summary.untriaged_leads, 1);
+    const ownerLeadRequest = mock.requests.find((request) =>
+      request.doctype === "Lead Envelope" && request.fields.includes("contact_phone") === false,
+    );
+    assert.deepEqual(ownerLeadRequest?.fields, FRAPPE_READ_FIELDS["Lead Envelope"]);
+
+    await assert.rejects(
+      async () => await buildSalesReadModel(env(), auth("field", "crew@example.com")),
+      /office_scope_required/,
+    );
+  } finally {
+    mock.restore();
+  }
+});
+
 test("MCTB status distinguishes provider acceptance from delivery and never guesses without timing proof", () => {
   const receivedAt = "2026-07-10T10:00:00.000Z";
   const onTime = mctbStatus(receivedAt, [{
@@ -382,6 +522,25 @@ test("owner Now HTTP route does not expose the office queue to field sessions", 
     const field = await handleAuthenticatedRoute(request, env(), auth("field", "crew@example.com"));
     assert.equal(field.status, 403);
     assert.deepEqual(await field.json(), { error: "forbidden" });
+    assert.equal(mock.requests.length, callsBeforeDenied);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("Sales Desk HTTP route is private and never starts office reads for field sessions", async () => {
+  const mock = installFrappeMock();
+  try {
+    const request = new Request("https://app.example.com/api/v1/sales");
+    const office = await handleAuthenticatedRoute(request, env(), auth("ops", "ops@example.com"));
+    assert.equal(office.status, 200);
+    assert.equal(office.headers.get("cache-control"), "private, no-store");
+    assert.equal((await office.json() as { leads: Array<{ id: string }> }).leads[0]?.id, "LEAD-A");
+
+    const callsBeforeDenied = mock.requests.length;
+    const field = await handleAuthenticatedRoute(request, env(), auth("field", "crew@example.com"));
+    assert.equal(field.status, 403);
+    assert.deepEqual(await field.json(), { error: "office_role_required" });
     assert.equal(mock.requests.length, callsBeforeDenied);
   } finally {
     mock.restore();
@@ -443,5 +602,10 @@ test("Frappe read allowlist never requests sensitive contact or commercial field
   assert.equal(FRAPPE_READ_FIELDS["Roof Job"].includes("qb_invoice_ref" as never), false);
   for (const privateTriageField of ["triaged_by", "triaged_at", "triage_summary"]) {
     assert.equal(FRAPPE_READ_FIELDS["Lead Envelope"].includes(privateTriageField as never), false);
+  }
+  for (const rawField of ["payload_json", "raw_key", "tax_policy_snapshot_json", "source_reference", "notes"]) {
+    assert.equal(OFFICE_SALES_READ_FIELDS["Lead Envelope"].includes(rawField as never), false);
+    assert.equal(OFFICE_SALES_READ_FIELDS["Customer Quote"].includes(rawField as never), false);
+    assert.equal(OFFICE_SALES_READ_FIELDS["Communication Consent"].includes(rawField as never), false);
   }
 });

@@ -43,6 +43,7 @@ import {
   buildJobProofReadModel,
   buildJobReadModel,
   buildOwnerNowReadModel,
+  buildSalesReadModel,
   buildTodayReadModel,
 } from "./app-read-models.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
@@ -251,6 +252,16 @@ export async function handleAuthenticatedRoute(
     }
     try {
       return privateAppJson(await buildOwnerNowReadModel(env, auth));
+    } catch {
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
+    }
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/sales") {
+    if (auth.session.role !== "owner" && auth.session.role !== "ops") {
+      return privateAppJson({ error: "office_role_required" }, 403);
+    }
+    try {
+      return privateAppJson(await buildSalesReadModel(env, auth));
     } catch {
       return privateAppJson({ error: "upstream_unavailable" }, 502);
     }

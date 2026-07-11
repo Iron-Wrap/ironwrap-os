@@ -101,8 +101,8 @@ export interface AppTenantPublic {
 }
 
 export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
-  owner: ["session:read", "jobs:read:any", "owner:read", "approvals:read", "approvals:decide"],
-  ops: ["session:read", "jobs:read:any", "owner:read", "approvals:read", "approvals:prepare"],
+  owner: ["session:read", "jobs:read:any", "owner:read", "sales:read", "approvals:read", "approvals:decide"],
+  ops: ["session:read", "jobs:read:any", "owner:read", "sales:read", "approvals:read", "approvals:prepare"],
   field: ["session:read", "jobs:read:assigned", "field:write:assigned"],
 };
 

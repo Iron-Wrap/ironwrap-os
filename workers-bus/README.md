@@ -44,7 +44,7 @@ IronWrap PWA
   ▼
 [1] tenant-bound active app user → one-time emailed magic link (hash only in D1)
 [2] one-time consume → fixed 12h __Host session (hash only in D1)
-[3] /api/v1/today, /jobs/:id, /owner/now → permission-shaped Frappe reads
+[3] /api/v1/today, /jobs/:id, /owner/now, /sales → permission-shaped Frappe reads
 [4] field users are filtered and rechecked against Frappe _assign before a job is returned
 ```
 
@@ -82,8 +82,8 @@ src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's jo
 src/operations.ts  readiness, operational status, and dead-letter replay safety orchestration
 src/app-auth.ts    one-time magic-link/session/CSRF/origin contract; no raw token persistence
 src/app-auth-store.ts D1 app-user/auth/throttle/audit adapter and retention cleanup
-src/frappe-read.ts strict Frappe GET allowlist and credential-safe upstream adapter
-src/app-read-models.ts screen-shaped Today, Job, and Owner Now projections
+src/frappe-read.ts strict default and office-Sales Frappe GET allowlists plus credential-safe upstream adapter
+src/app-read-models.ts screen-shaped Today, Job, Owner Now, and bounded office Sales projections
 src/app-api.ts     /api/v1 routing/CORS plus admin-token app-user provisioning and governed approval routes
 src/approval-store.ts immutable D1 approval-request projection/event ledger and CAS transitions
 src/approval-broker-client.ts Worker-to-private-broker HMAC client; no Frappe write capability in Worker
@@ -150,6 +150,7 @@ npx wrangler deploy
 | GET | `/api/v1/today` | session cookie | assigned active jobs for field; broader active jobs for owner/ops |
 | GET | `/api/v1/jobs/:id` | session cookie | job, gate locks, and proof stream; an unassigned field lookup is indistinguishable from missing |
 | GET | `/api/v1/owner/now` | owner/ops session | exception-first blocked gate, incident, finance, lead, and material read model |
+| GET | `/api/v1/sales` | owner/ops session | bounded office Lead Envelope, estimate, quote, and communication-record review DTO; raw payloads and commercial-policy internals are excluded |
 | GET | `/api/v1/approvals` | owner/ops session | browser-safe approval inbox with server-issued capability names; never returns receipts, raw args, or broker output |
 | GET | `/api/v1/approvals/:id` | owner/ops session | one current approval DTO; re-evaluates pending expiry |
 | POST | `/api/v1/approvals/lead-triage` | owner/ops session + CSRF + idempotency key | fixed local-triage preparation path; not a generic tool proxy |

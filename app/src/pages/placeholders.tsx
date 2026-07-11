@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { ClipboardCheck, Hammer, ShieldCheck, UsersRound } from "lucide-react";
+import { ClipboardCheck, Hammer, ShieldCheck } from "lucide-react";
 import { lazy, Suspense, type ReactNode } from "react";
 
 import { RoleGuard } from "../components/role-guard";
@@ -90,21 +90,6 @@ export function CheckInPage() {
             <Link to="/today">Open Today</Link>
           </Button>
         }
-      />
-    </RoleGuard>
-  );
-}
-
-export function SalesPage() {
-  return (
-    <RoleGuard surface="sales">
-      <PlaceholderSurface
-        eyebrow="Sales and estimating"
-        title="Sales"
-        description="Follow-up, estimate review, and proposal readiness will be organized around missing proof and human decisions."
-        emptyTitle="No live sales work is connected"
-        emptyMessage="Qualified opportunities will appear only from the tenant-scoped Sales read model. This production shell does not ship demo leads."
-        icon={<UsersRound className="size-6" aria-hidden="true" />}
       />
     </RoleGuard>
   );

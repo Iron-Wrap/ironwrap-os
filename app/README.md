@@ -30,6 +30,10 @@ data.
   `Execution Uncertain` state with one immutable evidence reconciliation. It never
   receives a receipt, raw write arguments, broker output, Frappe credential, or generic tool picker.
   Approval decisions are deliberately online-only and are never placed in the field outbox.
+- A locally contract-tested office Sales Desk: a bounded Lead Envelope, estimate, quote, and
+  communication-record review queue with a separate BFF allowlist. It labels preliminary estimate
+  ranges as non-binding and source limits as uncertainty. It does not receive raw intake payloads,
+  commercial policy snapshots, generic Frappe data, or any send, quote, or payment control.
 - A field-first Today run sheet: server order is preserved, schedules format in the tenant time
   zone, and local packet availability visibly progresses from checking to saving, saved, or not
   saved. A cached packet is never called complete or safety-cleared; a blocked gate can only open
@@ -42,9 +46,10 @@ data.
   blocker reporting is explicit, notes and location remain optional, and the visible outbox state
   distinguishes device save, queued work, upload, verification, and attention without implying
   delivery or onsite proof.
-- Route placeholders for the later Sales and customer Portal slices. Today, Job, Check-in, Owner
-  Now, Approvals, and Settings have their implemented North Star foundations. The inbox does not
-  manufacture a lead-triage request from the Owner Now feed until Sales has a source-backed lead-detail contract.
+- A route placeholder for the later customer Portal slice. Today, Job, Check-in, Owner Now,
+  Approvals, Sales, and Settings have implemented North Star foundations. The inbox remains a
+  decision surface, not a generic lead editor; source-backed Sales preparation is a later governed
+  slice.
 
 ## Run it
 
@@ -84,6 +89,7 @@ Endpoint names are centralized in `src/lib/api-paths.ts`:
 | `GET` / `POST` | `/api/v1/device-pairings`             | Owner/ops device list or QR issuance                     |
 | `POST`         | `/api/v1/device-pairings/:id/revoke`  | Revoke one lost or reassigned field device               |
 | `POST`         | `/api/v1/auth/logout`                 | Revoke the current session with `X-CSRF-Token`           |
+| `GET`          | `/api/v1/sales`                       | Owner/ops bounded Sales Desk review DTO                  |
 | `GET`          | `/api/v1/approvals`                   | Owner/ops browser-safe approval inbox and capability DTO |
 | `POST`         | `/api/v1/approvals/:id/approve`       | Configured-owner, CAS/idempotent approval decision       |
 | `POST`         | `/api/v1/approvals/:id/reject`        | Configured-owner, durable rejection with reason          |

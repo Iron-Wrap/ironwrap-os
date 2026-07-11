@@ -19,7 +19,7 @@ capability only.
 | Hermes agent layer | 8 runtime-filtered roles, 122 MCP tools, receipt-bound approved-write contract |
 | Deploy/ops | Contract-validated production configuration, pinned runtime lock, encrypted Frappe/D1 recovery, launch runbook |
 | Competitive truth | 10 exceeded / 7 covered / 19 open, adversarially audited |
-| Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, and P2 Owner Now plus the governed `/approvals` inbox are locally implemented and contract-tested. Owner Now separates work-stops, operating exceptions, and lead attention; the inbox renders only allowlisted before/patch/outcome DTOs and server-granted decision capability. Neither surface claims delivery or human follow-up. Live Worker/broker/Frappe/browser/device proof and P3-P5 remain open; Frappe Control Center is the truthful fallback. |
+| Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, P2 Owner Now plus governed `/approvals`, and the first P3 Sales Desk read model are locally implemented and contract-tested. Owner Now separates work-stops, operating exceptions, and lead attention; the inbox renders only allowlisted before/patch/outcome DTOs and server-granted decision capability; Sales joins narrowly allowlisted office lead, estimate, quote, and communication-record context. None claims delivery or human follow-up. Live Worker/broker/Frappe/browser/device proof, the estimator workbench, and P4-P5 remain open; Frappe Control Center is the truthful fallback. |
 
 Every "their UX beats ours" row in the scorecard (boards, mobile app, omnichannel inbox,
 homeowner widget) lands in this one missing layer. That makes the UI the highest-leverage
@@ -177,7 +177,9 @@ row, formats timestamps in the tenant time zone, and renders job access only whe
 the BFF response. It keeps untriaged leads separate from bus transport state and labels MCTB only
 as provider acceptance, late/unproven/no-channel evidence.
 
-The inbox is deliberately review-only until Sales exposes a source-backed lead-detail contract.
+The inbox is deliberately review-only rather than a generic lead editor. Sales now exposes a
+source-backed office lead contract, but triage preparation remains unavailable in the browser until
+its exact form and preflight path are implemented.
 It renders the exact local-triage before/patch diff plus scope fence (no customer message, transport,
 quote, or accounting mutation); the browser never sees a receipt, raw write args, broker output, or
 tool selector. It honors BFF `approval.approve` / `approval.reject` / `approval.reconcile` capabilities
@@ -199,6 +201,14 @@ checks (declared vs recomputed, deviations highlighted), takeoff review, custome
 proposal pack assembly. Repricing clones an immutable prior estimate against a versioned price
 book, shows every scope/price/tax/assumption delta, and retains all source references. Insurance
 supplements get a separate evidence lane rather than being forced through the retail flow.
+Repository checkpoint: the first `/sales` screen is locally implemented as an office-only, bounded
+review queue. Its BFF uses a dedicated Sales allowlist so Field Companion and Owner Now never fetch
+office contact or commercial fields. Each row joins the Lead Envelope, latest estimate session,
+latest quote, linked communication-record context, and explicit source/row-limit status. It labels
+an estimate range as non-binding and does not expose raw intake payloads, price-book internals,
+outbound send controls, quote issuance, payment controls, or a generic Frappe query. The estimator
+verification workbench, price-book/repricing diffs, proposal-pack assembly, insurance lane, and
+live source/browser/operator proof remain open.
 Beats: SmartEstimates on trust: JN auto-drafts from unverified numbers; we show the
 verification. Proof gate: measurement-to-proposal flow completed with every number
 traceable to its in-file source ref on screen.

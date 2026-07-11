@@ -131,6 +131,16 @@ ops remains review-only. A broker ambiguity becomes `Execution Uncertain` and is
 the UI. Local contract/mocked-browser proof is not deployment proof: remote D1/Frappe migration,
 enabled BFF and broker, real device/browser, provider receipt, and operator acceptance remain launch gates.
 
+Sales Desk checkpoint (2026-07-11): the PWA now has a locally tested, office-only `/sales` review
+surface backed by a separate Worker read contract. It joins only narrow allowlisted Lead Envelope
+contact/triage fields, linked Roof Job identity, the latest Instant Estimate Session, the latest
+Customer Quote, and linked Communication Consent records. The generic owner/field read allowlist
+remains unchanged, and the browser rejects raw payloads, price-policy snapshots, consent source
+references, and other unbounded Frappe data. The screen makes non-binding estimate status, quote
+state, consent-record presence, and capped-source uncertainty explicit. It cannot send a message,
+issue a quote, collect payment, or create triage from the browser. The measurement/repricing/
+proposal workbench, live Frappe data proof, and real-operator validation remain open.
+
 ## Research Basis
 
 Primary sources reviewed:

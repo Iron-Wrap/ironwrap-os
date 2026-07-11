@@ -2,6 +2,7 @@ import type { AppEnv, AuthContext } from "./app-types.ts";
 import {
   listFrappeResource,
   listFrappeResourcePage,
+  listOfficeSalesFrappeResource,
   publicFrappeRow,
   type FrappeFilter,
   type FrappeRow,
@@ -12,6 +13,7 @@ const ACTIVE_JOB_STATUSES = ["Won", "In Production"] as const;
 export const ACTIVE_ASSIGNMENT_STATUSES = ["Assigned", "Accepted", "In Progress", "Blocked"] as const;
 const FIELD_PACKET_PROOF_PAGE_SIZE = 100;
 const OWNER_NOW_SOURCE_LIMIT = 50;
+const SALES_SOURCE_LIMIT = 100;
 const MCTB_SLA_MS = 60_000;
 
 interface ReadModelEnvelope {
@@ -179,6 +181,92 @@ export interface OwnerNowReadModel extends ReadModelEnvelope {
     mctb_unproven_due: number;
     material_exceptions: number;
   };
+}
+
+export type SalesAttentionReason =
+  | "triage_unresolved"
+  | "estimate_needs_review"
+  | "quote_needs_review"
+  | "quote_expired";
+
+export interface SalesReadModel extends ReadModelEnvelope {
+  /** Sources that reached the bounded query limit; displayed totals are lower bounds. */
+  partial_sources: string[];
+  summary: {
+    listed_leads: number;
+    triage_unresolved: number;
+    estimate_needs_review: number;
+    quote_needs_review: number;
+    quote_expired: number;
+    no_linked_consent_record: number;
+  };
+  leads: Array<{
+    id: string;
+    envelope_id: string;
+    source: string | null;
+    received_at: string | null;
+    transport_status: string | null;
+    intent_queue: string | null;
+    contact: {
+      display_name: string | null;
+      phone: string | null;
+      email: string | null;
+    };
+    triage: {
+      status: string | null;
+      summary: string | null;
+    };
+    job: {
+      id: string;
+      job_number: string | null;
+      status: string | null;
+      service_type: string | null;
+      workflow_profile: string | null;
+    } | null;
+    estimate: {
+      id: string;
+      status: string | null;
+      service_type: string | null;
+      range_low: number | null;
+      range_high: number | null;
+      estimate_total: number | null;
+      confidence: string | null;
+      review_required: boolean;
+      reviewed_at: string | null;
+      approved_at: string | null;
+      assumptions: string | null;
+      exclusions: string | null;
+    } | null;
+    quote: {
+      id: string;
+      version: number | null;
+      status: string | null;
+      quote_total: number | null;
+      currency: string | null;
+      valid_until: string | null;
+      payment_status: string | null;
+      prepared_at: string | null;
+      approved_at: string | null;
+      accepted_at: string | null;
+      scope_summary: string | null;
+    } | null;
+    consent: {
+      context: "recorded" | "no_linked_record" | "partial";
+      records: Array<{
+        id: string;
+        channel: string | null;
+        purpose: string | null;
+        status: string | null;
+        jurisdiction: string | null;
+        basis: string | null;
+        captured_at: string | null;
+        effective_from: string | null;
+        expires_at: string | null;
+        revoked_at: string | null;
+      }>;
+    };
+    attention: SalesAttentionReason[];
+  }>;
 }
 
 export interface MctbStatus {
@@ -562,6 +650,165 @@ export async function buildOwnerNowReadModel(
   };
 }
 
+/**
+ * Office-only Sales Desk payload. This joins only the lead, estimate, quote, and consent context
+ * needed for a human review. It intentionally excludes raw intake payloads, outbound controls,
+ * price-book internals, and generic Frappe queries.
+ */
+export async function buildSalesReadModel(env: AppEnv, auth: AuthContext): Promise<SalesReadModel> {
+  if (auth.session.role !== "owner" && auth.session.role !== "ops") throw new Error("office_scope_required");
+
+  const leads = await listOfficeSalesFrappeResource(env, "Lead Envelope", [], SALES_SOURCE_LIMIT);
+  const leadIds = leads.map((row) => text(row.name)).filter(notNull);
+  const leadJobRefs = leads.map((row) => text(row.job_ref)).filter(notNull);
+  const [jobsLinkedByLead, jobsByReference, estimates, leadConsents] = await Promise.all([
+    leadIds.length > 0
+      ? listOfficeSalesFrappeResource(env, "Roof Job", [["Roof Job", "lead_envelope", "in", leadIds]], SALES_SOURCE_LIMIT)
+      : Promise.resolve([]),
+    leadJobRefs.length > 0
+      ? listOfficeSalesFrappeResource(env, "Roof Job", [["Roof Job", "name", "in", leadJobRefs]], SALES_SOURCE_LIMIT)
+      : Promise.resolve([]),
+    leadIds.length > 0
+      ? listOfficeSalesFrappeResource(
+        env,
+        "Instant Estimate Session",
+        [["Instant Estimate Session", "lead_envelope", "in", leadIds]],
+        SALES_SOURCE_LIMIT,
+      )
+      : Promise.resolve([]),
+    leadIds.length > 0
+      ? listOfficeSalesFrappeResource(
+        env,
+        "Communication Consent",
+        [["Communication Consent", "lead_envelope", "in", leadIds]],
+        SALES_SOURCE_LIMIT,
+      )
+      : Promise.resolve([]),
+  ]);
+
+  const jobs = uniqueRows([...jobsLinkedByLead, ...jobsByReference]);
+
+  const jobIds = jobs.map((row) => text(row.name)).filter(notNull);
+  const customerIds = jobs.map((row) => text(row.customer)).filter(notNull);
+  const [quotes, jobConsents, customerConsents] = await Promise.all([
+    jobIds.length > 0
+      ? listOfficeSalesFrappeResource(env, "Customer Quote", [["Customer Quote", "roof_job", "in", jobIds]], SALES_SOURCE_LIMIT)
+      : Promise.resolve([]),
+    jobIds.length > 0
+      ? listOfficeSalesFrappeResource(
+        env,
+        "Communication Consent",
+        [["Communication Consent", "roof_job", "in", jobIds]],
+        SALES_SOURCE_LIMIT,
+      )
+      : Promise.resolve([]),
+    customerIds.length > 0
+      ? listOfficeSalesFrappeResource(
+        env,
+        "Communication Consent",
+        [["Communication Consent", "customer", "in", customerIds]],
+        SALES_SOURCE_LIMIT,
+      )
+      : Promise.resolve([]),
+  ]);
+
+  const jobById = mapRowsByReference(jobs, "name");
+  const latestJobsByLead = latestRowsByReference(jobs, "lead_envelope");
+  const estimatesByLead = latestRowsByReference(estimates, "lead_envelope");
+  const quotesByJob = latestRowsByReference(quotes, "roof_job", "quote_version");
+  const consentRows = uniqueRows([...leadConsents, ...jobConsents, ...customerConsents]);
+  const directConsentsByLead = groupBy(consentRows, "lead_envelope");
+  const consentsByJob = groupBy(consentRows, "roof_job");
+  const consentsByCustomer = groupBy(consentRows, "customer");
+  const consentSourcesPartial = [leadConsents, jobConsents, customerConsents].some((rows) => rows.length === SALES_SOURCE_LIMIT);
+
+  const shaped: SalesReadModel["leads"] = leads.flatMap((lead) => {
+    const leadId = text(lead.name);
+    if (!leadId) return [];
+    const linkedJob = latestJobsByLead.get(leadId) ?? jobById.get(text(lead.job_ref) ?? "") ?? null;
+    const jobId = linkedJob ? text(linkedJob.name) : null;
+    const customerId = linkedJob ? text(linkedJob.customer) : null;
+    const linkedConsents = uniqueRows([
+      ...(directConsentsByLead.get(leadId) ?? []),
+      ...(jobId ? consentsByJob.get(jobId) ?? [] : []),
+      ...(customerId ? consentsByCustomer.get(customerId) ?? [] : []),
+    ]);
+    const consentRecords = linkedConsents.map(salesConsentRecord).filter(notNull);
+    const estimate = salesEstimateModel(estimatesByLead.get(leadId));
+    const quote = jobId ? salesQuoteModel(quotesByJob.get(jobId)) : null;
+    const attention = salesAttention(lead, estimate, quote);
+    const consentContext: SalesReadModel["leads"][number]["consent"]["context"] = consentSourcesPartial
+      ? "partial"
+      : consentRecords.length > 0
+        ? "recorded"
+        : "no_linked_record";
+    return [{
+      id: leadId,
+      envelope_id: text(lead.envelope_id) ?? leadId,
+      source: text(lead.source),
+      received_at: text(lead.event_ts),
+      transport_status: text(lead.status),
+      intent_queue: text(lead.intent_queue),
+      contact: {
+        display_name: text(lead.contact_name),
+        phone: text(lead.contact_phone),
+        email: text(lead.contact_email),
+      },
+      triage: {
+        status: text(lead.triage_status),
+        summary: text(lead.triage_summary),
+      },
+      job: linkedJob && jobId ? {
+        id: jobId,
+        job_number: text(linkedJob.job_number),
+        status: text(linkedJob.job_status),
+        service_type: text(linkedJob.service_type),
+        workflow_profile: text(linkedJob.workflow_profile),
+      } : null,
+      estimate,
+      quote,
+      consent: {
+        context: consentContext,
+        records: consentRecords,
+      },
+      attention,
+    }];
+  }).sort(compareSalesLead);
+
+  const sourceRows: Array<readonly [string, FrappeRow[]]> = [
+    ["leads", leads],
+    ["roof_jobs_by_lead", jobsLinkedByLead],
+    ["roof_jobs_by_reference", jobsByReference],
+    ["instant_estimates", estimates],
+    ["customer_quotes", quotes],
+    ["lead_consents", leadConsents],
+    ["job_consents", jobConsents],
+    ["customer_consents", customerConsents],
+  ];
+  const partialSources = sourceRows.flatMap(([name, rows]) => rows.length === SALES_SOURCE_LIMIT ? [name] : []);
+  const base = envelope(auth, [
+    ...leads, ...jobs, ...estimates, ...quotes, ...leadConsents, ...jobConsents, ...customerConsents,
+  ], partialSources.length > 0 ? ["sales.partial_sources"] : []);
+  return {
+    ...base,
+    allowed_actions: [
+      ...base.allowed_actions,
+      ...(auth.permissions.includes("approvals:read") ? ["approval.read"] : []),
+      "sales.read",
+    ],
+    partial_sources: partialSources,
+    summary: {
+      listed_leads: shaped.length,
+      triage_unresolved: shaped.filter((lead) => lead.attention.includes("triage_unresolved")).length,
+      estimate_needs_review: shaped.filter((lead) => lead.attention.includes("estimate_needs_review")).length,
+      quote_needs_review: shaped.filter((lead) => lead.attention.includes("quote_needs_review")).length,
+      quote_expired: shaped.filter((lead) => lead.attention.includes("quote_expired")).length,
+      no_linked_consent_record: shaped.filter((lead) => lead.consent.context === "no_linked_record").length,
+    },
+    leads: shaped,
+  };
+}
+
 function emptyToday(env: AppEnv, auth: AuthContext, rows: FrappeRow[] = []): TodayReadModel {
   return { ...envelope(auth, rows, []), date: tenantDate(env.APP_TIME_ZONE), jobs: [] };
 }
@@ -811,6 +1058,143 @@ function groupBy(rows: FrappeRow[], field: string): Map<string, FrappeRow[]> {
   return grouped;
 }
 
+function mapRowsByReference(rows: FrappeRow[], field: string): Map<string, FrappeRow> {
+  const mapped = new Map<string, FrappeRow>();
+  for (const row of rows) {
+    const key = text(row[field]);
+    if (key) mapped.set(key, row);
+  }
+  return mapped;
+}
+
+function latestRowsByReference(
+  rows: FrappeRow[],
+  field: string,
+  versionField?: string,
+): Map<string, FrappeRow> {
+  const latest = new Map<string, FrappeRow>();
+  for (const row of rows) {
+    const key = text(row[field]);
+    if (!key) continue;
+    const current = latest.get(key);
+    if (!current || recordIsNewer(row, current, versionField)) latest.set(key, row);
+  }
+  return latest;
+}
+
+function uniqueRows(rows: FrappeRow[]): FrappeRow[] {
+  const unique = new Map<string, FrappeRow>();
+  for (const row of rows) {
+    const key = text(row.name);
+    if (!key) continue;
+    const current = unique.get(key);
+    if (!current || recordIsNewer(row, current)) unique.set(key, row);
+  }
+  return [...unique.values()];
+}
+
+function recordIsNewer(candidate: FrappeRow, current: FrappeRow, versionField?: string): boolean {
+  if (versionField) {
+    const candidateVersion = optionalNumber(candidate[versionField]) ?? -1;
+    const currentVersion = optionalNumber(current[versionField]) ?? -1;
+    if (candidateVersion !== currentVersion) return candidateVersion > currentVersion;
+  }
+  const candidateModified = text(candidate.modified) ?? "";
+  const currentModified = text(current.modified) ?? "";
+  return candidateModified.localeCompare(currentModified) > 0
+    || (candidateModified === currentModified && (text(candidate.name) ?? "").localeCompare(text(current.name) ?? "") > 0);
+}
+
+function salesEstimateModel(
+  row: FrappeRow | undefined,
+): SalesReadModel["leads"][number]["estimate"] {
+  const id = row ? text(row.estimate_session_id) ?? text(row.name) : null;
+  if (!row || !id) return null;
+  return {
+    id,
+    status: text(row.status),
+    service_type: text(row.service_type),
+    range_low: optionalNumber(row.range_low),
+    range_high: optionalNumber(row.range_high),
+    estimate_total: optionalNumber(row.estimate_total),
+    confidence: text(row.confidence),
+    review_required: booleanValue(row.review_required) === true,
+    reviewed_at: text(row.reviewed_at),
+    approved_at: text(row.approved_at),
+    assumptions: text(row.assumptions),
+    exclusions: text(row.exclusions),
+  };
+}
+
+function salesQuoteModel(
+  row: FrappeRow | undefined,
+): SalesReadModel["leads"][number]["quote"] {
+  const id = row ? text(row.customer_quote_id) ?? text(row.name) : null;
+  if (!row || !id) return null;
+  return {
+    id,
+    version: optionalNumber(row.quote_version),
+    status: text(row.status),
+    quote_total: optionalNumber(row.quote_total),
+    currency: text(row.currency),
+    valid_until: text(row.valid_until),
+    payment_status: text(row.payment_status),
+    prepared_at: text(row.prepared_at),
+    approved_at: text(row.approved_at),
+    accepted_at: text(row.accepted_at),
+    scope_summary: text(row.scope_summary),
+  };
+}
+
+function salesConsentRecord(
+  row: FrappeRow,
+): SalesReadModel["leads"][number]["consent"]["records"][number] | null {
+  const id = text(row.consent_id) ?? text(row.name);
+  if (!id) return null;
+  return {
+    id,
+    channel: text(row.channel),
+    purpose: text(row.purpose),
+    status: text(row.status),
+    jurisdiction: text(row.jurisdiction),
+    basis: text(row.consent_basis),
+    captured_at: text(row.captured_at),
+    effective_from: text(row.effective_from),
+    expires_at: text(row.expires_at),
+    revoked_at: text(row.revoked_at),
+  };
+}
+
+function salesAttention(
+  lead: FrappeRow,
+  estimate: SalesReadModel["leads"][number]["estimate"],
+  quote: SalesReadModel["leads"][number]["quote"],
+): SalesAttentionReason[] {
+  const attention: SalesAttentionReason[] = [];
+  const triage = text(lead.triage_status);
+  if (triage !== "Triaged") attention.push("triage_unresolved");
+  if (estimate?.status === "Captured" || estimate?.status === "Needs Review") attention.push("estimate_needs_review");
+  if (quote?.status === "Needs Review") attention.push("quote_needs_review");
+  if (quote?.status === "Expired") attention.push("quote_expired");
+  return attention;
+}
+
+function compareSalesLead(
+  left: SalesReadModel["leads"][number],
+  right: SalesReadModel["leads"][number],
+): number {
+  const rank = (lead: SalesReadModel["leads"][number]) => {
+    if (lead.attention.includes("triage_unresolved")) return 0;
+    if (lead.attention.includes("estimate_needs_review")) return 1;
+    if (lead.attention.includes("quote_needs_review")) return 2;
+    if (lead.attention.includes("quote_expired")) return 3;
+    return 4;
+  };
+  return rank(left) - rank(right)
+    || dateValue(right.received_at) - dateValue(left.received_at)
+    || left.id.localeCompare(right.id);
+}
+
 function address(row: FrappeRow | undefined): string | null {
   if (!row) return null;
   const locality = [text(row.city), text(row.province), text(row.postal_code)].filter(notNull).join(" ");
@@ -863,6 +1247,7 @@ function numberValue(value: unknown): number {
 }
 
 function optionalNumber(value: unknown): number | null {
+  if (value === null || value === undefined || (typeof value === "string" && !value.trim())) return null;
   const number = typeof value === "number" ? value : Number(value);
   return Number.isFinite(number) ? number : null;
 }

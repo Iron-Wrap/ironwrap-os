@@ -66,8 +66,8 @@ arbitrary broker/MCP output.
   or that a lead was triaged until the executed Hermes Run proves it.
 - Rejection is durable and does not invoke the broker.
 - The initial `/approvals` PWA is a review/decision surface, not a generic lead
-  editor: it does not create a triage request from the Owner Now feed until a
-  source-backed Sales/lead-detail contract exists. It displays `approval.approve`,
+  editor. Sales now has a source-backed office read contract, but it does not create a
+  triage request until the exact lead-detail preparation form and preflight are implemented. It displays `approval.approve`,
   `approval.reject`, and `approval.reconcile` only when the BFF grants those capabilities; it never
   infers authority from the visible role.
 - Decision actions are online-only. The PWA never places an approval in its

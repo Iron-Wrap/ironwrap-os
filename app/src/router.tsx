@@ -17,7 +17,6 @@ import {
   NotFoundPage,
   PortalLinkRequiredPage,
   PortalPage,
-  SalesPage,
   SettingsPage,
 } from "./pages/placeholders";
 
@@ -26,6 +25,9 @@ const OwnerNowPage = lazy(async () => ({
 }));
 const ApprovalInboxPage = lazy(async () => ({
   default: (await import("./owner/approval-inbox-page")).ApprovalInboxPage,
+}));
+const SalesDeskPage = lazy(async () => ({
+  default: (await import("./sales/sales-desk-page")).SalesDeskPage,
 }));
 const TodayPage = lazy(async () => ({
   default: (await import("./field/field-pages")).TodayPage,
@@ -219,8 +221,16 @@ function OwnerRouteSkeleton() {
 const salesRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/sales",
-  component: SalesPage,
+  component: SalesRoute,
 });
+
+function SalesRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <SalesDeskPage />
+    </Suspense>
+  );
+}
 
 const settingsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,

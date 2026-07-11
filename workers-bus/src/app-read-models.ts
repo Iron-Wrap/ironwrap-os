@@ -2,11 +2,15 @@ import type { AppEnv, AuthContext } from "./app-types.ts";
 import {
   listFrappeResource,
   listFrappeResourcePage,
+  listOfficeEstimatorFrappeResource,
   listOfficeSalesFrappeResource,
   publicFrappeRow,
+  readOfficeEstimatorFrappeResource,
   type FrappeFilter,
   type FrappeRow,
 } from "./frappe-read.ts";
+import { parseBody } from "./core.ts";
+import { extractGeometry } from "./measurements.ts";
 import { listLeadMctbEvidence, type LeadAckReceipt } from "./store.ts";
 
 const ACTIVE_JOB_STATUSES = ["Won", "In Production"] as const;
@@ -14,6 +18,14 @@ export const ACTIVE_ASSIGNMENT_STATUSES = ["Assigned", "Accepted", "In Progress"
 const FIELD_PACKET_PROOF_PAGE_SIZE = 100;
 const OWNER_NOW_SOURCE_LIMIT = 50;
 const SALES_SOURCE_LIMIT = 100;
+const ESTIMATOR_SOURCE_LIMIT = 100;
+const MAX_ESTIMATOR_RAW_BYTES = 2 * 1024 * 1024;
+const MAX_ESTIMATOR_CHECKS = 80;
+const MAX_ESTIMATOR_FACETS = 120;
+const MAX_ESTIMATOR_METRICS = 120;
+const MAX_ESTIMATOR_TAKEOFF_ITEMS = 250;
+const MAX_ESTIMATOR_GEOMETRY_LABEL = 240;
+const MAX_ESTIMATOR_GEOMETRY_DETAIL = 600;
 const MCTB_SLA_MS = 60_000;
 
 interface ReadModelEnvelope {
@@ -267,6 +279,153 @@ export interface SalesReadModel extends ReadModelEnvelope {
     };
     attention: SalesAttentionReason[];
   }>;
+}
+
+export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
+  /** Sources that reached the bounded query limit; displayed history is a lower bound. */
+  partial_sources: string[];
+  job: {
+    id: string;
+    roof_job_id: string | null;
+    job_number: string | null;
+    brand: string | null;
+    service_type: string | null;
+    status: string | null;
+    workflow_profile: string | null;
+  };
+  lineage: {
+    measurement_to_takeoff: "linked" | "no_measurement" | "no_takeoff" | "mismatch" | "unknown";
+    quote_to_proposal: "linked" | "no_quote" | "no_proposal" | "mismatch" | "unknown";
+  };
+  measurements: {
+    reports: Array<{
+      id: string;
+      provider: string | null;
+      review_status: string | null;
+      parsed_at: string | null;
+      approved_at: string | null;
+    }>;
+    selected: {
+      id: string;
+      provider: string | null;
+      review_status: string | null;
+      parsed_at: string | null;
+      approved_at: string | null;
+      metrics: Array<{
+        metric: string;
+        value: number | null;
+        unit: string | null;
+        confidence: string | null;
+        source_ref: string | null;
+        needs_review: boolean;
+      }>;
+      metrics_truncated: boolean;
+      geometry: EstimatorGeometryProjection;
+    } | null;
+  };
+  takeoffs: {
+    records: Array<{
+      id: string;
+      measurement_report_id: string | null;
+      status: string | null;
+      prepared_at: string | null;
+      approved_at: string | null;
+    }>;
+    selected: {
+      id: string;
+      measurement_report_id: string | null;
+      status: string | null;
+      prepared_at: string | null;
+      approved_at: string | null;
+      assumptions: string | null;
+      exclusions: string | null;
+      items: Array<{
+        category: string | null;
+        item_name: string | null;
+        quantity: number | null;
+        unit: string | null;
+        waste_factor: number | null;
+        source_ref: string | null;
+        confidence: string | null;
+        needs_review: boolean;
+      }>;
+      items_truncated: boolean;
+    } | null;
+  };
+  quote: {
+    id: string;
+    version: number | null;
+    status: string | null;
+    price_book_version: string | null;
+    pricing_effective_at: string | null;
+    subtotal: number | null;
+    tax_amount: number | null;
+    tax_code: string | null;
+    tax_rate: number | null;
+    quote_total: number | null;
+    currency: string | null;
+    deposit_amount: number | null;
+    amount_due: number | null;
+    amount_paid: number | null;
+    balance_due: number | null;
+    payment_status: string | null;
+    payment_due_date: string | null;
+    valid_until: string | null;
+    prepared_at: string | null;
+    approved_at: string | null;
+    accepted_at: string | null;
+    scope_summary: string | null;
+    assumptions: string | null;
+    exclusions: string | null;
+    supersedes: string | null;
+    correction_reason: string | null;
+  } | null;
+  proposal: {
+    id: string;
+    quote_id: string | null;
+    status: string | null;
+    prepared_at: string | null;
+    approved_at: string | null;
+    signed_at: string | null;
+    assumptions: string | null;
+    exclusions: string | null;
+  } | null;
+  scope_clauses: Array<{
+    id: string;
+    type: string | null;
+    title: string | null;
+    text: string | null;
+    version: string | null;
+    status: string | null;
+    source_ref: string | null;
+    customer_visible: boolean;
+    approved_at: string | null;
+  }>;
+}
+
+export interface EstimatorGeometryProjection {
+  /** This verifies the source-file math only. It is never evidence of field verification. */
+  state: "recomputed" | "needs_review" | "unavailable";
+  reason: string | null;
+  check_count: number;
+  failed_check_count: number;
+  checks_truncated: boolean;
+  facet_count: number;
+  facets_truncated: boolean;
+  metrics_truncated: boolean;
+  checks: Array<{ check: string; target: string; ok: boolean; detail: string }>;
+  facets: Array<{
+    id: string;
+    type: string;
+    material: string | null;
+    pitch: number | null;
+    orientation: number | null;
+    declared_area: number | null;
+    computed_area: number | null;
+    deviation: number | null;
+    ring_closed: boolean;
+  }>;
+  metrics: Array<{ metric: string; value: number; source_ref: string | null }>;
 }
 
 export interface MctbStatus {
@@ -794,6 +953,7 @@ export async function buildSalesReadModel(env: AppEnv, auth: AuthContext): Promi
     allowed_actions: [
       ...base.allowed_actions,
       ...(auth.permissions.includes("approvals:read") ? ["approval.read"] : []),
+      ...(auth.permissions.includes("estimator:read") ? ["estimator.read"] : []),
       "sales.read",
     ],
     partial_sources: partialSources,
@@ -806,6 +966,148 @@ export async function buildSalesReadModel(env: AppEnv, auth: AuthContext): Promi
       no_linked_consent_record: shaped.filter((lead) => lead.consent.context === "no_linked_record").length,
     },
     leads: shaped,
+  };
+}
+
+/**
+ * Office-only read projection for measurement-to-proposal review. It intentionally stops before
+ * pricing, proposal assembly, signature, payment, or customer communication mutations. Geometry
+ * is recomputed server-side from the bounded raw source and is explicitly not field verification.
+ */
+export async function buildEstimatorWorkbenchReadModel(
+  env: AppEnv,
+  auth: AuthContext,
+  jobName: string,
+): Promise<EstimatorWorkbenchReadModel | null> {
+  if (auth.session.role !== "owner" && auth.session.role !== "ops") throw new Error("office_scope_required");
+  if (!validJobName(jobName)) return null;
+
+  const [job] = await listOfficeEstimatorFrappeResource(
+    env,
+    "Roof Job",
+    [["Roof Job", "name", "=", jobName]],
+    1,
+  );
+  const jobId = job ? text(job.name) : null;
+  if (!job || !jobId) return null;
+
+  const [measurementRows, takeoffRows, quoteRows, proposalRows, scopeRows] = await Promise.all([
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Measurement Report",
+      [["Measurement Report", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Material Takeoff",
+      [["Material Takeoff", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Customer Quote",
+      [["Customer Quote", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Proposal Evidence Pack",
+      [["Proposal Evidence Pack", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Scope Clause",
+      [["Scope Clause", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+  ]);
+
+  const selectedMeasurementRow = latestRecord(measurementRows);
+  const selectedMeasurementName = selectedMeasurementRow ? text(selectedMeasurementRow.name) : null;
+  const selectedTakeoffRow = selectedMeasurementName
+    ? latestRecord(takeoffRows.filter((row) => text(row.measurement_report) === selectedMeasurementName))
+    : null;
+  const selectedTakeoffName = selectedTakeoffRow ? text(selectedTakeoffRow.name) : null;
+  const selectedQuoteRow = latestRecord(quoteRows, "quote_version");
+  const selectedQuoteName = selectedQuoteRow ? text(selectedQuoteRow.name) : null;
+  const selectedProposalRow = selectedQuoteName
+    ? latestRecord(proposalRows.filter((row) => text(row.quotation) === selectedQuoteName))
+    : null;
+  const [measurementRead, takeoffRead] = await Promise.all([
+    selectedMeasurementName
+      ? safeEstimatorDetailRead(env, "Measurement Report", selectedMeasurementName)
+      : Promise.resolve({ row: null, unavailable_reason: null }),
+    selectedTakeoffName
+      ? safeEstimatorDetailRead(env, "Material Takeoff", selectedTakeoffName)
+      : Promise.resolve({ row: null, unavailable_reason: null }),
+  ]);
+  const measurementDetail = matchesMeasurementDetail(measurementRead.row, selectedMeasurementName, jobId)
+    ? measurementRead.row
+    : null;
+  const takeoffDetail = matchesTakeoffDetail(takeoffRead.row, selectedTakeoffName, jobId, selectedMeasurementName)
+    ? takeoffRead.row
+    : null;
+  const measurementDetailIssue = measurementRead.unavailable_reason
+    ?? (measurementRead.row && !measurementDetail ? "measurement_detail_mismatch" : null);
+  const takeoffDetailIssue = takeoffRead.unavailable_reason
+    ?? (takeoffRead.row && !takeoffDetail ? "takeoff_detail_mismatch" : null);
+
+  const geometry = measurementDetail
+    ? await estimatorGeometryFromRaw(env, text(measurementDetail.raw_key))
+    : unavailableEstimatorGeometry(
+      selectedMeasurementRow ? measurementDetailIssue ?? "measurement_detail_unavailable" : "no_measurement_report",
+    );
+  const staleFields: string[] = [];
+  if (selectedMeasurementRow && !measurementDetail) staleFields.push("measurements.selected_detail");
+  if (selectedTakeoffRow && !takeoffDetail) staleFields.push("takeoffs.selected_detail");
+
+  const sourceRows: Array<readonly [string, FrappeRow[]]> = [
+    ["measurement_reports", measurementRows],
+    ["material_takeoffs", takeoffRows],
+    ["customer_quotes", quoteRows],
+    ["proposal_evidence_packs", proposalRows],
+    ["scope_clauses", scopeRows],
+  ];
+  const partialSources = sourceRows.flatMap(([name, rows]) => rows.length === ESTIMATOR_SOURCE_LIMIT ? [name] : []);
+  const base = envelope(
+    auth,
+    [job, ...measurementRows, ...takeoffRows, ...quoteRows, ...proposalRows, ...scopeRows],
+    staleFields,
+  );
+  return {
+    ...base,
+    allowed_actions: [...base.allowed_actions, "estimator.read"],
+    partial_sources: partialSources,
+    job: {
+      id: jobId,
+      roof_job_id: text(job.roof_job_id),
+      job_number: text(job.job_number),
+      brand: text(job.brand),
+      service_type: text(job.service_type),
+      status: text(job.job_status),
+      workflow_profile: text(job.workflow_profile),
+    },
+    lineage: {
+      measurement_to_takeoff: measurementToTakeoffLineage(
+        selectedMeasurementRow,
+        selectedTakeoffRow,
+        takeoffRows,
+      ),
+      quote_to_proposal: quoteToProposalLineage(selectedQuoteRow, selectedProposalRow, proposalRows),
+    },
+    measurements: {
+      reports: newestFirst(measurementRows).flatMap(estimatorMeasurementSummary),
+      selected: estimatorMeasurementSelection(selectedMeasurementRow, measurementDetail, geometry),
+    },
+    takeoffs: {
+      records: newestFirst(takeoffRows).flatMap(estimatorTakeoffSummary),
+      selected: estimatorTakeoffSelection(selectedTakeoffRow, takeoffDetail),
+    },
+    quote: estimatorQuote(selectedQuoteRow),
+    proposal: estimatorProposal(selectedProposalRow),
+    scope_clauses: newestFirst(scopeRows).flatMap(estimatorScopeClause),
   };
 }
 
@@ -1082,6 +1384,20 @@ function latestRowsByReference(
   return latest;
 }
 
+function latestRecord(rows: FrappeRow[], versionField?: string): FrappeRow | null {
+  let latest: FrappeRow | null = null;
+  for (const row of rows) if (!latest || recordIsNewer(row, latest, versionField)) latest = row;
+  return latest;
+}
+
+function newestFirst(rows: FrappeRow[]): FrappeRow[] {
+  return [...rows].sort((left, right) => {
+    if (recordIsNewer(left, right)) return -1;
+    if (recordIsNewer(right, left)) return 1;
+    return 0;
+  });
+}
+
 function uniqueRows(rows: FrappeRow[]): FrappeRow[] {
   const unique = new Map<string, FrappeRow>();
   for (const row of rows) {
@@ -1193,6 +1509,305 @@ function compareSalesLead(
   return rank(left) - rank(right)
     || dateValue(right.received_at) - dateValue(left.received_at)
     || left.id.localeCompare(right.id);
+}
+
+function estimatorMeasurementSummary(
+  row: FrappeRow,
+): EstimatorWorkbenchReadModel["measurements"]["reports"] {
+  const id = text(row.measurement_id) ?? text(row.name);
+  return id ? [{
+    id,
+    provider: text(row.provider),
+    review_status: text(row.review_status),
+    parsed_at: text(row.parsed_at),
+    approved_at: text(row.approved_at),
+  }] : [];
+}
+
+async function safeEstimatorDetailRead(
+  env: AppEnv,
+  doctype: "Measurement Report" | "Material Takeoff",
+  name: string,
+): Promise<{ row: FrappeRow | null; unavailable_reason: string | null }> {
+  try {
+    return { row: await readOfficeEstimatorFrappeResource(env, doctype, name), unavailable_reason: null };
+  } catch (error) {
+    if (error instanceof Error && error.message === "frappe_read_response_too_large") {
+      return {
+        row: null,
+        unavailable_reason: doctype === "Measurement Report"
+          ? "measurement_detail_too_large"
+          : "takeoff_detail_too_large",
+      };
+    }
+    throw error;
+  }
+}
+
+function matchesMeasurementDetail(
+  row: FrappeRow | null,
+  expectedName: string | null,
+  jobName: string,
+): boolean {
+  return Boolean(row && expectedName && text(row.name) === expectedName && text(row.roof_job) === jobName);
+}
+
+function matchesTakeoffDetail(
+  row: FrappeRow | null,
+  expectedName: string | null,
+  jobName: string,
+  measurementName: string | null,
+): boolean {
+  return Boolean(
+    row
+      && expectedName
+      && measurementName
+      && text(row.name) === expectedName
+      && text(row.roof_job) === jobName
+      && text(row.measurement_report) === measurementName,
+  );
+}
+
+function measurementToTakeoffLineage(
+  measurement: FrappeRow | null,
+  takeoff: FrappeRow | null,
+  takeoffs: FrappeRow[],
+): EstimatorWorkbenchReadModel["lineage"]["measurement_to_takeoff"] {
+  if (!measurement) return "no_measurement";
+  if (takeoff) return "linked";
+  if (takeoffs.length === ESTIMATOR_SOURCE_LIMIT) return "unknown";
+  return takeoffs.length > 0 ? "mismatch" : "no_takeoff";
+}
+
+function quoteToProposalLineage(
+  quote: FrappeRow | null,
+  proposal: FrappeRow | null,
+  proposals: FrappeRow[],
+): EstimatorWorkbenchReadModel["lineage"]["quote_to_proposal"] {
+  if (!quote) return "no_quote";
+  if (proposal) return "linked";
+  if (proposals.length === ESTIMATOR_SOURCE_LIMIT) return "unknown";
+  return proposals.length > 0 ? "mismatch" : "no_proposal";
+}
+
+function estimatorMeasurementSelection(
+  row: FrappeRow | null,
+  detail: FrappeRow | null,
+  geometry: EstimatorGeometryProjection,
+): EstimatorWorkbenchReadModel["measurements"]["selected"] {
+  if (!row) return null;
+  const [summary] = estimatorMeasurementSummary(row);
+  if (!summary) return null;
+  const metricRows = detail ? recordRows(detail.measurements) : [];
+  return {
+    ...summary,
+    metrics: metricRows.slice(0, MAX_ESTIMATOR_METRICS).flatMap((metric) => {
+      const name = text(metric.metric);
+      return name ? [{
+        metric: name,
+        value: optionalNumber(metric.value),
+        unit: text(metric.unit),
+        confidence: text(metric.confidence),
+        source_ref: text(metric.source_ref),
+        needs_review: booleanValue(metric.needs_review) === true,
+      }] : [];
+    }),
+    metrics_truncated: metricRows.length > MAX_ESTIMATOR_METRICS
+      || booleanValue(detail?.__ironwrap_truncated_measurements) === true,
+    geometry,
+  };
+}
+
+function estimatorTakeoffSummary(
+  row: FrappeRow,
+): EstimatorWorkbenchReadModel["takeoffs"]["records"] {
+  const id = text(row.takeoff_id) ?? text(row.name);
+  return id ? [{
+    id,
+    measurement_report_id: text(row.measurement_report),
+    status: text(row.status),
+    prepared_at: text(row.prepared_at),
+    approved_at: text(row.approved_at),
+  }] : [];
+}
+
+function estimatorTakeoffSelection(
+  row: FrappeRow | null,
+  detail: FrappeRow | null,
+): EstimatorWorkbenchReadModel["takeoffs"]["selected"] {
+  if (!row) return null;
+  const [summary] = estimatorTakeoffSummary(row);
+  if (!summary) return null;
+  const itemRows = detail ? recordRows(detail.items) : [];
+  return {
+    ...summary,
+    assumptions: detail ? text(detail.assumptions) : null,
+    exclusions: detail ? text(detail.exclusions) : null,
+    items: itemRows.slice(0, MAX_ESTIMATOR_TAKEOFF_ITEMS).map((item) => ({
+      category: text(item.category),
+      item_name: text(item.item_name),
+      quantity: optionalNumber(item.quantity),
+      unit: text(item.unit),
+      waste_factor: optionalNumber(item.waste_factor),
+      source_ref: text(item.source_ref),
+      confidence: text(item.confidence),
+      needs_review: booleanValue(item.needs_review) === true,
+    })),
+    items_truncated: itemRows.length > MAX_ESTIMATOR_TAKEOFF_ITEMS
+      || booleanValue(detail?.__ironwrap_truncated_items) === true,
+  };
+}
+
+function estimatorQuote(row: FrappeRow | null): EstimatorWorkbenchReadModel["quote"] {
+  const id = row ? text(row.customer_quote_id) ?? text(row.name) : null;
+  if (!row || !id) return null;
+  return {
+    id,
+    version: optionalNumber(row.quote_version),
+    status: text(row.status),
+    price_book_version: text(row.price_book_version),
+    pricing_effective_at: text(row.pricing_effective_at),
+    subtotal: optionalNumber(row.subtotal),
+    tax_amount: optionalNumber(row.tax_amount),
+    tax_code: text(row.tax_code),
+    tax_rate: optionalNumber(row.tax_rate),
+    quote_total: optionalNumber(row.quote_total),
+    currency: text(row.currency),
+    deposit_amount: optionalNumber(row.deposit_amount),
+    amount_due: optionalNumber(row.amount_due),
+    amount_paid: optionalNumber(row.amount_paid),
+    balance_due: optionalNumber(row.balance_due),
+    payment_status: text(row.payment_status),
+    payment_due_date: text(row.payment_due_date),
+    valid_until: text(row.valid_until),
+    prepared_at: text(row.prepared_at),
+    approved_at: text(row.approved_at),
+    accepted_at: text(row.accepted_at),
+    scope_summary: text(row.scope_summary),
+    assumptions: text(row.assumptions),
+    exclusions: text(row.exclusions),
+    supersedes: text(row.supersedes),
+    correction_reason: text(row.correction_reason),
+  };
+}
+
+function estimatorProposal(row: FrappeRow | null): EstimatorWorkbenchReadModel["proposal"] {
+  const id = row ? text(row.pack_id) ?? text(row.name) : null;
+  if (!row || !id) return null;
+  return {
+    id,
+    quote_id: text(row.quotation),
+    status: text(row.status),
+    prepared_at: text(row.prepared_at),
+    approved_at: text(row.approved_at),
+    signed_at: text(row.signed_at),
+    assumptions: text(row.assumptions),
+    exclusions: text(row.exclusions),
+  };
+}
+
+function estimatorScopeClause(
+  row: FrappeRow,
+): EstimatorWorkbenchReadModel["scope_clauses"] {
+  const id = text(row.scope_clause_id) ?? text(row.name);
+  return id ? [{
+    id,
+    type: text(row.clause_type),
+    title: text(row.title),
+    text: text(row.clause_text),
+    version: text(row.version),
+    status: text(row.status),
+    source_ref: text(row.source_ref),
+    customer_visible: booleanValue(row.customer_visible) === true,
+    approved_at: text(row.approved_at),
+  }] : [];
+}
+
+async function estimatorGeometryFromRaw(
+  env: AppEnv,
+  rawKey: string | null,
+): Promise<EstimatorGeometryProjection> {
+  if (!rawKey) return unavailableEstimatorGeometry("raw_source_not_recorded");
+  if (!validMeasurementRawKey(rawKey)) return unavailableEstimatorGeometry("raw_source_rejected");
+  try {
+    const source = await env.RAW.get(rawKey);
+    if (!source) return unavailableEstimatorGeometry("raw_source_not_found");
+    if (source.size > MAX_ESTIMATOR_RAW_BYTES) return unavailableEstimatorGeometry("raw_source_too_large");
+    const rawText = await source.text();
+    const geometry = extractGeometry(rawText, parseBody(rawText, "application/json"));
+    if (!geometry) return unavailableEstimatorGeometry("raw_source_not_recomputable");
+    const failedChecks = geometry.checks.filter((check) => !check.ok);
+    return {
+      state: geometry.needsReview ? "needs_review" : "recomputed",
+      reason: null,
+      check_count: geometry.checks.length,
+      failed_check_count: failedChecks.length,
+      checks_truncated: geometry.checks.length > MAX_ESTIMATOR_CHECKS,
+      facet_count: geometry.facets.length,
+      facets_truncated: geometry.facets.length > MAX_ESTIMATOR_FACETS,
+      metrics_truncated: Object.keys(geometry.measurements).length > MAX_ESTIMATOR_METRICS,
+      checks: geometry.checks.slice(0, MAX_ESTIMATOR_CHECKS).map((check) => ({
+        check: boundedGeometryText(check.check, MAX_ESTIMATOR_GEOMETRY_LABEL),
+        target: boundedGeometryText(check.target, MAX_ESTIMATOR_GEOMETRY_LABEL),
+        ok: check.ok,
+        detail: boundedGeometryText(check.detail, MAX_ESTIMATOR_GEOMETRY_DETAIL),
+      })),
+      facets: geometry.facets.slice(0, MAX_ESTIMATOR_FACETS).map((facet) => ({
+        id: boundedGeometryText(facet.id, MAX_ESTIMATOR_GEOMETRY_LABEL),
+        type: boundedGeometryText(facet.type, MAX_ESTIMATOR_GEOMETRY_LABEL),
+        material: facet.material ? boundedGeometryText(facet.material, MAX_ESTIMATOR_GEOMETRY_LABEL) : null,
+        pitch: facet.pitch,
+        orientation: facet.orientation,
+        declared_area: facet.areaDeclared,
+        computed_area: facet.areaComputed,
+        deviation: facet.deviation,
+        ring_closed: facet.ringClosed,
+      })),
+      metrics: Object.entries(geometry.measurements)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .slice(0, MAX_ESTIMATOR_METRICS)
+        .map(([metric, value]) => ({
+          metric: boundedGeometryText(metric, MAX_ESTIMATOR_GEOMETRY_LABEL),
+          value,
+          source_ref: geometry.sourceRefs[metric]
+            ? boundedGeometryText(geometry.sourceRefs[metric], MAX_ESTIMATOR_GEOMETRY_DETAIL)
+            : null,
+        })),
+    };
+  } catch {
+    return unavailableEstimatorGeometry("raw_source_read_failed");
+  }
+}
+
+function unavailableEstimatorGeometry(reason: string): EstimatorGeometryProjection {
+  return {
+    state: "unavailable",
+    reason,
+    check_count: 0,
+    failed_check_count: 0,
+    checks_truncated: false,
+    facet_count: 0,
+    facets_truncated: false,
+    metrics_truncated: false,
+    checks: [],
+    facets: [],
+    metrics: [],
+  };
+}
+
+function validMeasurementRawKey(value: string): boolean {
+  return /^raw\/measurements\/\d{4}-\d{2}-\d{2}\/ow_[0-9a-f-]{36}\.json$/.test(value);
+}
+
+function boundedGeometryText(value: string, maximum: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length > maximum ? `${compact.slice(0, maximum - 1)}…` : compact;
+}
+
+function recordRows(value: unknown): FrappeRow[] {
+  return Array.isArray(value)
+    ? value.filter((row): row is FrappeRow => !!row && typeof row === "object" && !Array.isArray(row))
+    : [];
 }
 
 function address(row: FrappeRow | undefined): string | null {

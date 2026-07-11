@@ -29,6 +29,9 @@ const ApprovalInboxPage = lazy(async () => ({
 const SalesDeskPage = lazy(async () => ({
   default: (await import("./sales/sales-desk-page")).SalesDeskPage,
 }));
+const EstimatorWorkbenchPage = lazy(async () => ({
+  default: (await import("./estimator/estimator-workbench-page")).EstimatorWorkbenchPage,
+}));
 const TodayPage = lazy(async () => ({
   default: (await import("./field/field-pages")).TodayPage,
 }));
@@ -224,10 +227,24 @@ const salesRoute = createRoute({
   component: SalesRoute,
 });
 
+const estimatorWorkbenchRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/estimator/jobs/$jobId",
+  component: EstimatorWorkbenchRoute,
+});
+
 function SalesRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
       <SalesDeskPage />
+    </Suspense>
+  );
+}
+
+function EstimatorWorkbenchRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <EstimatorWorkbenchPage />
     </Suspense>
   );
 }
@@ -252,6 +269,7 @@ const routeTree = rootRoute.addChildren([
     ownerRoute,
     approvalsRoute,
     salesRoute,
+    estimatorWorkbenchRoute,
     settingsRoute,
   ]),
 ]);

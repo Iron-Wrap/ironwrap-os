@@ -34,6 +34,12 @@ data.
   communication-record review queue with a separate BFF allowlist. It labels preliminary estimate
   ranges as non-binding and source limits as uncertainty. It does not receive raw intake payloads,
   commercial policy snapshots, generic Frappe data, or any send, quote, or payment control.
+- A locally contract-tested Measurement Workbench: an office-only source review reached from Sales
+  that shows retained-source geometry checks, persisted metric and takeoff references, versioned
+  quote/proposal state, and attributable scope clauses. Raw R2 keys/XML, report URLs, tax-policy
+  snapshots, supplier costs, evidence JSON, and customer messages stay server-side; it has no
+  price, takeoff, proposal, signature, payment, or communication write control. Source geometry is
+  explicitly not field-verification evidence.
 - A field-first Today run sheet: server order is preserved, schedules format in the tenant time
   zone, and local packet availability visibly progresses from checking to saving, saved, or not
   saved. A cached packet is never called complete or safety-cleared; a blocked gate can only open
@@ -90,6 +96,7 @@ Endpoint names are centralized in `src/lib/api-paths.ts`:
 | `POST`         | `/api/v1/device-pairings/:id/revoke`  | Revoke one lost or reassigned field device               |
 | `POST`         | `/api/v1/auth/logout`                 | Revoke the current session with `X-CSRF-Token`           |
 | `GET`          | `/api/v1/sales`                       | Owner/ops bounded Sales Desk review DTO                  |
+| `GET`          | `/api/v1/estimator/jobs/:id`          | Owner/ops bounded Measurement Workbench review DTO       |
 | `GET`          | `/api/v1/approvals`                   | Owner/ops browser-safe approval inbox and capability DTO |
 | `POST`         | `/api/v1/approvals/:id/approve`       | Configured-owner, CAS/idempotent approval decision       |
 | `POST`         | `/api/v1/approvals/:id/reject`        | Configured-owner, durable rejection with reason          |

@@ -19,7 +19,7 @@ capability only.
 | Hermes agent layer | 8 runtime-filtered roles, 122 MCP tools, receipt-bound approved-write contract |
 | Deploy/ops | Contract-validated production configuration, pinned runtime lock, encrypted Frappe/D1 recovery, launch runbook |
 | Competitive truth | 10 exceeded / 7 covered / 19 open, adversarially audited |
-| Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, P2 Owner Now plus governed `/approvals`, and the first P3 Sales Desk read model are locally implemented and contract-tested. Owner Now separates work-stops, operating exceptions, and lead attention; the inbox renders only allowlisted before/patch/outcome DTOs and server-granted decision capability; Sales joins narrowly allowlisted office lead, estimate, quote, and communication-record context. None claims delivery or human follow-up. Live Worker/broker/Frappe/browser/device proof, the estimator workbench, and P4-P5 remain open; Frappe Control Center is the truthful fallback. |
+| Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, P2 Owner Now plus governed `/approvals`, and the first P3 Sales Desk plus Measurement Workbench read models are locally implemented and contract-tested. Owner Now separates work-stops, operating exceptions, and lead attention; the inbox renders only allowlisted before/patch/outcome DTOs and server-granted decision capability; Sales joins narrowly allowlisted office lead, estimate, quote, and communication-record context; the workbench recomputes retained source geometry in the Worker and shows bounded measurement, takeoff, quote, proposal-record, and clause lineage. None claims delivery, field verification, or human follow-up. Live Worker/broker/Frappe/browser/device proof, governed estimator writes, and P4-P5 remain open; Frappe Control Center is the truthful fallback. |
 
 Every "their UX beats ours" row in the scorecard (boards, mobile app, omnichannel inbox,
 homeowner widget) lands in this one missing layer. That makes the UI the highest-leverage
@@ -207,8 +207,17 @@ office contact or commercial fields. Each row joins the Lead Envelope, latest es
 latest quote, linked communication-record context, and explicit source/row-limit status. It labels
 an estimate range as non-binding and does not expose raw intake payloads, price-book internals,
 outbound send controls, quote issuance, payment controls, or a generic Frappe query. The estimator
-verification workbench, price-book/repricing diffs, proposal-pack assembly, insurance lane, and
-live source/browser/operator proof remain open.
+workbench is now locally implemented at `/estimator/jobs/:jobId` as a separate office-only read
+contract. Its Worker-only detail reads retain the selected raw measurement key solely long enough
+to reparse an allowlisted `raw/measurements/...` object from R2; the browser receives no raw key,
+XML, report URL, evidence JSON, or generic Frappe record. Instead it receives capped declared versus
+recomputed facet values, deterministic check results, persisted metric/takeoff source references,
+quote price-book/version state, proposal-record state, and attributable scope clauses. It explicitly
+labels recomputation as source-file math, not field verification, and never infers a continuous
+chain: the selected takeoff must link to the selected Measurement Report and the proposal must link
+to the selected Customer Quote; mismatch and bounded-source uncertainty remain visible. It has no
+price, takeoff, proposal, signature, payment, or communication write control. Price-book/repricing diffs,
+proposal-pack assembly, insurance lane, and live source/browser/operator proof remain open.
 Beats: SmartEstimates on trust: JN auto-drafts from unverified numbers; we show the
 verification. Proof gate: measurement-to-proposal flow completed with every number
 traceable to its in-file source ref on screen.

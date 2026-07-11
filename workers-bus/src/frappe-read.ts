@@ -2,6 +2,8 @@ import type { AppEnv } from "./app-types.ts";
 
 export type FrappeDocType = keyof typeof FRAPPE_READ_FIELDS;
 export type OfficeSalesDocType = keyof typeof OFFICE_SALES_READ_FIELDS;
+export type OfficeEstimatorDocType = keyof typeof OFFICE_ESTIMATOR_READ_FIELDS;
+export type OfficeEstimatorDetailDocType = keyof typeof OFFICE_ESTIMATOR_DETAIL_READ;
 export type FrappeFilter = readonly [
   doctype: FrappeDocType,
   field: string,
@@ -10,6 +12,12 @@ export type FrappeFilter = readonly [
 ];
 export type OfficeSalesFrappeFilter = readonly [
   doctype: OfficeSalesDocType,
+  field: string,
+  operator: string,
+  value: unknown,
+];
+export type OfficeEstimatorFrappeFilter = readonly [
+  doctype: OfficeEstimatorDocType,
   field: string,
   operator: string,
   value: unknown,
@@ -116,6 +124,63 @@ export const OFFICE_SALES_READ_FIELDS = {
   ],
 } as const;
 
+/**
+ * Estimator work is commercial and source-sensitive, so it has a separate static contract from
+ * both the field packet and Sales Desk. Raw report locations and unbounded evidence JSON never
+ * cross the BFF boundary; the two direct document readers below use those fields only to derive
+ * a safe, bounded workbench projection.
+ */
+export const OFFICE_ESTIMATOR_READ_FIELDS = {
+  "Roof Job": [
+    "name", "roof_job_id", "job_number", "brand", "service_type", "job_status", "workflow_profile", "modified",
+  ],
+  "Measurement Report": [
+    "name", "measurement_id", "roof_job", "provider", "review_status", "parsed_at", "approved_at", "modified",
+  ],
+  "Material Takeoff": [
+    "name", "takeoff_id", "roof_job", "measurement_report", "status", "prepared_at", "approved_at", "modified",
+  ],
+  "Customer Quote": [
+    "name", "customer_quote_id", "roof_job", "quote_version", "status", "price_book_version", "pricing_effective_at",
+    "subtotal", "tax_amount", "tax_code", "tax_rate", "quote_total", "currency", "deposit_amount", "amount_due",
+    "amount_paid", "balance_due", "payment_status", "payment_due_date", "valid_until", "prepared_at", "approved_at",
+    "accepted_at", "scope_summary", "assumptions", "exclusions", "supersedes", "correction_reason", "modified",
+  ],
+  "Proposal Evidence Pack": [
+    "name", "pack_id", "roof_job", "quotation", "status", "prepared_at", "approved_at", "signed_at", "assumptions",
+    "exclusions", "modified",
+  ],
+  "Scope Clause": [
+    "name", "scope_clause_id", "roof_job", "clause_type", "title", "clause_text", "version", "status", "source_ref",
+    "customer_visible", "approved_at", "modified",
+  ],
+} as const;
+
+/**
+ * Frappe's direct-document endpoint returns complete records, including child tables. Only these
+ * two explicit records need detail reads, and every parent/child field is projected before the
+ * result is returned to an app read model.
+ */
+const OFFICE_ESTIMATOR_DETAIL_READ = {
+  "Measurement Report": {
+    fields: [
+      "name", "measurement_id", "roof_job", "provider", "raw_key", "review_status", "parsed_at", "approved_at", "modified",
+    ],
+    children: {
+      measurements: ["metric", "value", "unit", "confidence", "source_ref", "needs_review"],
+    },
+  },
+  "Material Takeoff": {
+    fields: [
+      "name", "takeoff_id", "roof_job", "measurement_report", "status", "prepared_at", "approved_at", "assumptions",
+      "exclusions", "modified",
+    ],
+    children: {
+      items: ["category", "item_name", "quantity", "unit", "waste_factor", "source_ref", "confidence", "needs_review"],
+    },
+  },
+} as const;
+
 export function frappeReadConfigured(env: AppEnv): boolean {
   if (!env.ERPNEXT_API_KEY?.trim() || !env.ERPNEXT_API_SECRET?.trim()) return false;
   try {
@@ -154,7 +219,18 @@ const OFFICE_SALES_FILTER_FIELDS: Readonly<Record<OfficeSalesDocType, ReadonlySe
   "Communication Consent": new Set(["lead_envelope", "roof_job", "customer", "status"]),
 };
 
+const OFFICE_ESTIMATOR_FILTER_FIELDS: Readonly<Record<OfficeEstimatorDocType, ReadonlySet<string>>> = {
+  "Roof Job": new Set(["name"]),
+  "Measurement Report": new Set(["roof_job", "review_status"]),
+  "Material Takeoff": new Set(["roof_job", "measurement_report", "status"]),
+  "Customer Quote": new Set(["roof_job", "status"]),
+  "Proposal Evidence Pack": new Set(["roof_job", "quotation", "status"]),
+  "Scope Clause": new Set(["roof_job", "status"]),
+};
+
 const FILTER_OPERATORS = new Set(["=", "in", "like"]);
+const MAX_FRAPPE_READ_RESPONSE_BYTES = 768 * 1024;
+const MAX_ESTIMATOR_DETAIL_CHILD_ROWS = 300;
 
 export async function listFrappeResource(
   env: AppEnv,
@@ -204,6 +280,42 @@ export async function listOfficeSalesFrappeResource(
   );
 }
 
+/**
+ * Deliberately narrow estimator-only lookup. It cannot request arbitrary Frappe DocTypes,
+ * fields, filters, or pagination and therefore cannot widen the Sales/field contracts by accident.
+ */
+export async function listOfficeEstimatorFrappeResource(
+  env: AppEnv,
+  doctype: OfficeEstimatorDocType,
+  filters: readonly OfficeEstimatorFrappeFilter[] = [],
+  limit = 50,
+): Promise<FrappeRow[]> {
+  return await listFrappeResourcePageForContract(
+    env,
+    doctype,
+    filters,
+    limit,
+    0,
+    OFFICE_ESTIMATOR_READ_FIELDS,
+    OFFICE_ESTIMATOR_FILTER_FIELDS,
+  );
+}
+
+/**
+ * Read a single, fixed estimator document and project its allowed child-table fields. `raw_key`
+ * is intentionally available to the Worker read model only; no caller should expose this row
+ * directly to the browser.
+ */
+export async function readOfficeEstimatorFrappeResource(
+  env: AppEnv,
+  doctype: OfficeEstimatorDetailDocType,
+  name: string,
+): Promise<FrappeRow | null> {
+  if (!validFrappeDocumentName(name)) throw new Error("frappe_read_invalid_name");
+  const contract = OFFICE_ESTIMATOR_DETAIL_READ[doctype];
+  return await readFrappeDocumentForContract(env, doctype, name, contract.fields, contract.children);
+}
+
 async function listFrappeResourcePageForContract(
   env: AppEnv,
   doctype: string,
@@ -249,17 +361,53 @@ async function listFrappeResourcePageForContract(
       },
     });
     if (!response.ok) throw new Error(`frappe_read_http_${response.status}`);
-    let decoded: unknown;
-    try {
-      decoded = await response.json();
-    } catch {
-      throw new Error("frappe_read_invalid_json");
-    }
+    const decoded = await boundedFrappeJson(response, MAX_FRAPPE_READ_RESPONSE_BYTES);
     const data = decoded && typeof decoded === "object" && !Array.isArray(decoded)
       ? (decoded as { data?: unknown }).data
       : null;
     if (!Array.isArray(data)) throw new Error("frappe_read_invalid_shape");
     return data.slice(0, limit).filter(isRecord).map((row) => projectRow(fields, row));
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw new Error("frappe_read_timeout");
+    if (error instanceof Error && error.message.startsWith("frappe_read_")) throw error;
+    throw new Error("frappe_read_network_error");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readFrappeDocumentForContract(
+  env: AppEnv,
+  doctype: string,
+  name: string,
+  fields: readonly string[],
+  children: Readonly<Record<string, readonly string[]>>,
+): Promise<FrappeRow | null> {
+  const base = frappeBaseUrl(env);
+  if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET) throw new Error("frappe_read_not_configured");
+  const url = `${base}/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`;
+  const timeout = frappeRequestTimeout(env.APP_FRAPPE_REQUEST_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "error",
+      signal: controller.signal,
+      headers: {
+        accept: "application/json",
+        authorization: `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`,
+        "user-agent": "ironwrap-bff/1.0",
+      },
+    });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`frappe_read_http_${response.status}`);
+    const decoded = await boundedFrappeJson(response, MAX_FRAPPE_READ_RESPONSE_BYTES);
+    const data = decoded && typeof decoded === "object" && !Array.isArray(decoded)
+      ? (decoded as { data?: unknown }).data
+      : null;
+    if (!isRecord(data)) throw new Error("frappe_read_invalid_shape");
+    return projectDetailRow(fields, children, data);
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw new Error("frappe_read_timeout");
     if (error instanceof Error && error.message.startsWith("frappe_read_")) throw error;
@@ -278,6 +426,77 @@ function projectRow(fields: readonly string[], row: FrappeRow): FrappeRow {
   const projected: FrappeRow = {};
   for (const [key, value] of Object.entries(row)) if (allowed.has(key)) projected[key] = value;
   return projected;
+}
+
+function projectDetailRow(
+  fields: readonly string[],
+  children: Readonly<Record<string, readonly string[]>>,
+  row: FrappeRow,
+): FrappeRow {
+  const projected = projectRow(fields, row);
+  for (const [field, childFields] of Object.entries(children)) {
+    const value = row[field];
+    if (!Array.isArray(value)) continue;
+    const children: FrappeRow[] = [];
+    for (const child of value) {
+      if (!isRecord(child)) continue;
+      children.push(projectRow(childFields, child));
+      if (children.length === MAX_ESTIMATOR_DETAIL_CHILD_ROWS) break;
+    }
+    projected[field] = children;
+    if (value.length > children.length) projected[`__ironwrap_truncated_${field}`] = true;
+  }
+  return projected;
+}
+
+async function boundedFrappeJson(response: Response, maximumBytes: number): Promise<unknown> {
+  const declaredLength = Number(response.headers.get("content-length") ?? "");
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // A malformed upstream stream must not turn an over-limit response into a different error.
+    }
+    throw new Error("frappe_read_response_too_large");
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("frappe_read_invalid_json");
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      total += part.value.byteLength;
+      if (total > maximumBytes) {
+        try {
+          await reader.cancel();
+        } catch {
+          // The response is already over the boundary; cancellation failure must not mask that fact.
+        }
+        throw new Error("frappe_read_response_too_large");
+      }
+      chunks.push(part.value);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("frappe_read_")) throw error;
+    throw new Error("frappe_read_network_error");
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new Error("frappe_read_invalid_json");
+  }
+}
+
+function validFrappeDocumentName(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9 _.#:()\-]{0,139}$/.test(value);
 }
 
 export function frappeBaseUrl(env: AppEnv): string {

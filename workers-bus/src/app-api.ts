@@ -40,6 +40,7 @@ import {
 } from "./approval-broker-client.ts";
 import {
   activeAssignmentForJob,
+  buildEstimatorWorkbenchReadModel,
   buildJobProofReadModel,
   buildJobReadModel,
   buildOwnerNowReadModel,
@@ -236,6 +237,20 @@ export async function handleAuthenticatedRoute(
     }
   }
   const jobMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)$/);
+  const estimatorJobMatch = url.pathname.match(/^\/api\/v1\/estimator\/jobs\/([^/]+)$/);
+  if (req.method === "GET" && estimatorJobMatch) {
+    if (auth.session.role !== "owner" && auth.session.role !== "ops") {
+      return privateAppJson({ error: "office_role_required" }, 403);
+    }
+    const jobName = decodedPathSegment(estimatorJobMatch[1]);
+    if (!jobName) return privateAppJson({ error: "not_found" }, 404);
+    try {
+      const model = await buildEstimatorWorkbenchReadModel(env, auth, jobName);
+      return model ? privateAppJson(model) : privateAppJson({ error: "not_found" }, 404);
+    } catch {
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
+    }
+  }
   if (req.method === "GET" && jobMatch) {
     const jobName = decodedPathSegment(jobMatch[1]);
     if (!jobName) return appJson({ error: "not_found" }, 404);

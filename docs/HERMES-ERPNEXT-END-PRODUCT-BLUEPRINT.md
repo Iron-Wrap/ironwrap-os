@@ -141,6 +141,23 @@ state, consent-record presence, and capped-source uncertainty explicit. It canno
 issue a quote, collect payment, or create triage from the browser. The measurement/repricing/
 proposal workbench, live Frappe data proof, and real-operator validation remain open.
 
+Estimator Workbench checkpoint (2026-07-12): the PWA now has a locally tested, office-only
+`/estimator/jobs/:jobId` source-review surface. It uses a distinct static estimator allowlist and
+fixed direct-document reads for the selected Measurement Report and Material Takeoff. The Worker
+uses the Measurement Report's `raw_key` internally only after enforcing the owned
+`raw/measurements/YYYY-MM-DD/ow_<uuid>.json` path and a 2 MiB cap, then reparses the retained
+source with the existing deterministic geometry engine. The browser receives only capped facets,
+checks, derived source metrics, persisted measurement/takeoff source references, quote version and
+price-book state, Proposal Evidence Pack state, and Scope Clauses. It cannot receive raw keys, XML,
+report URLs, raw evidence JSON, customer messages, tax-policy snapshots, supplier cost, or a
+generic Frappe record. Direct Frappe responses are byte- and child-row-capped; over-limit detail
+degrades to a stale/unavailable state. The workbench selects takeoffs only through their Measurement
+Report link and proposal packs only through their Customer Quote link, exposing mismatches rather
+than silently combining independent latest records. Source-file recomputation is visibly distinct from field verification; no
+price, takeoff, proposal, signature, payment, or communication mutation exists in this vertical.
+Repricing deltas, governed proposal assembly, insurance/supplement evidence, live Frappe/R2
+freshness, real-browser, and estimator/operator acceptance proof remain open.
+
 ## Research Basis
 
 Primary sources reviewed:

@@ -1,0 +1,472 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import { buildEstimatorWorkbenchReadModel } from "../src/app-read-models.ts";
+import { OFFICE_ESTIMATOR_READ_FIELDS } from "../src/frappe-read.ts";
+import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
+
+const MODIFIED = "2026-07-11T10:00:00.000Z";
+const RAW_KEY = "raw/measurements/2026-07-11/ow_01234567-89ab-cdef-0123-456789abcdef.json";
+const GEOMETRY_XML = [
+  "<APPLICAD_EXPORT>",
+  '<POINT id="P1" data="0,0,0"/>',
+  '<POINT id="P2" data="10,0,0"/>',
+  '<POINT id="P3" data="10,10,0"/>',
+  '<POINT id="P4" data="0,10,0"/>',
+  '<LINE id="L1" path="P1,P2" type="EAVE" length="10"/>',
+  '<LINE id="L2" path="P2,P3" type="RIDGE" length="10"/>',
+  '<LINE id="L3" path="P3,P4" type="EAVE" length="10"/>',
+  '<LINE id="L4" path="P4,P1" type="EAVE" length="12"/>',
+  '<POLYGON id="F1" path="L1,L2,L3,L4" type="Roof" size="100" pitch="6" mat="Asphalt"/>',
+  "</APPLICAD_EXPORT>",
+].join("");
+
+const rows: Record<string, Array<Record<string, unknown>>> = {
+  "Roof Job": [
+    {
+      name: "JOB-A",
+      roof_job_id: "roof_job_a",
+      job_number: "IW-1001",
+      brand: "ironwrap",
+      service_type: "Roof replacement",
+      job_status: "Proposal",
+      workflow_profile: "Residential Retail",
+      modified: MODIFIED,
+      customer: "CUSTOMER-A",
+      internal_financial_note: "private-job-note",
+    },
+  ],
+  "Measurement Report": [
+    {
+      name: "MEASURE-A",
+      measurement_id: "measure_a",
+      roof_job: "JOB-A",
+      provider: "AppliCad",
+      review_status: "Needs Review",
+      parsed_at: MODIFIED,
+      approved_at: null,
+      raw_key: RAW_KEY,
+      report_url: "https://private.example/report",
+      modified: MODIFIED,
+      measurements: [
+        {
+          metric: "roof_area",
+          value: 100,
+          unit: "sq ft",
+          confidence: "deterministic",
+          source_ref: "POLYGON[type=Roof]",
+          needs_review: 1,
+          hidden_private_detail: "do-not-expose",
+        },
+      ],
+    },
+  ],
+  "Material Takeoff": [
+    {
+      name: "TAKEOFF-A",
+      takeoff_id: "takeoff_a",
+      roof_job: "JOB-A",
+      measurement_report: "MEASURE-A",
+      status: "Needs Review",
+      prepared_at: MODIFIED,
+      approved_at: null,
+      assumptions: "Waste includes valleys.",
+      exclusions: "Deck repairs require separate approval.",
+      source_measurements_json: "private-json",
+      modified: MODIFIED,
+      items: [
+        {
+          category: "Shingle",
+          item_name: "Architectural shingles",
+          quantity: 12.5,
+          unit: "squares",
+          waste_factor: 12,
+          source_ref: "roof_area",
+          confidence: "deterministic",
+          needs_review: 1,
+          supplier_cost: 9999,
+        },
+      ],
+    },
+  ],
+  "Customer Quote": [
+    {
+      name: "QUOTE-A",
+      customer_quote_id: "quote_a",
+      roof_job: "JOB-A",
+      quote_version: 3,
+      status: "Needs Review",
+      price_book_version: "2026-07-11",
+      pricing_effective_at: MODIFIED,
+      subtotal: 12000,
+      tax_amount: 600,
+      tax_code: "GST",
+      tax_rate: 5,
+      quote_total: 12600,
+      currency: "CAD",
+      deposit_amount: 2500,
+      amount_due: 2500,
+      amount_paid: 0,
+      balance_due: 12600,
+      payment_status: "Not Due",
+      payment_due_date: null,
+      valid_until: "2026-07-25",
+      prepared_at: MODIFIED,
+      approved_at: null,
+      accepted_at: null,
+      scope_summary: "Replace roof system and flashings.",
+      assumptions: "One existing layer.",
+      exclusions: "Deck repairs excluded.",
+      supersedes: "QUOTE-OLD",
+      correction_reason: "Supplier price notice",
+      tax_policy_snapshot_json: "private-tax-json",
+      quote_summary_json: "private-quote-json",
+      modified: MODIFIED,
+    },
+  ],
+  "Proposal Evidence Pack": [
+    {
+      name: "PACK-A",
+      pack_id: "pack_a",
+      roof_job: "JOB-A",
+      quotation: "QUOTE-A",
+      status: "Draft",
+      prepared_at: MODIFIED,
+      approved_at: null,
+      signed_at: null,
+      assumptions: "One existing layer.",
+      exclusions: "Deck repairs excluded.",
+      evidence_summary_json: "private-evidence-json",
+      customer_message: "private-message",
+      modified: MODIFIED,
+    },
+  ],
+  "Scope Clause": [
+    {
+      name: "CLAUSE-A",
+      scope_clause_id: "clause_a",
+      roof_job: "JOB-A",
+      clause_type: "Risk",
+      title: "Deck condition",
+      clause_text: "Hidden deck conditions require evidence and written approval.",
+      version: "v2",
+      status: "Approved",
+      source_ref: "Alberta contract policy",
+      customer_visible: 1,
+      approved_at: MODIFIED,
+      notes: "private-clause-note",
+      modified: MODIFIED,
+    },
+  ],
+};
+
+function auth(role: AppRole): AuthContext {
+  return {
+    rawSessionToken: "s".repeat(43),
+    csrfToken: "csrf",
+    permissions:
+      role === "field"
+        ? ["session:read", "jobs:read:assigned", "field:write:assigned"]
+        : ["session:read", "jobs:read:any", "owner:read", "sales:read", "estimator:read"],
+    session: {
+      session_hash: "a".repeat(64),
+      session_created_at: MODIFIED,
+      session_expires_at: "2026-07-11T22:00:00.000Z",
+      revoked_at: null,
+      user_id: `appu_${role}`,
+      tenant_id: "ironwrap",
+      email_normalized: `${role}@example.com`,
+      display_name: role,
+      role,
+      frappe_user_id: `${role}@example.com`,
+      active: 1,
+      created_by: "owner@example.com",
+      created_at: MODIFIED,
+      updated_at: MODIFIED,
+    },
+  };
+}
+
+function env(
+  rawText = JSON.stringify({
+    source_xml: GEOMETRY_XML,
+    internal_note: "never expose source bytes",
+  }),
+): AppEnv {
+  return {
+    ERPNEXT_BASE_URL: "https://frappe.example.com",
+    ERPNEXT_API_KEY: "read-key",
+    ERPNEXT_API_SECRET: "read-secret",
+    RAW: {
+      get: async (key: string) =>
+        key === RAW_KEY
+          ? {
+              size: new TextEncoder().encode(rawText).byteLength,
+              text: async () => rawText,
+            }
+          : null,
+    },
+  } as never;
+}
+
+function installFrappeMock(
+  dataset: Record<string, Array<Record<string, unknown>>> = rows,
+  options: {
+    oversizedMeasurementDetail?: boolean;
+    detailRows?: Record<string, Record<string, unknown>>;
+  } = {},
+) {
+  const original = globalThis.fetch;
+  const requests: Array<{
+    doctype: string;
+    name: string | null;
+    fields: string[];
+    filters: unknown[];
+  }> = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+    );
+    const segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    const resource = segments.lastIndexOf("resource");
+    const doctype = segments[resource + 1] ?? "";
+    const name = segments[resource + 2] ?? null;
+    const fields = JSON.parse(url.searchParams.get("fields") ?? "[]") as string[];
+    const filters = JSON.parse(url.searchParams.get("filters") ?? "[]") as unknown[];
+    requests.push({ doctype, name, fields, filters });
+    const source = dataset[doctype] ?? [];
+    if (name) {
+      const document = options.detailRows?.[`${doctype}/${name}`] ?? source.find((row) => row.name === name);
+      if (document && options.oversizedMeasurementDetail && doctype === "Measurement Report") {
+        const body = JSON.stringify({ data: { ...document, padding: "x".repeat(800 * 1024) } });
+        return new Response(body, {
+          headers: {
+            "content-length": String(new TextEncoder().encode(body).byteLength),
+            "content-type": "application/json",
+          },
+        });
+      }
+      return document
+        ? Response.json({ data: document })
+        : Response.json({ error: "not_found" }, { status: 404 });
+    }
+    return Response.json({
+      data: source.filter((row) => filters.every((filter) => matchesFilter(row, filter))),
+    });
+  };
+  return {
+    requests,
+    restore: () => {
+      globalThis.fetch = original;
+    },
+  };
+}
+
+function matchesFilter(row: Record<string, unknown>, raw: unknown): boolean {
+  if (!Array.isArray(raw)) return false;
+  const [, field, operator, expected] = raw;
+  if (operator === "=") return String(row[String(field)] ?? "") === String(expected ?? "");
+  return false;
+}
+
+test("estimator workbench derives safe measurement geometry and commercial traceability without raw leakage", async () => {
+  const mock = installFrappeMock();
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(env(), auth("ops"), "JOB-A");
+    assert.ok(model);
+    assert.equal(model.job.job_number, "IW-1001");
+    assert.deepEqual(model.allowed_actions.at(-1), "estimator.read");
+    assert.equal(model.measurements.selected?.geometry.state, "needs_review");
+    assert.equal(model.measurements.selected?.geometry.failed_check_count, 1);
+    assert.equal(model.measurements.selected?.geometry.facets[0]?.declared_area, 100);
+    assert.equal(model.measurements.selected?.geometry.facets[0]?.computed_area, 100);
+    assert.equal(model.measurements.selected?.metrics[0]?.source_ref, "POLYGON[type=Roof]");
+    assert.equal(model.takeoffs.selected?.items[0]?.source_ref, "roof_area");
+    assert.deepEqual(model.lineage, {
+      measurement_to_takeoff: "linked",
+      quote_to_proposal: "linked",
+    });
+    assert.equal(model.quote?.price_book_version, "2026-07-11");
+    assert.equal(model.proposal?.status, "Draft");
+    assert.equal(model.scope_clauses[0]?.customer_visible, true);
+
+    const serialized = JSON.stringify(model);
+    for (const secret of [
+      RAW_KEY,
+      GEOMETRY_XML,
+      "private-job-note",
+      "private-json",
+      "private-tax-json",
+      "private-quote-json",
+      "private-evidence-json",
+      "private-message",
+      "private-clause-note",
+      "do-not-expose",
+      "never expose source bytes",
+    ])
+      assert.equal(serialized.includes(secret), false, `leaked ${secret}`);
+
+    const reportList = mock.requests.find(
+      (request) => request.doctype === "Measurement Report" && request.name === null,
+    );
+    assert.deepEqual(reportList?.fields, OFFICE_ESTIMATOR_READ_FIELDS["Measurement Report"]);
+    assert.equal(reportList?.fields.includes("raw_key"), false);
+    const reportDetail = mock.requests.find(
+      (request) => request.doctype === "Measurement Report" && request.name === "MEASURE-A",
+    );
+    assert.ok(
+      reportDetail,
+      "selected report should be read only through the fixed direct-detail contract",
+    );
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench does not join a remeasurement to an unlinked takeoff or an older proposal", async () => {
+  const dataset = {
+    ...rows,
+    "Measurement Report": [
+      ...rows["Measurement Report"],
+      {
+        ...rows["Measurement Report"][0],
+        name: "MEASURE-B",
+        measurement_id: "measure_b",
+        modified: "2026-07-12T10:00:00.000Z",
+      },
+    ],
+    "Customer Quote": [
+      ...rows["Customer Quote"],
+      {
+        ...rows["Customer Quote"][0],
+        name: "QUOTE-OLD",
+        customer_quote_id: "quote_old",
+        quote_version: 2,
+        modified: "2026-07-14T10:00:00.000Z",
+      },
+    ],
+    "Proposal Evidence Pack": [
+      {
+        ...rows["Proposal Evidence Pack"][0],
+        quotation: "QUOTE-OLD",
+        modified: "2026-07-14T10:00:00.000Z",
+      },
+    ],
+  };
+  const mock = installFrappeMock(dataset);
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
+    assert.ok(model);
+    assert.equal(model.measurements.selected?.id, "measure_b");
+    assert.equal(model.takeoffs.selected, null);
+    assert.equal(model.lineage.measurement_to_takeoff, "mismatch");
+    assert.equal(model.quote?.id, "quote_a", "highest quote_version wins over modified timestamp");
+    assert.equal(model.proposal, null);
+    assert.equal(model.lineage.quote_to_proposal, "mismatch");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench fails closed when a direct report response exceeds the read boundary", async () => {
+  const mock = installFrappeMock(rows, { oversizedMeasurementDetail: true });
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(env(), auth("ops"), "JOB-A");
+    assert.ok(model);
+    assert.equal(model.measurements.selected?.geometry.state, "unavailable");
+    assert.equal(model.measurements.selected?.geometry.reason, "measurement_detail_too_large");
+    assert.equal(model.stale_fields.includes("measurements.selected_detail"), true);
+    assert.equal(JSON.stringify(model).includes(RAW_KEY), false);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench caps child detail rows and preserves the truncation signal", async () => {
+  const dataset = {
+    ...rows,
+    "Measurement Report": [{
+      ...rows["Measurement Report"][0],
+      measurements: Array.from({ length: 350 }, (_, index) => ({
+        metric: `metric_${index}`,
+        value: index,
+        unit: "sq ft",
+        confidence: "reported",
+        source_ref: "provider",
+        needs_review: 0,
+      })),
+    }],
+  };
+  const mock = installFrappeMock(dataset);
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(env(), auth("ops"), "JOB-A");
+    assert.equal(model?.measurements.selected?.metrics.length, 120);
+    assert.equal(model?.measurements.selected?.metrics_truncated, true);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench rejects direct detail that no longer belongs to the selected roof job", async () => {
+  const detailRows = {
+    "Measurement Report/MEASURE-A": {
+      ...rows["Measurement Report"][0],
+      roof_job: "JOB-OTHER",
+    },
+  };
+  const mock = installFrappeMock(rows, { detailRows });
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
+    assert.ok(model);
+    assert.equal(model.measurements.selected?.geometry.reason, "measurement_detail_mismatch");
+    assert.equal(model.stale_fields.includes("measurements.selected_detail"), true);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench bounds provider-controlled geometry labels before returning the browser DTO", async () => {
+  const mock = installFrappeMock();
+  try {
+    const oversizedId = `F${"x".repeat(900)}`;
+    const rawText = JSON.stringify({
+      source_xml: GEOMETRY_XML.replace('id="F1"', `id="${oversizedId}"`),
+    });
+    const model = await buildEstimatorWorkbenchReadModel(env(rawText), auth("owner"), "JOB-A");
+    const facetId = model?.measurements.selected?.geometry.facets[0]?.id ?? "";
+    assert.equal(facetId.length, 240);
+    assert.equal(facetId.endsWith("…"), true);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench is office-only and the HTTP route is private before it starts a Frappe read", async () => {
+  const mock = installFrappeMock();
+  try {
+    await assert.rejects(
+      async () => await buildEstimatorWorkbenchReadModel(env(), auth("field"), "JOB-A"),
+      /office_scope_required/,
+    );
+    assert.equal(mock.requests.length, 0);
+
+    const request = new Request("https://app.example.com/api/v1/estimator/jobs/JOB-A");
+    const field = await handleAuthenticatedRoute(request, env(), auth("field"));
+    assert.equal(field.status, 403);
+    assert.equal(field.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await field.json(), { error: "office_role_required" });
+    assert.equal(mock.requests.length, 0);
+
+    const office = await handleAuthenticatedRoute(request, env(), auth("owner"));
+    assert.equal(office.status, 200);
+    assert.equal(office.headers.get("cache-control"), "private, no-store");
+    assert.equal(
+      ((await office.json()) as { measurements: { selected: { geometry: { state: string } } } })
+        .measurements.selected.geometry.state,
+      "needs_review",
+    );
+  } finally {
+    mock.restore();
+  }
+});

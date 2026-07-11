@@ -12,7 +12,15 @@ import { SalesDeskPage } from "./sales-desk-page";
 
 vi.mock("./sales-api", () => ({ loadSales: vi.fn() }));
 vi.mock("@tanstack/react-router", () => ({
-  Link: ({ children, to }: { children: ReactNode; to: string }) => <a href={to}>{children}</a>,
+  Link: ({
+    children,
+    to,
+    params,
+  }: {
+    children: ReactNode;
+    to: string;
+    params?: { jobId?: string };
+  }) => <a href={params?.jobId ? to.replace("$jobId", params.jobId) : to}>{children}</a>,
 }));
 
 const ownerSession = {
@@ -220,6 +228,20 @@ describe("SalesDeskPage", () => {
     await screen.findByRole("heading", { name: "Sales desk" });
     expect(screen.getByText("Approved", { exact: true })).toBeVisible();
     expect(screen.queryByText("Non-binding", { exact: true })).not.toBeInTheDocument();
+  });
+
+  it("opens the source workbench only when the BFF grants estimator review", async () => {
+    const model = salesModel({
+      allowed_actions: ["sales.read", "approval.read", "estimator.read"],
+    });
+    vi.mocked(loadSales).mockResolvedValue(model);
+    renderSales();
+
+    await screen.findByRole("heading", { name: "Sales desk" });
+    expect(screen.getByRole("link", { name: /open measurement workbench/i })).toHaveAttribute(
+      "href",
+      "/estimator/jobs/JOB-A",
+    );
   });
 
   it("keeps the sales payload out of field devices before it asks the BFF", async () => {

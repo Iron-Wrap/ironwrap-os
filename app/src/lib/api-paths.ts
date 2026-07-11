@@ -9,6 +9,7 @@ export const API_PATHS = {
     `/api/v1/device-pairings/${encodeURIComponent(deviceId)}/revoke`,
   logout: "/api/v1/auth/logout",
   sales: "/api/v1/sales",
+  estimatorJob: (jobId: string) => `/api/v1/estimator/jobs/${encodeURIComponent(jobId)}`,
   approvals: "/api/v1/approvals",
   approvalApprove: (approvalId: string) =>
     `/api/v1/approvals/${encodeURIComponent(approvalId)}/approve`,

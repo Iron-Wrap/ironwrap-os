@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
+  ArrowUpRight,
   BriefcaseBusiness,
   CircleAlert,
   Clock3,
@@ -104,6 +105,7 @@ function SalesDeskScreen({
     model.stale_fields.length > 0 ||
     model.source_updated_at === null;
   const canReviewApprovals = model.allowed_actions.includes("approval.read");
+  const canOpenWorkbench = model.allowed_actions.includes("estimator.read");
 
   return (
     <section className="mx-auto max-w-7xl space-y-6 pb-4">
@@ -150,7 +152,13 @@ function SalesDeskScreen({
           <FilterRail filters={filters} selected={filter} onChange={onFilterChange} />
         </aside>
         <main className="min-w-0">
-          <LeadQueue leads={leads} filter={filter} locale={locale} currency={currency} />
+          <LeadQueue
+            leads={leads}
+            filter={filter}
+            locale={locale}
+            currency={currency}
+            canOpenWorkbench={canOpenWorkbench}
+          />
         </main>
       </div>
     </section>
@@ -258,11 +266,13 @@ function LeadQueue({
   filter,
   locale,
   currency,
+  canOpenWorkbench,
 }: {
   leads: SalesLead[];
   filter: SalesFilter;
   locale: string;
   currency: string;
+  canOpenWorkbench: boolean;
 }) {
   if (leads.length === 0) {
     return (
@@ -294,7 +304,12 @@ function LeadQueue({
       <ol className="border-y border-border divide-y divide-border">
         {leads.map((lead) => (
           <li key={lead.id}>
-            <LeadRow lead={lead} locale={locale} defaultCurrency={currency} />
+            <LeadRow
+              lead={lead}
+              locale={locale}
+              defaultCurrency={currency}
+              canOpenWorkbench={canOpenWorkbench}
+            />
           </li>
         ))}
       </ol>
@@ -306,10 +321,12 @@ function LeadRow({
   lead,
   locale,
   defaultCurrency,
+  canOpenWorkbench,
 }: {
   lead: SalesLead;
   locale: string;
   defaultCurrency: string;
+  canOpenWorkbench: boolean;
 }) {
   const receivedAt = formatDate(lead.received_at, locale);
   const contact = [lead.contact.phone, lead.contact.email].filter((value): value is string =>
@@ -371,6 +388,16 @@ function LeadRow({
           {lead.job?.service_type ? <span>{lead.job.service_type}</span> : null}
           {lead.job?.workflow_profile ? <span>{lead.job.workflow_profile}</span> : null}
           <span className="font-mono text-xs text-muted/85">Lead {lead.envelope_id}</span>
+          {canOpenWorkbench && lead.job ? (
+            <Link
+              to="/estimator/jobs/$jobId"
+              params={{ jobId: lead.job.id }}
+              className="inline-flex min-h-10 items-center gap-1.5 rounded-md px-2 font-bold text-foreground transition-colors hover:bg-surface-muted"
+            >
+              Open measurement workbench
+              <ArrowUpRight className="size-4" aria-hidden="true" />
+            </Link>
+          ) : null}
         </footer>
       </div>
     </article>

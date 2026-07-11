@@ -269,6 +269,33 @@ export async function getApprovalRequest(
   return row ? normalizeApprovalRequest(row) : null;
 }
 
+export async function getApprovalRequestByPrepareKey(
+  env: AppEnv,
+  tenantId: string,
+  prepareIdempotencyKey: string,
+): Promise<ApprovalRequestRecord | null> {
+  return await findApprovalRequestByPrepareKey(env, tenantId, prepareIdempotencyKey);
+}
+
+export function matchesApprovalPreparation(
+  record: ApprovalRequestRecord,
+  input: {
+    requestedByUserId: string;
+    leadEnvelopeId: string;
+    triageSummary: string;
+    requestText: string;
+  },
+): boolean {
+  const args = parseObject(record.write_args_json);
+  if (!args) return false;
+  return record.requested_by_user_id === input.requestedByUserId &&
+    record.lead_envelope_id === input.leadEnvelopeId &&
+    record.request_text === input.requestText &&
+    args.lead_envelope_id === input.leadEnvelopeId &&
+    args.triage_summary === input.triageSummary &&
+    args.request_text === input.requestText;
+}
+
 export async function getCurrentApprovalRequest(
   env: AppEnv,
   tenantId: string,

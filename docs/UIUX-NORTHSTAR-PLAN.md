@@ -1,6 +1,6 @@
 # IronWrap OS Product Layer: Mobile-First North Star Plan
 
-Status: repository implementation checkpoint, 2026-07-10. Builds on the verified competitive position in
+Status: repository implementation checkpoint, 2026-07-11. Builds on the verified competitive position in
 `docs/MARKET-DEFENSE-SCORECARD.md` and the audited substrate below. This is the plan for the
 layer users actually touch: mobile-first, crew-proof, and designed to subjectively beat
 JobNimbus, GoHighLevel, Roofr, and AccuLynx screen for screen.
@@ -10,7 +10,7 @@ maintained in `docs/ROOFING-DEMAND-EVIDENCE.md`. Primary demand scoring uses 202
 owner/operator discussions, verified reviews, and paid roles; vendor pages verify current
 capability only.
 
-## 1. Audit: what the substrate provides today (verified 2026-07-10)
+## 1. Audit: what the substrate provides today (verified 2026-07-11)
 
 | Layer | State |
 | --- | --- |
@@ -19,7 +19,7 @@ capability only.
 | Hermes agent layer | 8 runtime-filtered roles, 122 MCP tools, receipt-bound approved-write contract |
 | Deploy/ops | Contract-validated production configuration, pinned runtime lock, encrypted Frappe/D1 recovery, launch runbook |
 | Competitive truth | 10 exceeded / 7 covered / 19 open, adversarially audited |
-| Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, and P2's read-only Owner Now decision board are locally implemented and contract-tested. Owner Now separates work-stops, operating exceptions, and lead attention; exposes source freshness/lower bounds; gates job-packet access on BFF capability; and labels MCTB only as provider acceptance, late/unproven/no-channel evidence. It never claims delivery or human follow-up. Live backend/browser/device proof, P2 approvals, and P3-P5 remain open; Frappe Control Center is the truthful fallback. |
+| Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, and P2 Owner Now plus the governed `/approvals` inbox are locally implemented and contract-tested. Owner Now separates work-stops, operating exceptions, and lead attention; the inbox renders only allowlisted before/patch/outcome DTOs and server-granted decision capability. Neither surface claims delivery or human follow-up. Live Worker/broker/Frappe/browser/device proof and P3-P5 remain open; Frappe Control Center is the truthful fallback. |
 
 Every "their UX beats ours" row in the scorecard (boards, mobile app, omnichannel inbox,
 homeowner widget) lands in this one missing layer. That makes the UI the highest-leverage
@@ -167,15 +167,25 @@ synced later with zero loss; crew member with no training completes it on first 
 ### P2: Owner Cockpit + Approvals Inbox
 
 Screens: Now (blocked jobs, unpaid, untriaged leads, triage-data quality; heartbeat remains a gate), Job drill-down, Approvals inbox
-(pending Hermes dry-runs rendered as diff cards with approve/reject).
-Repository checkpoint: the role-scoped, read-only **Now** decision board is implemented locally.
-It turns the current proof-safe payload into three compact signals and ordered lanes for verified
-crew work-stops/gates, operating exceptions, and lead attention. It exposes stale and bounded
-source truth rather than repeating unavailable due/action copy on every row, formats timestamps in
-the tenant time zone, and renders job access only when `job.read` is in the BFF response. It keeps
-untriaged leads separate from bus transport state and labels MCTB only as provider acceptance,
-late/unproven/no-channel evidence. Approvals, heartbeat, live source freshness, and the phone
-acceptance gate remain open.
+(pending Hermes dry-runs rendered as diff cards with approve/reject, plus bounded
+uncertainty reconciliation when execution status cannot be proven).
+Repository checkpoint: the role-scoped **Now** decision board and a dedicated `/approvals` inbox
+are implemented locally. Now turns the current proof-safe payload into three compact signals and
+ordered lanes for verified crew work-stops/gates, operating exceptions, and lead attention. It
+exposes stale and bounded source truth rather than repeating unavailable due/action copy on every
+row, formats timestamps in the tenant time zone, and renders job access only when `job.read` is in
+the BFF response. It keeps untriaged leads separate from bus transport state and labels MCTB only
+as provider acceptance, late/unproven/no-channel evidence.
+
+The inbox is deliberately review-only until Sales exposes a source-backed lead-detail contract.
+It renders the exact local-triage before/patch diff plus scope fence (no customer message, transport,
+quote, or accounting mutation); the browser never sees a receipt, raw write args, broker output, or
+tool selector. It honors BFF `approval.approve` / `approval.reject` / `approval.reconcile` capabilities
+instead of inferring authority from role. A decision requires current CSRF, a recent configured-approver
+session, expected version, and stable idempotency key. It is not queued offline or automatically retried; broker ambiguity
+becomes a visible no-retry reconciliation state whose evidence can be appended without reopening the write.
+Remote D1/Frappe migration, private broker reachability,
+live source freshness, real browser/device operation, and the phone acceptance gate remain open.
 Beats: JN Insights ("AWFUL" per their own users) and gives the agent layer a human surface
 nobody in the market has: governed AI with a one-thumb approval queue.
 Proof gate: "what is blocked and why" answered in one tap in under 3 seconds; one real

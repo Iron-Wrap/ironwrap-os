@@ -24,6 +24,13 @@ export type AppEnv = Env & {
   APP_ALLOW_INSECURE_LOCAL?: string;
   APP_AUTH_PEPPER?: string;
   APP_FRAPPE_REQUEST_TIMEOUT_MS?: string;
+  APP_APPROVAL_BROKER_URL?: string;
+  APP_APPROVAL_BROKER_KEY_ID?: string;
+  APP_APPROVAL_APPROVER_ID?: string;
+  APP_APPROVAL_MAX_SESSION_AGE_SECONDS?: string;
+  APP_APPROVAL_BROKER_TIMEOUT_MS?: string;
+  APP_APPROVAL_EXECUTION_LEASE_SECONDS?: string;
+  APPROVAL_BROKER_SHARED_SECRET?: string;
   ERPNEXT_BASE_URL?: string;
   ERPNEXT_API_KEY?: string;
   ERPNEXT_API_SECRET?: string;
@@ -94,8 +101,8 @@ export interface AppTenantPublic {
 }
 
 export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
-  owner: ["session:read", "jobs:read:any", "owner:read"],
-  ops: ["session:read", "jobs:read:any", "owner:read"],
+  owner: ["session:read", "jobs:read:any", "owner:read", "approvals:read", "approvals:decide"],
+  ops: ["session:read", "jobs:read:any", "owner:read", "approvals:read", "approvals:prepare"],
   field: ["session:read", "jobs:read:assigned", "field:write:assigned"],
 };
 

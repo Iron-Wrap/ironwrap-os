@@ -40,6 +40,7 @@ export interface ApiRequestOptions<T> {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   csrfToken?: string;
+  idempotencyKey?: string;
   deviceProof?: DeviceProofProvider;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -50,6 +51,7 @@ export interface ApiCommandOptions {
   path: string;
   body?: unknown;
   csrfToken?: string;
+  idempotencyKey?: string;
   deviceProof?: DeviceProofProvider;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -123,6 +125,7 @@ async function executeRequest(
     const headers = new Headers({ Accept: "application/json" });
     if (options.body !== undefined) headers.set("Content-Type", "application/json");
     if (options.csrfToken) headers.set("X-CSRF-Token", options.csrfToken);
+    if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
     const deviceProof = await options.deviceProof?.();
     if (deviceProof) headers.set("X-IronWrap-Device-Proof", deviceProof);
 

@@ -28,6 +28,7 @@ import { handleQuickbooksWebhook } from "./quickbooks.ts";
 import { ensureJobFolder, googleConfigured } from "./google.ts";
 import { handleAdminAppUserProvision, handleAppApi } from "./app-api.ts";
 import { pruneAuthRecords } from "./app-auth-store.ts";
+import { markExpiredExecutionLeases } from "./approval-store.ts";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
@@ -66,7 +67,13 @@ export default {
         pruneAuthRecords(env).catch((error) => log({ at: "auth_prune", error: String(error) })),
       ]).then(() => {}));
     }
-    else ctx.waitUntil(retrySweep(env)); // the frequent cron
+    else ctx.waitUntil(Promise.all([
+      retrySweep(env),
+      // A broker timeout must never trigger an invisible second Frappe write.
+      // The durable request becomes owner-visible reconciliation work instead.
+      markExpiredExecutionLeases(env, new Date().toISOString())
+        .catch((error) => log({ at: "approval_lease_sweep", error: String(error) })),
+    ]).then(() => {})); // the frequent cron
   },
 } satisfies ExportedHandler<Env, { envelope_id: string }>;
 

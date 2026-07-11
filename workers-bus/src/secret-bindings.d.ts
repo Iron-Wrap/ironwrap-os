@@ -14,6 +14,7 @@ interface Env {
   ERPNEXT_API_KEY: string;
   ERPNEXT_API_SECRET: string;
   APP_AUTH_PEPPER: string;
+  APPROVAL_BROKER_SHARED_SECRET: string;
 }
 
 declare namespace Cloudflare {
@@ -26,5 +27,6 @@ declare namespace Cloudflare {
     ERPNEXT_API_KEY: string;
     ERPNEXT_API_SECRET: string;
     APP_AUTH_PEPPER: string;
+    APPROVAL_BROKER_SHARED_SECRET: string;
   }
 }

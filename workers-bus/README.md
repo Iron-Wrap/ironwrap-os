@@ -84,7 +84,9 @@ src/app-auth.ts    one-time magic-link/session/CSRF/origin contract; no raw toke
 src/app-auth-store.ts D1 app-user/auth/throttle/audit adapter and retention cleanup
 src/frappe-read.ts strict Frappe GET allowlist and credential-safe upstream adapter
 src/app-read-models.ts screen-shaped Today, Job, and Owner Now projections
-src/app-api.ts     /api/v1 routing/CORS plus admin-token app-user provisioning
+src/app-api.ts     /api/v1 routing/CORS plus admin-token app-user provisioning and governed approval routes
+src/approval-store.ts immutable D1 approval-request projection/event ledger and CAS transitions
+src/approval-broker-client.ts Worker-to-private-broker HMAC client; no Frappe write capability in Worker
 src/index.ts       the Worker: fetch + queue + scheduled
 migrations/0001_init.sql   D1 schema; 0002–0010 add operating and replay safety; 0011 adds app auth/audit state
 test/core.test.ts  zero-dep self-test (`node --test`)
@@ -115,6 +117,7 @@ npx wrangler secret put QB_WEBHOOK_TOKEN   # when the QuickBooks webhook is conn
 npx wrangler secret put ERPNEXT_API_KEY    # when ERPNext bridge is enabled
 npx wrangler secret put ERPNEXT_API_SECRET
 npx wrangler secret put APP_AUTH_PEPPER    # 32+ random characters; required before APP_BFF_ENABLED=true
+npx wrangler secret put APPROVAL_BROKER_SHARED_SECRET  # only when the governed approval broker is enabled
 
 npm test                     # pure-logic self-test
 npm run typecheck            # tsc --noEmit
@@ -147,6 +150,12 @@ npx wrangler deploy
 | GET | `/api/v1/today` | session cookie | assigned active jobs for field; broader active jobs for owner/ops |
 | GET | `/api/v1/jobs/:id` | session cookie | job, gate locks, and proof stream; an unassigned field lookup is indistinguishable from missing |
 | GET | `/api/v1/owner/now` | owner/ops session | exception-first blocked gate, incident, finance, lead, and material read model |
+| GET | `/api/v1/approvals` | owner/ops session | browser-safe approval inbox with server-issued capability names; never returns receipts, raw args, or broker output |
+| GET | `/api/v1/approvals/:id` | owner/ops session | one current approval DTO; re-evaluates pending expiry |
+| POST | `/api/v1/approvals/lead-triage` | owner/ops session + CSRF + idempotency key | fixed local-triage preparation path; not a generic tool proxy |
+| POST | `/api/v1/approvals/:id/approve` | configured owner + CSRF + recent session + idempotency key | compare-and-set decision through the private broker; transport ambiguity becomes `execution_uncertain`, never a retry |
+| POST | `/api/v1/approvals/:id/reject` | configured owner + CSRF + recent session + idempotency key | durable rejection; does not invoke the broker |
+| POST | `/api/v1/approvals/:id/reconcile` | configured owner + CSRF + recent session | append reconciliation evidence/outcome to an uncertain request; never reopens or retries the write |
 
 ### PWA auth and tenant boundary
 
@@ -196,6 +205,31 @@ fails closed when any enabled-BFF dependency is missing or malformed.
 HTTPS origins. `APP_ALLOW_INSECURE_LOCAL=true` permits explicit localhost HTTP origins for local
 development only. `APP_PUBLIC_ORIGIN` must be in the exact comma-separated origin allowlist.
 There is never a wildcard credentialed CORS response.
+
+### Governed approval broker (optional BFF slice)
+
+The ordinary BFF read surfaces do **not** require an approval broker. Enable
+this separate slice only after migration `0016` and the private broker host are
+ready. Set these Worker values (the shared secret is a secret binding):
+
+```text
+APP_APPROVAL_BROKER_URL=https://<private-access-broker-origin>
+APP_APPROVAL_BROKER_KEY_ID=approval-v1
+APP_APPROVAL_APPROVER_ID=owner@ironwrapexteriors.com
+APP_APPROVAL_MAX_SESSION_AGE_SECONDS=900
+APP_APPROVAL_BROKER_TIMEOUT_MS=15000
+APP_APPROVAL_EXECUTION_LEASE_SECONDS=45
+APPROVAL_BROKER_SHARED_SECRET=<same 32+-byte value held by the broker>
+```
+
+The Worker HMAC-binds timestamp, path, nonce, and raw body in both directions.
+It holds the D1 approval ledger only—not the Ed25519 approval private key or
+Frappe write credentials. The separate loopback-only broker owns those
+credentials and exposes only `/v1/lead-triage/preview` and
+`/v1/lead-triage/execute`; see `docs/APPROVAL-BROKER-CONTRACT.md` and
+`deploy/approval-broker.service.example`. A stale execution lease becomes
+`execution_uncertain` during the frequent Worker sweep and must be reconciled
+by recorded `run_id`, never automatically re-executed.
 
 The session cookie is `Secure; HttpOnly; SameSite=Strict; Path=/`, has no `Domain`, and expires
 after a fixed 12 hours. The D1 row contains only an HMAC; the CSRF value is separately derived and

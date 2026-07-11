@@ -24,6 +24,9 @@ import {
 const OwnerNowPage = lazy(async () => ({
   default: (await import("./owner/owner-now-page")).OwnerNowPage,
 }));
+const ApprovalInboxPage = lazy(async () => ({
+  default: (await import("./owner/approval-inbox-page")).ApprovalInboxPage,
+}));
 const TodayPage = lazy(async () => ({
   default: (await import("./field/field-pages")).TodayPage,
 }));
@@ -171,10 +174,24 @@ const ownerRoute = createRoute({
   component: OwnerRoute,
 });
 
+const approvalsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/approvals",
+  component: ApprovalsRoute,
+});
+
 function OwnerRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
       <OwnerNowPage />
+    </Suspense>
+  );
+}
+
+function ApprovalsRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <ApprovalInboxPage />
     </Suspense>
   );
 }
@@ -223,6 +240,7 @@ const routeTree = rootRoute.addChildren([
     checkInRoute,
     jobCheckInRoute,
     ownerRoute,
+    approvalsRoute,
     salesRoute,
     settingsRoute,
   ]),

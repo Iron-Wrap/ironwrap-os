@@ -105,7 +105,7 @@ mutations remain in the dry-run/approval/audit path. This is repository proof on
 Frappe site loads the Page and each role passes a live permission/empty/error-state smoke test.
 It is the back-office fallback, not the finished product UI.
 
-Product-layer checkpoint (2026-07-10): `docs/UIUX-NORTHSTAR-PLAN.md` is the binding product plan
+Product-layer checkpoint (2026-07-11): `docs/UIUX-NORTHSTAR-PLAN.md` is the binding product plan
 for the installable React PWA and Worker `/api/v1/*` BFF. `docs/ROOFING-DEMAND-EVIDENCE.md`
 grounds its acceptance contracts in fresh 2025-2026 Canadian/U.S. owner/operator discussions,
 verified reviews, paid roles, and current regulatory sources. The product signature is Proof
@@ -113,17 +113,23 @@ Stream plus physical gate locks; canonical job identity, owned export/restore, l
 role-shaped read models, offline verified outbox, field proof, owner exceptions, traceable
 estimation, and customer-safe closeout are required slices rather than future polish.
 
-Owner Now checkpoint (2026-07-10): the PWA's owner/ops route is locally implemented as a
-read-only, exception-first BFF decision board. It separates verified crew work-stops/blocked gates,
-operating exceptions, and lead attention into compact signals and durable decision rows; source
-freshness, bounded totals, unavailable action guidance, and missing due timing are disclosed once as
-data-confidence state. Job-packet links render only with the BFF's `job.read` capability. A Lead
-Envelope now separates `triage_status` from bus-owned, audited transport status; `Untriaged` is
-created before the JobNimbus bridge and legacy rows become explicit `Unknown` data-quality work.
-MCTB displays only an append-only Gmail provider-acceptance receipt (within SLA or late) or the
-distinct absence/no-channel state, never a claim of delivery or human follow-up. Local contract and
-mocked-browser proof are not deployment proof: remote D1/Frappe migration, enabled BFF, real
-device/browser, provider receipt, and operator acceptance remain launch gates.
+Owner Now + Approvals checkpoint (2026-07-11): the PWA's owner/ops routes are locally implemented
+as an exception-first BFF decision board and a governed approval inbox. Now separates verified crew
+work-stops/blocked gates, operating exceptions, and lead attention into compact signals and durable
+decision rows; source freshness, bounded totals, unavailable action guidance, and missing due timing
+are disclosed once as data-confidence state. Job-packet links render only with the BFF's `job.read`
+capability. A Lead Envelope separates `triage_status` from bus-owned, audited transport status;
+`Untriaged` is created before the JobNimbus bridge and legacy rows become explicit `Unknown`
+data-quality work. MCTB displays only an append-only Gmail provider-acceptance receipt (within SLA
+or late) or the distinct absence/no-channel state, never a claim of delivery or human follow-up.
+
+The first browser-approved vertical is deliberately bounded to local lead triage. The Worker holds
+the durable D1 approval ledger; a private HMAC-authenticated broker holds the signing key and fixed
+actor-scoped MCP child; the PWA receives only an allowlisted review DTO. A configured owner can act
+only with server-granted capability, CSRF, a recent session, expected version, and idempotency key;
+ops remains review-only. A broker ambiguity becomes `Execution Uncertain` and is never retried by
+the UI. Local contract/mocked-browser proof is not deployment proof: remote D1/Frappe migration,
+enabled BFF and broker, real device/browser, provider receipt, and operator acceptance remain launch gates.
 
 ## Research Basis
 
@@ -658,7 +664,7 @@ The artificial blockers below are collapsed in
 | Accounting boundary | QuickBooks permanent truth vs a future owned accounting migration |
 | Proposal renderer | Frappe print formats, custom Frappe UI, or external PDF service |
 | Public estimate policy | Range logic, disclaimers, required fields, estimator-review threshold |
-| Product PWA acceptance | P0 shell/session/outbox, P1 Field Companion/BFF/QR pairing, and P2 read-only Owner Now/lead-triage/MCTB evidence are locally implemented; complete live backend, browser/device/provider receipt gates, P2 approvals, and P3-P5 sales/portal/tenant protocols |
+| Product PWA acceptance | P0 shell/session/outbox, P1 Field Companion/BFF/QR pairing, and P2 Owner Now plus the receipt-safe governed lead-triage approval inbox are locally implemented; complete live backend, broker/Frappe, browser/device/provider receipt gates, and P3-P5 sales/portal/tenant protocols |
 | Frappe fallback cockpit | Repository surface exists; prove live role filtering, Worker readiness reachability, empty/error states, responsive layout, and source-record navigation on the deployed site |
 | Measurement/visual provider strategy | RoofRuler/AppliCad only vs Eagleview/Hover/provider-agnostic ingest |
 | Supplier integration strategy | Manual supplier quote capture vs API/order integrations |

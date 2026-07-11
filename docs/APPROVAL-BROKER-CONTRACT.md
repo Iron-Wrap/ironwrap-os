@@ -65,6 +65,32 @@ arbitrary broker/MCP output.
   result, expiry, and action outcome. It never claims a customer was contacted
   or that a lead was triaged until the executed Hermes Run proves it.
 - Rejection is durable and does not invoke the broker.
+- The initial `/approvals` PWA is a review/decision surface, not a generic lead
+  editor: it does not create a triage request from the Owner Now feed until a
+  source-backed Sales/lead-detail contract exists. It displays `approval.approve`,
+  `approval.reject`, and `approval.reconcile` only when the BFF grants those capabilities; it never
+  infers authority from the visible role.
+- Decision actions are online-only. The PWA never places an approval in its
+  field outbox, retries a timed-out broker call, or displays a success state
+  without the returned terminal ledger state.
+
+## Worker BFF routes
+
+All routes are `private, no-store`; mutation routes additionally require the
+exact allowed origin and session CSRF token.
+
+| Method | Route | Authority | Contract |
+| --- | --- | --- | --- |
+| GET | `/api/v1/approvals` | owner or ops | allowlisted list DTO plus server-issued capability names |
+| GET | `/api/v1/approvals/:id` | owner or ops | current allowlisted DTO; pending expiry is re-evaluated before return |
+| POST | `/api/v1/approvals/lead-triage` | owner or ops with Frappe identity | internal preparation endpoint; fixed tool/actor/site, strict body, and prepare idempotency key |
+| POST | `/api/v1/approvals/:id/approve` | configured owner only | recent session, expected version, decision idempotency key, broker execution, terminal ledger event |
+| POST | `/api/v1/approvals/:id/reject` | configured owner only | recent session, expected version, reason, decision idempotency key; no broker call |
+| POST | `/api/v1/approvals/:id/reconcile` | configured owner only | recent session, expected version, one immutable evidence/outcome append; does not reopen or retry |
+
+`Execution Uncertain` is a terminal mutation state, not a temporary UI error.
+The stored `run_id` is the reconciliation key; a later reconciliation records
+evidence without reopening the request or issuing another write.
 
 ## Production gates
 

@@ -53,6 +53,24 @@ describe("apiRequest", () => {
     expect(headers.get("X-IronWrap-Device-Proof")).toBe("device-proof-not-persisted");
   });
 
+  it("sends a bounded idempotency key only when a governed decision supplies one", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ value: "recorded" }));
+
+    await apiRequest({
+      path: "/api/v1/approvals/approval%3Atest/approve",
+      schema: z.object({ value: z.literal("recorded") }),
+      method: "POST",
+      body: { version: 1 },
+      csrfToken: "csrf-token",
+      idempotencyKey: "approval:test-key-0001",
+      fetcher,
+    });
+
+    const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("Idempotency-Key")).toBe("approval:test-key-0001");
+    expect(headers.get("X-CSRF-Token")).toBe("csrf-token");
+  });
+
   it("clears a rejected device proof without storing it in request state", async () => {
     await storeDeviceSecret("d".repeat(43));
     const fetcher = vi

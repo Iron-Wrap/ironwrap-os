@@ -24,6 +24,12 @@ data.
   and lead attention are separated into proof-safe lanes; data limits stay visible; and job packets
   open only when the BFF grants `job.read`. It does not invent delivery, follow-up, approvals, or
   financial impact.
+- A locally contract-tested governed Approvals inbox: server-safe before/patch diff cards, a
+  permanent local-only scope fence, BFF-issued `approval.approve` / `approval.reject` /
+  `approval.reconcile` capability, stable idempotency for approve/reject, and an explicit no-retry
+  `Execution Uncertain` state with one immutable evidence reconciliation. It never
+  receives a receipt, raw write arguments, broker output, Frappe credential, or generic tool picker.
+  Approval decisions are deliberately online-only and are never placed in the field outbox.
 - A field-first Today run sheet: server order is preserved, schedules format in the tenant time
   zone, and local packet availability visibly progresses from checking to saving, saved, or not
   saved. A cached packet is never called complete or safety-cleared; a blocked gate can only open
@@ -37,7 +43,8 @@ data.
   distinguishes device save, queued work, upload, verification, and attention without implying
   delivery or onsite proof.
 - Route placeholders for the later Sales and customer Portal slices. Today, Job, Check-in, Owner
-  Now, and Settings have their implemented North Star foundations.
+  Now, Approvals, and Settings have their implemented North Star foundations. The inbox does not
+  manufacture a lead-triage request from the Owner Now feed until Sales has a source-backed lead-detail contract.
 
 ## Run it
 
@@ -67,16 +74,20 @@ outside its declared and working peer range. Lint and typecheck remain separate 
 
 Endpoint names are centralized in `src/lib/api-paths.ts`:
 
-| Method         | Path                                  | Purpose                                                |
-| -------------- | ------------------------------------- | ------------------------------------------------------ |
-| `GET`          | `/api/v1/session`                     | Versioned tenant/session/RBAC read model               |
-| `POST`         | `/api/v1/auth/magic-link/request`     | Request a one-time link with `{email}`                 |
-| `POST`         | `/api/v1/auth/magic-link/consume`     | Consume `{token}` after browser-side extraction        |
-| `POST`         | `/api/v1/auth/device-pairing/consume` | Consume QR `{token, device_proof}` for Field Companion |
-| `GET`          | `/api/v1/field-users`                 | Owner/ops list of pairable active field users          |
-| `GET` / `POST` | `/api/v1/device-pairings`             | Owner/ops device list or QR issuance                   |
-| `POST`         | `/api/v1/device-pairings/:id/revoke`  | Revoke one lost or reassigned field device             |
-| `POST`         | `/api/v1/auth/logout`                 | Revoke the current session with `X-CSRF-Token`         |
+| Method         | Path                                  | Purpose                                                  |
+| -------------- | ------------------------------------- | -------------------------------------------------------- |
+| `GET`          | `/api/v1/session`                     | Versioned tenant/session/RBAC read model                 |
+| `POST`         | `/api/v1/auth/magic-link/request`     | Request a one-time link with `{email}`                   |
+| `POST`         | `/api/v1/auth/magic-link/consume`     | Consume `{token}` after browser-side extraction          |
+| `POST`         | `/api/v1/auth/device-pairing/consume` | Consume QR `{token, device_proof}` for Field Companion   |
+| `GET`          | `/api/v1/field-users`                 | Owner/ops list of pairable active field users            |
+| `GET` / `POST` | `/api/v1/device-pairings`             | Owner/ops device list or QR issuance                     |
+| `POST`         | `/api/v1/device-pairings/:id/revoke`  | Revoke one lost or reassigned field device               |
+| `POST`         | `/api/v1/auth/logout`                 | Revoke the current session with `X-CSRF-Token`           |
+| `GET`          | `/api/v1/approvals`                   | Owner/ops browser-safe approval inbox and capability DTO |
+| `POST`         | `/api/v1/approvals/:id/approve`       | Configured-owner, CAS/idempotent approval decision       |
+| `POST`         | `/api/v1/approvals/:id/reject`        | Configured-owner, durable rejection with reason          |
+| `POST`         | `/api/v1/approvals/:id/reconcile`     | Configured-owner, immutable uncertain-run reconciliation |
 
 The session envelope is validated centrally with Zod in `src/auth/session.ts`. Unauthenticated
 responses are `200` with null user/session fields and public tenant presentation; an authenticated
@@ -133,6 +144,10 @@ after exact server verification; the small verified action record remains as loc
 Interrupted `Uploading` records recover to `Queued` on the next launch. Flushes run on launch,
 `online`, `visibilitychange`, and every 30 seconds while the app stays open and has a current CSRF
 token. A module lock prevents concurrent flush loops.
+
+This contract is intentionally limited to field evidence writes. An office approval is not an
+outbox action: it stays disabled offline, is never auto-retried after a timeout, and is refreshed
+from the durable approval ledger before another human action can be offered.
 
 The app also makes a best-effort `navigator.storage.persist()` request and reads the browser quota.
 Unsupported storage APIs never block capture. Denied persistence, an unreadable storage estimate,

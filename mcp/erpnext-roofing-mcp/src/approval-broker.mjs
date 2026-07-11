@@ -282,7 +282,12 @@ async function previewLeadTriage(body, config, invokeMcp, now) {
     actor_user: config.actorUser,
     site_id: config.siteId,
     target: { doctype: "Lead Envelope", name: input.leadEnvelopeId },
-    write_args: writeArgs,
+    approved_intent: {
+      lead_envelope_id: input.leadEnvelopeId,
+      triage_summary: input.triageSummary,
+      request_text: input.requestText,
+      approved_by: config.approverId,
+    },
     args_digest: argsDigest,
     preview_digest: previewDigest,
   });

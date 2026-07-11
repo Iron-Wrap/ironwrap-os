@@ -1,0 +1,279 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { type ReactNode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { AuthenticatedSession } from "../auth/session";
+import { SessionProvider } from "../auth/session-context";
+import {
+  approveApproval,
+  loadApprovals,
+  newApprovalDecisionKey,
+  reconcileApproval,
+  rejectApproval,
+} from "./approval-api";
+import type { ApprovalListResponse, ApprovalRequest } from "./approval-contracts";
+import { ApprovalInboxPage } from "./approval-inbox-page";
+
+vi.mock("./approval-api", () => ({
+  loadApprovals: vi.fn(),
+  approveApproval: vi.fn(),
+  reconcileApproval: vi.fn(),
+  rejectApproval: vi.fn(),
+  newApprovalDecisionKey: vi.fn(),
+}));
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ children }: { children: ReactNode }) => <a href="/owner">{children}</a>,
+}));
+
+const ownerSession = {
+  version: 1,
+  authenticated: true,
+  user: {
+    id: "appu_owner",
+    email: "owner@ironwrapexteriors.com",
+    display_name: "Owner",
+    role: "owner",
+    frappe_user_id: "owner@ironwrapexteriors.com",
+  },
+  tenant: {
+    id: "ironwrap",
+    name: "IronWrap Exteriors",
+    brand: "IronWrap Exteriors",
+    locale: "en-CA",
+    time_zone: "America/Edmonton",
+    currency: "CAD",
+  },
+  permissions: ["approvals:read"],
+  allowed_actions: ["approval.approve", "approval.reject"],
+  csrf_token: "csrf",
+  session_expires_at: "2026-07-11T13:00:00.000Z",
+  source_updated_at: null,
+  read_model_generated_at: "2026-07-11T12:00:00.000Z",
+  stale_fields: [],
+} satisfies AuthenticatedSession;
+
+function pendingApproval(): ApprovalRequest {
+  return {
+    id: "approval:ui-001",
+    kind: "lead_triage",
+    state: "pending",
+    version: 1,
+    action: "mark_lead_triaged",
+    target: { doctype: "Lead Envelope", name: "lead:ui-001", lead_envelope_id: "lead:ui-001" },
+    request_text: "Record local triage only after owner review.",
+    preview: {
+      would_write: false,
+      target: { doctype: "Lead Envelope", name: "lead:ui-001" },
+      before: {
+        triage_status: "Untriaged",
+        triaged_by: null,
+        triaged_at: null,
+        triage_summary: null,
+      },
+      patch: {
+        triage_status: "Triaged",
+        triaged_by: "owner@ironwrapexteriors.com",
+        triaged_at: null,
+        triage_summary: "Hail report; confirm inspection window before outreach.",
+      },
+      transport_status_unchanged: "pushed",
+      communication_events_mutated: false,
+    },
+    expires_at: "2026-07-11T12:05:00.000Z",
+    requested_by: { user_id: "appu_owner", frappe_user: "owner@ironwrapexteriors.com" },
+    approved_by: null,
+    rejection_reason: null,
+    run_id: "run:lead-triage:ui-001",
+    hermes_run_id: null,
+    outcome: null,
+    error_code: null,
+    reconciliation: null,
+    created_at: "2026-07-11T12:00:00.000Z",
+    updated_at: "2026-07-11T12:00:00.000Z",
+    completed_at: null,
+  };
+}
+
+function executedApproval(): ApprovalRequest {
+  const pending = pendingApproval();
+  return {
+    ...pending,
+    state: "executed",
+    version: 3,
+    approved_by: {
+      user_id: "appu_owner",
+      frappe_user: "owner@ironwrapexteriors.com",
+      approved_at: "2026-07-11T12:01:00.000Z",
+    },
+    hermes_run_id: "run:lead-triage:ui-001",
+    outcome: {
+      run_id: "run:lead-triage:ui-001",
+      lead_envelope_id: "lead:ui-001",
+      updated: true,
+      audit_finalized: true,
+      replayed: false,
+      communication_events_mutated: false,
+    },
+    updated_at: "2026-07-11T12:01:00.000Z",
+    completed_at: "2026-07-11T12:01:00.000Z",
+  };
+}
+
+function uncertainApproval(): ApprovalRequest {
+  const pending = pendingApproval();
+  return {
+    ...pending,
+    state: "execution_uncertain",
+    version: 3,
+    approved_by: {
+      user_id: "appu_owner",
+      frappe_user: "owner@ironwrapexteriors.com",
+      approved_at: "2026-07-11T12:01:00.000Z",
+    },
+    hermes_run_id: "run:lead-triage:ui-001",
+    error_code: "broker_response_unverified",
+    updated_at: "2026-07-11T12:01:00.000Z",
+    completed_at: "2026-07-11T12:01:00.000Z",
+  };
+}
+
+function reconciledUncertainApproval(): ApprovalRequest {
+  const uncertain = uncertainApproval();
+  return {
+    ...uncertain,
+    version: 4,
+    reconciliation: {
+      at: "2026-07-11T12:02:00.000Z",
+      by_user_id: "appu_owner",
+      by_frappe_user: "owner@ironwrapexteriors.com",
+      outcome: "inconclusive",
+      evidence: "The recorded Hermes Run was unavailable; no second write was issued.",
+    },
+  };
+}
+
+function model(
+  approval: ApprovalRequest = pendingApproval(),
+  allowedActions = ["approval.read", "approval.approve", "approval.reject"],
+): ApprovalListResponse {
+  return {
+    version: 1,
+    read_model_generated_at: "2026-07-11T12:00:00.000Z",
+    permissions: ["approvals:read"],
+    allowed_actions: allowedActions,
+    approvals: [approval],
+  };
+}
+
+function renderInbox({
+  session = ownerSession,
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+}: {
+  session?: AuthenticatedSession;
+  client?: QueryClient;
+} = {}) {
+  return render(
+    <QueryClientProvider client={client}>
+      <SessionProvider session={session}>
+        <ApprovalInboxPage />
+      </SessionProvider>
+    </QueryClientProvider>,
+  );
+}
+
+describe("ApprovalInboxPage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(loadApprovals).mockResolvedValue(model());
+    vi.mocked(newApprovalDecisionKey).mockReturnValue("approval:stable-ui-decision-001");
+    vi.mocked(rejectApproval).mockResolvedValue({ approval: pendingApproval() });
+    vi.mocked(reconcileApproval).mockResolvedValue({ approval: reconciledUncertainApproval() });
+  });
+
+  it("shows an exact, bounded local-triage review and carries a stable CAS decision through the API", async () => {
+    const user = userEvent.setup();
+    const executed = executedApproval();
+    vi.mocked(loadApprovals).mockResolvedValueOnce(model()).mockResolvedValue(model(executed));
+    vi.mocked(approveApproval).mockResolvedValue({ approval: executed });
+    const { container } = renderInbox();
+
+    await screen.findByRole("heading", { name: "Approvals" });
+    expect(screen.getByText("Exact proposed change")).toBeVisible();
+    expect(
+      screen.getByText("No customer message. Transport unchanged. No quote or accounting change."),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Approve local triage" })).toBeVisible();
+    expect(container.textContent).not.toMatch(/dry_run_receipt|approval_receipt|write_args_json/i);
+    expect(container.textContent).not.toMatch(/sent|delivered|contacted customer/i);
+
+    await user.click(screen.getByRole("button", { name: "Approve local triage" }));
+
+    await waitFor(() => {
+      expect(approveApproval).toHaveBeenCalledWith(
+        ownerSession,
+        "approval:ui-001",
+        1,
+        "approval:stable-ui-decision-001",
+      );
+    });
+    expect(rejectApproval).not.toHaveBeenCalled();
+    expect((await screen.findAllByText("Triage recorded")).length).toBeGreaterThan(0);
+    expect(screen.getByText("run:lead-triage:ui-001")).toBeVisible();
+  });
+
+  it("keeps operations review-only when the server omits decision capabilities", async () => {
+    const opsSession = {
+      ...ownerSession,
+      user: { ...ownerSession.user, role: "ops" as const },
+    };
+    vi.mocked(loadApprovals).mockResolvedValueOnce(model(pendingApproval(), ["approval.read"]));
+    renderInbox({ session: opsSession });
+
+    await screen.findByRole("heading", { name: "Approvals" });
+    expect(screen.queryByRole("button", { name: "Approve local triage" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Waiting for the server-designated approver/i)).toBeVisible();
+  });
+
+  it("turns ambiguity into explicit manual reconciliation work without an automatic retry control", async () => {
+    vi.mocked(loadApprovals).mockResolvedValueOnce(model(uncertainApproval()));
+    renderInbox();
+
+    await screen.findByRole("heading", { name: "Approvals" });
+    expect(screen.getByText("Do not retry this request")).toBeVisible();
+    expect(screen.getByText(/a second write is not issued automatically/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Approve local triage" })).not.toBeInTheDocument();
+  });
+
+  it("records reconciliation evidence without reopening or repeating the protected write", async () => {
+    const user = userEvent.setup();
+    const reconciled = reconciledUncertainApproval();
+    vi.mocked(loadApprovals)
+      .mockResolvedValueOnce(model(uncertainApproval(), ["approval.read", "approval.reconcile"]))
+      .mockResolvedValue(model(reconciled, ["approval.read", "approval.reconcile"]));
+    vi.mocked(reconcileApproval).mockResolvedValue({ approval: reconciled });
+    renderInbox();
+
+    await screen.findByRole("heading", { name: "Approvals" });
+    await user.click(screen.getByRole("button", { name: "Record reconciliation" }));
+    await user.type(
+      screen.getByLabelText("Reconciliation evidence"),
+      "The recorded Hermes Run was unavailable; no second write was issued.",
+    );
+    await user.click(screen.getByRole("button", { name: "Record reconciliation" }));
+
+    await waitFor(() => {
+      expect(reconcileApproval).toHaveBeenCalledWith(
+        ownerSession,
+        "approval:ui-001",
+        3,
+        "inconclusive",
+        "The recorded Hermes Run was unavailable; no second write was issued.",
+      );
+    });
+    expect(approveApproval).not.toHaveBeenCalled();
+    expect(screen.getByText(/Reconciliation recorded: inconclusive/i)).toBeVisible();
+  });
+});

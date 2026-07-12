@@ -31,7 +31,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Validate DocType contract (46 DocTypes, Frappe-only link targets)
+      - name: Validate DocType contract (48 DocTypes, Frappe-only link targets)
         run: node tools/validate-erpnext-doctypes.mjs
       - name: Validate Hermes roles and manifest against the MCP tool inventory
         run: node tools/validate-hermes-config.mjs

@@ -125,11 +125,15 @@ or late) or the distinct absence/no-channel state, never a claim of delivery or 
 
 The first browser-approved vertical is deliberately bounded to local lead triage. The Worker holds
 the durable D1 approval ledger; a private HMAC-authenticated broker holds the signing key and fixed
-actor-scoped MCP child; the PWA receives only an allowlisted review DTO. A configured owner can act
-only with server-granted capability, CSRF, a recent session, expected version, and idempotency key;
-ops remains review-only. A broker ambiguity becomes `Execution Uncertain` and is never retried by
-the UI. Local contract/mocked-browser proof is not deployment proof: remote D1/Frappe migration,
-enabled BFF and broker, real device/browser, provider receipt, and operator acceptance remain launch gates.
+actor-scoped MCP child; the PWA receives only an allowlisted review DTO. Sales now offers a
+contextual preparation screen only for an explicitly `Untriaged` Lead Envelope when the BFF grants
+`approval.prepare`; it submits the Frappe document name and one internal summary, while the Worker
+derives request text and the existing `/approvals` queue remains the only decision surface. A
+configured owner can act only with server-granted capability, CSRF, a recent session, expected
+version, and idempotency key; ops remains review-only. A broker ambiguity becomes `Execution
+Uncertain` and is never retried by the UI. Local contract/mocked-browser proof is not deployment
+proof: remote D1/Frappe migration, enabled BFF and broker, real device/browser, provider receipt,
+and operator acceptance remain launch gates.
 
 Quote-revision approval checkpoint (2026-07-12): the append-only Draft Customer Quote revision
 now has its own estimator-assistant private broker, HMAC key/secret/port, D1 request/event ledger,
@@ -153,8 +157,10 @@ Customer Quote, and linked Communication Consent records. The generic owner/fiel
 remains unchanged, and the browser rejects raw payloads, price-policy snapshots, consent source
 references, and other unbounded Frappe data. The screen makes non-binding estimate status, quote
 state, consent-record presence, and capped-source uncertainty explicit. It cannot send a message,
-issue a quote, collect payment, or create triage from the browser. The measurement/repricing/
-proposal workbench, live Frappe data proof, and real-operator validation remain open.
+issue a quote, collect payment, or triage a lead directly. It can only prepare a bounded local
+triage review from an exact `Untriaged` Lead Envelope when the BFF grants `approval.prepare`; the
+browser submits no request text, customer message, quote, or accounting data. The measurement/
+repricing/proposal workbench, live Frappe data proof, and real-operator validation remain open.
 
 Estimator Workbench checkpoint (2026-07-12): the PWA now has a locally tested, office-only
 `/estimator/jobs/:jobId` source-review surface. It uses a distinct static estimator allowlist and
@@ -718,7 +724,7 @@ The artificial blockers below are collapsed in
 | Accounting boundary | QuickBooks permanent truth vs a future owned accounting migration |
 | Proposal renderer | Frappe print formats, custom Frappe UI, or external PDF service |
 | Public estimate policy | Range logic, disclaimers, required fields, estimator-review threshold |
-| Product PWA acceptance | P0 shell/session/outbox, P1 Field Companion/BFF/QR pairing, and P2 Owner Now plus the receipt-safe governed lead-triage approval inbox are locally implemented; complete live backend, broker/Frappe, browser/device/provider receipt gates, and P3-P5 sales/portal/tenant protocols |
+| Product PWA acceptance | P0 shell/session/outbox, P1 Field Companion/BFF/QR pairing, and P2 Owner Now plus the receipt-safe governed lead-triage preparation and approval inbox are locally implemented; complete live backend, broker/Frappe, browser/device/provider receipt gates, and P3-P5 sales/portal/tenant protocols |
 | Frappe fallback cockpit | Repository surface exists; prove live role filtering, Worker readiness reachability, empty/error states, responsive layout, and source-record navigation on the deployed site |
 | Measurement/visual provider strategy | RoofRuler/AppliCad only vs Eagleview/Hover/provider-agnostic ingest |
 | Supplier integration strategy | Manual supplier quote capture vs API/order integrations |

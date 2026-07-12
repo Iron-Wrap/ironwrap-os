@@ -29,6 +29,9 @@ const ApprovalInboxPage = lazy(async () => ({
 const SalesDeskPage = lazy(async () => ({
   default: (await import("./sales/sales-desk-page")).SalesDeskPage,
 }));
+const LeadTriagePreparePage = lazy(async () => ({
+  default: (await import("./sales/lead-triage-prepare-page")).LeadTriagePreparePage,
+}));
 const EstimatorWorkbenchPage = lazy(async () => ({
   default: (await import("./estimator/estimator-workbench-page")).EstimatorWorkbenchPage,
 }));
@@ -245,6 +248,12 @@ const estimatorWorkbenchRoute = createRoute({
   component: EstimatorWorkbenchRoute,
 });
 
+const leadTriagePrepareRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/sales/leads/$leadId/triage",
+  component: LeadTriagePrepareRoute,
+});
+
 const quoteRevisionApprovalQueueRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/quote-revision-approvals",
@@ -275,6 +284,14 @@ function EstimatorWorkbenchRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
       <EstimatorWorkbenchPage />
+    </Suspense>
+  );
+}
+
+function LeadTriagePrepareRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <LeadTriagePreparePage />
     </Suspense>
   );
 }
@@ -323,6 +340,7 @@ const routeTree = rootRoute.addChildren([
     ownerRoute,
     approvalsRoute,
     salesRoute,
+    leadTriagePrepareRoute,
     estimatorWorkbenchRoute,
     quoteRevisionApprovalQueueRoute,
     quoteRevisionApprovalDetailRoute,

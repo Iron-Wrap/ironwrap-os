@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   LeadTriageInputSchema,
   approvedWriteInputSchema,
+  assertLeadTriagePreparable,
   buildLeadTriagePatch,
   buildServer,
 } from "../src/server.mjs";
@@ -64,6 +65,58 @@ test("lead triage inputs and patch stay bounded, local, and timestamp-replay-saf
   });
   assert.equal("triaged_at" in firstPreview.patch, false);
   assert.equal(digest(firstPreview), digest(replayedPreview));
+});
+
+test("lead triage refuses Unknown, Triaged, and malformed source states", () => {
+  for (const envelope of [
+    { name: "lead:1", triage_status: "Unknown" },
+    { name: "lead:1", triage_status: "Triaged" },
+    { name: "lead:1", triage_status: "Queued" },
+    { name: "lead:1" },
+    { name: "lead:other", triage_status: "Untriaged" },
+    null,
+  ]) {
+    assert.throws(
+      () => assertLeadTriagePreparable(envelope, "lead:1"),
+      /lead_triage_not_preparable/,
+    );
+  }
+  assert.doesNotThrow(() => assertLeadTriagePreparable(
+    { name: "lead:1", triage_status: "Untriaged" },
+    "lead:1",
+  ));
+});
+
+test("lead-triage dry runs reject ineligible source state before issuing a receipt", async (t) => {
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: false,
+    agentRole: "lead-concierge",
+    actorUser: "concierge@example.com",
+  });
+  const envelope = { name: "lead:1", triage_status: "Untriaged" };
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    requests.push({ target: String(url), method: init.method });
+    return new Response(JSON.stringify({ data: envelope }), {
+      headers: { "content-type": "application/json" },
+    });
+  });
+
+  for (const status of ["Unknown", "Triaged", "Queued", undefined]) {
+    envelope.triage_status = status;
+    await assert.rejects(
+      async () => await server._registeredTools.dry_run_mark_lead_triaged.handler({
+        lead_envelope_id: "lead:1",
+        triage_summary: "Confirm the property address before local triage.",
+      }),
+      /lead_triage_not_preparable/,
+    );
+  }
+  assert.equal(requests.length, 4);
+  assert.ok(requests.every(({ method }) => method === "GET"));
 });
 
 test("lead-triage discovery and history are limited to lead concierge and owner", async (t) => {
@@ -286,4 +339,86 @@ test("lead triage requires matching receipts, patches only local fields, and rep
   assert.equal(replay.replayed, true);
   assert.equal(triageCommands, 1);
   assert.equal(communicationWrites, 0);
+});
+
+test("lead triage write preflight refuses a state that changed after its approved dry run", async (t) => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: true,
+    agentRole: "lead-concierge",
+    actorUser: "concierge@example.com",
+    approverId: "owner@example.com",
+    dryRunSigningKey: "l".repeat(32),
+    approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+  });
+  const leadEnvelope = {
+    name: "lead:1",
+    envelope_id: "lead:1",
+    source: "website",
+    event_ts: NOW,
+    status: "pushed",
+    triage_status: "Untriaged",
+    triaged_by: "",
+    triaged_at: "",
+    triage_summary: "",
+  };
+  let hermesRunWrites = 0;
+  let triageCommands = 0;
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const target = String(url);
+    if (init.method === "GET" && target.includes("Lead%20Envelope/lead%3A1")) {
+      return new Response(JSON.stringify({ data: leadEnvelope }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (init.method === "POST" && target.includes("Hermes%20Run")) {
+      hermesRunWrites += 1;
+      throw new Error("an ineligible lead must not create a Hermes Run");
+    }
+    if (init.method === "POST" && target.includes("lead_triage_api.mark_lead_triaged")) {
+      triageCommands += 1;
+      throw new Error("an ineligible lead must not reach the Frappe command");
+    }
+    throw new Error(`unexpected request ${init.method} ${target}`);
+  });
+
+  const baseArgs = {
+    lead_envelope_id: "lead:1",
+    triage_summary: "Confirm the property address before local triage.",
+  };
+  const dryRun = parseToolPayload(
+    await server._registeredTools.dry_run_mark_lead_triaged.handler(baseArgs),
+  );
+  const writeArgs = {
+    ...baseArgs,
+    request_text: "Record local lead triage after human review.",
+    approved_by: "owner@example.com",
+    run_id: "run-lead-triage-state-change-0001",
+    dry_run_receipt: dryRun.approval_request.dry_run_receipt,
+  };
+  writeArgs.approval_receipt = signApprovalReceipt(privateKey, {
+    write_tool: "request_mark_lead_triaged",
+    dry_run_receipt: writeArgs.dry_run_receipt,
+    agent_role: "lead-concierge",
+    actor_user: "concierge@example.com",
+    site_id: dryRun.approval_request.site_id,
+    run_id: writeArgs.run_id,
+    approved_by: writeArgs.approved_by,
+    args_digest: digest(approvedArgs(writeArgs)),
+    issued_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+  });
+
+  for (const status of ["Unknown", "Triaged"]) {
+    leadEnvelope.triage_status = status;
+    await assert.rejects(
+      async () => await server._registeredTools.request_mark_lead_triaged.handler(writeArgs),
+      /lead_triage_not_preparable/,
+    );
+  }
+  assert.equal(hermesRunWrites, 0);
+  assert.equal(triageCommands, 0);
 });

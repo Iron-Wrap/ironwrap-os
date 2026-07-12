@@ -19,7 +19,7 @@ capability only.
 | Hermes agent layer | 8 runtime-filtered roles, 126 MCP tools, receipt-bound approved-write contract |
 | Deploy/ops | Contract-validated production configuration, pinned runtime lock, encrypted Frappe/D1 recovery, launch runbook |
 | Competitive truth | 10 exceeded / 7 covered / 19 open, adversarially audited |
-| Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, P2 Owner Now plus governed `/approvals`, and P3 Sales, Measurement Workbench, and the isolated Draft Revision approval vertical are locally implemented and contract-tested. Owner Now separates work-stops, operating exceptions, and lead attention; the inbox renders only allowlisted before/patch/outcome DTOs and server-granted decision capability; Sales joins narrowly allowlisted office lead, estimate, quote, and communication-record context; the workbench recomputes retained source geometry in the Worker and shows bounded measurement, takeoff, quote, proposal-record, and clause lineage. The contextual revision entry, preparation, queue, and detail routes use separate redacted BFF DTOs, exact server-granted capability, stable decision idempotency, and reconcile-only execution uncertainty. None claims delivery, field verification, or human follow-up. Local browser/mocked-visual proof is not live Worker/broker/Frappe/device/operator proof; those gates and P4-P5 remain open, with Frappe Control Center as the truthful fallback. |
+| Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, P2 Owner Now plus governed `/approvals` and contextual lead-triage preparation, and P3 Sales, Measurement Workbench, and the isolated Draft Revision approval vertical are locally implemented and contract-tested. Owner Now separates work-stops, operating exceptions, and lead attention; the inbox renders only allowlisted before/patch/outcome DTOs and server-granted decision capability; Sales joins narrowly allowlisted office lead, estimate, quote, and communication-record context; the workbench recomputes retained source geometry in the Worker and shows bounded measurement, takeoff, quote, proposal-record, and clause lineage. The contextual triage and revision entries use exact server-granted capability, strict browser DTOs, stable idempotency, and reconcile-only execution uncertainty. None claims delivery, field verification, or human follow-up. Local browser/mocked-visual proof is not live Worker/broker/Frappe/device/operator proof; those gates and P4-P5 remain open, with Frappe Control Center as the truthful fallback. |
 
 Every "their UX beats ours" row in the scorecard (boards, mobile app, omnichannel inbox,
 homeowner widget) lands in this one missing layer. That makes the UI the highest-leverage
@@ -178,8 +178,12 @@ the BFF response. It keeps untriaged leads separate from bus transport state and
 as provider acceptance, late/unproven/no-channel evidence.
 
 The inbox is deliberately review-only rather than a generic lead editor. Sales now exposes a
-source-backed office lead contract, but triage preparation remains unavailable in the browser until
-its exact form and preflight path are implemented.
+source-backed office lead contract and a contextual local-triage preparation route. It appears only
+for an explicitly `Untriaged` Lead Envelope with the BFF-issued `approval.prepare` capability; an
+`Unknown` legacy state stays visible as data-quality work rather than becoming a write affordance.
+The route sends only the Frappe Lead Envelope name and one internal triage summary. The Worker
+derives its request text, previews through the private broker, and returns the user to the existing
+`/approvals` human queue; the browser never triages the lead directly.
 It renders the exact local-triage before/patch diff plus scope fence (no customer message, transport,
 quote, or accounting mutation); the browser never sees a receipt, raw write args, broker output, or
 tool selector. It honors BFF `approval.approve` / `approval.reject` / `approval.reconcile` capabilities

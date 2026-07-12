@@ -2,6 +2,17 @@ import { z } from "zod";
 
 const nullableText = z.string().min(1).nullable();
 
+/**
+ * The browser may prepare only a local lead-triage approval.  The Worker builds
+ * the human-readable request and all broker-bound write data itself.
+ */
+export const leadTriageApprovalPreparationInputSchema = z
+  .object({
+    leadEnvelopeId: z.string().trim().min(1).max(140),
+    triageSummary: z.string().trim().min(1).max(2_000),
+  })
+  .strict();
+
 const approvalPreviewSchema = z
   .object({
     would_write: z.literal(false),
@@ -129,3 +140,6 @@ export const approvalMutationResponseSchema = z
 export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;
 export type ApprovalListResponse = z.infer<typeof approvalListResponseSchema>;
 export type ApprovalMutationResponse = z.infer<typeof approvalMutationResponseSchema>;
+export type LeadTriageApprovalPreparationInput = z.infer<
+  typeof leadTriageApprovalPreparationInputSchema
+>;

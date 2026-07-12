@@ -97,10 +97,12 @@ lineage to match. Any drift fails before write; a post-invocation failure is
   or that a lead was triaged until the executed Hermes Run proves it.
 - Rejection is durable and does not invoke the broker.
 - The initial `/approvals` PWA is a review/decision surface, not a generic lead
-  editor. Sales now has a source-backed office read contract, but it does not create a
-  triage request until the exact lead-detail preparation form and preflight are implemented. It displays `approval.approve`,
-  `approval.reject`, and `approval.reconcile` only when the BFF grants those capabilities; it never
-  infers authority from the visible role.
+  editor. A contextual Sales preparation route may submit only an explicitly
+  `Untriaged` Lead Envelope and its internal summary when the BFF grants
+  `approval.prepare`; trusted dry-run and write boundaries enforce that status again.
+  It displays `approval.approve`, `approval.reject`, and `approval.reconcile` only
+  when the BFF grants those capabilities; it never infers authority from the
+  visible role.
 - Decision actions are online-only. The PWA never places an approval in its
   field outbox, retries a timed-out broker call, or displays a success state
   without the returned terminal ledger state.
@@ -114,7 +116,7 @@ exact allowed origin and session CSRF token.
 | --- | --- | --- | --- |
 | GET | `/api/v1/approvals` | owner or ops | allowlisted list DTO plus server-issued capability names |
 | GET | `/api/v1/approvals/:id` | owner or ops | current allowlisted DTO; pending expiry is re-evaluated before return |
-| POST | `/api/v1/approvals/lead-triage` | owner or ops with Frappe identity | internal preparation endpoint; fixed tool/actor/site, strict body, and prepare idempotency key |
+| POST | `/api/v1/approvals/lead-triage` | owner or ops with Frappe identity | contextual PWA preparation only; strict `{lead_envelope_id,triage_summary}` body, Worker-derived request text, fixed tool/actor/site, and prepare idempotency key |
 | POST | `/api/v1/approvals/:id/approve` | configured owner only | recent session, expected version, decision idempotency key, broker execution, terminal ledger event |
 | POST | `/api/v1/approvals/:id/reject` | configured owner only | recent session, expected version, reason, decision idempotency key; no broker call |
 | POST | `/api/v1/approvals/:id/reconcile` | configured owner only | recent session, expected version, one immutable evidence/outcome append; does not reopen or retry |
@@ -129,8 +131,11 @@ exact allowed origin and session CSRF token.
 The stored `run_id` is the reconciliation key; a later reconciliation records
 evidence without reopening the request or issuing another write.
 
-The installed `/approvals` PWA remains exclusively lead-triage review. The
-dedicated estimator PWA now reaches the quote-revision routes through a
+The installed `/approvals` PWA remains exclusively lead-triage review and decision. Sales reaches
+that queue only through a contextual preparation page for an explicit `Untriaged` Lead Envelope
+with `approval.prepare`; it sends only the Frappe lead name and internal triage summary, never a
+customer message or browser-authored request text. The dedicated estimator PWA reaches the
+quote-revision routes through a
 capability-gated workbench entry, a correction-reason-only preparation screen,
 and isolated queue/detail screens. It never reuses the lead inbox, exposes a
 generic approval selector, or renders receipt/write/commercial fields. This is

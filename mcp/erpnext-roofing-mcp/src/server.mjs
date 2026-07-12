@@ -901,6 +901,23 @@ export function buildLeadTriagePatch({ triageSummary, triagedBy, nowIso }) {
   };
 }
 
+/**
+ * A brokered local triage may start only from the explicit operational state.
+ * Do not normalize missing/legacy values here: `Unknown` is a data-quality
+ * state and must never be converted into a human-triage approval.
+ */
+export function assertLeadTriagePreparable(envelope, leadEnvelopeId) {
+  if (
+    !envelope ||
+    typeof envelope !== "object" ||
+    Array.isArray(envelope) ||
+    envelope.name !== leadEnvelopeId ||
+    envelope.triage_status !== "Untriaged"
+  ) {
+    throw new Error("lead_triage_not_preparable");
+  }
+}
+
 export function proposalPackIdForRoofJob(roofJobId) {
   return `proposal:${roofJobId}`;
 }
@@ -2497,6 +2514,7 @@ export function buildServer(config) {
     },
     async ({ lead_envelope_id, triage_summary }) => {
       const before = await readResource(config, "Lead Envelope", lead_envelope_id);
+      assertLeadTriagePreparable(before, lead_envelope_id);
       const patch = buildLeadTriagePatch({
         triageSummary: triage_summary,
         triagedBy: config.approverId,
@@ -2525,6 +2543,7 @@ export function buildServer(config) {
       assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const before = await readResource(config, "Lead Envelope", args.lead_envelope_id);
+      assertLeadTriagePreparable(before, args.lead_envelope_id);
       const patch = buildLeadTriagePatch({
         triageSummary: args.triage_summary,
         triagedBy: args.approved_by,

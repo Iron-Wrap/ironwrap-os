@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
-import { approveApproval, loadApprovals, reconcileApproval, rejectApproval } from "./approval-api";
+import {
+  approveApproval,
+  loadApprovals,
+  newLeadTriageApprovalPrepareKey,
+  prepareLeadTriageApproval,
+  reconcileApproval,
+  rejectApproval,
+} from "./approval-api";
 
 const session = {
   version: 1,
@@ -91,6 +98,55 @@ describe("approval API", () => {
       "/api/v1/approvals",
       expect.objectContaining({ credentials: "same-origin", cache: "no-store", method: "GET" }),
     );
+  });
+
+  it("prepares lead triage through the BFF with only safe input, CSRF, and caller-stable idempotency", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => Response.json({ approval: approval() }));
+
+    await prepareLeadTriageApproval(
+      session,
+      {
+        leadEnvelopeId: "lead:test-001",
+        triageSummary: "Hail report received; confirm the inspection window before outreach.",
+      },
+      "lead-triage-approval:prepare:test-001",
+      fetcher,
+    );
+
+    const prepareCall = fetcher.mock.calls[0];
+    expect(prepareCall?.[0]).toBe("/api/v1/approvals/lead-triage");
+    expect(new Headers(prepareCall?.[1]?.headers).get("X-CSRF-Token")).toBe("csrf");
+    expect(new Headers(prepareCall?.[1]?.headers).get("Idempotency-Key")).toBe(
+      "lead-triage-approval:prepare:test-001",
+    );
+    expect(prepareCall?.[1]?.body).toBe(
+      JSON.stringify({
+        lead_envelope_id: "lead:test-001",
+        triage_summary: "Hail report received; confirm the inspection window before outreach.",
+      }),
+    );
+    expect(newLeadTriageApprovalPrepareKey()).toMatch(/^lead-triage-approval:prepare:/);
+  });
+
+  it("rejects request text and broker or commercial data before a browser request is sent", async () => {
+    const fetcher = vi.fn<typeof fetch>();
+
+    await expect(
+      prepareLeadTriageApproval(
+        session,
+        {
+          leadEnvelopeId: "lead:test-001",
+          triageSummary: "Local triage only.",
+          request_text: "The browser must not author a broker request.",
+        } as never,
+        "lead-triage-approval:prepare:unsafe-input",
+        fetcher,
+      ),
+    ).rejects.toThrow();
+
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it("binds approve and reject decisions to CSRF, version, and a caller-stable idempotency key", async () => {

@@ -4,14 +4,37 @@ import { API_PATHS } from "../lib/api-paths";
 import {
   approvalListResponseSchema,
   approvalMutationResponseSchema,
+  leadTriageApprovalPreparationInputSchema,
   type ApprovalListResponse,
   type ApprovalMutationResponse,
+  type LeadTriageApprovalPreparationInput,
 } from "./approval-contracts";
 
 export async function loadApprovals(fetcher: typeof fetch = fetch): Promise<ApprovalListResponse> {
   return await apiRequest({
     path: API_PATHS.approvals,
     schema: approvalListResponseSchema,
+    fetcher,
+  });
+}
+
+export async function prepareLeadTriageApproval(
+  session: AuthenticatedSession,
+  input: LeadTriageApprovalPreparationInput,
+  idempotencyKey: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ApprovalMutationResponse> {
+  const prepared = leadTriageApprovalPreparationInputSchema.parse(input);
+  return await apiRequest({
+    path: API_PATHS.approvalLeadTriagePrepare,
+    schema: approvalMutationResponseSchema,
+    method: "POST",
+    body: {
+      lead_envelope_id: prepared.leadEnvelopeId,
+      triage_summary: prepared.triageSummary,
+    },
+    csrfToken: session.csrf_token,
+    idempotencyKey,
     fetcher,
   });
 }
@@ -73,4 +96,8 @@ export async function reconcileApproval(
 
 export function newApprovalDecisionKey(): string {
   return `approval:${crypto.randomUUID()}`;
+}
+
+export function newLeadTriageApprovalPrepareKey(): string {
+  return `lead-triage-approval:prepare:${crypto.randomUUID()}`;
 }

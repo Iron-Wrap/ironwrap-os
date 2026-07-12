@@ -104,7 +104,6 @@ function triageBody(lead = "lead:api-1"): Record<string, unknown> {
   return {
     lead_envelope_id: lead,
     triage_summary: "Roof leak reported after hail; verify address and inspection window.",
-    request_text: "Record local triage only after owner review.",
   };
 }
 
@@ -118,9 +117,13 @@ function containsCapability(value: unknown): boolean {
   return false;
 }
 
-function installBrokerMock(options: { invalidExecuteSignature?: boolean } = {}) {
+function installBrokerMock(options: {
+  invalidExecuteSignature?: boolean;
+  rejectedPreviewLeads?: ReadonlySet<string>;
+} = {}) {
   const original = globalThis.fetch;
   const calls: string[] = [];
+  const bodies: Record<string, unknown>[] = [];
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const inbound = input instanceof Request ? input : new Request(input, init);
     const raw = await inbound.text();
@@ -128,7 +131,11 @@ function installBrokerMock(options: { invalidExecuteSignature?: boolean } = {}) 
     calls.push(path);
     assertValidWorkerSignature(inbound, path, raw);
     const body = JSON.parse(raw) as Record<string, unknown>;
+    bodies.push(body);
     if (path === "/v1/lead-triage/preview") {
+      if (options.rejectedPreviewLeads?.has(String(body.lead_envelope_id))) {
+        return signedBrokerResponse(inbound, path, raw, { error: "broker_preview_rejected" }, 422);
+      }
       return signedBrokerResponse(inbound, path, raw, previewResponse(body));
     }
     if (path === "/v1/lead-triage/execute") {
@@ -137,7 +144,7 @@ function installBrokerMock(options: { invalidExecuteSignature?: boolean } = {}) 
     }
     return signedBrokerResponse(inbound, path, raw, { error: "not_found" }, 404);
   };
-  return { calls, restore: () => { globalThis.fetch = original; } };
+  return { calls, bodies, restore: () => { globalThis.fetch = original; } };
 }
 
 function previewResponse(body: Record<string, unknown>): Record<string, unknown> {
@@ -275,6 +282,10 @@ test("approval API keeps the broker boundary opaque, CAS-safe, and owner-gated",
     assert.equal(preparedJson.approval.state, "pending");
     assert.equal(containsCapability(preparedJson), false);
     assert.deepEqual(broker.calls, ["/v1/lead-triage/preview"]);
+    assert.equal(
+      broker.bodies[0]?.request_text,
+      "Record local lead triage after human review. Summary: Roof leak reported after hail; verify address and inspection window.",
+    );
 
     const replayed = await handleAuthenticatedRoute(
       request("/api/v1/approvals/lead-triage", body, "prepare-api-approval-0001"),
@@ -330,6 +341,77 @@ test("approval API keeps the broker boundary opaque, CAS-safe, and owner-gated",
     assert.equal(executeReplay.status, 200);
     assert.equal((await executeReplay.json() as { replayed: boolean }).replayed, true);
     assert.deepEqual(broker.calls, ["/v1/lead-triage/preview", "/v1/lead-triage/execute"], "same decision never invokes broker twice");
+  } finally {
+    broker.restore();
+  }
+});
+
+test("lead-triage preparation derives the review text and rejects browser-supplied text", async () => {
+  const appEnv = env();
+  const broker = installBrokerMock();
+  try {
+    const prepared = await handleAuthenticatedRoute(
+      request(
+        "/api/v1/approvals/lead-triage",
+        {
+          lead_envelope_id: "lead:api-derived",
+          triage_summary: "  Confirm the property address before local triage.  ",
+        },
+        "prepare-api-derived-0001",
+      ),
+      appEnv,
+      auth("ops"),
+    );
+    assert.equal(prepared.status, 201);
+    assert.equal(
+      broker.bodies[0]?.request_text,
+      "Record local lead triage after human review. Summary: Confirm the property address before local triage.",
+    );
+
+    const rejected = await handleAuthenticatedRoute(
+      request(
+        "/api/v1/approvals/lead-triage",
+        {
+          lead_envelope_id: "lead:api-derived",
+          triage_summary: "Confirm the property address before local triage.",
+          request_text: "Do not accept browser-controlled review text.",
+        },
+        "prepare-api-derived-0002",
+      ),
+      appEnv,
+      auth("ops"),
+    );
+    assert.equal(rejected.status, 400);
+    assert.deepEqual(await rejected.json(), { error: "invalid_approval_request" });
+    assert.deepEqual(broker.calls, ["/v1/lead-triage/preview"]);
+  } finally {
+    broker.restore();
+  }
+});
+
+test("a direct ineligible lead-triage POST stays opaque and never persists an approval", async () => {
+  const appEnv = env();
+  const broker = installBrokerMock({
+    rejectedPreviewLeads: new Set(["lead:unknown", "lead:triaged"]),
+  });
+  try {
+    for (const [lead, key] of [
+      ["lead:unknown", "prepare-api-unknown-0001"],
+      ["lead:triaged", "prepare-api-triaged-0001"],
+    ] as const) {
+      const response = await handleAuthenticatedRoute(
+        request("/api/v1/approvals/lead-triage", triageBody(lead), key),
+        appEnv,
+        auth("ops"),
+      );
+      assert.equal(response.status, 502);
+      assert.deepEqual(await response.json(), { error: "approval_broker_unavailable" });
+    }
+
+    assert.deepEqual(broker.calls, ["/v1/lead-triage/preview", "/v1/lead-triage/preview"]);
+    const inbox = await handleAuthenticatedRoute(request("/api/v1/approvals"), appEnv, auth("owner"));
+    assert.equal(inbox.status, 200);
+    assert.equal((await inbox.json() as { approvals: unknown[] }).approvals.length, 0);
   } finally {
     broker.restore();
   }

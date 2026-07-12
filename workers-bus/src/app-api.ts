@@ -630,6 +630,7 @@ async function prepareLeadTriageApproval(req: Request, env: AppEnv, auth: AuthCo
   if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
   const input = parseLeadTriagePreparation(parsed.value);
   if (!input) return privateAppJson({ error: "invalid_approval_request" }, 400);
+  const requestText = leadTriageRequestText(input.triageSummary);
   const requestedByFrappeUser = auth.session.frappe_user_id?.trim() ?? "";
   if (!requestedByFrappeUser) return privateAppJson({ error: "frappe_identity_required" }, 403);
 
@@ -640,7 +641,7 @@ async function prepareLeadTriageApproval(req: Request, env: AppEnv, auth: AuthCo
         requestedByUserId: auth.session.user_id,
         leadEnvelopeId: input.leadEnvelopeId,
         triageSummary: input.triageSummary,
-        requestText: input.requestText,
+        requestText,
       })
         ? privateAppJson({ approval: approvalProjection(existing), replayed: true })
         : privateAppJson({ error: "idempotency_conflict", approval: approvalProjection(existing) }, 409);
@@ -660,7 +661,7 @@ async function prepareLeadTriageApproval(req: Request, env: AppEnv, auth: AuthCo
       runId,
       leadEnvelopeId: input.leadEnvelopeId,
       triageSummary: input.triageSummary,
-      requestText: input.requestText,
+      requestText,
       requestedByUserId: auth.session.user_id,
       requestedByFrappeUser,
     });
@@ -1008,13 +1009,15 @@ function quoteRevisionApprovalAllowedActions(env: AppEnv, auth: AuthContext): st
 function parseLeadTriagePreparation(value: unknown): {
   leadEnvelopeId: string;
   triageSummary: string;
-  requestText: string;
 } | null {
-  if (!isRecord(value) || !onlyKeys(value, ["lead_envelope_id", "triage_summary", "request_text"])) return null;
+  if (!isRecord(value) || !onlyKeys(value, ["lead_envelope_id", "triage_summary"])) return null;
   const leadEnvelopeId = idText(value.lead_envelope_id, 1, 140);
   const triageSummary = boundedText(value.triage_summary, 1, 2_000);
-  const requestText = boundedText(value.request_text, 1, 4_000);
-  return leadEnvelopeId && triageSummary && requestText ? { leadEnvelopeId, triageSummary, requestText } : null;
+  return leadEnvelopeId && triageSummary ? { leadEnvelopeId, triageSummary } : null;
+}
+
+function leadTriageRequestText(triageSummary: string): string {
+  return `Record local lead triage after human review. Summary: ${triageSummary}`;
 }
 
 function parseQuoteRevisionApprovalPreparation(value: unknown): {

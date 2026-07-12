@@ -242,6 +242,21 @@ class LeadTriageApiTests(unittest.TestCase):
             self.call(api)
         self.assertEqual(fixtures["envelope"].save_count, 0)
 
+    def test_command_requires_an_explicit_untriaged_source_state(self) -> None:
+        for triage_status in (None, "", "Unknown", "Triaged", "Queued"):
+            with self.subTest(triage_status=triage_status):
+                fixtures = self.fixture_data()
+                fixtures["envelope"]["triage_status"] = triage_status
+                api, fixtures, _, context_calls = self.load_api(fixtures)
+
+                with self.assertRaisesRegex(
+                    FakeValidationError, "lead_triage_not_preparable"
+                ):
+                    self.call(api)
+
+                self.assertEqual(fixtures["envelope"].save_count, 0)
+                self.assertEqual(context_calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

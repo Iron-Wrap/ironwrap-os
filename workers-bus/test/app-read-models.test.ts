@@ -132,6 +132,20 @@ function env(): AppEnv {
   } as never;
 }
 
+function envWithLeadTriageBroker(): AppEnv {
+  return {
+    ...env(),
+    APP_ALLOW_INSECURE_LOCAL: "true",
+    APP_APPROVAL_BROKER_URL: "http://127.0.0.1:8788",
+    APP_APPROVAL_BROKER_KEY_ID: "sales-triage-test-key",
+    APPROVAL_BROKER_SHARED_SECRET: "sales-triage-shared-secret-for-test-0001",
+    APP_APPROVAL_APPROVER_ID: "owner@example.com",
+    APP_APPROVAL_MAX_SESSION_AGE_SECONDS: "900",
+    APP_APPROVAL_BROKER_TIMEOUT_MS: "5000",
+    APP_APPROVAL_EXECUTION_LEASE_SECONDS: "45",
+  } as AppEnv;
+}
+
 function installFrappeMock() {
   const original = globalThis.fetch;
   const requests: Array<{ doctype: string; fields: string[]; filters: unknown[]; offset: number; limit: number }> = [];
@@ -477,6 +491,24 @@ test("Sales Desk receives a bounded office contract without widening Owner Now o
       async () => await buildSalesReadModel(env(), auth("field", "crew@example.com")),
       /office_scope_required/,
     );
+  } finally {
+    mock.restore();
+  }
+});
+
+test("Sales grants the bounded triage-prepare action only for a configured broker and Frappe identity", async () => {
+  const mock = installFrappeMock();
+  try {
+    const ready = await buildSalesReadModel(envWithLeadTriageBroker(), auth("ops", "ops@example.com"));
+    assert.equal(ready.allowed_actions.includes("approval.prepare"), true);
+    assert.equal(ready.leads[0]?.triage.status, "Untriaged");
+    assert.equal(ready.leads[0]?.attention.includes("triage_unresolved"), true);
+
+    const noFrappeIdentity = await buildSalesReadModel(envWithLeadTriageBroker(), auth("ops", null));
+    assert.equal(noFrappeIdentity.allowed_actions.includes("approval.prepare"), false);
+
+    const noBroker = await buildSalesReadModel(env(), auth("ops", "ops@example.com"));
+    assert.equal(noBroker.allowed_actions.includes("approval.prepare"), false);
   } finally {
     mock.restore();
   }

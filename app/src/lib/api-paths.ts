@@ -20,6 +20,7 @@ export const API_PATHS = {
   quoteRevisionApprovalReconcile: (approvalId: string) =>
     `/api/v1/quote-revision-approvals/${encodeURIComponent(approvalId)}/reconcile`,
   approvals: "/api/v1/approvals",
+  approvalLeadTriagePrepare: "/api/v1/approvals/lead-triage",
   approvalApprove: (approvalId: string) =>
     `/api/v1/approvals/${encodeURIComponent(approvalId)}/approve`,
   approvalReject: (approvalId: string) =>

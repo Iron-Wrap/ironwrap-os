@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { approvalListResponseSchema, approvalRequestSchema } from "./approval-contracts";
+import {
+  approvalListResponseSchema,
+  approvalRequestSchema,
+  leadTriageApprovalPreparationInputSchema,
+} from "./approval-contracts";
 
 function approvalPayload() {
   return {
@@ -79,5 +83,28 @@ describe("approval browser contract", () => {
         outcome: { raw_broker_output: "never render this" },
       }).success,
     ).toBe(false);
+  });
+
+  it("permits only a lead identity and local triage summary when preparing an approval", () => {
+    const safeInput = {
+      leadEnvelopeId: "lead:test-001",
+      triageSummary: "Hail report received; confirm the inspection window before outreach.",
+    };
+
+    expect(leadTriageApprovalPreparationInputSchema.parse(safeInput)).toEqual(safeInput);
+
+    for (const forbiddenField of [
+      "request_text",
+      "customer_name",
+      "commercial_terms",
+      "raw_broker_output",
+    ]) {
+      expect(
+        leadTriageApprovalPreparationInputSchema.safeParse({
+          ...safeInput,
+          [forbiddenField]: "must-not-cross-the-browser-boundary",
+        }).success,
+      ).toBe(false);
+    }
   });
 });

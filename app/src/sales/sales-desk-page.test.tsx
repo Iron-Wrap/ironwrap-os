@@ -19,8 +19,16 @@ vi.mock("@tanstack/react-router", () => ({
   }: {
     children: ReactNode;
     to: string;
-    params?: { jobId?: string };
-  }) => <a href={params?.jobId ? to.replace("$jobId", params.jobId) : to}>{children}</a>,
+    params?: { jobId?: string; leadId?: string };
+  }) => (
+    <a
+      href={to
+        .replace("$jobId", params?.jobId ?? "$jobId")
+        .replace("$leadId", params?.leadId ?? "$leadId")}
+    >
+      {children}
+    </a>
+  ),
 }));
 
 const ownerSession = {
@@ -185,6 +193,7 @@ describe("SalesDeskPage", () => {
       "href",
       "/approvals",
     );
+    expect(screen.queryByRole("link", { name: /prepare triage review/i })).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /send|call|email|issue quote|collect payment/i }),
     ).not.toBeInTheDocument();
@@ -242,6 +251,38 @@ describe("SalesDeskPage", () => {
       "href",
       "/estimator/jobs/JOB-A",
     );
+  });
+
+  it("offers triage preparation only for an explicitly untriaged lead when the BFF grants it", async () => {
+    const model = salesModel({
+      allowed_actions: ["sales.read", "approval.read", "approval.prepare"],
+    });
+    vi.mocked(loadSales).mockResolvedValue(model);
+    renderSales();
+
+    await screen.findByRole("heading", { name: "Sales desk" });
+    expect(screen.getByRole("link", { name: /prepare triage review/i })).toHaveAttribute(
+      "href",
+      "/sales/leads/LEAD-A/triage",
+    );
+  });
+
+  it("does not turn an Unknown triage record into a preparation action", async () => {
+    const model = salesModel({
+      allowed_actions: ["sales.read", "approval.read", "approval.prepare"],
+      leads: [
+        {
+          ...salesModel().leads[0]!,
+          triage: { status: "Unknown", summary: null },
+          attention: ["triage_unresolved"],
+        },
+      ],
+    });
+    vi.mocked(loadSales).mockResolvedValue(model);
+    renderSales();
+
+    await screen.findByRole("heading", { name: "Sales desk" });
+    expect(screen.queryByRole("link", { name: /prepare triage review/i })).not.toBeInTheDocument();
   });
 
   it("keeps the sales payload out of field devices before it asks the BFF", async () => {

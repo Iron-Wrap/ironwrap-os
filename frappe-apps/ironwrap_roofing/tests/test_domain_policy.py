@@ -1094,6 +1094,127 @@ class DomainPolicyTests(unittest.TestCase):
         }
         validate_record("payment_milestone", payment)
 
+    def test_insurance_supplement_requires_verified_human_evidence(self) -> None:
+        def evidence(evidence_type: str) -> dict[str, object]:
+            return {
+                "roof_job": "job-1",
+                "evidence_type": evidence_type,
+                "sync_state": "Verified",
+                "content_checksum": "a" * 64,
+                "checksum_algorithm": "SHA-256",
+                "verified_at": "2026-07-12T10:00:00.000Z",
+                "verification_source": "worker-checksum",
+                "r2_key": "private/job-1/evidence",
+            }
+
+        sources = {
+            "ev-carrier": evidence("PDF"),
+            "ev-code": evidence("PDF"),
+            "ev-photo": evidence("Photo"),
+            "ev-invoice": evidence("Invoice"),
+        }
+        context = {
+            "insurance_measurement": {
+                "roof_job": "job-1",
+                "review_status": "Approved",
+                "approved_by": "estimator@example.com",
+                "approved_at": "2026-07-12T09:00:00.000Z",
+            },
+            "insurance_evidence": sources,
+        }
+        review = {
+            "insurance_supplement_id": "supp-1",
+            "roof_job": "job-1",
+            "version": 1,
+            "status": "Ready for Human Review",
+            "carrier_name": "Carrier record retained internally",
+            "claim_reference": "claim-internal",
+            "policy_reference": "policy-internal",
+            "date_of_loss": "2026-06-18",
+            "adjuster_reference": "adjuster-internal",
+            "supplement_basis": "Verified scope, measurement, code, and photo evidence are attached.",
+            "measurement_report": "measurement-1",
+            "invoice_required": 1,
+            "evidence": [
+                {"evidence_item": "ev-carrier", "evidence_role": "Carrier Scope"},
+                {"evidence_item": "ev-code", "evidence_role": "Code/Manufacturer"},
+                {"evidence_item": "ev-photo", "evidence_role": "Photo"},
+                {"evidence_item": "ev-invoice", "evidence_role": "Invoice"},
+            ],
+        }
+        validate_record("insurance_supplement", review, context=context)
+        self.assert_policy(
+            "missing_insurance_evidence",
+            validate_record,
+            "insurance_supplement",
+            {**review, "evidence": review["evidence"][:-2]},
+            context=context,
+        )
+        self.assert_policy(
+            "unverified_insurance_evidence",
+            validate_record,
+            "insurance_supplement",
+            review,
+            context={
+                **context,
+                "insurance_evidence": {
+                    **sources,
+                    "ev-photo": {**sources["ev-photo"], "sync_state": "Uploaded"},
+                },
+            },
+        )
+
+        manifest = {
+            "roof_job": "job-1",
+            "measurement_report": "measurement-1",
+            "evidence": [
+                {
+                    "evidence_item_id": evidence_id,
+                    "evidence_role": role,
+                    "evidence_type": sources[evidence_id]["evidence_type"],
+                    "content_checksum": sources[evidence_id]["content_checksum"],
+                    "checksum_algorithm": "SHA-256",
+                    "verified_at": sources[evidence_id]["verified_at"],
+                    "verification_source": sources[evidence_id]["verification_source"],
+                }
+                for evidence_id, role in [
+                    ("ev-carrier", "Carrier Scope"),
+                    ("ev-code", "Code/Manufacturer"),
+                    ("ev-invoice", "Invoice"),
+                    ("ev-photo", "Photo"),
+                ]
+            ],
+        }
+        approved = {
+            **review,
+            "status": "Approved for Submission",
+            "evidence_manifest_json": json.dumps(manifest),
+            "approved_by": "owner@example.com",
+            "approved_at": "2026-07-12T10:05:00.000Z",
+        }
+        validate_record(
+            "insurance_supplement",
+            approved,
+            previous=review,
+            context=context,
+        )
+        self.assert_policy(
+            "immutable_field",
+            validate_record,
+            "insurance_supplement",
+            {**approved, "carrier_name": "Changed carrier"},
+            previous=approved,
+            context=context,
+        )
+        self.assert_policy(
+            "missing_submission_evidence",
+            validate_record,
+            "insurance_supplement",
+            {**approved, "status": "Submitted", "submitted_at": "2026-07-12T10:10:00.000Z"},
+            previous=approved,
+            context=context,
+        )
+
     def test_customer_consent_decision_and_acceptance_are_append_only(self) -> None:
         consent = {
             "consent_id": "consent-1",

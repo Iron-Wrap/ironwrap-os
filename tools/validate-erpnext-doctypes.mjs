@@ -593,6 +593,17 @@ specs.push(
     fieldContracts: { tax_policy_snapshot_json: { fieldtype: "Code", options: "JSON" } },
   },
   {
+    name: "Insurance Supplement Evidence", dir: "insurance_supplement_evidence", child: true,
+    requiredFields: ["evidence_item", "evidence_role"],
+  },
+  {
+    name: "Insurance Supplement", dir: "insurance_supplement", idField: "insurance_supplement_id",
+    requiredFields: ["insurance_supplement_id", "roof_job", "customer_quote", "change_order", "version", "status", "carrier_name", "claim_reference", "policy_reference", "date_of_loss", "adjuster_reference", "supplement_basis", "measurement_report", "invoice_required", "invoice_exception_reason", "evidence", "evidence_manifest_json", "approved_by", "approved_at", "submitted_at", "carrier_response_at", "resolution_summary", "closed_at", "supersedes", "correction_reason", "notes"],
+    fieldContracts: {
+      evidence_manifest_json: { fieldtype: "Code", options: "JSON", read_only: 1 },
+    },
+  },
+  {
     name: "Safety Plan", dir: "safety_plan", idField: "safety_plan_id",
     requiredFields: ["safety_plan_id", "roof_job", "version", "status", "effective_date", "prepared_by", "prepared_at", "hazard_summary", "controls", "emergency_plan", "ppe_requirements", "weather_limits", "evidence_item", "acknowledgements", "approved_by", "approved_at", "supersedes", "correction_reason", "notes"],
   },
@@ -638,9 +649,9 @@ const discoveredDirs = readdirSync(doctypePath, { withFileTypes: true })
   .filter((dir) => existsSync(join(doctypePath, dir, `${dir}.json`)))
   .sort();
 
-assert.equal(specs.length, 46, "the product contract must contain exactly 46 DocTypes");
-assert.equal(specs.filter((spec) => spec.child).length, 7, "expected seven child-table DocTypes");
-assert.equal(specs.filter((spec) => !spec.child).length, 39, "expected 39 top-level DocTypes");
+assert.equal(specs.length, 48, "the product contract must contain exactly 48 DocTypes");
+assert.equal(specs.filter((spec) => spec.child).length, 8, "expected eight child-table DocTypes");
+assert.equal(specs.filter((spec) => !spec.child).length, 40, "expected 40 top-level DocTypes");
 assert.equal(new Set(specs.map((spec) => spec.name)).size, specs.length, "duplicate DocType name in validator");
 assert.equal(new Set(expectedDirs).size, specs.length, "duplicate DocType directory in validator");
 assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 46-type product contract");
@@ -896,4 +907,4 @@ function validateRuntimeWiring() {
   assert.match(adapter, /def\s+deny_business_document_delete\s*\(/, "append-only delete guard is missing");
 }
 
-console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (39 top-level + 7 child)`);
+console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (40 top-level + 8 child)`);

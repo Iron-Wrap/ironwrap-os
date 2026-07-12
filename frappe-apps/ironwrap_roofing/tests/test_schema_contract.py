@@ -43,6 +43,7 @@ TOP_LEVEL_DOCTYPES = {
     "Hermes Run",
     "Instant Estimate Session",
     "Integration Reconciliation",
+    "Insurance Supplement",
     "Job Assignment",
     "Job Compliance Record",
     "Lead Envelope",
@@ -71,6 +72,7 @@ TOP_LEVEL_DOCTYPES = {
 }
 CHILD_DOCTYPES = {
     "Change Order Item",
+    "Insurance Supplement Evidence",
     "Crew Member",
     "Material Takeoff Item",
     "Measurement Value",
@@ -186,6 +188,7 @@ NEW_BLUEPRINT_FIELDS.update(
         "Customer Decision": {"decision_id", "roof_job", "decision_type", "status", "decision_value", "decided_at", "evidence_item", "supersedes"},
         "Contract Acceptance": {"acceptance_id", "roof_job", "contract_version", "status", "accepted_at", "evidence_item", "terms_hash", "document_checksum", "supersedes"},
         "Integration Reconciliation": {"reconciliation_id", "system_name", "external_entity_id", "status", "diff_json", "source_payload_hash", "local_payload_hash", "resolution_evidence"},
+        "Insurance Supplement": {"insurance_supplement_id", "roof_job", "customer_quote", "change_order", "version", "status", "carrier_name", "claim_reference", "policy_reference", "date_of_loss", "adjuster_reference", "supplement_basis", "measurement_report", "invoice_required", "invoice_exception_reason", "evidence", "evidence_manifest_json", "approved_by", "approved_at", "submitted_at", "carrier_response_at", "resolution_summary", "closed_at", "supersedes", "correction_reason"},
         "Tenant Export Run": {"export_run_id", "tenant", "status", "scope_json", "manifest_key", "manifest_checksum", "archive_key", "archive_checksum", "encryption_key_ref"},
         "Evidence Item": {"evidence_id", "device_action_id", "proof_owner", "proof_slot", "content_checksum", "capture_actor", "latitude", "longitude", "sync_state", "correction_of"},
         "Field Check-in": {"checkin_id", "device_action_id", "job_assignment", "crew_profile", "capture_actor", "sync_state", "blocker_flag", "voice_evidence", "correction_of"},
@@ -210,9 +213,9 @@ class DocTypeContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.doctypes = load_doctypes()
 
-    def test_complete_46_doctype_blueprint(self) -> None:
+    def test_complete_48_doctype_blueprint(self) -> None:
         self.assertEqual(set(self.doctypes), TOP_LEVEL_DOCTYPES | CHILD_DOCTYPES)
-        self.assertEqual(len(self.doctypes), 46)
+        self.assertEqual(len(self.doctypes), 48)
 
         for name, (_, document) in self.doctypes.items():
             with self.subTest(doctype=name):

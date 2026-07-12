@@ -234,7 +234,12 @@ lead-triage broker or `/approvals` inbox. The workbench exposes a contextual ent
 exact BFF action is granted for a current versioned, non-accepted source. The resulting prepare,
 queue, and detail routes show a source-to-blank-Draft decision rail, commercial-term fence,
 server-granted actions only, stable idempotency, and reconciliation instead of retry on ambiguity.
-Immutable price-rule snapshot binding, proposal-pack assembly, insurance lane, and live
+A separate governed proposal-pack MCP slice can now create only a Draft pack for one explicit,
+same-job `Approved`/`Accepted` quote: it requires an approved measurement and customer-safe,
+checksum/provenance-verified evidence, creates a quote-owned identity, and persists only a
+redacted summary. Frappe re-resolves every retained source ID and rejects customer messages or any
+non-Draft status until a dedicated delivery path exists. It is not a browser proposal assembler,
+customer renderer/send, e-sign, or live proof. Immutable price-rule snapshot binding, insurance lane, and live
 source/browser/operator proof remain open.
 Beats: SmartEstimates on trust: JN auto-drafts from unverified numbers; we show the
 verification. Proof gate: measurement-to-proposal flow completed with every number

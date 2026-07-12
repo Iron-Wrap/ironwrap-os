@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Sequence
 
@@ -1273,23 +1274,285 @@ def _validate_payment_milestone(record: Any, context: Mapping[str, Any]) -> None
 
 
 def _validate_proposal(record: Any, context: Mapping[str, Any]) -> None:
-    status = _get(record, "status")
-    if status not in {"Approved", "Sent", "Signed"}:
-        return
-    require_fields(record, "roof_job", "quotation", "assumptions", "exclusions")
-    require_approval(record)
-    if _context_status(context, "quote_status") not in {"Approved", "Accepted"}:
+    """Keep every proposal evidence pack anchored to one approved quote.
+
+    A Draft pack is already a durable, customer-adjacent evidence artifact.  It
+    must therefore carry a verified quote anchor and a nonempty evidence
+    summary; otherwise a later status transition could make an unrelated or
+    unanchored pack appear customer-ready.  The anchor is immutable after
+    insert so quote revisions receive their own evidence pack rather than
+    rewriting the prior version's proof.
+    """
+
+    require_fields(record, "roof_job", "quotation")
+    enforce_immutable(record, context.get("_previous"), "roof_job", "quotation")
+    if _get(record, "pack_id") != f"proposal:{_get(record, 'quotation')}":
         raise PolicyViolation(
-            "unapproved_quote", "linked Customer Quote must be Approved or Accepted"
+            "proposal_pack_id_mismatch",
+            "must be derived from the linked Customer Quote",
+            "pack_id",
         )
-    parse_json_field(record, "evidence_summary_json", required=True, non_empty=True)
-    if status == "Signed":
-        require_fields(record, "signed_evidence", "signed_at")
-        evidence_type = _context_status(context, "signed_evidence_type")
-        if evidence_type and evidence_type != "Signed Document":
-            raise PolicyViolation(
-                "invalid_signed_evidence", "signed_evidence must be a Signed Document"
+    if _get(record, "status") != "Draft":
+        raise PolicyViolation(
+            "proposal_pack_draft_only",
+            "status changes require a dedicated receipt-verifying delivery command",
+            "status",
+        )
+    quote_status = _context_status(context, "quote_status")
+    if quote_status not in {"Approved", "Accepted"}:
+        raise PolicyViolation(
+            "unapproved_quote",
+            "linked Customer Quote must be Approved or Accepted",
+            "quotation",
+        )
+
+    quote_roof_job = _context_status(context, "quote_roof_job")
+    if quote_roof_job is None:
+        raise PolicyViolation(
+            "unverified_proposal_quote",
+            "linked Customer Quote roof job could not be verified",
+            "quotation",
+        )
+    if quote_roof_job != str(_get(record, "roof_job")):
+        raise PolicyViolation(
+            "cross_job_proposal_quote",
+            "linked Customer Quote must belong to the same Roof Job",
+            "quotation",
+        )
+    summary = parse_json_field(
+        record,
+        "evidence_summary_json",
+        required=True,
+        container_types=(dict,),
+        non_empty=True,
+    )
+    _validate_proposal_evidence_summary(record, summary, context)
+    if not _blank(_get(record, "customer_message")):
+        raise PolicyViolation(
+            "proposal_customer_message_forbidden",
+            "customer messages require a dedicated approved delivery workflow",
+            "customer_message",
+        )
+
+
+def _validate_proposal_evidence_summary(
+    record: Any, summary: Mapping[str, Any], context: Mapping[str, Any]
+) -> None:
+    """Allow only the redacted, quote-bound evidence summary emitted by Hermes."""
+
+    required = {
+        "roof_job",
+        "quotation",
+        "quote_version",
+        "counts",
+        "measurement_reports",
+        "eligible_evidence",
+        "withheld_evidence",
+    }
+    allowed = required | {"generated_at"}
+    if set(summary) - allowed or required - set(summary):
+        raise PolicyViolation(
+            "invalid_proposal_evidence_summary",
+            "must use the redacted proposal evidence summary shape",
+            "evidence_summary_json",
+        )
+    if summary["roof_job"] != _get(record, "roof_job") or summary["quotation"] != _get(
+        record, "quotation"
+    ):
+        raise PolicyViolation(
+            "proposal_evidence_anchor_mismatch",
+            "summary roof job and quotation must match the pack",
+            "evidence_summary_json",
+        )
+    if not _safe_proposal_summary_version(summary["quote_version"]) or (
+        "generated_at" in summary
+        and not _safe_proposal_summary_timestamp(summary["generated_at"])
+    ):
+        raise PolicyViolation(
+            "invalid_proposal_evidence_summary",
+            "quote version and generation time must be safe scalar values",
+            "evidence_summary_json",
+        )
+    if summary["quote_version"] != context.get("quote_version"):
+        raise PolicyViolation(
+            "proposal_quote_version_mismatch",
+            "summary quote version must match the linked Customer Quote",
+            "evidence_summary_json",
+        )
+
+    counts = summary["counts"]
+    measurement_reports = summary["measurement_reports"]
+    eligible_evidence = summary["eligible_evidence"]
+    withheld_evidence = summary["withheld_evidence"]
+    count_keys = {"measurement_reports", "eligible_evidence", "withheld_evidence"}
+    withheld_keys = {
+        "not_customer_safe",
+        "unverified_or_incomplete",
+        "identity_missing",
+    }
+    if (
+        not isinstance(counts, dict)
+        or set(counts) != count_keys
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in counts.values()
+        )
+        or not isinstance(measurement_reports, list)
+        or not isinstance(eligible_evidence, list)
+        or not isinstance(withheld_evidence, dict)
+        or set(withheld_evidence) != withheld_keys
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in withheld_evidence.values()
+        )
+    ):
+        raise PolicyViolation(
+            "invalid_proposal_evidence_summary",
+            "counts and withheld evidence must be complete nonnegative integers",
+            "evidence_summary_json",
+        )
+    if (
+        not measurement_reports
+        or not eligible_evidence
+        or counts["measurement_reports"] != len(measurement_reports)
+        or counts["eligible_evidence"] != len(eligible_evidence)
+        or counts["withheld_evidence"] != sum(withheld_evidence.values())
+    ):
+        raise PolicyViolation(
+            "proposal_evidence_count_mismatch",
+            "counts must match approved measurements and verified eligible evidence",
+            "evidence_summary_json",
+        )
+    if (
+        len(
+            {
+                row.get("measurement_id")
+                for row in measurement_reports
+                if isinstance(row, Mapping)
+            }
+        )
+        != len(measurement_reports)
+        or len(
+            {
+                row.get("evidence_id")
+                for row in eligible_evidence
+                if isinstance(row, Mapping)
+            }
+        )
+        != len(eligible_evidence)
+    ):
+        raise PolicyViolation(
+            "duplicate_proposal_evidence",
+            "measurement and evidence identities must be unique",
+            "evidence_summary_json",
+        )
+
+    source_measurements = context.get("proposal_measurements")
+    source_evidence = context.get("proposal_evidence")
+    if not isinstance(source_measurements, Mapping) or not isinstance(
+        source_evidence, Mapping
+    ):
+        raise PolicyViolation(
+            "unverified_proposal_evidence",
+            "proposal source records could not be verified",
+            "evidence_summary_json",
+        )
+
+    for measurement in measurement_reports:
+        if (
+            not isinstance(measurement, dict)
+            or set(measurement)
+            != {"measurement_id", "provider", "review_status", "approved_at"}
+            or measurement.get("review_status") != "Approved"
+            or not all(
+                _safe_proposal_summary_label(measurement.get(field))
+                for field in ("measurement_id", "provider")
             )
+            or not _safe_proposal_summary_timestamp(measurement.get("approved_at"))
+        ):
+            raise PolicyViolation(
+                "invalid_proposal_evidence_summary",
+                "measurements must contain only approved redacted provenance",
+                "evidence_summary_json",
+            )
+        source = source_measurements.get(measurement["measurement_id"])
+        if (
+            not isinstance(source, Mapping)
+            or source.get("roof_job") != _get(record, "roof_job")
+            or source.get("review_status") != "Approved"
+            or _blank(source.get("approved_by"))
+            or source.get("provider") != measurement["provider"]
+            or source.get("approved_at") != measurement["approved_at"]
+        ):
+            raise PolicyViolation(
+                "unverified_proposal_measurement",
+                "measurement must resolve to an approved same-job source record",
+                "evidence_summary_json",
+            )
+    for evidence in eligible_evidence:
+        if (
+            not isinstance(evidence, dict)
+            or set(evidence) != {"evidence_id", "evidence_type", "proof_slot"}
+            or not all(
+                _safe_proposal_summary_label(evidence.get(field)) for field in evidence
+            )
+        ):
+            raise PolicyViolation(
+                "invalid_proposal_evidence_summary",
+                "eligible evidence must contain only safe identifiers and labels",
+                "evidence_summary_json",
+            )
+        source = source_evidence.get(evidence["evidence_id"])
+        checksum = (
+            str(source.get("content_checksum") or "")
+            if isinstance(source, Mapping)
+            else ""
+        )
+        if (
+            not isinstance(source, Mapping)
+            or source.get("roof_job") != _get(record, "roof_job")
+            or source.get("evidence_type") != evidence["evidence_type"]
+            or source.get("proof_slot") != evidence["proof_slot"]
+            or source.get("customer_safe") not in {True, 1, "1"}
+            or source.get("sync_state") != "Verified"
+            or source.get("checksum_algorithm") != "SHA-256"
+            or len(checksum) != 64
+            or any(character not in "0123456789abcdef" for character in checksum)
+            or _blank(source.get("verified_at"))
+            or _blank(source.get("verification_source"))
+            or not any(
+                not _blank(source.get(field))
+                for field in ("source_uri", "r2_key", "drive_file_id")
+            )
+        ):
+            raise PolicyViolation(
+                "unverified_proposal_evidence",
+                "evidence must resolve to verified same-job customer-safe proof",
+                "evidence_summary_json",
+            )
+
+
+def _safe_proposal_summary_label(value: Any) -> bool:
+    normalized = value.strip() if isinstance(value, str) else ""
+    return bool(normalized) and len(normalized) <= 140 and not any(
+        marker in normalized.lower()
+        for marker in ("://", "r2:", "s3:", "/", "\\\\", "\n", "\r")
+    )
+
+
+def _safe_proposal_summary_version(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _safe_proposal_summary_timestamp(value: Any) -> bool:
+    normalized = value.strip() if isinstance(value, str) else ""
+    if not normalized or len(normalized) > 64:
+        return False
+    try:
+        datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
 
 
 def _validate_completion(record: Any, _context: Mapping[str, Any]) -> None:

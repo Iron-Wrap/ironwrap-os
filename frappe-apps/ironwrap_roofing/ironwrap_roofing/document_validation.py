@@ -9,6 +9,7 @@ from typing import Any
 import frappe
 
 from ironwrap_roofing.domain_policy import PolicyViolation, validate_record
+from ironwrap_roofing.domain_policy import parse_json_field
 
 
 CORRECTION_TARGETS: dict[str, tuple[str, str, tuple[str, ...]]] = {
@@ -324,11 +325,95 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
                 "Supplier Quote", document.get("source_quote"), "status"
             )
     elif kind == "proposal_evidence_pack":
-        context["quote_status"] = _value(
-            "Customer Quote", document.get("quotation"), "status"
+        quotation = document.get("quotation")
+        quote = (
+            frappe.db.get_value(
+                "Customer Quote",
+                quotation,
+                ("roof_job", "status", "quote_version"),
+                as_dict=True,
+            )
+            if quotation
+            else None
         )
-        context["signed_evidence_type"] = _value(
-            "Evidence Item", document.get("signed_evidence"), "evidence_type"
+        context["quote_status"] = quote.get("status") if quote else None
+        context["quote_roof_job"] = quote.get("roof_job") if quote else None
+        context["quote_version"] = quote.get("quote_version") if quote else None
+        summary = parse_json_field(
+            document,
+            "evidence_summary_json",
+            required=True,
+            container_types=(dict,),
+            non_empty=True,
+        )
+        measurement_rows = summary.get("measurement_reports")
+        evidence_rows = summary.get("eligible_evidence")
+        if (
+            isinstance(measurement_rows, list)
+            and len(measurement_rows) > 100
+        ) or (isinstance(evidence_rows, list) and len(evidence_rows) > 100):
+            raise PolicyViolation(
+                "proposal_evidence_window_exceeded",
+                "proposal source verification is limited to 100 records per type",
+                "evidence_summary_json",
+            )
+        measurement_ids = [
+            row.get("measurement_id")
+            for row in (measurement_rows if isinstance(measurement_rows, list) else [])
+            if isinstance(row, dict)
+            and isinstance(row.get("measurement_id"), str)
+        ]
+        evidence_ids = [
+            row.get("evidence_id")
+            for row in (evidence_rows if isinstance(evidence_rows, list) else [])
+            if isinstance(row, dict)
+            and isinstance(row.get("evidence_id"), str)
+        ]
+        roof_job = document.get("roof_job")
+        context["proposal_measurements"] = (
+            {
+                row["name"]: row
+                for row in frappe.get_all(
+                    "Measurement Report",
+                    filters={"name": ["in", measurement_ids], "roof_job": roof_job},
+                    fields=[
+                        "name",
+                        "roof_job",
+                        "provider",
+                        "review_status",
+                        "approved_by",
+                        "approved_at",
+                    ],
+                )
+            }
+            if measurement_ids
+            else {}
+        )
+        context["proposal_evidence"] = (
+            {
+                row["name"]: row
+                for row in frappe.get_all(
+                    "Evidence Item",
+                    filters={"name": ["in", evidence_ids], "roof_job": roof_job},
+                    fields=[
+                        "name",
+                        "roof_job",
+                        "evidence_type",
+                        "proof_slot",
+                        "customer_safe",
+                        "sync_state",
+                        "content_checksum",
+                        "checksum_algorithm",
+                        "verified_at",
+                        "verification_source",
+                        "source_uri",
+                        "r2_key",
+                        "drive_file_id",
+                    ],
+                )
+            }
+            if evidence_ids
+            else {}
         )
     elif kind in {"warranty_packet", "review_request"}:
         context["completion_status"] = _value(

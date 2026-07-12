@@ -135,6 +135,103 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         ):
             accepted_adapter.validate_business_document(revision, "customer_quote")
 
+    def test_proposal_evidence_pack_loads_quote_anchor_context_for_draft(self) -> None:
+        quote_fields = ("roof_job", "status", "quote_version")
+        proposal_rows = {
+            "Measurement Report": [
+                {
+                    "name": "measurement-1",
+                    "roof_job": "job-1",
+                    "provider": "RoofRuler",
+                    "review_status": "Approved",
+                    "approved_by": "owner@example.com",
+                    "approved_at": "2026-07-10T12:00:00.000Z",
+                }
+            ],
+            "Evidence Item": [
+                {
+                    "name": "evidence-1",
+                    "roof_job": "job-1",
+                    "evidence_type": "Photo",
+                    "proof_slot": "Measurement",
+                    "customer_safe": 1,
+                    "sync_state": "Verified",
+                    "content_checksum": "a" * 64,
+                    "checksum_algorithm": "SHA-256",
+                    "verified_at": "2026-07-10T12:00:00.000Z",
+                    "verification_source": "worker-checksum",
+                    "r2_key": "private/job-1/evidence-1.jpg",
+                }
+            ],
+        }
+        draft = FakeDocument(
+            {
+                "pack_id": "proposal:cq-1",
+                "status": "Draft",
+                "roof_job": "job-1",
+                "quotation": "cq-1",
+                "evidence_summary_json": """{
+                  "roof_job": "job-1",
+                  "quotation": "cq-1",
+                  "quote_version": 1,
+                  "counts": {"measurement_reports": 1, "eligible_evidence": 1, "withheld_evidence": 0},
+                  "measurement_reports": [{"measurement_id": "measurement-1", "provider": "RoofRuler", "review_status": "Approved", "approved_at": "2026-07-10T12:00:00.000Z"}],
+                  "eligible_evidence": [{"evidence_id": "evidence-1", "evidence_type": "Photo", "proof_slot": "Measurement"}],
+                  "withheld_evidence": {"not_customer_safe": 0, "unverified_or_incomplete": 0, "identity_missing": 0}
+                }""",
+            }
+        )
+        adapter, _ = self.load_adapter(
+            values={
+                ("Customer Quote", "cq-1", quote_fields): {
+                    "roof_job": "job-1",
+                    "status": "Approved",
+                    "quote_version": 1,
+                }
+            },
+            rows=proposal_rows,
+        )
+        adapter.validate_business_document(draft, "proposal_evidence_pack")
+
+        cross_job_adapter, _ = self.load_adapter(
+            values={
+                ("Customer Quote", "cq-1", quote_fields): {
+                    "roof_job": "job-other",
+                    "status": "Accepted",
+                    "quote_version": 1,
+                }
+            },
+            rows=proposal_rows,
+        )
+        with self.assertRaisesRegex(FakeValidationError, "cross_job_proposal_quote"):
+            cross_job_adapter.validate_business_document(draft, "proposal_evidence_pack")
+
+        draft_quote_adapter, _ = self.load_adapter(
+            values={
+                ("Customer Quote", "cq-1", quote_fields): {
+                    "roof_job": "job-1",
+                    "status": "Draft",
+                    "quote_version": 1,
+                }
+            },
+            rows=proposal_rows,
+        )
+        with self.assertRaisesRegex(FakeValidationError, "unapproved_quote"):
+            draft_quote_adapter.validate_business_document(draft, "proposal_evidence_pack")
+
+        missing_source_adapter, _ = self.load_adapter(
+            values={
+                ("Customer Quote", "cq-1", quote_fields): {
+                    "roof_job": "job-1",
+                    "status": "Approved",
+                    "quote_version": 1,
+                }
+            },
+            rows={"Measurement Report": proposal_rows["Measurement Report"]},
+        )
+        with self.assertRaisesRegex(FakeValidationError, "unverified_proposal_evidence"):
+            missing_source_adapter.validate_business_document(draft, "proposal_evidence_pack")
+
     def test_closed_roof_job_uses_database_context(self) -> None:
         gates = [
             {

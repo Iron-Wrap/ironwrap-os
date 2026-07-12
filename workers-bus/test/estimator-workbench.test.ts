@@ -324,6 +324,158 @@ test("estimator workbench derives safe measurement geometry and commercial trace
   }
 });
 
+test("estimator workbench projects restricted insurance evidence without claim or storage leakage", async () => {
+  const dataset = {
+    ...rows,
+    "Insurance Supplement": [{
+      name: "SUPPLEMENT-A",
+      insurance_supplement_id: "private-claim-reference",
+      roof_job: "JOB-A",
+      version: 1,
+      status: "Ready for Human Review",
+      measurement_report: "MEASURE-A",
+      invoice_required: 1,
+      claim_reference: "private-claim-reference",
+      policy_reference: "private-policy-reference",
+      adjuster_reference: "private-adjuster-reference",
+      supplement_basis: "private-carrier-scope-analysis",
+      evidence_manifest_json: "{\"private\":\"manifest\"}",
+      approved_at: null,
+      submitted_at: null,
+      carrier_response_at: null,
+      closed_at: null,
+      modified: MODIFIED,
+      evidence: [
+        { evidence_item: "private-evidence-carrier", evidence_role: "Carrier Scope" },
+        { evidence_item: "private-evidence-code", evidence_role: "Code/Manufacturer" },
+        { evidence_item: "private-evidence-photo", evidence_role: "Photo" },
+        { evidence_item: "private-evidence-invoice", evidence_role: "Invoice" },
+      ],
+    }],
+  };
+  const mock = installFrappeMock(dataset);
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
+    assert.deepEqual(model?.insurance_supplements, [{
+      presentation_key: "insurance-supplement-1",
+      version: 1,
+      status: "Ready for Human Review",
+      measurement_state: "review_required",
+      evidence_roles: ["Carrier Scope", "Code/Manufacturer", "Photo", "Invoice"],
+      missing_requirements: ["approved_measurement"],
+      invoice_state: "recorded",
+      approval_recorded: false,
+      submission_recorded: false,
+      carrier_response_recorded: false,
+      closed_recorded: false,
+    }]);
+    const serialized = JSON.stringify(model);
+    for (const privateValue of [
+      "private-claim-reference",
+      "private-policy-reference",
+      "private-adjuster-reference",
+      "private-carrier-scope-analysis",
+      "SUPPLEMENT-A",
+      "private-evidence-carrier",
+      "private-evidence-invoice",
+      "manifest",
+    ]) assert.equal(serialized.includes(privateValue), false);
+
+    const list = mock.requests.find(
+      (request) => request.doctype === "Insurance Supplement" && request.name === null,
+    );
+    assert.deepEqual(list?.fields, OFFICE_ESTIMATOR_READ_FIELDS["Insurance Supplement"]);
+    for (const forbiddenField of [
+      "claim_reference",
+      "insurance_supplement_id",
+      "policy_reference",
+      "adjuster_reference",
+      "supplement_basis",
+      "evidence_manifest_json",
+    ]) assert.equal(list?.fields.includes(forbiddenField), false);
+    const detail = mock.requests.find(
+      (request) => request.doctype === "Insurance Supplement" && request.name === "SUPPLEMENT-A",
+    );
+    assert.ok(detail);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench never places an internal supplement document name in stale browser state", async () => {
+  const dataset = {
+    ...rows,
+    "Insurance Supplement": [{
+      name: "SUPPLEMENT-A",
+      insurance_supplement_id: "supplement_a",
+      roof_job: "JOB-A",
+      version: 1,
+      status: "Draft",
+      measurement_report: null,
+      invoice_required: 1,
+      approved_at: null,
+      submitted_at: null,
+      carrier_response_at: null,
+      closed_at: null,
+      modified: MODIFIED,
+    }],
+  };
+  const mock = installFrappeMock(dataset, {
+    detailRows: { "Insurance Supplement/SUPPLEMENT-A": {} },
+  });
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
+    assert.deepEqual(model?.insurance_supplements[0]?.missing_requirements, ["source_detail_unavailable"]);
+    assert.ok(model?.stale_fields.includes("insurance_supplements.detail_unavailable"));
+    assert.equal(JSON.stringify(model).includes("SUPPLEMENT-A"), false);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench requests restricted supplement evidence only for an owner or configured estimator identity", async () => {
+  const dataset = {
+    ...rows,
+    "Insurance Supplement": [{
+      name: "PRIVATE-SUPPLEMENT-DOCUMENT",
+      insurance_supplement_id: "private-claim-reference",
+      roof_job: "JOB-A",
+      version: 1,
+      status: "Draft",
+      measurement_report: null,
+      invoice_required: 1,
+      approved_at: null,
+      submitted_at: null,
+      carrier_response_at: null,
+      closed_at: null,
+      modified: MODIFIED,
+      evidence: [],
+    }],
+  };
+  const unconfigured = installFrappeMock(dataset);
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(env(), auth("ops"), "JOB-A");
+    assert.deepEqual(model?.insurance_supplements, []);
+    assert.equal(unconfigured.requests.some((request) => request.doctype === "Insurance Supplement"), false);
+  } finally {
+    unconfigured.restore();
+  }
+
+  const configured = installFrappeMock(dataset);
+  try {
+    const model = await buildEstimatorWorkbenchReadModel({
+      ...env(),
+      APP_INSURANCE_ESTIMATOR_FRAPPE_USERS: "reviewer@example.com, OPS@example.com",
+    }, auth("ops"), "JOB-A");
+    assert.equal(model?.insurance_supplements.length, 1);
+    assert.equal(model?.insurance_supplements[0]?.presentation_key, "insurance-supplement-1");
+    assert.equal(JSON.stringify(model).includes("PRIVATE-SUPPLEMENT-DOCUMENT"), false);
+    assert.ok(configured.requests.some((request) => request.doctype === "Insurance Supplement"));
+  } finally {
+    configured.restore();
+  }
+});
+
 test("estimator workbench grants the draft-revision entry only for a configured isolated broker and versioned non-accepted source", async () => {
   const configured = {
     ...env(),

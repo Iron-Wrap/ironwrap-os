@@ -16,6 +16,7 @@ operating core:
 - `Customer Quote`
 - `Instant Estimate Session`
 - `Price Book Rule`
+- `Insurance Supplement` with child `Insurance Supplement Evidence`
 - `Measurement Report` with child `Measurement Value`
 - `Visual Property Model`
 - `Roof Area`
@@ -59,10 +60,10 @@ bench get-app /path/to/ironwrap/frappe-apps/ironwrap_roofing
 bench --site <site> install-app ironwrap_roofing
 ```
 
-Validate the committed DocType contract without a bench. The app contains 46
-DocType JSON contracts (39 top-level records and seven child tables). The root
+Validate the committed DocType contract without a bench. The app contains 48
+DocType JSON contracts (40 top-level records and eight child tables). The root
 validator keeps its historical `erpnext` filename; the app-local unittest suite
-enforces the complete 46-record model:
+enforces the complete 48-record model:
 
 ```bash
 node tools/validate-erpnext-doctypes.mjs

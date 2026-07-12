@@ -24,6 +24,9 @@ export type AppEnv = Env & {
   APP_ALLOW_INSECURE_LOCAL?: string;
   APP_AUTH_PEPPER?: string;
   APP_FRAPPE_REQUEST_TIMEOUT_MS?: string;
+  // Exact Frappe identities authorized to see restricted insurance-proof state in the app BFF.
+  // This is deliberately separate from broad `ops` access and defaults to no estimator access.
+  APP_INSURANCE_ESTIMATOR_FRAPPE_USERS?: string;
   APP_APPROVAL_BROKER_URL?: string;
   APP_APPROVAL_BROKER_KEY_ID?: string;
   APP_APPROVAL_APPROVER_ID?: string;

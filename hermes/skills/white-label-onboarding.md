@@ -20,7 +20,7 @@ Stand up a new contractor tenant from a validated config with isolated data, bra
 3. Follow `docs/WHITE-LABEL-CLONE-PLAYBOOK.md` to provision the isolated stack: one plain Frappe
    site, one Hermes profile, one Cloudflare namespace/config set, one Drive/R2 namespace, one
    QuickBooks connection, and one brand/template pack. Never install ERPNext.
-4. Install the proprietary IronWrap app, validate its committed 46 DocTypes, and confirm the site has at
+4. Install the proprietary IronWrap app, validate its committed 48 DocTypes, and confirm the site has at
    most one Active White-Label Tenant.
 5. Wire the Frappe MCP server with per-tenant `ERPNEXT_BASE_URL`, an API key/secret pair
    issued to exactly its configured actor, `ERPNEXT_WRITE_ENABLED`, a unique

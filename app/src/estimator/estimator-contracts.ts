@@ -234,6 +234,42 @@ const scopeChangeSchema = z
   })
   .strict();
 
+const insuranceSupplementSchema = z
+  .object({
+    presentation_key: z.string().min(1),
+    version: z.number().int().nonnegative().nullable(),
+    status: nullableText,
+    measurement_state: z.enum(["approved", "missing", "review_required", "unavailable"]),
+    evidence_roles: z.array(
+      z.enum([
+        "Carrier Scope",
+        "Code/Manufacturer",
+        "Photo",
+        "Invoice",
+        "Submission",
+        "Carrier Response",
+      ]),
+    ),
+    missing_requirements: z.array(
+      z.enum([
+        "approved_measurement",
+        "carrier_scope",
+        "code_or_manufacturer",
+        "photo",
+        "invoice_or_exception",
+        "submission_artifact",
+        "carrier_response_artifact",
+        "source_detail_unavailable",
+      ]),
+    ),
+    invoice_state: z.enum(["recorded", "required", "not_required", "unavailable"]),
+    approval_recorded: z.boolean(),
+    submission_recorded: z.boolean(),
+    carrier_response_recorded: z.boolean(),
+    closed_recorded: z.boolean(),
+  })
+  .strict();
+
 const proposalReadinessSchema = z
   .object({
     state: z.enum(["ready", "review_required", "blocked", "unavailable"]),
@@ -312,6 +348,7 @@ export const estimatorWorkbenchResponseSchema = envelopeSchema
     quote_revision: quoteRevisionSchema,
     proposal: proposalSchema.nullable(),
     scope_changes: z.array(scopeChangeSchema),
+    insurance_supplements: z.array(insuranceSupplementSchema),
     proposal_readiness: proposalReadinessSchema,
     scope_clauses: z.array(scopeClauseSchema),
   })

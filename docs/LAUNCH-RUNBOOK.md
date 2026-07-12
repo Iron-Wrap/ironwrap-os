@@ -229,8 +229,11 @@ Before enabling the BFF in the intended Cloudflare account:
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
    `APP_ALLOWED_ORIGINS` to that exact origin (or an explicit, reviewed comma-separated set).
-   Leave `APP_ALLOW_INSECURE_LOCAL=false`. Do not bake an operator's temporary preview origin into
-   the release configuration.
+   Leave `APP_ALLOW_INSECURE_LOCAL=false`. If restricted insurance evidence is needed in the
+   browser, set `APP_INSURANCE_ESTIMATOR_FRAPPE_USERS` only to reviewed, exact Frappe estimator
+   identities; leave it blank to restrict the rail to owner sessions. Broad app `ops` access never
+   grants this read. Do not bake an operator's temporary preview origin into the release
+   configuration.
 3. Store a new high-entropy `APP_AUTH_PEPPER` only with `wrangler secret put`; it is a Worker
    secret, never a `vars` value or a browser value. Configure the dedicated Gmail sender and any
    Frappe read credentials separately. Keep Hermes write flags false for this gate.
@@ -383,7 +386,7 @@ artifact checksums. A successful upload without this restore drill is not backup
 | Gate | Repository evidence | Required live evidence |
 | --- | --- | --- |
 | Intake spine | Worker tests, typecheck, dry-run bundle | Real source reaches R2, D1, Frappe, ack, bridge, reconcile |
-| Operating core | 46 DocTypes (39 top-level + 7 child), policy/RBAC tests, Workspace/Control Center package proof | App installed on plain Frappe; fixture, per-role cockpit, empty/error/readiness, and source-navigation checks pass |
+| Operating core | 48 DocTypes (40 top-level + 8 child), policy/RBAC tests, Workspace/Control Center package proof | App installed on plain Frappe; fixture, per-role cockpit, empty/error/readiness, and source-navigation checks pass |
 | Read-only Hermes | Role/manifest and MCP tests | Owner query uses live truth with zero writes |
 | Approved write | Dry-run/request contracts and idempotency tests | One human-approved mutation and complete `Hermes Run` audit |
 | Recovery | Readiness/status/replay plus encrypted Frappe/D1 backup tests | Targeted replay, alerts, exact-prefix local verification, isolated Frappe and D1 restores, table row-count, trigger-inventory, and receipt-semantics parity, and live R2 denied-delete proof |

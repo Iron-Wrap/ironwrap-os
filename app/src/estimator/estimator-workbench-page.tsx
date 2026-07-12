@@ -135,6 +135,8 @@ function EstimatorWorkbenchScreen({
 
       <CommercialDecisionRail model={model} locale={locale} />
 
+      <InsuranceEvidenceRail supplements={model.insurance_supplements} />
+
       <MeasurementSource model={model} locale={locale} />
 
       <div className="grid min-w-0 items-start gap-7 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.85fr)]">
@@ -323,6 +325,185 @@ function CommercialDecisionRail({
       </div>
     </section>
   );
+}
+
+function InsuranceEvidenceRail({
+  supplements,
+}: {
+  supplements: EstimatorWorkbenchResponse["insurance_supplements"];
+}) {
+  if (supplements.length === 0) return null;
+
+  return (
+    <section
+      className="border-y border-border py-5 sm:py-6"
+      aria-labelledby="insurance-evidence-heading"
+    >
+      <div className="px-4 sm:px-6">
+        <SectionHeading
+          id="insurance-evidence-heading"
+          icon={ShieldAlert}
+          title="Insurance supplement evidence"
+          description="A restricted evidence lane for hail and insurance work. It records proof state, never a carrier decision."
+        />
+        <ol className="mt-5 divide-y divide-border border-y border-border">
+          {supplements.map((supplement) => {
+            const missing = supplement.missing_requirements;
+            const readiness =
+              missing.length === 0
+                ? { label: "Evidence coverage recorded", tone: "bg-ok-soft text-ok" }
+                : {
+                    label:
+                      missing.length +
+                      " proof item" +
+                      (missing.length === 1 ? "" : "s") +
+                      " to check",
+                    tone: "bg-warning-soft text-warning",
+                  };
+            return (
+              <li key={supplement.presentation_key} className="py-5 first:pt-0 last:pb-0">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-foreground">
+                      Insurance supplement
+                      {supplement.version === null ? "" : " · Version " + supplement.version}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-muted">
+                      Proof coverage only. Carrier scope is recorded, not interpreted.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <StatusChip
+                      label={humanize(supplement.status) ?? "State unavailable"}
+                      tone={insuranceTone(supplement.status)}
+                    />
+                    <StatusChip label={readiness.label} tone={readiness.tone} />
+                  </div>
+                </div>
+
+                <dl className="mt-4 grid border-y border-border sm:grid-cols-2">
+                  <InsuranceEvidenceCell
+                    label="Measurement"
+                    value={insuranceMeasurementCopy(supplement.measurement_state)}
+                  />
+                  <InsuranceEvidenceCell
+                    label="Evidence coverage"
+                    value={
+                      supplement.evidence_roles.length > 0
+                        ? supplement.evidence_roles.join(" · ")
+                        : "No verified evidence role returned"
+                    }
+                  />
+                  <InsuranceEvidenceCell
+                    label="Invoice"
+                    value={insuranceInvoiceCopy(supplement.invoice_state)}
+                  />
+                  <InsuranceEvidenceCell
+                    label="Recorded handoff"
+                    value={insuranceHandoffCopy(supplement)}
+                  />
+                </dl>
+
+                {missing.length > 0 ? (
+                  <ul className="mt-4 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                    {missing.map((requirement) => (
+                      <li key={requirement} className="flex gap-2 leading-6 text-foreground">
+                        <CircleAlert
+                          className="mt-1 size-4 shrink-0 text-warning"
+                          aria-hidden="true"
+                        />
+                        <span>{insuranceRequirementCopy(requirement)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-4 flex items-start gap-2 text-sm leading-6 text-ok">
+                    <Check className="mt-1 size-4 shrink-0" aria-hidden="true" />
+                    <span>
+                      Recorded evidence coverage is complete for the current internal state. Human
+                      review still controls every transition.
+                    </span>
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    </section>
+  );
+}
+
+function InsuranceEvidenceCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 px-3 py-3 first:pt-3 sm:px-4 sm:[&:nth-child(even)]:border-l sm:[&:nth-child(n+3)]:border-t">
+      <dt className="text-xs font-bold text-muted">{label}</dt>
+      <dd className="mt-1 text-sm font-semibold leading-6 text-foreground">{value}</dd>
+    </div>
+  );
+}
+
+function insuranceTone(status: string | null): string {
+  if (status === "Closed") return "bg-ok-soft text-ok";
+  if (
+    status === "Approved for Submission" ||
+    status === "Submitted" ||
+    status === "Carrier Response Recorded"
+  ) {
+    return "bg-info-soft text-info";
+  }
+  if (status === "Draft" || status === "Needs Evidence" || status === "Ready for Human Review") {
+    return "bg-warning-soft text-warning";
+  }
+  return "bg-surface-muted text-muted";
+}
+
+function insuranceMeasurementCopy(
+  state: EstimatorWorkbenchResponse["insurance_supplements"][number]["measurement_state"],
+): string {
+  if (state === "approved") return "Approved measurement linked";
+  if (state === "review_required") return "Measurement linked, approval required";
+  if (state === "missing") return "No measurement linked";
+  return "Measurement source unavailable";
+}
+
+function insuranceInvoiceCopy(
+  state: EstimatorWorkbenchResponse["insurance_supplements"][number]["invoice_state"],
+): string {
+  if (state === "recorded") return "Invoice evidence recorded";
+  if (state === "not_required") return "Invoice not required in this record";
+  if (state === "required") return "Invoice evidence or exception needed";
+  return "Invoice state unavailable";
+}
+
+function insuranceHandoffCopy(
+  supplement: EstimatorWorkbenchResponse["insurance_supplements"][number],
+): string {
+  if (supplement.closed_recorded) return "Closed internally";
+  if (supplement.carrier_response_recorded) return "Carrier response artifact recorded";
+  if (supplement.submission_recorded) return "Human submission artifact recorded";
+  if (supplement.approval_recorded) return "Approved for submission";
+  return "No handoff artifact recorded";
+}
+
+function insuranceRequirementCopy(
+  requirement: EstimatorWorkbenchResponse["insurance_supplements"][number]["missing_requirements"][number],
+): string {
+  const copy = {
+    approved_measurement: "Link an approved measurement report.",
+    carrier_scope: "Add verified carrier-scope evidence.",
+    code_or_manufacturer: "Add verified code or manufacturer evidence.",
+    photo: "Add verified photo evidence.",
+    invoice_or_exception: "Add invoice evidence or record a reviewer exception.",
+    submission_artifact: "Record a verified human submission artifact before using Submitted.",
+    carrier_response_artifact:
+      "Record a verified carrier-response artifact before using this state.",
+    source_detail_unavailable: "The restricted evidence detail could not be read safely.",
+  } satisfies Record<
+    EstimatorWorkbenchResponse["insurance_supplements"][number]["missing_requirements"][number],
+    string
+  >;
+  return copy[requirement];
 }
 
 function takeoffDecisionStep(model: EstimatorWorkbenchResponse) {

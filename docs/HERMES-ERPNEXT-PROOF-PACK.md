@@ -1,7 +1,7 @@
 # Hermes/Frappe Proof Pack
 
 Status: repository proof packet; no live deployment claim.
-Date: 2026-07-08. Updated 2026-07-10: 46-DocType Frappe-only application, atomic safety acknowledgement,
+Date: 2026-07-08. Updated 2026-07-12: 48-DocType Frappe-only application, atomic safety acknowledgement,
 runtime-governed MCP writes, Field Companion PWA, and pinned deployment/recovery contract.
 
 This collapses the artificial blockers from the Hermes/ERPNext blocker audit.
@@ -37,7 +37,7 @@ is never installed. ERPNext was removed 2026-07-09 for 100% IP ownership; the ap
 IronWrap IP on the MIT Frappe framework, with fixtures committed as DocType JSON. The only
 non-custom Link target is Frappe core `User`.
 
-Exactly 46 DocTypes are committed: 39 top-level objects and seven child tables.
+Exactly 48 DocTypes are committed: 40 top-level objects and eight child tables.
 
 | DocType | Kind | Purpose / principal links |
 | --- | --- | --- |
@@ -128,7 +128,7 @@ Current implementation checkpoint:
 - D1 proof fields: `workers-bus/migrations/0002_erpnext_consumer.sql` and
   `workers-bus/migrations/0003_erpnext_operating_core.sql`; operational schema, replay audit, and
   run-id ledger are extended by ordered migrations `0007` through `0010`.
-- Frappe app contract: `frappe-apps/ironwrap_roofing` carries all 46 blueprint DocTypes, shared
+- Frappe app contract: `frappe-apps/ironwrap_roofing` carries all 48 blueprint DocTypes, shared
   policy/controllers, site roles/permissions, install/migrate hooks, and package discovery proof.
 - Contract validator: `node tools/validate-erpnext-doctypes.mjs`.
 - Worker operational truth: `GET /health` is liveness, `GET /ready` queries D1 schema and verifies
@@ -142,8 +142,8 @@ Current implementation checkpoint:
   replay requires exact hard confirmation and is unavailable to Hermes. The replay-request ledger
   makes an exact completed `run_id` retry read-only, rejects changed intent/approver/reason, exposes
   concurrent in-progress requests, and permits safe retry of a failed rolled-back request.
-- MCP wrappers: `mcp/ironwrap-bus-mcp` exposes 7 tools and `mcp/erpnext-roofing-mcp` exposes 121;
-  the role/manifest validator currently proves 128 implemented tools across eight roles.
+- MCP wrappers: `mcp/ironwrap-bus-mcp` exposes 7 tools and `mcp/erpnext-roofing-mcp` exposes 129;
+  the role/manifest validator currently proves 136 implemented tools across eight roles.
 - Measurement bridge: `/ingest/measurement` now stores raw input first, then
   mirrors parsed report metadata and child measurement values into Frappe
   `Measurement Report` plus a linked `Evidence Item` when `ERPNEXT_ENABLED=true`.
@@ -155,7 +155,7 @@ Current implementation checkpoint:
 - Production gate bootstrap: Roof Job sync creates missing `Production Gate State`
   rows for Deposit, Materials, Safety, Access, Weather, Crew, and Completion.
   Existing rows are not overwritten on retry.
-- Domain spine (2026-07-10): all 46 DocTypes are exact-contract validated. Review Requests apply
+- Domain spine (2026-07-12): all 48 DocTypes are exact-contract validated. Review Requests apply
   deterministic completion/payment/consent stops; Communication Events apply CASL-style consent
   and quiet hours and remain record-only; field intake accepts voice notes/transcripts as Evidence
   Items; supplier, proposal, production, and closeout transitions validate upstream evidence.

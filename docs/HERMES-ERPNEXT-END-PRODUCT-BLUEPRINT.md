@@ -71,17 +71,29 @@ config level: every referenced tool exists, buckets are correctly typed, and no 
 is granted without its `dry_run` counterpart in the same role. No tool sends a customer message or
 mutates accounting.
 
-Frappe-only checkpoint (updated 2026-07-10): the ERPNext (GPL-3.0) dependency is removed for 100% IP
+Frappe-only checkpoint (updated 2026-07-12): the ERPNext (GPL-3.0) dependency is removed for 100% IP
 ownership. `ironwrap_roofing` now deploys on a plain Frappe site (never install the erpnext app)
 and is proprietary IronWrap IP on the MIT Frappe framework. The app carries the complete
-46-DocType blueprint: 39 top-level business/audit objects plus seven child tables. The thirteen
-latest operating objects are Crew Profile, Job Assignment, Change Order, Safety Plan, Job Compliance
+48-DocType blueprint: 40 top-level business/audit objects plus eight child tables. The latest
+operating objects are Crew Profile, Job Assignment, Change Order, Safety Plan, Job Compliance
 Record, Communication Consent, Customer Decision, Contract Acceptance, Integration Reconciliation,
-Tenant Export Run, Crew Member, Change Order Item, and Safety Acknowledgement. Every top-level DocType uses a shared
+Tenant Export Run, Insurance Supplement, Crew Member, Change Order Item, Safety Acknowledgement,
+and Insurance Supplement Evidence. Every top-level DocType uses a shared
 server-side policy adapter; identities/evidence have immutable or write-once rules; approvals,
 production, proposal, supplier, and closeout transitions fail closed; and site-local roles are
 installed from a least-privilege matrix with delete disabled. Frappe core `User` remains the only
 non-custom Link target.
+
+Insurance-supplement checkpoint (2026-07-12): a restricted `Insurance Supplement` parent plus
+`Insurance Supplement Evidence` child now records carrier scope, claim/policy/adjuster/basis facts,
+and role-coded proof only for the same roof job. Every linked proof must be verified and durable;
+internal approval freezes the exact evidence manifest. Only Owner Operator and Estimator Assistant
+receive its governed MCP reads/commands. The browser BFF has a separate server-side gate: an
+owner session is allowed, while an operations session must bind to an exact reviewed Frappe
+estimator identity in `APP_INSURANCE_ESTIMATOR_FRAPPE_USERS`; broad operations access starts no
+supplement read. An allowed browser receives only derived measurement/evidence/invoice/handoff
+state; it never receives claim facts, document identity, storage pointers, raw manifests, or a
+carrier decision. There is no ESX integration, carrier submission, or coverage determination claim.
 
 MCP/deploy checkpoint (2026-07-10): both MCP clients enforce production HTTPS, bounded timeouts,
 redirect refusal, and structured transport errors. The Frappe MCP server requires a canonical role
@@ -206,7 +218,7 @@ write time, requires an Approved rule effective at the quote timestamp, locks th
 quote version, and freezes approved rule content while allowing only Approved → Retired. An
 Approved/Accepted quote and a Proposal Evidence Pack now require that snapshot. This is immutable
 provenance, not repricing, a live supplier-price feed, a browser control, or a customer-send path.
-Insurance/supplement evidence, authenticated production-browser, and estimator/operator acceptance
+Live insurer/ESX integration, authenticated production-browser, and estimator/operator acceptance
 proof remain open.
 
 ## Research Basis
@@ -390,6 +402,7 @@ Custom DocTypes:
 | Proposal Evidence Pack | The proposal proof bundle shown to owner/customer |
 | Scope Clause | Included, excluded, assumption, risk, optional upgrade, warranty clause |
 | Payment Milestone | Deposit, progress, final, holdback, status mirror |
+| Insurance Supplement | Restricted carrier-scope, claim, proof, and human-handoff record; never a coverage decision |
 | Production Gate State | Deposit, material, WCB/safety, access, weather, crew, completion |
 | Field Check-in | Crew update with photos, GPS/device metadata, notes, blockers |
 | Completion Packet | Completion photos, customer signoff, deficiency list, warranty readiness |
@@ -414,8 +427,9 @@ Custom DocTypes:
 | Integration Reconciliation | Evidence-backed mirror discrepancy and resolution record |
 | Tenant Export Run | Requested export audit record; archive/key creation is separate |
 
-The seven child-table DocTypes are Measurement Value, Material Takeoff Item, Supplier Quote Item,
-Supplier Order Item, Crew Member, Change Order Item, and Safety Acknowledgement. Repository validation requires exactly these 46 DocTypes, exact field
+The eight child-table DocTypes are Measurement Value, Material Takeoff Item, Supplier Quote Item,
+Supplier Order Item, Crew Member, Change Order Item, Safety Acknowledgement, and Insurance
+Supplement Evidence. Repository validation requires exactly these 48 DocTypes, exact field
 contracts, shared controllers for every top-level object, owned/Frappe-core Link targets only, and
 the canonical role matrix.
 
@@ -485,7 +499,7 @@ Build narrow MCP servers, not one giant god tool.
 | MCP server | Repository state | Capability boundary |
 | --- | --- | --- |
 | `ironwrap-bus-mcp` | Implemented: 7 tools | Read readiness/status/envelopes/dead letters; preview and request one targeted replay. No bulk Hermes replay |
-| `erpnext-roofing-mcp` | Implemented under compatibility name: 121 tools | 73 bounded reads plus 24 dry-run/request pairs across job, proof, estimator, quote revision, price-rule provenance, production, safety, compliance, consent, customer-decision, lead triage, reconciliation, export, closeout, comms, and market truth; runtime role/actor filtering is enforced in-server |
+| `erpnext-roofing-mcp` | Implemented under compatibility name: 129 tools | 75 bounded reads plus 27 dry-run/request pairs across job, proof, estimator, price-rule provenance, insurance supplement, production, safety, compliance, consent, customer-decision, lead triage, reconciliation, export, closeout, comms, and market truth; runtime role/actor filtering is enforced in-server |
 | `evidence-mcp` | Planned split | Evidence search, packet assembly, and approved attachment only |
 | `measurement-mcp` | Planned split | Deterministic parsing/comparison and review flags |
 | `instant-estimate-mcp` | Planned split | Range/qualification drafts and quote-review request |
@@ -496,7 +510,7 @@ Build narrow MCP servers, not one giant god tool.
 | `tenant-admin-mcp` | Planned split | Tenant readiness and clone dry-run; no cross-tenant data access |
 
 `tools/validate-hermes-config.mjs` currently validates all eight roles and the launch manifest
-against 128 implemented tools. It also rejects an approved-write grant that lacks the matching
+against 136 implemented tools. It also rejects an approved-write grant that lacks the matching
 dry-run grant in the same role and verifies the runtime receipt/role/evidence enforcement seams.
 
 Mutation pattern:
@@ -676,8 +690,8 @@ Repository support means code/contracts/tests exist. It is not the same as a pas
 | --- | --- | --- | --- |
 | 0 | Source truth | Documented and contract-validated | Reconcile Cloudflare, Frappe, Hermes, QB, Drive, bridge, and admin inventory |
 | 1 | Intake spine | Worker route/storage/consumer/reconcile tests exist | One real source lands in R2, D1, Frappe, audit, ack, and bridge with zero gap |
-| 2 | Operating core | 46 DocTypes, shared policy/RBAC, atomic safety append, and packaging tests exist | Install/migrate on plain Frappe; role-specific fixture workflow passes |
-| 3 | Read-only Hermes | Eight roles and 128-tool inventory validate | Hermes answers owner questions from live bus/Frappe truth with zero writes |
+| 2 | Operating core | 48 DocTypes, shared policy/RBAC, atomic safety append, and packaging tests exist | Install/migrate on plain Frappe; role-specific fixture workflow passes |
+| 3 | Read-only Hermes | Eight roles and 136-tool inventory validate | Hermes answers owner questions from live bus/Frappe truth with zero writes |
 | 4 | Approved-write Hermes | Dry-run/receipt/approval, single-claim idempotency, verified evidence, actor scope, and audit-failure tests exist | One approved live mutation has complete Hermes Run, receipt, and replay-safe proof |
 | 5 | Instant estimate parity | Owned idempotent ingest/session contract exists | Public widget, range policy, consent, owner follow-up, and estimator review pass |
 | 6 | Proposal proof | Evidence/takeoff/options/scope/quote/proposal records and tools exist | Customer-quality renderer plus selected e-sign path complete one signed packet |
@@ -726,7 +740,7 @@ The artificial blockers below are collapsed in
 | Topic | Current Decision |
 | --- | --- |
 | ERPNext customization path | Frappe-only custom app; ERPNext removed entirely (2026-07-09) for 100% IP ownership. Never install the erpnext app. |
-| Roofing record model | Exactly 46 owned DocTypes: 39 top-level objects plus seven child tables; the only non-custom Link target is Frappe core User. |
+| Roofing record model | Exactly 48 owned DocTypes: 40 top-level objects plus eight child tables; the only non-custom Link target is Frappe core User. |
 | Bus-to-Frappe sync | Worker/D1/R2 remains front door and source spine; the Frappe site consumes idempotent mirrors (`erpnext-*` names retained for compatibility). |
 | Hermes boundary | Read-only first, draft second, narrow approved-write third; no raw SQL/API freestyle writes. |
 | Measurement proof | Use the existing `/ingest/measurement` route and sample files; add deterministic extraction before OCR. |

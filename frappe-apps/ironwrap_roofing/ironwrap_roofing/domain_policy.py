@@ -1076,6 +1076,46 @@ def _validate_supplier_order(record: Any, context: Mapping[str, Any]) -> None:
         parse_json_field(record, "receipt_evidence_json", required=True, non_empty=True)
 
 
+def _validate_customer_quote_correction(record: Any, context: Mapping[str, Any]) -> None:
+    """Keep quote correction lineage internal until a new commercial review completes.
+
+    An Accepted Customer Quote is contract evidence, not a repricing source. Any change after
+    acceptance must enter the separately evidenced Change Order flow. This applies equally to
+    direct Frappe writes and Hermes commands.
+    """
+
+    if _blank(_get(record, "supersedes")):
+        return
+    require_fields(record, "roof_job", "customer", "quote_version", "correction_reason")
+    _validate_correction(record, context, version_field="quote_version")
+    prior = context.get("superseded_record")
+    if prior is None:
+        return
+    if (
+        _get(prior, "status") == "Accepted"
+        or not _blank(_get(prior, "contract_acceptance"))
+        or not _blank(_get(prior, "accepted_at"))
+    ):
+        raise PolicyViolation(
+            "accepted_quote_revision_requires_change_order",
+            "accepted quotes must be changed through an evidenced Change Order",
+            "supersedes",
+        )
+    prior_customer = _get(prior, "customer")
+    if _blank(prior_customer):
+        raise PolicyViolation(
+            "unverified_correction_customer",
+            "the superseded quote customer could not be verified",
+            "supersedes",
+        )
+    if _get(record, "customer") != prior_customer:
+        raise PolicyViolation(
+            "cross_customer_correction",
+            "quote revisions must remain with the same customer",
+            "customer",
+        )
+
+
 def _validate_customer_quote(record: Any, context: Mapping[str, Any]) -> None:
     require_nonnegative(
         record,
@@ -1102,7 +1142,7 @@ def _validate_customer_quote(record: Any, context: Mapping[str, Any]) -> None:
         },
     )
     if status not in {"Approved", "Accepted"}:
-        _validate_correction(record, context, version_field="quote_version")
+        _validate_customer_quote_correction(record, context)
         return
     require_fields(
         record,
@@ -1159,7 +1199,7 @@ def _validate_customer_quote(record: Any, context: Mapping[str, Any]) -> None:
         require_fields(
             record, "acceptance_evidence", "contract_acceptance", "accepted_at"
         )
-    _validate_correction(record, context, version_field="quote_version")
+    _validate_customer_quote_correction(record, context)
 
 
 def _validate_payment_milestone(record: Any, context: Mapping[str, Any]) -> None:

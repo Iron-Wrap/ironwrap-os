@@ -22,6 +22,8 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - list_supplier_orders_for_job
 - get_supplier_quote
 - list_supplier_quotes_for_job
+- get_customer_quote
+- list_customer_quotes_for_job
 - get_instant_estimate_session
 - list_instant_estimate_sessions_for_job
 - get_evidence_item
@@ -89,6 +91,7 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - dry_run_update_material_takeoff_status
 - dry_run_supplier_order
 - dry_run_supplier_quote
+- dry_run_quote_revision
 - dry_run_proposal_evidence_pack
 - dry_run_job_assignment
 - dry_run_change_order
@@ -115,6 +118,7 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - request_update_material_takeoff_status
 - request_create_supplier_order
 - request_create_supplier_quote
+- request_create_quote_revision
 - request_create_proposal_evidence_pack
 - request_create_job_assignment
 - request_create_change_order

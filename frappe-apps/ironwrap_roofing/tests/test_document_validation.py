@@ -54,7 +54,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         frappe_module = types.ModuleType("frappe")
         frappe_module.ValidationError = FakeValidationError
         frappe_module.db = types.SimpleNamespace(
-            get_value=lambda doctype, name, field: values.get((doctype, name, field)),
+            get_value=lambda doctype, name, field, **_kwargs: values.get((doctype, name, field)),
             count=lambda doctype, filters=None: counts.get(doctype, 0),
         )
 
@@ -87,6 +87,53 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(FakeValidationError, "write_once_field"):
             adapter.validate_business_document(document, "evidence_item")
+
+    def test_customer_quote_correction_loads_contract_lineage_context(self) -> None:
+        fields = (
+            "roof_job",
+            "customer",
+            "quote_version",
+            "status",
+            "contract_acceptance",
+            "accepted_at",
+        )
+        source = {
+            "roof_job": "job-1",
+            "customer": "customer-1",
+            "quote_version": 1,
+            "status": "Approved",
+            "contract_acceptance": "",
+            "accepted_at": "",
+        }
+        revision = FakeDocument(
+            {
+                "customer_quote_id": "cq-2",
+                "roof_job": "job-1",
+                "customer": "customer-1",
+                "quote_version": 2,
+                "status": "Draft",
+                "supersedes": "cq-1",
+                "correction_reason": "Fresh source review is required.",
+            }
+        )
+        adapter, _ = self.load_adapter(
+            values={("Customer Quote", "cq-1", fields): source}
+        )
+        adapter.validate_business_document(revision, "customer_quote")
+
+        accepted_adapter, _ = self.load_adapter(
+            values={
+                ("Customer Quote", "cq-1", fields): {
+                    **source,
+                    "status": "Accepted",
+                    "contract_acceptance": "accept-1",
+                }
+            }
+        )
+        with self.assertRaisesRegex(
+            FakeValidationError, "accepted_quote_revision_requires_change_order"
+        ):
+            accepted_adapter.validate_business_document(revision, "customer_quote")
 
     def test_closed_roof_job_uses_database_context(self) -> None:
         gates = [

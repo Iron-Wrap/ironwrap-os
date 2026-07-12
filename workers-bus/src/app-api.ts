@@ -39,6 +39,24 @@ import {
   sessionIsRecentForApproval,
 } from "./approval-broker-client.ts";
 import {
+  QuoteRevisionApprovalBrokerError,
+  executeQuoteRevisionApproval,
+  previewQuoteRevisionApproval,
+  quoteRevisionApprovalBrokerConfig,
+} from "./quote-revision-approval-broker-client.ts";
+import {
+  claimQuoteRevisionApprovalExecution,
+  createQuoteRevisionApprovalRequest,
+  denyQuoteRevisionApprovalRequest,
+  finalizeQuoteRevisionApprovalExecution,
+  getCurrentQuoteRevisionApprovalRequest,
+  getQuoteRevisionApprovalRequestByPrepareKey,
+  listQuoteRevisionApprovalRequests,
+  matchesQuoteRevisionApprovalPreparation,
+  quoteRevisionApprovalProjection,
+  reconcileQuoteRevisionApprovalUncertainty,
+} from "./quote-revision-approval-store.ts";
+import {
   activeAssignmentForJob,
   buildEstimatorWorkbenchReadModel,
   buildJobProofReadModel,
@@ -128,6 +146,58 @@ export async function handleAuthenticatedRoute(
   }
   if (req.method === "POST" && url.pathname === "/api/v1/auth/logout") {
     return await logoutAppSession(req, env, auth);
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/quote-revision-approvals") {
+    if (!officeRole(auth)) return privateAppJson({ error: "office_role_required" }, 403);
+    try {
+      const approvals = await listQuoteRevisionApprovalRequests(
+        env,
+        auth.session.tenant_id,
+        new Date().toISOString(),
+        parsedListLimit(url.searchParams.get("limit")),
+      );
+      return privateAppJson(quoteRevisionApprovalReadEnvelope(env, auth, {
+        approvals: approvals.map(quoteRevisionApprovalProjection),
+      }));
+    } catch {
+      return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+    }
+  }
+  if (req.method === "POST" && url.pathname === "/api/v1/quote-revision-approvals") {
+    return await prepareQuoteRevisionApproval(req, env, auth);
+  }
+  const quoteRevisionDecisionMatch = url.pathname.match(
+    /^\/api\/v1\/quote-revision-approvals\/([^/]+)\/(approve|reject|reconcile)$/,
+  );
+  if (req.method === "POST" && quoteRevisionDecisionMatch) {
+    const requestId = decodedQuoteRevisionApprovalId(quoteRevisionDecisionMatch[1]);
+    if (!requestId) return privateAppJson({ error: "not_found" }, 404);
+    if (quoteRevisionDecisionMatch[2] === "approve") {
+      return await approveQuoteRevisionApproval(req, env, auth, requestId);
+    }
+    if (quoteRevisionDecisionMatch[2] === "reject") {
+      return await rejectQuoteRevisionApproval(req, env, auth, requestId);
+    }
+    return await reconcileQuoteRevisionApproval(req, env, auth, requestId);
+  }
+  const quoteRevisionDetailMatch = url.pathname.match(/^\/api\/v1\/quote-revision-approvals\/([^/]+)$/);
+  if (req.method === "GET" && quoteRevisionDetailMatch) {
+    if (!officeRole(auth)) return privateAppJson({ error: "office_role_required" }, 403);
+    const requestId = decodedQuoteRevisionApprovalId(quoteRevisionDetailMatch[1]);
+    if (!requestId) return privateAppJson({ error: "not_found" }, 404);
+    try {
+      const approval = await getCurrentQuoteRevisionApprovalRequest(
+        env,
+        auth.session.tenant_id,
+        requestId,
+        new Date().toISOString(),
+      );
+      return approval
+        ? privateAppJson(quoteRevisionApprovalReadEnvelope(env, auth, { approval: quoteRevisionApprovalProjection(approval) }))
+        : privateAppJson({ error: "not_found" }, 404);
+    } catch {
+      return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+    }
   }
   if (req.method === "GET" && url.pathname === "/api/v1/approvals") {
     if (!officeRole(auth)) return privateAppJson({ error: "office_role_required" }, 403);
@@ -282,6 +352,273 @@ export async function handleAuthenticatedRoute(
     }
   }
   return appJson({ error: "not_found" }, 404);
+}
+
+async function prepareQuoteRevisionApproval(req: Request, env: AppEnv, auth: AuthContext): Promise<Response> {
+  if (!officeRole(auth)) return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const prepareIdempotencyKey = idempotencyKey(req);
+  if (!prepareIdempotencyKey) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const input = parseQuoteRevisionApprovalPreparation(parsed.value);
+  if (!input) return privateAppJson({ error: "invalid_quote_revision_approval_request" }, 400);
+  const requestedByFrappeUser = auth.session.frappe_user_id?.trim() ?? "";
+  if (!requestedByFrappeUser) return privateAppJson({ error: "frappe_identity_required" }, 403);
+  const requestText = quoteRevisionRequestText(input.correctionReason);
+
+  try {
+    const existing = await getQuoteRevisionApprovalRequestByPrepareKey(
+      env,
+      auth.session.tenant_id,
+      prepareIdempotencyKey,
+    );
+    if (existing) {
+      return matchesQuoteRevisionApprovalPreparation(existing, {
+        requestedByUserId: auth.session.user_id,
+        roofJobId: input.roofJobId,
+        sourceCustomerQuoteId: input.customerQuoteId,
+        correctionReason: input.correctionReason,
+        requestText,
+      })
+        ? privateAppJson({ approval: quoteRevisionApprovalProjection(existing), replayed: true })
+        : privateAppJson({ error: "idempotency_conflict", approval: quoteRevisionApprovalProjection(existing) }, 409);
+    }
+  } catch {
+    return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+  }
+
+  if (!quoteRevisionApprovalBrokerConfig(env) || !approvalDecisionConfig(env)) {
+    return privateAppJson({ error: "quote_revision_broker_not_configured" }, 503);
+  }
+  const approvalRequestId = `quote-revision-approval:${randomToken()}`;
+  const runId = `run:quote-revision:${randomToken()}`;
+  let packet;
+  try {
+    packet = await previewQuoteRevisionApproval(env, {
+      approvalRequestId,
+      tenantId: auth.session.tenant_id,
+      runId,
+      roofJobId: input.roofJobId,
+      customerQuoteId: input.customerQuoteId,
+      correctionReason: input.correctionReason,
+      requestText,
+      requestedByUserId: auth.session.user_id,
+      requestedByFrappeUser,
+    });
+  } catch (error) {
+    return privateAppJson({ error: quoteRevisionBrokerPrepareError(error) }, quoteRevisionBrokerPrepareStatus(error));
+  }
+
+  try {
+    const created = await createQuoteRevisionApprovalRequest(env, {
+      id: approvalRequestId,
+      tenantId: auth.session.tenant_id,
+      prepareIdempotencyKey,
+      intentFingerprint: packet.intentFingerprint,
+      actorUser: packet.actorUser,
+      siteId: packet.siteId,
+      roofJobId: packet.roofJobId,
+      sourceCustomerQuoteId: packet.sourceCustomerQuoteId,
+      sourceQuoteVersion: packet.sourceQuoteVersion,
+      sourceQuoteStatus: packet.sourceQuoteStatus,
+      sourceQuoteModified: packet.sourceQuoteModified,
+      targetCustomerQuoteId: packet.targetCustomerQuoteId,
+      targetQuoteVersion: packet.targetQuoteVersion,
+      correctionReason: packet.correctionReason,
+      requestText: packet.requestText,
+      writeArgsJson: packet.writeArgsJson,
+      previewJson: packet.previewJson,
+      argsDigest: packet.argsDigest,
+      previewDigest: packet.previewDigest,
+      receiptPreviewDigest: packet.receiptPreviewDigest,
+      dryRunReceipt: packet.dryRunReceipt,
+      expiresAt: packet.expiresAt,
+      requestedByUserId: auth.session.user_id,
+      requestedByFrappeUser,
+      runId: packet.runId,
+      now: new Date().toISOString(),
+    });
+    if (created.kind === "conflict") {
+      return privateAppJson({ error: "idempotency_conflict", approval: quoteRevisionApprovalProjection(created.request) }, 409);
+    }
+    return privateAppJson(
+      { approval: quoteRevisionApprovalProjection(created.request), replayed: created.kind === "replayed" },
+      created.kind === "created" ? 201 : 200,
+    );
+  } catch {
+    return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+  }
+}
+
+async function approveQuoteRevisionApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  requestId: string,
+): Promise<Response> {
+  const identity = quoteRevisionApprovalBrokerDecisionIdentity(env, auth);
+  if (!identity.ok) return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const decisionIdempotencyKey = idempotencyKey(req);
+  if (!decisionIdempotencyKey) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const expectedVersion = parseExpectedVersion(parsed.value);
+  if (expectedVersion === null) return privateAppJson({ error: "invalid_quote_revision_approval_decision" }, 400);
+
+  const now = new Date();
+  let claimed;
+  try {
+    claimed = await claimQuoteRevisionApprovalExecution(env, {
+      tenantId: auth.session.tenant_id,
+      requestId,
+      expectedVersion,
+      decisionIdempotencyKey,
+      approvedByUserId: auth.session.user_id,
+      approvedByFrappeUser: identity.frappeUserId,
+      now: now.toISOString(),
+      leaseExpiresAt: new Date(now.getTime() + identity.config.executionLeaseSeconds * 1000).toISOString(),
+    });
+  } catch {
+    return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+  }
+  if (claimed.kind !== "claimed") return quoteRevisionDecisionResultResponse(claimed);
+
+  let outcome;
+  try {
+    outcome = await executeQuoteRevisionApproval(env, claimed.request);
+  } catch (error) {
+    return await finalizeQuoteRevisionBrokerFailure(env, auth, claimed.request, decisionIdempotencyKey, error);
+  }
+  try {
+    const finalized = await finalizeQuoteRevisionApprovalExecution(env, {
+      tenantId: auth.session.tenant_id,
+      requestId,
+      decisionIdempotencyKey,
+      state: outcome.state,
+      hermesRunId: outcome.hermesRunId,
+      resultJson: outcome.resultJson,
+      errorCode: outcome.errorCode,
+      now: new Date().toISOString(),
+    });
+    if (finalized.kind === "lost_claim") {
+      return finalized.request
+        ? privateAppJson({ error: "quote_revision_approval_state_changed", approval: quoteRevisionApprovalProjection(finalized.request) }, 409)
+        : privateAppJson({ error: "not_found" }, 404);
+    }
+    const status = outcome.state === "executed" ? 200 : outcome.state === "execution_uncertain" ? 502 : 422;
+    return privateAppJson({ approval: quoteRevisionApprovalProjection(finalized.request) }, status);
+  } catch {
+    // The private broker may have completed a Frappe write. Keep the lease so
+    // it becomes reconciliation work rather than inviting a second revision.
+    return privateAppJson({ error: "quote_revision_execution_finalization_unavailable" }, 502);
+  }
+}
+
+async function finalizeQuoteRevisionBrokerFailure(
+  env: AppEnv,
+  auth: AuthContext,
+  request: Parameters<typeof executeQuoteRevisionApproval>[1],
+  decisionIdempotencyKey: string,
+  error: unknown,
+): Promise<Response> {
+  const errorCode = error instanceof QuoteRevisionApprovalBrokerError && error.code === "quote_revision_broker_unavailable"
+    ? "quote_revision_broker_unavailable"
+    : "quote_revision_broker_response_unverified";
+  try {
+    const finalized = await finalizeQuoteRevisionApprovalExecution(env, {
+      tenantId: auth.session.tenant_id,
+      requestId: request.quote_revision_approval_id,
+      decisionIdempotencyKey,
+      state: "execution_uncertain",
+      hermesRunId: request.run_id,
+      errorCode,
+      now: new Date().toISOString(),
+    });
+    if (finalized.kind === "finalized") {
+      return privateAppJson({
+        error: "execution_uncertain",
+        approval: quoteRevisionApprovalProjection(finalized.request),
+      }, 502);
+    }
+    return finalized.request
+      ? privateAppJson({ error: "quote_revision_approval_state_changed", approval: quoteRevisionApprovalProjection(finalized.request) }, 409)
+      : privateAppJson({ error: "not_found" }, 404);
+  } catch {
+    return privateAppJson({ error: "quote_revision_execution_finalization_unavailable" }, 502);
+  }
+}
+
+async function rejectQuoteRevisionApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  requestId: string,
+): Promise<Response> {
+  const identity = approvalDecisionIdentity(env, auth);
+  if (!identity.ok) return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const decisionIdempotencyKey = idempotencyKey(req);
+  if (!decisionIdempotencyKey) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const decision = parseRejectionDecision(parsed.value);
+  if (!decision) return privateAppJson({ error: "invalid_quote_revision_approval_decision" }, 400);
+  try {
+    const denied = await denyQuoteRevisionApprovalRequest(env, {
+      tenantId: auth.session.tenant_id,
+      requestId,
+      expectedVersion: decision.version,
+      decisionIdempotencyKey,
+      approvedByUserId: auth.session.user_id,
+      approvedByFrappeUser: identity.frappeUserId,
+      rejectionReason: decision.reason,
+      now: new Date().toISOString(),
+    });
+    if (denied.kind === "denied") return privateAppJson({ approval: quoteRevisionApprovalProjection(denied.request) });
+    return quoteRevisionDecisionResultResponse(denied);
+  } catch {
+    return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+  }
+}
+
+async function reconcileQuoteRevisionApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  requestId: string,
+): Promise<Response> {
+  const identity = approvalDecisionIdentity(env, auth);
+  if (!identity.ok) return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const reconciliation = parseReconciliation(parsed.value);
+  if (!reconciliation) return privateAppJson({ error: "invalid_quote_revision_reconciliation" }, 400);
+  try {
+    const result = await reconcileQuoteRevisionApprovalUncertainty(env, {
+      tenantId: auth.session.tenant_id,
+      requestId,
+      expectedVersion: reconciliation.version,
+      reconciledByUserId: auth.session.user_id,
+      reconciledByFrappeUser: identity.frappeUserId,
+      outcome: reconciliation.outcome,
+      evidence: reconciliation.evidence,
+      now: new Date().toISOString(),
+    });
+    if (result.kind === "reconciled") return privateAppJson({ approval: quoteRevisionApprovalProjection(result.request) });
+    if (result.kind === "already_reconciled") {
+      return privateAppJson({ approval: quoteRevisionApprovalProjection(result.request), replayed: true });
+    }
+    if (result.kind === "missing") return privateAppJson({ error: "not_found" }, 404);
+    if (result.kind === "not_uncertain") {
+      return privateAppJson({ error: "quote_revision_approval_not_uncertain", approval: quoteRevisionApprovalProjection(result.request) }, 409);
+    }
+    return privateAppJson({ error: "quote_revision_approval_version_conflict", approval: quoteRevisionApprovalProjection(result.request) }, 409);
+  } catch {
+    return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+  }
 }
 
 async function prepareLeadTriageApproval(req: Request, env: AppEnv, auth: AuthContext): Promise<Response> {
@@ -540,6 +877,18 @@ function officeRole(auth: AuthContext): boolean {
   return auth.session.role === "owner" || auth.session.role === "ops";
 }
 
+function quoteRevisionApprovalBrokerDecisionIdentity(
+  env: AppEnv,
+  auth: AuthContext,
+): { ok: true; config: NonNullable<ReturnType<typeof quoteRevisionApprovalBrokerConfig>>; frappeUserId: string } |
+  { ok: false; error: string; status: number } {
+  const decision = approvalDecisionIdentity(env, auth);
+  if (!decision.ok) return decision;
+  const config = quoteRevisionApprovalBrokerConfig(env);
+  if (!config) return { ok: false, error: "quote_revision_broker_not_configured", status: 503 };
+  return { ok: true, config, frappeUserId: decision.frappeUserId };
+}
+
 function approvalDecisionIdentity(
   env: AppEnv,
   auth: AuthContext,
@@ -586,6 +935,24 @@ function approvalDecisionResultResponse(
   return privateAppJson({ error: "approval_already_decided", approval: approvalProjection(result.request) }, 409);
 }
 
+function quoteRevisionDecisionResultResponse(
+  result: Exclude<Awaited<ReturnType<typeof claimQuoteRevisionApprovalExecution>>, { kind: "claimed" }> |
+    Exclude<Awaited<ReturnType<typeof denyQuoteRevisionApprovalRequest>>, { kind: "denied" }>,
+): Response {
+  if (result.kind === "missing") return privateAppJson({ error: "not_found" }, 404);
+  if (result.kind === "expired") {
+    return privateAppJson({ error: "quote_revision_approval_expired", approval: quoteRevisionApprovalProjection(result.request) }, 410);
+  }
+  if (result.kind === "version_conflict") {
+    return privateAppJson({ error: "quote_revision_approval_version_conflict", approval: quoteRevisionApprovalProjection(result.request) }, 409);
+  }
+  if (result.kind === "replayed") {
+    const status = result.request.state === "executing" ? 202 : 200;
+    return privateAppJson({ approval: quoteRevisionApprovalProjection(result.request), replayed: true }, status);
+  }
+  return privateAppJson({ error: "quote_revision_approval_already_decided", approval: quoteRevisionApprovalProjection(result.request) }, 409);
+}
+
 function approvalReadEnvelope(
   env: AppEnv,
   auth: AuthContext,
@@ -596,6 +963,20 @@ function approvalReadEnvelope(
     read_model_generated_at: new Date().toISOString(),
     permissions: auth.permissions,
     allowed_actions: approvalAllowedActions(env, auth),
+    ...body,
+  };
+}
+
+function quoteRevisionApprovalReadEnvelope(
+  env: AppEnv,
+  auth: AuthContext,
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    version: 1,
+    read_model_generated_at: new Date().toISOString(),
+    permissions: auth.permissions,
+    allowed_actions: quoteRevisionApprovalAllowedActions(env, auth),
     ...body,
   };
 }
@@ -611,6 +992,19 @@ function approvalAllowedActions(env: AppEnv, auth: AuthContext): string[] {
   return actions;
 }
 
+function quoteRevisionApprovalAllowedActions(env: AppEnv, auth: AuthContext): string[] {
+  if (!officeRole(auth)) return [];
+  const actions = ["quote_revision_approval.read"];
+  const broker = quoteRevisionApprovalBrokerConfig(env);
+  if (broker && approvalDecisionConfig(env) && auth.session.frappe_user_id?.trim()) {
+    actions.push("quote_revision_approval.prepare");
+  }
+  if (approvalDecisionIdentity(env, auth).ok) actions.push("quote_revision_approval.reject");
+  if (approvalDecisionIdentity(env, auth).ok) actions.push("quote_revision_approval.reconcile");
+  if (quoteRevisionApprovalBrokerDecisionIdentity(env, auth).ok) actions.push("quote_revision_approval.approve");
+  return actions;
+}
+
 function parseLeadTriagePreparation(value: unknown): {
   leadEnvelopeId: string;
   triageSummary: string;
@@ -621,6 +1015,22 @@ function parseLeadTriagePreparation(value: unknown): {
   const triageSummary = boundedText(value.triage_summary, 1, 2_000);
   const requestText = boundedText(value.request_text, 1, 4_000);
   return leadEnvelopeId && triageSummary && requestText ? { leadEnvelopeId, triageSummary, requestText } : null;
+}
+
+function parseQuoteRevisionApprovalPreparation(value: unknown): {
+  roofJobId: string;
+  customerQuoteId: string;
+  correctionReason: string;
+} | null {
+  if (!isRecord(value) || !onlyKeys(value, ["roof_job_id", "customer_quote_id", "correction_reason"])) return null;
+  const roofJobId = idText(value.roof_job_id, 1, 140);
+  const customerQuoteId = idText(value.customer_quote_id, 1, 140);
+  const correctionReason = boundedText(value.correction_reason, 1, 2_000);
+  return roofJobId && customerQuoteId && correctionReason ? { roofJobId, customerQuoteId, correctionReason } : null;
+}
+
+function quoteRevisionRequestText(correctionReason: string): string {
+  return `Prepare an append-only Draft Customer Quote revision shell after human review. Reason: ${correctionReason}`;
 }
 
 function parseExpectedVersion(value: unknown): number | null {
@@ -665,6 +1075,11 @@ function decodedApprovalRequestId(value: string): string | null {
   return decoded && /^approval:[A-Za-z0-9_-]{16,64}$/.test(decoded) ? decoded : null;
 }
 
+function decodedQuoteRevisionApprovalId(value: string): string | null {
+  const decoded = decodedPathSegment(value);
+  return decoded && /^quote-revision-approval:[A-Za-z0-9_-]{16,64}$/.test(decoded) ? decoded : null;
+}
+
 function parsedListLimit(value: string | null): number {
   if (value === null || value === "") return 50;
   const parsed = Number(value);
@@ -692,6 +1107,19 @@ function brokerPrepareError(error: unknown): string {
 
 function brokerPrepareStatus(error: unknown): number {
   return error instanceof ApprovalBrokerError && error.code === "approval_broker_not_configured" ? 503 : 502;
+}
+
+function quoteRevisionBrokerPrepareError(error: unknown): string {
+  if (error instanceof QuoteRevisionApprovalBrokerError && error.code === "quote_revision_broker_not_configured") {
+    return error.code;
+  }
+  return "quote_revision_broker_unavailable";
+}
+
+function quoteRevisionBrokerPrepareStatus(error: unknown): number {
+  return error instanceof QuoteRevisionApprovalBrokerError && error.code === "quote_revision_broker_not_configured"
+    ? 503
+    : 502;
 }
 
 function withCors(response: Response, origin: string | null): Response {

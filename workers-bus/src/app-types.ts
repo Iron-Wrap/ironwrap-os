@@ -31,6 +31,13 @@ export type AppEnv = Env & {
   APP_APPROVAL_BROKER_TIMEOUT_MS?: string;
   APP_APPROVAL_EXECUTION_LEASE_SECONDS?: string;
   APPROVAL_BROKER_SHARED_SECRET?: string;
+  // Quote revisions have their own broker, signing secret, and execution
+  // lease. Never route them through the fixed lead-triage authority.
+  APP_QUOTE_REVISION_BROKER_URL?: string;
+  APP_QUOTE_REVISION_BROKER_KEY_ID?: string;
+  APP_QUOTE_REVISION_BROKER_TIMEOUT_MS?: string;
+  APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS?: string;
+  QUOTE_REVISION_BROKER_SHARED_SECRET?: string;
   ERPNEXT_BASE_URL?: string;
   ERPNEXT_API_KEY?: string;
   ERPNEXT_API_SECRET?: string;

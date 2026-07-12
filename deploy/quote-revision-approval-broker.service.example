@@ -1,0 +1,28 @@
+# Private Hermes quote-revision approval broker. Install as
+# /etc/systemd/system/ironwrap-quote-revision-approval-broker.service and keep
+# the referenced environment file root-readable only. It is separate from the
+# lead-triage broker: distinct credentials and process are part of the safety
+# boundary, not deployment convenience.
+[Unit]
+Description=IronWrap Hermes quote-revision approval broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ironwrap-broker
+Group=ironwrap-broker
+WorkingDirectory=/srv/ironwrap/mcp/erpnext-roofing-mcp
+EnvironmentFile=/etc/ironwrap/quote-revision-approval-broker.env
+ExecStart=/usr/bin/node /srv/ironwrap/mcp/erpnext-roofing-mcp/src/quote-revision-approval-broker.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/srv/ironwrap /run/secrets
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

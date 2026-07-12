@@ -343,6 +343,7 @@ const REQUIRED_D1_TABLES = [
   "app_users", "app_magic_links", "app_sessions", "app_auth_throttles", "app_auth_audit",
   "app_action_throttles", "app_device_pairings", "app_devices", "lead_ack_receipts",
   "approval_requests", "approval_request_events",
+  "quote_revision_approval_requests", "quote_revision_approval_request_events",
 ];
 
 const REQUIRED_D1_TRIGGER_BINDINGS = [
@@ -359,9 +360,23 @@ const REQUIRED_D1_TRIGGER_BINDINGS = [
   ["prevent_approval_request_event_update", "approval_request_events"],
   ["prevent_approval_request_event_delete", "approval_request_events"],
   ["prevent_approval_request_delete", "approval_requests"],
+  ["prevent_quote_revision_approval_binding_rewrite", "quote_revision_approval_requests"],
+  ["enforce_quote_revision_approval_transition", "quote_revision_approval_requests"],
+  ["enforce_quote_revision_approval_reconciliation", "quote_revision_approval_requests"],
+  ["append_quote_revision_approval_created_event", "quote_revision_approval_requests"],
+  ["append_quote_revision_approval_transition_event", "quote_revision_approval_requests"],
+  ["append_quote_revision_approval_reconciliation_event", "quote_revision_approval_requests"],
+  ["prevent_quote_revision_approval_event_update", "quote_revision_approval_request_events"],
+  ["prevent_quote_revision_approval_event_delete", "quote_revision_approval_request_events"],
+  ["prevent_quote_revision_approval_delete", "quote_revision_approval_requests"],
 ];
 
-function d1TriggerSql(name, table, { weakReceiptTrigger = "", wrongTimingReceiptTrigger = "" } = {}) {
+function d1TriggerSql(name, table, {
+  weakReceiptTrigger = "",
+  wrongTimingReceiptTrigger = "",
+  weakApprovalTrigger = "",
+  wrongTimingApprovalTrigger = "",
+} = {}) {
   if (name === "validate_source_count_insert") {
     return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} WHEN 0 BEGIN SELECT RAISE(ABORT, 'invalid_source_count'); END;`;
   }
@@ -374,6 +389,18 @@ function d1TriggerSql(name, table, { weakReceiptTrigger = "", wrongTimingReceipt
   }
   if (name === wrongTimingReceiptTrigger) {
     return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, 'lead_ack_receipts_immutable'); END;`;
+  }
+  if (name === weakApprovalTrigger) {
+    const timing = name.endsWith("_event_delete") || name.endsWith("_approval_delete") ? "DELETE" : "UPDATE";
+    return `CREATE TRIGGER ${name} BEFORE ${timing} ON ${table} BEGIN SELECT 1; END;`;
+  }
+  if (name === wrongTimingApprovalTrigger) {
+    const abort = name === "prevent_quote_revision_approval_binding_rewrite"
+      ? "quote_revision_approval_binding_immutable"
+      : name === "prevent_quote_revision_approval_delete"
+        ? "quote_revision_approvals_append_only"
+        : "quote_revision_approval_events_immutable";
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, '${abort}'); END;`;
   }
   if (name === "prevent_lead_ack_receipts_update") {
     return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'lead_ack_receipts_immutable'); END;`;
@@ -393,19 +420,48 @@ function d1TriggerSql(name, table, { weakReceiptTrigger = "", wrongTimingReceipt
   if (name === "prevent_approval_request_delete") {
     return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'approval_requests_append_only'); END;`;
   }
+  if (name === "prevent_quote_revision_approval_binding_rewrite") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'quote_revision_approval_binding_immutable'); END;`;
+  }
+  if (name === "prevent_quote_revision_approval_event_update") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'quote_revision_approval_events_immutable'); END;`;
+  }
+  if (name === "prevent_quote_revision_approval_event_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'quote_revision_approval_events_immutable'); END;`;
+  }
+  if (name === "prevent_quote_revision_approval_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'quote_revision_approvals_append_only'); END;`;
+  }
   if (name.startsWith("append_approval_request_")) {
+    return `CREATE TRIGGER ${name} AFTER INSERT ON ${table} BEGIN SELECT 1; END;`;
+  }
+  if (name.startsWith("append_quote_revision_approval_")) {
     return `CREATE TRIGGER ${name} AFTER INSERT ON ${table} BEGIN SELECT 1; END;`;
   }
   return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT 1; END;`;
 }
 
-function d1Sql({ missingTable = "", missingTrigger = "", weakReceiptTrigger = "", wrongTimingReceiptTrigger = "" } = {}) {
+function d1Sql({
+  missingTable = "",
+  missingTrigger = "",
+  weakReceiptTrigger = "",
+  wrongTimingReceiptTrigger = "",
+  weakApprovalTrigger = "",
+  wrongTimingApprovalTrigger = "",
+} = {}) {
   const tables = REQUIRED_D1_TABLES.filter((name) => name !== missingTable);
   const triggers = REQUIRED_D1_TRIGGER_BINDINGS.filter(([name]) => name !== missingTrigger);
-  return `BEGIN TRANSACTION;\n${tables.map((name, index) => `CREATE TABLE ${name} (id TEXT PRIMARY KEY);\nINSERT INTO ${name} (id) VALUES ('row-${index}');`).join("\n")}\n${triggers.map(([name, table]) => d1TriggerSql(name, table, { weakReceiptTrigger, wrongTimingReceiptTrigger })).join("\n")}\nCOMMIT;\n`;
+  return `BEGIN TRANSACTION;\n${tables.map((name, index) => `CREATE TABLE ${name} (id TEXT PRIMARY KEY);\nINSERT INTO ${name} (id) VALUES ('row-${index}');`).join("\n")}\n${triggers.map(([name, table]) => d1TriggerSql(name, table, { weakReceiptTrigger, wrongTimingReceiptTrigger, weakApprovalTrigger, wrongTimingApprovalTrigger })).join("\n")}\nCOMMIT;\n`;
 }
 
-async function mockD1BackupEnvironment(t, { failCopy = false, signalCopy = false, missingTable = "", missingTrigger = "", weakReceiptTrigger = "" } = {}) {
+async function mockD1BackupEnvironment(t, {
+  failCopy = false,
+  signalCopy = false,
+  missingTable = "",
+  missingTrigger = "",
+  weakReceiptTrigger = "",
+  weakApprovalTrigger = "",
+} = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-d1-backup-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const bin = path.join(root, "bin");
@@ -462,7 +518,7 @@ exit 0
       PATH: `${bin}:${process.env.PATH}`,
       TMPDIR: root,
       MOCK_STATE: state,
-      MOCK_D1_SQL: d1Sql({ missingTable, missingTrigger, weakReceiptTrigger }),
+      MOCK_D1_SQL: d1Sql({ missingTable, missingTrigger, weakReceiptTrigger, weakApprovalTrigger }),
       MOCK_FAIL_COPY: failCopy ? "1" : "0",
       MOCK_SIGNAL_COPY: signalCopy ? "1" : "0",
       D1_BACKUP_API_TOKEN: "cloudflare_d1_backup_read_4c8f0b2d6a9137e5",
@@ -481,7 +537,20 @@ exit 0
   };
 }
 
-async function mockD1RestoreEnvironment(t, { badChecksum = false, targetCount = 0, signalDownload = false, rowMismatch = false, triggerMismatch = false, triggerSemanticsMismatch = false, missingTrigger = "", weakReceiptTrigger = "", wrongTimingReceiptTrigger = "" } = {}) {
+async function mockD1RestoreEnvironment(t, {
+  badChecksum = false,
+  targetCount = 0,
+  signalDownload = false,
+  rowMismatch = false,
+  triggerMismatch = false,
+  triggerSemanticsMismatch = false,
+  quoteRevisionTriggerSemanticsMismatch = false,
+  missingTrigger = "",
+  weakReceiptTrigger = "",
+  wrongTimingReceiptTrigger = "",
+  weakApprovalTrigger = "",
+  wrongTimingApprovalTrigger = "",
+} = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-d1-restore-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const bin = path.join(root, "bin");
@@ -493,7 +562,13 @@ async function mockD1RestoreEnvironment(t, { badChecksum = false, targetCount = 
   const stamp = "20260710T120000Z";
   const sqlFile = `ironwrap-d1-ironwrap-bus-${stamp}.sql`;
   const sqlPath = path.join(packageDir, sqlFile);
-  await writeFile(sqlPath, d1Sql({ missingTrigger, weakReceiptTrigger, wrongTimingReceiptTrigger }));
+  await writeFile(sqlPath, d1Sql({
+    missingTrigger,
+    weakReceiptTrigger,
+    wrongTimingReceiptTrigger,
+    weakApprovalTrigger,
+    wrongTimingApprovalTrigger,
+  }));
   const sqlDigest = createHash("sha256").update(await readFile(sqlPath)).digest("hex");
   await writeFile(path.join(packageDir, "IRONWRAP-D1-BACKUP-MANIFEST.txt"), [
     "schema_version=1",
@@ -559,6 +634,14 @@ async function mockD1RestoreEnvironment(t, { badChecksum = false, targetCount = 
     })),
     success: true,
   }]);
+  const quoteRevisionSemanticallyMismatchedTriggers = JSON.stringify([{
+    results: REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({
+      trigger_name,
+      table_name,
+      trigger_sql: d1TriggerSql(trigger_name, table_name, { wrongTimingApprovalTrigger: "prevent_quote_revision_approval_event_update" }),
+    })),
+    success: true,
+  }]);
 
   await writeExecutable(path.join(staged.workerBin, "wrangler"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -581,7 +664,7 @@ if (( json == 1 )); then
   elif [[ "$file" == *target-verify.sql ]]; then
     if [[ "$MOCK_ROW_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedRows}'; else printf '%s\\n' '${matchingRows}'; fi
   elif [[ "$file" == *target-trigger-verify.sql ]]; then
-    if [[ "$MOCK_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${semanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedTriggers}'; else printf '%s\\n' '${matchingTriggers}'; fi
+    if [[ "$MOCK_QUOTE_REVISION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${quoteRevisionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${semanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedTriggers}'; else printf '%s\\n' '${matchingTriggers}'; fi
   fi
 fi
 `);
@@ -629,6 +712,7 @@ esac
       MOCK_ROW_MISMATCH: rowMismatch ? "1" : "0",
       MOCK_TRIGGER_MISMATCH: triggerMismatch ? "1" : "0",
       MOCK_TRIGGER_SEMANTICS_MISMATCH: triggerSemanticsMismatch ? "1" : "0",
+      MOCK_QUOTE_REVISION_TRIGGER_SEMANTICS_MISMATCH: quoteRevisionTriggerSemanticsMismatch ? "1" : "0",
       D1_BACKUP_API_TOKEN: "cloudflare_d1_backup_read_4c8f0b2d6a9137e5",
       D1_RESTORE_API_TOKEN: "",
       D1_PRODUCTION_ACCOUNT_ID: "7ee5775bc1ba46f05c5a65235b60e939",
@@ -1133,6 +1217,14 @@ test("D1 backup rejects a named receipt trigger without immutable update/delete 
   await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
 });
 
+test("D1 backup rejects a quote-revision ledger trigger without immutable semantics", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { weakApprovalTrigger: "prevent_quote_revision_approval_event_delete" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_quote_revision_approval_event_delete/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
 test("D1 backup purges incomplete remote state and plaintext on upload failure", async (t) => {
   const mock = await mockD1BackupEnvironment(t, { failCopy: true });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
@@ -1252,6 +1344,14 @@ test("D1 recovery rejects a local receipt trigger without immutable update/delet
   await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
 });
 
+test("D1 recovery rejects a local quote-revision ledger trigger without immutable semantics", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { weakApprovalTrigger: "prevent_quote_revision_approval_event_update" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_quote_revision_approval_event_update/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
 test("remote D1 drill fails when named invariant-trigger inventory differs", async (t) => {
   const mock = await mockD1RestoreEnvironment(t, { triggerMismatch: true });
   mock.env.D1_RESTORE_MODE = "remote";
@@ -1266,6 +1366,18 @@ test("remote D1 drill fails when named invariant-trigger inventory differs", asy
 
 test("remote D1 drill rejects receipt triggers without immutable update/delete semantics", async (t) => {
   const mock = await mockD1RestoreEnvironment(t, { triggerSemanticsMismatch: true });
+  mock.env.D1_RESTORE_MODE = "remote";
+  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
+  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+  assert.equal(operations.length, 4);
+});
+
+test("remote D1 drill rejects quote-revision ledger triggers without immutable semantics", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { quoteRevisionTriggerSemanticsMismatch: true });
   mock.env.D1_RESTORE_MODE = "remote";
   mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
   mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;

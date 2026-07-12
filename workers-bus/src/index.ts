@@ -29,6 +29,7 @@ import { ensureJobFolder, googleConfigured } from "./google.ts";
 import { handleAdminAppUserProvision, handleAppApi } from "./app-api.ts";
 import { pruneAuthRecords } from "./app-auth-store.ts";
 import { markExpiredExecutionLeases } from "./approval-store.ts";
+import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
@@ -73,6 +74,11 @@ export default {
       // The durable request becomes owner-visible reconciliation work instead.
       markExpiredExecutionLeases(env, new Date().toISOString())
         .catch((error) => log({ at: "approval_lease_sweep", error: String(error) })),
+      // Quote-revision execution has an independent ledger and broker. Its
+      // lease therefore becomes explicit reconciliation work independently of
+      // the lead-triage authority.
+      markExpiredQuoteRevisionApprovalExecutionLeases(env, new Date().toISOString())
+        .catch((error) => log({ at: "quote_revision_approval_lease_sweep", error: String(error) })),
     ]).then(() => {})); // the frequent cron
   },
 } satisfies ExportedHandler<Env, { envelope_id: string }>;

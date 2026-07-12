@@ -158,6 +158,12 @@ npx wrangler deploy
 | POST | `/api/v1/approvals/:id/approve` | configured owner + CSRF + recent session + idempotency key | compare-and-set decision through the private broker; transport ambiguity becomes `execution_uncertain`, never a retry |
 | POST | `/api/v1/approvals/:id/reject` | configured owner + CSRF + recent session + idempotency key | durable rejection; does not invoke the broker |
 | POST | `/api/v1/approvals/:id/reconcile` | configured owner + CSRF + recent session | append reconciliation evidence/outcome to an uncertain request; never reopens or retries the write |
+| GET | `/api/v1/quote-revision-approvals` | owner/ops session | separate browser-safe queue for append-only Customer Quote Draft shells; never mixed with lead triage |
+| GET | `/api/v1/quote-revision-approvals/:id` | owner/ops session | one safe quote-revision approval DTO; pending expiry is re-evaluated before return |
+| POST | `/api/v1/quote-revision-approvals` | owner/ops session + CSRF + idempotency key | fixed estimator-assistant preparation path; source/job/reason are receipt-bound, target/version broker-derived |
+| POST | `/api/v1/quote-revision-approvals/:id/approve` | configured owner + CSRF + recent session + idempotency key | distinct broker/ledger execution; ambiguity is reconciliation-only and never replays the Frappe write |
+| POST | `/api/v1/quote-revision-approvals/:id/reject` | configured owner + CSRF + recent session + idempotency key | durable rejection; does not invoke either broker |
+| POST | `/api/v1/quote-revision-approvals/:id/reconcile` | configured owner + CSRF + recent session | one immutable reconciliation append for an uncertain quote-revision execution |
 
 ### PWA auth and tenant boundary
 
@@ -232,6 +238,36 @@ credentials and exposes only `/v1/lead-triage/preview` and
 `deploy/approval-broker.service.example`. A stale execution lease becomes
 `execution_uncertain` during the frequent Worker sweep and must be reconciled
 by recorded `run_id`, never automatically re-executed.
+
+### Quote-revision approval broker (optional, separate authority)
+
+The append-only Customer Quote revision command is **not** a second route on
+the lead-triage broker. After migration `0017`, enable it only with a separate
+loopback service, HMAC secret, key id, port, and estimator-assistant MCP
+runtime. The Worker needs only these non-secret values plus one secret:
+
+```text
+APP_QUOTE_REVISION_BROKER_URL=https://<private-quote-revision-broker-origin>
+APP_QUOTE_REVISION_BROKER_KEY_ID=quote-revision-v1
+APP_QUOTE_REVISION_BROKER_TIMEOUT_MS=15000
+APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS=45
+QUOTE_REVISION_BROKER_SHARED_SECRET=<different 32+-byte Worker-to-broker secret>
+```
+
+Use [`deploy/quote-revision-approval-broker.service.example`](../deploy/quote-revision-approval-broker.service.example)
+with the dedicated host-only
+[`deploy/quote-revision-approval-broker.env.example`](../deploy/quote-revision-approval-broker.env.example).
+That process binds `HERMES_AGENT_ROLE=estimator-assistant` and exposes only
+`/v1/quote-revision/preview` and `/v1/quote-revision/execute`.
+
+Its D1 ledger stores a redacted preview (source identity/version/status/modified,
+empty Draft target/version/supersedes, and correction reason) plus a one-way
+digest of the full receipt-bound dry run. It never stores a price, tax, payment,
+scope, customer-facing term, acceptance, or approval receipt in the browser
+projection. The broker re-runs the full dry run immediately before it signs;
+source drift, quote-version drift, or a deterministic target collision fails
+before the write. An invoked-write transport failure is terminal
+`execution_uncertain`, not an automatic retry.
 
 The session cookie is `Secure; HttpOnly; SameSite=Strict; Path=/`, has no `Domain`, and expires
 after a fixed 12 hours. The D1 row contains only an HMAC; the CSRF value is separately derived and

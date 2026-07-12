@@ -131,6 +131,17 @@ ops remains review-only. A broker ambiguity becomes `Execution Uncertain` and is
 the UI. Local contract/mocked-browser proof is not deployment proof: remote D1/Frappe migration,
 enabled BFF and broker, real device/browser, provider receipt, and operator acceptance remain launch gates.
 
+Quote-revision approval checkpoint (2026-07-12): the append-only Draft Customer Quote revision
+now has its own estimator-assistant private broker, HMAC key/secret/port, D1 request/event ledger,
+lease sweep, Worker BFF routes, and recovery/backup invariants. It never extends the lead-triage
+broker or `/approvals` inbox. The stored review projection contains only source identity/version/
+status/modified time, blank Draft target/version/supersedes, correction reason, lifecycle evidence,
+and fixed no-effect flags; the full receipt-bound dry run is represented by a one-way digest. The
+broker re-runs its dry run before signing and fails closed on source/version/target drift. An
+ambiguous invoked write becomes reconciliation work and is never retried. This is local contract
+proof only; the dedicated estimator approval UI, live migration, private service reachability,
+Frappe audit, and operator acceptance remain separate gates.
+
 Sales Desk checkpoint (2026-07-11): the PWA now has a locally tested, office-only `/sales` review
 surface backed by a separate Worker read contract. It joins only narrow allowlisted Lead Envelope
 contact/triage fields, linked Roof Job identity, the latest Instant Estimate Session, the latest
@@ -161,10 +172,12 @@ verification; no price, takeoff, proposal, signature, payment, or communication 
 this vertical. The separate MCP contract now supports a receipt-bound, append-only Draft Customer
 Quote revision shell: it binds source/job/customer/reason/fresh version, copies no commercial or
 acceptance field, rejects duplicate targets, and rejects an accepted or contract-linked source in
-favor of Change Order evidence. It is intentionally not clickable in the workbench while the
-browser approval broker is lead-triage-only. Immutable price-rule snapshot binding, proposal
-assembly, insurance/supplement evidence, live Frappe/R2 freshness, real-browser, and
-estimator/operator acceptance proof remain open.
+favor of Change Order evidence. Its isolated estimator-assistant broker and Worker D1/BFF approval
+lane are now locally contract-tested, with a redacted ledger projection and no lead-triage authority
+reuse. It is intentionally still not clickable in the workbench until its dedicated estimator
+approval surface is implemented. Immutable price-rule snapshot binding, proposal assembly,
+insurance/supplement evidence, live Frappe/R2 freshness, real-browser, and estimator/operator
+acceptance proof remain open.
 
 ## Research Basis
 

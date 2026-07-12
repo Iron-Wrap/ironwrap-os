@@ -187,9 +187,17 @@ lane are now locally contract-tested, with a redacted ledger projection and no l
 reuse. A capability-gated `Request draft revision` link now appears only for a configured broker
 and a current, positive-version, non-accepted source; it opens the isolated preparation route,
 then a separate queue/detail review surface rather than `/approvals`. These surfaces never render
-commercial values, receipts, raw write arguments, or a retry for an uncertain execution. Immutable
-price-rule snapshot binding, proposal assembly, insurance/supplement evidence, live Frappe/R2
-freshness, authenticated production-browser, and estimator/operator acceptance proof remain open.
+commercial values, receipts, raw write arguments, or a retry for an uncertain execution. The
+separate proposal-pack MCP slice now creates only a Draft proof pack scoped to one explicit,
+same-job `Approved`/`Accepted` Customer Quote. It requires an approved Measurement Report and
+customer-safe Evidence Items with verified provenance, checksum, and proof slot; uses a
+quote-owned pack identity; redacts source URIs, R2 keys, raw summaries, and customer messages; and
+re-reads the quote before any audited write. Frappe resolves every retained source ID back to a
+same-job approved/verified record, repeats the quote-anchor and immutable identity checks, and
+permits only Draft status until a receipt-verifying delivery command exists. There is still no browser
+assembler, customer renderer/send, e-sign, or live Frappe/R2/operator proof. Immutable price-rule
+snapshot binding, insurance/supplement evidence, authenticated production-browser, and
+estimator/operator acceptance proof remain open.
 
 ## Research Basis
 

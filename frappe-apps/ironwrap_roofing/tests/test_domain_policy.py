@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 from ironwrap_roofing.domain_policy import (
@@ -7,6 +8,74 @@ from ironwrap_roofing.domain_policy import (
     parse_json_field,
     validate_record,
 )
+
+
+def proposal_evidence_summary(roof_job: str = "job-1", quotation: str = "cq-1") -> str:
+    return json.dumps(
+        {
+            "roof_job": roof_job,
+            "quotation": quotation,
+            "quote_version": 1,
+            "counts": {
+                "measurement_reports": 1,
+                "eligible_evidence": 1,
+                "withheld_evidence": 0,
+            },
+            "measurement_reports": [
+                {
+                    "measurement_id": "measurement-1",
+                    "provider": "RoofRuler",
+                    "review_status": "Approved",
+                    "approved_at": "2026-07-10T12:00:00.000Z",
+                }
+            ],
+            "eligible_evidence": [
+                {
+                    "evidence_id": "evidence-1",
+                    "evidence_type": "Photo",
+                    "proof_slot": "Measurement",
+                }
+            ],
+            "withheld_evidence": {
+                "not_customer_safe": 0,
+                "unverified_or_incomplete": 0,
+                "identity_missing": 0,
+            },
+        }
+    )
+
+
+def proposal_context(**overrides: object) -> dict[str, object]:
+    context: dict[str, object] = {
+        "quote_status": "Approved",
+        "quote_roof_job": "job-1",
+        "quote_version": 1,
+        "proposal_measurements": {
+            "measurement-1": {
+                "roof_job": "job-1",
+                "provider": "RoofRuler",
+                "review_status": "Approved",
+                "approved_by": "owner@example.com",
+                "approved_at": "2026-07-10T12:00:00.000Z",
+            }
+        },
+        "proposal_evidence": {
+            "evidence-1": {
+                "roof_job": "job-1",
+                "evidence_type": "Photo",
+                "proof_slot": "Measurement",
+                "customer_safe": 1,
+                "sync_state": "Verified",
+                "content_checksum": "a" * 64,
+                "checksum_algorithm": "SHA-256",
+                "verified_at": "2026-07-10T12:00:00.000Z",
+                "verification_source": "worker-checksum",
+                "r2_key": "private/job-1/evidence-1.jpg",
+            }
+        },
+    }
+    context.update(overrides)
+    return context
 
 
 class DomainPolicyTests(unittest.TestCase):
@@ -378,25 +447,141 @@ class DomainPolicyTests(unittest.TestCase):
         validate_record("customer_quote", customer_quote)
 
         proposal = {
-            "pack_id": "pack-1",
-            "status": "Signed",
+            "pack_id": "proposal:cq-1",
+            "status": "Draft",
             "roof_job": "job-1",
             "quotation": "cq-1",
             "assumptions": "Clear driveway.",
             "exclusions": "Structural repairs.",
             "approved_by": "owner@example.com",
             "approved_at": "2026-07-10 12:00:00",
-            "evidence_summary_json": '{"items":["ev-signed"]}',
+            "evidence_summary_json": proposal_evidence_summary(),
             "signed_evidence": "ev-signed",
             "signed_at": "2026-07-10 12:30:00",
         }
         validate_record(
             "proposal_evidence_pack",
             proposal,
-            context={
-                "quote_status": "Accepted",
-                "signed_evidence_type": "Signed Document",
+            context=proposal_context(quote_status="Accepted"),
+        )
+        self.assert_policy(
+            "proposal_pack_draft_only",
+            validate_record,
+            "proposal_evidence_pack",
+            {**proposal, "status": "Signed"},
+            context=proposal_context(quote_status="Accepted"),
+        )
+
+    def test_proposal_evidence_pack_anchor_is_required_verified_and_immutable_from_draft(self) -> None:
+        draft = {
+            "pack_id": "proposal:cq-1",
+            "status": "Draft",
+            "roof_job": "job-1",
+            "quotation": "cq-1",
+            "evidence_summary_json": proposal_evidence_summary(),
+        }
+        context = proposal_context()
+        validate_record("proposal_evidence_pack", draft, context=context)
+
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "proposal_evidence_pack",
+            {key: value for key, value in draft.items() if key != "roof_job"},
+            context=context,
+        )
+        self.assert_policy(
+            "proposal_pack_id_mismatch",
+            validate_record,
+            "proposal_evidence_pack",
+            {**draft, "pack_id": "proposal:other"},
+            context=context,
+        )
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "proposal_evidence_pack",
+            {key: value for key, value in draft.items() if key != "quotation"},
+            context=context,
+        )
+        self.assert_policy(
+            "empty_json_contract",
+            validate_record,
+            "proposal_evidence_pack",
+            {**draft, "evidence_summary_json": "{}"},
+            context=context,
+        )
+        unsafe_summary = json.loads(proposal_evidence_summary())
+        unsafe_summary["eligible_evidence"][0]["source_uri"] = "r2://private/job-1/raw.jpg"
+        self.assert_policy(
+            "invalid_proposal_evidence_summary",
+            validate_record,
+            "proposal_evidence_pack",
+            {
+                **draft,
+                "evidence_summary_json": json.dumps(unsafe_summary),
             },
+            context=context,
+        )
+        self.assert_policy(
+            "proposal_customer_message_forbidden",
+            validate_record,
+            "proposal_evidence_pack",
+            {**draft, "customer_message": "A customer-facing draft must stay in the approved path."},
+            context=context,
+        )
+        synthetic_summary = json.loads(proposal_evidence_summary())
+        synthetic_summary["eligible_evidence"][0]["evidence_id"] = "synthetic-evidence"
+        self.assert_policy(
+            "unverified_proposal_evidence",
+            validate_record,
+            "proposal_evidence_pack",
+            {**draft, "evidence_summary_json": json.dumps(synthetic_summary)},
+            context=context,
+        )
+        self.assert_policy(
+            "proposal_pack_draft_only",
+            validate_record,
+            "proposal_evidence_pack",
+            {**draft, "status": "Ready"},
+            context=context,
+        )
+        self.assert_policy(
+            "unapproved_quote",
+            validate_record,
+            "proposal_evidence_pack",
+            draft,
+            context=proposal_context(quote_status="Draft"),
+        )
+        self.assert_policy(
+            "unverified_proposal_quote",
+            validate_record,
+            "proposal_evidence_pack",
+            draft,
+            context=proposal_context(quote_roof_job=None),
+        )
+        self.assert_policy(
+            "cross_job_proposal_quote",
+            validate_record,
+            "proposal_evidence_pack",
+            draft,
+            context=proposal_context(quote_status="Accepted", quote_roof_job="job-other"),
+        )
+        self.assert_policy(
+            "immutable_field",
+            validate_record,
+            "proposal_evidence_pack",
+            {**draft, "quotation": "cq-2"},
+            previous=draft,
+            context=proposal_context(),
+        )
+        self.assert_policy(
+            "immutable_field",
+            validate_record,
+            "proposal_evidence_pack",
+            {**draft, "roof_job": "job-2"},
+            previous=draft,
+            context=proposal_context(quote_roof_job="job-2"),
         )
 
         completion = {

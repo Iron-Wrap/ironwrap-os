@@ -130,9 +130,10 @@ Current approved-write tools:
   `Supplier Order` draft from an approved `Material Takeoff`. It does not place
   orders, reserve material, contact suppliers, or mutate accounting.
 - `request_create_proposal_evidence_pack` creates or updates one draft
-  `Proposal Evidence Pack` from linked Measurement Report and Evidence Item
-  rows. It does not approve pricing, scope, payment terms, material orders, or
-  customer send.
+  `Proposal Evidence Pack` for one same-job, `Approved`/`Accepted` Customer Quote.
+  It requires approved measurement and verified customer-safe evidence, retains a
+  quote-owned Draft identity, and persists only a redacted summary. It does not
+  approve pricing, scope, payment terms, material orders, or customer send.
 - `request_create_supplier_quote` creates or updates one review-gated
   `Supplier Quote` (with `valid_until` and per-line prices) from an approved
   `Material Takeoff`. It does not place orders or commit pricing.

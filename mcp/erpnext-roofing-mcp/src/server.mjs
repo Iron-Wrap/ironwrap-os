@@ -104,11 +104,9 @@ const MEASUREMENT_REPORT_FIELDS = [
   "measurement_id",
   "roof_job",
   "provider",
-  "source_file",
-  "report_url",
-  "raw_key",
-  "parsed_at",
   "review_status",
+  "approved_by",
+  "approved_at",
   "modified",
 ];
 
@@ -158,13 +156,17 @@ const EVIDENCE_ITEM_FIELDS = [
   "name",
   "evidence_id",
   "roof_job",
-  "lead_envelope",
   "evidence_type",
-  "source_system",
   "source_uri",
   "r2_key",
+  "drive_file_id",
   "customer_safe",
-  "captured_at",
+  "proof_slot",
+  "sync_state",
+  "content_checksum",
+  "checksum_algorithm",
+  "verified_at",
+  "verification_source",
   "modified",
 ];
 
@@ -918,8 +920,9 @@ export function assertLeadTriagePreparable(envelope, leadEnvelopeId) {
   }
 }
 
-export function proposalPackIdForRoofJob(roofJobId) {
-  return `proposal:${roofJobId}`;
+export function proposalPackIdForCustomerQuote(customerQuoteId) {
+  if (!customerQuoteId) throw new Error("customer_quote_id_required");
+  return `proposal:${customerQuoteId}`;
 }
 
 export function materialTakeoffIdForRoofJob(roofJobId) {
@@ -1013,47 +1016,74 @@ export function buildSupplierOrderDraft({
 
 export function buildProposalEvidencePackDraft({
   roofJobId,
-  packId = proposalPackIdForRoofJob(roofJobId),
+  customerQuote,
   measurements = [],
   evidence = [],
   nowIso,
 } = {}) {
   if (!roofJobId) throw new Error("roof_job_id_required");
-  const measurementReports = measurements.map((row) => ({
-    name: row.name,
-    measurement_id: row.measurement_id ?? row.name,
-    provider: row.provider ?? "",
-    source_file: row.source_file ?? "",
-    report_url: row.report_url ?? "",
-    raw_key: row.raw_key ?? "",
-    parsed_at: row.parsed_at ?? "",
-    review_status: row.review_status ?? "",
-  }));
-  const evidenceItems = evidence.map((row) => ({
-    name: row.name,
-    evidence_id: row.evidence_id ?? row.name,
-    evidence_type: row.evidence_type ?? "",
-    source_system: row.source_system ?? "",
-    source_uri: row.source_uri ?? "",
-    r2_key: row.r2_key ?? "",
-    customer_safe: Boolean(row.customer_safe),
-    captured_at: row.captured_at ?? "",
-    summary: row.summary ?? "",
-  }));
+  const quotation = assertProposalQuotePreparable(customerQuote, roofJobId);
+  const resolvedPackId = proposalPackIdForCustomerQuote(quotation);
+  const measurementReports = measurements
+    .filter((row) => row?.review_status === "Approved")
+    .map((row) => ({
+      measurement_id: row.measurement_id ?? row.name ?? "",
+      provider: row.provider ?? "",
+      review_status: "Approved",
+      approved_at: row.approved_at ?? "",
+    }))
+    .filter((row) => row.measurement_id && row.provider && row.approved_at);
+  if (!measurementReports.length) throw new Error("proposal_measurement_approved_required");
+
+  const withheld = {
+    not_customer_safe: 0,
+    unverified_or_incomplete: 0,
+    identity_missing: 0,
+  };
+  const eligibleEvidence = [];
+  for (const row of evidence) {
+    if (!isCheckedTrue(row?.customer_safe)) {
+      withheld.not_customer_safe += 1;
+      continue;
+    }
+    const evidenceId = row?.evidence_id ?? row?.name ?? "";
+    if (!evidenceId) {
+      withheld.identity_missing += 1;
+      continue;
+    }
+    try {
+      assertVerifiedEvidence(row, "proposal");
+    } catch {
+      withheld.unverified_or_incomplete += 1;
+      continue;
+    }
+    eligibleEvidence.push({
+      evidence_id: evidenceId,
+      evidence_type: row.evidence_type ?? "",
+      proof_slot: row.proof_slot ?? "",
+    });
+  }
+  if (!eligibleEvidence.length) throw new Error("proposal_customer_safe_evidence_required");
+
   const summary = {
     roof_job: roofJobId,
+    quotation,
+    quote_version: customerQuote.quote_version ?? null,
     generated_at: nowIso,
     counts: {
       measurement_reports: measurementReports.length,
-      evidence_items: evidenceItems.length,
+      eligible_evidence: eligibleEvidence.length,
+      withheld_evidence: Object.values(withheld).reduce((total, count) => total + count, 0),
     },
     measurement_reports: measurementReports,
-    evidence_items: evidenceItems,
+    eligible_evidence: eligibleEvidence,
+    withheld_evidence: withheld,
   };
 
   return {
-    pack_id: packId,
+    pack_id: resolvedPackId,
     roof_job: roofJobId,
+    quotation,
     status: "Draft",
     ...(nowIso ? { prepared_at: nowIso } : {}),
     evidence_summary_json: JSON.stringify(summary, null, 2),
@@ -1065,11 +1095,21 @@ export function buildProposalEvidencePackDraft({
       "This pack does not create a binding quote, accepted scope, material order, or payment request.",
       "Unsafe, missing, or ambiguous evidence must be resolved before proposal approval.",
     ].join("\n"),
-    customer_message: [
-      "<p>We assembled the available measurement and project evidence for estimator review.</p>",
-      "<p>The final proposal will confirm scope, options, exclusions, warranty, and payment terms after approval.</p>",
-    ].join(""),
   };
+}
+
+export function assertProposalQuotePreparable(customerQuote, roofJobId) {
+  const quotation = customerQuote?.name ?? customerQuote?.customer_quote_id ?? "";
+  if (!quotation) throw new Error("customer_quote_id_required");
+  assertLinkedRoofJob(roofJobId, customerQuote, "customer_quote");
+  if (!new Set(["Approved", "Accepted"]).has(customerQuote.status)) {
+    throw new Error("customer_quote_not_approved");
+  }
+  return quotation;
+}
+
+function isCheckedTrue(value) {
+  return value === true || value === 1 || value === "1";
 }
 
 export function completionPacketIdForRoofJob(roofJobId) {
@@ -3090,12 +3130,17 @@ export function buildServer(config) {
       description: "Preview the draft Proposal Evidence Pack assembled from job evidence without writing.",
       inputSchema: {
         roof_job_id: z.string().min(1),
-        pack_id: z.string().min(1).optional(),
+        customer_quote_id: z.string().min(1),
         limit: z.number().int().min(1).max(100).optional(),
       },
     },
-    async ({ roof_job_id, pack_id, limit = 25 }) => {
-      const { draft, measurements, evidence } = await buildProposalDraftFromErp(config, roof_job_id, { packId: pack_id, limit });
+    async ({ roof_job_id, customer_quote_id, limit = 25 }) => {
+      const { draft, measurements, evidence } = await buildProposalDraftFromErp(config, roof_job_id, {
+        customerQuoteId: customer_quote_id,
+        limit,
+      });
+      const before = await readResourceOrNull(config, "Proposal Evidence Pack", draft.pack_id);
+      assertProposalPackWritable(before, draft);
       return text({
         would_write: false,
         required_tool: "request_create_proposal_evidence_pack",
@@ -3113,7 +3158,7 @@ export function buildServer(config) {
       description: "Approved-write: create or update one draft Proposal Evidence Pack and record a Hermes Run audit row.",
       inputSchema: {
         roof_job_id: z.string().min(1),
-        pack_id: z.string().min(1).optional(),
+        customer_quote_id: z.string().min(1),
         limit: z.number().int().min(1).max(100).optional(),
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
@@ -3127,11 +3172,12 @@ export function buildServer(config) {
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
       const { draft, measurements, evidence } = await buildProposalDraftFromErp(config, args.roof_job_id, {
-        packId: args.pack_id,
+        customerQuoteId: args.customer_quote_id,
         limit: args.limit ?? 25,
         nowIso: now,
       });
       const before = await readResourceOrNull(config, "Proposal Evidence Pack", draft.pack_id);
+      assertProposalPackWritable(before, draft);
       const operation = before ? "update" : "create";
       const dryRun = {
         target: { doctype: "Proposal Evidence Pack", name: draft.pack_id },
@@ -6071,7 +6117,13 @@ function fieldAssignmentBoundUpsertExecutor(config, roofJobId, doctype, name, dr
   };
 }
 
-async function buildProposalDraftFromErp(config, roofJobId, { packId, limit = 25, nowIso } = {}) {
+async function buildProposalDraftFromErp(config, roofJobId, {
+  customerQuoteId,
+  limit = 25,
+  nowIso,
+} = {}) {
+  const customerQuote = await readResource(config, "Customer Quote", customerQuoteId);
+  assertProposalQuotePreparable(customerQuote, roofJobId);
   const [measurements, evidence] = await Promise.all([
     listResources(config, "Measurement Report", {
       fields: MEASUREMENT_REPORT_FIELDS,
@@ -6088,12 +6140,18 @@ async function buildProposalDraftFromErp(config, roofJobId, { packId, limit = 25
   ]);
   const draft = buildProposalEvidencePackDraft({
     roofJobId,
-    packId,
+    customerQuote,
     measurements,
     evidence,
     nowIso,
   });
-  return { draft, measurements, evidence };
+  return { draft, measurements, evidence, customerQuote };
+}
+
+function assertProposalPackWritable(before, draft) {
+  if (!before) return;
+  if (before.status !== "Draft") throw new Error("proposal_evidence_pack_not_draft");
+  assertImmutableFields(before, draft, ["roof_job", "quotation"], "proposal_evidence_pack");
 }
 
 async function buildMaterialTakeoffDraftFromErp(config, roofJobId, {

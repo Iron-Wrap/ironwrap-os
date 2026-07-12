@@ -16,7 +16,7 @@ import {
   materialTakeoffIdForRoofJob,
   normalizeFrappeBaseUrl,
   parseRequestTimeout,
-  proposalPackIdForRoofJob,
+  proposalPackIdForCustomerQuote,
   redactApprovalArgs,
   resourceListPath,
   resourcePath,
@@ -592,42 +592,120 @@ test("supplier order draft requires approved takeoff and keeps supplier action r
   assert.throws(() => buildSupplierOrderDraft({ materialTakeoff: { ...materialTakeoff, status: "Needs Review" } }), /approved_required/);
 });
 
-test("proposal evidence pack draft links measurement and evidence proof", () => {
-  assert.equal(proposalPackIdForRoofJob("job:ow_1"), "proposal:job:ow_1");
+test("proposal evidence pack draft is quote-scoped and persists only redacted verified proof", () => {
+  assert.equal(proposalPackIdForCustomerQuote("quote:ow_1"), "proposal:quote:ow_1");
 
   const draft = buildProposalEvidencePackDraft({
     roofJobId: "job:ow_1",
+    customerQuote: {
+      name: "quote:ow_1",
+      roof_job: "job:ow_1",
+      quote_version: 3,
+      status: "Approved",
+    },
     measurements: [{
       name: "measurement:ow_1",
       measurement_id: "measurement:ow_1",
       provider: "RoofRuler",
       source_file: "sample.pdf",
       raw_key: "measurements/ow_1/sample.pdf",
-      review_status: "Parsed",
+      review_status: "Approved",
+      approved_at: "2026-07-08T09:00:00.000Z",
     }],
-    evidence: [{
-      name: "evidence:measurement:ow_1",
-      evidence_id: "evidence:measurement:ow_1",
-      evidence_type: "Measurement Report",
-      source_system: "workers-bus",
-      r2_key: "measurements/ow_1/sample.pdf",
-      customer_safe: 1,
-      summary: "RoofRuler measurement report synced from R2.",
-    }],
+    evidence: [
+      {
+        name: "evidence:measurement:ow_1",
+        evidence_id: "evidence:measurement:ow_1",
+        evidence_type: "Measurement Report",
+        source_uri: "r2://raw/measurements/ow_1/sample.pdf",
+        r2_key: "raw/measurements/ow_1/sample.pdf",
+        customer_safe: 1,
+        proof_slot: "Measurement",
+        sync_state: "Verified",
+        checksum_algorithm: "SHA-256",
+        content_checksum: "a".repeat(64),
+        verified_at: "2026-07-08T09:01:00.000Z",
+        verification_source: "worker-checksum",
+        summary: "RoofRuler measurement report synced from R2.",
+      },
+      {
+        name: "evidence:private",
+        evidence_id: "evidence:private",
+        evidence_type: "Photo",
+        source_uri: "r2://private/photo.jpg",
+        customer_safe: "0",
+        proof_slot: "Production",
+        sync_state: "Verified",
+        checksum_algorithm: "SHA-256",
+        content_checksum: "b".repeat(64),
+        verified_at: "2026-07-08T09:01:00.000Z",
+        verification_source: "worker-checksum",
+        summary: "Private homeowner note.",
+      },
+      {
+        name: "evidence:unverified",
+        evidence_id: "evidence:unverified",
+        evidence_type: "Photo",
+        source_uri: "r2://unverified/photo.jpg",
+        customer_safe: true,
+        proof_slot: "Production",
+        sync_state: "Uploaded",
+        checksum_algorithm: "SHA-256",
+        content_checksum: "c".repeat(64),
+      },
+    ],
     nowIso: "2026-07-08T10:00:00.000Z",
   });
 
-  assert.equal(draft.pack_id, "proposal:job:ow_1");
+  assert.equal(draft.pack_id, "proposal:quote:ow_1");
   assert.equal(draft.roof_job, "job:ow_1");
+  assert.equal(draft.quotation, "quote:ow_1");
   assert.equal(draft.status, "Draft");
   assert.equal(draft.prepared_at, "2026-07-08T10:00:00.000Z");
   assert.match(draft.assumptions, /estimator review/);
   assert.match(draft.exclusions, /binding quote/);
-  assert.match(draft.customer_message, /final proposal/);
+  assert.equal("customer_message" in draft, false);
 
   const summary = JSON.parse(draft.evidence_summary_json);
-  assert.deepEqual(summary.counts, { measurement_reports: 1, evidence_items: 1 });
+  assert.deepEqual(summary.counts, {
+    measurement_reports: 1,
+    eligible_evidence: 1,
+    withheld_evidence: 2,
+  });
+  assert.equal(summary.quotation, "quote:ow_1");
+  assert.equal(summary.quote_version, 3);
   assert.equal(summary.measurement_reports[0].measurement_id, "measurement:ow_1");
-  assert.equal(summary.evidence_items[0].evidence_id, "evidence:measurement:ow_1");
-  assert.equal(summary.evidence_items[0].customer_safe, true);
+  assert.equal(summary.eligible_evidence[0].evidence_id, "evidence:measurement:ow_1");
+  assert.deepEqual(summary.withheld_evidence, {
+    not_customer_safe: 1,
+    unverified_or_incomplete: 1,
+    identity_missing: 0,
+  });
+  expectNoSensitiveProofPointers(JSON.stringify(draft));
+
+  assert.throws(() => buildProposalEvidencePackDraft({
+    roofJobId: "job:ow_1",
+    customerQuote: { name: "quote:ow_1", roof_job: "job:other", status: "Approved" },
+    measurements: [{ name: "measurement:ow_1", review_status: "Approved" }],
+    evidence: [],
+  }), /customer_quote_roof_job_mismatch/);
+  assert.throws(() => buildProposalEvidencePackDraft({
+    roofJobId: "job:ow_1",
+    customerQuote: { name: "quote:ow_1", roof_job: "job:ow_1", status: "Needs Review" },
+    measurements: [{ name: "measurement:ow_1", review_status: "Approved" }],
+    evidence: [],
+  }), /customer_quote_not_approved/);
 });
+
+function expectNoSensitiveProofPointers(value) {
+  for (const forbidden of [
+    "raw/measurements/ow_1/sample.pdf",
+    "r2://raw/measurements/ow_1/sample.pdf",
+    "Private homeowner note.",
+    "r2://private/photo.jpg",
+    "r2://unverified/photo.jpg",
+    "sample.pdf",
+  ]) {
+    assert.equal(value.includes(forbidden), false, `must omit ${forbidden}`);
+  }
+}

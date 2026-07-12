@@ -155,6 +155,10 @@ export const OFFICE_ESTIMATOR_READ_FIELDS = {
     "scope_delta", "currency", "subtotal", "tax_amount", "total_amount", "price_book_version", "requested_at", "approved_at",
     "accepted_at", "supersedes", "correction_reason", "modified",
   ],
+  "Insurance Supplement": [
+    "name", "roof_job", "version", "status", "measurement_report", "invoice_required",
+    "approved_at", "submitted_at", "carrier_response_at", "closed_at", "modified",
+  ],
   "Scope Clause": [
     "name", "scope_clause_id", "roof_job", "clause_type", "title", "clause_text", "version", "status", "source_ref",
     "customer_visible", "approved_at", "modified",
@@ -182,6 +186,15 @@ const OFFICE_ESTIMATOR_DETAIL_READ = {
     ],
     children: {
       items: ["category", "item_name", "quantity", "unit", "waste_factor", "source_ref", "confidence", "needs_review"],
+    },
+  },
+  "Insurance Supplement": {
+    fields: [
+      "name", "roof_job", "version", "status", "measurement_report", "invoice_required",
+      "approved_at", "submitted_at", "carrier_response_at", "closed_at", "modified",
+    ],
+    children: {
+      evidence: ["evidence_role"],
     },
   },
 } as const;
@@ -231,6 +244,7 @@ const OFFICE_ESTIMATOR_FILTER_FIELDS: Readonly<Record<OfficeEstimatorDocType, Re
   "Customer Quote": new Set(["roof_job", "status"]),
   "Proposal Evidence Pack": new Set(["roof_job", "quotation", "status"]),
   "Change Order": new Set(["roof_job", "customer_quote", "status"]),
+  "Insurance Supplement": new Set(["roof_job", "status"]),
   "Scope Clause": new Set(["roof_job", "status"]),
 };
 

@@ -214,6 +214,7 @@ function workbenchModel(
       exclusions: "Deck repairs excluded.",
     },
     scope_changes: [],
+    insurance_supplements: [],
     proposal_readiness: {
       state: "review_required",
       reasons: ["measurement_source_review_required", "takeoff_not_approved", "quote_not_approved"],
@@ -275,6 +276,9 @@ describe("EstimatorWorkbenchPage", () => {
       }),
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /request draft revision/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Insurance supplement evidence" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows a source-read failure as unavailable instead of relabeling it as field verified", async () => {
@@ -305,6 +309,38 @@ describe("EstimatorWorkbenchPage", () => {
     expect(screen.getByText("The retained measurement source was not found.")).toBeVisible();
     expect(screen.queryByText("Geometry recomputed from source file")).not.toBeInTheDocument();
     expect(screen.queryByText(/field verified/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the restricted insurance evidence lane without claim details or write controls", async () => {
+    const restrictedSupplement = {
+      presentation_key: "insurance-supplement-1",
+      version: 1,
+      status: "Ready for Human Review",
+      measurement_state: "review_required",
+      evidence_roles: ["Carrier Scope", "Code/Manufacturer", "Photo", "Invoice"],
+      missing_requirements: ["approved_measurement"],
+      invoice_state: "recorded",
+      approval_recorded: false,
+      submission_recorded: false,
+      carrier_response_recorded: false,
+      closed_recorded: false,
+      claim_reference: "private-claim-reference",
+      carrier_name: "private-carrier-name",
+    } as unknown as EstimatorWorkbenchResponse["insurance_supplements"][number];
+    vi.mocked(loadEstimatorWorkbench).mockResolvedValue(
+      workbenchModel({ insurance_supplements: [restrictedSupplement] }),
+    );
+    renderWorkbench();
+
+    await screen.findByRole("heading", { name: "Insurance supplement evidence" });
+    expect(screen.getByText("Carrier Scope · Code/Manufacturer · Photo · Invoice")).toBeVisible();
+    expect(screen.getByText("Link an approved measurement report.")).toBeVisible();
+    expect(screen.getByText(/carrier scope is recorded, not interpreted/i)).toBeVisible();
+    expect(screen.queryByText("private-claim-reference")).not.toBeInTheDocument();
+    expect(screen.queryByText("private-carrier-name")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /submit|carrier|coverage|approve supplement/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not present unrelated takeoff or proposal records as a continuous evidence chain", async () => {

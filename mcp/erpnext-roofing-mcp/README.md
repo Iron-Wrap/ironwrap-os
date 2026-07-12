@@ -4,7 +4,7 @@ Narrow MCP server for the proprietary IronWrap OS Frappe app. The `erpnext-*`
 name is retained only for compatibility; ERPNext is not installed or linked.
 
 This server is the Hermes command surface over IronWrap OS business truth. It uses
-Frappe token auth. The implemented source contract is **121 tools: 73 reads, 24 dry-runs, and 24
+Frappe token auth. The implemented source contract is **129 tools: 75 reads, 27 dry-runs, and 27
 approved writes**. The manifest in `hermes/mcp-servers.json` is the exact source-registration
 inventory; deployed runtime proof remains a launch gate.
 
@@ -79,7 +79,7 @@ Baseline reads and command pairs:
 - `dry_run_market_watch_item`
 - `request_add_market_watch_item`
 
-Committed 46-DocType operating-model additions:
+Committed 48-DocType operating-model additions:
 
 - `get_crew_profile` / `list_crew_profiles` (strictly read-only)
 - `get_job_assignment` / `list_job_assignments_for_job`
@@ -101,6 +101,15 @@ Committed 46-DocType operating-model additions:
 - `dry_run_communication_consent` / `request_record_communication_consent`
 - `dry_run_reconciliation_resolution` / `request_resolve_reconciliation`
 - `dry_run_tenant_export` / `request_tenant_export`
+- `get_insurance_supplement` / `list_insurance_supplements_for_job` (strict proof-state projection)
+- `dry_run_insurance_supplement` / `request_create_insurance_supplement`
+- `dry_run_set_insurance_supplement_evidence` / `request_set_insurance_supplement_evidence`
+- `dry_run_insurance_supplement_transition` / `request_transition_insurance_supplement`
+
+Insurance Supplement reads and commands are granted only to the owner-operator and
+estimator-assistant roles. The MCP surface deliberately excludes carrier, claim, policy, adjuster,
+basis, raw evidence manifest, document identity, and storage location; it records evidence proof
+and human handoff state, never coverage or a carrier decision.
 
 Estimator intake enters IronWrap OS through the Worker `POST /ingest/estimate` route first. This MCP
 server reads the resulting `Instant Estimate Session` rows and can draft downstream takeoff/proposal

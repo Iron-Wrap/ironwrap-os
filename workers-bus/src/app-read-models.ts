@@ -450,6 +450,35 @@ export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
     accepted_at: string | null;
     correction_reason: string | null;
   }>;
+  insurance_supplements: Array<{
+    presentation_key: string;
+    version: number | null;
+    status: string | null;
+    measurement_state: "approved" | "missing" | "review_required" | "unavailable";
+    evidence_roles: Array<
+      "Carrier Scope"
+      | "Code/Manufacturer"
+      | "Photo"
+      | "Invoice"
+      | "Submission"
+      | "Carrier Response"
+    >;
+    missing_requirements: Array<
+      | "approved_measurement"
+      | "carrier_scope"
+      | "code_or_manufacturer"
+      | "photo"
+      | "invoice_or_exception"
+      | "submission_artifact"
+      | "carrier_response_artifact"
+      | "source_detail_unavailable"
+    >;
+    invoice_state: "recorded" | "required" | "not_required" | "unavailable";
+    approval_recorded: boolean;
+    submission_recorded: boolean;
+    carrier_response_recorded: boolean;
+    closed_recorded: boolean;
+  }>;
   proposal_readiness: {
     state: "ready" | "review_required" | "blocked" | "unavailable";
     reasons: Array<
@@ -1070,8 +1099,17 @@ export async function buildEstimatorWorkbenchReadModel(
   );
   const jobId = job ? text(job.name) : null;
   if (!job || !jobId) return null;
+  const insuranceAccessGranted = hasRestrictedInsuranceAccess(env, auth);
 
-  const [measurementRows, takeoffRows, quoteRows, proposalRows, changeOrderRows, scopeRows] = await Promise.all([
+  const [
+    measurementRows,
+    takeoffRows,
+    quoteRows,
+    proposalRows,
+    changeOrderRows,
+    insuranceSupplementRows,
+    scopeRows,
+  ] = await Promise.all([
     listOfficeEstimatorFrappeResource(
       env,
       "Measurement Report",
@@ -1102,6 +1140,14 @@ export async function buildEstimatorWorkbenchReadModel(
       [["Change Order", "roof_job", "=", jobId]],
       ESTIMATOR_SOURCE_LIMIT,
     ),
+    insuranceAccessGranted
+      ? listOfficeEstimatorFrappeResource(
+        env,
+        "Insurance Supplement",
+        [["Insurance Supplement", "roof_job", "=", jobId]],
+        ESTIMATOR_SOURCE_LIMIT,
+      )
+      : Promise.resolve([]),
     listOfficeEstimatorFrappeResource(
       env,
       "Scope Clause",
@@ -1127,13 +1173,22 @@ export async function buildEstimatorWorkbenchReadModel(
   const scopeChanges = newestFirst(changeOrderRows).flatMap((row) =>
     estimatorScopeChange(row, selectedQuoteName, quoteRows),
   );
-  const [measurementRead, takeoffRead] = await Promise.all([
+  const [measurementRead, takeoffRead, insuranceSupplementReads] = await Promise.all([
     selectedMeasurementName
       ? safeEstimatorDetailRead(env, "Measurement Report", selectedMeasurementName)
       : Promise.resolve({ row: null, unavailable_reason: null }),
     selectedTakeoffName
       ? safeEstimatorDetailRead(env, "Material Takeoff", selectedTakeoffName)
       : Promise.resolve({ row: null, unavailable_reason: null }),
+    Promise.all(insuranceSupplementRows.map(async (row) => {
+      const name = text(row.name);
+      return {
+        name,
+        read: name
+          ? await safeEstimatorDetailRead(env, "Insurance Supplement", name)
+          : { row: null, unavailable_reason: "insurance_supplement_detail_unavailable" },
+      };
+    })),
   ]);
   const measurementDetail = matchesMeasurementDetail(measurementRead.row, selectedMeasurementName, jobId)
     ? measurementRead.row
@@ -1154,6 +1209,15 @@ export async function buildEstimatorWorkbenchReadModel(
   const staleFields: string[] = [];
   if (selectedMeasurementRow && !measurementDetail) staleFields.push("measurements.selected_detail");
   if (selectedTakeoffRow && !takeoffDetail) staleFields.push("takeoffs.selected_detail");
+  const insuranceSupplementDetails = new Map<string, FrappeRow | null>();
+  for (const { name, read } of insuranceSupplementReads) {
+    if (!name) continue;
+    const detail = matchesInsuranceSupplementDetail(read.row, name, jobId) ? read.row : null;
+    insuranceSupplementDetails.set(name, detail);
+    if (!detail && !staleFields.includes("insurance_supplements.detail_unavailable")) {
+      staleFields.push("insurance_supplements.detail_unavailable");
+    }
+  }
 
   const sourceRows: Array<readonly [string, FrappeRow[]]> = [
     ["measurement_reports", measurementRows],
@@ -1161,12 +1225,22 @@ export async function buildEstimatorWorkbenchReadModel(
     ["customer_quotes", quoteRows],
     ["proposal_evidence_packs", proposalRows],
     ["change_orders", changeOrderRows],
+    ["insurance_supplements", insuranceSupplementRows],
     ["scope_clauses", scopeRows],
   ];
   const partialSources = sourceRows.flatMap(([name, rows]) => rows.length === ESTIMATOR_SOURCE_LIMIT ? [name] : []);
   const base = envelope(
     auth,
-    [job, ...measurementRows, ...takeoffRows, ...quoteRows, ...proposalRows, ...changeOrderRows, ...scopeRows],
+    [
+      job,
+      ...measurementRows,
+      ...takeoffRows,
+      ...quoteRows,
+      ...proposalRows,
+      ...changeOrderRows,
+      ...insuranceSupplementRows,
+      ...scopeRows,
+    ],
     staleFields,
   );
   const quoteRevisionPreparationAvailable = Boolean(
@@ -1212,6 +1286,14 @@ export async function buildEstimatorWorkbenchReadModel(
     quote_revision: quoteRevision,
     proposal: estimatorProposal(selectedProposalRow),
     scope_changes: scopeChanges,
+    insurance_supplements: newestFirst(insuranceSupplementRows).flatMap((row, index) =>
+      estimatorInsuranceSupplement(
+        "insurance-supplement-" + (index + 1),
+        row,
+        insuranceSupplementDetails.get(text(row.name) ?? "") ?? null,
+        measurementRows,
+      ),
+    ),
     proposal_readiness: estimatorProposalReadiness({
       geometry,
       measurement: selectedMeasurementRow,
@@ -1644,7 +1726,7 @@ function estimatorMeasurementSummary(
 
 async function safeEstimatorDetailRead(
   env: AppEnv,
-  doctype: "Measurement Report" | "Material Takeoff",
+  doctype: "Measurement Report" | "Material Takeoff" | "Insurance Supplement",
   name: string,
 ): Promise<{ row: FrappeRow | null; unavailable_reason: string | null }> {
   try {
@@ -1655,7 +1737,9 @@ async function safeEstimatorDetailRead(
         row: null,
         unavailable_reason: doctype === "Measurement Report"
           ? "measurement_detail_too_large"
-          : "takeoff_detail_too_large",
+          : doctype === "Material Takeoff"
+            ? "takeoff_detail_too_large"
+            : "insurance_supplement_detail_too_large",
       };
     }
     throw error;
@@ -1683,6 +1767,19 @@ function matchesTakeoffDetail(
       && text(row.name) === expectedName
       && text(row.roof_job) === jobName
       && text(row.measurement_report) === measurementName,
+  );
+}
+
+function matchesInsuranceSupplementDetail(
+  row: FrappeRow | null,
+  expectedName: string | null,
+  jobName: string,
+): boolean {
+  return Boolean(
+    row
+      && expectedName
+      && text(row.name) === expectedName
+      && text(row.roof_job) === jobName,
   );
 }
 
@@ -1931,6 +2028,98 @@ function estimatorScopeChange(
   }];
 }
 
+function estimatorInsuranceSupplement(
+  presentationKey: string,
+  row: FrappeRow,
+  detail: FrappeRow | null,
+  measurementRows: FrappeRow[],
+): EstimatorWorkbenchReadModel["insurance_supplements"] {
+  const measurementName = text(row.measurement_report);
+  const measurement = measurementName
+    ? measurementRows.find(
+      (candidate) =>
+        text(candidate.name) === measurementName || text(candidate.measurement_id) === measurementName,
+    )
+    : null;
+  const measurementState: EstimatorWorkbenchReadModel["insurance_supplements"][number]["measurement_state"] =
+    !measurementName
+      ? "missing"
+      : !measurement
+        ? "unavailable"
+        : text(measurement.review_status) === "Approved"
+          ? "approved"
+          : "review_required";
+  const missing: EstimatorWorkbenchReadModel["insurance_supplements"][number]["missing_requirements"] = [];
+  if (!detail) {
+    missing.push("source_detail_unavailable");
+    return [{
+      presentation_key: presentationKey,
+      version: optionalNumber(row.version),
+      status: text(row.status),
+      measurement_state: measurementState,
+      evidence_roles: [],
+      missing_requirements: missing,
+      invoice_state: "unavailable",
+      approval_recorded: Boolean(text(row.approved_at)),
+      submission_recorded: Boolean(text(row.submitted_at)),
+      carrier_response_recorded: Boolean(text(row.carrier_response_at)),
+      closed_recorded: Boolean(text(row.closed_at)),
+    }];
+  }
+
+  const roleOrder = [
+    "Carrier Scope",
+    "Code/Manufacturer",
+    "Photo",
+    "Invoice",
+    "Submission",
+    "Carrier Response",
+  ] as const;
+  const availableRoles = new Set(
+    recordRows(detail.evidence)
+      .map((evidence) => text(evidence.evidence_role))
+      .filter((role): role is (typeof roleOrder)[number] =>
+        role !== null && roleOrder.includes(role as (typeof roleOrder)[number]),
+      ),
+  );
+  const evidenceRoles = roleOrder.filter((role) => availableRoles.has(role));
+  if (measurementState !== "approved") missing.push("approved_measurement");
+  if (!availableRoles.has("Carrier Scope")) missing.push("carrier_scope");
+  if (!availableRoles.has("Code/Manufacturer")) missing.push("code_or_manufacturer");
+  if (!availableRoles.has("Photo")) missing.push("photo");
+  const invoiceRequired = booleanValue(row.invoice_required) !== false;
+  if (invoiceRequired && !availableRoles.has("Invoice")) {
+    missing.push("invoice_or_exception");
+  }
+  const status = text(row.status);
+  if (
+    ["Submitted", "Carrier Response Recorded", "Closed"].includes(status ?? "")
+    && !availableRoles.has("Submission")
+  ) {
+    missing.push("submission_artifact");
+  }
+  if (status === "Carrier Response Recorded" && !availableRoles.has("Carrier Response")) {
+    missing.push("carrier_response_artifact");
+  }
+  return [{
+    presentation_key: presentationKey,
+    version: optionalNumber(row.version),
+    status,
+    measurement_state: measurementState,
+    evidence_roles: evidenceRoles,
+    missing_requirements: missing,
+    invoice_state: availableRoles.has("Invoice")
+      ? "recorded"
+      : invoiceRequired
+        ? "required"
+        : "not_required",
+    approval_recorded: Boolean(text(row.approved_at)),
+    submission_recorded: Boolean(text(row.submitted_at)),
+    carrier_response_recorded: Boolean(text(row.carrier_response_at)),
+    closed_recorded: Boolean(text(row.closed_at)),
+  }];
+}
+
 function estimatorProposalReadiness({
   geometry,
   measurement,
@@ -2147,6 +2336,19 @@ function validJobName(value: string): boolean {
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function hasRestrictedInsuranceAccess(env: AppEnv, auth: AuthContext): boolean {
+  if (auth.session.role === "owner") return true;
+  if (auth.session.role !== "ops") return false;
+  const frappeUser = text(auth.session.frappe_user_id)?.toLowerCase();
+  if (!frappeUser) return false;
+  return (env.APP_INSURANCE_ESTIMATOR_FRAPPE_USERS ?? "")
+    .split(",")
+    .map((candidate) => candidate.trim().toLowerCase())
+    .filter((candidate) => candidate.length > 0 && candidate.length <= 254)
+    .slice(0, 32)
+    .includes(frappeUser);
 }
 
 function sameUser(value: unknown, expected: string): boolean {

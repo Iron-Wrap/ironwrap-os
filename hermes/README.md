@@ -26,8 +26,8 @@ Two MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, pe
   deterministic policy checks (`check_consent`, `check_quiet_hours`), dry-run previews, and
   review-gated `request_*` writes. Its legacy name is retained for deployment compatibility.
 
-The validated implemented-source inventory is **128 tools** across both servers: the bus contributes 7;
-the Frappe server contributes **121 (73 reads, 24 dry-runs, 24 approved writes)**.
+The validated implemented-source inventory is **136 tools** across both servers: the bus contributes 7;
+the Frappe server contributes **129 (75 reads, 27 dry-runs, 27 approved writes)**.
 
 ## Tool filtering per agent role
 
@@ -59,7 +59,7 @@ is the mutation claim, and any in-flight or failed claim fails closed instead of
 retains its separate `IRONWRAP_BUS_WRITE_ENABLED` plus `HERMES_WRITE_TOKEN` replay gate. Frappe
 writes record Hermes Run rows; bus replay records envelope-scoped recovery and approval context.
 
-Additional hard boundaries in the committed 46-DocType model:
+Additional hard boundaries in the committed 48-DocType model:
 
 - Crew Profile and Contract Acceptance are read-only. No Hermes tool signs, accepts, or
   rejects on a customer's behalf.
@@ -72,6 +72,10 @@ Additional hard boundaries in the committed 46-DocType model:
   derives active assignment role server-side, and leaves generic child-table replacement unavailable.
 - Reconciliation resolution changes only the reconciliation record; QuickBooks remains
   accounting truth. Tenant export creates only a Requested row, never an archive or key.
+- Insurance Supplement is a restricted evidence record, available only to the owner and estimator
+  roles. It freezes the exact verified same-job evidence manifest at internal approval and never
+  exposes carrier, claim, policy, adjuster, raw-document, or storage-pointer data to broad roles
+  or browser DTOs. It records proof and human handoffs, never a carrier decision or coverage outcome.
 
 ## Security model
 
@@ -117,5 +121,5 @@ It parses the implemented tool inventory from both server sources, checks that e
 in `roles.json` exists, that reads are read-only, dry-runs are previews, approved-writes are
 `request_*` mutations each paired with its dry-run counterpart in the same role, and that all
 eight blueprint roles are present with no duplicate grants.
-It also freezes the 128-tool inventory, enforces Contract Acceptance as read-only, checks
+It also freezes the 136-tool inventory, enforces Contract Acceptance as read-only, checks
 least-privilege boundaries for field/finance roles, and validates manifest union exactness.

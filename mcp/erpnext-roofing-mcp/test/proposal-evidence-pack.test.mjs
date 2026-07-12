@@ -44,6 +44,7 @@ test("proposal-pack dry run needs an explicit approved quote and never emits raw
     roof_job: "JOB-A",
     quote_version: 2,
     status: "Approved",
+    price_rule_snapshot_json: "{\"bound\":true}",
   };
   const approvedMeasurement = {
     name: "MEASUREMENT-A",
@@ -127,6 +128,7 @@ test("proposal-pack approved write re-reads the anchored quote and fails before 
     roof_job: "JOB-A",
     quote_version: 2,
     status: "Approved",
+    price_rule_snapshot_json: "{\"bound\":true}",
   };
   const approvedMeasurement = {
     name: "MEASUREMENT-A",

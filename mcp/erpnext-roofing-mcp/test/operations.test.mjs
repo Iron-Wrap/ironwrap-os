@@ -116,7 +116,7 @@ test("strict read tools use bounded schemas and redact sensitive fields", async 
     apiSecret: "secret",
     writeEnabled: false,
   });
-  assert.equal(Object.keys(server._registeredTools).length, 119);
+  assert.equal(Object.keys(server._registeredTools).length, 121);
   assert.equal(server._registeredTools.get_contract_acceptance.inputSchema.safeParse({
     acceptance_id: "acceptance:1",
     unknown: true,

@@ -312,7 +312,59 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
             context["superseded_record"] = frappe.db.get_value(
                 doctype, target, fields, as_dict=True
             )
-    if kind == "material_takeoff":
+    if kind == "customer_quote":
+        snapshot = parse_json_field(
+            document,
+            "price_rule_snapshot_json",
+            container_types=(dict,),
+            non_empty=True,
+        )
+        context["price_rule_snapshot_rules"] = {}
+        if snapshot is not None:
+            rules = snapshot.get("rules")
+            if isinstance(rules, list) and len(rules) > 50:
+                raise PolicyViolation(
+                    "price_rule_snapshot_window_exceeded",
+                    "price rule source verification is limited to fifty rules",
+                    "price_rule_snapshot_json",
+                )
+            rule_ids = [
+                row.get("price_rule_id")
+                for row in (rules if isinstance(rules, list) else [])
+                if isinstance(row, dict)
+                and isinstance(row.get("price_rule_id"), str)
+            ]
+            if rule_ids:
+                context["price_rule_snapshot_rules"] = {
+                    row["name"]: row
+                    for row in frappe.get_all(
+                        "Price Book Rule",
+                        filters={"name": ["in", rule_ids]},
+                        fields=[
+                            "name",
+                            "price_rule_id",
+                            "rule_name",
+                            "rule_type",
+                            "status",
+                            "service_type",
+                            "material_system",
+                            "unit",
+                            "unit_cost",
+                            "unit_price",
+                            "minimum_quantity",
+                            "currency",
+                            "source_ref",
+                            "rule_json",
+                            "effective_from",
+                            "effective_to",
+                            "assumptions",
+                            "exclusions",
+                            "approved_by",
+                            "approved_at",
+                        ],
+                    )
+                }
+    elif kind == "material_takeoff":
         context["measurement_status"] = _value(
             "Measurement Report", document.get("measurement_report"), "review_status"
         )
@@ -330,7 +382,7 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
             frappe.db.get_value(
                 "Customer Quote",
                 quotation,
-                ("roof_job", "status", "quote_version"),
+                ("roof_job", "status", "quote_version", "price_rule_snapshot_json"),
                 as_dict=True,
             )
             if quotation
@@ -339,6 +391,9 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
         context["quote_status"] = quote.get("status") if quote else None
         context["quote_roof_job"] = quote.get("roof_job") if quote else None
         context["quote_version"] = quote.get("quote_version") if quote else None
+        context["quote_price_rule_snapshot_bound"] = bool(
+            quote and quote.get("price_rule_snapshot_json")
+        )
         summary = parse_json_field(
             document,
             "evidence_summary_json",

@@ -30,6 +30,9 @@ const REQUEST_TO_DRY_RUN = Object.freeze({
   request_create_job_assignment: "dry_run_job_assignment",
   request_create_change_order: "dry_run_change_order",
   request_transition_change_order: "dry_run_change_order_transition",
+  request_create_insurance_supplement: "dry_run_insurance_supplement",
+  request_set_insurance_supplement_evidence: "dry_run_set_insurance_supplement_evidence",
+  request_transition_insurance_supplement: "dry_run_insurance_supplement_transition",
   request_create_safety_plan: "dry_run_safety_plan",
   request_record_safety_acknowledgement: "dry_run_safety_acknowledgement",
   request_record_job_compliance: "dry_run_job_compliance_record",
@@ -541,6 +544,34 @@ const CHANGE_ORDER_ITEM_FIELDS = [
   "source_ref",
   "customer_visible",
 ];
+
+const INSURANCE_SUPPLEMENT_FIELDS = [
+  "name",
+  "insurance_supplement_id",
+  "roof_job",
+  "version",
+  "status",
+  "measurement_report",
+  "invoice_required",
+  "approved_at",
+  "submitted_at",
+  "carrier_response_at",
+  "closed_at",
+  "modified",
+];
+
+const INSURANCE_SUPPLEMENT_EVIDENCE_FIELDS = [
+  "evidence_role",
+];
+
+const INSURANCE_EVIDENCE_TYPES = Object.freeze({
+  "Carrier Scope": ["PDF", "Email", "Signed Document"],
+  "Code/Manufacturer": ["PDF", "Email", "Signed Document"],
+  Photo: ["Photo"],
+  Invoice: ["Invoice"],
+  Submission: ["PDF", "Email", "Signed Document"],
+  "Carrier Response": ["PDF", "Email", "Signed Document"],
+});
 
 const SAFETY_PLAN_FIELDS = [
   "name",
@@ -1679,6 +1710,63 @@ export const ChangeOrderTransitionInputSchema = z.object({
   evidence_item_id: IdSchema.optional(),
 }).strict();
 
+const InsuranceSupplementEvidenceInputSchema = z.object({
+  evidence_item_id: IdSchema,
+  evidence_role: z.enum([
+    "Carrier Scope",
+    "Code/Manufacturer",
+    "Photo",
+    "Invoice",
+    "Submission",
+    "Carrier Response",
+  ]),
+}).strict();
+
+export const InsuranceSupplementDraftInputSchema = z.object({
+  insurance_supplement_id: IdSchema,
+  roof_job_id: IdSchema,
+  customer_quote_id: IdSchema.optional(),
+  change_order_id: IdSchema.optional(),
+  version: z.number().int().min(1).max(100).optional(),
+  carrier_name: z.string().trim().min(1).max(140).optional(),
+  claim_reference: z.string().trim().min(1).max(140).optional(),
+  policy_reference: z.string().trim().min(1).max(140).optional(),
+  date_of_loss: DateSchema.optional(),
+  adjuster_reference: z.string().trim().min(1).max(140).optional(),
+  supplement_basis: z.string().trim().min(1).max(8000).optional(),
+  measurement_report_id: IdSchema.optional(),
+  invoice_required: z.boolean().optional(),
+  invoice_exception_reason: z.string().trim().min(1).max(2000).optional(),
+  evidence: z.array(InsuranceSupplementEvidenceInputSchema).max(50).optional(),
+  supersedes: IdSchema.optional(),
+  correction_reason: z.string().trim().min(1).max(2000).optional(),
+  notes: z.string().trim().max(2000).optional(),
+}).strict();
+
+export const InsuranceSupplementEvidenceUpdateInputSchema = z.object({
+  insurance_supplement_id: IdSchema,
+  roof_job_id: IdSchema,
+  measurement_report_id: IdSchema.optional(),
+  evidence: z.array(InsuranceSupplementEvidenceInputSchema).max(50),
+}).strict();
+
+export const InsuranceSupplementTransitionInputSchema = z.object({
+  insurance_supplement_id: IdSchema,
+  roof_job_id: IdSchema,
+  next_status: z.enum([
+    "Draft",
+    "Needs Evidence",
+    "Ready for Human Review",
+    "Approved for Submission",
+    "Submitted",
+    "Carrier Response Recorded",
+    "Closed",
+    "Superseded",
+  ]),
+  reason: z.string().trim().min(1).max(2000).optional(),
+  resolution_summary: z.string().trim().min(1).max(2000).optional(),
+}).strict();
+
 export const SafetyPlanInputSchema = z.object({
   safety_plan_id: IdSchema.optional(),
   roof_job_id: IdSchema,
@@ -2018,6 +2106,127 @@ export function buildChangeOrderTransitionPatch(
     patch.approved_by = "";
     patch.approved_at = "";
     patch.correction_reason = reason.trim();
+  }
+  if (nextStatus === "Superseded") patch.correction_reason = reason.trim();
+  return patch;
+}
+
+function normalizeInsuranceSupplementEvidence(evidence = []) {
+  const seen = new Set();
+  return evidence.map(({ evidence_item_id: evidenceItemId, evidence_role: evidenceRole }) => {
+    if (seen.has(evidenceItemId)) throw new Error("insurance_supplement_evidence_duplicate");
+    seen.add(evidenceItemId);
+    return {
+      evidence_item: evidenceItemId,
+      evidence_role: evidenceRole,
+    };
+  });
+}
+
+export function buildInsuranceSupplementDraft({
+  insuranceSupplementId,
+  roofJobId,
+  customerQuoteId,
+  changeOrderId,
+  version = 1,
+  carrierName,
+  claimReference,
+  policyReference,
+  dateOfLoss,
+  adjusterReference,
+  supplementBasis,
+  measurementReportId,
+  invoiceRequired = true,
+  invoiceExceptionReason,
+  evidence,
+  supersedes,
+  correctionReason,
+  notes,
+} = {}) {
+  if (!insuranceSupplementId) throw new Error("insurance_supplement_id_required");
+  if (!roofJobId) throw new Error("roof_job_id_required");
+  if (supersedes && !str(correctionReason)) throw new Error("correction_reason_required");
+  return {
+    insurance_supplement_id: insuranceSupplementId,
+    roof_job: roofJobId,
+    ...(customerQuoteId ? { customer_quote: customerQuoteId } : {}),
+    ...(changeOrderId ? { change_order: changeOrderId } : {}),
+    version,
+    status: "Draft",
+    ...(carrierName ? { carrier_name: carrierName.trim() } : {}),
+    ...(claimReference ? { claim_reference: claimReference.trim() } : {}),
+    ...(policyReference ? { policy_reference: policyReference.trim() } : {}),
+    ...(dateOfLoss ? { date_of_loss: dateOfLoss } : {}),
+    ...(adjusterReference ? { adjuster_reference: adjusterReference.trim() } : {}),
+    ...(supplementBasis ? { supplement_basis: supplementBasis.trim() } : {}),
+    ...(measurementReportId ? { measurement_report: measurementReportId } : {}),
+    invoice_required: invoiceRequired === false ? 0 : 1,
+    ...(invoiceExceptionReason
+      ? { invoice_exception_reason: invoiceExceptionReason.trim() }
+      : {}),
+    evidence: normalizeInsuranceSupplementEvidence(evidence),
+    ...(supersedes ? { supersedes, correction_reason: correctionReason.trim() } : {}),
+    notes: notes ?? "",
+  };
+}
+
+export function buildInsuranceSupplementEvidencePatch(
+  before = {},
+  { measurementReportId, evidence } = {},
+) {
+  if (!["Draft", "Needs Evidence", "Ready for Human Review"].includes(before.status)) {
+    throw new Error("insurance_supplement_evidence_locked");
+  }
+  return {
+    ...(measurementReportId ? { measurement_report: measurementReportId } : {}),
+    evidence: normalizeInsuranceSupplementEvidence(evidence),
+  };
+}
+
+export function buildInsuranceSupplementTransitionPatch(
+  before = {},
+  nextStatus,
+  reason,
+  approvedBy,
+  nowIso,
+  evidenceManifest,
+  resolutionSummary,
+) {
+  const current = before.status;
+  const allowed = {
+    Draft: ["Needs Evidence", "Ready for Human Review", "Superseded"],
+    "Needs Evidence": ["Draft", "Ready for Human Review", "Superseded"],
+    "Ready for Human Review": ["Needs Evidence", "Approved for Submission", "Superseded"],
+    "Approved for Submission": ["Submitted", "Superseded"],
+    Submitted: ["Carrier Response Recorded", "Closed", "Superseded"],
+    "Carrier Response Recorded": ["Closed", "Superseded"],
+    Closed: ["Superseded"],
+  };
+  if (!allowed[current]?.includes(nextStatus)) {
+    throw new Error(
+      "insurance_supplement_transition_invalid:" + (current ?? "missing") + "->" + nextStatus,
+    );
+  }
+  if (nextStatus === "Superseded" && !str(reason)) {
+    throw new Error("insurance_supplement_transition_reason_required");
+  }
+  if (nextStatus === "Approved for Submission" && !evidenceManifest) {
+    throw new Error("insurance_supplement_evidence_manifest_required");
+  }
+  if (nextStatus === "Closed" && !str(resolutionSummary)) {
+    throw new Error("insurance_supplement_resolution_required");
+  }
+  const patch = { status: nextStatus };
+  if (nextStatus === "Approved for Submission") {
+    patch.evidence_manifest_json = JSON.stringify(evidenceManifest);
+    if (approvedBy) patch.approved_by = approvedBy;
+    if (nowIso) patch.approved_at = nowIso;
+  }
+  if (nextStatus === "Submitted" && nowIso) patch.submitted_at = nowIso;
+  if (nextStatus === "Carrier Response Recorded" && nowIso) patch.carrier_response_at = nowIso;
+  if (nextStatus === "Closed") {
+    patch.resolution_summary = resolutionSummary.trim();
+    if (nowIso) patch.closed_at = nowIso;
   }
   if (nextStatus === "Superseded") patch.correction_reason = reason.trim();
   return patch;
@@ -2428,6 +2637,30 @@ function str(v) {
 export function redactApprovalArgs(args) {
   const safeArgs = approvedArgs(args);
   delete safeArgs.__hermes_actor_user;
+  if (Object.hasOwn(safeArgs, "insurance_supplement_id")) {
+    const evidence = Array.isArray(safeArgs.evidence) ? safeArgs.evidence : [];
+    if (Array.isArray(safeArgs.evidence)) {
+      safeArgs.evidence = {
+        evidence_count: evidence.length,
+        evidence_roles: [...new Set(evidence.map((row) => row?.evidence_role).filter(Boolean))].sort(),
+      };
+    }
+    for (const field of [
+      "carrier_name",
+      "claim_reference",
+      "policy_reference",
+      "date_of_loss",
+      "adjuster_reference",
+      "supplement_basis",
+      "measurement_report_id",
+      "invoice_exception_reason",
+      "notes",
+      "reason",
+      "resolution_summary",
+    ]) delete safeArgs[field];
+    safeArgs.request_text = "[restricted insurance supplement approval request]";
+    safeArgs.insurance_context = "redacted";
+  }
   return safeArgs;
 }
 
@@ -3506,6 +3739,14 @@ export function buildServer(config) {
     childFields: { items: CHANGE_ORDER_ITEM_FIELDS },
   });
   registerStrictJobReadPair(server, config, {
+    doctype: "Insurance Supplement",
+    idArg: "insurance_supplement_id",
+    getName: "get_insurance_supplement",
+    listName: "list_insurance_supplements_for_job",
+    fields: INSURANCE_SUPPLEMENT_FIELDS,
+    childFields: { evidence: INSURANCE_SUPPLEMENT_EVIDENCE_FIELDS },
+  });
+  registerStrictJobReadPair(server, config, {
     doctype: "Safety Plan",
     idArg: "safety_plan_id",
     getName: "get_safety_plan",
@@ -4033,6 +4274,282 @@ export function buildServer(config) {
         ]),
         execute: () => erpPut(config, resourcePath("Change Order", args.change_order_id), patch),
         responseExtra: { updated: true, change_order_id: args.change_order_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_insurance_supplement",
+    {
+      title: "Dry Run Insurance Supplement",
+      description: "Preview one append-only restricted insurance supplement evidence record. It never determines coverage, submits to a carrier, or contacts anyone.",
+      inputSchema: InsuranceSupplementDraftInputSchema,
+    },
+    async (args) => {
+      const draft = insuranceSupplementDraftFromArgs(args);
+      const verifiedEvidence = await assertInsuranceSupplementSources(config, draft);
+      const before = await readResourceOrNull(config, "Insurance Supplement", draft.insurance_supplement_id);
+      return text({
+        would_write: false,
+        required_tool: "request_create_insurance_supplement",
+        target: { doctype: "Insurance Supplement", name: draft.insurance_supplement_id },
+        append_only: true,
+        blocked_existing: Boolean(before),
+        ...(before ? { blocked_reason: "insurance_supplement_append_only" } : {}),
+        draft: summarizeInsuranceSupplement(draft),
+        source: {
+          customer_quote_linked: Boolean(draft.customer_quote),
+          change_order_linked: Boolean(draft.change_order),
+          measurement_report_linked: Boolean(draft.measurement_report),
+          ...summarizeInsuranceEvidenceRows(verifiedEvidence),
+        },
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_create_insurance_supplement",
+    {
+      title: "Request Create Insurance Supplement",
+      description: "Approved-write: append one restricted insurance supplement Draft and audit it. It cannot make a carrier determination or submit evidence externally.",
+      inputSchema: approvedWriteInputSchema(InsuranceSupplementDraftInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const draft = insuranceSupplementDraftFromArgs(args);
+      const verifiedEvidence = await assertInsuranceSupplementSources(config, draft);
+      const before = await readResourceOrNull(config, "Insurance Supplement", draft.insurance_supplement_id);
+      const safeDraft = summarizeInsuranceSupplement(draft);
+      const dryRun = {
+        target: { doctype: "Insurance Supplement", name: draft.insurance_supplement_id },
+        operation: before ? "blocked_existing" : "create",
+        append_only: true,
+        draft: safeDraft,
+        source: {
+          customer_quote_linked: Boolean(draft.customer_quote),
+          change_order_linked: Boolean(draft.change_order),
+          measurement_report_linked: Boolean(draft.measurement_report),
+          ...summarizeInsuranceEvidenceRows(verifiedEvidence),
+        },
+      };
+      const now = new Date().toISOString();
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_create_insurance_supplement",
+        target: { doctype: "Insurance Supplement", name: draft.insurance_supplement_id },
+        roofJob: args.roof_job_id,
+        dryRun,
+        beforeSummary: summarizeInsuranceSupplement(before),
+        afterSummary: safeDraft,
+        execute: async () => ({
+          data: summarizeInsuranceSupplement(
+            (await createOnlyExecutor(
+              config,
+              "Insurance Supplement",
+              before,
+              draft,
+              "insurance_supplement_append_only",
+            )())?.data,
+          ),
+        }),
+        responseExtra: { created: true, insurance_supplement_id: draft.insurance_supplement_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_set_insurance_supplement_evidence",
+    {
+      title: "Dry Run Set Insurance Supplement Evidence",
+      description: "Preview a replacement evidence set for a Draft, Needs Evidence, or Ready for Human Review supplement. It never changes claim facts or submits evidence.",
+      inputSchema: InsuranceSupplementEvidenceUpdateInputSchema,
+    },
+    async (args) => {
+      const before = await readResource(config, "Insurance Supplement", args.insurance_supplement_id);
+      assertLinkedRoofJob(args.roof_job_id, before, "insurance_supplement");
+      const patch = buildInsuranceSupplementEvidencePatch(before, {
+        measurementReportId: args.measurement_report_id,
+        evidence: args.evidence,
+      });
+      if (patch.measurement_report) {
+        await assertLinkedResourceForJob(
+          config,
+          "Measurement Report",
+          patch.measurement_report,
+          args.roof_job_id,
+          "insurance_supplement_measurement",
+        );
+      }
+      const verifiedEvidence = await assertInsuranceSupplementEvidence(
+        config,
+        args.roof_job_id,
+        patch.evidence,
+      );
+      return text({
+        would_write: false,
+        required_tool: "request_set_insurance_supplement_evidence",
+        target: { doctype: "Insurance Supplement", name: args.insurance_supplement_id },
+        before: summarizeInsuranceSupplement(before),
+        patch: {
+          measurement_report_linked: Boolean(patch.measurement_report),
+          ...summarizeInsuranceEvidenceRows(verifiedEvidence),
+        },
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_set_insurance_supplement_evidence",
+    {
+      title: "Request Set Insurance Supplement Evidence",
+      description: "Approved-write: replace the verified evidence references on an editable insurance supplement and audit the change. It never submits evidence externally.",
+      inputSchema: approvedWriteInputSchema(InsuranceSupplementEvidenceUpdateInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const before = await readResource(config, "Insurance Supplement", args.insurance_supplement_id);
+      assertLinkedRoofJob(args.roof_job_id, before, "insurance_supplement");
+      const patch = buildInsuranceSupplementEvidencePatch(before, {
+        measurementReportId: args.measurement_report_id,
+        evidence: args.evidence,
+      });
+      if (patch.measurement_report) {
+        await assertLinkedResourceForJob(
+          config,
+          "Measurement Report",
+          patch.measurement_report,
+          args.roof_job_id,
+          "insurance_supplement_measurement",
+        );
+      }
+      const verifiedEvidence = await assertInsuranceSupplementEvidence(
+        config,
+        args.roof_job_id,
+        patch.evidence,
+      );
+      const safeBefore = summarizeInsuranceSupplement(before);
+      const safeAfter = summarizeInsuranceSupplement({ ...before, ...patch });
+      const dryRun = {
+        target: { doctype: "Insurance Supplement", name: args.insurance_supplement_id },
+        before: safeBefore,
+        patch: {
+          measurement_report_linked: Boolean(patch.measurement_report),
+          ...summarizeInsuranceEvidenceRows(verifiedEvidence),
+        },
+      };
+      const now = new Date().toISOString();
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_set_insurance_supplement_evidence",
+        target: { doctype: "Insurance Supplement", name: args.insurance_supplement_id },
+        roofJob: args.roof_job_id,
+        dryRun,
+        beforeSummary: safeBefore,
+        afterSummary: safeAfter,
+        execute: async () => ({
+          data: summarizeInsuranceSupplement(
+            (await erpPut(
+              config,
+              resourcePath("Insurance Supplement", args.insurance_supplement_id),
+              patch,
+            ))?.data,
+          ),
+        }),
+        responseExtra: { updated: true, insurance_supplement_id: args.insurance_supplement_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_insurance_supplement_transition",
+    {
+      title: "Dry Run Insurance Supplement Transition",
+      description: "Preview an internal insurance evidence state transition. Submitted and response states only record a verified human artifact; no carrier decision or external send occurs.",
+      inputSchema: InsuranceSupplementTransitionInputSchema,
+    },
+    async (args) => {
+      const before = await readResource(config, "Insurance Supplement", args.insurance_supplement_id);
+      assertLinkedRoofJob(args.roof_job_id, before, "insurance_supplement");
+      const evidenceManifest = await insuranceEvidenceManifestFromRecord(config, before);
+      const patch = buildInsuranceSupplementTransitionPatch(
+        before,
+        args.next_status,
+        args.reason,
+        undefined,
+        undefined,
+        args.next_status === "Approved for Submission" ? evidenceManifest : undefined,
+        args.resolution_summary,
+      );
+      return text({
+        would_write: false,
+        required_tool: "request_transition_insurance_supplement",
+        target: { doctype: "Insurance Supplement", name: args.insurance_supplement_id },
+        before: summarizeInsuranceSupplement(before),
+        patch: summarizeInsuranceSupplement({ ...before, ...patch }),
+        verified_evidence: summarizeInsuranceEvidenceRows(
+          before.evidence ?? [],
+        ),
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_transition_insurance_supplement",
+    {
+      title: "Request Transition Insurance Supplement",
+      description: "Approved-write: record a reviewed internal insurance evidence state transition and audit it. It cannot submit to a carrier, decide coverage, or alter commercial amounts.",
+      inputSchema: approvedWriteInputSchema(InsuranceSupplementTransitionInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const before = await readResource(config, "Insurance Supplement", args.insurance_supplement_id);
+      assertLinkedRoofJob(args.roof_job_id, before, "insurance_supplement");
+      const evidenceManifest = await insuranceEvidenceManifestFromRecord(config, before);
+      const patch = buildInsuranceSupplementTransitionPatch(
+        before,
+        args.next_status,
+        args.reason,
+        args.approved_by,
+        now,
+        args.next_status === "Approved for Submission" ? evidenceManifest : undefined,
+        args.resolution_summary,
+      );
+      const safeBefore = summarizeInsuranceSupplement(before);
+      const safeAfter = summarizeInsuranceSupplement({ ...before, ...patch });
+      const dryRun = {
+        target: { doctype: "Insurance Supplement", name: args.insurance_supplement_id },
+        before: safeBefore,
+        patch: safeAfter,
+        verified_evidence: summarizeInsuranceEvidenceRows(before.evidence ?? []),
+      };
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_transition_insurance_supplement",
+        target: { doctype: "Insurance Supplement", name: args.insurance_supplement_id },
+        roofJob: args.roof_job_id,
+        dryRun,
+        beforeSummary: safeBefore,
+        afterSummary: safeAfter,
+        execute: async () => ({
+          data: summarizeInsuranceSupplement(
+            (await erpPut(
+              config,
+              resourcePath("Insurance Supplement", args.insurance_supplement_id),
+              patch,
+            ))?.data,
+          ),
+        }),
+        responseExtra: { updated: true, insurance_supplement_id: args.insurance_supplement_id },
       }));
     },
   );
@@ -5825,6 +6342,130 @@ function changeOrderDraftFromArgs(args, nowIso) {
   });
 }
 
+function insuranceSupplementDraftFromArgs(args) {
+  return buildInsuranceSupplementDraft({
+    insuranceSupplementId: args.insurance_supplement_id,
+    roofJobId: args.roof_job_id,
+    customerQuoteId: args.customer_quote_id,
+    changeOrderId: args.change_order_id,
+    version: args.version,
+    carrierName: args.carrier_name,
+    claimReference: args.claim_reference,
+    policyReference: args.policy_reference,
+    dateOfLoss: args.date_of_loss,
+    adjusterReference: args.adjuster_reference,
+    supplementBasis: args.supplement_basis,
+    measurementReportId: args.measurement_report_id,
+    invoiceRequired: args.invoice_required,
+    invoiceExceptionReason: args.invoice_exception_reason,
+    evidence: args.evidence,
+    supersedes: args.supersedes,
+    correctionReason: args.correction_reason,
+    notes: args.notes,
+  });
+}
+
+async function assertInsuranceSupplementEvidence(config, roofJobId, rows) {
+  const seen = new Set();
+  const verified = [];
+  for (const row of rows ?? []) {
+    const evidenceItemId = row?.evidence_item ?? row?.evidence_item_id;
+    const evidenceRole = row?.evidence_role;
+    if (!evidenceItemId || !INSURANCE_EVIDENCE_TYPES[evidenceRole]) {
+      throw new Error("insurance_supplement_evidence_invalid");
+    }
+    if (seen.has(evidenceItemId)) throw new Error("insurance_supplement_evidence_duplicate");
+    seen.add(evidenceItemId);
+    const evidence = await assertLinkedResourceForJob(
+      config,
+      "Evidence Item",
+      evidenceItemId,
+      roofJobId,
+      "insurance_supplement",
+      { evidenceTypes: INSURANCE_EVIDENCE_TYPES[evidenceRole] },
+    );
+    verified.push({ evidence_item_id: evidenceItemId, evidence_role: evidenceRole, evidence });
+  }
+  return verified;
+}
+
+async function assertInsuranceSupplementSources(config, draft) {
+  if (draft.customer_quote) {
+    await assertLinkedResourceForJob(
+      config,
+      "Customer Quote",
+      draft.customer_quote,
+      draft.roof_job,
+      "insurance_supplement_customer_quote",
+    );
+  }
+  if (draft.change_order) {
+    await assertLinkedResourceForJob(
+      config,
+      "Change Order",
+      draft.change_order,
+      draft.roof_job,
+      "insurance_supplement_change_order",
+    );
+  }
+  if (draft.measurement_report) {
+    await assertLinkedResourceForJob(
+      config,
+      "Measurement Report",
+      draft.measurement_report,
+      draft.roof_job,
+      "insurance_supplement_measurement",
+    );
+  }
+  if (draft.supersedes) {
+    const prior = await assertLinkedResourceForJob(
+      config,
+      "Insurance Supplement",
+      draft.supersedes,
+      draft.roof_job,
+      "insurance_supplement_correction",
+    );
+    if ((prior.insurance_supplement_id ?? prior.name) === draft.insurance_supplement_id) {
+      throw new Error("insurance_supplement_correction_requires_new_id");
+    }
+    assertCorrectionVersion(draft, prior, "insurance_supplement_correction");
+  }
+  return await assertInsuranceSupplementEvidence(config, draft.roof_job, draft.evidence);
+}
+
+async function insuranceEvidenceManifestFromRecord(config, supplement) {
+  const verified = await assertInsuranceSupplementEvidence(
+    config,
+    supplement.roof_job,
+    supplement.evidence,
+  );
+  return {
+    roof_job: supplement.roof_job,
+    measurement_report: supplement.measurement_report ?? "",
+    evidence: verified
+      .map(({ evidence_item_id: evidenceItemId, evidence_role: evidenceRole, evidence }) => ({
+        evidence_item_id: evidenceItemId,
+        evidence_role: evidenceRole,
+        evidence_type: evidence.evidence_type,
+        content_checksum: evidence.content_checksum,
+        checksum_algorithm: evidence.checksum_algorithm,
+        verified_at: evidence.verified_at,
+        verification_source: evidence.verification_source,
+      }))
+      .sort((left, right) =>
+        left.evidence_role.localeCompare(right.evidence_role)
+        || left.evidence_item_id.localeCompare(right.evidence_item_id),
+      ),
+  };
+}
+
+function summarizeInsuranceEvidenceRows(rows = []) {
+  return {
+    evidence_count: rows.length,
+    evidence_roles: [...new Set(rows.map((row) => row.evidence_role))].sort(),
+  };
+}
+
 function safetyPlanDraftFromArgs(args, nowIso) {
   return buildSafetyPlanDraft({
     safetyPlanId: args.safety_plan_id,
@@ -6663,6 +7304,28 @@ function summarizeCustomerQuote(quote) {
     valid_until: quote.valid_until ?? "",
     supersedes: quote.supersedes ?? "",
     modified: quote.modified ?? "",
+  };
+}
+
+function summarizeInsuranceSupplement(supplement) {
+  if (!supplement) return null;
+  const evidence = Array.isArray(supplement.evidence) ? supplement.evidence : [];
+  return {
+    name: supplement.name,
+    insurance_supplement_id: supplement.insurance_supplement_id,
+    roof_job: supplement.roof_job,
+    version: supplement.version,
+    status: supplement.status,
+    measurement_report_bound: Boolean(supplement.measurement_report),
+    invoice_required: Number(supplement.invoice_required ?? 1) !== 0,
+    evidence_manifest_bound: Boolean(supplement.evidence_manifest_json),
+    evidence_count: evidence.length,
+    evidence_roles: [...new Set(evidence.map((row) => row?.evidence_role).filter(Boolean))].sort(),
+    approved_at: supplement.approved_at ?? "",
+    submitted_at: supplement.submitted_at ?? "",
+    carrier_response_at: supplement.carrier_response_at ?? "",
+    closed_at: supplement.closed_at ?? "",
+    modified: supplement.modified ?? "",
   };
 }
 

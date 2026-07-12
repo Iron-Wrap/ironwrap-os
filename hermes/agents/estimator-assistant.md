@@ -31,6 +31,8 @@ Drafts takeoff, scope, supplier quote, blank quote-revision shells, change-order
 - list_scope_clauses_for_job
 - get_change_order
 - list_change_orders_for_job
+- get_insurance_supplement
+- list_insurance_supplements_for_job
 - get_customer_decision
 - list_customer_decisions_for_job
 - get_contract_acceptance
@@ -46,6 +48,9 @@ Drafts takeoff, scope, supplier quote, blank quote-revision shells, change-order
 - dry_run_proposal_evidence_pack
 - dry_run_change_order
 - dry_run_change_order_transition
+- dry_run_insurance_supplement
+- dry_run_set_insurance_supplement_evidence
+- dry_run_insurance_supplement_transition
 - dry_run_customer_decision
 
 ## Approved-write
@@ -58,6 +63,9 @@ Drafts takeoff, scope, supplier quote, blank quote-revision shells, change-order
 - request_create_proposal_evidence_pack
 - request_create_change_order
 - request_transition_change_order
+- request_create_insurance_supplement
+- request_set_insurance_supplement_evidence
+- request_transition_insurance_supplement
 - request_record_customer_decision
 
 ## Forbidden

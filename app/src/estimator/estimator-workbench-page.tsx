@@ -840,6 +840,7 @@ function CommercialRecord({
                 locale={locale}
                 tenantCurrency={tenantCurrency}
               />
+              <QuoteRevisionEntry model={model} quote={quote} />
             </>
           )}
         </div>
@@ -1006,6 +1007,44 @@ function QuoteLedger({
         ) : null}
       </div>
     </div>
+  );
+}
+
+function QuoteRevisionEntry({
+  model,
+  quote,
+}: {
+  model: EstimatorWorkbenchResponse;
+  quote: NonNullable<EstimatorWorkbenchResponse["quote"]>;
+}) {
+  if (!model.allowed_actions.includes("quote_revision_approval.prepare")) return null;
+  return (
+    <section
+      className="mt-6 border-y border-border py-4"
+      aria-labelledby="revision-request-heading"
+    >
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="max-w-xl">
+          <p id="revision-request-heading" className="text-sm font-bold text-foreground">
+            Correct this version without carrying terms forward
+          </p>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            The next step creates a human-reviewed request for a blank Draft shell. It does not copy
+            price, tax, scope, payment, approval, acceptance, or customer terms.
+          </p>
+        </div>
+        <Button asChild variant="outline" size="default" className="shrink-0">
+          <Link to="/estimator/jobs/$jobId/revision" params={{ jobId: model.job.id }}>
+            <FileText aria-hidden="true" />
+            Request draft revision
+          </Link>
+        </Button>
+      </div>
+      <p className="mt-3 break-all text-xs font-semibold text-muted">
+        Source: {quote.id}
+        {quote.version === null ? " · Version not recorded" : ` · Version ${quote.version}`}
+      </p>
+    </section>
   );
 }
 

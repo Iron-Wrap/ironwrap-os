@@ -1,4 +1,6 @@
 import type { AppEnv, AuthContext } from "./app-types.ts";
+import { approvalDecisionConfig } from "./approval-broker-client.ts";
+import { quoteRevisionApprovalBrokerConfig } from "./quote-revision-approval-broker-client.ts";
 import {
   listFrappeResource,
   listFrappeResourcePage,
@@ -1163,9 +1165,18 @@ export async function buildEstimatorWorkbenchReadModel(
     [job, ...measurementRows, ...takeoffRows, ...quoteRows, ...proposalRows, ...changeOrderRows, ...scopeRows],
     staleFields,
   );
+  const quoteRevisionPreparationAvailable = Boolean(
+    quote && quote.id && quote.version !== null && quote.version > 0 && quote.status !== "Accepted" &&
+      quoteRevisionApprovalBrokerConfig(env) && approvalDecisionConfig(env) &&
+      auth.session.frappe_user_id?.trim(),
+  );
   return {
     ...base,
-    allowed_actions: [...base.allowed_actions, "estimator.read"],
+    allowed_actions: [
+      ...base.allowed_actions,
+      "estimator.read",
+      ...(quoteRevisionPreparationAvailable ? ["quote_revision_approval.prepare"] : []),
+    ],
     partial_sources: partialSources,
     job: {
       id: jobId,

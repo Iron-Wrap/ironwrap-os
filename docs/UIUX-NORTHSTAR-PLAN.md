@@ -1,6 +1,6 @@
 # IronWrap OS Product Layer: Mobile-First North Star Plan
 
-Status: repository implementation checkpoint, 2026-07-11. Builds on the verified competitive position in
+Status: repository implementation checkpoint, 2026-07-12. Builds on the verified competitive position in
 `docs/MARKET-DEFENSE-SCORECARD.md` and the audited substrate below. This is the plan for the
 layer users actually touch: mobile-first, crew-proof, and designed to subjectively beat
 JobNimbus, GoHighLevel, Roofr, and AccuLynx screen for screen.
@@ -19,7 +19,7 @@ capability only.
 | Hermes agent layer | 8 runtime-filtered roles, 126 MCP tools, receipt-bound approved-write contract |
 | Deploy/ops | Contract-validated production configuration, pinned runtime lock, encrypted Frappe/D1 recovery, launch runbook |
 | Competitive truth | 10 exceeded / 7 covered / 19 open, adversarially audited |
-| Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, P2 Owner Now plus governed `/approvals`, and the first P3 Sales Desk plus Measurement Workbench read models are locally implemented and contract-tested. Owner Now separates work-stops, operating exceptions, and lead attention; the inbox renders only allowlisted before/patch/outcome DTOs and server-granted decision capability; Sales joins narrowly allowlisted office lead, estimate, quote, and communication-record context; the workbench recomputes retained source geometry in the Worker and shows bounded measurement, takeoff, quote, proposal-record, and clause lineage. A separate, redacted quote-revision broker/D1/BFF lane is locally contract-tested, but its estimator approval screen is not yet shipped. None claims delivery, field verification, or human follow-up. Live Worker/broker/Frappe/browser/device proof, governed estimator UI, and P4-P5 remain open; Frappe Control Center is the truthful fallback. |
+| Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, P2 Owner Now plus governed `/approvals`, and P3 Sales, Measurement Workbench, and the isolated Draft Revision approval vertical are locally implemented and contract-tested. Owner Now separates work-stops, operating exceptions, and lead attention; the inbox renders only allowlisted before/patch/outcome DTOs and server-granted decision capability; Sales joins narrowly allowlisted office lead, estimate, quote, and communication-record context; the workbench recomputes retained source geometry in the Worker and shows bounded measurement, takeoff, quote, proposal-record, and clause lineage. The contextual revision entry, preparation, queue, and detail routes use separate redacted BFF DTOs, exact server-granted capability, stable decision idempotency, and reconcile-only execution uncertainty. None claims delivery, field verification, or human follow-up. Local browser/mocked-visual proof is not live Worker/broker/Frappe/device/operator proof; those gates and P4-P5 remain open, with Frappe Control Center as the truthful fallback. |
 
 Every "their UX beats ours" row in the scorecard (boards, mobile app, omnichannel inbox,
 homeowner widget) lands in this one missing layer. That makes the UI the highest-leverage
@@ -225,10 +225,13 @@ customer agreement. A governed MCP quote-revision command now creates only an ap
 shell bound to its source quote, customer, job, reason, and fresh version; it never copies price,
 tax, scope, payment, approval, acceptance, or customer-facing terms, and an accepted quote must
 use the Change Order path. Its dedicated estimator-assistant broker, separate D1 event ledger,
-redacted preview, and BFF approval routes are now locally contract-tested; they never reuse the
-lead-triage broker or `/approvals` inbox. The dedicated estimator approval screen and workbench
-entry remain open, alongside immutable price-rule snapshot binding, proposal-pack assembly,
-insurance lane, and live source/browser/operator proof.
+redacted preview, and BFF approval routes are locally contract-tested; they never reuse the
+lead-triage broker or `/approvals` inbox. The workbench exposes a contextual entry only when the
+exact BFF action is granted for a current versioned, non-accepted source. The resulting prepare,
+queue, and detail routes show a source-to-blank-Draft decision rail, commercial-term fence,
+server-granted actions only, stable idempotency, and reconciliation instead of retry on ambiguity.
+Immutable price-rule snapshot binding, proposal-pack assembly, insurance lane, and live
+source/browser/operator proof remain open.
 Beats: SmartEstimates on trust: JN auto-drafts from unverified numbers; we show the
 verification. Proof gate: measurement-to-proposal flow completed with every number
 traceable to its in-file source ref on screen.

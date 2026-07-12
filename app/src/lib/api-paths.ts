@@ -10,6 +10,15 @@ export const API_PATHS = {
   logout: "/api/v1/auth/logout",
   sales: "/api/v1/sales",
   estimatorJob: (jobId: string) => `/api/v1/estimator/jobs/${encodeURIComponent(jobId)}`,
+  quoteRevisionApprovals: "/api/v1/quote-revision-approvals",
+  quoteRevisionApproval: (approvalId: string) =>
+    `/api/v1/quote-revision-approvals/${encodeURIComponent(approvalId)}`,
+  quoteRevisionApprovalApprove: (approvalId: string) =>
+    `/api/v1/quote-revision-approvals/${encodeURIComponent(approvalId)}/approve`,
+  quoteRevisionApprovalReject: (approvalId: string) =>
+    `/api/v1/quote-revision-approvals/${encodeURIComponent(approvalId)}/reject`,
+  quoteRevisionApprovalReconcile: (approvalId: string) =>
+    `/api/v1/quote-revision-approvals/${encodeURIComponent(approvalId)}/reconcile`,
   approvals: "/api/v1/approvals",
   approvalApprove: (approvalId: string) =>
     `/api/v1/approvals/${encodeURIComponent(approvalId)}/approve`,

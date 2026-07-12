@@ -130,9 +130,12 @@ The stored `run_id` is the reconciliation key; a later reconciliation records
 evidence without reopening the request or issuing another write.
 
 The installed `/approvals` PWA remains exclusively lead-triage review. The
-quote-revision routes are locally contract-tested backend authority only until
-the dedicated estimator approval screen ships; do not mislabel it in the lead
-inbox or expose a generic approval selector.
+dedicated estimator PWA now reaches the quote-revision routes through a
+capability-gated workbench entry, a correction-reason-only preparation screen,
+and isolated queue/detail screens. It never reuses the lead inbox, exposes a
+generic approval selector, or renders receipt/write/commercial fields. This is
+local application and mocked-browser proof only; it does not replace the live
+broker, migration, authenticated-browser, or operator-acceptance gates below.
 
 ## Production gates
 

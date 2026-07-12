@@ -40,6 +40,13 @@ data.
   snapshots, supplier costs, evidence JSON, and customer messages stay server-side; it has no
   price, takeoff, proposal, signature, payment, or communication write control. Source geometry is
   explicitly not field-verification evidence.
+- A locally contract-tested Draft Revision approval vertical: the workbench offers a contextual
+  entry only when its BFF grants `quote_revision_approval.prepare` for a current versioned,
+  non-accepted source. Its prepare page submits only source identity plus correction reason; its
+  separate queue and detail routes receive a redacted source-to-blank-Draft projection, use exact
+  BFF capability for decisions, keep stable approve/reject idempotency, and turn an uncertain
+  execution into reconciliation work with no retry. It cannot carry commercial terms, broker
+  proof, raw write arguments, customer messaging, or accounting mutation into the browser.
 - A field-first Today run sheet: server order is preserved, schedules format in the tenant time
   zone, and local packet availability visibly progresses from checking to saving, saved, or not
   saved. A cached packet is never called complete or safety-cleared; a blocked gate can only open
@@ -53,9 +60,9 @@ data.
   distinguishes device save, queued work, upload, verification, and attention without implying
   delivery or onsite proof.
 - A route placeholder for the later customer Portal slice. Today, Job, Check-in, Owner Now,
-  Approvals, Sales, and Settings have implemented North Star foundations. The inbox remains a
-  decision surface, not a generic lead editor; source-backed Sales preparation is a later governed
-  slice.
+  Approvals, Sales, Measurement Workbench, Draft Revision review, and Settings have implemented
+  North Star foundations. The inbox remains a decision surface, not a generic lead editor; live
+  broker/Frappe/operator proof remains a deployment gate.
 
 ## Run it
 
@@ -85,22 +92,27 @@ outside its declared and working peer range. Lint and typecheck remain separate 
 
 Endpoint names are centralized in `src/lib/api-paths.ts`:
 
-| Method         | Path                                  | Purpose                                                  |
-| -------------- | ------------------------------------- | -------------------------------------------------------- |
-| `GET`          | `/api/v1/session`                     | Versioned tenant/session/RBAC read model                 |
-| `POST`         | `/api/v1/auth/magic-link/request`     | Request a one-time link with `{email}`                   |
-| `POST`         | `/api/v1/auth/magic-link/consume`     | Consume `{token}` after browser-side extraction          |
-| `POST`         | `/api/v1/auth/device-pairing/consume` | Consume QR `{token, device_proof}` for Field Companion   |
-| `GET`          | `/api/v1/field-users`                 | Owner/ops list of pairable active field users            |
-| `GET` / `POST` | `/api/v1/device-pairings`             | Owner/ops device list or QR issuance                     |
-| `POST`         | `/api/v1/device-pairings/:id/revoke`  | Revoke one lost or reassigned field device               |
-| `POST`         | `/api/v1/auth/logout`                 | Revoke the current session with `X-CSRF-Token`           |
-| `GET`          | `/api/v1/sales`                       | Owner/ops bounded Sales Desk review DTO                  |
-| `GET`          | `/api/v1/estimator/jobs/:id`          | Owner/ops bounded Measurement Workbench review DTO       |
-| `GET`          | `/api/v1/approvals`                   | Owner/ops browser-safe approval inbox and capability DTO |
-| `POST`         | `/api/v1/approvals/:id/approve`       | Configured-owner, CAS/idempotent approval decision       |
-| `POST`         | `/api/v1/approvals/:id/reject`        | Configured-owner, durable rejection with reason          |
-| `POST`         | `/api/v1/approvals/:id/reconcile`     | Configured-owner, immutable uncertain-run reconciliation |
+| Method         | Path                                             | Purpose                                                   |
+| -------------- | ------------------------------------------------ | --------------------------------------------------------- |
+| `GET`          | `/api/v1/session`                                | Versioned tenant/session/RBAC read model                  |
+| `POST`         | `/api/v1/auth/magic-link/request`                | Request a one-time link with `{email}`                    |
+| `POST`         | `/api/v1/auth/magic-link/consume`                | Consume `{token}` after browser-side extraction           |
+| `POST`         | `/api/v1/auth/device-pairing/consume`            | Consume QR `{token, device_proof}` for Field Companion    |
+| `GET`          | `/api/v1/field-users`                            | Owner/ops list of pairable active field users             |
+| `GET` / `POST` | `/api/v1/device-pairings`                        | Owner/ops device list or QR issuance                      |
+| `POST`         | `/api/v1/device-pairings/:id/revoke`             | Revoke one lost or reassigned field device                |
+| `POST`         | `/api/v1/auth/logout`                            | Revoke the current session with `X-CSRF-Token`            |
+| `GET`          | `/api/v1/sales`                                  | Owner/ops bounded Sales Desk review DTO                   |
+| `GET`          | `/api/v1/estimator/jobs/:id`                     | Owner/ops bounded Measurement Workbench review DTO        |
+| `GET` / `POST` | `/api/v1/quote-revision-approvals`               | Isolated redacted Draft Revision queue or preparation     |
+| `GET`          | `/api/v1/quote-revision-approvals/:id`           | One redacted Draft Revision review                        |
+| `POST`         | `/api/v1/quote-revision-approvals/:id/approve`   | Configured approver, CAS/idempotent Draft-shell decision  |
+| `POST`         | `/api/v1/quote-revision-approvals/:id/reject`    | Configured approver, durable rejection with reason        |
+| `POST`         | `/api/v1/quote-revision-approvals/:id/reconcile` | Configured approver, immutable uncertainty reconciliation |
+| `GET`          | `/api/v1/approvals`                              | Owner/ops browser-safe approval inbox and capability DTO  |
+| `POST`         | `/api/v1/approvals/:id/approve`                  | Configured-owner, CAS/idempotent approval decision        |
+| `POST`         | `/api/v1/approvals/:id/reject`                   | Configured-owner, durable rejection with reason           |
+| `POST`         | `/api/v1/approvals/:id/reconcile`                | Configured-owner, immutable uncertain-run reconciliation  |
 
 The session envelope is validated centrally with Zod in `src/auth/session.ts`. Unauthenticated
 responses are `200` with null user/session fields and public tenant presentation; an authenticated

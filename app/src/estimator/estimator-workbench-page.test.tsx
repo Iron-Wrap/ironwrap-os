@@ -274,6 +274,7 @@ describe("EstimatorWorkbenchPage", () => {
         name: /send|assemble proposal|approve quote|collect payment|change price/i,
       }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /request draft revision/i })).not.toBeInTheDocument();
   });
 
   it("shows a source-read failure as unavailable instead of relabeling it as field verified", async () => {
@@ -449,5 +450,22 @@ describe("EstimatorWorkbenchPage", () => {
 
     expect(await screen.findByText("This work belongs to another role")).toBeVisible();
     expect(loadEstimatorWorkbench).not.toHaveBeenCalled();
+  });
+
+  it("opens the isolated draft-revision request only when the BFF grants that action", async () => {
+    vi.mocked(loadEstimatorWorkbench).mockResolvedValue(
+      workbenchModel({
+        allowed_actions: ["job.read", "estimator.read", "quote_revision_approval.prepare"],
+      }),
+    );
+    renderWorkbench();
+
+    const request = await screen.findByRole("link", { name: /request draft revision/i });
+    expect(request).toHaveAttribute("href", "/estimator/jobs/$jobId/revision");
+    expect(
+      screen.getByText(
+        /does not copy price, tax, scope, payment, approval, acceptance, or customer terms/i,
+      ),
+    ).toBeVisible();
   });
 });

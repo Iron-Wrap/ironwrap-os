@@ -141,6 +141,9 @@ const WRITE_PAIRS = {
   request_create_job_assignment: "dry_run_job_assignment",
   request_create_change_order: "dry_run_change_order",
   request_transition_change_order: "dry_run_change_order_transition",
+  request_create_insurance_supplement: "dry_run_insurance_supplement",
+  request_set_insurance_supplement_evidence: "dry_run_set_insurance_supplement_evidence",
+  request_transition_insurance_supplement: "dry_run_insurance_supplement_transition",
   request_create_safety_plan: "dry_run_safety_plan",
   request_record_safety_acknowledgement: "dry_run_safety_acknowledgement",
   request_record_job_compliance: "dry_run_job_compliance_record",
@@ -161,6 +164,7 @@ const NEW_STRICT_READS = new Set([
   "get_crew_profile", "list_crew_profiles",
   "get_job_assignment", "list_job_assignments_for_job",
   "get_change_order", "list_change_orders_for_job",
+  "get_insurance_supplement", "list_insurance_supplements_for_job",
   "get_safety_plan", "list_safety_plans_for_job",
   "get_job_compliance_record", "list_job_compliance_records_for_job",
   "get_communication_consent", "list_communication_consents_for_job",
@@ -176,14 +180,14 @@ for (const tool of NEW_STRICT_READS) {
 }
 
 const frappeTools = new Set([...inventory].filter((tool) => toolServer.get(tool) === "erpnext-roofing-mcp"));
-assert.equal(frappeTools.size, 121, "Frappe MCP inventory must stay at the reviewed 121-tool contract");
-assert.equal([...frappeTools].filter((tool) => reads.has(tool)).length, 73,
-  "Frappe MCP must expose 73 read tools");
-assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 24,
-  "Frappe MCP must expose 24 dry-run tools");
-assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 24,
-  "Frappe MCP must expose 24 approved-write tools");
-assert.equal(inventory.size, 128, "two-server Hermes inventory must stay at 128 tools");
+assert.equal(frappeTools.size, 129, "Frappe MCP inventory must stay at the reviewed 129-tool contract");
+assert.equal([...frappeTools].filter((tool) => reads.has(tool)).length, 75,
+  "Frappe MCP must expose 75 read tools");
+assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 27,
+  "Frappe MCP must expose 27 dry-run tools");
+assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 27,
+  "Frappe MCP must expose 27 approved-write tools");
+assert.equal(inventory.size, 136, "two-server Hermes inventory must stay at 136 tools");
 
 // Contract Acceptance is evidence produced by the customer/provider, never an agent mutation.
 assert.ok(reads.has("get_contract_acceptance") && reads.has("list_contract_acceptances_for_job"),
@@ -290,6 +294,34 @@ for (const [roleName, role] of Object.entries(config.roles)) {
     }
   }
 }
+
+// Claim references, carrier artifacts, and insurance evidence are restricted to the owner
+// supervisor and estimator. The tools are internal records only: no tool submits a carrier
+// claim, decides coverage, or sends a message.
+const INSURANCE_SUPPLEMENT_TOOLS = new Set([
+  "get_insurance_supplement",
+  "list_insurance_supplements_for_job",
+  "dry_run_insurance_supplement",
+  "request_create_insurance_supplement",
+  "dry_run_set_insurance_supplement_evidence",
+  "request_set_insurance_supplement_evidence",
+  "dry_run_insurance_supplement_transition",
+  "request_transition_insurance_supplement",
+]);
+for (const [roleName, role] of Object.entries(config.roles)) {
+  const granted = new Set([...role.reads, ...role.dry_run, ...role.approved_write]);
+  if (["owner-operator", "estimator-assistant"].includes(roleName)) {
+    for (const tool of INSURANCE_SUPPLEMENT_TOOLS) {
+      assert.ok(granted.has(tool), roleName + " must receive the insurance supplement tool " + tool);
+    }
+  } else {
+    for (const tool of INSURANCE_SUPPLEMENT_TOOLS) {
+      assert.ok(!granted.has(tool), roleName + " must not receive the insurance supplement tool " + tool);
+    }
+  }
+}
+assert.doesNotMatch(frappeSource, /carrier[_ ]approved|coverage[_ ]decision/i,
+  "insurance supplement tools must not introduce carrier approval or coverage decision semantics");
 
 const fieldCompanionTools = new Set([
   ...config.roles["field-companion"].reads,

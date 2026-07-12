@@ -6,6 +6,9 @@ import { approvedArgs, digest, signApprovalReceipt } from "../src/approval-contr
 import {
   CommunicationConsentInputSchema,
   ChangeOrderDraftInputSchema,
+  InsuranceSupplementDraftInputSchema,
+  InsuranceSupplementEvidenceUpdateInputSchema,
+  InsuranceSupplementTransitionInputSchema,
   JobAssignmentInputSchema,
   SafetyAcknowledgementInputSchema,
   TenantExportInputSchema,
@@ -21,12 +24,16 @@ import {
   buildCommunicationConsentDraft,
   buildComplianceRecordDraft,
   buildCustomerDecisionDraft,
+  buildInsuranceSupplementDraft,
+  buildInsuranceSupplementEvidencePatch,
+  buildInsuranceSupplementTransitionPatch,
   buildJobAssignmentDraft,
   buildReconciliationResolutionPatch,
   buildSafetyAcknowledgementPatch,
   buildSafetyPlanDraft,
   buildTenantExportRequestDraft,
   buildServer,
+  redactApprovalArgs,
 } from "../src/server.mjs";
 
 const NOW = "2026-07-10T18:00:00.000Z";
@@ -116,14 +123,30 @@ test("strict read tools use bounded schemas and redact sensitive fields", async 
     apiSecret: "secret",
     writeEnabled: false,
   });
-  assert.equal(Object.keys(server._registeredTools).length, 121);
+  assert.equal(Object.keys(server._registeredTools).length, 129);
   assert.equal(server._registeredTools.get_contract_acceptance.inputSchema.safeParse({
     acceptance_id: "acceptance:1",
     unknown: true,
   }).success, false);
 
   t.mock.method(globalThis, "fetch", async (url) => {
-    const record = url.includes("Contract%20Acceptance")
+    const record = url.includes("Insurance%20Supplement")
+      ? {
+          name: "supplement:1",
+          insurance_supplement_id: "supplement:1",
+          roof_job: "job:1",
+          version: 1,
+          status: "Ready for Human Review",
+          measurement_report: "measurement:1",
+          invoice_required: 1,
+          claim_reference: "private-claim",
+          policy_reference: "private-policy",
+          adjuster_reference: "private-adjuster",
+          supplement_basis: "private-scope",
+          evidence_manifest_json: "{\"private\":true}",
+          evidence: [{ evidence_item: "private-evidence", evidence_role: "Photo" }],
+        }
+      : url.includes("Contract%20Acceptance")
       ? {
           name: "acceptance:1",
           acceptance_id: "acceptance:1",
@@ -174,6 +197,100 @@ test("strict read tools use bounded schemas and redact sensitive fields", async 
   assert.equal(exportRun.status, "Completed");
   assert.equal("archive_key" in exportRun, false);
   assert.equal("encryption_key_ref" in exportRun, false);
+
+  const supplement = await call("get_insurance_supplement", {
+    insurance_supplement_id: "supplement:1",
+  });
+  assert.equal(supplement.status, "Ready for Human Review");
+  assert.deepEqual(supplement.evidence, [{ evidence_role: "Photo" }]);
+  for (const sensitive of [
+    "claim_reference",
+    "policy_reference",
+    "adjuster_reference",
+    "supplement_basis",
+    "evidence_manifest_json",
+  ]) assert.equal(sensitive in supplement, false);
+});
+
+test("insurance supplement preview verifies evidence but never returns claim or document details", async (t) => {
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: false,
+  });
+  t.mock.method(globalThis, "fetch", async (url) => {
+    const target = String(url);
+    if (target.includes("Insurance%20Supplement/supplement%3A1")) {
+      return new Response(JSON.stringify({ error: "missing" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (target.includes("Measurement%20Report/measurement%3A1")) {
+      return new Response(JSON.stringify({ data: {
+        name: "measurement:1",
+        roof_job: "job:1",
+        review_status: "Approved",
+      } }), { headers: { "content-type": "application/json" } });
+    }
+    const evidenceId = decodeURIComponent(target).match(/Evidence Item\/([^?]+)/)?.[1];
+    if (evidenceId) {
+      const evidenceType = evidenceId.includes("photo")
+        ? "Photo"
+        : evidenceId.includes("invoice")
+          ? "Invoice"
+          : "PDF";
+      return new Response(JSON.stringify({ data: {
+        name: evidenceId,
+        roof_job: "job:1",
+        evidence_type: evidenceType,
+        proof_slot: "Other",
+        sync_state: "Verified",
+        content_checksum: "a".repeat(64),
+        checksum_algorithm: "SHA-256",
+        verified_at: NOW,
+        verification_source: "worker-checksum",
+        r2_key: "private/raw/evidence",
+      } }), { headers: { "content-type": "application/json" } });
+    }
+    throw new Error("unexpected request " + target);
+  });
+
+  const response = await server._registeredTools.dry_run_insurance_supplement.handler({
+    insurance_supplement_id: "supplement:1",
+    roof_job_id: "job:1",
+    carrier_name: "Private carrier",
+    claim_reference: "claim-private",
+    policy_reference: "policy-private",
+    date_of_loss: "2026-06-18",
+    adjuster_reference: "adjuster-private",
+    supplement_basis: "Private scope narrative",
+    measurement_report_id: "measurement:1",
+    evidence: [
+      { evidence_item_id: "evidence:carrier", evidence_role: "Carrier Scope" },
+      { evidence_item_id: "evidence:code", evidence_role: "Code/Manufacturer" },
+      { evidence_item_id: "evidence:photo", evidence_role: "Photo" },
+      { evidence_item_id: "evidence:invoice", evidence_role: "Invoice" },
+    ],
+  });
+  const payload = JSON.parse(response.content[0].text);
+  assert.equal(payload.required_tool, "request_create_insurance_supplement");
+  assert.deepEqual(payload.source.evidence_roles, [
+    "Carrier Scope",
+    "Code/Manufacturer",
+    "Invoice",
+    "Photo",
+  ]);
+  const serialized = JSON.stringify(payload);
+  for (const privateValue of [
+    "Private carrier",
+    "claim-private",
+    "policy-private",
+    "adjuster-private",
+    "Private scope narrative",
+    "private/raw/evidence",
+  ]) assert.equal(serialized.includes(privateValue), false);
 });
 
 test("runtime role filtering and field assignment scoping are enforced in the MCP server", async (t) => {
@@ -659,6 +776,119 @@ test("change-order transitions cannot impersonate a customer", () => {
     ),
     { status: "Presented" },
   );
+});
+
+test("insurance supplements are evidence-only, privacy-redacted, and never carrier decisions", () => {
+  const input = {
+    insurance_supplement_id: "supplement:1",
+    roof_job_id: "job:1",
+    carrier_name: "Carrier internal",
+    claim_reference: "claim-internal",
+    policy_reference: "policy-internal",
+    date_of_loss: "2026-06-18",
+    adjuster_reference: "adjuster-internal",
+    supplement_basis: "Verified scope evidence.",
+    measurement_report_id: "measurement:1",
+    evidence: [
+      { evidence_item_id: "evidence:carrier", evidence_role: "Carrier Scope" },
+      { evidence_item_id: "evidence:code", evidence_role: "Code/Manufacturer" },
+      { evidence_item_id: "evidence:photo", evidence_role: "Photo" },
+      { evidence_item_id: "evidence:invoice", evidence_role: "Invoice" },
+    ],
+  };
+  assert.equal(InsuranceSupplementDraftInputSchema.safeParse(input).success, true);
+  assert.equal(InsuranceSupplementDraftInputSchema.safeParse({
+    ...input,
+    unknown: true,
+  }).success, false);
+  assert.equal(InsuranceSupplementEvidenceUpdateInputSchema.safeParse({
+    insurance_supplement_id: "supplement:1",
+    roof_job_id: "job:1",
+    evidence: [],
+  }).success, true);
+  assert.equal(InsuranceSupplementTransitionInputSchema.safeParse({
+    insurance_supplement_id: "supplement:1",
+    roof_job_id: "job:1",
+    next_status: "Carrier Approved",
+  }).success, false);
+
+  const draft = buildInsuranceSupplementDraft({
+    insuranceSupplementId: input.insurance_supplement_id,
+    roofJobId: input.roof_job_id,
+    carrierName: input.carrier_name,
+    claimReference: input.claim_reference,
+    policyReference: input.policy_reference,
+    dateOfLoss: input.date_of_loss,
+    adjusterReference: input.adjuster_reference,
+    supplementBasis: input.supplement_basis,
+    measurementReportId: input.measurement_report_id,
+    evidence: input.evidence,
+  });
+  assert.equal(draft.status, "Draft");
+  assert.equal(draft.evidence.length, 4);
+  assert.throws(
+    () => buildInsuranceSupplementDraft({
+      insuranceSupplementId: "supplement:2",
+      roofJobId: "job:1",
+      evidence: [
+        { evidence_item_id: "evidence:photo", evidence_role: "Photo" },
+        { evidence_item_id: "evidence:photo", evidence_role: "Invoice" },
+      ],
+    }),
+    /insurance_supplement_evidence_duplicate/,
+  );
+  assert.throws(
+    () => buildInsuranceSupplementEvidencePatch(
+      { status: "Approved for Submission" },
+      { evidence: [] },
+    ),
+    /insurance_supplement_evidence_locked/,
+  );
+
+  const manifest = {
+    roof_job: "job:1",
+    measurement_report: "measurement:1",
+    evidence: [],
+  };
+  assert.deepEqual(
+    buildInsuranceSupplementTransitionPatch(
+      { status: "Ready for Human Review" },
+      "Approved for Submission",
+      "",
+      "owner@example.com",
+      NOW,
+      manifest,
+    ),
+    {
+      status: "Approved for Submission",
+      evidence_manifest_json: JSON.stringify(manifest),
+      approved_by: "owner@example.com",
+      approved_at: NOW,
+    },
+  );
+  assert.throws(
+    () => buildInsuranceSupplementTransitionPatch(
+      { status: "Submitted" },
+      "Closed",
+      "",
+      "owner@example.com",
+      NOW,
+      undefined,
+      "",
+    ),
+    /insurance_supplement_resolution_required/,
+  );
+  const auditArgs = redactApprovalArgs({
+    ...input,
+    request_text: "claim-internal must stay private",
+    approved_by: "owner@example.com",
+  });
+  const serialized = JSON.stringify(auditArgs);
+  for (const secret of ["claim-internal", "policy-internal", "adjuster-internal", "Carrier internal"]) {
+    assert.equal(serialized.includes(secret), false);
+  }
+  assert.match(serverSource, /cannot submit to a carrier/i);
+  assert.match(serverSource, /cannot make a carrier determination/i);
 });
 
 test("safety acknowledgements are evidence-backed, device-bound, unique, and idempotent", () => {

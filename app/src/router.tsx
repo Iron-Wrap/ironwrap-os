@@ -32,6 +32,18 @@ const SalesDeskPage = lazy(async () => ({
 const EstimatorWorkbenchPage = lazy(async () => ({
   default: (await import("./estimator/estimator-workbench-page")).EstimatorWorkbenchPage,
 }));
+const QuoteRevisionApprovalQueuePage = lazy(async () => ({
+  default: (await import("./estimator/quote-revision-approval-page"))
+    .QuoteRevisionApprovalQueuePage,
+}));
+const QuoteRevisionApprovalDetailPage = lazy(async () => ({
+  default: (await import("./estimator/quote-revision-approval-page"))
+    .QuoteRevisionApprovalDetailPage,
+}));
+const QuoteRevisionApprovalPreparePage = lazy(async () => ({
+  default: (await import("./estimator/quote-revision-approval-page"))
+    .QuoteRevisionApprovalPreparePage,
+}));
 const TodayPage = lazy(async () => ({
   default: (await import("./field/field-pages")).TodayPage,
 }));
@@ -233,6 +245,24 @@ const estimatorWorkbenchRoute = createRoute({
   component: EstimatorWorkbenchRoute,
 });
 
+const quoteRevisionApprovalQueueRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/quote-revision-approvals",
+  component: QuoteRevisionApprovalQueueRoute,
+});
+
+const quoteRevisionApprovalDetailRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/quote-revision-approvals/$approvalId",
+  component: QuoteRevisionApprovalDetailRoute,
+});
+
+const quoteRevisionApprovalPrepareRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/estimator/jobs/$jobId/revision",
+  component: QuoteRevisionApprovalPrepareRoute,
+});
+
 function SalesRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
@@ -245,6 +275,30 @@ function EstimatorWorkbenchRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
       <EstimatorWorkbenchPage />
+    </Suspense>
+  );
+}
+
+function QuoteRevisionApprovalQueueRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <QuoteRevisionApprovalQueuePage />
+    </Suspense>
+  );
+}
+
+function QuoteRevisionApprovalDetailRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <QuoteRevisionApprovalDetailPage />
+    </Suspense>
+  );
+}
+
+function QuoteRevisionApprovalPrepareRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <QuoteRevisionApprovalPreparePage />
     </Suspense>
   );
 }
@@ -270,6 +324,9 @@ const routeTree = rootRoute.addChildren([
     approvalsRoute,
     salesRoute,
     estimatorWorkbenchRoute,
+    quoteRevisionApprovalQueueRoute,
+    quoteRevisionApprovalDetailRoute,
+    quoteRevisionApprovalPrepareRoute,
     settingsRoute,
   ]),
 ]);

@@ -138,9 +138,13 @@ broker or `/approvals` inbox. The stored review projection contains only source 
 status/modified time, blank Draft target/version/supersedes, correction reason, lifecycle evidence,
 and fixed no-effect flags; the full receipt-bound dry run is represented by a one-way digest. The
 broker re-runs its dry run before signing and fails closed on source/version/target drift. An
-ambiguous invoked write becomes reconciliation work and is never retried. This is local contract
-proof only; the dedicated estimator approval UI, live migration, private service reachability,
-Frappe audit, and operator acceptance remain separate gates.
+ambiguous invoked write becomes reconciliation work and is never retried. The PWA now has a
+contextual workbench entry plus isolated prepare, queue, and detail routes; they render only the
+redacted projection, submit only source identity plus correction reason, and enable decisions only
+from the exact BFF capability. The routes are locally contract-, build-, and mocked-browser-tested,
+including desktop/mobile no-overflow visual proof. That is not live proof: migration, private
+service reachability, Frappe audit, authenticated production browser, and operator acceptance remain
+separate gates.
 
 Sales Desk checkpoint (2026-07-11): the PWA now has a locally tested, office-only `/sales` review
 surface backed by a separate Worker read contract. It joins only narrow allowlisted Lead Envelope
@@ -174,10 +178,12 @@ Quote revision shell: it binds source/job/customer/reason/fresh version, copies 
 acceptance field, rejects duplicate targets, and rejects an accepted or contract-linked source in
 favor of Change Order evidence. Its isolated estimator-assistant broker and Worker D1/BFF approval
 lane are now locally contract-tested, with a redacted ledger projection and no lead-triage authority
-reuse. It is intentionally still not clickable in the workbench until its dedicated estimator
-approval surface is implemented. Immutable price-rule snapshot binding, proposal assembly,
-insurance/supplement evidence, live Frappe/R2 freshness, real-browser, and estimator/operator
-acceptance proof remain open.
+reuse. A capability-gated `Request draft revision` link now appears only for a configured broker
+and a current, positive-version, non-accepted source; it opens the isolated preparation route,
+then a separate queue/detail review surface rather than `/approvals`. These surfaces never render
+commercial values, receipts, raw write arguments, or a retry for an uncertain execution. Immutable
+price-rule snapshot binding, proposal assembly, insurance/supplement evidence, live Frappe/R2
+freshness, authenticated production-browser, and estimator/operator acceptance proof remain open.
 
 ## Research Basis
 

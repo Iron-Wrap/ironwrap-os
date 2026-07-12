@@ -324,6 +324,50 @@ test("estimator workbench derives safe measurement geometry and commercial trace
   }
 });
 
+test("estimator workbench grants the draft-revision entry only for a configured isolated broker and versioned non-accepted source", async () => {
+  const configured = {
+    ...env(),
+    APP_ALLOW_INSECURE_LOCAL: "true",
+    APP_QUOTE_REVISION_BROKER_URL: "http://127.0.0.1:8789",
+    APP_QUOTE_REVISION_BROKER_KEY_ID: "quote-revision-test-key",
+    QUOTE_REVISION_BROKER_SHARED_SECRET: "q".repeat(48),
+    APP_APPROVAL_APPROVER_ID: "owner@example.com",
+    APP_APPROVAL_MAX_SESSION_AGE_SECONDS: "900",
+  } as AppEnv;
+
+  const configuredMock = installFrappeMock();
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(configured, auth("ops"), "JOB-A");
+    assert.ok(model?.allowed_actions.includes("quote_revision_approval.prepare"));
+  } finally {
+    configuredMock.restore();
+  }
+
+  const acceptedRows = {
+    ...rows,
+    "Customer Quote": rows["Customer Quote"].map((row) => ({ ...row, status: "Accepted" })),
+  };
+  const acceptedMock = installFrappeMock(acceptedRows);
+  try {
+    const accepted = await buildEstimatorWorkbenchReadModel(configured, auth("ops"), "JOB-A");
+    assert.equal(accepted?.allowed_actions.includes("quote_revision_approval.prepare"), false);
+  } finally {
+    acceptedMock.restore();
+  }
+
+  const unversionedRows = {
+    ...rows,
+    "Customer Quote": rows["Customer Quote"].map((row) => ({ ...row, quote_version: null })),
+  };
+  const unversionedMock = installFrappeMock(unversionedRows);
+  try {
+    const unversioned = await buildEstimatorWorkbenchReadModel(configured, auth("ops"), "JOB-A");
+    assert.equal(unversioned?.allowed_actions.includes("quote_revision_approval.prepare"), false);
+  } finally {
+    unversionedMock.restore();
+  }
+});
+
 test("estimator workbench does not join a remeasurement to an unlinked takeoff or an older proposal", async () => {
   const dataset = {
     ...rows,

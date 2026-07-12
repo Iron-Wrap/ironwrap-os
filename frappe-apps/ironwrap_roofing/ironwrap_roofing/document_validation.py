@@ -16,7 +16,11 @@ CORRECTION_TARGETS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "communication_consent": ("supersedes", "Communication Consent", ("roof_job",)),
     "contract_acceptance": ("supersedes", "Contract Acceptance", ("roof_job",)),
     "customer_decision": ("supersedes", "Customer Decision", ("roof_job",)),
-    "customer_quote": ("supersedes", "Customer Quote", ("roof_job", "quote_version")),
+    "customer_quote": (
+        "supersedes",
+        "Customer Quote",
+        ("roof_job", "customer", "quote_version", "status", "contract_acceptance", "accepted_at"),
+    ),
     "evidence_item": ("correction_of", "Evidence Item", ("roof_job",)),
     "field_check_in": ("correction_of", "Field Check-in", ("roof_job",)),
     "integration_reconciliation": (

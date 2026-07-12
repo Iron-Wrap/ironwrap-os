@@ -293,6 +293,55 @@ class DomainPolicyTests(unittest.TestCase):
             context={**context, "supplier_quote_status": "Draft"},
         )
 
+    def test_customer_quote_revision_is_minimal_and_cannot_replace_a_contract(self) -> None:
+        prior = {
+            "name": "cq-1",
+            "customer_quote_id": "cq-1",
+            "roof_job": "job-1",
+            "customer": "customer-1",
+            "quote_version": 1,
+            "status": "Approved",
+        }
+        revision = {
+            "customer_quote_id": "cq-2",
+            "roof_job": "job-1",
+            "customer": "customer-1",
+            "quote_version": 2,
+            "status": "Draft",
+            "supersedes": "cq-1",
+            "correction_reason": "Measurement and supplier inputs require a fresh review.",
+        }
+        validate_record("customer_quote", revision, context={"superseded_record": prior})
+
+        self.assert_policy(
+            "cross_customer_correction",
+            validate_record,
+            "customer_quote",
+            {**revision, "customer": "customer-2"},
+            context={"superseded_record": prior},
+        )
+        self.assert_policy(
+            "stale_version",
+            validate_record,
+            "customer_quote",
+            {**revision, "quote_version": 1},
+            context={"superseded_record": prior},
+        )
+        self.assert_policy(
+            "accepted_quote_revision_requires_change_order",
+            validate_record,
+            "customer_quote",
+            revision,
+            context={"superseded_record": {**prior, "status": "Accepted"}},
+        )
+        self.assert_policy(
+            "accepted_quote_revision_requires_change_order",
+            validate_record,
+            "customer_quote",
+            revision,
+            context={"superseded_record": {**prior, "contract_acceptance": "accept-1"}},
+        )
+
     def test_quote_proposal_and_closeout_evidence_chain(self) -> None:
         customer_quote = {
             "customer_quote_id": "cq-1",

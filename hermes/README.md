@@ -26,8 +26,8 @@ Two MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, pe
   deterministic policy checks (`check_consent`, `check_quiet_hours`), dry-run previews, and
   review-gated `request_*` writes. Its legacy name is retained for deployment compatibility.
 
-The validated implemented-source inventory is **122 tools** across both servers: the bus contributes 7;
-the Frappe server contributes **115 (71 reads, 22 dry-runs, 22 approved writes)**.
+The validated implemented-source inventory is **126 tools** across both servers: the bus contributes 7;
+the Frappe server contributes **119 (73 reads, 23 dry-runs, 23 approved writes)**.
 
 ## Tool filtering per agent role
 
@@ -65,6 +65,9 @@ Additional hard boundaries in the committed 46-DocType model:
   rejects on a customer's behalf.
 - Assignment, change-order draft, safety-plan, customer-decision, consent, and export-request
   corrections append/supersede history instead of silently overwriting it.
+- Quote revision can create only a fresh Draft shell with source/job/customer/version/reason
+  lineage. It cannot copy commercial terms or supersede an accepted/contract-linked quote;
+  that route is Change Order only.
 - Safety acknowledgement uses a locked Frappe append command, is device-bound and verified-evidence-backed,
   derives active assignment role server-side, and leaves generic child-table replacement unavailable.
 - Reconciliation resolution changes only the reconciliation record; QuickBooks remains
@@ -114,5 +117,5 @@ It parses the implemented tool inventory from both server sources, checks that e
 in `roles.json` exists, that reads are read-only, dry-runs are previews, approved-writes are
 `request_*` mutations each paired with its dry-run counterpart in the same role, and that all
 eight blueprint roles are present with no duplicate grants.
-It also freezes the 122-tool inventory, enforces Contract Acceptance as read-only, checks
+It also freezes the 126-tool inventory, enforces Contract Acceptance as read-only, checks
 least-privilege boundaries for field/finance roles, and validates manifest union exactness.

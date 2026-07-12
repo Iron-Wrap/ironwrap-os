@@ -4,7 +4,7 @@ Narrow MCP server for the proprietary IronWrap OS Frappe app. The `erpnext-*`
 name is retained only for compatibility; ERPNext is not installed or linked.
 
 This server is the Hermes command surface over IronWrap OS business truth. It uses
-Frappe token auth. The implemented source contract is **115 tools: 71 reads, 22 dry-runs, and 22
+Frappe token auth. The implemented source contract is **119 tools: 73 reads, 23 dry-runs, and 23
 approved writes**. The manifest in `hermes/mcp-servers.json` is the exact source-registration
 inventory; deployed runtime proof remains a launch gate.
 
@@ -42,6 +42,8 @@ Baseline reads and command pairs:
 - `list_communication_events_for_job`
 - `get_supplier_quote`
 - `list_supplier_quotes_for_job`
+- `get_customer_quote` / `list_customer_quotes_for_job` (strict projection; excludes tax,
+  payment, acceptance, and notes)
 - `list_market_watch_items`
 - `get_price_book_rule` / `list_price_book_rules`
 - `get_visual_property_model` / `list_visual_property_models_for_job`
@@ -62,6 +64,8 @@ Baseline reads and command pairs:
 - `request_create_supplier_order`
 - `dry_run_supplier_quote`
 - `request_create_supplier_quote`
+- `dry_run_quote_revision`
+- `request_create_quote_revision`
 - `dry_run_proposal_evidence_pack`
 - `request_create_proposal_evidence_pack`
 - `dry_run_completion_packet`
@@ -109,8 +113,9 @@ needs a stable `run_id`, request text, approver, a short-lived server-issued
 `dry_run_receipt`, and an independently signed `approval_receipt` for the exact
 arguments, role, actor, and Frappe site. Receipt fields are redacted from the
 `Hermes Run` audit payload. Creating the unique `Hermes Run` is the one mutation
-claim: a completed exact retry returns stored truth; an in-flight, failed, or
-audit-failed claim never re-executes the mutation.
+claim. A source change or an already-created append-only target fails closed during
+preview revalidation; an in-flight, failed, or audit-failed claim never re-executes
+the mutation.
 
 Current approved-write tools:
 
@@ -131,6 +136,9 @@ Current approved-write tools:
 - `request_create_supplier_quote` creates or updates one review-gated
   `Supplier Quote` (with `valid_until` and per-line prices) from an approved
   `Material Takeoff`. It does not place orders or commit pricing.
+- `request_create_quote_revision` appends one blank `Customer Quote` Draft shell with
+  verified source/job/customer/version/reason lineage. It never carries commercial or
+  acceptance facts forward and cannot supersede an accepted or contract-linked quote.
 - `request_create_completion_packet` creates or updates one review-gated
   `Completion Packet` from Field Check-in and photo Evidence Item rows. It
   requires photo evidence and never sets warranty readiness itself.

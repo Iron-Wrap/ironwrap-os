@@ -16,7 +16,7 @@ capability only.
 | --- | --- |
 | Frappe operating core | 46 DocTypes (39 top + 7 child), the blueprint's full record model, contract-validated |
 | Worker bus | Intake/dedup/dead-letter/reconcile, geometry-verified measurements, `/health` `/ready` `/admin/status` |
-| Hermes agent layer | 8 runtime-filtered roles, 122 MCP tools, receipt-bound approved-write contract |
+| Hermes agent layer | 8 runtime-filtered roles, 126 MCP tools, receipt-bound approved-write contract |
 | Deploy/ops | Contract-validated production configuration, pinned runtime lock, encrypted Frappe/D1 recovery, launch runbook |
 | Competitive truth | 10 exceeded / 7 covered / 19 open, adversarially audited |
 | Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, P2 Owner Now plus governed `/approvals`, and the first P3 Sales Desk plus Measurement Workbench read models are locally implemented and contract-tested. Owner Now separates work-stops, operating exceptions, and lead attention; the inbox renders only allowlisted before/patch/outcome DTOs and server-granted decision capability; Sales joins narrowly allowlisted office lead, estimate, quote, and communication-record context; the workbench recomputes retained source geometry in the Worker and shows bounded measurement, takeoff, quote, proposal-record, and clause lineage. None claims delivery, field verification, or human follow-up. Live Worker/broker/Frappe/browser/device proof, governed estimator writes, and P4-P5 remain open; Frappe Control Center is the truthful fallback. |
@@ -221,8 +221,12 @@ Decision Rail now compares a selected quote only to an explicitly superseded pri
 the captured price-book/effective-date snapshot distinct from a live supplier-price claim, isolates
 pending change orders by selected quote linkage, and exposes proposal-review stops. It cannot
 regenerate an amount, mutate a quote, prepare a proposal, send a customer message, or infer written
-customer agreement. Price-book source snapshots, governed quote revision, proposal-pack assembly,
-insurance lane, and live source/browser/operator proof remain open.
+customer agreement. A governed MCP quote-revision command now creates only an append-only Draft
+shell bound to its source quote, customer, job, reason, and fresh version; it never copies price,
+tax, scope, payment, approval, acceptance, or customer-facing terms, and an accepted quote must
+use the Change Order path. It deliberately has no PWA button while the browser approval broker is
+lead-triage-only. Immutable price-rule snapshot binding, proposal-pack assembly, insurance lane,
+and live source/browser/operator proof remain open.
 Beats: SmartEstimates on trust: JN auto-drafts from unverified numbers; we show the
 verification. Proof gate: measurement-to-proposal flow completed with every number
 traceable to its in-file source ref on screen.

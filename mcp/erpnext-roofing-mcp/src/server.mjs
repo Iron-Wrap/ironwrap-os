@@ -24,6 +24,7 @@ const REQUEST_TO_DRY_RUN = Object.freeze({
   request_update_material_takeoff_status: "dry_run_update_material_takeoff_status",
   request_create_supplier_order: "dry_run_supplier_order",
   request_create_supplier_quote: "dry_run_supplier_quote",
+  request_create_quote_revision: "dry_run_quote_revision",
   request_create_proposal_evidence_pack: "dry_run_proposal_evidence_pack",
   request_create_job_assignment: "dry_run_job_assignment",
   request_create_change_order: "dry_run_change_order",
@@ -293,6 +294,29 @@ const SUPPLIER_QUOTE_FIELDS = [
   "approved_by",
   "approved_at",
   "quote_total",
+  "modified",
+];
+
+// Customer Quote reads are strict and intentionally exclude tax-policy JSON, payment truth,
+// internal notes, and acceptance proof. Quote revision commands read the full source server-side
+// only to build a blank, review-gated successor; none of those commercial fields are copied.
+const CUSTOMER_QUOTE_FIELDS = [
+  "name",
+  "customer_quote_id",
+  "roof_job",
+  "customer",
+  "quote_version",
+  "status",
+  "price_book_version",
+  "pricing_effective_at",
+  "quote_total",
+  "currency",
+  "valid_until",
+  "prepared_at",
+  "approved_by",
+  "approved_at",
+  "supersedes",
+  "correction_reason",
   "modified",
 ];
 
@@ -1331,6 +1355,58 @@ export function buildSupplierQuoteDraft({
   };
 }
 
+// A quote revision intentionally creates an empty commercial shell. The next approved
+// pricing, tax, scope, payment, and customer-facing proposal must be rebuilt from current
+// evidence; none of the superseded quote's commercial facts are carried forward here.
+export function customerQuoteRevisionIdForRoofJob(roofJobId, quoteVersion) {
+  if (!str(roofJobId)) throw new Error("roof_job_id_required");
+  if (!Number.isSafeInteger(quoteVersion) || quoteVersion < 1) {
+    throw new Error("customer_quote_version_invalid");
+  }
+  return `quote-revision:${slugify(`${roofJobId}:v${quoteVersion}`)}`;
+}
+
+export function buildCustomerQuoteRevisionDraft({
+  sourceQuote = {},
+  roofJobId,
+  existingQuotes = [],
+  correctionReason,
+  nowIso,
+} = {}) {
+  if (!str(roofJobId)) throw new Error("roof_job_id_required");
+  const sourceQuoteId = str(sourceQuote.customer_quote_id ?? sourceQuote.name);
+  if (!sourceQuoteId) throw new Error("customer_quote_id_required");
+  if (sourceQuote.status === "Accepted" || sourceQuote.contract_acceptance || sourceQuote.accepted_at) {
+    throw new Error("accepted_quote_revision_requires_change_order");
+  }
+  if (!str(sourceQuote.roof_job)) throw new Error("customer_quote_roof_job_required");
+  if (sourceQuote.roof_job !== roofJobId) throw new Error("customer_quote_roof_job_mismatch");
+  const customer = str(sourceQuote.customer);
+  if (!customer) throw new Error("customer_quote_customer_required");
+  const reason = str(correctionReason);
+  if (!reason) throw new Error("correction_reason_required");
+
+  const versions = [sourceQuote, ...(Array.isArray(existingQuotes) ? existingQuotes : [])]
+    .map((quote) => Number(quote?.quote_version))
+    .filter((version) => Number.isSafeInteger(version) && version >= 1);
+  if (!versions.length) throw new Error("customer_quote_version_required");
+  const quoteVersion = Math.max(...versions) + 1;
+  if (!Number.isSafeInteger(quoteVersion)) throw new Error("customer_quote_version_invalid");
+  const customerQuoteId = customerQuoteRevisionIdForRoofJob(roofJobId, quoteVersion);
+  if (customerQuoteId === sourceQuoteId) throw new Error("customer_quote_revision_requires_new_id");
+
+  return {
+    customer_quote_id: customerQuoteId,
+    roof_job: roofJobId,
+    customer,
+    quote_version: quoteVersion,
+    status: "Draft",
+    supersedes: sourceQuoteId,
+    correction_reason: reason,
+    ...(nowIso ? { prepared_at: nowIso } : {}),
+  };
+}
+
 export function buildMarketWatchItemDraft({
   watchId,
   competitor,
@@ -1369,6 +1445,12 @@ export const LeadTriageInputSchema = z.object({
 }).strict();
 const IsoDateTimeSchema = z.string().datetime({ offset: true });
 const DateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const CustomerQuoteRevisionInputSchema = z.object({
+  roof_job_id: IdSchema,
+  customer_quote_id: IdSchema,
+  correction_reason: z.string().trim().min(1).max(2000),
+}).strict();
 
 export const JobAssignmentInputSchema = z.object({
   assignment_id: IdSchema.optional(),
@@ -3160,6 +3242,13 @@ export function buildServer(config) {
     getName: "get_supplier_quote",
     listName: "list_supplier_quotes_for_job",
     fields: SUPPLIER_QUOTE_FIELDS,
+  });
+  registerStrictJobReadPair(server, config, {
+    doctype: "Customer Quote",
+    idArg: "customer_quote_id",
+    getName: "get_customer_quote",
+    listName: "list_customer_quotes_for_job",
+    fields: CUSTOMER_QUOTE_FIELDS,
   });
   registerReadPair(server, config, {
     doctype: "Visual Property Model",
@@ -5164,6 +5253,75 @@ export function buildServer(config) {
   );
 
   server.registerTool(
+    "dry_run_quote_revision",
+    {
+      title: "Dry Run Quote Revision",
+      description: "Preview one append-only, non-commercial Customer Quote revision shell. It never copies price, tax, scope, payment, approval, acceptance, or customer-facing terms.",
+      inputSchema: CustomerQuoteRevisionInputSchema,
+    },
+    async (args) => {
+      const { draft, sourceQuote, existingQuotes } = await buildCustomerQuoteRevisionDraftFromErp(config, args);
+      await assertQuoteRevisionTargetAbsent(config, draft.customer_quote_id);
+      return text({
+        would_write: false,
+        required_tool: "request_create_quote_revision",
+        target: { doctype: "Customer Quote", name: draft.customer_quote_id },
+        append_only: true,
+        source: summarizeCustomerQuote(sourceQuote),
+        observed_quote_count: existingQuotes.length,
+        draft,
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_create_quote_revision",
+    {
+      title: "Request Create Quote Revision",
+      description: "Approved-write: append one blank Customer Quote revision shell and audit it. It cannot reprice, present, approve, accept, sign, or send a quote.",
+      inputSchema: approvedWriteInputSchema(CustomerQuoteRevisionInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const { draft, sourceQuote, existingQuotes } = await buildCustomerQuoteRevisionDraftFromErp(config, args, now);
+      await assertQuoteRevisionTargetAbsent(config, draft.customer_quote_id);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_create_quote_revision",
+        target: { doctype: "Customer Quote", name: draft.customer_quote_id },
+        roofJob: args.roof_job_id,
+        dryRun: {
+          target: { doctype: "Customer Quote", name: draft.customer_quote_id },
+          operation: "create",
+          append_only: true,
+          source: summarizeCustomerQuote(sourceQuote),
+          observed_quote_count: existingQuotes.length,
+          draft,
+        },
+        beforeSummary: null,
+        afterSummary: summarizeCustomerQuote({ ...draft, name: draft.customer_quote_id }),
+        execute: createOnlyExecutor(
+          config,
+          "Customer Quote",
+          null,
+          draft,
+          "quote_revision_append_only",
+        ),
+        responseExtra: {
+          created: true,
+          customer_quote_id: draft.customer_quote_id,
+          quote_version: draft.quote_version,
+          supersedes: draft.supersedes,
+        },
+      }));
+    },
+  );
+
+  server.registerTool(
     "dry_run_market_watch_item",
     {
       title: "Dry Run Market Watch Item",
@@ -5987,6 +6145,32 @@ async function buildSupplierQuoteDraftFromErp(config, args, nowIso) {
   return { draft, materialTakeoff };
 }
 
+async function buildCustomerQuoteRevisionDraftFromErp(config, args, nowIso) {
+  const sourceQuote = await readResource(config, "Customer Quote", args.customer_quote_id);
+  const existingQuotes = await listResources(config, "Customer Quote", {
+    fields: CUSTOMER_QUOTE_FIELDS,
+    filters: [["Customer Quote", "roof_job", "=", args.roof_job_id]],
+    limit: 100,
+    orderBy: "modified desc",
+  });
+  // Version identity must be derived from the complete job history. A job with an unusually
+  // large quote history is review work, not a reason to silently choose from a truncated page.
+  if (existingQuotes.length >= 100) throw new Error("customer_quote_version_window_exceeded");
+  const draft = buildCustomerQuoteRevisionDraft({
+    sourceQuote,
+    roofJobId: args.roof_job_id,
+    existingQuotes,
+    correctionReason: args.correction_reason,
+    nowIso,
+  });
+  return { draft, sourceQuote, existingQuotes };
+}
+
+async function assertQuoteRevisionTargetAbsent(config, customerQuoteId) {
+  const existing = await readResourceOrNull(config, "Customer Quote", customerQuoteId);
+  if (existing) throw new Error("quote_revision_append_only");
+}
+
 async function buildCompletionPacketDraftFromErp(config, roofJobId, { packetId, limit = 25, nowIso } = {}) {
   const [checkIns, evidence] = await Promise.all([
     listResources(config, "Field Check-in", {
@@ -6188,6 +6372,25 @@ function summarizeSupplierQuote(quote) {
     status: quote.status,
     valid_until: quote.valid_until ?? "",
     quote_total: quote.quote_total ?? 0,
+  };
+}
+
+function summarizeCustomerQuote(quote) {
+  if (!quote) return null;
+  return {
+    name: quote.name,
+    customer_quote_id: quote.customer_quote_id,
+    roof_job: quote.roof_job,
+    customer: quote.customer,
+    quote_version: quote.quote_version,
+    status: quote.status,
+    price_book_version: quote.price_book_version ?? "",
+    pricing_effective_at: quote.pricing_effective_at ?? "",
+    quote_total: quote.quote_total ?? null,
+    currency: quote.currency ?? "",
+    valid_until: quote.valid_until ?? "",
+    supersedes: quote.supersedes ?? "",
+    modified: quote.modified ?? "",
   };
 }
 

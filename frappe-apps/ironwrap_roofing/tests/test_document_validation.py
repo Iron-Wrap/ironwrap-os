@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import types
 import unittest
@@ -135,8 +136,92 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         ):
             accepted_adapter.validate_business_document(revision, "customer_quote")
 
+    def test_customer_quote_snapshot_loads_verified_price_rule_context(self) -> None:
+        rule = {
+            "name": "rule-1",
+            "price_rule_id": "rule-1",
+            "rule_name": "Standing seam panel",
+            "rule_type": "Material",
+            "status": "Approved",
+            "service_type": "Metal reroof",
+            "material_system": "24ga standing seam",
+            "unit": "sqft",
+            "unit_cost": "8.00",
+            "unit_price": "12.50",
+            "minimum_quantity": "0",
+            "currency": "CAD",
+            "source_ref": "supplier-sheet-2026-07",
+            "effective_from": "2026-07-01",
+            "effective_to": "",
+            "assumptions": "Standard colour.",
+            "exclusions": "Freight.",
+            "approved_by": "owner@example.com",
+            "approved_at": "2026-07-10 10:00:00",
+            "rule_json": '{"unit_price":12.5}',
+        }
+        snapshot = json.dumps(
+            {
+                "quote": {
+                    "customer_quote_id": "cq-1",
+                    "quote_version": 1,
+                    "price_book_version": "retail-2026-07",
+                    "pricing_effective_at": "2026-07-10 11:30:00",
+                },
+                "captured_at": "2026-07-10T11:31:00.000Z",
+                "rules": [
+                    {
+                        key: json.loads(rule[key]) if key == "rule_json" else str(rule[key])
+                        for key in (
+                            "price_rule_id",
+                            "rule_name",
+                            "rule_type",
+                            "status",
+                            "service_type",
+                            "material_system",
+                            "unit",
+                            "unit_cost",
+                            "unit_price",
+                            "minimum_quantity",
+                            "currency",
+                            "source_ref",
+                            "effective_from",
+                            "effective_to",
+                            "assumptions",
+                            "exclusions",
+                            "approved_by",
+                            "approved_at",
+                            "rule_json",
+                        )
+                    }
+                ],
+            }
+        )
+        draft = FakeDocument(
+            {
+                "customer_quote_id": "cq-1",
+                "roof_job": "job-1",
+                "customer": "customer-1",
+                "quote_version": 1,
+                "status": "Draft",
+                "price_book_version": "retail-2026-07",
+                "pricing_effective_at": "2026-07-10 11:30:00",
+                "price_rule_snapshot_json": snapshot,
+            }
+        )
+        adapter, _ = self.load_adapter(rows={"Price Book Rule": [rule]})
+        adapter.validate_business_document(draft, "customer_quote")
+
+        missing_adapter, _ = self.load_adapter()
+        with self.assertRaisesRegex(FakeValidationError, "unverified_price_rule_snapshot"):
+            missing_adapter.validate_business_document(draft, "customer_quote")
+
     def test_proposal_evidence_pack_loads_quote_anchor_context_for_draft(self) -> None:
-        quote_fields = ("roof_job", "status", "quote_version")
+        quote_fields = (
+            "roof_job",
+            "status",
+            "quote_version",
+            "price_rule_snapshot_json",
+        )
         proposal_rows = {
             "Measurement Report": [
                 {
@@ -187,6 +272,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                     "roof_job": "job-1",
                     "status": "Approved",
                     "quote_version": 1,
+                    "price_rule_snapshot_json": "{}",
                 }
             },
             rows=proposal_rows,
@@ -199,6 +285,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                     "roof_job": "job-other",
                     "status": "Accepted",
                     "quote_version": 1,
+                    "price_rule_snapshot_json": "{}",
                 }
             },
             rows=proposal_rows,
@@ -212,6 +299,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                     "roof_job": "job-1",
                     "status": "Draft",
                     "quote_version": 1,
+                    "price_rule_snapshot_json": "{}",
                 }
             },
             rows=proposal_rows,
@@ -225,6 +313,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                     "roof_job": "job-1",
                     "status": "Approved",
                     "quote_version": 1,
+                    "price_rule_snapshot_json": "{}",
                 }
             },
             rows={"Measurement Report": proposal_rows["Measurement Report"]},

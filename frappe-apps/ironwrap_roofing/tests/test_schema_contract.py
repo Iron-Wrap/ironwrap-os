@@ -191,7 +191,7 @@ NEW_BLUEPRINT_FIELDS.update(
         "Field Check-in": {"checkin_id", "device_action_id", "job_assignment", "crew_profile", "capture_actor", "sync_state", "blocker_flag", "voice_evidence", "correction_of"},
         "Production Gate State": {"gate_id", "owner_user", "assigned_at", "due_at"},
         "Roof Job": {"roof_job_id", "workflow_profile", "locale_policy_version", "locale_policy_snapshot_json"},
-        "Customer Quote": {"customer_quote_id", "quote_version", "price_book_version", "subtotal", "tax_amount", "tax_policy_snapshot_json", "amount_due", "amount_paid", "balance_due", "payment_truth_source", "supersedes"},
+        "Customer Quote": {"customer_quote_id", "quote_version", "price_book_version", "price_rule_snapshot_json", "subtotal", "tax_amount", "tax_policy_snapshot_json", "amount_due", "amount_paid", "balance_due", "payment_truth_source", "supersedes"},
         "Payment Milestone": {"payment_milestone_id", "milestone_version", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due", "tax_policy_snapshot_json", "truth_source", "supersedes"},
     }
 )

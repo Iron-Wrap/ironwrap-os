@@ -92,6 +92,7 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - dry_run_supplier_order
 - dry_run_supplier_quote
 - dry_run_quote_revision
+- dry_run_bind_quote_price_rules
 - dry_run_proposal_evidence_pack
 - dry_run_job_assignment
 - dry_run_change_order
@@ -119,6 +120,7 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - request_create_supplier_order
 - request_create_supplier_quote
 - request_create_quote_revision
+- request_bind_quote_price_rules
 - request_create_proposal_evidence_pack
 - request_create_job_assignment
 - request_create_change_order
@@ -158,6 +160,9 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - Lead triage is an approved local annotation: use `dry_run_mark_lead_triaged` then
   `request_mark_lead_triaged`. It cannot alter bus transport status and does not create or
   update a Communication Event.
+- Bind price provenance only while a quote is Draft or Needs Review with
+  `dry_run_bind_quote_price_rules` then `request_bind_quote_price_rules`; the resulting immutable
+  snapshot is not a live supplier-price claim and must exist before approval or proof-pack assembly.
 - Treat assignments, change orders, safety plans, compliance records, decisions, consent, and
   export requests as append-only/evidence-backed history where the tool contract says so.
   `Contract Acceptance` and `Crew Profile` are read-only; no role can sign for a customer.

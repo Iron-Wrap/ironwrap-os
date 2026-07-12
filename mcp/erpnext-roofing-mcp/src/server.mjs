@@ -25,6 +25,7 @@ const REQUEST_TO_DRY_RUN = Object.freeze({
   request_create_supplier_order: "dry_run_supplier_order",
   request_create_supplier_quote: "dry_run_supplier_quote",
   request_create_quote_revision: "dry_run_quote_revision",
+  request_bind_quote_price_rules: "dry_run_bind_quote_price_rules",
   request_create_proposal_evidence_pack: "dry_run_proposal_evidence_pack",
   request_create_job_assignment: "dry_run_job_assignment",
   request_create_change_order: "dry_run_change_order",
@@ -350,6 +351,27 @@ const PRICE_BOOK_RULE_FIELDS = [
   "effective_from",
   "effective_to",
   "modified",
+];
+
+const PRICE_RULE_SNAPSHOT_FIELDS = [
+  "price_rule_id",
+  "rule_name",
+  "rule_type",
+  "status",
+  "service_type",
+  "material_system",
+  "unit",
+  "unit_cost",
+  "unit_price",
+  "minimum_quantity",
+  "currency",
+  "source_ref",
+  "effective_from",
+  "effective_to",
+  "assumptions",
+  "exclusions",
+  "approved_by",
+  "approved_at",
 ];
 
 const VISUAL_PROPERTY_MODEL_FIELDS = [
@@ -1105,6 +1127,9 @@ export function assertProposalQuotePreparable(customerQuote, roofJobId) {
   if (!new Set(["Approved", "Accepted"]).has(customerQuote.status)) {
     throw new Error("customer_quote_not_approved");
   }
+  if (!str(customerQuote.price_rule_snapshot_json)) {
+    throw new Error("customer_quote_price_rule_snapshot_required");
+  }
   return quotation;
 }
 
@@ -1464,6 +1489,88 @@ export function buildCustomerQuoteRevisionDraft({
   };
 }
 
+export function buildQuotePriceRuleSnapshot({
+  roofJobId,
+  customerQuote = {},
+  priceRules = [],
+  nowIso,
+} = {}) {
+  if (!str(roofJobId)) throw new Error("roof_job_id_required");
+  const customerQuoteId = str(customerQuote.customer_quote_id ?? customerQuote.name);
+  if (!customerQuoteId) throw new Error("customer_quote_id_required");
+  if (customerQuote.roof_job !== roofJobId) throw new Error("customer_quote_roof_job_mismatch");
+  if (!new Set(["Draft", "Needs Review"]).has(customerQuote.status)) {
+    throw new Error("customer_quote_price_rule_bind_state_invalid");
+  }
+  if (str(customerQuote.price_rule_snapshot_json)) {
+    throw new Error("customer_quote_price_rule_snapshot_already_bound");
+  }
+  const quoteVersion = Number(customerQuote.quote_version);
+  if (!Number.isSafeInteger(quoteVersion) || quoteVersion < 1) {
+    throw new Error("customer_quote_version_required");
+  }
+  const priceBookVersion = str(customerQuote.price_book_version);
+  if (!priceBookVersion) throw new Error("customer_quote_price_book_version_required");
+  const pricingEffectiveAt = str(customerQuote.pricing_effective_at);
+  const effectiveDate = priceRuleSnapshotDate(pricingEffectiveAt, "customer_quote_pricing_effective_at_required");
+  const capturedAt = str(nowIso);
+  if (!capturedAt) throw new Error("price_rule_snapshot_timestamp_required");
+  if (!Array.isArray(priceRules) || !priceRules.length || priceRules.length > 50) {
+    throw new Error("price_rule_snapshot_rules_required");
+  }
+
+  const seen = new Set();
+  const rules = priceRules.map((rule) => {
+    const priceRuleId = str(rule?.price_rule_id ?? rule?.name);
+    if (!priceRuleId || seen.has(priceRuleId)) throw new Error("duplicate_price_rule_id");
+    seen.add(priceRuleId);
+    if (rule.status !== "Approved") throw new Error("price_rule_not_approved");
+    const effectiveFrom = priceRuleSnapshotDate(rule.effective_from, "price_rule_effective_from_required");
+    const effectiveTo = str(rule.effective_to);
+    if (effectiveDate < effectiveFrom || (effectiveTo && effectiveDate > priceRuleSnapshotDate(effectiveTo, "price_rule_effective_to_invalid"))) {
+      throw new Error("price_rule_not_effective_for_quote");
+    }
+    for (const field of ["rule_name", "rule_type", "unit", "source_ref", "assumptions", "exclusions", "approved_by", "approved_at"]) {
+      if (!str(rule[field])) throw new Error(`price_rule_${field}_required`);
+    }
+    const ruleJson = parsePriceRuleSnapshotJson(rule.rule_json);
+    return {
+      price_rule_id: priceRuleId,
+      ...Object.fromEntries(PRICE_RULE_SNAPSHOT_FIELDS
+        .filter((field) => field !== "price_rule_id")
+        .map((field) => [field, String(rule[field] ?? "")])),
+      rule_json: ruleJson,
+    };
+  }).sort((left, right) => left.price_rule_id.localeCompare(right.price_rule_id));
+
+  return {
+    quote: {
+      customer_quote_id: customerQuoteId,
+      quote_version: quoteVersion,
+      price_book_version: priceBookVersion,
+      pricing_effective_at: pricingEffectiveAt,
+    },
+    captured_at: capturedAt,
+    rules,
+  };
+}
+
+function priceRuleSnapshotDate(value, errorCode) {
+  const text = str(value);
+  if (!text || !/^\d{4}-\d{2}-\d{2}/.test(text)) throw new Error(errorCode);
+  return text.slice(0, 10);
+}
+
+function parsePriceRuleSnapshotJson(value) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error();
+    return parsed;
+  } catch {
+    throw new Error("price_rule_json_invalid");
+  }
+}
+
 export function buildMarketWatchItemDraft({
   watchId,
   competitor,
@@ -1507,6 +1614,12 @@ export const CustomerQuoteRevisionInputSchema = z.object({
   roof_job_id: IdSchema,
   customer_quote_id: IdSchema,
   correction_reason: z.string().trim().min(1).max(2000),
+}).strict();
+
+export const QuotePriceRuleSnapshotInputSchema = z.object({
+  roof_job_id: IdSchema,
+  customer_quote_id: IdSchema,
+  price_rule_ids: z.array(IdSchema).min(1).max(50),
 }).strict();
 
 export const JobAssignmentInputSchema = z.object({
@@ -5318,6 +5431,70 @@ export function buildServer(config) {
   );
 
   server.registerTool(
+    "dry_run_bind_quote_price_rules",
+    {
+      title: "Dry Run Bind Quote Price Rules",
+      description: "Preview one immutable Price Book Rule snapshot for a Draft or Needs Review Customer Quote without writing.",
+      inputSchema: QuotePriceRuleSnapshotInputSchema,
+    },
+    async (args) => {
+      const { customerQuote, snapshot } = await buildQuotePriceRuleSnapshotFromErp(
+        config,
+        args,
+        new Date().toISOString(),
+      );
+      return text({
+        would_write: false,
+        required_tool: "request_bind_quote_price_rules",
+        target: { doctype: "Customer Quote", name: customerQuote.name ?? customerQuote.customer_quote_id },
+        before: summarizeCustomerQuote(customerQuote),
+        patch: { price_rule_snapshot_bound: true },
+        source: summarizeQuotePriceRuleSnapshot(snapshot),
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_bind_quote_price_rules",
+    {
+      title: "Request Bind Quote Price Rules",
+      description: "Approved-write: bind one immutable verified Price Book Rule snapshot to a Draft or Needs Review Customer Quote and audit it.",
+      inputSchema: approvedWriteInputSchema(QuotePriceRuleSnapshotInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const { customerQuote, snapshot, patch } = await buildQuotePriceRuleSnapshotFromErp(config, args, now);
+      const targetName = customerQuote.name ?? customerQuote.customer_quote_id;
+      const beforeSummary = summarizeCustomerQuote(customerQuote);
+      const dryRun = {
+        target: { doctype: "Customer Quote", name: targetName },
+        before: beforeSummary,
+        patch: { price_rule_snapshot_bound: true },
+        source: summarizeQuotePriceRuleSnapshot(snapshot),
+      };
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_bind_quote_price_rules",
+        target: { doctype: "Customer Quote", name: targetName },
+        roofJob: args.roof_job_id,
+        dryRun,
+        beforeSummary,
+        afterSummary: { ...beforeSummary, price_rule_snapshot_bound: true },
+        execute: () => erpPut(config, resourcePath("Customer Quote", targetName), patch),
+        responseExtra: {
+          updated: true,
+          customer_quote_id: targetName,
+          price_rule_count: snapshot.rules.length,
+        },
+      }));
+    },
+  );
+
+  server.registerTool(
     "dry_run_quote_revision",
     {
       title: "Dry Run Quote Revision",
@@ -6243,6 +6420,24 @@ async function buildCustomerQuoteRevisionDraftFromErp(config, args, nowIso) {
   return { draft, sourceQuote, existingQuotes };
 }
 
+async function buildQuotePriceRuleSnapshotFromErp(config, args, nowIso) {
+  const customerQuote = await readResource(config, "Customer Quote", args.customer_quote_id);
+  const priceRules = await Promise.all(
+    args.price_rule_ids.map((priceRuleId) => readResource(config, "Price Book Rule", priceRuleId)),
+  );
+  const snapshot = buildQuotePriceRuleSnapshot({
+    roofJobId: args.roof_job_id,
+    customerQuote,
+    priceRules,
+    nowIso,
+  });
+  return {
+    customerQuote,
+    snapshot,
+    patch: { price_rule_snapshot_json: JSON.stringify(snapshot, null, 2) },
+  };
+}
+
 async function assertQuoteRevisionTargetAbsent(config, customerQuoteId) {
   const existing = await readResourceOrNull(config, "Customer Quote", customerQuoteId);
   if (existing) throw new Error("quote_revision_append_only");
@@ -6468,6 +6663,20 @@ function summarizeCustomerQuote(quote) {
     valid_until: quote.valid_until ?? "",
     supersedes: quote.supersedes ?? "",
     modified: quote.modified ?? "",
+  };
+}
+
+function summarizeQuotePriceRuleSnapshot(snapshot) {
+  return {
+    quote: snapshot.quote,
+    rule_count: snapshot.rules.length,
+    rules: snapshot.rules.map((rule) => ({
+      price_rule_id: rule.price_rule_id,
+      rule_name: rule.rule_name,
+      rule_type: rule.rule_type,
+      effective_from: rule.effective_from,
+      effective_to: rule.effective_to,
+    })),
   };
 }
 

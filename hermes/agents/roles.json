@@ -49,7 +49,7 @@
       "dry_run": [
         "dry_run_replay",
         "dry_run_update_gate", "dry_run_material_takeoff", "dry_run_update_material_takeoff_status",
-        "dry_run_supplier_order", "dry_run_supplier_quote", "dry_run_quote_revision", "dry_run_proposal_evidence_pack",
+        "dry_run_supplier_order", "dry_run_supplier_quote", "dry_run_quote_revision", "dry_run_bind_quote_price_rules", "dry_run_proposal_evidence_pack",
         "dry_run_job_assignment", "dry_run_change_order", "dry_run_change_order_transition",
         "dry_run_safety_plan", "dry_run_safety_acknowledgement", "dry_run_job_compliance_record",
         "dry_run_customer_decision", "dry_run_communication_consent",
@@ -60,7 +60,7 @@
       "approved_write": [
         "request_replay",
         "request_update_gate", "request_create_material_takeoff", "request_update_material_takeoff_status",
-        "request_create_supplier_order", "request_create_supplier_quote", "request_create_quote_revision", "request_create_proposal_evidence_pack",
+        "request_create_supplier_order", "request_create_supplier_quote", "request_create_quote_revision", "request_bind_quote_price_rules", "request_create_proposal_evidence_pack",
         "request_create_job_assignment", "request_create_change_order", "request_transition_change_order",
         "request_create_safety_plan", "request_record_safety_acknowledgement", "request_record_job_compliance",
         "request_record_customer_decision", "request_record_communication_consent",
@@ -114,12 +114,12 @@
       ],
       "dry_run": [
         "dry_run_material_takeoff", "dry_run_update_material_takeoff_status",
-        "dry_run_supplier_quote", "dry_run_quote_revision", "dry_run_proposal_evidence_pack",
+        "dry_run_supplier_quote", "dry_run_quote_revision", "dry_run_bind_quote_price_rules", "dry_run_proposal_evidence_pack",
         "dry_run_change_order", "dry_run_change_order_transition", "dry_run_customer_decision"
       ],
       "approved_write": [
         "request_create_material_takeoff", "request_update_material_takeoff_status",
-        "request_create_supplier_quote", "request_create_quote_revision", "request_create_proposal_evidence_pack",
+        "request_create_supplier_quote", "request_create_quote_revision", "request_bind_quote_price_rules", "request_create_proposal_evidence_pack",
         "request_create_change_order", "request_transition_change_order", "request_record_customer_decision"
       ],
       "forbidden": [

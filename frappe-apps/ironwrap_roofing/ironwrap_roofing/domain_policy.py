@@ -318,7 +318,13 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "supersedes",
         "correction_reason",
     ),
-    "customer_quote": ("roof_job", "customer", "quote_version", "supersedes"),
+    "customer_quote": (
+        "roof_job",
+        "customer",
+        "quote_version",
+        "price_rule_snapshot_json",
+        "supersedes",
+    ),
     "evidence_item": (
         "device_action_id",
         "roof_job",
@@ -454,7 +460,11 @@ JSON_FIELDS: dict[str, tuple[str, ...]] = {
     "change_order": ("tax_policy_snapshot_json",),
     "communication_event": ("policy_reasons_json",),
     "completion_packet": ("photo_evidence_json", "evidence_summary_json"),
-    "customer_quote": ("quote_summary_json", "tax_policy_snapshot_json"),
+    "customer_quote": (
+        "quote_summary_json",
+        "tax_policy_snapshot_json",
+        "price_rule_snapshot_json",
+    ),
     "field_check_in": ("evidence_ids_json",),
     "hermes_run": (
         "tool_args_json",
@@ -1142,6 +1152,14 @@ def _validate_customer_quote(record: Any, context: Mapping[str, Any]) -> None:
             "Expired": set(),
         },
     )
+    price_rule_snapshot = parse_json_field(
+        record,
+        "price_rule_snapshot_json",
+        container_types=(dict,),
+        non_empty=True,
+    )
+    if price_rule_snapshot is not None:
+        _validate_quote_price_rule_snapshot(record, price_rule_snapshot, context)
     if status not in {"Approved", "Accepted"}:
         _validate_customer_quote_correction(record, context)
         return
@@ -1152,6 +1170,7 @@ def _validate_customer_quote(record: Any, context: Mapping[str, Any]) -> None:
         "quote_version",
         "price_book_version",
         "pricing_effective_at",
+        "price_rule_snapshot_json",
         "subtotal",
         "tax_amount",
         "tax_code",
@@ -1184,6 +1203,7 @@ def _validate_customer_quote(record: Any, context: Mapping[str, Any]) -> None:
         "quote_version",
         "price_book_version",
         "pricing_effective_at",
+        "price_rule_snapshot_json",
         "subtotal",
         "tax_amount",
         "tax_code",
@@ -1201,6 +1221,151 @@ def _validate_customer_quote(record: Any, context: Mapping[str, Any]) -> None:
             record, "acceptance_evidence", "contract_acceptance", "accepted_at"
         )
     _validate_customer_quote_correction(record, context)
+
+
+def _validate_quote_price_rule_snapshot(
+    record: Any, snapshot: Mapping[str, Any], context: Mapping[str, Any]
+) -> None:
+    """Keep quote price provenance append-only and tied to live rule identities."""
+
+    if set(snapshot) != {"quote", "captured_at", "rules"}:
+        raise PolicyViolation(
+            "invalid_price_rule_snapshot",
+            "must contain quote, captured_at, and rules only",
+            "price_rule_snapshot_json",
+        )
+    quote = snapshot["quote"]
+    if not isinstance(quote, Mapping) or set(quote) != {
+        "customer_quote_id",
+        "quote_version",
+        "price_book_version",
+        "pricing_effective_at",
+    }:
+        raise PolicyViolation(
+            "invalid_price_rule_snapshot",
+            "quote identity must use the canonical snapshot shape",
+            "price_rule_snapshot_json",
+        )
+    if (
+        quote["customer_quote_id"] != _get(record, "customer_quote_id")
+        or quote["quote_version"] != _get(record, "quote_version")
+        or quote["price_book_version"] != _get(record, "price_book_version")
+        or quote["pricing_effective_at"] != _get(record, "pricing_effective_at")
+        or not _safe_positive_int(quote["quote_version"])
+        or _blank(quote["price_book_version"])
+        or not _safe_iso_timestamp(quote["pricing_effective_at"])
+        or not _safe_iso_timestamp(snapshot["captured_at"])
+    ):
+        raise PolicyViolation(
+            "price_rule_snapshot_quote_mismatch",
+            "snapshot quote identity must match the Customer Quote",
+            "price_rule_snapshot_json",
+        )
+    rules = snapshot["rules"]
+    if not isinstance(rules, list) or not 1 <= len(rules) <= 50:
+        raise PolicyViolation(
+            "invalid_price_rule_snapshot",
+            "must contain one to fifty price rules",
+            "price_rule_snapshot_json",
+        )
+    if len({row.get("price_rule_id") for row in rules if isinstance(row, Mapping)}) != len(rules):
+        raise PolicyViolation(
+            "duplicate_price_rule_snapshot",
+            "price rule identities must be unique",
+            "price_rule_snapshot_json",
+        )
+
+    sources = context.get("price_rule_snapshot_rules")
+    if not isinstance(sources, Mapping):
+        raise PolicyViolation(
+            "unverified_price_rule_snapshot",
+            "price rule sources could not be verified",
+            "price_rule_snapshot_json",
+        )
+    previous = context.get("_previous")
+    binding = previous is None or _blank(_get(previous, "price_rule_snapshot_json"))
+    if binding and _get(record, "status") not in {"Draft", "Needs Review"}:
+        raise PolicyViolation(
+            "price_rule_snapshot_bind_state",
+            "a snapshot can only be first bound while the quote is Draft or Needs Review",
+            "price_rule_snapshot_json",
+        )
+    effective_date = str(quote["pricing_effective_at"])[:10]
+    fields = {
+        "price_rule_id",
+        "rule_name",
+        "rule_type",
+        "status",
+        "service_type",
+        "material_system",
+        "unit",
+        "unit_cost",
+        "unit_price",
+        "minimum_quantity",
+        "currency",
+        "source_ref",
+        "effective_from",
+        "effective_to",
+        "assumptions",
+        "exclusions",
+        "approved_by",
+        "approved_at",
+        "rule_json",
+    }
+    source_scalar_fields = fields - {"price_rule_id", "rule_json", "status"}
+    for rule in rules:
+        if (
+            not isinstance(rule, Mapping)
+            or set(rule) != fields
+            or rule.get("status") != "Approved"
+            or not _safe_proposal_summary_label(rule.get("price_rule_id"))
+            or not all(isinstance(rule.get(field), str) for field in source_scalar_fields)
+            or not isinstance(rule.get("rule_json"), dict)
+            or not rule["rule_json"]
+        ):
+            raise PolicyViolation(
+                "invalid_price_rule_snapshot",
+                "rules must use the canonical frozen source shape",
+                "price_rule_snapshot_json",
+            )
+        source = sources.get(rule["price_rule_id"])
+        if not isinstance(source, Mapping) or source.get("price_rule_id") != rule["price_rule_id"]:
+            raise PolicyViolation(
+                "unverified_price_rule_snapshot",
+                "each rule must resolve to its live source record",
+                "price_rule_snapshot_json",
+            )
+        source_status = source.get("status")
+        if source_status not in ({"Approved"} if binding else {"Approved", "Retired"}):
+            raise PolicyViolation(
+                "unapproved_price_rule_snapshot",
+                "a snapshot can only bind approved price rules",
+                "price_rule_snapshot_json",
+            )
+        source_from = str(source.get("effective_from") or "")[:10]
+        source_to = str(source.get("effective_to") or "")[:10]
+        if binding and (not source_from or effective_date < source_from or (source_to and effective_date > source_to)):
+            raise PolicyViolation(
+                "price_rule_effective_window_mismatch",
+                "each bound rule must be effective at the quote pricing timestamp",
+                "price_rule_snapshot_json",
+            )
+        source_rule_json = parse_json_field(
+            source,
+            "rule_json",
+            required=True,
+            container_types=(dict,),
+            non_empty=True,
+        )
+        if rule["rule_json"] != source_rule_json or any(
+            str(source.get(field) or "") != rule[field]
+            for field in source_scalar_fields
+        ):
+            raise PolicyViolation(
+                "price_rule_snapshot_source_mismatch",
+                "frozen rule fields must match their verified source records",
+                "price_rule_snapshot_json",
+            )
 
 
 def _validate_payment_milestone(record: Any, context: Mapping[str, Any]) -> None:
@@ -1319,6 +1484,12 @@ def _validate_proposal(record: Any, context: Mapping[str, Any]) -> None:
             "linked Customer Quote must belong to the same Roof Job",
             "quotation",
         )
+    if not context.get("quote_price_rule_snapshot_bound"):
+        raise PolicyViolation(
+            "unbound_quote_price_rules",
+            "linked Customer Quote must carry an immutable Price Book Rule snapshot",
+            "quotation",
+        )
     summary = parse_json_field(
         record,
         "evidence_summary_json",
@@ -1364,9 +1535,9 @@ def _validate_proposal_evidence_summary(
             "summary roof job and quotation must match the pack",
             "evidence_summary_json",
         )
-    if not _safe_proposal_summary_version(summary["quote_version"]) or (
+    if not _safe_positive_int(summary["quote_version"]) or (
         "generated_at" in summary
-        and not _safe_proposal_summary_timestamp(summary["generated_at"])
+        and not _safe_iso_timestamp(summary["generated_at"])
     ):
         raise PolicyViolation(
             "invalid_proposal_evidence_summary",
@@ -1468,7 +1639,7 @@ def _validate_proposal_evidence_summary(
                 _safe_proposal_summary_label(measurement.get(field))
                 for field in ("measurement_id", "provider")
             )
-            or not _safe_proposal_summary_timestamp(measurement.get("approved_at"))
+            or not _safe_iso_timestamp(measurement.get("approved_at"))
         ):
             raise PolicyViolation(
                 "invalid_proposal_evidence_summary",
@@ -1540,11 +1711,11 @@ def _safe_proposal_summary_label(value: Any) -> bool:
     )
 
 
-def _safe_proposal_summary_version(value: Any) -> bool:
+def _safe_positive_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 1
 
 
-def _safe_proposal_summary_timestamp(value: Any) -> bool:
+def _safe_iso_timestamp(value: Any) -> bool:
     normalized = value.strip() if isinstance(value, str) else ""
     if not normalized or len(normalized) > 64:
         return False
@@ -1868,7 +2039,7 @@ def _validate_hermes_run(record: Any, _context: Mapping[str, Any]) -> None:
         parse_json_field(record, "result_json", required=True)
 
 
-def _validate_price_rule(record: Any, _context: Mapping[str, Any]) -> None:
+def _validate_price_rule(record: Any, context: Mapping[str, Any]) -> None:
     require_nonnegative(record, "unit_cost", "unit_price", "minimum_quantity")
     start = _get(record, "effective_from")
     end = _get(record, "effective_to")
@@ -1891,6 +2062,46 @@ def _validate_price_rule(record: Any, _context: Mapping[str, Any]) -> None:
         require_approval(record, note="approval_note")
         parse_json_field(
             record, "rule_json", required=True, container_types=(dict,), non_empty=True
+        )
+    previous = context.get("_previous")
+    if previous is None:
+        return
+    previous_status = _get(previous, "status")
+    status = _get(record, "status")
+    if previous_status == "Retired" and status != "Retired":
+        raise PolicyViolation(
+            "invalid_state_transition",
+            "a retired Price Book Rule cannot be reactivated",
+            "status",
+        )
+    if previous_status == "Approved" and status not in {"Approved", "Retired"}:
+        raise PolicyViolation(
+            "invalid_state_transition",
+            "an approved Price Book Rule can only remain Approved or be Retired",
+            "status",
+        )
+    if previous_status in {"Approved", "Retired"}:
+        enforce_immutable(
+            record,
+            previous,
+            "rule_name",
+            "rule_type",
+            "service_type",
+            "material_system",
+            "unit",
+            "unit_cost",
+            "unit_price",
+            "minimum_quantity",
+            "currency",
+            "source_ref",
+            "rule_json",
+            "effective_from",
+            "effective_to",
+            "assumptions",
+            "exclusions",
+            "approved_by",
+            "approved_at",
+            "approval_note",
         )
 
 

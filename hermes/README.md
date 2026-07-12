@@ -26,8 +26,8 @@ Two MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, pe
   deterministic policy checks (`check_consent`, `check_quiet_hours`), dry-run previews, and
   review-gated `request_*` writes. Its legacy name is retained for deployment compatibility.
 
-The validated implemented-source inventory is **126 tools** across both servers: the bus contributes 7;
-the Frappe server contributes **119 (73 reads, 23 dry-runs, 23 approved writes)**.
+The validated implemented-source inventory is **128 tools** across both servers: the bus contributes 7;
+the Frappe server contributes **121 (73 reads, 24 dry-runs, 24 approved writes)**.
 
 ## Tool filtering per agent role
 
@@ -117,5 +117,5 @@ It parses the implemented tool inventory from both server sources, checks that e
 in `roles.json` exists, that reads are read-only, dry-runs are previews, approved-writes are
 `request_*` mutations each paired with its dry-run counterpart in the same role, and that all
 eight blueprint roles are present with no duplicate grants.
-It also freezes the 126-tool inventory, enforces Contract Acceptance as read-only, checks
+It also freezes the 128-tool inventory, enforces Contract Acceptance as read-only, checks
 least-privilege boundaries for field/finance roles, and validates manifest union exactness.

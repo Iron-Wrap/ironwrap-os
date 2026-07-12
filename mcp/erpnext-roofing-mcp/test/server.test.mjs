@@ -8,6 +8,7 @@ import {
   buildMaterialTakeoffDraft,
   buildMaterialTakeoffStatusPatch,
   buildProposalEvidencePackDraft,
+  buildQuotePriceRuleSnapshot,
   buildSupplierOrderDraft,
   configFromEnv,
   erpGet,
@@ -602,6 +603,7 @@ test("proposal evidence pack draft is quote-scoped and persists only redacted ve
       roof_job: "job:ow_1",
       quote_version: 3,
       status: "Approved",
+      price_rule_snapshot_json: "{\"bound\":true}",
     },
     measurements: [{
       name: "measurement:ow_1",
@@ -695,6 +697,77 @@ test("proposal evidence pack draft is quote-scoped and persists only redacted ve
     measurements: [{ name: "measurement:ow_1", review_status: "Approved" }],
     evidence: [],
   }), /customer_quote_not_approved/);
+  assert.throws(() => buildProposalEvidencePackDraft({
+    roofJobId: "job:ow_1",
+    customerQuote: { name: "quote:ow_1", roof_job: "job:ow_1", status: "Approved" },
+  }), /customer_quote_price_rule_snapshot_required/);
+});
+
+test("quote price-rule snapshot is immutable, effective, and source-complete", () => {
+  const quote = {
+    name: "quote:ow_1",
+    customer_quote_id: "quote:ow_1",
+    roof_job: "job:ow_1",
+    quote_version: 3,
+    status: "Needs Review",
+    price_book_version: "retail-2026-07",
+    pricing_effective_at: "2026-07-10T10:00:00.000Z",
+  };
+  const rule = {
+    name: "rule:b",
+    price_rule_id: "rule:b",
+    rule_name: "Standing seam panel",
+    rule_type: "Material",
+    status: "Approved",
+    service_type: "Metal reroof",
+    material_system: "24ga standing seam",
+    unit: "sqft",
+    unit_cost: 8,
+    unit_price: 12.5,
+    minimum_quantity: 0,
+    currency: "CAD",
+    source_ref: "supplier-sheet-2026-07",
+    rule_json: '{"unit_price":12.5}',
+    effective_from: "2026-07-01",
+    effective_to: "",
+    assumptions: "Standard colour.",
+    exclusions: "Freight.",
+    approved_by: "owner@example.com",
+    approved_at: "2026-07-10T09:00:00.000Z",
+  };
+  const snapshot = buildQuotePriceRuleSnapshot({
+    roofJobId: "job:ow_1",
+    customerQuote: quote,
+    priceRules: [{ ...rule, name: "rule:a", price_rule_id: "rule:a" }, rule],
+    nowIso: "2026-07-10T10:01:00.000Z",
+  });
+  assert.deepEqual(snapshot.quote, {
+    customer_quote_id: "quote:ow_1",
+    quote_version: 3,
+    price_book_version: "retail-2026-07",
+    pricing_effective_at: "2026-07-10T10:00:00.000Z",
+  });
+  assert.deepEqual(snapshot.rules.map((item) => item.price_rule_id), ["rule:a", "rule:b"]);
+  assert.equal(snapshot.rules[0].unit_price, "12.5");
+  assert.deepEqual(snapshot.rules[0].rule_json, { unit_price: 12.5 });
+  assert.throws(() => buildQuotePriceRuleSnapshot({
+    roofJobId: "job:ow_1",
+    customerQuote: { ...quote, price_rule_snapshot_json: "{}" },
+    priceRules: [rule],
+    nowIso: "2026-07-10T10:01:00.000Z",
+  }), /already_bound/);
+  assert.throws(() => buildQuotePriceRuleSnapshot({
+    roofJobId: "job:ow_1",
+    customerQuote: quote,
+    priceRules: [{ ...rule, status: "Retired" }],
+    nowIso: "2026-07-10T10:01:00.000Z",
+  }), /price_rule_not_approved/);
+  assert.throws(() => buildQuotePriceRuleSnapshot({
+    roofJobId: "job:ow_1",
+    customerQuote: quote,
+    priceRules: [{ ...rule, effective_from: "2026-08-01" }],
+    nowIso: "2026-07-10T10:01:00.000Z",
+  }), /price_rule_not_effective_for_quote/);
 });
 
 function expectNoSensitiveProofPointers(value) {

@@ -42,6 +42,7 @@ Drafts takeoff, scope, supplier quote, blank quote-revision shells, change-order
 - dry_run_update_material_takeoff_status
 - dry_run_supplier_quote
 - dry_run_quote_revision
+- dry_run_bind_quote_price_rules
 - dry_run_proposal_evidence_pack
 - dry_run_change_order
 - dry_run_change_order_transition
@@ -53,6 +54,7 @@ Drafts takeoff, scope, supplier quote, blank quote-revision shells, change-order
 - request_update_material_takeoff_status
 - request_create_supplier_quote
 - request_create_quote_revision
+- request_bind_quote_price_rules
 - request_create_proposal_evidence_pack
 - request_create_change_order
 - request_transition_change_order
@@ -75,6 +77,9 @@ Drafts takeoff, scope, supplier quote, blank quote-revision shells, change-order
   append-only Draft shell tied to a non-accepted predecessor. It never carries price, tax,
   scope, payment, approval, acceptance, or customer-facing terms forward; an accepted quote
   requires the Change Order route instead.
+- `dry_run_bind_quote_price_rules` -> `request_bind_quote_price_rules` binds the exact approved,
+  effective rule sources to a Draft or Needs Review quote before it can be approved or receive a
+  proof pack. It is provenance only: never live pricing, repricing, or a customer-facing amount.
 - Change-order corrections append a new version that supersedes the prior row. Internal
   transitions cannot accept/reject for a customer; Presented requires linked evidence of a
   human/provider action, and `Contract Acceptance` has reads only.

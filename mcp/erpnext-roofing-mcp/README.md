@@ -4,7 +4,7 @@ Narrow MCP server for the proprietary IronWrap OS Frappe app. The `erpnext-*`
 name is retained only for compatibility; ERPNext is not installed or linked.
 
 This server is the Hermes command surface over IronWrap OS business truth. It uses
-Frappe token auth. The implemented source contract is **119 tools: 73 reads, 23 dry-runs, and 23
+Frappe token auth. The implemented source contract is **121 tools: 73 reads, 24 dry-runs, and 24
 approved writes**. The manifest in `hermes/mcp-servers.json` is the exact source-registration
 inventory; deployed runtime proof remains a launch gate.
 
@@ -129,11 +129,16 @@ Current approved-write tools:
 - `request_create_supplier_order` creates or updates one internal, review-gated
   `Supplier Order` draft from an approved `Material Takeoff`. It does not place
   orders, reserve material, contact suppliers, or mutate accounting.
+- `request_bind_quote_price_rules` binds one verified, immutable Price Book Rule
+  snapshot to a Draft or Needs Review `Customer Quote`. It accepts only source IDs,
+  re-checks approved/effective source rules at execution, returns a redacted preview,
+  and never recalculates, approves, sends, or exposes supplier pricing.
 - `request_create_proposal_evidence_pack` creates or updates one draft
   `Proposal Evidence Pack` for one same-job, `Approved`/`Accepted` Customer Quote.
-  It requires approved measurement and verified customer-safe evidence, retains a
-  quote-owned Draft identity, and persists only a redacted summary. It does not
-  approve pricing, scope, payment terms, material orders, or customer send.
+  It requires the quote's immutable Price Book Rule snapshot, approved measurement,
+  and verified customer-safe evidence; retains a quote-owned Draft identity; and
+  persists only a redacted summary. It does not approve pricing, scope, payment
+  terms, material orders, or customer send.
 - `request_create_supplier_quote` creates or updates one review-gated
   `Supplier Quote` (with `valid_until` and per-line prices) from an approved
   `Material Takeoff`. It does not place orders or commit pricing.

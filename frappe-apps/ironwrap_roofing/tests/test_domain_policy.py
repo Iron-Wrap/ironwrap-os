@@ -50,6 +50,7 @@ def proposal_context(**overrides: object) -> dict[str, object]:
         "quote_status": "Approved",
         "quote_roof_job": "job-1",
         "quote_version": 1,
+        "quote_price_rule_snapshot_bound": True,
         "proposal_measurements": {
             "measurement-1": {
                 "roof_job": "job-1",
@@ -74,6 +75,78 @@ def proposal_context(**overrides: object) -> dict[str, object]:
             }
         },
     }
+    context.update(overrides)
+    return context
+
+
+def price_rule_source() -> dict[str, object]:
+    return {
+        "price_rule_id": "rule-1",
+        "rule_name": "Standing seam panel",
+        "rule_type": "Material",
+        "status": "Approved",
+        "service_type": "Metal reroof",
+        "material_system": "24ga standing seam",
+        "unit": "sqft",
+        "unit_cost": "8.00",
+        "unit_price": "12.50",
+        "minimum_quantity": "0",
+        "currency": "CAD",
+        "source_ref": "supplier-sheet-2026-07",
+        "effective_from": "2026-07-01",
+        "effective_to": "",
+        "assumptions": "Standard colour.",
+        "exclusions": "Freight.",
+        "approved_by": "owner@example.com",
+        "approved_at": "2026-07-10 10:00:00",
+        "rule_json": '{"unit_price":12.5}',
+    }
+
+
+def price_rule_snapshot() -> str:
+    source = price_rule_source()
+    return json.dumps(
+        {
+            "quote": {
+                "customer_quote_id": "cq-1",
+                "quote_version": 1,
+                "price_book_version": "retail-2026-07",
+                "pricing_effective_at": "2026-07-10 11:30:00",
+            },
+            "captured_at": "2026-07-10T11:31:00.000Z",
+            "rules": [
+                {
+                    key: json.loads(source[key]) if key == "rule_json" else str(source[key])
+                    for key in (
+                        "price_rule_id",
+                        "rule_name",
+                        "rule_type",
+                        "status",
+                        "service_type",
+                        "material_system",
+                        "unit",
+                        "unit_cost",
+                        "unit_price",
+                        "minimum_quantity",
+                        "currency",
+                        "source_ref",
+                        "effective_from",
+                        "effective_to",
+                        "assumptions",
+                        "exclusions",
+                        "approved_by",
+                        "approved_at",
+                        "rule_json",
+                    )
+                }
+            ],
+        }
+    )
+
+
+def price_rule_snapshot_context(**overrides: object) -> dict[str, object]:
+    source = price_rule_source()
+    context: dict[str, object] = {"price_rule_snapshot_rules": {"rule-1": source}}
     context.update(overrides)
     return context
 
@@ -420,6 +493,7 @@ class DomainPolicyTests(unittest.TestCase):
             "quote_version": 1,
             "price_book_version": "retail-2026-07",
             "pricing_effective_at": "2026-07-10 11:30:00",
+            "price_rule_snapshot_json": price_rule_snapshot(),
             "subtotal": 23_809.52,
             "tax_amount": 1_190.48,
             "tax_code": "GST",
@@ -444,7 +518,50 @@ class DomainPolicyTests(unittest.TestCase):
             "contract_acceptance": "accept-1",
             "accepted_at": "2026-07-10 12:30:00",
         }
-        validate_record("customer_quote", customer_quote)
+        validate_record(
+            "customer_quote",
+            customer_quote,
+            previous={**customer_quote, "status": "Approved"},
+            context=price_rule_snapshot_context(),
+        )
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "customer_quote",
+            {key: value for key, value in customer_quote.items() if key != "price_rule_snapshot_json"},
+            context=price_rule_snapshot_context(),
+        )
+
+        draft_quote = {
+            "customer_quote_id": "cq-1",
+            "roof_job": "job-1",
+            "customer": "customer-1",
+            "quote_version": 1,
+            "status": "Draft",
+            "price_book_version": "retail-2026-07",
+            "pricing_effective_at": "2026-07-10 11:30:00",
+            "price_rule_snapshot_json": price_rule_snapshot(),
+        }
+        validate_record(
+            "customer_quote", draft_quote, context=price_rule_snapshot_context()
+        )
+        altered_snapshot = json.loads(price_rule_snapshot())
+        altered_snapshot["rules"][0]["unit_price"] = "99.00"
+        self.assert_policy(
+            "price_rule_snapshot_source_mismatch",
+            validate_record,
+            "customer_quote",
+            {**draft_quote, "price_rule_snapshot_json": json.dumps(altered_snapshot)},
+            context=price_rule_snapshot_context(),
+        )
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "customer_quote",
+            {**draft_quote, "price_rule_snapshot_json": json.dumps(altered_snapshot)},
+            previous=draft_quote,
+            context=price_rule_snapshot_context(),
+        )
 
         proposal = {
             "pack_id": "proposal:cq-1",
@@ -1318,6 +1435,24 @@ class DomainPolicyTests(unittest.TestCase):
             validate_record,
             "visual_property_model",
             {**records["visual_property_model"], "confidence": 101},
+        )
+        price_rule = records["price_book_rule"]
+        validate_record(
+            "price_book_rule", {**price_rule, "status": "Retired"}, previous=price_rule
+        )
+        self.assert_policy(
+            "invalid_state_transition",
+            validate_record,
+            "price_book_rule",
+            {**price_rule, "status": "Draft"},
+            previous=price_rule,
+        )
+        self.assert_policy(
+            "immutable_field",
+            validate_record,
+            "price_book_rule",
+            {**price_rule, "source_ref": "supplier-sheet-2026-08"},
+            previous=price_rule,
         )
 
     def test_incident_and_tenant_lifecycle_gates(self) -> None:

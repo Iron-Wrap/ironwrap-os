@@ -16,7 +16,7 @@ capability only.
 | --- | --- |
 | Frappe operating core | 46 DocTypes (39 top + 7 child), the blueprint's full record model, contract-validated |
 | Worker bus | Intake/dedup/dead-letter/reconcile, geometry-verified measurements, `/health` `/ready` `/admin/status` |
-| Hermes agent layer | 8 runtime-filtered roles, 126 MCP tools, receipt-bound approved-write contract |
+| Hermes agent layer | 8 runtime-filtered roles, 128 MCP tools, receipt-bound approved-write contract |
 | Deploy/ops | Contract-validated production configuration, pinned runtime lock, encrypted Frappe/D1 recovery, launch runbook |
 | Competitive truth | 10 exceeded / 7 covered / 19 open, adversarially audited |
 | Product UI | P0 shell/session/magic-link/outbox, P1 Field Companion/BFF, QR device proof/revocation, P2 Owner Now plus governed `/approvals` and contextual lead-triage preparation, and P3 Sales, Measurement Workbench, and the isolated Draft Revision approval vertical are locally implemented and contract-tested. Owner Now separates work-stops, operating exceptions, and lead attention; the inbox renders only allowlisted before/patch/outcome DTOs and server-granted decision capability; Sales joins narrowly allowlisted office lead, estimate, quote, and communication-record context; the workbench recomputes retained source geometry in the Worker and shows bounded measurement, takeoff, quote, proposal-record, and clause lineage. The contextual triage and revision entries use exact server-granted capability, strict browser DTOs, stable idempotency, and reconcile-only execution uncertainty. None claims delivery, field verification, or human follow-up. Local browser/mocked-visual proof is not live Worker/broker/Frappe/device/operator proof; those gates and P4-P5 remain open, with Frappe Control Center as the truthful fallback. |
@@ -238,9 +238,13 @@ A separate governed proposal-pack MCP slice can now create only a Draft pack for
 same-job `Approved`/`Accepted` quote: it requires an approved measurement and customer-safe,
 checksum/provenance-verified evidence, creates a quote-owned identity, and persists only a
 redacted summary. Frappe re-resolves every retained source ID and rejects customer messages or any
-non-Draft status until a dedicated delivery path exists. It is not a browser proposal assembler,
-customer renderer/send, e-sign, or live proof. Immutable price-rule snapshot binding, insurance lane, and live
-source/browser/operator proof remain open.
+non-Draft status until a dedicated delivery path exists. A quote can now carry a server-bound,
+immutable Price Book Rule snapshot: it is created only for Draft/Needs Review quotes from approved,
+effective source rules; required before quote approval or proof-pack assembly; and redacted from
+the browser. This protects real supplier-cost volatility without presenting a timestamp as live
+pricing. The local workbench remains review-only: it has no price-rule bind control, live supplier
+feed, browser proposal assembler, customer renderer/send, e-sign, or live proof. Insurance lane
+and live source/browser/operator proof remain open.
 Beats: SmartEstimates on trust: JN auto-drafts from unverified numbers; we show the
 verification. Proof gate: measurement-to-proposal flow completed with every number
 traceable to its in-file source ref on screen.

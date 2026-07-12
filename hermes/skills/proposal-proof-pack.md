@@ -12,7 +12,7 @@ Assemble the customer-facing evidence narrative for a proposal into a review-gat
 
 ## Procedure
 1. Read `get_roof_job`, the exact `Customer Quote`, and source evidence with measurement/evidence tools.
-2. Confirm the quote belongs to the same Roof Job and is `Approved` or `Accepted`; a revised quote receives a new proof pack.
+2. Confirm the quote belongs to the same Roof Job, is `Approved` or `Accepted`, and carries its immutable Price Book Rule snapshot; a revised quote receives a new proof pack. If the snapshot is missing, stop and use the separate governed price-rule binding pair while the quote is Draft or Needs Review.
 3. Preview with `dry_run_proposal_evidence_pack` using both `roof_job_id` and `customer_quote_id`. Review only its redacted count/identity summary.
 4. Resolve any missing measurement approval or evidence that is unsafe, unverified, checksumless, provenance-free, or missing a proof slot.
 5. On human approval, call `request_create_proposal_evidence_pack` with `roof_job_id`, `customer_quote_id`, `request_text`, `approved_by`, `dry_run_receipt`, and a signed `approval_receipt`. This creates or updates only that quote-owned Draft pack and records a Hermes Run audit row.

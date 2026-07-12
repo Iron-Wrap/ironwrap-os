@@ -93,8 +93,9 @@ npx wrangler deploy --dry-run    # validate config + bundle
   `JOBNIMBUS_ENABLED` is now `"true"`. Record types are configurable via `JN_CONTACT_RECORD_TYPE`
   (`Customer`) / `JN_JOB_RECORD_TYPE` (`Retail`) / `*_STATUS`.
 - Secrets go in `.dev.vars` (local, gitignored) or `wrangler secret put` (prod): `INGEST_TOKEN`,
-  `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`, and `QB_WEBHOOK_TOKEN`
-  when QuickBooks is connected.
+  `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `QB_WEBHOOK_TOKEN`, and
+  the separate private-broker secrets `APPROVAL_BROKER_SHARED_SECRET` /
+  `QUOTE_REVISION_BROKER_SHARED_SECRET` when those governed rails are enabled.
 
 ## Working with `hermes/`, `mcp/`, and the validators
 

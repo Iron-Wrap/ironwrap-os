@@ -191,17 +191,25 @@ HERMES_APPROVAL_PUBLIC_KEY_FILE=/run/secrets/hermes-approval-public.pem
 ERPNEXT_REQUEST_TIMEOUT_MS=10000
 ```
 
-The private approval broker holds the Ed25519 private key and starts a fresh,
-fixed-role MCP child only for its two lead-triage endpoints. It accepts a
-short-window HMAC-bound Worker request, revalidates the exact dry-run packet,
-signs the receipt in memory, and never returns that receipt to the Worker or
-browser. Run it with `node src/approval-broker.mjs` only behind the loopback
-systemd/tunnel contract in `deploy/approval-broker.service.example`; the legacy
-`tools/issue-hermes-approval.mjs` remains a host-side break-glass utility, not
-an HTTP primitive. For an atomic safety acknowledgement, the Frappe API token
-must belong to exactly `HERMES_ACTOR_USER`; a shared integration/service account
-is rejected. Run one MCP process per actor and never reuse the Worker's Frappe
-integration credential for that process.
+The private brokers hold the Ed25519 private key and start a fresh, fixed-role
+MCP child only for their bounded endpoints. Lead triage remains
+`node src/approval-broker.mjs` behind
+`deploy/approval-broker.service.example`. Quote revision is a separate process:
+`node src/quote-revision-approval-broker.mjs` behind
+`deploy/quote-revision-approval-broker.service.example` with
+`HERMES_AGENT_ROLE=estimator-assistant`, a different HMAC secret/key ID/port,
+and only `/v1/quote-revision/preview` plus `/v1/quote-revision/execute`.
+
+Both revalidate the exact dry-run packet, sign the receipt in memory, and never
+return that receipt to the Worker or browser. The quote-revision broker stores
+only a redacted preview plus the full receipt-preview digest, then reruns the
+full dry run before it signs. It can create only a blank append-only Draft
+shell—never price, tax, scope, payment, acceptance, or a customer message. The
+legacy `tools/issue-hermes-approval.mjs` remains a host-side break-glass utility,
+not an HTTP primitive. For an atomic safety acknowledgement, the Frappe API
+token must belong to exactly `HERMES_ACTOR_USER`; a shared integration/service
+account is rejected. Run one MCP process per actor and never reuse the Worker's
+Frappe integration credential for that process.
 
 Production URLs must use HTTPS. Plain HTTP is rejected unless the hostname is
 localhost and `ERPNEXT_ALLOW_INSECURE_LOCAL=true` is explicitly set for local

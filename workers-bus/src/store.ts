@@ -408,7 +408,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'quickbooks_webhook_receipts','dedup_claims','replay_requests','app_users',
           'app_magic_links','app_sessions','app_auth_throttles','app_auth_audit',
           'field_actions','field_action_media','app_action_throttles','app_device_pairings',
-          'app_devices','lead_ack_receipts','approval_requests','approval_request_events') THEN 1 ELSE 0 END), 0) AS table_count,
+          'app_devices','lead_ack_receipts','approval_requests','approval_request_events',
+          'quote_revision_approval_requests','quote_revision_approval_request_events') THEN 1 ELSE 0 END), 0) AS table_count,
        COALESCE(SUM(CASE WHEN type = 'index' AND name IN
          ('idx_dead_letter_open_envelope','idx_audit_result_ts','idx_envelopes_operational',
           'idx_envelopes_erpnext_error_open','idx_heartbeat_ran_at','idx_qb_receipts_last_seen',
@@ -421,7 +422,11 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'idx_app_device_pairings_user_expiry','idx_app_devices_tenant_user_active',
           'idx_lead_ack_receipts_envelope_observed','idx_approval_requests_tenant_state_updated',
           'idx_approval_requests_state_lease','idx_approval_requests_pending_expiry',
-          'idx_approval_request_events_tenant_created')
+          'idx_approval_request_events_tenant_created',
+          'idx_quote_revision_approvals_tenant_state_updated',
+          'idx_quote_revision_approvals_state_lease','idx_quote_revision_approvals_pending_expiry',
+          'idx_quote_revision_approvals_active_target',
+          'idx_quote_revision_approval_events_tenant_created')
          THEN 1 ELSE 0 END), 0) AS index_count,
        COALESCE(SUM(CASE WHEN type = 'trigger' AND name IN
          ('validate_source_count_insert','validate_source_count_update',
@@ -430,7 +435,16 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'enforce_approval_request_reconciliation','append_approval_request_created_event',
           'append_approval_request_transition_event','append_approval_request_reconciliation_event',
           'prevent_approval_request_event_update','prevent_approval_request_event_delete',
-          'prevent_approval_request_delete') THEN 1 ELSE 0 END), 0) AS trigger_count
+          'prevent_approval_request_delete',
+          'prevent_quote_revision_approval_binding_rewrite',
+          'enforce_quote_revision_approval_transition',
+          'enforce_quote_revision_approval_reconciliation',
+          'append_quote_revision_approval_created_event',
+          'append_quote_revision_approval_transition_event',
+          'append_quote_revision_approval_reconciliation_event',
+          'prevent_quote_revision_approval_event_update',
+          'prevent_quote_revision_approval_event_delete',
+          'prevent_quote_revision_approval_delete') THEN 1 ELSE 0 END), 0) AS trigger_count
      FROM sqlite_master`,
   ).first<{ table_count: number; index_count: number; trigger_count: number }>();
 
@@ -458,7 +472,12 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             fam.attachment_id AS field_attachment_id, fam.checksum_sha256 AS field_media_checksum,
             aat.scope AS action_throttle_scope, aat.attempts AS action_throttle_attempts,
             ar.approval_request_id, ar.state AS approval_state, ar.run_id AS approval_run_id,
-            are.event_type AS approval_event_type, are.request_version AS approval_event_version
+            are.event_type AS approval_event_type, are.request_version AS approval_event_version,
+            qrar.quote_revision_approval_id,
+            qrar.state AS quote_revision_approval_state,
+            qrar.run_id AS quote_revision_approval_run_id,
+            qrare.event_type AS quote_revision_approval_event_type,
+            qrare.request_version AS quote_revision_approval_event_version
      FROM envelopes e
      LEFT JOIN audit_log a ON 1 = 0
      LEFT JOIN dead_letter d ON 1 = 0
@@ -480,11 +499,13 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN app_action_throttles aat ON 1 = 0
      LEFT JOIN approval_requests ar ON 1 = 0
      LEFT JOIN approval_request_events are ON 1 = 0
+     LEFT JOIN quote_revision_approval_requests qrar ON 1 = 0
+     LEFT JOIN quote_revision_approval_request_events qrare ON 1 = 0
      LIMIT 0`,
   ).all();
-  return Number(artifacts?.table_count ?? 0) === 21 &&
-    Number(artifacts?.index_count ?? 0) === 25 &&
-    Number(artifacts?.trigger_count ?? 0) === 13;
+  return Number(artifacts?.table_count ?? 0) === 23 &&
+    Number(artifacts?.index_count ?? 0) === 30 &&
+    Number(artifacts?.trigger_count ?? 0) === 22;
 }
 
 /** Envelopes still pending past the threshold — the retry sweep re-drives these. */

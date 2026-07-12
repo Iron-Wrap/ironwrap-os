@@ -61,8 +61,9 @@
   // Non-secret config. Secrets go via `wrangler secret put` (or scripts/apply-secrets.sh):
   //   INGEST_TOKEN, ADMIN_TOKEN, JOBNIMBUS_API_KEY, GOOGLE_SERVICE_ACCOUNT_JSON,
   //   QB_WEBHOOK_TOKEN, ERPNEXT_API_KEY, ERPNEXT_API_SECRET, APP_AUTH_PEPPER,
-  //   APPROVAL_BROKER_SHARED_SECRET. The broker secret is Worker-to-private-broker only;
-  //   never expose it through the PWA or a public environment variable.
+  //   APPROVAL_BROKER_SHARED_SECRET, QUOTE_REVISION_BROKER_SHARED_SECRET. Broker secrets
+  //   are Worker-to-private-broker only; never expose either through the PWA or a public
+  //   environment variable.
   // Email/Drive = Google Workspace via service account + domain-wide delegation (live-verified
   // 2026-07-02). FROM_EMAIL is the impersonated sender: sales@ for now — switch to quote@ once
   // that mailbox migrates onto the Google Workspace. SMS is JobNimbus Engage's job (no Twilio send).
@@ -95,6 +96,10 @@
     "APP_APPROVAL_MAX_SESSION_AGE_SECONDS": "900",
     "APP_APPROVAL_BROKER_TIMEOUT_MS": "15000",
     "APP_APPROVAL_EXECUTION_LEASE_SECONDS": "45",
+    "APP_QUOTE_REVISION_BROKER_URL": "",
+    "APP_QUOTE_REVISION_BROKER_KEY_ID": "",
+    "APP_QUOTE_REVISION_BROKER_TIMEOUT_MS": "15000",
+    "APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS": "45",
     "DEDUP_WINDOW_HOURS": "72",
     "STUCK_THRESHOLD_MIN": "15",
     "SHARED_DRIVE_ID_JOBS": "0AHqXhIQ3svySUk9PVA",

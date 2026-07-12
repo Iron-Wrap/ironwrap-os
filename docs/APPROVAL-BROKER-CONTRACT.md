@@ -1,9 +1,21 @@
-# Hermes approval broker contract
+# Hermes approval broker contracts
 
 The approval rail turns one bounded Hermes preview into one human-approved,
 audited mutation. It is deliberately not a generic remote-control API.
 
-## First vertical
+## Bounded verticals
+
+| Authority | Fixed dry run → write | Role | D1 ledger | Private routes |
+| --- | --- | --- | --- | --- |
+| Lead triage | `dry_run_mark_lead_triaged` → `request_mark_lead_triaged` | `lead-concierge` | `approval_requests` / `approval_request_events` | `/v1/lead-triage/preview`, `/v1/lead-triage/execute` |
+| Quote-revision shell | `dry_run_quote_revision` → `request_create_quote_revision` | `estimator-assistant` | `quote_revision_approval_requests` / `quote_revision_approval_request_events` | `/v1/quote-revision/preview`, `/v1/quote-revision/execute` |
+
+The brokers are distinct processes with different private URLs, HMAC secrets,
+key IDs, listener ports, and role-scoped MCP children. Neither is a generic
+remote-control API, and no browser request can choose its tool, role, actor,
+site, approver, or Frappe path.
+
+### Lead-triage vertical
 
 `dry_run_mark_lead_triaged` → `request_mark_lead_triaged` only.
 
@@ -17,8 +29,10 @@ preview and verify the exact signed receipt before the Frappe command can run.
 ```mermaid
 flowchart LR
   PWA["Owner PWA"] -->|"session + CSRF"| Worker["Worker BFF / D1"]
-  Worker -->|"HMAC-authenticated HTTPS"| Broker["Private approval broker"]
-  Broker -->|"MCP stdio, actor-scoped"| MCP["Hermes Frappe MCP"]
+  Worker -->|"lead HMAC secret"| LeadBroker["Private lead-triage broker"]
+  Worker -->|"revision HMAC secret"| RevisionBroker["Private quote-revision broker"]
+  LeadBroker -->|"MCP stdio, lead-concierge"| MCP["Hermes Frappe MCP"]
+  RevisionBroker -->|"MCP stdio, estimator-assistant"| MCP
   MCP -->|"receipt-bound write"| Frappe["Frappe + Hermes Run"]
 ```
 
@@ -26,11 +40,10 @@ flowchart LR
   signing key, or raw MCP capability.
 - The Worker owns the durable, tenant-scoped approval-request record in D1. It
   does not sign approvals or call Frappe directly for the approved write.
-- The broker owns the Ed25519 private key and actor-scoped MCP environment. It
-  accepts only HMAC-authenticated Worker requests over HTTPS and only the
-  bounded lead-triage preview/execute endpoints. It is a constrained policy
-  enforcement point, not a generic MCP proxy: browser data cannot choose a
-  tool, role, actor, site, approver, or Frappe path.
+- Each broker owns the Ed25519 private key and actor-scoped MCP environment.
+  It accepts only HMAC-authenticated Worker requests over HTTPS and only its
+  two bounded endpoints. It is a constrained policy enforcement point, not a
+  generic MCP proxy.
 - Frappe remains the executed business audit: the existing MCP request creates
   and finalizes the immutable `Hermes Run` only after receipt verification.
 
@@ -54,6 +67,24 @@ append-only D1 event ledger; database triggers reject rewrite/delete of static
 evidence or events. The browser response is an allowlisted review DTO, not a
 JSON pass-through: it excludes both receipt types, raw write arguments, and
 arbitrary broker/MCP output.
+
+### Quote-revision shell vertical
+
+The quote-revision broker can create only a fresh, append-only `Draft` Customer
+Quote shell. It binds the source quote, Frappe Roof Job, correction reason,
+new deterministic target, fresh version, actor, approver, run, receipt, and
+expiry. It cannot copy or set price, tax, scope, payment, approval, acceptance,
+customer terms, or any customer communication. An `Accepted` or contract-linked
+source fails closed to the Change Order path.
+
+The ledger stores only a redacted approval preview: source identity, version,
+status, modified time; Draft target/version/supersedes; and correction reason.
+Its browser projection adds fixed no-effect flags. A separate `receipt_preview_digest` binds the full
+private dry run without retaining commercial source fields in D1. Immediately
+before signing, the broker re-runs the full dry run and requires both the
+redacted and receipt-bound digests, source, target, version, and supersedes
+lineage to match. Any drift fails before write; a post-invocation failure is
+`Execution Uncertain` and is never retried.
 
 ## User-facing contract
 
@@ -87,10 +118,21 @@ exact allowed origin and session CSRF token.
 | POST | `/api/v1/approvals/:id/approve` | configured owner only | recent session, expected version, decision idempotency key, broker execution, terminal ledger event |
 | POST | `/api/v1/approvals/:id/reject` | configured owner only | recent session, expected version, reason, decision idempotency key; no broker call |
 | POST | `/api/v1/approvals/:id/reconcile` | configured owner only | recent session, expected version, one immutable evidence/outcome append; does not reopen or retry |
+| GET | `/api/v1/quote-revision-approvals` | owner or ops | separate safe Draft-shell queue; never a lead-triage variant |
+| GET | `/api/v1/quote-revision-approvals/:id` | owner or ops | current safe quote-revision DTO; re-evaluates pending expiry |
+| POST | `/api/v1/quote-revision-approvals` | owner or ops with Frappe identity | fixed job/source/reason preparation and broker-derived target; no tool proxy |
+| POST | `/api/v1/quote-revision-approvals/:id/approve` | configured owner only | distinct broker, recent session, expected version, decision idempotency, terminal ledger event |
+| POST | `/api/v1/quote-revision-approvals/:id/reject` | configured owner only | durable rejection; no broker invocation |
+| POST | `/api/v1/quote-revision-approvals/:id/reconcile` | configured owner only | one immutable uncertainty evidence/outcome append; no reopen/retry |
 
 `Execution Uncertain` is a terminal mutation state, not a temporary UI error.
 The stored `run_id` is the reconciliation key; a later reconciliation records
 evidence without reopening the request or issuing another write.
+
+The installed `/approvals` PWA remains exclusively lead-triage review. The
+quote-revision routes are locally contract-tested backend authority only until
+the dedicated estimator approval screen ships; do not mislabel it in the lead
+inbox or expose a generic approval selector.
 
 ## Production gates
 
@@ -105,3 +147,9 @@ evidence without reopening the request or issuing another write.
    paths have deterministic tests.
 4. A controlled live proof archives the preview, approval decision, protected
    triage result, and executed Hermes Run for one Untriaged lead.
+5. The quote-revision service uses
+   `deploy/quote-revision-approval-broker.service.example` and its own
+   root-readable environment file, secrets, port, role identity, and Frappe
+   credential. A controlled proof must show one Draft shell with matching
+   source/version, redacted queue projection, and executed Hermes Run—without
+   price, tax, scope, payment, acceptance, or customer-message mutation.

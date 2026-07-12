@@ -29,6 +29,11 @@ CORRECTION_TARGETS: dict[str, tuple[str, str, tuple[str, ...]]] = {
         "Integration Reconciliation",
         ("roof_job",),
     ),
+    "insurance_supplement": (
+        "supersedes",
+        "Insurance Supplement",
+        ("roof_job", "version"),
+    ),
     "job_assignment": ("supersedes", "Job Assignment", ("roof_job",)),
     "job_compliance_record": (
         "supersedes",
@@ -456,6 +461,71 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
                         "evidence_type",
                         "proof_slot",
                         "customer_safe",
+                        "sync_state",
+                        "content_checksum",
+                        "checksum_algorithm",
+                        "verified_at",
+                        "verification_source",
+                        "source_uri",
+                        "r2_key",
+                        "drive_file_id",
+                    ],
+                )
+            }
+            if evidence_ids
+            else {}
+        )
+    elif kind == "insurance_supplement":
+        roof_job = document.get("roof_job")
+        customer_quote = document.get("customer_quote")
+        change_order = document.get("change_order")
+        measurement_report = document.get("measurement_report")
+        context["insurance_customer_quote"] = (
+            frappe.db.get_value(
+                "Customer Quote", customer_quote, ("roof_job",), as_dict=True
+            )
+            if customer_quote
+            else None
+        )
+        context["insurance_change_order"] = (
+            frappe.db.get_value(
+                "Change Order", change_order, ("roof_job",), as_dict=True
+            )
+            if change_order
+            else None
+        )
+        context["insurance_measurement"] = (
+            frappe.db.get_value(
+                "Measurement Report",
+                measurement_report,
+                ("roof_job", "review_status", "approved_by", "approved_at"),
+                as_dict=True,
+            )
+            if measurement_report
+            else None
+        )
+        evidence_rows = document.get("evidence") or []
+        if len(evidence_rows) > 50:
+            raise PolicyViolation(
+                "insurance_evidence_window_exceeded",
+                "insurance supplement source verification is limited to fifty evidence records",
+                "evidence",
+            )
+        evidence_ids = [
+            row.get("evidence_item")
+            for row in evidence_rows
+            if isinstance(row.get("evidence_item"), str) and row.get("evidence_item")
+        ]
+        context["insurance_evidence"] = (
+            {
+                row["name"]: row
+                for row in frappe.get_all(
+                    "Evidence Item",
+                    filters={"name": ["in", evidence_ids], "roof_job": roof_job},
+                    fields=[
+                        "name",
+                        "roof_job",
+                        "evidence_type",
                         "sync_state",
                         "content_checksum",
                         "checksum_algorithm",

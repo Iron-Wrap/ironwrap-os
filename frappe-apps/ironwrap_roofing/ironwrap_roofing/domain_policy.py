@@ -223,6 +223,7 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "hermes_run": ("run_id",),
     "instant_estimate_session": ("estimate_session_id",),
     "integration_reconciliation": ("reconciliation_id",),
+    "insurance_supplement": ("insurance_supplement_id",),
     "job_assignment": ("assignment_id",),
     "job_compliance_record": ("compliance_record_id",),
     "lead_envelope": ("envelope_id",),
@@ -409,6 +410,14 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "local_payload_hash",
         "supersedes",
     ),
+    "insurance_supplement": (
+        "roof_job",
+        "customer_quote",
+        "change_order",
+        "version",
+        "supersedes",
+        "evidence_manifest_json",
+    ),
     "job_assignment": (
         "roof_job",
         "assignment_type",
@@ -479,6 +488,7 @@ JSON_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "lead_envelope": ("payload_json",),
     "integration_reconciliation": ("diff_json",),
+    "insurance_supplement": ("evidence_manifest_json",),
     "material_takeoff": ("source_measurements_json",),
     "option_package": ("options_json", "scope_clause_ids_json"),
     "payment_milestone": ("tax_policy_snapshot_json",),
@@ -801,6 +811,327 @@ def _validate_lead_envelope(record: Any, context: Mapping[str, Any]) -> None:
                 "cannot move away from Triaged",
                 "triage_status",
             )
+
+
+INSURANCE_SUPPLEMENT_STATUSES = {
+    "Draft",
+    "Needs Evidence",
+    "Ready for Human Review",
+    "Approved for Submission",
+    "Submitted",
+    "Carrier Response Recorded",
+    "Closed",
+    "Superseded",
+}
+INSURANCE_EVIDENCE_TYPES = {
+    "Carrier Scope": {"PDF", "Email", "Signed Document"},
+    "Code/Manufacturer": {"PDF", "Email", "Signed Document"},
+    "Photo": {"Photo"},
+    "Invoice": {"Invoice"},
+    "Submission": {"PDF", "Email", "Signed Document"},
+    "Carrier Response": {"PDF", "Email", "Signed Document"},
+}
+INSURANCE_REVIEW_REQUIRED_ROLES = {
+    "Carrier Scope",
+    "Code/Manufacturer",
+    "Photo",
+}
+INSURANCE_SUBMISSION_LOCKED_STATUSES = {
+    "Approved for Submission",
+    "Submitted",
+    "Carrier Response Recorded",
+    "Closed",
+}
+
+
+def _insurance_evidence_sources(
+    record: Any, context: Mapping[str, Any]
+) -> list[tuple[str, str, Any]]:
+    sources = context.get("insurance_evidence")
+    if not isinstance(sources, Mapping):
+        sources = {}
+    roof_job = _get(record, "roof_job")
+    rows = _rows(record, "evidence")
+    if len(rows) > 50:
+        raise PolicyViolation(
+            "insurance_evidence_window_exceeded",
+            "insurance supplement source verification is limited to fifty evidence records",
+            "evidence",
+        )
+    evidence_ids: set[str] = set()
+    verified_rows: list[tuple[str, str, Any]] = []
+    for index, row in enumerate(rows, start=1):
+        require_fields(row, "evidence_item", "evidence_role")
+        evidence_id = str(_get(row, "evidence_item"))
+        role = str(_get(row, "evidence_role"))
+        if role not in INSURANCE_EVIDENCE_TYPES:
+            raise PolicyViolation(
+                "invalid_insurance_evidence_role",
+                f"row {index} has an unsupported evidence role",
+                "evidence",
+            )
+        if evidence_id in evidence_ids:
+            raise PolicyViolation(
+                "duplicate_insurance_evidence",
+                f"row {index} repeats an evidence item",
+                "evidence",
+            )
+        evidence_ids.add(evidence_id)
+        source = sources.get(evidence_id)
+        if source is None:
+            raise PolicyViolation(
+                "unverified_insurance_evidence",
+                f"row {index} evidence source could not be verified",
+                "evidence",
+            )
+        if _get(source, "roof_job") != roof_job:
+            raise PolicyViolation(
+                "cross_job_insurance_evidence",
+                f"row {index} evidence belongs to another Roof Job",
+                "evidence",
+            )
+        if _get(source, "sync_state") != "Verified":
+            raise PolicyViolation(
+                "unverified_insurance_evidence",
+                f"row {index} evidence must be verified",
+                "evidence",
+            )
+        if _get(source, "checksum_algorithm") != "SHA-256":
+            raise PolicyViolation(
+                "unsupported_checksum",
+                f"row {index} evidence must use SHA-256",
+                "evidence",
+            )
+        require_fields(source, "content_checksum", "verified_at", "verification_source")
+        require_sha256(source, "content_checksum")
+        if not any(
+            not _blank(_get(source, field))
+            for field in ("source_uri", "r2_key", "drive_file_id")
+        ):
+            raise PolicyViolation(
+                "unverified_insurance_evidence",
+                f"row {index} evidence has no durable source pointer",
+                "evidence",
+            )
+        if _get(source, "evidence_type") not in INSURANCE_EVIDENCE_TYPES[role]:
+            raise PolicyViolation(
+                "invalid_insurance_evidence_type",
+                f"row {index} evidence type is not valid for {role}",
+                "evidence",
+            )
+        verified_rows.append((evidence_id, role, source))
+    return verified_rows
+
+
+def _expected_insurance_manifest(
+    record: Any, evidence_rows: Sequence[tuple[str, str, Any]]
+) -> dict[str, Any]:
+    return {
+        "roof_job": _get(record, "roof_job"),
+        "measurement_report": _get(record, "measurement_report"),
+        "evidence": [
+            {
+                "evidence_item_id": evidence_id,
+                "evidence_role": role,
+                "evidence_type": _get(source, "evidence_type"),
+                "content_checksum": _get(source, "content_checksum"),
+                "checksum_algorithm": _get(source, "checksum_algorithm"),
+                "verified_at": _get(source, "verified_at"),
+                "verification_source": _get(source, "verification_source"),
+            }
+            for evidence_id, role, source in sorted(
+                evidence_rows, key=lambda value: (value[1], value[0])
+            )
+        ],
+    }
+
+
+def _validate_insurance_manifest(
+    record: Any, evidence_rows: Sequence[tuple[str, str, Any]]
+) -> None:
+    manifest = parse_json_field(
+        record,
+        "evidence_manifest_json",
+        required=True,
+        container_types=(dict,),
+        non_empty=True,
+    )
+    expected = _expected_insurance_manifest(record, evidence_rows)
+    if set(manifest) != set(expected) or manifest != expected:
+        raise PolicyViolation(
+            "insurance_evidence_manifest_mismatch",
+            "must exactly match the currently verified insurance evidence sources",
+            "evidence_manifest_json",
+        )
+
+
+def _validate_insurance_supplement(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in INSURANCE_SUPPLEMENT_STATUSES:
+        raise PolicyViolation(
+            "invalid_insurance_supplement_status",
+            "must use a supported internal insurance evidence state",
+            "status",
+        )
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Needs Evidence", "Ready for Human Review", "Superseded"},
+            "Needs Evidence": {"Draft", "Ready for Human Review", "Superseded"},
+            "Ready for Human Review": {
+                "Needs Evidence",
+                "Approved for Submission",
+                "Superseded",
+            },
+            "Approved for Submission": {"Submitted", "Superseded"},
+            "Submitted": {"Carrier Response Recorded", "Closed", "Superseded"},
+            "Carrier Response Recorded": {"Closed", "Superseded"},
+            "Closed": {"Superseded"},
+            "Superseded": set(),
+        },
+    )
+
+    roof_job = _get(record, "roof_job")
+    for source_key, link_field, error_code in (
+        ("insurance_customer_quote", "customer_quote", "unverified_insurance_quote"),
+        ("insurance_change_order", "change_order", "unverified_insurance_change_order"),
+    ):
+        target = _get(record, link_field)
+        if _blank(target):
+            continue
+        source = context.get(source_key)
+        if source is None:
+            raise PolicyViolation(error_code, "linked record could not be verified", link_field)
+        if _get(source, "roof_job") != roof_job:
+            raise PolicyViolation(
+                "cross_job_insurance_link",
+                "linked record belongs to another Roof Job",
+                link_field,
+            )
+
+    measurement = context.get("insurance_measurement")
+    measurement_id = _get(record, "measurement_report")
+    if not _blank(measurement_id):
+        if measurement is None:
+            raise PolicyViolation(
+                "unverified_insurance_measurement",
+                "measurement report could not be verified",
+                "measurement_report",
+            )
+        if _get(measurement, "roof_job") != roof_job:
+            raise PolicyViolation(
+                "cross_job_insurance_measurement",
+                "measurement report belongs to another Roof Job",
+                "measurement_report",
+            )
+
+    evidence_rows = _insurance_evidence_sources(record, context)
+    roles = {role for _, role, _ in evidence_rows}
+    review_or_later = {
+        "Ready for Human Review",
+        *INSURANCE_SUBMISSION_LOCKED_STATUSES,
+    }
+    if status in review_or_later:
+        require_fields(
+            record,
+            "carrier_name",
+            "claim_reference",
+            "policy_reference",
+            "date_of_loss",
+            "adjuster_reference",
+            "supplement_basis",
+            "measurement_report",
+        )
+        if measurement is None or _get(measurement, "review_status") != "Approved":
+            raise PolicyViolation(
+                "insurance_measurement_not_approved",
+                "ready insurance evidence requires an approved Measurement Report",
+                "measurement_report",
+            )
+        missing_roles = INSURANCE_REVIEW_REQUIRED_ROLES - roles
+        if missing_roles:
+            raise PolicyViolation(
+                "missing_insurance_evidence",
+                f"missing required evidence roles: {', '.join(sorted(missing_roles))}",
+                "evidence",
+            )
+
+    invoice_required = _get(record, "invoice_required") not in {False, 0, "0", "", None}
+    invoice_exception = _get(record, "invoice_exception_reason")
+    if invoice_required and not _blank(invoice_exception):
+        raise PolicyViolation(
+            "stale_invoice_exception",
+            "invoice exception requires invoice_required to be disabled",
+            "invoice_exception_reason",
+        )
+    if status in review_or_later:
+        if invoice_required and "Invoice" not in roles:
+            raise PolicyViolation(
+                "missing_insurance_invoice",
+                "an invoice is required or the reviewer must record a not-applicable reason",
+                "evidence",
+            )
+        if not invoice_required:
+            require_fields(record, "invoice_exception_reason")
+
+    if status in INSURANCE_SUBMISSION_LOCKED_STATUSES:
+        require_approval(record)
+        _validate_insurance_manifest(record, evidence_rows)
+    elif not _blank(_get(record, "evidence_manifest_json")):
+        raise PolicyViolation(
+            "premature_insurance_evidence_manifest",
+            "evidence manifest is created only with human approval for submission",
+            "evidence_manifest_json",
+        )
+    elif any(
+        not _blank(_get(record, field)) for field in ("approved_by", "approved_at")
+    ):
+        raise PolicyViolation(
+            "stale_insurance_approval",
+            "approval metadata requires Approved for Submission or a later state",
+            "status",
+        )
+
+    if status in {"Submitted", "Carrier Response Recorded", "Closed"}:
+        require_fields(record, "submitted_at")
+        if "Submission" not in roles:
+            raise PolicyViolation(
+                "missing_submission_evidence",
+                "submitted evidence must record a human submission artifact",
+                "evidence",
+            )
+    if status == "Carrier Response Recorded":
+        require_fields(record, "carrier_response_at")
+        if "Carrier Response" not in roles:
+            raise PolicyViolation(
+                "missing_carrier_response_evidence",
+                "carrier response state requires a verified response artifact",
+                "evidence",
+            )
+    if status == "Closed":
+        require_fields(record, "closed_at", "resolution_summary")
+
+    _lock_after_status(
+        record,
+        context,
+        INSURANCE_SUBMISSION_LOCKED_STATUSES,
+        "customer_quote",
+        "change_order",
+        "carrier_name",
+        "claim_reference",
+        "policy_reference",
+        "date_of_loss",
+        "adjuster_reference",
+        "supplement_basis",
+        "measurement_report",
+        "invoice_required",
+        "invoice_exception_reason",
+        "evidence",
+        "evidence_manifest_json",
+    )
+    _validate_correction(record, context, version_field="version")
 
 
 def _validate_change_order(record: Any, context: Mapping[str, Any]) -> None:
@@ -2257,6 +2588,7 @@ VALIDATORS = {
     "hermes_run": _validate_hermes_run,
     "instant_estimate_session": _validate_instant_estimate,
     "integration_reconciliation": _validate_reconciliation,
+    "insurance_supplement": _validate_insurance_supplement,
     "job_assignment": _validate_job_assignment,
     "job_compliance_record": _validate_compliance,
     "lead_envelope": _validate_lead_envelope,

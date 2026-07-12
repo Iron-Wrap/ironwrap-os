@@ -30,6 +30,11 @@ data.
   `Execution Uncertain` state with one immutable evidence reconciliation. It never
   receives a receipt, raw write arguments, broker output, Frappe credential, or generic tool picker.
   Approval decisions are deliberately online-only and are never placed in the field outbox.
+- A locally contract-tested Sales-to-triage preparation flow: an exact `Untriaged` Lead Envelope
+  exposes `approval.prepare` only when its BFF grants it. The route submits only the Frappe Lead
+  Envelope name and one internal summary; the Worker derives the broker-bound request text and
+  returns the user to the existing human review queue. It cannot send a customer message, modify
+  transport, issue a quote, alter commercial terms, or triage the lead directly.
 - A locally contract-tested office Sales Desk: a bounded Lead Envelope, estimate, quote, and
   communication-record review queue with a separate BFF allowlist. It labels preliminary estimate
   ranges as non-binding and source limits as uncertainty. It does not receive raw intake payloads,

@@ -312,10 +312,10 @@ def mark_lead_triaged(
         authenticated_user=authenticated_user,
     )
     envelope = _lock_lead_envelope(lead_envelope_id)
-    if envelope.get("triage_status") == "Triaged":
+    if envelope.get("triage_status") != "Untriaged":
         _fail(
-            "lead_triage_already_triaged",
-            "Lead Envelope already has an immutable triage decision",
+            "lead_triage_not_preparable",
+            "Lead Envelope must be exactly Untriaged before an approved triage can be applied",
         )
 
     triaged_at = str(frappe.utils.now_datetime())

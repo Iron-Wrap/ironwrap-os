@@ -1,5 +1,5 @@
 import type { AppEnv, AuthContext } from "./app-types.ts";
-import { approvalDecisionConfig } from "./approval-broker-client.ts";
+import { approvalBrokerConfig, approvalDecisionConfig } from "./approval-broker-client.ts";
 import { quoteRevisionApprovalBrokerConfig } from "./quote-revision-approval-broker-client.ts";
 import {
   listFrappeResource,
@@ -1024,11 +1024,15 @@ export async function buildSalesReadModel(env: AppEnv, auth: AuthContext): Promi
   const base = envelope(auth, [
     ...leads, ...jobs, ...estimates, ...quotes, ...leadConsents, ...jobConsents, ...customerConsents,
   ], partialSources.length > 0 ? ["sales.partial_sources"] : []);
+  const leadTriagePreparationAvailable = Boolean(
+    approvalBrokerConfig(env) && auth.session.frappe_user_id?.trim(),
+  );
   return {
     ...base,
     allowed_actions: [
       ...base.allowed_actions,
       ...(auth.permissions.includes("approvals:read") ? ["approval.read"] : []),
+      ...(leadTriagePreparationAvailable ? ["approval.prepare"] : []),
       ...(auth.permissions.includes("estimator:read") ? ["estimator.read"] : []),
       "sales.read",
     ],

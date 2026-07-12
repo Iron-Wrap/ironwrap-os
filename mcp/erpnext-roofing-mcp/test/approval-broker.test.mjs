@@ -82,6 +82,7 @@ function invoker(config, options = {}) {
   const invokeMcp = async (name, args) => {
     calls.push({ name, args });
     if (name === "dry_run_mark_lead_triaged") {
+      if (options.dryRunError) throw new Error(options.dryRunError);
       const preview = {
         would_write: false,
         required_tool: "request_mark_lead_triaged",
@@ -188,6 +189,32 @@ test("broker produces a receipt-free trusted preview packet and rejects nonce re
   const replay = await broker.handle(request(brokerConfig, "/v1/lead-triage/preview", body, nonce));
   assert.equal(replay.status, 409);
   assert.deepEqual(await replay.json(), { error: "internal_replay_detected" });
+});
+
+test("broker stops an ineligible lead before emitting an approval packet", async () => {
+  const brokerConfig = config();
+  const blocked = invoker(brokerConfig, { dryRunError: "lead_triage_not_preparable" });
+  const broker = createApprovalBroker({
+    config: brokerConfig,
+    invokeMcp: blocked.invokeMcp,
+    now: () => NOW,
+    nonceStore: createNonceStore({ now: () => NOW }),
+  });
+  const body = previewInput();
+  const nonce = "nonce-preview-ineligible1";
+  const response = await broker.handle(request(
+    brokerConfig,
+    "/v1/lead-triage/preview",
+    body,
+    nonce,
+  ));
+
+  assert.equal(response.status, 422);
+  assert.deepEqual(
+    await verifiedBody(response, brokerConfig, "/v1/lead-triage/preview", body, nonce),
+    { error: "broker_preview_rejected" },
+  );
+  assert.deepEqual(blocked.calls.map((call) => call.name), ["dry_run_mark_lead_triaged"]);
 });
 
 test("broker signs only the bound triage packet, executes once, and withholds the approval receipt", async () => {

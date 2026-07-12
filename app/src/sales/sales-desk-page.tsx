@@ -5,6 +5,7 @@ import {
   ArrowUpRight,
   BriefcaseBusiness,
   CircleAlert,
+  ClipboardCheck,
   Clock3,
   FileSearch,
   FileText,
@@ -105,6 +106,7 @@ function SalesDeskScreen({
     model.stale_fields.length > 0 ||
     model.source_updated_at === null;
   const canReviewApprovals = model.allowed_actions.includes("approval.read");
+  const canPrepareTriage = model.allowed_actions.includes("approval.prepare");
   const canOpenWorkbench = model.allowed_actions.includes("estimator.read");
 
   return (
@@ -158,6 +160,7 @@ function SalesDeskScreen({
             locale={locale}
             currency={currency}
             canOpenWorkbench={canOpenWorkbench}
+            canPrepareTriage={canPrepareTriage}
           />
         </main>
       </div>
@@ -267,12 +270,14 @@ function LeadQueue({
   locale,
   currency,
   canOpenWorkbench,
+  canPrepareTriage,
 }: {
   leads: SalesLead[];
   filter: SalesFilter;
   locale: string;
   currency: string;
   canOpenWorkbench: boolean;
+  canPrepareTriage: boolean;
 }) {
   if (leads.length === 0) {
     return (
@@ -309,6 +314,7 @@ function LeadQueue({
               locale={locale}
               defaultCurrency={currency}
               canOpenWorkbench={canOpenWorkbench}
+              canPrepareTriage={canPrepareTriage}
             />
           </li>
         ))}
@@ -322,11 +328,13 @@ function LeadRow({
   locale,
   defaultCurrency,
   canOpenWorkbench,
+  canPrepareTriage,
 }: {
   lead: SalesLead;
   locale: string;
   defaultCurrency: string;
   canOpenWorkbench: boolean;
+  canPrepareTriage: boolean;
 }) {
   const receivedAt = formatDate(lead.received_at, locale);
   const contact = [lead.contact.phone, lead.contact.email].filter((value): value is string =>
@@ -396,6 +404,18 @@ function LeadRow({
             >
               Open measurement workbench
               <ArrowUpRight className="size-4" aria-hidden="true" />
+            </Link>
+          ) : null}
+          {canPrepareTriage &&
+          lead.triage.status === "Untriaged" &&
+          lead.attention.includes("triage_unresolved") ? (
+            <Link
+              to="/sales/leads/$leadId/triage"
+              params={{ leadId: lead.id }}
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 font-bold text-foreground transition-colors hover:bg-surface-muted"
+            >
+              <ClipboardCheck className="size-4" aria-hidden="true" />
+              Prepare triage review
             </Link>
           ) : null}
         </footer>

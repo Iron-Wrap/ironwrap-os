@@ -35,6 +35,25 @@ test("Wrangler asset routing keeps all dynamic/auth surfaces Worker-first", asyn
   }
 });
 
+test("0018 customer portal migration stores only revocable capability hashes", async () => {
+  const sql = await readFile(new URL("../migrations/0018_customer_portal_links.sql", import.meta.url), "utf8");
+  for (const table of ["customer_portal_links", "customer_portal_access_throttles"]) {
+    assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+  }
+  for (const index of [
+    "idx_customer_portal_links_tenant_job_active",
+    "idx_customer_portal_access_throttles_expiry",
+  ]) {
+    assert.match(sql, new RegExp(`CREATE INDEX IF NOT EXISTS ${index}\\b`));
+  }
+  assert.match(sql, /token_hash TEXT NOT NULL UNIQUE/);
+  assert.match(sql, /customer_id TEXT NOT NULL/);
+  assert.match(sql, /revoked_at TEXT/);
+  assert.match(sql, /FOREIGN KEY \(issued_by_user_id, tenant_id\)[\s\S]*ON DELETE RESTRICT/);
+  assert.doesNotMatch(sql, /raw_token|portal_token|token_value/i);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
 test("0012 field migration preserves idempotent actions and immutable media receipts", async () => {
   const sql = await readFile(new URL("../migrations/0012_field_companion.sql", import.meta.url), "utf8");
   for (const table of ["field_actions", "field_action_media"]) {

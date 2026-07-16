@@ -13,12 +13,8 @@ import { MagicLinkConsume } from "./auth/magic-link-consume";
 import { takeMagicLinkTokenFromWindow } from "./auth/magic-link-fragment";
 import { takePairingTokenFromWindow } from "./auth/pairing-fragment";
 import { AppShell } from "./components/app-shell";
-import {
-  NotFoundPage,
-  PortalLinkRequiredPage,
-  PortalPage,
-  SettingsPage,
-} from "./pages/placeholders";
+import { NotFoundPage, SettingsPage } from "./pages/placeholders";
+import { CustomerPortalPage } from "./portal/customer-portal-page";
 
 const OwnerNowPage = lazy(async () => ({
   default: (await import("./owner/owner-now-page")).OwnerNowPage,
@@ -103,13 +99,7 @@ function PairRoute() {
 const portalRootRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/portal",
-  component: PortalLinkRequiredPage,
-});
-
-const portalRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/portal/$token",
-  component: PortalPage,
+  component: CustomerPortalPage,
 });
 
 const authenticatedRoute = createRoute({
@@ -331,7 +321,6 @@ const routeTree = rootRoute.addChildren([
   verifyRoute,
   pairRoute,
   portalRootRoute,
-  portalRoute,
   authenticatedRoute.addChildren([
     todayRoute,
     jobRoute,

@@ -103,34 +103,6 @@ export function SettingsPage() {
   );
 }
 
-export function PortalLinkRequiredPage() {
-  return (
-    <main className="grid min-h-dvh place-items-center p-4">
-      <ErrorState
-        title="Open your private project link"
-        message="The customer portal requires the signed link sent for a specific project. Ask your IronWrap contact for a fresh link if yours expired."
-      />
-    </main>
-  );
-}
-
-export function PortalPage() {
-  return (
-    <main className="min-h-dvh bg-background px-4 py-10 sm:px-6">
-      <div className="mx-auto max-w-3xl">
-        <PlaceholderSurface
-          eyebrow="Customer project portal"
-          title="Your project"
-          description="Approved scope, decisions, progress proof, invoices, warranties, and closeout records will share one customer-safe timeline."
-          emptyTitle="Project details are not available yet"
-          emptyMessage="This signed route is ready for the customer read model. No internal notes or unapproved estimates are ever fabricated or exposed here."
-          icon={<ShieldCheck className="size-6" aria-hidden="true" />}
-        />
-      </div>
-    </main>
-  );
-}
-
 export function NotFoundPage() {
   return (
     <main className="grid min-h-dvh place-items-center p-4">

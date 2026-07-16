@@ -3,6 +3,7 @@ export const API_PATHS = {
   magicLinkRequest: "/api/v1/auth/magic-link/request",
   magicLinkConsume: "/api/v1/auth/magic-link/consume",
   devicePairingConsume: "/api/v1/auth/device-pairing/consume",
+  customerPortalResolve: "/api/v1/customer-portal/resolve",
   fieldUsers: "/api/v1/field-users",
   devicePairings: "/api/v1/device-pairings",
   devicePairingRevoke: (deviceId: string) =>

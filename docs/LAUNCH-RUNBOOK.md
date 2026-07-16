@@ -227,9 +227,9 @@ Field Companion deployment and must not be described as one.
 
 Before enabling the BFF in the intended Cloudflare account:
 
-1. Apply the exact D1 migration sequence remotely, including `0016_approval_requests.sql`, then
+1. Apply the exact D1 migration sequence remotely, including `0018_customer_portal_links.sql`, then
    run the Frappe app migration so legacy Lead Envelopes become explicit `Unknown` triage rows.
-   Verify `/ready` against the intended database. The 23-table backup/restore inventory must be
+   Verify `/ready` against the intended database. The 25-table backup/restore inventory must be
    deployed with the same release.
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
@@ -257,6 +257,38 @@ Before enabling the BFF in the intended Cloudflare account:
    with no eligible email to prove the queue shows a no-channel exception rather than a false
    “sent” result. For an intentionally rejected staging send, wait past the 60-second deadline
    and prove the queue shows an unproven exception.
+
+### Customer Portal Capability Enablement Gate
+
+The checked-in customer portal is a disabled, read-only capability foundation. It is not a public
+estimate widget, customer session, document-download service, payment flow, or e-sign service.
+It shows only customer-safe projected summaries; raw storage keys, Drive links, field notes,
+unapproved estimates, and office session data never cross the public boundary.
+
+Before enabling it in the intended Cloudflare account:
+
+1. Apply `0018_customer_portal_links.sql` with the same release and prove `/ready` against the
+   migrated D1 database. Keep `APP_CUSTOMER_PORTAL_ENABLED=false` until this is complete.
+2. Complete the Field Companion BFF configuration above, including the exact HTTPS
+   `APP_PUBLIC_ORIGIN`, matching `APP_ALLOWED_ORIGINS`, Frappe read credentials, and the
+   `APP_AUTH_PEPPER` secret. Then set `APP_CUSTOMER_PORTAL_ENABLED=true`; the portal fails closed
+   without every one of those prerequisites or an enabled, healthy BFF. This preserves an office
+   revocation path for every live customer link.
+3. From an owner/ops session, issue one explicit-expiry link for a test job with a linked Roofing
+   Customer. The response must be `https://<origin>/portal#token=...`: the token is in a fragment,
+   is scrubbed by the browser, and is POSTed to the fixed resolver without cookies. Do not put a
+   token in a query string, path, ticket, screenshot, browser recording, or log.
+4. Prove one customer-safe project view in the real browser, then prove that a wrong origin,
+   expired link, revoked link, and a job reassigned to a different Roofing Customer all return the
+   same unavailable result. Check the live static asset headers include `Referrer-Policy:
+   no-referrer` and a restrictive CSP before sending any link.
+5. Archive only link id, job id, request id, expiry, and test result. Never archive the raw URL or
+   capability token. Confirm a fresh link revokes the prior active link for that job.
+
+Do not add proof-photo/download, invoice, warranty-file, or proposal-file URLs to this route
+without a separate short-lived attachment-authorization design and browser proof. A public
+`/ingest/estimate` path remains out of scope until its own consent, rate-limit, pricing, and abuse
+controls are reviewed.
 
 ## 10. Prove The End-To-End Intake Slice
 
@@ -321,7 +353,7 @@ CRON_TZ=UTC
 `backup-d1-to-r2.sh` is bound to Cloudflare account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
-the SQL into isolated SQLite, checks integrity and all 23 current core/auth/operational tables,
+the SQL into isolated SQLite, checks integrity and all 25 current core/auth/operational tables,
 plus the 22 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
 locally, uploads immutably, remotely checks the objects, and publishes
 `IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
@@ -349,7 +381,7 @@ For the launch remote drill, create a fresh empty D1 database named
 `ironwrap-restore-drill-<label>` in the same committed account and record its exact UUID. The
 name and UUID must both differ from production. Bind one approval to that exact pair; the script
 generates a target-only Wrangler config, rechecks emptiness, imports, then compares the complete
-table-to-row-count map for all 23 required tables and the exact 22 trigger-to-table bindings
+table-to-row-count map for all 25 required tables and the exact 22 trigger-to-table bindings
 with the locally verified SQLite export:
 
 ```bash
@@ -366,13 +398,14 @@ export D1_RESTORE_MODE=verify
 
 Any new D1 migration that adds a persistent table must update the required-table allowlist in
 both D1 scripts and their readiness tests before deployment. Any migration that adds or changes
-an invariant trigger must update the trigger inventory too. The current 23 are `envelopes`,
+an invariant trigger must update the trigger inventory too. The current 25 are `envelopes`,
 `audit_log`, `dead_letter`, `source_counts`, `heartbeat`, `quickbooks_webhook_receipts`,
 `dedup_claims`, `replay_requests`, `field_actions`, `field_action_media`, `app_users`,
 `app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`,
 `app_action_throttles`, `app_device_pairings`, `app_devices`, `lead_ack_receipts`,
-`approval_requests`, `approval_request_events`, `quote_revision_approval_requests`, and
-`quote_revision_approval_request_events`. The 22 required triggers include source-count
+`approval_requests`, `approval_request_events`, `quote_revision_approval_requests`,
+`quote_revision_approval_request_events`, `customer_portal_links`, and
+`customer_portal_access_throttles`. The 22 required triggers include source-count
 validation, immutable lead-ack receipts, and each approval ledger's transition/event/immutability
 rules. Approval binding rewrites must raise `ABORT, 'approval_request_binding_immutable'`; approval
 event updates/deletes must raise `ABORT, 'approval_request_events_immutable'` in both local export

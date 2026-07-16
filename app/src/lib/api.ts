@@ -45,6 +45,7 @@ export interface ApiRequestOptions<T> {
   signal?: AbortSignal;
   timeoutMs?: number;
   fetcher?: typeof fetch;
+  credentials?: RequestCredentials;
 }
 
 export interface ApiCommandOptions {
@@ -56,6 +57,7 @@ export interface ApiCommandOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   fetcher?: typeof fetch;
+  credentials?: RequestCredentials;
 }
 
 const DEFAULT_TIMEOUT_MS = 12_000;
@@ -131,7 +133,7 @@ async function executeRequest(
 
     const response = await fetcher(options.path, {
       method: options.method ?? "GET",
-      credentials: "same-origin",
+      credentials: options.credentials ?? "same-origin",
       cache: "no-store",
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),

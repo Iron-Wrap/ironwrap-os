@@ -344,6 +344,7 @@ const REQUIRED_D1_TABLES = [
   "app_action_throttles", "app_device_pairings", "app_devices", "lead_ack_receipts",
   "approval_requests", "approval_request_events",
   "quote_revision_approval_requests", "quote_revision_approval_request_events",
+  "customer_portal_links", "customer_portal_access_throttles",
 ];
 
 const REQUIRED_D1_TRIGGER_BINDINGS = [
@@ -541,6 +542,7 @@ async function mockD1RestoreEnvironment(t, {
   badChecksum = false,
   targetCount = 0,
   signalDownload = false,
+  missingTable = "",
   rowMismatch = false,
   triggerMismatch = false,
   triggerSemanticsMismatch = false,
@@ -563,6 +565,7 @@ async function mockD1RestoreEnvironment(t, {
   const sqlFile = `ironwrap-d1-ironwrap-bus-${stamp}.sql`;
   const sqlPath = path.join(packageDir, sqlFile);
   await writeFile(sqlPath, d1Sql({
+    missingTable,
     missingTrigger,
     weakReceiptTrigger,
     wrongTimingReceiptTrigger,
@@ -1205,11 +1208,11 @@ test("D1 backup exports through locked Wrangler, validates SQL, and commits its 
   assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
 });
 
-test("D1 backup fails before upload when a required auth table is missing", async (t) => {
-  const mock = await mockD1BackupEnvironment(t, { missingTable: "app_sessions" });
+test("D1 backup fails before upload when a required customer-portal table is missing", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { missingTable: "customer_portal_links" });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /missing required core\/auth table: app_sessions/);
+  assert.match(run.stderr, /missing required production table: customer_portal_links/);
   await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
   assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
 });
@@ -1347,6 +1350,14 @@ test("D1 recovery rejects an export missing a required invariant trigger", async
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /missing required invariant trigger: prevent_lead_ack_receipts_update on lead_ack_receipts/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
+test("D1 recovery rejects an export missing a required customer-portal table", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { missingTable: "customer_portal_access_throttles" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required production table: customer_portal_access_throttles/);
   await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
 });
 

@@ -28,6 +28,8 @@ import { handleQuickbooksWebhook } from "./quickbooks.ts";
 import { ensureJobFolder, googleConfigured } from "./google.ts";
 import { handleAdminAppUserProvision, handleAppApi } from "./app-api.ts";
 import { pruneAuthRecords } from "./app-auth-store.ts";
+import { handleCustomerPortalResolve } from "./customer-portal.ts";
+import { pruneCustomerPortalRecords } from "./customer-portal-store.ts";
 import { markExpiredExecutionLeases } from "./approval-store.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 
@@ -66,6 +68,7 @@ export default {
       ctx.waitUntil(Promise.all([
         runReconcile(env),
         pruneAuthRecords(env).catch((error) => log({ at: "auth_prune", error: String(error) })),
+        pruneCustomerPortalRecords(env).catch((error) => log({ at: "customer_portal_prune", error: String(error) })),
       ]).then(() => {}));
     }
     else ctx.waitUntil(Promise.all([
@@ -91,6 +94,13 @@ async function routeRequest(req: Request, env: Env, ctx: ExecutionContext): Prom
   if (req.method === "GET" && url.pathname === "/ready") {
     const readiness = await getReadiness(env);
     return json(readiness, readiness.ok ? 200 : 503);
+  }
+  // Customer capability resolution bypasses office cookies but requires healthy BFF configuration
+  // so the office revocation control plane cannot disappear while customer links remain live. It
+  // accepts one opaque token in a POST body after the app has scrubbed the fragment from its
+  // signed link; it never accepts a token path/query as authority.
+  if (url.pathname === "/api/v1/customer-portal/resolve") {
+    return await handleCustomerPortalResolve(req, env as import("./app-types.ts").AppEnv);
   }
   if (url.pathname.startsWith("/api/v1/")) return await handleAppApi(req, env, ctx);
   // Jobsite-photo intake (Phase 3) — checked before the generic /ingest/:source match.

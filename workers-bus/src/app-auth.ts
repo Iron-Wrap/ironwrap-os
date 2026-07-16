@@ -39,9 +39,8 @@ export interface DevicePairingDependencies {
 export function appBffConfigured(env: AppEnv): boolean {
   if (String(env.APP_BFF_ENABLED) !== "true") return true;
   const tenantId = configuredTenantId(env);
-  const publicOrigin = normalizeConfiguredOrigin(env.APP_PUBLIC_ORIGIN, String(env.APP_ALLOW_INSECURE_LOCAL) === "true");
-  const allowed = allowedOrigins(env);
-  return !!tenantId && !!publicTenant(env) && !!publicOrigin && allowed.has(publicOrigin) &&
+  const origin = appPublicOrigin(env);
+  return !!tenantId && !!publicTenant(env) && !!origin &&
     nonEmpty(env.APP_AUTH_PEPPER) && env.APP_AUTH_PEPPER.trim().length >= 32 &&
     frappeReadConfigured(env) &&
     gmailConfigured(env);
@@ -74,6 +73,19 @@ export function allowedOrigins(env: AppEnv): Set<string> {
     if (normalized) result.add(normalized);
   }
   return result;
+}
+
+/**
+ * The one canonical public origin for links sent by IronWrap OS. Keeping this separate from
+ * request-origin validation lets capability-link issuers fail closed when an operator has not
+ * deliberately configured both the public origin and its allowlist entry.
+ */
+export function appPublicOrigin(env: AppEnv): string | null {
+  const origin = normalizeConfiguredOrigin(
+    env.APP_PUBLIC_ORIGIN,
+    String(env.APP_ALLOW_INSECURE_LOCAL) === "true",
+  );
+  return origin && allowedOrigins(env).has(origin) ? origin : null;
 }
 
 export function validateAppOrigin(
@@ -339,8 +351,8 @@ export async function issueDevicePairing(
     return { ok: false, error: "invalid_field_user", status: 400 };
   }
   const tenantId = configuredTenantId(env);
-  const origin = normalizeConfiguredOrigin(env.APP_PUBLIC_ORIGIN, String(env.APP_ALLOW_INSECURE_LOCAL) === "true");
-  if (!tenantId || !origin || !allowedOrigins(env).has(origin)) {
+  const origin = appPublicOrigin(env);
+  if (!tenantId || !origin) {
     return { ok: false, error: "app_bff_not_configured", status: 503 };
   }
   const fieldUser = await authStore.findActiveUserById(env, tenantId, fieldUserId);
@@ -637,8 +649,8 @@ export function buildMagicLinkEmail(
   user: Pick<AppUserRecord, "display_name">,
   rawToken: string,
 ): { subject: string; html: string; href: string } {
-  const origin = normalizeConfiguredOrigin(env.APP_PUBLIC_ORIGIN, String(env.APP_ALLOW_INSECURE_LOCAL) === "true");
-  if (!origin || !allowedOrigins(env).has(origin)) throw new Error("magic_link_origin_not_configured");
+  const origin = appPublicOrigin(env);
+  if (!origin) throw new Error("magic_link_origin_not_configured");
   // The token is in a fragment so it is not sent in an HTTP request or server access log. The
   // PWA scrubs the fragment and POSTs it to /api/v1/auth/magic-link/consume.
   const href = `${origin}/auth/verify#token=${encodeURIComponent(rawToken)}`;

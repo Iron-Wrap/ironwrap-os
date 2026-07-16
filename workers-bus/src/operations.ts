@@ -2,6 +2,7 @@
 
 import * as store from "./store.ts";
 import { appBffConfigured } from "./app-auth.ts";
+import { customerPortalConfigured } from "./customer-portal.ts";
 import type { AppEnv } from "./app-types.ts";
 
 export const BULK_REPLAY_CONFIRMATION = "REPLAY_ALL_OPEN_DEAD_LETTERS";
@@ -38,6 +39,7 @@ export interface ReadinessReport {
     jobnimbus_configuration: boolean;
     frappe_configuration: boolean;
     app_bff_configuration: boolean;
+    customer_portal_configuration: boolean;
   };
 }
 
@@ -95,13 +97,15 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
     jobnimbus_configuration: env.JOBNIMBUS_ENABLED !== "true" || nonEmpty(env.JOBNIMBUS_API_KEY),
     frappe_configuration: (
       String(extended.ERPNEXT_ENABLED ?? "false") !== "true" &&
-      String(extended.APP_BFF_ENABLED ?? "false") !== "true"
+      String(extended.APP_BFF_ENABLED ?? "false") !== "true" &&
+      String(extended.APP_CUSTOMER_PORTAL_ENABLED ?? "false") !== "true"
     ) || (
       nonEmpty(extended.ERPNEXT_BASE_URL) &&
       nonEmpty(extended.ERPNEXT_API_KEY) &&
       nonEmpty(extended.ERPNEXT_API_SECRET)
     ),
     app_bff_configuration: appBffConfigured(extended),
+    customer_portal_configuration: customerPortalConfigured(extended),
   };
 
   if (typeof db?.prepare === "function") {

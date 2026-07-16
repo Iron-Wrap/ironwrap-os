@@ -10,6 +10,11 @@ import type { EstimatorWorkbenchResponse } from "./estimator-contracts";
 import { EstimatorWorkbenchPage } from "./estimator-workbench-page";
 
 vi.mock("./estimator-api", () => ({ loadEstimatorWorkbench: vi.fn() }));
+vi.mock("../portal/customer-portal-office-access", () => ({
+  CustomerPortalOfficeAccess: ({ roofJobId }: { roofJobId: string }) => (
+    <div data-testid="customer-portal-office-access">{roofJobId}</div>
+  ),
+}));
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children, to }: { children: ReactNode; to: string }) => <a href={to}>{children}</a>,
   useParams: () => ({ jobId: "JOB-A" }),
@@ -269,6 +274,7 @@ describe("EstimatorWorkbenchPage", () => {
     expect(screen.getAllByText(/POLYGON\[type=Roof\]/).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("Not customer-ready")).toBeVisible();
     expect(screen.getByText("Deck condition")).toBeVisible();
+    expect(screen.getByTestId("customer-portal-office-access")).toHaveTextContent("JOB-A");
     expect(screen.getByRole("link", { name: /back to sales/i })).toHaveAttribute("href", "/sales");
     expect(
       screen.queryByRole("button", {

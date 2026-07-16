@@ -97,7 +97,7 @@ function ProposalCard({ model }: { model: CustomerPortalResponse }) {
         <div className="flex items-start gap-3">
           <FileCheck2 className="mt-0.5 size-5 text-info" aria-hidden="true" />
           <div>
-            <CardTitle>Approved proposal</CardTitle>
+            <CardTitle>Project proposal</CardTitle>
             <CardDescription>
               {model.proposal?.status ?? quote?.status ?? "Published project terms"}
             </CardDescription>

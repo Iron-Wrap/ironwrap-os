@@ -21,6 +21,7 @@ import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { ErrorState } from "../components/ui/state-panel";
 import { cn } from "../lib/cn";
+import { CustomerPortalOfficeAccess } from "../portal/customer-portal-office-access";
 import { loadEstimatorWorkbench } from "./estimator-api";
 import type { EstimatorGeometry, EstimatorWorkbenchResponse } from "./estimator-contracts";
 
@@ -1069,6 +1070,8 @@ function CommercialRecord({
           <ProposalReadiness readiness={model.proposal_readiness} />
         </div>
       </section>
+
+      <CustomerPortalOfficeAccess roofJobId={model.job.id} locale={locale} />
 
       <section className="border-y border-border py-6" aria-labelledby="scope-heading">
         <div className="px-4 sm:px-5">

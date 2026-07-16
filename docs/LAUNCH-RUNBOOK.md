@@ -262,13 +262,18 @@ Before enabling the BFF in the intended Cloudflare account:
 
 ```bash
 node tools/launch-proof.mjs
-BUS_BASE_URL=... INGEST_TOKEN=... ADMIN_TOKEN=... node tools/launch-proof.mjs --execute
+BUS_BASE_URL=... INGEST_TOKEN=... ADMIN_TOKEN=... node tools/launch-proof.mjs --execute > launch-proof-evidence.json
 ```
 
-Archive the output with the release commit and image digest. Verify the fixture in D1/R2 and in
-Frappe as Lead Envelope, Roofing Customer/Property, Roof Job, and seven Production Gate State
-rows. Run `POST /admin/reconcile`, then confirm `/admin/status` reports the new heartbeat and no
-unexplained gaps. Remove or clearly label fixture records after proof.
+The dry run makes no network request. In execute mode, the runner proves `/health` and every
+`/ready` check before it creates a fixture; then it verifies website intake, estimator idempotency,
+admin read-back, reconciliation, and a fresh/reconciled `/admin/status` with no dead-letter,
+stuck, Frappe, replay, or recent-audit failure. It emits only redacted evidence and response
+request ids; do not add tokens or raw responses to the artifact.
+
+Archive `launch-proof-evidence.json` with the release commit and image digest. Verify the fixture
+in D1/R2 and in Frappe as Lead Envelope, Roofing Customer/Property, Roof Job, and seven Production
+Gate State rows. Remove or clearly label fixture records after proof.
 
 ## 11. Cut Over Real Sources
 

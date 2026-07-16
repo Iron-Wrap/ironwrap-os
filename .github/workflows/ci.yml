@@ -82,6 +82,8 @@ jobs:
 
       - name: Test production-readiness verifier
         run: node --test tools/production-readiness.test.mjs
+      - name: Test launch-proof release evidence runner
+        run: node --test tools/launch-proof.test.mjs
       - name: Validate repository production contract
         run: node tools/production-readiness.mjs contract
       - name: Validate shell syntax

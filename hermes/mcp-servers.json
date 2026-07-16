@@ -1,6 +1,6 @@
 {
   "version": "0.2.0",
-  "note": "Launch/config manifest for the two MCP servers Hermes connects to. tool_filter arrays are the UNION across roles only for host discovery; the Frappe server itself requires HERMES_AGENT_ROLE plus HERMES_ACTOR_USER, and its Frappe API pair must belong to exactly that actor rather than a shared service principal. It registers only that canonical roles.json allowlist and assignment-scopes Field Companion calls. Frappe approved writes require ERPNEXT_WRITE_ENABLED plus a short-lived server-issued dry_run_receipt and separately signed human approval_receipt; HERMES_DRY_RUN_SIGNING_KEY stays in the MCP host, HERMES_APPROVAL_PUBLIC_KEY_FILE verifies the approval broker's signature, and HERMES_APPROVER_ID binds that key to the approved human identity. The bus retains its separate IRONWRAP_BUS_WRITE_ENABLED + HERMES_WRITE_TOKEN replay gate. Frappe writes record Hermes Run rows; bus replay records envelope-scoped recovery in the bus audit log. env values are placeholders resolved from the Hermes host environment; never commit real secret values.",
+  "note": "Launch/config manifest for the two MCP servers Hermes connects to. tool_filter arrays are the UNION across roles only for host discovery; each server requires HERMES_AGENT_ROLE and registers only that canonical roles.json allowlist. The Frappe server also requires HERMES_ACTOR_USER, and its Frappe API pair must belong to exactly that actor rather than a shared service principal; it assignment-scopes Field Companion calls. Frappe approved writes require ERPNEXT_WRITE_ENABLED plus a short-lived server-issued dry_run_receipt and separately signed human approval_receipt; HERMES_DRY_RUN_SIGNING_KEY stays in the MCP host, HERMES_APPROVAL_PUBLIC_KEY_FILE verifies the approval broker's signature, and HERMES_APPROVER_ID binds that key to the approved human identity. The bus retains its separate IRONWRAP_BUS_WRITE_ENABLED + HERMES_WRITE_TOKEN replay gate. Frappe writes record Hermes Run rows; bus replay records envelope-scoped recovery in the bus audit log. env values are placeholders resolved from the Hermes host environment; never commit real secret values.",
   "mcpServers": {
     "ironwrap-bus-mcp": {
       "command": "node",
@@ -26,7 +26,9 @@
         "IRONWRAP_ADMIN_TOKEN": "${IRONWRAP_ADMIN_TOKEN}",
         "IRONWRAP_BUS_WRITE_ENABLED": "${IRONWRAP_BUS_WRITE_ENABLED}",
         "IRONWRAP_BUS_REQUEST_TIMEOUT_MS": "${IRONWRAP_BUS_REQUEST_TIMEOUT_MS}",
-        "HERMES_WRITE_TOKEN": "${HERMES_WRITE_TOKEN}"
+        "HERMES_WRITE_TOKEN": "${HERMES_WRITE_TOKEN}",
+        "HERMES_AGENT_ROLE": "${HERMES_AGENT_ROLE}",
+        "HERMES_ROLE_POLICY_PATH": "${HERMES_ROLE_POLICY_PATH}"
       }
     },
     "erpnext-roofing-mcp": {

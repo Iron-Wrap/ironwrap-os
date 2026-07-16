@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const nullableText = z.string().nullable();
+const isoTimestampSchema = z.string().datetime({ offset: true });
 
 const mctbSchema = z.object({
   state: z.enum([
@@ -58,5 +59,55 @@ export const ownerNowResponseSchema = ownerReadModelEnvelopeSchema.extend({
   }),
 });
 
+export const measurementIntakeOwnerExceptionSchema = z
+  .object({
+    id: z.string().regex(/^measurement_[0-9a-f]{64}$/),
+    provider: z.string().min(3).max(80),
+    job_number: z.string().min(1).max(160).nullable(),
+    status: z.enum(["unmatched", "retryable_error"]),
+    reason: z.enum([
+      "job_number_missing",
+      "job_match_required",
+      "drive_not_configured",
+      "report_fetch_failed",
+      "raw_source_missing",
+      "frappe_sync_failed",
+      "retry_pending",
+    ]),
+    drive_report_url: z.string().url().max(2_048).nullable(),
+    drive_folder_url: z.string().url().max(2_048).nullable(),
+    attempts: z.number().int().positive(),
+    recovery_disposition: z.enum([
+      "manual_review",
+      "retry_scheduled",
+      "recovery_blocked",
+      "retry_exhausted",
+    ]),
+    created_at: isoTimestampSchema,
+    updated_at: isoTimestampSchema,
+  })
+  .strict()
+  .superRefine((exception, context) => {
+    const dispositionMatchesStatus =
+      exception.status === "unmatched"
+        ? exception.recovery_disposition === "manual_review"
+        : exception.recovery_disposition !== "manual_review";
+    if (!dispositionMatchesStatus) {
+      context.addIssue({
+        code: "custom",
+        path: ["recovery_disposition"],
+        message: "measurement_recovery_disposition_status_mismatch",
+      });
+    }
+  });
+
+export const measurementIntakeOwnerExceptionsResponseSchema = z
+  .object({ measurements: z.array(measurementIntakeOwnerExceptionSchema) })
+  .strict();
+
 export type OwnerException = z.infer<typeof ownerExceptionSchema>;
 export type OwnerNowResponse = z.infer<typeof ownerNowResponseSchema>;
+export type MeasurementIntakeOwnerException = z.infer<typeof measurementIntakeOwnerExceptionSchema>;
+export type MeasurementIntakeOwnerExceptionsResponse = z.infer<
+  typeof measurementIntakeOwnerExceptionsResponseSchema
+>;

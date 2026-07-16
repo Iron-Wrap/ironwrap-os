@@ -6,8 +6,16 @@
 // re-drives anything stuck; a daily cron reconciles source vs landed and emits the heartbeat.
 
 import {
-  ALLOWED_SOURCES, type Source, type EnvelopeRecord,
-  newEnvelopeId, normalizeEnvelope, dedupKey, validateInbound, classifyIntent, reconcileDiff, parseBody,
+  ALLOWED_SOURCES,
+  type Source,
+  type EnvelopeRecord,
+  newEnvelopeId,
+  normalizeEnvelope,
+  dedupKey,
+  validateInbound,
+  classifyIntent,
+  reconcileDiff,
+  parseBody,
   validateSourceCount,
 } from "./core.ts";
 import * as store from "./store.ts";
@@ -22,7 +30,10 @@ import { pushToJobNimbus } from "./jobnimbus.ts";
 import { pushToErpNext, syncLeadTransportToErpNext } from "./erpnext.ts";
 import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
 import { handlePhotoIngest } from "./photos.ts";
-import { handleMeasurementIngest, retryMeasurementIntakeReceipts } from "./measurements.ts";
+import {
+  handleMeasurementIngest,
+  retryMeasurementIntakeReceipts,
+} from "./measurements.ts";
 import { handleEstimateIngest } from "./estimates.ts";
 import { handleQuickbooksWebhook } from "./quickbooks.ts";
 import { ensureJobFolder, googleConfigured } from "./google.ts";
@@ -33,17 +44,28 @@ import { pruneCustomerPortalRecords } from "./customer-portal-store.ts";
 import {
   listMeasurementIntakeExceptions,
   pruneMeasurementIntakeReceipts,
-  type MeasurementIntakeReceipt,
+  projectMeasurementIntakeAdminException,
+  type MeasurementIntakeAdminException,
 } from "./measurement-intake-store.ts";
 import { markExpiredExecutionLeases } from "./approval-store.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
-const safeJson = (s: string): Record<string, unknown> => { try { return JSON.parse(s) as Record<string, unknown>; } catch { return {}; } };
+const safeJson = (s: string): Record<string, unknown> => {
+  try {
+    return JSON.parse(s) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+};
 
 export default {
-  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(
+    req: Request,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<Response> {
     const requestId = requestIdFor(req);
     try {
       const response = await routeRequest(req, env, ctx);
@@ -54,7 +76,11 @@ export default {
     }
   },
 
-  async queue(batch: MessageBatch<{ envelope_id: string }>, env: Env, _ctx: ExecutionContext): Promise<void> {
+  async queue(
+    batch: MessageBatch<{ envelope_id: string }>,
+    env: Env,
+    _ctx: ExecutionContext,
+  ): Promise<void> {
     const isDlq = batch.queue.endsWith("-dlq");
     for (const msg of batch.messages) {
       try {
@@ -62,42 +88,77 @@ export default {
         else await handlePush(env, msg.body.envelope_id);
         msg.ack();
       } catch (err) {
-        log({ at: "queue", queue: batch.queue, envelope_id: msg.body.envelope_id, error: String(err) });
+        log({
+          at: "queue",
+          queue: batch.queue,
+          envelope_id: msg.body.envelope_id,
+          error: String(err),
+        });
         msg.retry(); // exhausting retries on the main queue routes to the DLQ (wrangler.jsonc)
       }
     }
   },
 
-  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(
+    controller: ScheduledController,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<void> {
     if (controller.cron === "0 14 * * *") {
-      ctx.waitUntil(Promise.all([
-        runReconcile(env),
-        pruneAuthRecords(env).catch((error) => log({ at: "auth_prune", error: String(error) })),
-        pruneCustomerPortalRecords(env).catch((error) => log({ at: "customer_portal_prune", error: String(error) })),
-        pruneMeasurementIntakeReceipts(env).catch((error) => log({ at: "measurement_receipt_prune", error: String(error) })),
-      ]).then(() => {}));
-    }
-    else ctx.waitUntil(Promise.all([
-      retrySweep(env),
-      retryMeasurementIntakeReceipts(env).catch((error) => log({ at: "measurement_intake_retry", error: String(error) })),
-      // A broker timeout must never trigger an invisible second Frappe write.
-      // The durable request becomes owner-visible reconciliation work instead.
-      markExpiredExecutionLeases(env, new Date().toISOString())
-        .catch((error) => log({ at: "approval_lease_sweep", error: String(error) })),
-      // Quote-revision execution has an independent ledger and broker. Its
-      // lease therefore becomes explicit reconciliation work independently of
-      // the lead-triage authority.
-      markExpiredQuoteRevisionApprovalExecutionLeases(env, new Date().toISOString())
-        .catch((error) => log({ at: "quote_revision_approval_lease_sweep", error: String(error) })),
-    ]).then(() => {})); // the frequent cron
+      ctx.waitUntil(
+        Promise.all([
+          runReconcile(env),
+          pruneAuthRecords(env).catch((error) =>
+            log({ at: "auth_prune", error: String(error) }),
+          ),
+          pruneCustomerPortalRecords(env).catch((error) =>
+            log({ at: "customer_portal_prune", error: String(error) }),
+          ),
+          pruneMeasurementIntakeReceipts(env).catch((error) =>
+            log({ at: "measurement_receipt_prune", error: String(error) }),
+          ),
+        ]).then(() => {}),
+      );
+    } else
+      ctx.waitUntil(
+        Promise.all([
+          retrySweep(env),
+          retryMeasurementIntakeReceipts(env).catch((error) =>
+            log({ at: "measurement_intake_retry", error: String(error) }),
+          ),
+          // A broker timeout must never trigger an invisible second Frappe write.
+          // The durable request becomes owner-visible reconciliation work instead.
+          markExpiredExecutionLeases(env, new Date().toISOString()).catch(
+            (error) =>
+              log({ at: "approval_lease_sweep", error: String(error) }),
+          ),
+          // Quote-revision execution has an independent ledger and broker. Its
+          // lease therefore becomes explicit reconciliation work independently of
+          // the lead-triage authority.
+          markExpiredQuoteRevisionApprovalExecutionLeases(
+            env,
+            new Date().toISOString(),
+          ).catch((error) =>
+            log({
+              at: "quote_revision_approval_lease_sweep",
+              error: String(error),
+            }),
+          ),
+        ]).then(() => {}),
+      ); // the frequent cron
   },
 } satisfies ExportedHandler<Env, { envelope_id: string }>;
 
-async function routeRequest(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+async function routeRequest(
+  req: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
   const url = new URL(req.url);
   // Preserve the original cheap liveness contract for platform health checks. Readiness is
   // intentionally separate because it can fail while the isolate itself is healthy.
-  if (req.method === "GET" && url.pathname === "/health") return json({ ok: true });
+  if (req.method === "GET" && url.pathname === "/health")
+    return json({ ok: true });
   if (req.method === "GET" && url.pathname === "/ready") {
     const readiness = await getReadiness(env);
     return json(readiness, readiness.ok ? 200 : 503);
@@ -107,60 +168,87 @@ async function routeRequest(req: Request, env: Env, ctx: ExecutionContext): Prom
   // accepts one opaque token in a POST body after the app has scrubbed the fragment from its
   // signed link; it never accepts a token path/query as authority.
   if (url.pathname === "/api/v1/customer-portal/resolve") {
-    return await handleCustomerPortalResolve(req, env as import("./app-types.ts").AppEnv);
+    return await handleCustomerPortalResolve(
+      req,
+      env as import("./app-types.ts").AppEnv,
+    );
   }
-  if (url.pathname.startsWith("/api/v1/")) return await handleAppApi(req, env, ctx);
+  if (url.pathname.startsWith("/api/v1/"))
+    return await handleAppApi(req, env, ctx);
   // Jobsite-photo intake (Phase 3) — checked before the generic /ingest/:source match.
   if (req.method === "POST" && url.pathname === "/ingest/photo") {
-    if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
-    if (Number(req.headers.get("content-length") ?? "0") > MAX_BODY_BYTES) return json({ error: "payload_too_large" }, 413);
+    if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN))
+      return json({ error: "unauthorized" }, 401);
+    if (Number(req.headers.get("content-length") ?? "0") > MAX_BODY_BYTES)
+      return json({ error: "payload_too_large" }, 413);
     const text = await req.text();
-    if (text.length > MAX_BODY_BYTES) return json({ error: "payload_too_large" }, 413);
+    if (text.length > MAX_BODY_BYTES)
+      return json({ error: "payload_too_large" }, 413);
     return await handlePhotoIngest(env, text, req.headers.get("content-type"));
   }
   // Measurement-report intake (Phase 3) — also before the generic /ingest/:source match.
   if (req.method === "POST" && url.pathname === "/ingest/measurement") {
-    if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
+    if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN))
+      return json({ error: "unauthorized" }, 401);
     const body = await readBounded(req);
     if (body === null) return json({ error: "payload_too_large" }, 413);
     return await handleMeasurementIngest(
       env,
       body,
       req.headers.get("content-type"),
-      req.headers.get("idempotency-key") ?? req.headers.get("x-idempotency-key"),
+      req.headers.get("idempotency-key") ??
+        req.headers.get("x-idempotency-key"),
     );
   }
   // Estimator/configurator handoff: own the lead/session first; do not depend on JobNimbus/GHL.
   if (req.method === "POST" && url.pathname === "/ingest/estimate") {
-    if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
+    if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN))
+      return json({ error: "unauthorized" }, 401);
     const body = await readBounded(req);
     if (body === null) return json({ error: "payload_too_large" }, 413);
     return await handleEstimateIngest(
       env,
       body,
       req.headers.get("content-type"),
-      req.headers.get("idempotency-key") ?? req.headers.get("x-idempotency-key"),
+      req.headers.get("idempotency-key") ??
+        req.headers.get("x-idempotency-key"),
     );
   }
   const ingest = url.pathname.match(/^\/ingest\/([a-z]+)$/);
   if (req.method === "POST" && ingest) {
-    if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
+    if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN))
+      return json({ error: "unauthorized" }, 401);
     return await handleIngest(req, env, ctx, ingest[1]);
   }
   if (url.pathname.startsWith("/admin/")) {
-    if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN)) return json({ error: "unauthorized" }, 401);
-    if (req.method === "GET" && url.pathname === "/admin/envelopes") return json(await handleListEnvelopes(env, url));
-    if (req.method === "GET" && url.pathname.startsWith("/admin/envelope/")) return json(await handleGetEnvelope(env, url));
-    if (req.method === "GET" && url.pathname === "/admin/dead-letter") return json(await handleListDeadLetters(env, url));
-    if (req.method === "GET" && url.pathname === "/admin/measurements/exceptions") {
+    if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN))
+      return json({ error: "unauthorized" }, 401);
+    if (req.method === "GET" && url.pathname === "/admin/envelopes")
+      return json(await handleListEnvelopes(env, url));
+    if (req.method === "GET" && url.pathname.startsWith("/admin/envelope/"))
+      return json(await handleGetEnvelope(env, url));
+    if (req.method === "GET" && url.pathname === "/admin/dead-letter")
+      return json(await handleListDeadLetters(env, url));
+    if (
+      req.method === "GET" &&
+      url.pathname === "/admin/measurements/exceptions"
+    ) {
       return json(await handleListMeasurementExceptions(env, url));
     }
     if (req.method === "GET" && url.pathname === "/admin/status") {
-      return json(await getOperationalStatus(env, clampLimit(url.searchParams.get("audit_limit"), 20, 100)));
+      return json(
+        await getOperationalStatus(
+          env,
+          clampLimit(url.searchParams.get("audit_limit"), 20, 100),
+        ),
+      );
     }
-    if (req.method === "POST" && url.pathname === "/admin/reconcile") return json(await runReconcile(env));
-    if (req.method === "POST" && url.pathname === "/admin/source-count") return await handleSourceCount(req, env);
-    if (req.method === "POST" && url.pathname === "/admin/replay") return await handleReplay(req, env);
+    if (req.method === "POST" && url.pathname === "/admin/reconcile")
+      return json(await runReconcile(env));
+    if (req.method === "POST" && url.pathname === "/admin/source-count")
+      return await handleSourceCount(req, env);
+    if (req.method === "POST" && url.pathname === "/admin/replay")
+      return await handleReplay(req, env);
     if (req.method === "POST" && url.pathname === "/admin/app-users") {
       return await handleAdminAppUserProvision(req, env);
     }
@@ -171,20 +259,31 @@ async function routeRequest(req: Request, env: Env, ctx: ExecutionContext): Prom
   if (req.method === "POST" && url.pathname === "/webhook/quickbooks") {
     const body = await readBounded(req);
     if (body === null) return json({ error: "payload_too_large" }, 413);
-    return await handleQuickbooksWebhook(env, body, req.headers.get("intuit-signature"));
+    return await handleQuickbooksWebhook(
+      env,
+      body,
+      req.headers.get("intuit-signature"),
+    );
   }
   return json({ error: "not_found" }, 404);
 }
 
 // ---------------------------------------------------------------------------- ingest
 
-async function handleIngest(req: Request, env: Env, ctx: ExecutionContext, source: string): Promise<Response> {
-  if (!(ALLOWED_SOURCES as readonly string[]).includes(source)) return json({ error: "bad_source" }, 400);
+async function handleIngest(
+  req: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  source: string,
+): Promise<Response> {
+  if (!(ALLOWED_SOURCES as readonly string[]).includes(source))
+    return json({ error: "bad_source" }, 400);
 
   const len = Number(req.headers.get("content-length") ?? "0");
   if (len > MAX_BODY_BYTES) return json({ error: "payload_too_large" }, 413);
   const rawText = await req.text();
-  if (rawText.length > MAX_BODY_BYTES) return json({ error: "payload_too_large" }, 413);
+  if (rawText.length > MAX_BODY_BYTES)
+    return json({ error: "payload_too_large" }, 413);
 
   const raw = parseBody(rawText, req.headers.get("content-type"));
   const envelopeId = newEnvelopeId();
@@ -209,37 +308,55 @@ async function handleIngest(req: Request, env: Env, ctx: ExecutionContext, sourc
 
   const intentText = `${raw["service"] ?? ""} ${raw["service_intent"] ?? ""} ${raw["message"] ?? ""}`;
   const rec: EnvelopeRecord = {
-    envelope_id: envelopeId, source,
+    envelope_id: envelopeId,
+    source,
     contact_name: envelope.contact.name ?? null,
     contact_phone: envelope.contact.phone ?? null,
     contact_email: envelope.contact.email ?? null,
     job_ref: envelope.job_ref,
     payload_json: JSON.stringify(envelope.payload),
-    raw_key: rawKey, ts: now,
+    raw_key: rawKey,
+    ts: now,
     status: dupOf ? "duplicate" : valid.ok ? "pending_jn_push" : "received",
-    dedup_key: key, dup_of: dupOf, attempts: 0,
-    last_error: valid.ok ? null : valid.reason ?? null,
-    jn_contact_id: null, jn_job_id: null,
+    dedup_key: key,
+    dup_of: dupOf,
+    attempts: 0,
+    last_error: valid.ok ? null : (valid.reason ?? null),
+    jn_contact_id: null,
+    jn_job_id: null,
     intent_queue: classifyIntent(intentText),
-    created_at: now, updated_at: now,
+    created_at: now,
+    updated_at: now,
   };
 
   // 4) Owned store write (system of record).
   await store.insertEnvelope(env, rec);
   await store.recordAudit(env, {
-    automation: "ingest", trigger: source, envelope_id: envelopeId,
-    action: dupOf ? "dedup" : "received", result: "ok",
-    error: rec.last_error, recovery_owner: env.OWNER_ALERT_EMAIL,
+    automation: "ingest",
+    trigger: source,
+    envelope_id: envelopeId,
+    action: dupOf ? "dedup" : "received",
+    result: "ok",
+    error: rec.last_error,
+    recovery_owner: env.OWNER_ALERT_EMAIL,
   });
 
   // 5) Instant-ack fires OFF the owned-store write (never off the JobNimbus push).
-  ctx.waitUntil(sendInstantAck(env, rec).catch((e) =>
-    log({ at: "instant_ack", envelope_id: envelopeId, error: String(e) })));
+  ctx.waitUntil(
+    sendInstantAck(env, rec).catch((e) =>
+      log({ at: "instant_ack", envelope_id: envelopeId, error: String(e) }),
+    ),
+  );
 
   // 6) Enqueue the JobNimbus push (skip pure duplicates and unroutable-no-contact rows).
   if (!dupOf && valid.ok) await env.JN_QUEUE.send({ envelope_id: envelopeId });
 
-  return json({ envelope_id: envelopeId, status: rec.status, duplicate: !!dupOf, queue: rec.intent_queue });
+  return json({
+    envelope_id: envelopeId,
+    status: rec.status,
+    duplicate: !!dupOf,
+    queue: rec.intent_queue,
+  });
 }
 
 // ---------------------------------------------------------------------------- queue work
@@ -263,14 +380,23 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
       });
       const targetIds = [
         `lead_envelope:${erp.name}`,
-        erp.roofingPropertyName ? `roofing_property:${erp.roofingPropertyName}` : null,
+        erp.roofingPropertyName
+          ? `roofing_property:${erp.roofingPropertyName}`
+          : null,
         erp.roofJobName ? `roof_job:${erp.roofJobName}` : null,
-        erp.productionGateCount ? `production_gates:${erp.productionGateCount}` : null,
-      ].filter(Boolean).join(",");
+        erp.productionGateCount
+          ? `production_gates:${erp.productionGateCount}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(",");
       await store.recordAudit(env, {
-        automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,
+        automation: "erpnext_push",
+        trigger: "queue",
+        envelope_id: envelopeId,
         target_ids: targetIds,
-        action: erp.reused ? "upsert_pre_bridge" : "create_pre_bridge", result: "ok",
+        action: erp.reused ? "upsert_pre_bridge" : "create_pre_bridge",
+        result: "ok",
       });
     }
   } catch (err) {
@@ -278,8 +404,12 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     await store.setErpNextError(env, envelopeId, error).catch(() => {});
     const n = await store.bumpAttempt(env, envelopeId, error);
     await store.recordAudit(env, {
-      automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,
-      action: `push_attempt_${n}`, result: "error", error,
+      automation: "erpnext_push",
+      trigger: "queue",
+      envelope_id: envelopeId,
+      action: `push_attempt_${n}`,
+      result: "error",
+      error,
       recovery_owner: env.OWNER_ALERT_EMAIL,
     });
     throw err; // retry preserves the owned business record as a hard prerequisite for the bridge
@@ -289,21 +419,34 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
   try {
     r = await pushToJobNimbus(env, rec);
     await store.recordAudit(env, {
-      automation: "jn_push", trigger: "queue", envelope_id: envelopeId,
+      automation: "jn_push",
+      trigger: "queue",
+      envelope_id: envelopeId,
       target_ids: `contact:${r.contactId}${r.jobId ? ",job:" + r.jobId : ""}`,
-      action: "push", result: "ok",
+      action: "push",
+      result: "ok",
     });
     // Fresh job → ensure its Drive folder (+01–06 template) now (best-effort, credential-gated).
     if (r.jobNumber && googleConfigured(env)) {
       const p = safeJson(rec.payload_json);
-      await ensureJobFolder(env, r.jobNumber, rec.contact_name, typeof p.brand === "string" ? p.brand : null)
-        .catch((e) => log({ at: "job_folder", job: r.jobNumber, error: String(e) }));
+      await ensureJobFolder(
+        env,
+        r.jobNumber,
+        rec.contact_name,
+        typeof p.brand === "string" ? p.brand : null,
+      ).catch((e) =>
+        log({ at: "job_folder", job: r.jobNumber, error: String(e) }),
+      );
     }
   } catch (err) {
     const n = await store.bumpAttempt(env, envelopeId, String(err));
     await store.recordAudit(env, {
-      automation: "jn_push", trigger: "queue", envelope_id: envelopeId,
-      action: `push_attempt_${n}`, result: "error", error: String(err),
+      automation: "jn_push",
+      trigger: "queue",
+      envelope_id: envelopeId,
+      action: `push_attempt_${n}`,
+      result: "error",
+      error: String(err),
       recovery_owner: env.OWNER_ALERT_EMAIL,
     });
     throw err; // → queue retry; exhausted → DLQ
@@ -320,12 +463,17 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     const lead = await syncLeadTransportToErpNext(env, pushedRecord, r);
     if (lead) {
       await store.recordAudit(env, {
-        automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,
+        automation: "erpnext_push",
+        trigger: "queue",
+        envelope_id: envelopeId,
         target_ids: [
           `lead_envelope:${lead.name}`,
           lead.roofJobName ? `roof_job:${lead.roofJobName}` : null,
-        ].filter(Boolean).join(","),
-        action: "sync_bridge_transport", result: "ok",
+        ]
+          .filter(Boolean)
+          .join(","),
+        action: "sync_bridge_transport",
+        result: "ok",
       });
     }
   } catch (err) {
@@ -333,8 +481,12 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     await store.setErpNextError(env, envelopeId, error).catch(() => {});
     const n = await store.bumpAttempt(env, envelopeId, error);
     await store.recordAudit(env, {
-      automation: "erpnext_push", trigger: "queue", envelope_id: envelopeId,
-      action: `transport_sync_attempt_${n}`, result: "error", error,
+      automation: "erpnext_push",
+      trigger: "queue",
+      envelope_id: envelopeId,
+      action: `transport_sync_attempt_${n}`,
+      result: "error",
+      error,
       recovery_owner: env.OWNER_ALERT_EMAIL,
     });
     throw err; // keep pending so retry re-verifies both the bridge and its mirrored transport facts
@@ -350,19 +502,33 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
 
 async function handleDead(env: Env, envelopeId: string): Promise<void> {
   const rec = await store.getEnvelope(env, envelopeId);
-  const stage = rec?.last_error?.includes("erpnext_") ? "erpnext_push" : "jn_push";
-  await store.setStatus(env, envelopeId, "dead", { last_error: rec?.last_error ?? "dead_letter" });
+  const stage = rec?.last_error?.includes("erpnext_")
+    ? "erpnext_push"
+    : "jn_push";
+  await store.setStatus(env, envelopeId, "dead", {
+    last_error: rec?.last_error ?? "dead_letter",
+  });
   await store.recordDeadLetter(env, {
-    envelope_id: envelopeId, stage,
-    error: rec?.last_error ?? "unknown", payload_json: rec?.payload_json ?? "{}",
+    envelope_id: envelopeId,
+    stage,
+    error: rec?.last_error ?? "unknown",
+    payload_json: rec?.payload_json ?? "{}",
   });
   // Best-effort: the dead_letter ROW (recorded above) is the source of truth; a failed alert email
   // must not throw, or the DLQ message would needlessly retry/drop.
-  await sendOwnerAlert(env, `DEAD-LETTER: lead ${envelopeId} failed during ${stage}`,
+  await sendOwnerAlert(
+    env,
+    `DEAD-LETTER: lead ${envelopeId} failed during ${stage}`,
     `<p>Envelope <b>${envelopeId}</b> exhausted retries during <b>${stage}</b>.</p>
      <p>Last error: ${rec?.last_error ?? "unknown"}</p>
-     <p>Recover with POST /admin/replay once the cause is fixed.</p>`)
-    .catch((e) => log({ at: "deadletter_alert_failed", envelope_id: envelopeId, error: String(e) }));
+     <p>Recover with POST /admin/replay once the cause is fixed.</p>`,
+  ).catch((e) =>
+    log({
+      at: "deadletter_alert_failed",
+      envelope_id: envelopeId,
+      error: String(e),
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------- cron
@@ -372,12 +538,18 @@ async function retrySweep(env: Env): Promise<void> {
   const thresholdMin = Number(env.STUCK_THRESHOLD_MIN ?? "15");
   const stuck = await store.listStuck(env, thresholdMin, 100);
   if (stuck.length === 0) return;
-  await env.JN_QUEUE.sendBatch(stuck.map((r) => ({ body: { envelope_id: r.envelope_id } })));
+  await env.JN_QUEUE.sendBatch(
+    stuck.map((r) => ({ body: { envelope_id: r.envelope_id } })),
+  );
   log({ at: "retry_sweep", redriven: stuck.length });
 }
 
 /** Daily reconciliation: independent source counts vs envelopes landed; heartbeat = the digest email. */
-async function runReconcile(env: Env): Promise<{ day: string; rows: ReturnType<typeof reconcileDiff>; openDeadLetter: number }> {
+async function runReconcile(env: Env): Promise<{
+  day: string;
+  rows: ReturnType<typeof reconcileDiff>;
+  openDeadLetter: number;
+}> {
   const day = new Date().toISOString().slice(0, 10);
   const [sourceCounts, landed, openDlq] = await Promise.all([
     store.getSourceCounts(env, day),
@@ -388,20 +560,27 @@ async function runReconcile(env: Env): Promise<{ day: string; rows: ReturnType<t
   const gaps = rows.filter((r) => r.gap > 0);
   await store.writeHeartbeat(env, day, gaps.length === 0, openDlq);
 
-  const table = rows.map((r) =>
-    `<tr><td>${r.channel}</td><td>${r.source}</td><td>${r.landed}</td><td>${r.gap}</td></tr>`).join("");
-  const subject = gaps.length || openDlq
-    ? `⚠️ Reconciliation ${day}: ${gaps.length} gap(s), ${openDlq} dead-letter`
-    : `✓ Reconciliation ${day}: green`;
+  const table = rows
+    .map(
+      (r) =>
+        `<tr><td>${r.channel}</td><td>${r.source}</td><td>${r.landed}</td><td>${r.gap}</td></tr>`,
+    )
+    .join("");
+  const subject =
+    gaps.length || openDlq
+      ? `⚠️ Reconciliation ${day}: ${gaps.length} gap(s), ${openDlq} dead-letter`
+      : `✓ Reconciliation ${day}: green`;
   // Email is best-effort: the heartbeat ROW (writeHeartbeat above) is the source of truth, so a
   // missing/unconfigured mailer must not fail the reconcile. Once email is wired, its arrival is
   // the human-facing heartbeat; until then, rely on the D1 heartbeat row / the admin result.
-  await sendDailyDigest(env, subject,
+  await sendDailyDigest(
+    env,
+    subject,
     `<p>Daily source-vs-landed reconciliation for ${day}. (This email IS the heartbeat — if it
       doesn't arrive, the reconcile didn't run: escalate to the backup owner.)</p>
      <table border="1" cellpadding="4"><tr><th>channel</th><th>source</th><th>landed</th><th>gap</th></tr>${table}</table>
-     <p>Open dead-letter items: <b>${openDlq}</b>.</p>`)
-    .catch((e) => log({ at: "reconcile_digest_failed", day, error: String(e) }));
+     <p>Open dead-letter items: <b>${openDlq}</b>.</p>`,
+  ).catch((e) => log({ at: "reconcile_digest_failed", day, error: String(e) }));
   log({ at: "reconcile", day, gaps: gaps.length, openDeadLetter: openDlq });
   return { day, rows, openDeadLetter: openDlq };
 }
@@ -413,31 +592,58 @@ async function handleReplay(req: Request, env: Env): Promise<Response> {
   let body: Record<string, unknown>;
   try {
     const parsed = JSON.parse(rawBody) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not_object");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      throw new Error("not_object");
     body = parsed as Record<string, unknown>;
   } catch {
     return json({ error: "invalid_json" }, 400);
   }
 
   if (body.all === true) {
-    if (body.envelope_id !== undefined) return json({ error: "ambiguous_replay_selection" }, 400);
-    if (hasUnexpectedFields(body, ["all", "confirm", "run_id", "approved_by", "reason"])) {
+    if (body.envelope_id !== undefined)
+      return json({ error: "ambiguous_replay_selection" }, 400);
+    if (
+      hasUnexpectedFields(body, [
+        "all",
+        "confirm",
+        "run_id",
+        "approved_by",
+        "reason",
+      ])
+    ) {
       return json({ error: "unexpected_replay_field" }, 400);
     }
     if (body.confirm !== BULK_REPLAY_CONFIRMATION) {
-      return json({
-        error: "bulk_confirmation_required",
-        confirmation: BULK_REPLAY_CONFIRMATION,
-      }, 400);
+      return json(
+        {
+          error: "bulk_confirmation_required",
+          confirmation: BULK_REPLAY_CONFIRMATION,
+        },
+        400,
+      );
     }
     const approval = validateReplayApprovalContext(body);
-    if (!approval.ok) return json({ error: "invalid_approval_context", fields: approval.fields }, 400);
-    const replay = await executeReplayRequest(env, { all: true }, approval.value);
+    if (!approval.ok)
+      return json(
+        { error: "invalid_approval_context", fields: approval.fields },
+        400,
+      );
+    const replay = await executeReplayRequest(
+      env,
+      { all: true },
+      approval.value,
+    );
     if (replay.kind === "run_id_conflict") {
-      return json({ error: "replay_run_id_conflict", run_id: approval.value.run_id }, 409);
+      return json(
+        { error: "replay_run_id_conflict", run_id: approval.value.run_id },
+        409,
+      );
     }
     if (replay.kind === "in_progress") {
-      return json({ error: "replay_run_in_progress", run_id: approval.value.run_id }, 409);
+      return json(
+        { error: "replay_run_in_progress", run_id: approval.value.run_id },
+        409,
+      );
     }
     return json({
       matched: replay.matched,
@@ -447,29 +653,70 @@ async function handleReplay(req: Request, env: Env): Promise<Response> {
     });
   }
 
-  if (body.all !== undefined && body.all !== false) return json({ error: "invalid_all_flag" }, 400);
-  if (hasUnexpectedFields(body, ["all", "envelope_id", "run_id", "approved_by", "reason"])) {
+  if (body.all !== undefined && body.all !== false)
+    return json({ error: "invalid_all_flag" }, 400);
+  if (
+    hasUnexpectedFields(body, [
+      "all",
+      "envelope_id",
+      "run_id",
+      "approved_by",
+      "reason",
+    ])
+  ) {
     return json({ error: "unexpected_replay_field" }, 400);
   }
-  if (typeof body.envelope_id !== "string" ||
-      !/^ow_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.envelope_id)) {
+  if (
+    typeof body.envelope_id !== "string" ||
+    !/^ow_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      body.envelope_id,
+    )
+  ) {
     return json({ error: "invalid_envelope_id" }, 400);
   }
 
   const approval = validateReplayApprovalContext(body);
-  if (!approval.ok) return json({ error: "invalid_approval_context", fields: approval.fields }, 400);
-  const replay = await executeReplayRequest(env, { all: false, envelopeId: body.envelope_id }, approval.value);
+  if (!approval.ok)
+    return json(
+      { error: "invalid_approval_context", fields: approval.fields },
+      400,
+    );
+  const replay = await executeReplayRequest(
+    env,
+    { all: false, envelopeId: body.envelope_id },
+    approval.value,
+  );
   if (replay.kind === "run_id_conflict") {
-    return json({ error: "replay_run_id_conflict", run_id: approval.value.run_id }, 409);
+    return json(
+      { error: "replay_run_id_conflict", run_id: approval.value.run_id },
+      409,
+    );
   }
   if (replay.kind === "in_progress") {
-    return json({ error: "replay_run_in_progress", run_id: approval.value.run_id }, 409);
+    return json(
+      { error: "replay_run_in_progress", run_id: approval.value.run_id },
+      409,
+    );
   }
   if (replay.matched === 0) {
-    return json({ error: "dead_letter_not_replayable", run_id: approval.value.run_id, replayed: false }, 404);
+    return json(
+      {
+        error: "dead_letter_not_replayable",
+        run_id: approval.value.run_id,
+        replayed: false,
+      },
+      404,
+    );
   }
   if (replay.requeued === 0) {
-    return json({ error: "dead_letter_replay_conflict", run_id: approval.value.run_id, replayed: false }, 409);
+    return json(
+      {
+        error: "dead_letter_replay_conflict",
+        run_id: approval.value.run_id,
+        replayed: false,
+      },
+      409,
+    );
   }
   return json({
     matched: replay.matched,
@@ -480,19 +727,30 @@ async function handleReplay(req: Request, env: Env): Promise<Response> {
   });
 }
 
-async function handleListEnvelopes(env: Env, url: URL): Promise<{ envelopes: ReturnType<typeof adminEnvelope>[] }> {
+async function handleListEnvelopes(
+  env: Env,
+  url: URL,
+): Promise<{ envelopes: ReturnType<typeof adminEnvelope>[] }> {
   const limit = clampLimit(url.searchParams.get("limit"), 50, 100);
   const rows = await store.listRecentEnvelopes(env, limit);
   return { envelopes: rows.map(adminEnvelope) };
 }
 
-async function handleGetEnvelope(env: Env, url: URL): Promise<{ envelope: ReturnType<typeof adminEnvelope> | null }> {
+async function handleGetEnvelope(
+  env: Env,
+  url: URL,
+): Promise<{ envelope: ReturnType<typeof adminEnvelope> | null }> {
   const id = decodeURIComponent(url.pathname.slice("/admin/envelope/".length));
   const rec = id ? await store.getEnvelope(env, id) : null;
   return { envelope: rec ? adminEnvelope(rec) : null };
 }
 
-async function handleListDeadLetters(env: Env, url: URL): Promise<{ dead_letters: Awaited<ReturnType<typeof store.listOpenDeadLetters>> }> {
+async function handleListDeadLetters(
+  env: Env,
+  url: URL,
+): Promise<{
+  dead_letters: Awaited<ReturnType<typeof store.listOpenDeadLetters>>;
+}> {
   const limit = clampLimit(url.searchParams.get("limit"), 50, 100);
   return { dead_letters: await store.listOpenDeadLetters(env, limit) };
 }
@@ -500,54 +758,18 @@ async function handleListDeadLetters(env: Env, url: URL): Promise<{ dead_letters
 async function handleListMeasurementExceptions(
   env: Env,
   url: URL,
-): Promise<{ measurements: ReturnType<typeof adminMeasurementException>[] }> {
+): Promise<{ measurements: MeasurementIntakeAdminException[] }> {
   const limit = clampLimit(url.searchParams.get("limit"), 50, 100);
-  return { measurements: (await listMeasurementIntakeExceptions(env, limit)).map(adminMeasurementException) };
-}
-
-/** Admin response excludes idempotency/payload hash fields and leases; opaque operational ids stay visible for review. */
-function adminMeasurementException(receipt: MeasurementIntakeReceipt): {
-  receipt_id: string;
-  measurement_id: string;
-  provider: string;
-  job_number: string | null;
-  raw_key: string;
-  status: "unmatched" | "retryable_error";
-  drive_report_url: string | null;
-  drive_folder_url: string | null;
-  frappe_measurement_id: string | null;
-  frappe_evidence_id: string | null;
-  frappe_error: string | null;
-  last_error: string | null;
-  attempts: number;
-  created_at: string;
-  updated_at: string;
-  completed_at: string | null;
-} {
-  if (receipt.status !== "unmatched" && receipt.status !== "retryable_error") {
-    throw new Error("measurement_exception_status_invalid");
-  }
   return {
-    receipt_id: receipt.receipt_id,
-    measurement_id: receipt.measurement_id,
-    provider: receipt.provider,
-    job_number: receipt.job_number,
-    raw_key: receipt.raw_key,
-    status: receipt.status,
-    drive_report_url: receipt.drive_report_url,
-    drive_folder_url: receipt.drive_folder_url,
-    frappe_measurement_id: receipt.frappe_measurement_id,
-    frappe_evidence_id: receipt.frappe_evidence_id,
-    frappe_error: receipt.frappe_error,
-    last_error: receipt.last_error,
-    attempts: receipt.attempts,
-    created_at: receipt.created_at,
-    updated_at: receipt.updated_at,
-    completed_at: receipt.completed_at,
+    measurements: (await listMeasurementIntakeExceptions(env, limit)).map(
+      projectMeasurementIntakeAdminException,
+    ),
   };
 }
 
-function adminEnvelope(rec: EnvelopeRecord): Omit<EnvelopeRecord, "payload_json"> & { payload: Record<string, unknown> } {
+function adminEnvelope(
+  rec: EnvelopeRecord,
+): Omit<EnvelopeRecord, "payload_json"> & { payload: Record<string, unknown> } {
   const { payload_json, ...rest } = rec;
   return { ...rest, payload: safeJson(payload_json) };
 }
@@ -557,7 +779,10 @@ function clampLimit(raw: string | null, fallback: number, max: number): number {
   return Number.isInteger(n) && n > 0 ? Math.min(n, max) : fallback;
 }
 
-function hasUnexpectedFields(body: Record<string, unknown>, allowed: readonly string[]): boolean {
+function hasUnexpectedFields(
+  body: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
   const allowedSet = new Set(allowed);
   return Object.keys(body).some((key) => !allowedSet.has(key));
 }
@@ -569,7 +794,8 @@ async function handleSourceCount(req: Request, env: Env): Promise<Response> {
   let body: Record<string, unknown>;
   try {
     const parsed = JSON.parse(rawBody) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not_object");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      throw new Error("not_object");
     body = parsed as Record<string, unknown>;
   } catch {
     return json({ error: "invalid_json" }, 400);
@@ -582,15 +808,26 @@ async function handleSourceCount(req: Request, env: Env): Promise<Response> {
   );
   if (!validation.ok) return json({ error: validation.reason }, 400);
 
-  await store.putSourceCount(env, validation.day, validation.channel, validation.count);
-  return json({ ok: true, day: validation.day, channel: validation.channel, count: validation.count });
+  await store.putSourceCount(
+    env,
+    validation.day,
+    validation.channel,
+    validation.count,
+  );
+  return json({
+    ok: true,
+    day: validation.day,
+    channel: validation.channel,
+    count: validation.count,
+  });
 }
 
 // ---------------------------------------------------------------------------- helpers
 
 /** Read the request body, returning null if it exceeds the cap. */
 async function readBounded(req: Request): Promise<string | null> {
-  if (Number(req.headers.get("content-length") ?? "0") > MAX_BODY_BYTES) return null;
+  if (Number(req.headers.get("content-length") ?? "0") > MAX_BODY_BYTES)
+    return null;
   const text = await req.text();
   return text.length > MAX_BODY_BYTES ? null : text;
 }
@@ -608,7 +845,11 @@ function constantTimeEqual(a: string, b: string | undefined): boolean {
   if (ab.byteLength !== bb.byteLength) return false;
   // Workers exposes crypto.subtle.timingSafeEqual; fall back to a constant-time compare
   // elsewhere (e.g. Node test runtime) so the handler is testable without Miniflare.
-  const tse = (crypto.subtle as unknown as { timingSafeEqual?: (x: ArrayBufferView, y: ArrayBufferView) => boolean }).timingSafeEqual;
+  const tse = (
+    crypto.subtle as unknown as {
+      timingSafeEqual?: (x: ArrayBufferView, y: ArrayBufferView) => boolean;
+    }
+  ).timingSafeEqual;
   if (typeof tse === "function") return tse.call(crypto.subtle, ab, bb);
   let diff = 0;
   for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i];
@@ -623,7 +864,10 @@ function json(body: unknown, status = 200): Response {
 }
 
 function requestIdFor(req: Request): string {
-  for (const supplied of [req.headers.get("x-correlation-id"), req.headers.get("x-request-id")]) {
+  for (const supplied of [
+    req.headers.get("x-correlation-id"),
+    req.headers.get("x-request-id"),
+  ]) {
     if (supplied && /^[A-Za-z0-9._:-]{8,128}$/.test(supplied)) return supplied;
   }
   return crypto.randomUUID();
@@ -632,8 +876,14 @@ function requestIdFor(req: Request): string {
 function withResponseHeaders(response: Response, requestId: string): Response {
   const headers = new Headers(response.headers);
   if (!headers.has("cache-control")) headers.set("cache-control", "no-store");
-  headers.set("content-security-policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
-  headers.set("permissions-policy", "accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()");
+  headers.set(
+    "content-security-policy",
+    "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+  );
+  headers.set(
+    "permissions-policy",
+    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()",
+  );
   headers.set("referrer-policy", "no-referrer");
   headers.set("strict-transport-security", "max-age=31536000");
   headers.set("x-content-type-options", "nosniff");

@@ -510,7 +510,7 @@ Build narrow MCP servers, not one giant god tool.
 | `tenant-admin-mcp` | Planned split | Tenant readiness and clone dry-run; no cross-tenant data access |
 
 `tools/validate-hermes-config.mjs` currently validates all eight roles and the launch manifest
-against 136 implemented tools. It also rejects an approved-write grant that lacks the matching
+against 137 implemented tools. It also rejects an approved-write grant that lacks the matching
 dry-run grant in the same role and verifies the runtime receipt/role/evidence enforcement seams.
 
 Mutation pattern:
@@ -691,7 +691,7 @@ Repository support means code/contracts/tests exist. It is not the same as a pas
 | 0 | Source truth | Documented and contract-validated | Reconcile Cloudflare, Frappe, Hermes, QB, Drive, bridge, and admin inventory |
 | 1 | Intake spine | Worker route/storage/consumer/reconcile tests exist | One real source lands in R2, D1, Frappe, audit, ack, and bridge with zero gap |
 | 2 | Operating core | 48 DocTypes, shared policy/RBAC, atomic safety append, and packaging tests exist | Install/migrate on plain Frappe; role-specific fixture workflow passes |
-| 3 | Read-only Hermes | Eight roles and 136-tool inventory validate | Hermes answers owner questions from live bus/Frappe truth with zero writes |
+| 3 | Read-only Hermes | Eight roles and 137-tool inventory validate | Hermes answers owner questions from live bus/Frappe truth with zero writes |
 | 4 | Approved-write Hermes | Dry-run/receipt/approval, single-claim idempotency, verified evidence, actor scope, and audit-failure tests exist | One approved live mutation has complete Hermes Run, receipt, and replay-safe proof |
 | 5 | Instant estimate parity | Owned idempotent ingest/session contract exists | Public widget, range policy, consent, owner follow-up, and estimator review pass |
 | 6 | Proposal proof | Evidence/takeoff/options/scope/quote/proposal records and tools exist | Customer-quality renderer plus selected e-sign path complete one signed packet |

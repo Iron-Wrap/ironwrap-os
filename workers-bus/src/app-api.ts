@@ -69,6 +69,10 @@ import {
 import { handleCustomerPortalLinks } from "./customer-portal.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import { handleFieldAction } from "./field-actions.ts";
+import {
+  listMeasurementIntakeExceptions,
+  projectMeasurementIntakeOwnerException,
+} from "./measurement-intake-store.ts";
 
 const MAX_ADMIN_BODY_BYTES = 8 * 1024;
 
@@ -78,21 +82,37 @@ export async function handleAppApi(
   ctx: ExecutionContext,
 ): Promise<Response> {
   const appEnv = env as AppEnv;
-  if (String(appEnv.APP_BFF_ENABLED) !== "true") return appJson({ error: "app_bff_disabled" }, 503);
-  if (!appBffConfigured(appEnv)) return appJson({ error: "app_bff_not_configured" }, 503);
+  if (String(appEnv.APP_BFF_ENABLED) !== "true")
+    return appJson({ error: "app_bff_disabled" }, 503);
+  if (!appBffConfigured(appEnv))
+    return appJson({ error: "app_bff_not_configured" }, 503);
 
   const url = new URL(req.url);
   const mutation = req.method === "POST";
-  const origin = validateAppOrigin(req, appEnv, req.method === "OPTIONS" || mutation);
+  const origin = validateAppOrigin(
+    req,
+    appEnv,
+    req.method === "OPTIONS" || mutation,
+  );
   if (!origin.ok) return appJson({ error: "origin_not_allowed" }, 403);
-  if (req.method === "OPTIONS") return withCors(new Response(null, { status: 204 }), origin.origin);
+  if (req.method === "OPTIONS")
+    return withCors(new Response(null, { status: 204 }), origin.origin);
 
   let response: Response;
-  if (req.method === "POST" && url.pathname === "/api/v1/auth/magic-link/request") {
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/auth/magic-link/request"
+  ) {
     response = await requestMagicLink(req, appEnv, ctx);
-  } else if (req.method === "POST" && url.pathname === "/api/v1/auth/magic-link/consume") {
+  } else if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/auth/magic-link/consume"
+  ) {
     response = await consumeMagicLink(req, appEnv);
-  } else if (req.method === "POST" && url.pathname === "/api/v1/auth/device-pairing/consume") {
+  } else if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/auth/device-pairing/consume"
+  ) {
     response = await consumeDevicePairing(req, appEnv);
   } else {
     const auth = await authenticateAppRequest(req, appEnv);
@@ -112,10 +132,15 @@ export async function handleAppApi(
   return withCors(response, origin.origin);
 }
 
-export async function handleAdminAppUserProvision(req: Request, env: Env): Promise<Response> {
+export async function handleAdminAppUserProvision(
+  req: Request,
+  env: Env,
+): Promise<Response> {
   const appEnv = env as AppEnv;
-  if (String(appEnv.APP_BFF_ENABLED) !== "true") return appJson({ error: "app_bff_disabled" }, 503);
-  if (!appBffConfigured(appEnv)) return appJson({ error: "app_bff_not_configured" }, 503);
+  if (String(appEnv.APP_BFF_ENABLED) !== "true")
+    return appJson({ error: "app_bff_disabled" }, 503);
+  if (!appBffConfigured(appEnv))
+    return appJson({ error: "app_bff_not_configured" }, 503);
   const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
   if (!parsed.ok) return appJson({ error: parsed.error }, parsed.status);
   const validated = parseProvisionAppUser(parsed.value, appEnv);
@@ -152,8 +177,12 @@ export async function handleAuthenticatedRoute(
   if (url.pathname.startsWith("/api/v1/customer-portal/links")) {
     return await handleCustomerPortalLinks(req, env, auth);
   }
-  if (req.method === "GET" && url.pathname === "/api/v1/quote-revision-approvals") {
-    if (!officeRole(auth)) return privateAppJson({ error: "office_role_required" }, 403);
+  if (
+    req.method === "GET" &&
+    url.pathname === "/api/v1/quote-revision-approvals"
+  ) {
+    if (!officeRole(auth))
+      return privateAppJson({ error: "office_role_required" }, 403);
     try {
       const approvals = await listQuoteRevisionApprovalRequests(
         env,
@@ -161,21 +190,31 @@ export async function handleAuthenticatedRoute(
         new Date().toISOString(),
         parsedListLimit(url.searchParams.get("limit")),
       );
-      return privateAppJson(quoteRevisionApprovalReadEnvelope(env, auth, {
-        approvals: approvals.map(quoteRevisionApprovalProjection),
-      }));
+      return privateAppJson(
+        quoteRevisionApprovalReadEnvelope(env, auth, {
+          approvals: approvals.map(quoteRevisionApprovalProjection),
+        }),
+      );
     } catch {
-      return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+      return privateAppJson(
+        { error: "quote_revision_approval_store_unavailable" },
+        502,
+      );
     }
   }
-  if (req.method === "POST" && url.pathname === "/api/v1/quote-revision-approvals") {
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/quote-revision-approvals"
+  ) {
     return await prepareQuoteRevisionApproval(req, env, auth);
   }
   const quoteRevisionDecisionMatch = url.pathname.match(
     /^\/api\/v1\/quote-revision-approvals\/([^/]+)\/(approve|reject|reconcile)$/,
   );
   if (req.method === "POST" && quoteRevisionDecisionMatch) {
-    const requestId = decodedQuoteRevisionApprovalId(quoteRevisionDecisionMatch[1]);
+    const requestId = decodedQuoteRevisionApprovalId(
+      quoteRevisionDecisionMatch[1],
+    );
     if (!requestId) return privateAppJson({ error: "not_found" }, 404);
     if (quoteRevisionDecisionMatch[2] === "approve") {
       return await approveQuoteRevisionApproval(req, env, auth, requestId);
@@ -185,10 +224,15 @@ export async function handleAuthenticatedRoute(
     }
     return await reconcileQuoteRevisionApproval(req, env, auth, requestId);
   }
-  const quoteRevisionDetailMatch = url.pathname.match(/^\/api\/v1\/quote-revision-approvals\/([^/]+)$/);
+  const quoteRevisionDetailMatch = url.pathname.match(
+    /^\/api\/v1\/quote-revision-approvals\/([^/]+)$/,
+  );
   if (req.method === "GET" && quoteRevisionDetailMatch) {
-    if (!officeRole(auth)) return privateAppJson({ error: "office_role_required" }, 403);
-    const requestId = decodedQuoteRevisionApprovalId(quoteRevisionDetailMatch[1]);
+    if (!officeRole(auth))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    const requestId = decodedQuoteRevisionApprovalId(
+      quoteRevisionDetailMatch[1],
+    );
     if (!requestId) return privateAppJson({ error: "not_found" }, 404);
     try {
       const approval = await getCurrentQuoteRevisionApprovalRequest(
@@ -198,14 +242,22 @@ export async function handleAuthenticatedRoute(
         new Date().toISOString(),
       );
       return approval
-        ? privateAppJson(quoteRevisionApprovalReadEnvelope(env, auth, { approval: quoteRevisionApprovalProjection(approval) }))
+        ? privateAppJson(
+            quoteRevisionApprovalReadEnvelope(env, auth, {
+              approval: quoteRevisionApprovalProjection(approval),
+            }),
+          )
         : privateAppJson({ error: "not_found" }, 404);
     } catch {
-      return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+      return privateAppJson(
+        { error: "quote_revision_approval_store_unavailable" },
+        502,
+      );
     }
   }
   if (req.method === "GET" && url.pathname === "/api/v1/approvals") {
-    if (!officeRole(auth)) return privateAppJson({ error: "office_role_required" }, 403);
+    if (!officeRole(auth))
+      return privateAppJson({ error: "office_role_required" }, 403);
     try {
       const approvals = await listApprovalRequests(
         env,
@@ -213,31 +265,54 @@ export async function handleAuthenticatedRoute(
         new Date().toISOString(),
         parsedListLimit(url.searchParams.get("limit")),
       );
-      return privateAppJson(approvalReadEnvelope(env, auth, { approvals: approvals.map(approvalProjection) }));
+      return privateAppJson(
+        approvalReadEnvelope(env, auth, {
+          approvals: approvals.map(approvalProjection),
+        }),
+      );
     } catch {
       return privateAppJson({ error: "approval_store_unavailable" }, 502);
     }
   }
-  if (req.method === "POST" && url.pathname === "/api/v1/approvals/lead-triage") {
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/approvals/lead-triage"
+  ) {
     return await prepareLeadTriageApproval(req, env, auth);
   }
-  const approvalDecisionMatch = url.pathname.match(/^\/api\/v1\/approvals\/([^/]+)\/(approve|reject|reconcile)$/);
+  const approvalDecisionMatch = url.pathname.match(
+    /^\/api\/v1\/approvals\/([^/]+)\/(approve|reject|reconcile)$/,
+  );
   if (req.method === "POST" && approvalDecisionMatch) {
     const requestId = decodedApprovalRequestId(approvalDecisionMatch[1]);
     if (!requestId) return privateAppJson({ error: "not_found" }, 404);
-    if (approvalDecisionMatch[2] === "approve") return await approveLeadTriageApproval(req, env, auth, requestId);
-    if (approvalDecisionMatch[2] === "reject") return await rejectLeadTriageApproval(req, env, auth, requestId);
+    if (approvalDecisionMatch[2] === "approve")
+      return await approveLeadTriageApproval(req, env, auth, requestId);
+    if (approvalDecisionMatch[2] === "reject")
+      return await rejectLeadTriageApproval(req, env, auth, requestId);
     return await reconcileLeadTriageApproval(req, env, auth, requestId);
   }
-  const approvalDetailMatch = url.pathname.match(/^\/api\/v1\/approvals\/([^/]+)$/);
+  const approvalDetailMatch = url.pathname.match(
+    /^\/api\/v1\/approvals\/([^/]+)$/,
+  );
   if (req.method === "GET" && approvalDetailMatch) {
-    if (!officeRole(auth)) return privateAppJson({ error: "office_role_required" }, 403);
+    if (!officeRole(auth))
+      return privateAppJson({ error: "office_role_required" }, 403);
     const requestId = decodedApprovalRequestId(approvalDetailMatch[1]);
     if (!requestId) return privateAppJson({ error: "not_found" }, 404);
     try {
-      const approval = await getCurrentApprovalRequest(env, auth.session.tenant_id, requestId, new Date().toISOString());
+      const approval = await getCurrentApprovalRequest(
+        env,
+        auth.session.tenant_id,
+        requestId,
+        new Date().toISOString(),
+      );
       return approval
-        ? privateAppJson(approvalReadEnvelope(env, auth, { approval: approvalProjection(approval) }))
+        ? privateAppJson(
+            approvalReadEnvelope(env, auth, {
+              approval: approvalProjection(approval),
+            }),
+          )
         : privateAppJson({ error: "not_found" }, 404);
     } catch {
       return privateAppJson({ error: "approval_store_unavailable" }, 502);
@@ -253,29 +328,44 @@ export async function handleAuthenticatedRoute(
     if (auth.session.role !== "owner" && auth.session.role !== "ops") {
       return appJson({ error: "office_role_required" }, 403);
     }
-    if (req.method === "GET") return appJson({ devices: await listDevicePairings(env, auth) });
+    if (req.method === "GET")
+      return appJson({ devices: await listDevicePairings(env, auth) });
     if (req.method === "POST") {
       const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
       if (!parsed.ok) return appJson({ error: parsed.error }, parsed.status);
-      if (!isRecord(parsed.value) || Object.keys(parsed.value).some((key) => key !== "field_user_id")) {
+      if (
+        !isRecord(parsed.value) ||
+        Object.keys(parsed.value).some((key) => key !== "field_user_id")
+      ) {
         return appJson({ error: "unexpected_field" }, 400);
       }
-      const fieldUserId = typeof parsed.value.field_user_id === "string" ? parsed.value.field_user_id : "";
+      const fieldUserId =
+        typeof parsed.value.field_user_id === "string"
+          ? parsed.value.field_user_id
+          : "";
       const result = await issueDevicePairing(req, env, auth, fieldUserId);
-      return result.ok ? appJson({
-        pairing_url: result.pairing_url,
-        expires_at: result.expires_at,
-        field_user: result.field_user,
-      }) : appJson({ error: result.error }, result.status);
+      return result.ok
+        ? appJson({
+            pairing_url: result.pairing_url,
+            expires_at: result.expires_at,
+            field_user: result.field_user,
+          })
+        : appJson({ error: result.error }, result.status);
     }
   }
-  const revokeMatch = url.pathname.match(/^\/api\/v1\/device-pairings\/([^/]+)\/revoke$/);
+  const revokeMatch = url.pathname.match(
+    /^\/api\/v1\/device-pairings\/([^/]+)\/revoke$/,
+  );
   if (req.method === "POST" && revokeMatch) {
     const deviceId = decodedPathSegment(revokeMatch[1]);
     if (!deviceId) return appJson({ error: "not_found" }, 404);
     const result = await revokeDevicePairing(req, env, auth, deviceId);
     return result.ok
-      ? appJson({ ok: true, device_id: result.device_id, revoked_at: result.revoked_at })
+      ? appJson({
+          ok: true,
+          device_id: result.device_id,
+          revoked_at: result.revoked_at,
+        })
       : appJson({ error: result.error }, result.status);
   }
   if (req.method === "GET" && url.pathname === "/api/v1/today") {
@@ -290,21 +380,30 @@ export async function handleAuthenticatedRoute(
     const jobName = decodedPathSegment(proofMatch[1]);
     if (!jobName) return appJson({ error: "not_found" }, 404);
     try {
-      const model = await buildJobProofReadModel(env, auth, jobName, url.searchParams.get("cursor"));
+      const model = await buildJobProofReadModel(
+        env,
+        auth,
+        jobName,
+        url.searchParams.get("cursor"),
+      );
       return model ? appJson(model) : appJson({ error: "not_found" }, 404);
     } catch {
       return appJson({ error: "upstream_unavailable" }, 502);
     }
   }
-  const checkInMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)\/check-ins$/);
+  const checkInMatch = url.pathname.match(
+    /^\/api\/v1\/jobs\/([^/]+)\/check-ins$/,
+  );
   if (req.method === "POST" && checkInMatch) {
-    if (auth.session.role !== "field") return appJson({ error: "field_role_required" }, 403);
+    if (auth.session.role !== "field")
+      return appJson({ error: "field_role_required" }, 403);
     if (!validAppCsrf(req, auth)) return appJson({ error: "csrf_failed" }, 403);
     const jobName = decodedPathSegment(checkInMatch[1]);
     if (!jobName) return appJson({ error: "not_found" }, 404);
     try {
       const assignment = await activeAssignmentForJob(env, auth, jobName);
-      const assignmentName = typeof assignment?.name === "string" ? assignment.name : null;
+      const assignmentName =
+        typeof assignment?.name === "string" ? assignment.name : null;
       if (!assignmentName) return appJson({ error: "not_found" }, 404);
       return await handleFieldAction(req, env, auth, jobName, assignmentName);
     } catch {
@@ -312,7 +411,9 @@ export async function handleAuthenticatedRoute(
     }
   }
   const jobMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)$/);
-  const estimatorJobMatch = url.pathname.match(/^\/api\/v1\/estimator\/jobs\/([^/]+)$/);
+  const estimatorJobMatch = url.pathname.match(
+    /^\/api\/v1\/estimator\/jobs\/([^/]+)$/,
+  );
   if (req.method === "GET" && estimatorJobMatch) {
     if (auth.session.role !== "owner" && auth.session.role !== "ops") {
       return privateAppJson({ error: "office_role_required" }, 403);
@@ -321,7 +422,9 @@ export async function handleAuthenticatedRoute(
     if (!jobName) return privateAppJson({ error: "not_found" }, 404);
     try {
       const model = await buildEstimatorWorkbenchReadModel(env, auth, jobName);
-      return model ? privateAppJson(model) : privateAppJson({ error: "not_found" }, 404);
+      return model
+        ? privateAppJson(model)
+        : privateAppJson({ error: "not_found" }, 404);
     } catch {
       return privateAppJson({ error: "upstream_unavailable" }, 502);
     }
@@ -344,6 +447,31 @@ export async function handleAuthenticatedRoute(
       return privateAppJson(await buildOwnerNowReadModel(env, auth));
     } catch {
       return privateAppJson({ error: "upstream_unavailable" }, 502);
+    }
+  }
+  if (
+    req.method === "GET" &&
+    url.pathname === "/api/v1/owner/measurement-intake-exceptions"
+  ) {
+    if (!officeRole(auth))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    try {
+      // This deployment is selected to one configured tenant, and authenticateAppRequest only
+      // admits sessions for that same configured tenant. Keep this narrow browser projection
+      // separate from the ADMIN_TOKEN diagnostics endpoint: no raw pointer, hashes, leases,
+      // Frappe ids, or provider error detail crosses into the app session.
+      const measurements = await listMeasurementIntakeExceptions(
+        env,
+        parsedListLimit(url.searchParams.get("limit")),
+      );
+      return privateAppJson({
+        measurements: measurements.map(projectMeasurementIntakeOwnerException),
+      });
+    } catch {
+      return privateAppJson(
+        { error: "measurement_intake_exception_store_unavailable" },
+        502,
+      );
     }
   }
   if (req.method === "GET" && url.pathname === "/api/v1/production") {
@@ -369,17 +497,29 @@ export async function handleAuthenticatedRoute(
   return appJson({ error: "not_found" }, 404);
 }
 
-async function prepareQuoteRevisionApproval(req: Request, env: AppEnv, auth: AuthContext): Promise<Response> {
-  if (!officeRole(auth)) return privateAppJson({ error: "office_role_required" }, 403);
-  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+async function prepareQuoteRevisionApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!officeRole(auth))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
   const prepareIdempotencyKey = idempotencyKey(req);
-  if (!prepareIdempotencyKey) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  if (!prepareIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
   const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
   if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
   const input = parseQuoteRevisionApprovalPreparation(parsed.value);
-  if (!input) return privateAppJson({ error: "invalid_quote_revision_approval_request" }, 400);
+  if (!input)
+    return privateAppJson(
+      { error: "invalid_quote_revision_approval_request" },
+      400,
+    );
   const requestedByFrappeUser = auth.session.frappe_user_id?.trim() ?? "";
-  if (!requestedByFrappeUser) return privateAppJson({ error: "frappe_identity_required" }, 403);
+  if (!requestedByFrappeUser)
+    return privateAppJson({ error: "frappe_identity_required" }, 403);
   const requestText = quoteRevisionRequestText(input.correctionReason);
 
   try {
@@ -396,15 +536,30 @@ async function prepareQuoteRevisionApproval(req: Request, env: AppEnv, auth: Aut
         correctionReason: input.correctionReason,
         requestText,
       })
-        ? privateAppJson({ approval: quoteRevisionApprovalProjection(existing), replayed: true })
-        : privateAppJson({ error: "idempotency_conflict", approval: quoteRevisionApprovalProjection(existing) }, 409);
+        ? privateAppJson({
+            approval: quoteRevisionApprovalProjection(existing),
+            replayed: true,
+          })
+        : privateAppJson(
+            {
+              error: "idempotency_conflict",
+              approval: quoteRevisionApprovalProjection(existing),
+            },
+            409,
+          );
     }
   } catch {
-    return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+    return privateAppJson(
+      { error: "quote_revision_approval_store_unavailable" },
+      502,
+    );
   }
 
   if (!quoteRevisionApprovalBrokerConfig(env) || !approvalDecisionConfig(env)) {
-    return privateAppJson({ error: "quote_revision_broker_not_configured" }, 503);
+    return privateAppJson(
+      { error: "quote_revision_broker_not_configured" },
+      503,
+    );
   }
   const approvalRequestId = `quote-revision-approval:${randomToken()}`;
   const runId = `run:quote-revision:${randomToken()}`;
@@ -422,7 +577,10 @@ async function prepareQuoteRevisionApproval(req: Request, env: AppEnv, auth: Aut
       requestedByFrappeUser,
     });
   } catch (error) {
-    return privateAppJson({ error: quoteRevisionBrokerPrepareError(error) }, quoteRevisionBrokerPrepareStatus(error));
+    return privateAppJson(
+      { error: quoteRevisionBrokerPrepareError(error) },
+      quoteRevisionBrokerPrepareStatus(error),
+    );
   }
 
   try {
@@ -455,14 +613,26 @@ async function prepareQuoteRevisionApproval(req: Request, env: AppEnv, auth: Aut
       now: new Date().toISOString(),
     });
     if (created.kind === "conflict") {
-      return privateAppJson({ error: "idempotency_conflict", approval: quoteRevisionApprovalProjection(created.request) }, 409);
+      return privateAppJson(
+        {
+          error: "idempotency_conflict",
+          approval: quoteRevisionApprovalProjection(created.request),
+        },
+        409,
+      );
     }
     return privateAppJson(
-      { approval: quoteRevisionApprovalProjection(created.request), replayed: created.kind === "replayed" },
+      {
+        approval: quoteRevisionApprovalProjection(created.request),
+        replayed: created.kind === "replayed",
+      },
       created.kind === "created" ? 201 : 200,
     );
   } catch {
-    return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+    return privateAppJson(
+      { error: "quote_revision_approval_store_unavailable" },
+      502,
+    );
   }
 }
 
@@ -473,14 +643,21 @@ async function approveQuoteRevisionApproval(
   requestId: string,
 ): Promise<Response> {
   const identity = quoteRevisionApprovalBrokerDecisionIdentity(env, auth);
-  if (!identity.ok) return privateAppJson({ error: identity.error }, identity.status);
-  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  if (!identity.ok)
+    return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
   const decisionIdempotencyKey = idempotencyKey(req);
-  if (!decisionIdempotencyKey) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  if (!decisionIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
   const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
   if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
   const expectedVersion = parseExpectedVersion(parsed.value);
-  if (expectedVersion === null) return privateAppJson({ error: "invalid_quote_revision_approval_decision" }, 400);
+  if (expectedVersion === null)
+    return privateAppJson(
+      { error: "invalid_quote_revision_approval_decision" },
+      400,
+    );
 
   const now = new Date();
   let claimed;
@@ -493,18 +670,30 @@ async function approveQuoteRevisionApproval(
       approvedByUserId: auth.session.user_id,
       approvedByFrappeUser: identity.frappeUserId,
       now: now.toISOString(),
-      leaseExpiresAt: new Date(now.getTime() + identity.config.executionLeaseSeconds * 1000).toISOString(),
+      leaseExpiresAt: new Date(
+        now.getTime() + identity.config.executionLeaseSeconds * 1000,
+      ).toISOString(),
     });
   } catch {
-    return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+    return privateAppJson(
+      { error: "quote_revision_approval_store_unavailable" },
+      502,
+    );
   }
-  if (claimed.kind !== "claimed") return quoteRevisionDecisionResultResponse(claimed);
+  if (claimed.kind !== "claimed")
+    return quoteRevisionDecisionResultResponse(claimed);
 
   let outcome;
   try {
     outcome = await executeQuoteRevisionApproval(env, claimed.request);
   } catch (error) {
-    return await finalizeQuoteRevisionBrokerFailure(env, auth, claimed.request, decisionIdempotencyKey, error);
+    return await finalizeQuoteRevisionBrokerFailure(
+      env,
+      auth,
+      claimed.request,
+      decisionIdempotencyKey,
+      error,
+    );
   }
   try {
     const finalized = await finalizeQuoteRevisionApprovalExecution(env, {
@@ -519,15 +708,32 @@ async function approveQuoteRevisionApproval(
     });
     if (finalized.kind === "lost_claim") {
       return finalized.request
-        ? privateAppJson({ error: "quote_revision_approval_state_changed", approval: quoteRevisionApprovalProjection(finalized.request) }, 409)
+        ? privateAppJson(
+            {
+              error: "quote_revision_approval_state_changed",
+              approval: quoteRevisionApprovalProjection(finalized.request),
+            },
+            409,
+          )
         : privateAppJson({ error: "not_found" }, 404);
     }
-    const status = outcome.state === "executed" ? 200 : outcome.state === "execution_uncertain" ? 502 : 422;
-    return privateAppJson({ approval: quoteRevisionApprovalProjection(finalized.request) }, status);
+    const status =
+      outcome.state === "executed"
+        ? 200
+        : outcome.state === "execution_uncertain"
+          ? 502
+          : 422;
+    return privateAppJson(
+      { approval: quoteRevisionApprovalProjection(finalized.request) },
+      status,
+    );
   } catch {
     // The private broker may have completed a Frappe write. Keep the lease so
     // it becomes reconciliation work rather than inviting a second revision.
-    return privateAppJson({ error: "quote_revision_execution_finalization_unavailable" }, 502);
+    return privateAppJson(
+      { error: "quote_revision_execution_finalization_unavailable" },
+      502,
+    );
   }
 }
 
@@ -538,9 +744,11 @@ async function finalizeQuoteRevisionBrokerFailure(
   decisionIdempotencyKey: string,
   error: unknown,
 ): Promise<Response> {
-  const errorCode = error instanceof QuoteRevisionApprovalBrokerError && error.code === "quote_revision_broker_unavailable"
-    ? "quote_revision_broker_unavailable"
-    : "quote_revision_broker_response_unverified";
+  const errorCode =
+    error instanceof QuoteRevisionApprovalBrokerError &&
+    error.code === "quote_revision_broker_unavailable"
+      ? "quote_revision_broker_unavailable"
+      : "quote_revision_broker_response_unverified";
   try {
     const finalized = await finalizeQuoteRevisionApprovalExecution(env, {
       tenantId: auth.session.tenant_id,
@@ -552,16 +760,28 @@ async function finalizeQuoteRevisionBrokerFailure(
       now: new Date().toISOString(),
     });
     if (finalized.kind === "finalized") {
-      return privateAppJson({
-        error: "execution_uncertain",
-        approval: quoteRevisionApprovalProjection(finalized.request),
-      }, 502);
+      return privateAppJson(
+        {
+          error: "execution_uncertain",
+          approval: quoteRevisionApprovalProjection(finalized.request),
+        },
+        502,
+      );
     }
     return finalized.request
-      ? privateAppJson({ error: "quote_revision_approval_state_changed", approval: quoteRevisionApprovalProjection(finalized.request) }, 409)
+      ? privateAppJson(
+          {
+            error: "quote_revision_approval_state_changed",
+            approval: quoteRevisionApprovalProjection(finalized.request),
+          },
+          409,
+        )
       : privateAppJson({ error: "not_found" }, 404);
   } catch {
-    return privateAppJson({ error: "quote_revision_execution_finalization_unavailable" }, 502);
+    return privateAppJson(
+      { error: "quote_revision_execution_finalization_unavailable" },
+      502,
+    );
   }
 }
 
@@ -572,14 +792,21 @@ async function rejectQuoteRevisionApproval(
   requestId: string,
 ): Promise<Response> {
   const identity = approvalDecisionIdentity(env, auth);
-  if (!identity.ok) return privateAppJson({ error: identity.error }, identity.status);
-  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  if (!identity.ok)
+    return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
   const decisionIdempotencyKey = idempotencyKey(req);
-  if (!decisionIdempotencyKey) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  if (!decisionIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
   const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
   if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
   const decision = parseRejectionDecision(parsed.value);
-  if (!decision) return privateAppJson({ error: "invalid_quote_revision_approval_decision" }, 400);
+  if (!decision)
+    return privateAppJson(
+      { error: "invalid_quote_revision_approval_decision" },
+      400,
+    );
   try {
     const denied = await denyQuoteRevisionApprovalRequest(env, {
       tenantId: auth.session.tenant_id,
@@ -591,10 +818,16 @@ async function rejectQuoteRevisionApproval(
       rejectionReason: decision.reason,
       now: new Date().toISOString(),
     });
-    if (denied.kind === "denied") return privateAppJson({ approval: quoteRevisionApprovalProjection(denied.request) });
+    if (denied.kind === "denied")
+      return privateAppJson({
+        approval: quoteRevisionApprovalProjection(denied.request),
+      });
     return quoteRevisionDecisionResultResponse(denied);
   } catch {
-    return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+    return privateAppJson(
+      { error: "quote_revision_approval_store_unavailable" },
+      502,
+    );
   }
 }
 
@@ -605,12 +838,18 @@ async function reconcileQuoteRevisionApproval(
   requestId: string,
 ): Promise<Response> {
   const identity = approvalDecisionIdentity(env, auth);
-  if (!identity.ok) return privateAppJson({ error: identity.error }, identity.status);
-  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  if (!identity.ok)
+    return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
   const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
   if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
   const reconciliation = parseReconciliation(parsed.value);
-  if (!reconciliation) return privateAppJson({ error: "invalid_quote_revision_reconciliation" }, 400);
+  if (!reconciliation)
+    return privateAppJson(
+      { error: "invalid_quote_revision_reconciliation" },
+      400,
+    );
   try {
     const result = await reconcileQuoteRevisionApprovalUncertainty(env, {
       tenantId: auth.session.tenant_id,
@@ -622,35 +861,69 @@ async function reconcileQuoteRevisionApproval(
       evidence: reconciliation.evidence,
       now: new Date().toISOString(),
     });
-    if (result.kind === "reconciled") return privateAppJson({ approval: quoteRevisionApprovalProjection(result.request) });
+    if (result.kind === "reconciled")
+      return privateAppJson({
+        approval: quoteRevisionApprovalProjection(result.request),
+      });
     if (result.kind === "already_reconciled") {
-      return privateAppJson({ approval: quoteRevisionApprovalProjection(result.request), replayed: true });
+      return privateAppJson({
+        approval: quoteRevisionApprovalProjection(result.request),
+        replayed: true,
+      });
     }
-    if (result.kind === "missing") return privateAppJson({ error: "not_found" }, 404);
+    if (result.kind === "missing")
+      return privateAppJson({ error: "not_found" }, 404);
     if (result.kind === "not_uncertain") {
-      return privateAppJson({ error: "quote_revision_approval_not_uncertain", approval: quoteRevisionApprovalProjection(result.request) }, 409);
+      return privateAppJson(
+        {
+          error: "quote_revision_approval_not_uncertain",
+          approval: quoteRevisionApprovalProjection(result.request),
+        },
+        409,
+      );
     }
-    return privateAppJson({ error: "quote_revision_approval_version_conflict", approval: quoteRevisionApprovalProjection(result.request) }, 409);
+    return privateAppJson(
+      {
+        error: "quote_revision_approval_version_conflict",
+        approval: quoteRevisionApprovalProjection(result.request),
+      },
+      409,
+    );
   } catch {
-    return privateAppJson({ error: "quote_revision_approval_store_unavailable" }, 502);
+    return privateAppJson(
+      { error: "quote_revision_approval_store_unavailable" },
+      502,
+    );
   }
 }
 
-async function prepareLeadTriageApproval(req: Request, env: AppEnv, auth: AuthContext): Promise<Response> {
-  if (!officeRole(auth)) return privateAppJson({ error: "office_role_required" }, 403);
-  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+async function prepareLeadTriageApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!officeRole(auth))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
   const prepareIdempotencyKey = idempotencyKey(req);
-  if (!prepareIdempotencyKey) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  if (!prepareIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
   const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
   if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
   const input = parseLeadTriagePreparation(parsed.value);
   if (!input) return privateAppJson({ error: "invalid_approval_request" }, 400);
   const requestText = leadTriageRequestText(input.triageSummary);
   const requestedByFrappeUser = auth.session.frappe_user_id?.trim() ?? "";
-  if (!requestedByFrappeUser) return privateAppJson({ error: "frappe_identity_required" }, 403);
+  if (!requestedByFrappeUser)
+    return privateAppJson({ error: "frappe_identity_required" }, 403);
 
   try {
-    const existing = await getApprovalRequestByPrepareKey(env, auth.session.tenant_id, prepareIdempotencyKey);
+    const existing = await getApprovalRequestByPrepareKey(
+      env,
+      auth.session.tenant_id,
+      prepareIdempotencyKey,
+    );
     if (existing) {
       return matchesApprovalPreparation(existing, {
         requestedByUserId: auth.session.user_id,
@@ -658,14 +931,24 @@ async function prepareLeadTriageApproval(req: Request, env: AppEnv, auth: AuthCo
         triageSummary: input.triageSummary,
         requestText,
       })
-        ? privateAppJson({ approval: approvalProjection(existing), replayed: true })
-        : privateAppJson({ error: "idempotency_conflict", approval: approvalProjection(existing) }, 409);
+        ? privateAppJson({
+            approval: approvalProjection(existing),
+            replayed: true,
+          })
+        : privateAppJson(
+            {
+              error: "idempotency_conflict",
+              approval: approvalProjection(existing),
+            },
+            409,
+          );
     }
   } catch {
     return privateAppJson({ error: "approval_store_unavailable" }, 502);
   }
 
-  if (!approvalBrokerConfig(env)) return privateAppJson({ error: "approval_broker_not_configured" }, 503);
+  if (!approvalBrokerConfig(env))
+    return privateAppJson({ error: "approval_broker_not_configured" }, 503);
   const approvalRequestId = `approval:${randomToken()}`;
   const runId = `run:lead-triage:${randomToken()}`;
   let packet;
@@ -681,7 +964,10 @@ async function prepareLeadTriageApproval(req: Request, env: AppEnv, auth: AuthCo
       requestedByFrappeUser,
     });
   } catch (error) {
-    return privateAppJson({ error: brokerPrepareError(error) }, brokerPrepareStatus(error));
+    return privateAppJson(
+      { error: brokerPrepareError(error) },
+      brokerPrepareStatus(error),
+    );
   }
 
   try {
@@ -707,10 +993,19 @@ async function prepareLeadTriageApproval(req: Request, env: AppEnv, auth: AuthCo
       now: new Date().toISOString(),
     });
     if (created.kind === "conflict") {
-      return privateAppJson({ error: "idempotency_conflict", approval: approvalProjection(created.request) }, 409);
+      return privateAppJson(
+        {
+          error: "idempotency_conflict",
+          approval: approvalProjection(created.request),
+        },
+        409,
+      );
     }
     return privateAppJson(
-      { approval: approvalProjection(created.request), replayed: created.kind === "replayed" },
+      {
+        approval: approvalProjection(created.request),
+        replayed: created.kind === "replayed",
+      },
       created.kind === "created" ? 201 : 200,
     );
   } catch {
@@ -725,14 +1020,18 @@ async function approveLeadTriageApproval(
   requestId: string,
 ): Promise<Response> {
   const identity = approvalBrokerDecisionIdentity(env, auth);
-  if (!identity.ok) return privateAppJson({ error: identity.error }, identity.status);
-  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  if (!identity.ok)
+    return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
   const decisionIdempotencyKey = idempotencyKey(req);
-  if (!decisionIdempotencyKey) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  if (!decisionIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
   const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
   if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
   const expectedVersion = parseExpectedVersion(parsed.value);
-  if (expectedVersion === null) return privateAppJson({ error: "invalid_approval_decision" }, 400);
+  if (expectedVersion === null)
+    return privateAppJson({ error: "invalid_approval_decision" }, 400);
 
   const now = new Date();
   let claimed;
@@ -745,18 +1044,27 @@ async function approveLeadTriageApproval(
       approvedByUserId: auth.session.user_id,
       approvedByFrappeUser: identity.frappeUserId,
       now: now.toISOString(),
-      leaseExpiresAt: new Date(now.getTime() + identity.config.executionLeaseSeconds * 1000).toISOString(),
+      leaseExpiresAt: new Date(
+        now.getTime() + identity.config.executionLeaseSeconds * 1000,
+      ).toISOString(),
     });
   } catch {
     return privateAppJson({ error: "approval_store_unavailable" }, 502);
   }
-  if (claimed.kind !== "claimed") return approvalDecisionResultResponse(claimed);
+  if (claimed.kind !== "claimed")
+    return approvalDecisionResultResponse(claimed);
 
   let outcome;
   try {
     outcome = await executeLeadTriageApproval(env, claimed.request);
   } catch (error) {
-    return await finalizeBrokerFailure(env, auth, claimed.request, decisionIdempotencyKey, error);
+    return await finalizeBrokerFailure(
+      env,
+      auth,
+      claimed.request,
+      decisionIdempotencyKey,
+      error,
+    );
   }
   try {
     const finalized = await finalizeApprovalExecution(env, {
@@ -771,11 +1079,25 @@ async function approveLeadTriageApproval(
     });
     if (finalized.kind === "lost_claim") {
       return finalized.request
-        ? privateAppJson({ error: "approval_state_changed", approval: approvalProjection(finalized.request) }, 409)
+        ? privateAppJson(
+            {
+              error: "approval_state_changed",
+              approval: approvalProjection(finalized.request),
+            },
+            409,
+          )
         : privateAppJson({ error: "not_found" }, 404);
     }
-    const status = outcome.state === "executed" ? 200 : outcome.state === "execution_uncertain" ? 502 : 422;
-    return privateAppJson({ approval: approvalProjection(finalized.request) }, status);
+    const status =
+      outcome.state === "executed"
+        ? 200
+        : outcome.state === "execution_uncertain"
+          ? 502
+          : 422;
+    return privateAppJson(
+      { approval: approvalProjection(finalized.request) },
+      status,
+    );
   } catch {
     // The broker may have completed a Frappe write, but the terminal D1 event
     // could not be recorded. Keep the lease; the sweep turns it into explicit
@@ -791,9 +1113,11 @@ async function finalizeBrokerFailure(
   decisionIdempotencyKey: string,
   error: unknown,
 ): Promise<Response> {
-  const errorCode = error instanceof ApprovalBrokerError && error.code === "approval_broker_unavailable"
-    ? "broker_unavailable"
-    : "broker_response_unverified";
+  const errorCode =
+    error instanceof ApprovalBrokerError &&
+    error.code === "approval_broker_unavailable"
+      ? "broker_unavailable"
+      : "broker_response_unverified";
   try {
     const finalized = await finalizeApprovalExecution(env, {
       tenantId: auth.session.tenant_id,
@@ -805,13 +1129,22 @@ async function finalizeBrokerFailure(
       now: new Date().toISOString(),
     });
     if (finalized.kind === "finalized") {
-      return privateAppJson({
-        error: "execution_uncertain",
-        approval: approvalProjection(finalized.request),
-      }, 502);
+      return privateAppJson(
+        {
+          error: "execution_uncertain",
+          approval: approvalProjection(finalized.request),
+        },
+        502,
+      );
     }
     return finalized.request
-      ? privateAppJson({ error: "approval_state_changed", approval: approvalProjection(finalized.request) }, 409)
+      ? privateAppJson(
+          {
+            error: "approval_state_changed",
+            approval: approvalProjection(finalized.request),
+          },
+          409,
+        )
       : privateAppJson({ error: "not_found" }, 404);
   } catch {
     return privateAppJson({ error: "execution_finalization_unavailable" }, 502);
@@ -825,14 +1158,18 @@ async function rejectLeadTriageApproval(
   requestId: string,
 ): Promise<Response> {
   const identity = approvalDecisionIdentity(env, auth);
-  if (!identity.ok) return privateAppJson({ error: identity.error }, identity.status);
-  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  if (!identity.ok)
+    return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
   const decisionIdempotencyKey = idempotencyKey(req);
-  if (!decisionIdempotencyKey) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  if (!decisionIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
   const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
   if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
   const decision = parseRejectionDecision(parsed.value);
-  if (!decision) return privateAppJson({ error: "invalid_approval_decision" }, 400);
+  if (!decision)
+    return privateAppJson({ error: "invalid_approval_decision" }, 400);
   try {
     const denied = await denyApprovalRequest(env, {
       tenantId: auth.session.tenant_id,
@@ -844,7 +1181,8 @@ async function rejectLeadTriageApproval(
       rejectionReason: decision.reason,
       now: new Date().toISOString(),
     });
-    if (denied.kind === "denied") return privateAppJson({ approval: approvalProjection(denied.request) });
+    if (denied.kind === "denied")
+      return privateAppJson({ approval: approvalProjection(denied.request) });
     return approvalDecisionResultResponse(denied);
   } catch {
     return privateAppJson({ error: "approval_store_unavailable" }, 502);
@@ -858,12 +1196,15 @@ async function reconcileLeadTriageApproval(
   requestId: string,
 ): Promise<Response> {
   const identity = approvalDecisionIdentity(env, auth);
-  if (!identity.ok) return privateAppJson({ error: identity.error }, identity.status);
-  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  if (!identity.ok)
+    return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
   const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
   if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
   const reconciliation = parseReconciliation(parsed.value);
-  if (!reconciliation) return privateAppJson({ error: "invalid_reconciliation" }, 400);
+  if (!reconciliation)
+    return privateAppJson({ error: "invalid_reconciliation" }, 400);
   try {
     const result = await reconcileApprovalUncertainty(env, {
       tenantId: auth.session.tenant_id,
@@ -875,15 +1216,32 @@ async function reconcileLeadTriageApproval(
       evidence: reconciliation.evidence,
       now: new Date().toISOString(),
     });
-    if (result.kind === "reconciled") return privateAppJson({ approval: approvalProjection(result.request) });
+    if (result.kind === "reconciled")
+      return privateAppJson({ approval: approvalProjection(result.request) });
     if (result.kind === "already_reconciled") {
-      return privateAppJson({ approval: approvalProjection(result.request), replayed: true });
+      return privateAppJson({
+        approval: approvalProjection(result.request),
+        replayed: true,
+      });
     }
-    if (result.kind === "missing") return privateAppJson({ error: "not_found" }, 404);
+    if (result.kind === "missing")
+      return privateAppJson({ error: "not_found" }, 404);
     if (result.kind === "not_uncertain") {
-      return privateAppJson({ error: "approval_not_uncertain", approval: approvalProjection(result.request) }, 409);
+      return privateAppJson(
+        {
+          error: "approval_not_uncertain",
+          approval: approvalProjection(result.request),
+        },
+        409,
+      );
     }
-    return privateAppJson({ error: "approval_version_conflict", approval: approvalProjection(result.request) }, 409);
+    return privateAppJson(
+      {
+        error: "approval_version_conflict",
+        approval: approvalProjection(result.request),
+      },
+      409,
+    );
   } catch {
     return privateAppJson({ error: "approval_store_unavailable" }, 502);
   }
@@ -896,23 +1254,44 @@ function officeRole(auth: AuthContext): boolean {
 function quoteRevisionApprovalBrokerDecisionIdentity(
   env: AppEnv,
   auth: AuthContext,
-): { ok: true; config: NonNullable<ReturnType<typeof quoteRevisionApprovalBrokerConfig>>; frappeUserId: string } |
-  { ok: false; error: string; status: number } {
+):
+  | {
+      ok: true;
+      config: NonNullable<ReturnType<typeof quoteRevisionApprovalBrokerConfig>>;
+      frappeUserId: string;
+    }
+  | { ok: false; error: string; status: number } {
   const decision = approvalDecisionIdentity(env, auth);
   if (!decision.ok) return decision;
   const config = quoteRevisionApprovalBrokerConfig(env);
-  if (!config) return { ok: false, error: "quote_revision_broker_not_configured", status: 503 };
+  if (!config)
+    return {
+      ok: false,
+      error: "quote_revision_broker_not_configured",
+      status: 503,
+    };
   return { ok: true, config, frappeUserId: decision.frappeUserId };
 }
 
 function approvalDecisionIdentity(
   env: AppEnv,
   auth: AuthContext,
-): { ok: true; config: NonNullable<ReturnType<typeof approvalDecisionConfig>>; frappeUserId: string } |
-  { ok: false; error: string; status: number } {
-  if (auth.session.role !== "owner") return { ok: false, error: "owner_role_required", status: 403 };
+):
+  | {
+      ok: true;
+      config: NonNullable<ReturnType<typeof approvalDecisionConfig>>;
+      frappeUserId: string;
+    }
+  | { ok: false; error: string; status: number } {
+  if (auth.session.role !== "owner")
+    return { ok: false, error: "owner_role_required", status: 403 };
   const config = approvalDecisionConfig(env);
-  if (!config) return { ok: false, error: "approval_approver_not_configured", status: 503 };
+  if (!config)
+    return {
+      ok: false,
+      error: "approval_approver_not_configured",
+      status: 503,
+    };
   const frappeUserId = auth.session.frappe_user_id?.trim() ?? "";
   if (!frappeUserId || frappeUserId !== config.approverId) {
     return { ok: false, error: "configured_approver_required", status: 403 };
@@ -926,47 +1305,115 @@ function approvalDecisionIdentity(
 function approvalBrokerDecisionIdentity(
   env: AppEnv,
   auth: AuthContext,
-): { ok: true; config: NonNullable<ReturnType<typeof approvalBrokerConfig>>; frappeUserId: string } |
-  { ok: false; error: string; status: number } {
+):
+  | {
+      ok: true;
+      config: NonNullable<ReturnType<typeof approvalBrokerConfig>>;
+      frappeUserId: string;
+    }
+  | { ok: false; error: string; status: number } {
   const decision = approvalDecisionIdentity(env, auth);
   if (!decision.ok) return decision;
   const config = approvalBrokerConfig(env);
-  if (!config) return { ok: false, error: "approval_broker_not_configured", status: 503 };
+  if (!config)
+    return { ok: false, error: "approval_broker_not_configured", status: 503 };
   return { ok: true, config, frappeUserId: decision.frappeUserId };
 }
 
 function approvalDecisionResultResponse(
-  result: Exclude<Awaited<ReturnType<typeof claimApprovalExecution>>, { kind: "claimed" }> |
-    Exclude<Awaited<ReturnType<typeof denyApprovalRequest>>, { kind: "denied" }>,
+  result:
+    | Exclude<
+        Awaited<ReturnType<typeof claimApprovalExecution>>,
+        { kind: "claimed" }
+      >
+    | Exclude<
+        Awaited<ReturnType<typeof denyApprovalRequest>>,
+        { kind: "denied" }
+      >,
 ): Response {
-  if (result.kind === "missing") return privateAppJson({ error: "not_found" }, 404);
-  if (result.kind === "expired") return privateAppJson({ error: "approval_expired", approval: approvalProjection(result.request) }, 410);
+  if (result.kind === "missing")
+    return privateAppJson({ error: "not_found" }, 404);
+  if (result.kind === "expired")
+    return privateAppJson(
+      {
+        error: "approval_expired",
+        approval: approvalProjection(result.request),
+      },
+      410,
+    );
   if (result.kind === "version_conflict") {
-    return privateAppJson({ error: "approval_version_conflict", approval: approvalProjection(result.request) }, 409);
+    return privateAppJson(
+      {
+        error: "approval_version_conflict",
+        approval: approvalProjection(result.request),
+      },
+      409,
+    );
   }
   if (result.kind === "replayed") {
     const status = result.request.state === "executing" ? 202 : 200;
-    return privateAppJson({ approval: approvalProjection(result.request), replayed: true }, status);
+    return privateAppJson(
+      { approval: approvalProjection(result.request), replayed: true },
+      status,
+    );
   }
-  return privateAppJson({ error: "approval_already_decided", approval: approvalProjection(result.request) }, 409);
+  return privateAppJson(
+    {
+      error: "approval_already_decided",
+      approval: approvalProjection(result.request),
+    },
+    409,
+  );
 }
 
 function quoteRevisionDecisionResultResponse(
-  result: Exclude<Awaited<ReturnType<typeof claimQuoteRevisionApprovalExecution>>, { kind: "claimed" }> |
-    Exclude<Awaited<ReturnType<typeof denyQuoteRevisionApprovalRequest>>, { kind: "denied" }>,
+  result:
+    | Exclude<
+        Awaited<ReturnType<typeof claimQuoteRevisionApprovalExecution>>,
+        { kind: "claimed" }
+      >
+    | Exclude<
+        Awaited<ReturnType<typeof denyQuoteRevisionApprovalRequest>>,
+        { kind: "denied" }
+      >,
 ): Response {
-  if (result.kind === "missing") return privateAppJson({ error: "not_found" }, 404);
+  if (result.kind === "missing")
+    return privateAppJson({ error: "not_found" }, 404);
   if (result.kind === "expired") {
-    return privateAppJson({ error: "quote_revision_approval_expired", approval: quoteRevisionApprovalProjection(result.request) }, 410);
+    return privateAppJson(
+      {
+        error: "quote_revision_approval_expired",
+        approval: quoteRevisionApprovalProjection(result.request),
+      },
+      410,
+    );
   }
   if (result.kind === "version_conflict") {
-    return privateAppJson({ error: "quote_revision_approval_version_conflict", approval: quoteRevisionApprovalProjection(result.request) }, 409);
+    return privateAppJson(
+      {
+        error: "quote_revision_approval_version_conflict",
+        approval: quoteRevisionApprovalProjection(result.request),
+      },
+      409,
+    );
   }
   if (result.kind === "replayed") {
     const status = result.request.state === "executing" ? 202 : 200;
-    return privateAppJson({ approval: quoteRevisionApprovalProjection(result.request), replayed: true }, status);
+    return privateAppJson(
+      {
+        approval: quoteRevisionApprovalProjection(result.request),
+        replayed: true,
+      },
+      status,
+    );
   }
-  return privateAppJson({ error: "quote_revision_approval_already_decided", approval: quoteRevisionApprovalProjection(result.request) }, 409);
+  return privateAppJson(
+    {
+      error: "quote_revision_approval_already_decided",
+      approval: quoteRevisionApprovalProjection(result.request),
+    },
+    409,
+  );
 }
 
 function approvalReadEnvelope(
@@ -1001,23 +1448,36 @@ function approvalAllowedActions(env: AppEnv, auth: AuthContext): string[] {
   if (!officeRole(auth)) return [];
   const actions = ["approval.read"];
   const config = approvalBrokerConfig(env);
-  if (config && auth.session.frappe_user_id?.trim()) actions.push("approval.prepare");
+  if (config && auth.session.frappe_user_id?.trim())
+    actions.push("approval.prepare");
   if (approvalDecisionIdentity(env, auth).ok) actions.push("approval.reject");
-  if (approvalDecisionIdentity(env, auth).ok) actions.push("approval.reconcile");
-  if (approvalBrokerDecisionIdentity(env, auth).ok) actions.push("approval.approve");
+  if (approvalDecisionIdentity(env, auth).ok)
+    actions.push("approval.reconcile");
+  if (approvalBrokerDecisionIdentity(env, auth).ok)
+    actions.push("approval.approve");
   return actions;
 }
 
-function quoteRevisionApprovalAllowedActions(env: AppEnv, auth: AuthContext): string[] {
+function quoteRevisionApprovalAllowedActions(
+  env: AppEnv,
+  auth: AuthContext,
+): string[] {
   if (!officeRole(auth)) return [];
   const actions = ["quote_revision_approval.read"];
   const broker = quoteRevisionApprovalBrokerConfig(env);
-  if (broker && approvalDecisionConfig(env) && auth.session.frappe_user_id?.trim()) {
+  if (
+    broker &&
+    approvalDecisionConfig(env) &&
+    auth.session.frappe_user_id?.trim()
+  ) {
     actions.push("quote_revision_approval.prepare");
   }
-  if (approvalDecisionIdentity(env, auth).ok) actions.push("quote_revision_approval.reject");
-  if (approvalDecisionIdentity(env, auth).ok) actions.push("quote_revision_approval.reconcile");
-  if (quoteRevisionApprovalBrokerDecisionIdentity(env, auth).ok) actions.push("quote_revision_approval.approve");
+  if (approvalDecisionIdentity(env, auth).ok)
+    actions.push("quote_revision_approval.reject");
+  if (approvalDecisionIdentity(env, auth).ok)
+    actions.push("quote_revision_approval.reconcile");
+  if (quoteRevisionApprovalBrokerDecisionIdentity(env, auth).ok)
+    actions.push("quote_revision_approval.approve");
   return actions;
 }
 
@@ -1025,10 +1485,16 @@ function parseLeadTriagePreparation(value: unknown): {
   leadEnvelopeId: string;
   triageSummary: string;
 } | null {
-  if (!isRecord(value) || !onlyKeys(value, ["lead_envelope_id", "triage_summary"])) return null;
+  if (
+    !isRecord(value) ||
+    !onlyKeys(value, ["lead_envelope_id", "triage_summary"])
+  )
+    return null;
   const leadEnvelopeId = idText(value.lead_envelope_id, 1, 140);
   const triageSummary = boundedText(value.triage_summary, 1, 2_000);
-  return leadEnvelopeId && triageSummary ? { leadEnvelopeId, triageSummary } : null;
+  return leadEnvelopeId && triageSummary
+    ? { leadEnvelopeId, triageSummary }
+    : null;
 }
 
 function leadTriageRequestText(triageSummary: string): string {
@@ -1040,11 +1506,17 @@ function parseQuoteRevisionApprovalPreparation(value: unknown): {
   customerQuoteId: string;
   correctionReason: string;
 } | null {
-  if (!isRecord(value) || !onlyKeys(value, ["roof_job_id", "customer_quote_id", "correction_reason"])) return null;
+  if (
+    !isRecord(value) ||
+    !onlyKeys(value, ["roof_job_id", "customer_quote_id", "correction_reason"])
+  )
+    return null;
   const roofJobId = idText(value.roof_job_id, 1, 140);
   const customerQuoteId = idText(value.customer_quote_id, 1, 140);
   const correctionReason = boundedText(value.correction_reason, 1, 2_000);
-  return roofJobId && customerQuoteId && correctionReason ? { roofJobId, customerQuoteId, correctionReason } : null;
+  return roofJobId && customerQuoteId && correctionReason
+    ? { roofJobId, customerQuoteId, correctionReason }
+    : null;
 }
 
 function quoteRevisionRequestText(correctionReason: string): string {
@@ -1056,7 +1528,9 @@ function parseExpectedVersion(value: unknown): number | null {
   return validVersion(value.version);
 }
 
-function parseRejectionDecision(value: unknown): { version: number; reason: string } | null {
+function parseRejectionDecision(
+  value: unknown,
+): { version: number; reason: string } | null {
   if (!isRecord(value) || !onlyKeys(value, ["version", "reason"])) return null;
   const version = validVersion(value.version);
   const reason = boundedText(value.reason, 3, 1_000);
@@ -1068,17 +1542,24 @@ function parseReconciliation(value: unknown): {
   outcome: "executed" | "not_executed" | "inconclusive";
   evidence: string;
 } | null {
-  if (!isRecord(value) || !onlyKeys(value, ["version", "outcome", "evidence"])) return null;
+  if (!isRecord(value) || !onlyKeys(value, ["version", "outcome", "evidence"]))
+    return null;
   const version = validVersion(value.version);
-  const outcome = value.outcome === "executed" || value.outcome === "not_executed" || value.outcome === "inconclusive"
-    ? value.outcome
-    : null;
+  const outcome =
+    value.outcome === "executed" ||
+    value.outcome === "not_executed" ||
+    value.outcome === "inconclusive"
+      ? value.outcome
+      : null;
   const evidence = boundedText(value.evidence, 3, 1_000);
   return version && outcome && evidence ? { version, outcome, evidence } : null;
 }
 
 function validVersion(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 && value <= 2_147_483_647
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 1 &&
+    value <= 2_147_483_647
     ? value
     : null;
 }
@@ -1090,12 +1571,17 @@ function idempotencyKey(req: Request): string | null {
 
 function decodedApprovalRequestId(value: string): string | null {
   const decoded = decodedPathSegment(value);
-  return decoded && /^approval:[A-Za-z0-9_-]{16,64}$/.test(decoded) ? decoded : null;
+  return decoded && /^approval:[A-Za-z0-9_-]{16,64}$/.test(decoded)
+    ? decoded
+    : null;
 }
 
 function decodedQuoteRevisionApprovalId(value: string): string | null {
   const decoded = decodedPathSegment(value);
-  return decoded && /^quote-revision-approval:[A-Za-z0-9_-]{16,64}$/.test(decoded) ? decoded : null;
+  return decoded &&
+    /^quote-revision-approval:[A-Za-z0-9_-]{16,64}$/.test(decoded)
+    ? decoded
+    : null;
 }
 
 function parsedListLimit(value: string | null): number {
@@ -1109,7 +1595,10 @@ function onlyKeys(value: Record<string, unknown>, allowed: string[]): boolean {
 }
 
 function idText(value: unknown, min: number, max: number): string | null {
-  return typeof value === "string" && new RegExp(`^[A-Za-z0-9._:-]{${min},${max}}$`).test(value) ? value : null;
+  return typeof value === "string" &&
+    new RegExp(`^[A-Za-z0-9._:-]{${min},${max}}$`).test(value)
+    ? value
+    : null;
 }
 
 function boundedText(value: unknown, min: number, max: number): string | null {
@@ -1119,23 +1608,34 @@ function boundedText(value: unknown, min: number, max: number): string | null {
 }
 
 function brokerPrepareError(error: unknown): string {
-  if (error instanceof ApprovalBrokerError && error.code === "approval_broker_not_configured") return error.code;
+  if (
+    error instanceof ApprovalBrokerError &&
+    error.code === "approval_broker_not_configured"
+  )
+    return error.code;
   return "approval_broker_unavailable";
 }
 
 function brokerPrepareStatus(error: unknown): number {
-  return error instanceof ApprovalBrokerError && error.code === "approval_broker_not_configured" ? 503 : 502;
+  return error instanceof ApprovalBrokerError &&
+    error.code === "approval_broker_not_configured"
+    ? 503
+    : 502;
 }
 
 function quoteRevisionBrokerPrepareError(error: unknown): string {
-  if (error instanceof QuoteRevisionApprovalBrokerError && error.code === "quote_revision_broker_not_configured") {
+  if (
+    error instanceof QuoteRevisionApprovalBrokerError &&
+    error.code === "quote_revision_broker_not_configured"
+  ) {
     return error.code;
   }
   return "quote_revision_broker_unavailable";
 }
 
 function quoteRevisionBrokerPrepareStatus(error: unknown): number {
-  return error instanceof QuoteRevisionApprovalBrokerError && error.code === "quote_revision_broker_not_configured"
+  return error instanceof QuoteRevisionApprovalBrokerError &&
+    error.code === "quote_revision_broker_not_configured"
     ? 503
     : 502;
 }
@@ -1174,12 +1674,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 async function readJson(
   req: Request,
   maxBytes: number,
-): Promise<{ ok: true; value: unknown } | { ok: false; error: string; status: number }> {
+): Promise<
+  { ok: true; value: unknown } | { ok: false; error: string; status: number }
+> {
   if (Number(req.headers.get("content-length") ?? "0") > maxBytes) {
     return { ok: false, error: "payload_too_large", status: 413 };
   }
   const text = await req.text();
-  if (text.length > maxBytes) return { ok: false, error: "payload_too_large", status: 413 };
+  if (text.length > maxBytes)
+    return { ok: false, error: "payload_too_large", status: 413 };
   try {
     return { ok: true, value: JSON.parse(text) as unknown };
   } catch {

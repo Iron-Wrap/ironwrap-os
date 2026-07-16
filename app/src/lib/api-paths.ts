@@ -12,6 +12,7 @@ export const API_PATHS = {
   devicePairingRevoke: (deviceId: string) =>
     `/api/v1/device-pairings/${encodeURIComponent(deviceId)}/revoke`,
   logout: "/api/v1/auth/logout",
+  ownerMeasurementIntakeExceptions: "/api/v1/owner/measurement-intake-exceptions",
   production: "/api/v1/production",
   sales: "/api/v1/sales",
   estimatorJob: (jobId: string) => `/api/v1/estimator/jobs/${encodeURIComponent(jobId)}`,

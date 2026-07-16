@@ -14,6 +14,7 @@ const AUTH_FIELDS = new Set([
 
 const VOLATILE_PREVIEW_FIELDS = new Set([
   "acknowledged_at",
+  "assigned_at",
   "approved_at",
   "captured_at",
   "completed_at",

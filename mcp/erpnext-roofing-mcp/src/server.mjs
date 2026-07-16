@@ -77,6 +77,16 @@ const FIELD_ROOF_JOB_FIELDS = [
 
 const GateStateSchema = z.enum(["Blocked", "Ready", "Waived", "Done"]);
 const MaterialTakeoffStatusSchema = z.enum(["Needs Review", "Approved", "Rejected"]);
+const PRODUCTION_SCHEDULING_GATES = Object.freeze([
+  "Deposit",
+  "Materials",
+  "Safety",
+  "Access",
+  "Weather",
+  "Crew",
+]);
+const SCHEDULABLE_PRODUCTION_GATE_STATES = new Set(["Ready", "Done", "Waived"]);
+const PRODUCTION_SCHEDULE_PREVIEW_LIMIT = 25;
 
 const GATE_FIELDS = [
   "name",
@@ -88,6 +98,8 @@ const GATE_FIELDS = [
   "evidence_item",
   "modified",
 ];
+
+const PRODUCTION_SCHEDULE_PREVIEW_FIELDS = ["gate", "state"];
 
 const HERMES_RUN_FIELDS = [
   "name",
@@ -1973,6 +1985,7 @@ export function buildJobAssignmentDraft({
   if (Boolean(crewProfileId) === Boolean(assignedUser)) {
     throw new Error("assignment_requires_exactly_one_target");
   }
+  if (scheduledEnd && !scheduledStart) throw new Error("scheduled_end_requires_start");
   if (scheduledStart && scheduledEnd && Date.parse(scheduledEnd) <= Date.parse(scheduledStart)) {
     throw new Error("assignment_schedule_invalid");
   }
@@ -1997,6 +2010,60 @@ export function buildJobAssignmentDraft({
     assigned_at: nowIso,
     ...(supersedes ? { supersedes, correction_reason: correctionReason.trim() } : {}),
     notes: notes ?? "",
+  };
+}
+
+export function buildProductionScheduleGatePreview(draft, gateRows = [], { truncated = false } = {}) {
+  const required = draft.assignment_type === "Production" && Boolean(draft.scheduled_start);
+  if (!required) {
+    return {
+      required: false,
+      state_eligible: true,
+      reason: "production_schedule_gates_not_required",
+      authoritative_enforcement: "frappe_document_policy",
+    };
+  }
+
+  const rowsByGate = new Map();
+  for (const row of gateRows) {
+    if (!PRODUCTION_SCHEDULING_GATES.includes(row?.gate)) continue;
+    const rows = rowsByGate.get(row.gate) ?? [];
+    rows.push(row);
+    rowsByGate.set(row.gate, rows);
+  }
+  const gates = PRODUCTION_SCHEDULING_GATES.map((gate) => {
+    const rows = rowsByGate.get(gate) ?? [];
+    if (rows.length === 0) return { gate, state: null };
+    if (rows.length > 1) return { gate, state: null };
+    const state = rows[0].state ?? null;
+    return { gate, state };
+  });
+  const missingGates = PRODUCTION_SCHEDULING_GATES.filter(
+    (gate) => (rowsByGate.get(gate) ?? []).length === 0,
+  );
+  const duplicateGates = PRODUCTION_SCHEDULING_GATES.filter(
+    (gate) => (rowsByGate.get(gate) ?? []).length > 1,
+  );
+  const stateIneligibleGates = gates.filter(
+    ({ gate, state }) => !missingGates.includes(gate)
+      && !duplicateGates.includes(gate)
+      && !SCHEDULABLE_PRODUCTION_GATE_STATES.has(state),
+  );
+
+  return {
+    required: true,
+    required_gates: PRODUCTION_SCHEDULING_GATES,
+    allowed_states: [...SCHEDULABLE_PRODUCTION_GATE_STATES],
+    gates,
+    missing_gates: missingGates,
+    duplicate_gates: duplicateGates,
+    state_ineligible_gates: stateIneligibleGates,
+    state_eligible: !truncated
+      && missingGates.length === 0
+      && duplicateGates.length === 0
+      && stateIneligibleGates.length === 0,
+    snapshot_truncated: truncated,
+    authoritative_enforcement: "frappe_document_policy",
   };
 }
 
@@ -4003,6 +4070,7 @@ export function buildServer(config) {
         }
       }
       const before = await readResourceOrNull(config, "Job Assignment", draft.assignment_id);
+      const productionScheduleGatePreview = await previewProductionScheduleGatePreview(config, draft);
       return text({
         would_write: false,
         required_tool: "request_create_job_assignment",
@@ -4011,6 +4079,7 @@ export function buildServer(config) {
         blocked_existing: Boolean(before),
         ...(before ? { blocked_reason: "assignment_append_only" } : {}),
         draft,
+        production_schedule_gate_preview: productionScheduleGatePreview,
       });
     },
   );
@@ -4044,11 +4113,16 @@ export function buildServer(config) {
         }
       }
       const before = await readResourceOrNull(config, "Job Assignment", draft.assignment_id);
+      // This is a diagnostic snapshot for the audit trail, not a write gate. The
+      // Frappe validation hook reads the current rows immediately when it receives
+      // the mutation, closing the preview-to-write race.
+      const productionScheduleGatePreview = await previewProductionScheduleGatePreview(config, draft);
       const dryRun = {
         target: { doctype: "Job Assignment", name: draft.assignment_id },
         operation: before ? "blocked_existing" : "create",
         append_only: true,
         draft,
+        production_schedule_gate_preview: productionScheduleGatePreview,
       };
       return text(await executeAuditedWrite(config, {
         runId,
@@ -6661,6 +6735,20 @@ async function readResourceOrNull(config, doctype, name) {
 async function listResources(config, doctype, options) {
   const res = await erpGet(config, resourceListPath(doctype, options));
   return Array.isArray(res.data) ? res.data : [];
+}
+
+async function previewProductionScheduleGatePreview(config, draft) {
+  const notRequired = buildProductionScheduleGatePreview(draft);
+  if (!notRequired.required) return notRequired;
+  const gateRows = await listResources(config, "Production Gate State", {
+    fields: PRODUCTION_SCHEDULE_PREVIEW_FIELDS,
+    filters: [["Production Gate State", "roof_job", "=", draft.roof_job]],
+    limit: PRODUCTION_SCHEDULE_PREVIEW_LIMIT,
+    orderBy: "modified desc",
+  });
+  return buildProductionScheduleGatePreview(draft, gateRows, {
+    truncated: gateRows.length >= PRODUCTION_SCHEDULE_PREVIEW_LIMIT,
+  });
 }
 
 async function finalizeHermesRun(config, runId, patch) {

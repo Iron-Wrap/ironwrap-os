@@ -86,6 +86,19 @@ LEAD_TRIAGE_FIELDS = (
     "triaged_at",
     "triage_summary",
 )
+PRODUCTION_GATE_CONTEXT_FIELDS = (
+    "gate",
+    "state",
+    "owner_user",
+    "assigned_at",
+    "due_at",
+    "blocker_reason",
+    "evidence_item",
+    "waived_by",
+    "waived_at",
+    "waiver_reason",
+)
+_PRODUCTION_GATE_CONTEXT_SELECT = ", ".join(PRODUCTION_GATE_CONTEXT_FIELDS)
 _ATOMIC_SAFETY_ACKNOWLEDGEMENT_APPEND: ContextVar[tuple[str, str] | None] = ContextVar(
     "ironwrap_atomic_safety_acknowledgement_append",
     default=None,
@@ -305,6 +318,70 @@ def _value(doctype: str, name: str | None, field: str) -> Any:
     if not name:
         return None
     return frappe.db.get_value(doctype, name, field)
+
+
+def _lock_roof_job(roof_job: Any) -> str:
+    """Serialize gate changes and schedule writes for one existing Roof Job."""
+
+    rows = frappe.db.sql(
+        """
+        SELECT name
+        FROM `tabRoof Job`
+        WHERE name = %s
+        FOR UPDATE
+        """,
+        (roof_job,),
+        as_dict=True,
+    )
+    if len(rows) != 1:
+        raise PolicyViolation(
+            "roof_job_lock_not_found", "the referenced Roof Job does not exist"
+        )
+    return str(rows[0]["name"])
+
+
+def _locked_production_gates(roof_job: Any) -> list[dict[str, Any]]:
+    """Read the gate set under the same transaction locks as the schedule write."""
+
+    _lock_roof_job(roof_job)
+    return [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_PRODUCTION_GATE_CONTEXT_SELECT}
+            FROM `tabProduction Gate State`
+            WHERE roof_job = %s
+            FOR UPDATE
+            """,
+            (roof_job,),
+            as_dict=True,
+        )
+    ]
+
+
+def _assert_unique_production_gate(document: Any) -> None:
+    """Keep one current gate record per Roof Job/gate pair under the parent lock."""
+
+    roof_job = document.get("roof_job")
+    gate = document.get("gate")
+    _lock_roof_job(roof_job)
+    rows = frappe.db.sql(
+        """
+        SELECT name
+        FROM `tabProduction Gate State`
+        WHERE roof_job = %s
+          AND gate = %s
+          AND name != %s
+        FOR UPDATE
+        """,
+        (roof_job, gate, document.get("name") or ""),
+        as_dict=True,
+    )
+    if rows:
+        raise PolicyViolation(
+            "duplicate_production_gate",
+            "only one current gate record may exist for a Roof Job/gate pair",
+        )
 
 
 def _context(document: Any, kind: str) -> dict[str, Any]:
@@ -549,22 +626,7 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
         "Closed",
     }:
         roof_job = document.get("name") or document.get("roof_job_id")
-        context["gates"] = frappe.get_all(
-            "Production Gate State",
-            filters={"roof_job": roof_job},
-            fields=[
-                "gate",
-                "state",
-                "owner_user",
-                "assigned_at",
-                "due_at",
-                "blocker_reason",
-                "evidence_item",
-                "waived_by",
-                "waived_at",
-                "waiver_reason",
-            ],
-        )
+        context["gates"] = _locked_production_gates(roof_job)
         if document.get("job_status") == "Closed":
             context["completion_packets"] = frappe.get_all(
                 "Completion Packet", filters={"roof_job": roof_job}, fields=["status"]
@@ -575,6 +637,16 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
             context["payment_milestones"] = frappe.get_all(
                 "Payment Milestone", filters={"roof_job": roof_job}, fields=["status"]
             )
+    elif (
+        kind == "job_assignment"
+        and document.get("assignment_type") == "Production"
+        and document.get("scheduled_start")
+    ):
+        context["gates"] = _locked_production_gates(document.get("roof_job"))
+    elif kind == "production_gate_state":
+        # Gate creates and updates take the same per-job lock as scheduling, so
+        # a validation snapshot cannot race a gate transition into a commit.
+        _assert_unique_production_gate(document)
     elif kind == "white_label_tenant" and document.get("status") == "Active":
         filters: dict[str, Any] = {"status": "Active"}
         if document.get("name"):

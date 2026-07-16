@@ -1,5 +1,11 @@
 # 11 - Owner Signoff Checklist
 
+> **Current authority (2026-07-16):** This retained signoff record is planning/provenance.
+> [`18-phase-1-source-truth-and-build-contract.md`](./18-phase-1-source-truth-and-build-contract.md)
+> prevails on conflict: Worker/D1/R2 is the first write, the operating core is Frappe-only, the
+> Field Companion PWA is primary, and JobNimbus, GHL, Make, and Jotform are bridges. Legacy
+> `erpnext-*` names do not authorize ERPNext or DocuSeal.
+
 Use this as the final acceptance checklist with IronWrap.
 
 ## Business Decisions
@@ -12,12 +18,12 @@ Use this as the final acceptance checklist with IronWrap.
 - [ ] QuickBooks owns accounting truth.
 - [ ] Google Drive (Google Workspace) selected as storage authority, unless owner explicitly overrides.
 - [ ] Renoworks deferred unless visualizer-led selling is approved.
-- [ ] NaturalForms dropped; Jotform "Jobsite Photo" form = sole jobsite photo/geo capture ($0 incremental; device-geolocation widget + offline mobile capture; coordinates-only, not photo EXIF). Jotform for other structured forms deferred until a workflow hurts.
+- [ ] NaturalForms dropped; Field Companion PWA is the primary jobsite photo/geo capture path. Jotform remains a temporary structured-intake bridge until PWA real-device proof is complete.
 - [ ] Design = free Canva + free Affinity (Designer/Photo/Publisher, Canva-owned, went 100% free Oct 2025); Canva Pro (~CAD $18/mo) only if brand-kit/team features needed; full Adobe Creative Cloud rejected.
 - [ ] Paradigm deferred until material request flow is stable.
 - [ ] Phone AI = JobNimbus AssistAI (P0) behind eval gate; managed Retell only on eval failure; 4-vendor custom voice stack killed.
 - [ ] Call attribution deferred (UTM + manual Lead Source + one tracked number); CallRail only when paid ads start.
-- [ ] GHL and JobNimbus are declined as keepers for new work; import-rescue/legacy routes are disabled only after replacement proof through the owned bus/ERPNext path.
+- [ ] GHL and JobNimbus are declined as keepers for new work; import-rescue/legacy routes are disabled only after replacement proof through the owned Worker/Frappe path.
 - [ ] WooCommerce/B2C store deferred from Task 1.
 - [ ] Calgary expansion structure deferred unless owner explicitly adds it to Task 1.
 

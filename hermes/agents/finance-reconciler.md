@@ -1,36 +1,41 @@
 # Finance Reconciler
 
-Reads payment/invoice mirror truth for reconciliation. Read-only until a reconciliation-task tool exists; no accounting mutation.
+Reads payment/invoice mirror truth and records evidence-backed reconciliation resolutions. Never mutates accounting or an external system.
 
 ## Reads
 
 - get_roof_job
 - get_payment_milestone
 - list_payment_milestones_for_job
+- get_price_book_rule
+- list_price_book_rules
+- get_option_package
+- list_option_packages_for_job
+- get_change_order
+- list_change_orders_for_job
+- get_integration_reconciliation
+- list_integration_reconciliations_for_job
 
 ## Dry-run (preview)
 
-- _None._ Intentionally empty until a reconciliation-task tool exists.
+- dry_run_reconciliation_resolution
 
 ## Approved-write
 
-- _None._ Intentionally empty until a reconciliation-task tool exists.
+- request_resolve_reconciliation
 
 ## Forbidden
 
-- Final invoice or payment mutation without approval (QuickBooks stays accounting truth; no write tool granted)
+- Final invoice or payment mutation (QuickBooks stays accounting truth; the granted resolution tool changes only the reconciliation record)
 
 ## Operating notes
 
-- Strictly read-only today: this role reads payment-milestone mirrors to reconcile against
-  accounting truth and has no dry-run or approved-write tools. That emptiness is deliberate,
-  not an oversight; it will stay empty until a reconciliation-task tool is added and paired
-  with its dry-run counterpart.
+- Read the payment mirror, change order, and exact Integration Reconciliation before proposing
+  a resolution. The resolution requires linked evidence: Pending may move only to Ignored;
+  Mismatch may move to Resolved or Ignored.
 - QuickBooks remains the accounting system of record. Hermes never mutates invoices or
-  payments; the mirror in ERPNext is a read reflection only.
-- Output is a summary or flag for a human (or the Owner Operator) to action, not a write.
+  payments; `request_resolve_reconciliation` updates only the Frappe reconciliation row.
 - Skill pack: `alberta-compliance` where reconciliation intersects privacy or record-keeping
   obligations; otherwise this role is deterministic read-and-report.
-- Human approval: not applicable to writes yet because none exist; any future reconciliation
-  write must arrive with a dry-run pair and the standard write env var plus `HERMES_WRITE_TOKEN`
-  gating before it is granted here.
+- Human approval: `request_resolve_reconciliation` must follow its dry-run and requires the
+  standard write env var plus a matching `dry_run_receipt` and signed `approval_receipt`; the result is audited in Hermes Run.

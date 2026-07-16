@@ -1,5 +1,11 @@
 # 13 - Source Verification Notes
 
+> **Current authority (2026-07-16):** This retained evidence record is planning/provenance.
+> [`18-phase-1-source-truth-and-build-contract.md`](./18-phase-1-source-truth-and-build-contract.md)
+> prevails on conflict: Worker/D1/R2 is the first write, the operating core is Frappe-only, the
+> Field Companion PWA is primary, and JobNimbus, GHL, Make, and Jotform are bridges. Legacy
+> `erpnext-*` names do not authorize ERPNext or DocuSeal.
+
 Date checked: 2026-06-27
 
 > Historical research notes. Current stack decisions are in `00-final-decisions.md`;

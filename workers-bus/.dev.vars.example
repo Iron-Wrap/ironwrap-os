@@ -3,6 +3,7 @@
 
 INGEST_TOKEN="dev-ingest-token-change-me"
 ADMIN_TOKEN="dev-admin-token-change-me"
+APP_AUTH_PEPPER="replace-with-at-least-32-random-characters"
 
 # JobNimbus (api1 Bearer key)
 JOBNIMBUS_API_KEY=""
@@ -22,3 +23,8 @@ ERPNEXT_API_SECRET=""
 # JOBNIMBUS_ENABLED="false"
 # ERPNEXT_ENABLED="false"
 # ERPNEXT_BASE_URL="https://your-site.frappe.cloud"
+# APP_BFF_ENABLED="true"
+# APP_PUBLIC_ORIGIN="http://localhost:5173"
+# APP_ALLOWED_ORIGINS="http://localhost:5173"
+# APP_ALLOW_INSECURE_LOCAL="true"
+# APP_INSURANCE_ESTIMATOR_FRAPPE_USERS="estimator@your-site.example"

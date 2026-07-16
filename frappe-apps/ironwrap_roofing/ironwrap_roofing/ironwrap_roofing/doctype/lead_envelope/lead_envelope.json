@@ -12,6 +12,10 @@
     "event_ts",
     "status",
     "intent_queue",
+    "triage_status",
+    "triaged_by",
+    "triaged_at",
+    "triage_summary",
     "contact_section",
     "contact_name",
     "contact_phone",
@@ -65,6 +69,31 @@
       "fieldtype": "Data",
       "in_standard_filter": 1,
       "label": "Intent Queue"
+    },
+    {
+      "default": "Unknown",
+      "fieldname": "triage_status",
+      "fieldtype": "Select",
+      "in_list_view": 1,
+      "in_standard_filter": 1,
+      "label": "Triage Status",
+      "options": "Unknown\nUntriaged\nTriaged"
+    },
+    {
+      "fieldname": "triaged_by",
+      "fieldtype": "Link",
+      "label": "Triaged By",
+      "options": "User"
+    },
+    {
+      "fieldname": "triaged_at",
+      "fieldtype": "Datetime",
+      "label": "Triaged At"
+    },
+    {
+      "fieldname": "triage_summary",
+      "fieldtype": "Small Text",
+      "label": "Triage Summary"
     },
     {
       "fieldname": "contact_section",
@@ -143,19 +172,14 @@
   "naming_rule": "By fieldname",
   "owner": "Administrator",
   "permissions": [
-    {
-      "create": 1,
-      "delete": 0,
-      "email": 0,
-      "export": 1,
-      "import": 1,
-      "print": 1,
-      "read": 1,
-      "report": 1,
-      "role": "System Manager",
-      "share": 1,
-      "write": 1
-    }
+    {"create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Owner", "write": 1},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Sales", "write": 1},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Estimator"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Production"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Finance"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Closeout"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support"}
   ],
   "quick_entry": 0,
   "sort_field": "modified",

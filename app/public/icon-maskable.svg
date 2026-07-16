@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="IronWrap OS">
+  <rect width="512" height="512" fill="#121611"/>
+  <path d="M112 276 256 124l144 152-44 42-100-104-100 104-44-42Z" fill="#F3B321"/>
+  <path d="M168 290h56v106h-56zm120 0h56v106h-56z" fill="#F5F6F4"/>
+</svg>

@@ -57,12 +57,13 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    (JobNimbus is a temporary bridge, not a keeper).
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
-   (applies `workers-bus/migrations/0001_init.sql` through `0006_dedup_claims.sql`).
-7. Secrets: fill a tenant-specific `ACCESS.env` and run
-   `bash workers-bus/scripts/apply-secrets.sh` with the tenant's Cloudflare API token, or
-   `printf '%s' '<value>' | npx wrangler secret put <NAME>` per secret. Required set:
+   (applies `workers-bus/migrations/0001_init.sql` through
+   `0017_quote_revision_approval_requests.sql`).
+7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store;
+   never pass a generic Cloudflare token to a repository script. Required set:
    `INGEST_TOKEN`, `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY` (if bridging),
-   `GOOGLE_SERVICE_ACCOUNT_JSON`, `QB_WEBHOOK_TOKEN`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`.
+   `GOOGLE_SERVICE_ACCOUNT_JSON`, `QB_WEBHOOK_TOKEN`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`,
+   and `APP_AUTH_PEPPER`; add each broker shared secret only when its isolated broker is enabled.
    All tokens are NEW values, never reused from another tenant.
 8. `npm test`, `npm run typecheck`, `npx wrangler deploy --dry-run` in `workers-bus/`,
    then deploy.
@@ -75,7 +76,9 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    `bench --site <tenant-site> install-app ironwrap_roofing`.
 3. Sanity: `node tools/validate-erpnext-doctypes.mjs` in the repo confirms the DocType
    pack shape (prints `ok 26`); on the site, confirm the IronWrap Roofing DocTypes exist.
-4. Create a tenant-scoped API key/secret pair for the bus and MCP (never the IronWrap pair).
+4. Create a tenant-scoped API key/secret pair for the bus, plus a separate pair for every
+   Hermes MCP actor. Each MCP pair must be issued to exactly that process's
+   `HERMES_ACTOR_USER`; never use the bus pair to attest an actor action.
 5. Never adopt frappe/press (AGPL, Frappe Cloud's control plane): per-tenant provisioning
    stays on IronWrap's own scripts (`config/tenants/` + validators + this playbook).
 
@@ -96,13 +99,16 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 
 Run tenant-dedicated MCP server processes with tenant-only env:
 
-- `mcp/erpnext-roofing-mcp`: `ERPNEXT_BASE_URL`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`,
-  `ERPNEXT_WRITE_ENABLED`, `HERMES_WRITE_TOKEN`.
+- `mcp/erpnext-roofing-mcp`: `ERPNEXT_BASE_URL`, an `ERPNEXT_API_KEY` /
+  `ERPNEXT_API_SECRET` pair belonging to exactly `HERMES_ACTOR_USER`,
+  `ERPNEXT_WRITE_ENABLED`, `HERMES_DRY_RUN_SIGNING_KEY`, and
+  `HERMES_APPROVAL_PUBLIC_KEY_FILE`.
 - `mcp/ironwrap-bus-mcp`: `IRONWRAP_BUS_BASE_URL`, `IRONWRAP_ADMIN_TOKEN`,
   `IRONWRAP_BUS_WRITE_ENABLED`, `IRONWRAP_BUS_WRITE_TOKEN`.
 
 Defaults for a new tenant: write flags off (`ERPNEXT_WRITE_ENABLED` unset/false) until the
-tenant passes the approved-write proof. `HERMES_WRITE_TOKEN` is minted per tenant. The
+tenant passes the approved-write proof. `HERMES_DRY_RUN_SIGNING_KEY` is unique per tenant and the
+approval broker public key plus bound approver identity are configured per isolated runtime. The
 Hermes profile (memory, skills, tool allowlist) is created fresh; never point two tenants'
 profiles at the same MCP process or token.
 
@@ -136,7 +142,7 @@ Gate 11 (blueprint): "A second demo company runs with separate brand/config/data
 
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
-- [ ] All 6 D1 migrations applied to the tenant database.
+- [ ] All 15 D1 migrations applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed and its own API key pair.
 - [ ] Tenant Shared Drives + R2 bucket receive a test job's files.
 - [ ] Tenant QuickBooks webhook verified (signature accepted on `POST /webhook/quickbooks`).

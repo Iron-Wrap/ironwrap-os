@@ -1,0 +1,39 @@
+{
+  "actions": [],
+  "allow_rename": 0,
+  "creation": "2026-07-10 00:00:00.000000",
+  "custom": 0,
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "acknowledged_by",
+    "acknowledged_at",
+    "acknowledgement_method",
+    "device_action_id",
+    "evidence_item",
+    "role_on_job",
+    "notes"
+  ],
+  "fields": [
+    { "fieldname": "acknowledged_by", "fieldtype": "Link", "in_list_view": 1, "label": "Acknowledged By", "options": "User", "reqd": 1 },
+    { "fieldname": "acknowledged_at", "fieldtype": "Datetime", "in_list_view": 1, "label": "Acknowledged At", "reqd": 1 },
+    { "fieldname": "acknowledgement_method", "fieldtype": "Select", "label": "Acknowledgement Method", "options": "QR Device Pairing\nE-signature\nIn Person\nOwner Attestation\nOther", "reqd": 1 },
+    { "fieldname": "device_action_id", "fieldtype": "Data", "label": "Device Action ID" },
+    { "fieldname": "evidence_item", "fieldtype": "Link", "label": "Evidence Item", "options": "Evidence Item", "reqd": 1 },
+    { "fieldname": "role_on_job", "fieldtype": "Data", "label": "Role on Job" },
+    { "fieldname": "notes", "fieldtype": "Small Text", "label": "Notes" }
+  ],
+  "index_web_pages_for_search": 0,
+  "istable": 1,
+  "links": [],
+  "modified": "2026-07-10 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "IronWrap Roofing",
+  "name": "Safety Acknowledgement",
+  "owner": "Administrator",
+  "permissions": [],
+  "sort_field": "idx",
+  "sort_order": "ASC",
+  "states": [],
+  "track_changes": 1
+}

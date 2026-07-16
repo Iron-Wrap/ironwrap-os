@@ -8,7 +8,7 @@ Produce a non-binding budget range for a homeowner from an Instant Estimate Sess
 - A lead asks "roughly what will this cost?" before any measurement or estimator review.
 
 ## Inputs
-- ERPNext: `get_instant_estimate_session` / `list_instant_estimate_sessions_for_job` (Instant Estimate Session: `service_type`, `range_low`, `range_high`, `estimate_total`, `review_required`, `status`).
+- Frappe: `get_instant_estimate_session` / `list_instant_estimate_sessions_for_job` (Instant Estimate Session: `service_type`, `range_low`, `range_high`, `estimate_total`, `review_required`, `status`).
 - Context: `get_lead_envelope`, `get_roof_job`, `list_evidence_for_job` (any homeowner-supplied photos).
 - Tenant policy: `estimates.instant_estimate` (non_binding=true, review_required=true, disclaimer).
 
@@ -18,7 +18,7 @@ Produce a non-binding budget range for a homeowner from an Instant Estimate Sess
 3. Build a range from the session inputs only. Record every assumption in a ledger: assumed size, pitch, access, material tier, and any unknown treated as a placeholder.
 4. State exclusions clearly: no measurement verification, no material selection lock, no access/complexity survey, no permit or structural review.
 5. Attach the tenant disclaimer verbatim: "This is a non-binding budget range based on the information you provided. Final pricing requires an estimator review of measurements, access, and material selections."
-6. This skill writes no ERPNext record itself. It emits the range, ledger, and disclaimer for a human and for the lead-triage first-response draft.
+6. This skill writes no Frappe record itself. It emits the range, ledger, and disclaimer for a human and for the lead-triage first-response draft.
 7. If a customer-facing draft carries the range, route it through the Lead Triage comms path (`check_consent` -> `check_quiet_hours` -> `dry_run_communication_event` -> `request_record_communication_event`). The range text must keep the disclaimer.
 
 ## Guardrails

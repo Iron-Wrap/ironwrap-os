@@ -7,6 +7,22 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true, "head_sampling_rate": 1 },
 
+  // One deployment boundary: the Worker serves the built PWA and runs every dynamic/auth route.
+  // CI builds ../app/dist before Worker bundle validation or deployment.
+  "assets": {
+    "directory": "../app/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api/*",
+      "/health",
+      "/ready",
+      "/admin/*",
+      "/ingest/*",
+      "/webhook/*"
+    ]
+  },
+
   // Owned system of record. Create with: wrangler d1 create ironwrap-bus → paste database_id.
   "d1_databases": [
     {
@@ -42,9 +58,12 @@
   // */5 = retry sweep (re-drive stuck pushes); 0 14 * * * = daily reconciliation digest/heartbeat.
   "triggers": { "crons": ["*/5 * * * *", "0 14 * * *"] },
 
-  // Non-secret config. Secrets go via `wrangler secret put` (or scripts/apply-secrets.sh):
+  // Non-secret config. Secrets go only via `wrangler secret put`:
   //   INGEST_TOKEN, ADMIN_TOKEN, JOBNIMBUS_API_KEY, GOOGLE_SERVICE_ACCOUNT_JSON,
-  //   QB_WEBHOOK_TOKEN, ERPNEXT_API_KEY, ERPNEXT_API_SECRET.
+  //   QB_WEBHOOK_TOKEN, ERPNEXT_API_KEY, ERPNEXT_API_SECRET, APP_AUTH_PEPPER,
+  //   APPROVAL_BROKER_SHARED_SECRET, QUOTE_REVISION_BROKER_SHARED_SECRET. Broker secrets
+  //   are Worker-to-private-broker only; never expose either through the PWA or a public
+  //   environment variable.
   // Email/Drive = Google Workspace via service account + domain-wide delegation (live-verified
   // 2026-07-02). FROM_EMAIL is the impersonated sender: sales@ for now — switch to quote@ once
   // that mailbox migrates onto the Google Workspace. SMS is JobNimbus Engage's job (no Twilio send).
@@ -60,6 +79,28 @@
     "ERPNEXT_ENABLED": "false",
     "ERPNEXT_BASE_URL": "",
     "ERPNEXT_LEAD_ENVELOPE_DOCTYPE": "Lead Envelope",
+    "APP_BFF_ENABLED": "false",
+    "APP_TENANT_ID": "ironwrap",
+    "APP_TENANT_NAME": "IronWrap OS",
+    "APP_TENANT_BRAND": "IronWrap",
+    "APP_LOCALE": "en-CA",
+    "APP_TIME_ZONE": "America/Edmonton",
+    "APP_CURRENCY": "CAD",
+    "APP_PUBLIC_ORIGIN": "",
+    "APP_ALLOWED_ORIGINS": "",
+    "APP_ALLOW_INSECURE_LOCAL": "false",
+    "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
+    "APP_INSURANCE_ESTIMATOR_FRAPPE_USERS": "",
+    "APP_APPROVAL_BROKER_URL": "",
+    "APP_APPROVAL_BROKER_KEY_ID": "",
+    "APP_APPROVAL_APPROVER_ID": "",
+    "APP_APPROVAL_MAX_SESSION_AGE_SECONDS": "900",
+    "APP_APPROVAL_BROKER_TIMEOUT_MS": "15000",
+    "APP_APPROVAL_EXECUTION_LEASE_SECONDS": "45",
+    "APP_QUOTE_REVISION_BROKER_URL": "",
+    "APP_QUOTE_REVISION_BROKER_KEY_ID": "",
+    "APP_QUOTE_REVISION_BROKER_TIMEOUT_MS": "15000",
+    "APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS": "45",
     "DEDUP_WINDOW_HOURS": "72",
     "STUCK_THRESHOLD_MIN": "15",
     "SHARED_DRIVE_ID_JOBS": "0AHqXhIQ3svySUk9PVA",

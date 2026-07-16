@@ -1,5 +1,10 @@
 # QA & Go-Live Acceptance Matrix (spec 10)
 
+> **Scope:** This is the temporary bridge matrix. Full release acceptance also requires the
+> Frappe/Hermes, Field Companion device, approved-write, backup/restore, and R2 protection gates in
+> [`../final-spec-pack/18-phase-1-source-truth-and-build-contract.md`](../final-spec-pack/18-phase-1-source-truth-and-build-contract.md)
+> and [`LAUNCH-RUNBOOK.md`](./LAUNCH-RUNBOOK.md).
+
 Run before launch, for **both brands** (IronWrap Exteriors + iRoof Alberta). Each case: **do → expect → ✅/❌**.
 A case is **N/A** until its feature is connected (see `ACTIVATION-CHECKLIST.md`) — the matrix is the proof
 that "built" became "operating."

@@ -1,0 +1,27 @@
+# Private Hermes approval broker. Install as
+# /etc/systemd/system/ironwrap-approval-broker.service and keep the referenced
+# environment file root-readable only. Cloudflare Tunnel/Access may reach it,
+# but it must never bind directly to a public interface.
+[Unit]
+Description=IronWrap Hermes lead-triage approval broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ironwrap-broker
+Group=ironwrap-broker
+WorkingDirectory=/srv/ironwrap/mcp/erpnext-roofing-mcp
+EnvironmentFile=/etc/ironwrap/approval-broker.env
+ExecStart=/usr/bin/node /srv/ironwrap/mcp/erpnext-roofing-mcp/src/approval-broker.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/srv/ironwrap /run/secrets
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -6,6 +6,7 @@ export const ALLOWED_SOURCES = [
   "website", "phone", "gbp", "ad", "referral", "manual",
 ] as const;
 export type Source = (typeof ALLOWED_SOURCES)[number];
+export const MAX_SOURCE_COUNT = 1_000_000;
 
 export interface Contact {
   name?: string;
@@ -66,6 +67,10 @@ export interface ReconcileRow {
   landed: number; // envelopes recorded
   gap: number;    // source - landed; > 0 means a source event never became an envelope
 }
+
+export type SourceCountValidation =
+  | { ok: true; day: string; channel: Source; count: number }
+  | { ok: false; reason: "invalid_day" | "invalid_channel" | "invalid_count" };
 
 /** Owned-store identity for an event. Matches the spec's `ow_envelope_id` external ref. */
 export function newEnvelopeId(): string {
@@ -185,6 +190,29 @@ export function reconcileDiff(
     rows.push({ channel, source, landed, gap: source - landed });
   }
   return rows.sort((a, b) => b.gap - a.gap);
+}
+
+/** Strict UTC calendar-day validation (rejects impossible dates such as 2026-02-30). */
+export function isIsoDay(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+/** Validate one independent source-count observation before it reaches D1. */
+export function validateSourceCount(
+  day: unknown,
+  channel: unknown,
+  count: unknown,
+): SourceCountValidation {
+  if (!isIsoDay(day)) return { ok: false, reason: "invalid_day" };
+  if (typeof channel !== "string" || !(ALLOWED_SOURCES as readonly string[]).includes(channel)) {
+    return { ok: false, reason: "invalid_channel" };
+  }
+  if (typeof count !== "number" || !Number.isInteger(count) || count < 0 || count > MAX_SOURCE_COUNT) {
+    return { ok: false, reason: "invalid_count" };
+  }
+  return { ok: true, day, channel: channel as Source, count };
 }
 
 /** Exponential backoff for the retry sweep (cap 1h). */

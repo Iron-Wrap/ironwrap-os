@@ -1,11 +1,16 @@
-# Activation Checklist - Built -> Operating
+# Activation Checklist - Worker/Account Cutover
 
-Everything in `workers-bus/` is buildable and locally verified. The bus is deployed, JobNimbus
-push is enabled, Gmail instant-ack uses Google Workspace domain-wide delegation, and job files go
-to Google Drive Shared Drives. The remaining work is account wiring and live-source cutover.
+> **Scope:** This is a Worker/account cutover checklist, not full IronWrap OS launch authority.
+> The release path is [`LAUNCH-RUNBOOK.md`](./LAUNCH-RUNBOOK.md); the Phase 1 acceptance gates are
+> [`../final-spec-pack/18-phase-1-source-truth-and-build-contract.md`](../final-spec-pack/18-phase-1-source-truth-and-build-contract.md).
+> Revalidate deployed resources and all external claims in the target account before checking an item done.
+
+Everything in `workers-bus/` is buildable and locally verified. The remaining work is target-account
+wiring, live-source cutover, Frappe/Hermes deployment, and the wider production proof set.
 
 - Bus base URL: `https://ironwrap-bus.yellow-rain-7498.workers.dev`
-- Set a secret from `workers-bus/`: `printf '%s' '<value>' | CLOUDFLARE_API_TOKEN='<cf-token>' npx wrangler secret put <NAME>`
+- Set a secret from `workers-bus/`: `printf '%s' '<value>' | npx wrangler secret put <NAME>` using
+  the approved IronWrap account identity; never pass a generic Cloudflare token through a repository script.
 - Companion docs: `SETUP-CHECKLIST.md`, `WEBSITE-INTEGRATION.md`, `EMAIL-DUAL-DELIVERY.md`, `DELIVERY-PLAN.md`.
 - Exhaustive Phase 1 contract: `final-spec-pack/18-phase-1-source-truth-and-build-contract.md`.
 

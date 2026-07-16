@@ -31,14 +31,14 @@ Assume the new tenant id is `<tenant>` (example already in repo: `demo-exteriors
 ### 1. Tenant config
 
 1. Copy `config/tenants/demo-exteriors.json` to `config/tenants/<tenant>.json`.
-2. Fill in: `tenant.id` (unique), brands with their own `sender_mailbox` and `sender_domain`
+2. Fill in: `tenant.id` (unique), `runtime.app_tenant_name`, brands with their own `sender_mailbox` and `sender_domain`
    (must not overlap any other tenant's domains), service areas, services, suppliers,
    milestones, gates.
 3. Secrets stay out: the config carries env var NAMES only (`*_env` fields).
 4. Validate: `node tools/validate-tenant-config.mjs` must print
    `ok N tenant configs validated`. The validator enforces id uniqueness, sender-domain
    isolation, CASL consent, quiet hours sanity, non-binding instant estimates, the 7
-   production gates, the approval policy, and a no-secret-values scan.
+   production gates, the approval policy, runtime tenant naming, and a no-secret-values scan.
 
 ### 2. Cloudflare namespace (Worker + data plane)
 
@@ -53,20 +53,30 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    update producer, consumer, and `dead_letter_queue` names.
 5. `vars`: tenant's own `OWNER_ALERT_EMAIL`, `BACKUP_ALERT_EMAIL`, `FROM_EMAIL`,
    `SHARED_DRIVE_ID_JOBS`, `SHARED_DRIVE_ID_RESTRICTED`, `SHARED_DRIVE_ID_ARCHIVE`,
-   `ERPNEXT_BASE_URL`. Keep `JOBNIMBUS_ENABLED` per the tenant's bridge decision
-   (JobNimbus is a temporary bridge, not a keeper).
+   `ERPNEXT_BASE_URL`, `APP_TENANT_ID`, `APP_TENANT_NAME`, `APP_TENANT_BRAND`,
+   `APP_LOCALE`, `APP_TIME_ZONE`, `APP_CURRENCY`, `APP_BFF_ENABLED`,
+   `APP_PUBLIC_ORIGIN`, `APP_ALLOWED_ORIGINS`, and `APP_CUSTOMER_PORTAL_ENABLED`.
+   Keep `JOBNIMBUS_ENABLED` per the tenant's bridge decision (JobNimbus is a temporary bridge,
+   not a keeper).
+   If `APP_BFF_ENABLED=true`, set a canonical HTTPS `APP_PUBLIC_ORIGIN` and include that exact
+   value in comma-separated `APP_ALLOWED_ORIGINS`. `APP_CUSTOMER_PORTAL_ENABLED=true` requires
+   the BFF to be enabled.
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
    (applies `workers-bus/migrations/0001_init.sql` through
-   `0017_quote_revision_approval_requests.sql`).
+   `0018_customer_portal_links.sql`).
 7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store;
    never pass a generic Cloudflare token to a repository script. Required set:
    `INGEST_TOKEN`, `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY` (if bridging),
    `GOOGLE_SERVICE_ACCOUNT_JSON`, `QB_WEBHOOK_TOKEN`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`,
    and `APP_AUTH_PEPPER`; add each broker shared secret only when its isolated broker is enabled.
    All tokens are NEW values, never reused from another tenant.
-8. `npm test`, `npm run typecheck`, `npx wrangler deploy --dry-run` in `workers-bus/`,
-   then deploy.
+8. Compare the intended Worker runtime values before deployment (this reads supplied env values;
+   it does not inspect or change a live Worker):
+   `IRONWRAP_TENANT_CONFIG=<tenant> APP_TENANT_ID=<tenant> APP_TENANT_NAME='<tenant app name>' APP_TENANT_BRAND='<tenant brand>' APP_LOCALE=en-CA APP_TIME_ZONE=America/Edmonton APP_CURRENCY=CAD FROM_EMAIL=<declared sender mailbox> APP_BFF_ENABLED=false APP_CUSTOMER_PORTAL_ENABLED=false node tools/validate-tenant-runtime.mjs`.
+   Run `npm test`, `npm run typecheck`, and `npx wrangler deploy --dry-run` in `workers-bus/`.
+   A deliberate deployment in the tenant's Cloudflare account and separate live health/origin checks
+   remain required before treating this step as complete.
 
 ### 3. Frappe site
 
@@ -74,8 +84,8 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    (own database, own users). Never install the erpnext app; the site is Frappe-only.
 2. Install the custom app: `bench get-app frappe-apps/ironwrap_roofing` then
    `bench --site <tenant-site> install-app ironwrap_roofing`.
-3. Sanity: `node tools/validate-erpnext-doctypes.mjs` in the repo confirms the DocType
-   pack shape (prints `ok 26`); on the site, confirm the IronWrap Roofing DocTypes exist.
+3. Sanity: `node tools/validate-erpnext-doctypes.mjs` in the repo confirms the 48-DocType
+   pack shape; on the site, confirm the IronWrap Roofing DocTypes exist.
 4. Create a tenant-scoped API key/secret pair for the bus, plus a separate pair for every
    Hermes MCP actor. Each MCP pair must be issued to exactly that process's
    `HERMES_ACTOR_USER`; never use the bus pair to attest an actor action.
@@ -121,7 +131,8 @@ formats on the tenant's ERPNext site, review links in `config/tenants/<tenant>.j
 
 Run all of these before calling the clone done:
 
-1. `node tools/validate-tenant-config.mjs` passes (id uniqueness + sender-domain isolation).
+1. `node tools/validate-tenant-config.mjs` passes (id uniqueness + sender-domain isolation), and
+   `tools/validate-tenant-runtime.mjs` passes against the intended tenant runtime values.
 2. Cross-tenant token test: call the new Worker's `GET /admin/envelopes` with the OLD
    tenant's `ADMIN_TOKEN`; expect 401. Repeat in the other direction.
 3. Data plane: `wrangler d1 execute <tenant>-bus --remote --command "SELECT COUNT(*) FROM envelopes"`
@@ -142,7 +153,7 @@ Gate 11 (blueprint): "A second demo company runs with separate brand/config/data
 
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
-- [ ] All 15 D1 migrations applied to the tenant database.
+- [ ] All 18 D1 migrations through `0018_customer_portal_links.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed and its own API key pair.
 - [ ] Tenant Shared Drives + R2 bucket receive a test job's files.
 - [ ] Tenant QuickBooks webhook verified (signature accepted on `POST /webhook/quickbooks`).

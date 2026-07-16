@@ -8,6 +8,7 @@ const tenantDir = join(root, "config", "tenants");
 
 const requiredAreas = [
   "tenant",
+  "runtime",
   "brand",
   "geography",
   "locale",
@@ -49,6 +50,8 @@ for (const { file, doc } of tenants) {
   assert.ok(doc.tenant.id.length > 0, `${file} tenant.id must be non-empty`);
   assert.equal(typeof doc.tenant.display_name, "string", `${file} tenant.display_name must be a string`);
   assert.equal(typeof doc.tenant.status, "string", `${file} tenant.status must be a string`);
+  assert.equal(typeof doc.runtime.app_tenant_name, "string", `${file} runtime.app_tenant_name must be a string`);
+  assert.ok(doc.runtime.app_tenant_name.trim().length > 0, `${file} runtime.app_tenant_name must be non-empty`);
 
   const compliance = doc.geography?.compliance;
   assert.ok(compliance, `${file} missing geography.compliance`);

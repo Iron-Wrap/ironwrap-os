@@ -37,6 +37,21 @@ jobs:
         run: node tools/validate-hermes-config.mjs
       - name: Validate tenant configs (no secrets, isolated namespaces)
         run: node tools/validate-tenant-config.mjs
+      - name: Test tenant runtime preflight
+        run: node --test tools/validate-tenant-runtime.test.mjs
+      - name: Validate IronWrap runtime tenant identity
+        env:
+          IRONWRAP_TENANT_CONFIG: ironwrap
+          APP_TENANT_ID: ironwrap
+          APP_TENANT_NAME: IronWrap OS
+          APP_TENANT_BRAND: IronWrap
+          APP_LOCALE: en-CA
+          APP_TIME_ZONE: America/Edmonton
+          APP_CURRENCY: CAD
+          FROM_EMAIL: sales@ironwrapexteriors.com
+          APP_BFF_ENABLED: "false"
+          APP_CUSTOMER_PORTAL_ENABLED: "false"
+        run: node tools/validate-tenant-runtime.mjs
       - name: Prove deterministic AppliCad extraction
         run: node tools/applicad-xml-proof.mjs --check
 

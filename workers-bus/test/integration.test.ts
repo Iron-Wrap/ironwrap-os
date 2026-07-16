@@ -182,6 +182,7 @@ test("POST /ingest/estimate: configurator payload lands in owned store and ERPNe
     erpCalls.push({ url, init: init ?? {} });
     if ((init?.method ?? "GET") === "GET") return json({ data: [] });
     if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-EST-1" } });
+    if (url.endsWith("/api/resource/Roofing%20Customer")) return json({ data: { name: "RC-EST-1" } });
     if (url.endsWith("/api/resource/Roofing%20Property")) return json({ data: { name: "RP-EST-1" } });
     if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-EST-1" } });
     if (url.endsWith("/api/resource/Production%20Gate%20State")) {
@@ -241,6 +242,12 @@ test("POST /ingest/estimate: configurator payload lands in owned store and ERPNe
   const job = JSON.parse(String(erpCalls.find((c) => c.url.endsWith("/api/resource/Roof%20Job"))?.init.body));
   assert.equal(job.roof_job_id, "job:26-180-ER");
   assert.equal(job.job_number, "26-180-ER");
+  assert.equal(job.customer, "RC-EST-1");
+
+  const customer = JSON.parse(String(erpCalls.find((c) => c.url.endsWith("/api/resource/Roofing%20Customer"))?.init.body));
+  assert.equal(customer.customer_id, "customer:email:jim_example.com");
+  assert.equal(customer.display_name, "Jim Rakievich");
+  assert.equal(customer.lead_envelope, "LE-EST-1");
 
   const estimate = JSON.parse(String(erpCalls.find((c) => c.url.endsWith("/api/resource/Instant%20Estimate%20Session"))?.init.body));
   assert.equal(estimate.estimate_session_id, "estimate:26-180-ER");
@@ -264,6 +271,7 @@ test("POST /ingest/estimate: repeated project id is idempotent and does not re-d
     erpCalls.push({ url, init: init ?? {} });
     if ((init?.method ?? "GET") === "GET") return json({ data: [] });
     if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-EST-IDEMPOTENT" } });
+    if (url.endsWith("/api/resource/Roofing%20Customer")) return json({ data: { name: "RC-EST-IDEMPOTENT" } });
     if (url.endsWith("/api/resource/Roofing%20Property")) return json({ data: { name: "RP-EST-IDEMPOTENT" } });
     if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-EST-IDEMPOTENT" } });
     if (url.endsWith("/api/resource/Production%20Gate%20State")) {
@@ -312,6 +320,7 @@ test("POST /ingest/estimate: repeated project id is idempotent and does not re-d
   assert.equal(r2.length, 1);
   assert.equal(db.filter((c) => c.sql.includes("INSERT INTO envelopes")).length, 1);
   assert.equal(erpCalls.filter((c) => c.url.endsWith("/api/resource/Lead%20Envelope")).length, 1);
+  assert.equal(erpCalls.filter((c) => c.url.endsWith("/api/resource/Roofing%20Customer")).length, 1);
   assert.equal(erpCalls.filter((c) => c.url.endsWith("/api/resource/Instant%20Estimate%20Session")).length, 1);
 });
 

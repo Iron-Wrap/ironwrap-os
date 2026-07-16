@@ -44,6 +44,8 @@ test("queue: Frappe lead visibility precedes JobNimbus and transport sync marks 
     if (url.endsWith("/api/resource/Lead%20Envelope/LE-0001") && init?.method === "PUT") {
       return json({ data: { name: "LE-0001" } });
     }
+    if (url.includes("/api/resource/Roofing%20Customer?")) return json({ data: [] });
+    if (url.endsWith("/api/resource/Roofing%20Customer")) return json({ data: { name: "RC-0001" } });
     if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [] });
     if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-0001" } });
     if (url.includes("/api/resource/Production%20Gate%20State?")) return json({ data: [] });
@@ -97,6 +99,7 @@ test("queue: Frappe lead visibility precedes JobNimbus and transport sync marks 
   assert.equal(acked, 1);
   assert.equal(retried, 0);
   assert.ok(fetches.some((f) => f.url.endsWith("/api/resource/Lead%20Envelope")));
+  assert.ok(fetches.some((f) => f.url.endsWith("/api/resource/Roofing%20Customer")));
   assert.ok(fetches.some((f) => f.url.endsWith("/api/resource/Roof%20Job")));
   assert.equal(fetches.filter((f) => f.url.endsWith("/api/resource/Production%20Gate%20State")).length, 7);
   const initialLeadWrite = fetches.findIndex((f) => f.url.endsWith("/api/resource/Lead%20Envelope"));

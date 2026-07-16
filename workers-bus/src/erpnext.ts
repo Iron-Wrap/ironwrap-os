@@ -88,7 +88,17 @@ export async function pushToErpNext(
   const p = safeJson(rec.payload_json);
   const lead = await upsertLeadEnvelope(cfg, base, doctype, rec, jn);
   const property = await upsertProperty(cfg, base, rec, p, lead.name);
-  const roofJob = await upsertRoofJob(cfg, base, rec, p, lead.name, property?.name, jn);
+  const customer = await upsertRoofingCustomer(cfg, base, rec, lead.name);
+  const roofJob = await upsertRoofJob(
+    cfg,
+    base,
+    rec,
+    p,
+    lead.name,
+    property?.name,
+    customer.name,
+    jn,
+  );
   const productionGateCount = await ensureInitialProductionGates(cfg, base, roofJob.name);
   const instantEstimate = await upsertInstantEstimateSession(cfg, base, rec, p, lead.name, roofJob.name);
 
@@ -194,6 +204,37 @@ async function upsertProperty(
   });
 }
 
+/**
+ * A customer is an owned, tenant-local identity. Prefer a normalized contact method so a later
+ * lead for the same person reuses the record; never use a display name as an identity key.
+ * Source retries create missing records only, preserving any human correction to the customer.
+ */
+async function upsertRoofingCustomer(
+  env: ErpEnv,
+  base: string,
+  rec: EnvelopeRecord,
+  leadName: string,
+): Promise<ErpNextResult> {
+  const contactName = str(rec.contact_name);
+  const nameParts = contactName?.split(/\s+/).filter(Boolean) ?? [];
+  const [firstName, ...lastName] = nameParts;
+  const id = customerId(rec);
+  const displayName = contactName
+    ?? str(rec.contact_email)
+    ?? str(rec.contact_phone)
+    ?? `Lead ${rec.envelope_id.slice(-8)}`;
+
+  return await createIfMissingByField(env, base, "Roofing Customer", "customer_id", id, {
+    customer_id: id,
+    display_name: displayName,
+    first_name: firstName,
+    last_name: lastName.length ? lastName.join(" ") : undefined,
+    phone: str(rec.contact_phone),
+    email: str(rec.contact_email),
+    lead_envelope: leadName,
+  });
+}
+
 async function upsertRoofJob(
   env: ErpEnv,
   base: string,
@@ -201,12 +242,13 @@ async function upsertRoofJob(
   p: Record<string, unknown>,
   leadName: string,
   propertyName: string | undefined,
+  customerName: string,
   jn?: JnResult,
 ): Promise<ErpNextResult> {
   const roofJobId = stableId("job", instantEstimateProjectRef(p), rec.envelope_id);
   // `job_status` and `current_gate_state` are human-owned operational state. Queue retries may
   // create a missing initial job but must not reset an in-progress job to qualification.
-  return await createIfMissingByField(env, base, "Roof Job", "roof_job_id", roofJobId, {
+  const roofJob = await createIfMissingByField(env, base, "Roof Job", "roof_job_id", roofJobId, {
     roof_job_id: roofJobId,
     brand: brand(p),
     job_number: jn?.jobNumber ?? rec.job_ref ?? undefined,
@@ -214,10 +256,36 @@ async function upsertRoofJob(
     job_status: "Qualified",
     lead_envelope: leadName,
     roofing_property: propertyName,
+    customer: customerName,
     current_gate_state: "qualification",
     qb_invoice_ref: undefined,
     jobnimbus_contact_id: jn?.contactId ?? rec.jn_contact_id ?? undefined,
     jobnimbus_job_id: jn?.jobId ?? rec.jn_job_id ?? undefined,
+  });
+  if (roofJob.reused) await linkRoofJobCustomerIfMissing(env, base, roofJob.name, customerName);
+  return roofJob;
+}
+
+/** Fill an old, unlinked job exactly once without replacing a customer selected by an operator. */
+async function linkRoofJobCustomerIfMissing(
+  env: ErpEnv,
+  base: string,
+  roofJobName: string,
+  customerName: string,
+): Promise<void> {
+  const current = await erpFetch(
+    env,
+    base,
+    "GET",
+    `/api/resource/${enc("Roof Job")}/${enc(roofJobName)}`,
+  );
+  const row = current.data;
+  const currentCustomer = row && typeof row === "object"
+    ? str((row as Record<string, unknown>).customer)
+    : undefined;
+  if (currentCustomer) return;
+  await erpFetch(env, base, "PUT", `/api/resource/${enc("Roof Job")}/${enc(roofJobName)}`, {
+    customer: customerName,
   });
 }
 
@@ -554,6 +622,14 @@ function safeJson(s: string): Record<string, unknown> {
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
+}
+
+function customerId(rec: EnvelopeRecord): string {
+  const email = str(rec.contact_email)?.toLowerCase();
+  if (email) return stableId("customer", `email:${email}`, rec.envelope_id);
+  const phone = str(rec.contact_phone)?.replace(/\D/g, "");
+  if (phone) return stableId("customer", `phone:${phone}`, rec.envelope_id);
+  return stableId("customer", undefined, rec.envelope_id);
 }
 
 function estimateProjectRef(p: Record<string, unknown>): string | undefined {

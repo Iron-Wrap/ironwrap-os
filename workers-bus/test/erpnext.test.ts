@@ -29,13 +29,14 @@ test("pushToErpNext: disabled flag is a no-op", async () => {
   assert.equal(await pushToErpNext({ ERPNEXT_ENABLED: "false" } as never, rec), null);
 });
 
-test("pushToErpNext: creates Lead Envelope, Roofing Property, and Roof Job", async (t) => {
+test("pushToErpNext: creates Lead Envelope, Roofing Customer, Property, and Roof Job", async (t) => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, init: init ?? {} });
     if ((init?.method ?? "GET") === "GET") return json({ data: [] });
     if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-0001" } });
+    if (url.endsWith("/api/resource/Roofing%20Customer")) return json({ data: { name: "RC-0001" } });
     if (url.endsWith("/api/resource/Roofing%20Property")) return json({ data: { name: "RP-0001" } });
     if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-0001" } });
     if (url.endsWith("/api/resource/Production%20Gate%20State")) {
@@ -59,7 +60,7 @@ test("pushToErpNext: creates Lead Envelope, Roofing Property, and Roof Job", asy
     roofJobName: "RJ-0001",
     productionGateCount: 7,
   });
-  assert.equal(calls.length, 20);
+  assert.equal(calls.length, 22);
   assert.match(calls[0].url, /^https:\/\/erp\.example\.com\/api\/resource\/Lead%20Envelope\?/);
   assert.equal(calls[0].init.headers?.["authorization" as never], "token key:secret");
   const leadBody = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/resource/Lead%20Envelope"))?.init.body));
@@ -67,6 +68,15 @@ test("pushToErpNext: creates Lead Envelope, Roofing Property, and Roof Job", asy
   assert.equal(leadBody.triage_status, "Untriaged");
   assert.equal(leadBody.jobnimbus_contact_id, "C-1");
   assert.equal(leadBody.jobnimbus_job_id, "J-1");
+
+  const customerBody = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/resource/Roofing%20Customer"))?.init.body));
+  assert.equal(customerBody.customer_id, "customer:email:jane_example.com");
+  assert.equal(customerBody.display_name, "Jane Doe");
+  assert.equal(customerBody.first_name, "Jane");
+  assert.equal(customerBody.last_name, "Doe");
+  assert.equal(customerBody.phone, "+15875551234");
+  assert.equal(customerBody.email, "jane@example.com");
+  assert.equal(customerBody.lead_envelope, "LE-0001");
 
   const propertyBody = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/resource/Roofing%20Property"))?.init.body));
   assert.equal(propertyBody.property_key, "property:1 main st");
@@ -80,6 +90,7 @@ test("pushToErpNext: creates Lead Envelope, Roofing Property, and Roof Job", asy
   assert.equal(jobBody.job_status, "Qualified");
   assert.equal(jobBody.lead_envelope, "LE-0001");
   assert.equal(jobBody.roofing_property, "RP-0001");
+  assert.equal(jobBody.customer, "RC-0001");
   assert.equal(jobBody.current_gate_state, "qualification");
   assert.equal(jobBody.jobnimbus_contact_id, "C-1");
   assert.equal(jobBody.jobnimbus_job_id, "J-1");
@@ -99,8 +110,10 @@ test("pushToErpNext: retry never resets existing human-owned operational records
     calls.push({ url, init: init ?? {} });
     if (url.includes("/api/resource/Lead%20Envelope?")) return json({ data: [{ name: "LE-TRIAGED" }] });
     if (url.endsWith("/api/resource/Lead%20Envelope/LE-TRIAGED")) return json({ data: { name: "LE-TRIAGED" } });
+    if (url.includes("/api/resource/Roofing%20Customer?")) return json({ data: [{ name: "RC-TRIAGED" }] });
     if (url.includes("/api/resource/Roofing%20Property?")) return json({ data: [{ name: "RP-TRIAGED" }] });
     if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-TRIAGED" }] });
+    if (url.endsWith("/api/resource/Roof%20Job/RJ-TRIAGED")) return json({ data: { name: "RJ-TRIAGED", customer: "RC-HUMAN" } });
     if (url.includes("/api/resource/Production%20Gate%20State?")) return json({ data: [{ name: "gate" }] });
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -117,12 +130,48 @@ test("pushToErpNext: retry never resets existing human-owned operational records
   for (const forbidden of ["triage_status", "triaged_by", "triaged_at", "triage_summary"]) {
     assert.equal(Object.hasOwn(body, forbidden), false, `${forbidden} must remain human-owned`);
   }
-  const protectedDoctypes = ["Roofing%20Property", "Roof%20Job", "Production%20Gate%20State"];
+  const protectedDoctypes = ["Roofing%20Customer", "Roofing%20Property", "Roof%20Job", "Production%20Gate%20State"];
   assert.equal(
-    calls.some((call) => protectedDoctypes.some((doctype) => call.url.endsWith(`/api/resource/${doctype}`) ||
+    calls.some((call) => call.init.method !== "GET" && protectedDoctypes.some((doctype) => call.url.endsWith(`/api/resource/${doctype}`) ||
       call.url.includes(`/api/resource/${doctype}/`))),
     false,
     "retry must not overwrite property, job, or gate business state",
+  );
+});
+
+test("pushToErpNext: fills an old unlinked job customer without replacing an existing assignment", async (t) => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    if (url.includes("/api/resource/Lead%20Envelope?")) return json({ data: [{ name: "LE-OLD" }] });
+    if (url.endsWith("/api/resource/Lead%20Envelope/LE-OLD")) return json({ data: { name: "LE-OLD" } });
+    if (url.includes("/api/resource/Roofing%20Customer?")) return json({ data: [{ name: "RC-OLD" }] });
+    if (url.includes("/api/resource/Roofing%20Property?")) return json({ data: [{ name: "RP-OLD" }] });
+    if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-OLD" }] });
+    if (url.endsWith("/api/resource/Roof%20Job/RJ-OLD") && init?.method === "GET") {
+      return json({ data: { name: "RJ-OLD", customer: null } });
+    }
+    if (url.endsWith("/api/resource/Roof%20Job/RJ-OLD") && init?.method === "PUT") {
+      return json({ data: { name: "RJ-OLD", customer: "RC-OLD" } });
+    }
+    if (url.includes("/api/resource/Production%20Gate%20State?")) return json({ data: [{ name: "gate" }] });
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  await pushToErpNext({
+    ERPNEXT_ENABLED: "true", ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "key", ERPNEXT_API_SECRET: "secret",
+  } as never, rec);
+
+  const customerLink = calls.find((call) =>
+    call.url.endsWith("/api/resource/Roof%20Job/RJ-OLD") && call.init.method === "PUT",
+  );
+  assert.ok(customerLink);
+  assert.deepEqual(JSON.parse(String(customerLink.init.body)), { customer: "RC-OLD" });
+  assert.equal(
+    calls.some((call) => call.url.endsWith("/api/resource/Roof%20Job") && call.init.method === "POST"),
+    false,
   );
 });
 
@@ -161,6 +210,7 @@ test("pushToErpNext: captures instant estimate sessions as review-gated ERPNext 
     calls.push({ url, init: init ?? {} });
     if ((init?.method ?? "GET") === "GET") return json({ data: [] });
     if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-0002" } });
+    if (url.endsWith("/api/resource/Roofing%20Customer")) return json({ data: { name: "RC-0002" } });
     if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-0002" } });
     if (url.endsWith("/api/resource/Production%20Gate%20State")) {
       const body = JSON.parse(String(init?.body));

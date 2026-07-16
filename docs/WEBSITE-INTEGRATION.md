@@ -59,7 +59,8 @@ export async function POST(req: Request) {
 
 ## Setup steps (whoever owns the website)
 1. In your hosting (Vercel/…) set env var **`IRONWRAP_BUS_INGEST_TOKEN`** = the `INGEST_TOKEN`
-   (shared securely — it's in the deploy chat / your password manager). Set it for **both** brand sites.
+   retrieved through the approved secret store or owner-only handoff. Never place it in chat, source,
+   or client-side code. Set it for **both** brand sites.
 2. Add `forwardToBus(...)` to each lead form's server handler (home, quote, contact, service pages).
 3. Ensure forms send `brand` + the hidden attribution fields (`source_url`, `page_type`, `utm_*`).
 4. Deploy; submit one test from each form; confirm it appears in JobNimbus (and in the bus D1).

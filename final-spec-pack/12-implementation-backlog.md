@@ -1,5 +1,11 @@
 # 12 - Implementation Backlog
 
+> **Current authority (2026-07-16):** This retained backlog is planning/provenance.
+> [`18-phase-1-source-truth-and-build-contract.md`](./18-phase-1-source-truth-and-build-contract.md)
+> prevails on conflict: Worker/D1/R2 is the first write, the operating core is Frappe-only, the
+> Field Companion PWA is primary, and JobNimbus, GHL, Make, and Jotform are bridges. Legacy
+> `erpnext-*` names do not authorize ERPNext or DocuSeal.
+
 This backlog turns the spec pack into buildable work. Each item should be
 completed with evidence, not just marked done.
 
@@ -27,7 +33,10 @@ Do not expand this epic from older GHL-first notes.
 | J5 | Configure attachment categories | Categories | Docs/photos/proposals/materials/invoices organized |
 | J6 | Configure division routing | Division fields and queues | Residential, commercial, shop/supply, and steel/distribution route correctly |
 
-## Epic 2B - Field Capture Layer (Jotform Jobsite Photo)
+## Epic 2B - Field Capture Layer (Field Companion PWA)
+
+The owned Field Companion PWA is the target for offline photo, voice, blocker, and GPS proof.
+Jotform remains a temporary intake bridge until the PWA has real-device launch evidence.
 
 NaturalForms is dropped (stagnant). The Jotform "Jobsite Photo" form is the
 SOLE jobsite photo/geo tool ($0 incremental, reuses already-paid Jotform +

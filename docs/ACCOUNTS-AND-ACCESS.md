@@ -1,5 +1,10 @@
 # Accounts, Services & Access Register
 
+> **Historical capability/account register, not current operating truth.** Revalidate live ownership,
+> permissions, prices, and configurations before action. The binding launch contract is
+> [`LAUNCH-RUNBOOK.md`](./LAUNCH-RUNBOOK.md); the Phase 1 source of truth is
+> [`../final-spec-pack/18-phase-1-source-truth-and-build-contract.md`](../final-spec-pack/18-phase-1-source-truth-and-build-contract.md).
+
 Every account/service/access the end-state system needs, with status. Doubles as the **vendor
 register** required by `final-spec-pack/09` (compliance). Status: ✅ have · 🔲 need (set up / upgrade /
 enable) · ❌ retire (cancel to avoid double-paying) · ❓ confirm. 💲 = cost. Verified against repo
@@ -8,7 +13,7 @@ and handoff docs 2026-07-07.
 ## 1. CRM & operations
 | Service | Status | For | Action |
 |---|---|---|---|
-| JobNimbus | ✅ have | CRM / job truth / the spine | 🔲 confirm current tier + limits on the invoice — **API already works on the current plan** (proven live, so NO upgrade needed just for API); watch the **automation/integration cap** (~10 automations / 5 integrations on lower tiers) · 🔲 rotate API key · 🔲 configure record types (`Customer`/`Retail`), statuses, Lead Sources, pipeline stages |
+| JobNimbus | ✅ have | Temporary CRM/job bridge | 🔲 confirm current tier + limits on the invoice — **API already works on the current plan** (proven live, so NO upgrade needed just for API); watch the **automation/integration cap** (~10 automations / 5 integrations on lower tiers) · 🔲 rotate API key · 🔲 configure record types (`Customer`/`Retail`), statuses, Lead Sources, pipeline stages |
 | JobNimbus Engage | 🔲 need | 2-way SMS to clients (stage-triggered) | 🔲 subscribe (~USD $49+/mo) · 🔲 register A2P yourself (see §2) |
 | JobNimbus AssistAI | 🔲 need (Phase 2) | 24/7 AI phone receptionist | 🔲 enable after eval gate · 💲 $0.15/voice-min, set a monthly cap · ❓ confirm Canadian-number support with sales |
 

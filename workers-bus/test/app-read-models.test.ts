@@ -4,12 +4,13 @@ import {
   buildJobProofReadModel,
   buildJobReadModel,
   buildOwnerNowReadModel,
+  buildProductionRunwayReadModel,
   buildSalesReadModel,
   buildTodayReadModel,
   mctbStatus,
 } from "../src/app-read-models.ts";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
-import { FRAPPE_READ_FIELDS, OFFICE_SALES_READ_FIELDS } from "../src/frappe-read.ts";
+import { FRAPPE_READ_FIELDS, OFFICE_PRODUCTION_READ_FIELDS, OFFICE_SALES_READ_FIELDS } from "../src/frappe-read.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 
 const MODIFIED = "2026-07-10T11:00:00.000Z";
@@ -146,7 +147,7 @@ function envWithLeadTriageBroker(): AppEnv {
   } as AppEnv;
 }
 
-function installFrappeMock() {
+function installFrappeMock(sourceOverrides: Record<string, Array<Record<string, unknown>>> = {}) {
   const original = globalThis.fetch;
   const requests: Array<{ doctype: string; fields: string[]; filters: unknown[]; offset: number; limit: number }> = [];
   globalThis.fetch = async (input) => {
@@ -157,7 +158,7 @@ function installFrappeMock() {
     const offset = Number(url.searchParams.get("limit_start") ?? "0");
     const limit = Number(url.searchParams.get("limit_page_length") ?? "50");
     requests.push({ doctype, fields, filters, offset, limit });
-    const source = rowsFor(doctype);
+    const source = sourceOverrides[doctype] ?? rowsFor(doctype);
     const filtered = source.filter((row) => filters.every((filter) => matchFilter(row, filter)));
     const ordered = [...filtered].sort((left, right) => {
       const modified = String(right.modified ?? "").localeCompare(String(left.modified ?? ""));
@@ -381,6 +382,148 @@ test("owner Now is an office-only, exception-first roofing read model", async ()
   }
 });
 
+test("production runway is an office-only, bounded read that never treats a gate summary as dispatch authority", async () => {
+  const readyGates = ["JOB-B", "JOB-C"].flatMap((roofJob) =>
+    ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"].map((gate) => ({
+      name: `GATE-${roofJob}-${gate}`,
+      gate_id: `gate_${roofJob.toLowerCase()}_${gate.toLowerCase()}`,
+      roof_job: roofJob,
+      gate,
+      state: "Ready",
+      owner_user: "office-owner@example.com",
+      assigned_at: MODIFIED,
+      due_at: null,
+      blocker_reason: null,
+      modified: MODIFIED,
+    })),
+  );
+  const mock = installFrappeMock({
+    "Job Assignment": [
+      assignments[0]!,
+      { ...assignments[1]!, scheduled_start: null, scheduled_end: null },
+      {
+        name: "ASSIGN-C", assignment_id: "assignment_c", roof_job: "JOB-C", assignment_type: "Production",
+        status: "Assigned", assigned_user: null, crew_profile: "CREW-1",
+        scheduled_start: null, scheduled_end: null, blocker_reason: null, modified: MODIFIED,
+      },
+    ],
+    "Production Gate State": [
+      {
+        name: "GATE-A", gate_id: "gate_a", roof_job: "JOB-A", gate: "Materials", state: "Blocked",
+        owner_user: "office-owner@example.com", due_at: "2026-07-11 12:00:00",
+        blocker_reason: "Delivery not confirmed", modified: MODIFIED,
+      },
+      ...readyGates,
+    ],
+    "Supplier Order": [{
+      name: "ORDER-A", supplier_order_id: "order_a", roof_job: "JOB-A", status: "Ordered",
+      requested_delivery_date: "2026-07-12", delivery_notes: "Deliver to rear", order_summary_json: "financial", modified: MODIFIED,
+    }],
+  });
+  try {
+    const model = await buildProductionRunwayReadModel(env(), auth("ops", "ops@example.com"));
+    assert.deepEqual(model.summary, {
+      active_jobs: 3,
+      blocked: 1,
+      scheduled: 0,
+      needs_assignment: 1,
+      ready_for_review: 1,
+      needs_verification: 0,
+    });
+    assert.equal(model.jobs.find((job) => job.id === "JOB-A")?.lane, "blocked");
+    assert.equal(model.jobs.find((job) => job.id === "JOB-B")?.lane, "needs_assignment");
+    assert.equal(model.jobs.find((job) => job.id === "JOB-B")?.assignment, null);
+    assert.equal(model.jobs.find((job) => job.id === "JOB-C")?.lane, "ready_for_review");
+    assert.equal(model.jobs.find((job) => job.id === "JOB-C")?.gate_coverage, "complete");
+    assert.deepEqual(model.allowed_actions, ["job.read", "production.read"]);
+    assert.equal(model.jobs.find((job) => job.id === "JOB-C")?.next_action.includes("does not dispatch"), true);
+    const serialized = JSON.stringify(model);
+    for (const secret of ["financial-secret", "customer0@private.example", "Deliver to rear", "office-owner@example.com"]) {
+      assert.equal(serialized.includes(secret), false, `leaked ${secret}`);
+    }
+    const jobRequest = mock.requests.find((request) => request.doctype === "Roof Job");
+    assert.deepEqual(jobRequest?.fields, OFFICE_PRODUCTION_READ_FIELDS["Roof Job"]);
+    const assignmentRequest = mock.requests.find((request) => request.doctype === "Job Assignment");
+    assert.deepEqual(assignmentRequest?.fields, OFFICE_PRODUCTION_READ_FIELDS["Job Assignment"]);
+    assert.deepEqual(assignmentRequest?.filters, [
+      ["Job Assignment", "status", "in", ["Assigned", "Accepted", "In Progress", "Blocked"]],
+      ["Job Assignment", "assignment_type", "=", "Production"],
+    ]);
+    const gateRequest = mock.requests.find((request) => request.doctype === "Production Gate State");
+    assert.deepEqual(gateRequest?.fields, OFFICE_PRODUCTION_READ_FIELDS["Production Gate State"]);
+    assert.deepEqual(gateRequest?.filters, [["Production Gate State", "roof_job", "in", ["JOB-C", "JOB-B", "JOB-A"]]]);
+    const materialRequest = mock.requests.find((request) => request.doctype === "Supplier Order");
+    assert.deepEqual(materialRequest?.fields, OFFICE_PRODUCTION_READ_FIELDS["Supplier Order"]);
+    assert.deepEqual(materialRequest?.filters, [
+      ["Supplier Order", "roof_job", "in", ["JOB-C", "JOB-B", "JOB-A"]],
+      ["Supplier Order", "status", "in", ["Needs Review", "Shortage"]],
+    ]);
+    await assert.rejects(
+      async () => await buildProductionRunwayReadModel(env(), auth("field", "crew@example.com")),
+      /owner_scope_required/,
+    );
+  } finally {
+    mock.restore();
+  }
+});
+
+test("production runway with a truncated assignment source does not claim an unreturned crew is missing", async () => {
+  const partialAssignments = Array.from({ length: 100 }, (_, index) => ({
+    name: `ASSIGN-PARTIAL-${index}`,
+    roof_job: `OTHER-${index}`,
+    assignment_type: "Production",
+    status: "Assigned",
+    scheduled_start: null,
+    scheduled_end: null,
+    modified: MODIFIED,
+  }));
+  const mock = installFrappeMock({ "Job Assignment": partialAssignments });
+  try {
+    const model = await buildProductionRunwayReadModel(env(), auth("ops", "ops@example.com"));
+    assert.ok(model.partial_sources.includes("active_assignments"));
+    assert.equal(model.jobs.find((job) => job.id === "JOB-C")?.lane, "needs_verification");
+    assert.equal(model.jobs.find((job) => job.id === "JOB-C")?.assignment, null);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("production runway with a truncated material source never promotes a job to ready for review", async () => {
+  const readyGates = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"].map((gate) => ({
+    name: `GATE-B-${gate}`,
+    roof_job: "JOB-B",
+    gate,
+    state: "Ready",
+    modified: MODIFIED,
+  }));
+  const partialMaterials = Array.from({ length: 100 }, (_, index) => ({
+    name: `ORDER-PARTIAL-${index}`,
+    roof_job: "JOB-C",
+    status: "Shortage",
+    requested_delivery_date: null,
+    modified: MODIFIED,
+  }));
+  const mock = installFrappeMock({
+    "Job Assignment": [
+      assignments[0]!,
+      { ...assignments[1]!, assignment_type: "Production", scheduled_start: null, scheduled_end: null },
+    ],
+    "Production Gate State": [
+      { name: "GATE-A", roof_job: "JOB-A", gate: "Materials", state: "Blocked", modified: MODIFIED },
+      ...readyGates,
+    ],
+    "Supplier Order": partialMaterials,
+  });
+  try {
+    const model = await buildProductionRunwayReadModel(env(), auth("ops", "ops@example.com"));
+    assert.ok(model.partial_sources.includes("material_exceptions"));
+    assert.equal(model.jobs.find((job) => job.id === "JOB-B")?.gate_coverage, "complete");
+    assert.equal(model.jobs.find((job) => job.id === "JOB-B")?.lane, "needs_verification");
+  } finally {
+    mock.restore();
+  }
+});
+
 test("Sales Desk receives a bounded office contract without widening Owner Now or leaking raw records", async () => {
   const mock = installFrappeMock();
   try {
@@ -554,6 +697,25 @@ test("owner Now HTTP route does not expose the office queue to field sessions", 
     const field = await handleAuthenticatedRoute(request, env(), auth("field", "crew@example.com"));
     assert.equal(field.status, 403);
     assert.deepEqual(await field.json(), { error: "forbidden" });
+    assert.equal(mock.requests.length, callsBeforeDenied);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("production runway HTTP route is private and starts no upstream read for field sessions", async () => {
+  const mock = installFrappeMock();
+  try {
+    const request = new Request("https://app.example.com/api/v1/production");
+    const office = await handleAuthenticatedRoute(request, env(), auth("ops", "ops@example.com"));
+    assert.equal(office.status, 200);
+    assert.equal(office.headers.get("cache-control"), "private, no-store");
+    assert.equal((await office.json() as { summary: { active_jobs: number } }).summary.active_jobs, 3);
+
+    const callsBeforeDenied = mock.requests.length;
+    const field = await handleAuthenticatedRoute(request, env(), auth("field", "crew@example.com"));
+    assert.equal(field.status, 403);
+    assert.deepEqual(await field.json(), { error: "office_role_required" });
     assert.equal(mock.requests.length, callsBeforeDenied);
   } finally {
     mock.restore();

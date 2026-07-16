@@ -1,12 +1,19 @@
 import type { AppEnv } from "./app-types.ts";
 
 export type FrappeDocType = keyof typeof FRAPPE_READ_FIELDS;
+export type OfficeProductionDocType = keyof typeof OFFICE_PRODUCTION_READ_FIELDS;
 export type OfficeSalesDocType = keyof typeof OFFICE_SALES_READ_FIELDS;
 export type OfficeEstimatorDocType = keyof typeof OFFICE_ESTIMATOR_READ_FIELDS;
 export type OfficeEstimatorDetailDocType = keyof typeof OFFICE_ESTIMATOR_DETAIL_READ;
 export type CustomerPortalDocType = keyof typeof CUSTOMER_PORTAL_READ_FIELDS;
 export type FrappeFilter = readonly [
   doctype: FrappeDocType,
+  field: string,
+  operator: string,
+  value: unknown,
+];
+export type OfficeProductionFrappeFilter = readonly [
+  doctype: OfficeProductionDocType,
   field: string,
   operator: string,
   value: unknown,
@@ -100,6 +107,22 @@ export const FRAPPE_READ_FIELDS = {
     "name", "supplier_order_id", "roof_job", "status", "prepared_at", "requested_delivery_date",
     "delivery_notes", "modified",
   ],
+} as const;
+
+/**
+ * Production runway is a separate office projection. It cannot receive contact links, field
+ * blocker text, staff identities, or supplier delivery notes simply because another office read
+ * model needs them.
+ */
+export const OFFICE_PRODUCTION_READ_FIELDS = {
+  "Roof Job": [
+    "name", "job_number", "brand", "service_type", "job_status", "modified",
+  ],
+  "Job Assignment": [
+    "name", "roof_job", "assignment_type", "status", "scheduled_start", "scheduled_end", "modified",
+  ],
+  "Production Gate State": ["name", "roof_job", "gate", "state", "modified"],
+  "Supplier Order": ["name", "roof_job", "status", "requested_delivery_date", "modified"],
 } as const;
 
 /**
@@ -272,6 +295,13 @@ const FILTER_FIELDS: Readonly<Record<FrappeDocType, ReadonlySet<string>>> = {
   "Supplier Order": new Set(["roof_job", "status"]),
 };
 
+const OFFICE_PRODUCTION_FILTER_FIELDS: Readonly<Record<OfficeProductionDocType, ReadonlySet<string>>> = {
+  "Roof Job": new Set(["name", "job_status"]),
+  "Job Assignment": new Set(["roof_job", "assignment_type", "status"]),
+  "Production Gate State": new Set(["roof_job", "state"]),
+  "Supplier Order": new Set(["roof_job", "status"]),
+};
+
 const OFFICE_SALES_FILTER_FIELDS: Readonly<Record<OfficeSalesDocType, ReadonlySet<string>>> = {
   "Lead Envelope": new Set(["name", "triage_status", "status"]),
   "Roof Job": new Set(["name", "lead_envelope"]),
@@ -329,6 +359,27 @@ export async function listFrappeResourcePage(
     offset,
     FRAPPE_READ_FIELDS,
     FILTER_FIELDS,
+  );
+}
+
+/**
+ * Dedicated office-only production runway lookup. Keep this projection separate from the broader
+ * field packet contract so production planning cannot accidentally acquire customer or free text.
+ */
+export async function listOfficeProductionFrappeResource(
+  env: AppEnv,
+  doctype: OfficeProductionDocType,
+  filters: readonly OfficeProductionFrappeFilter[] = [],
+  limit = 50,
+): Promise<FrappeRow[]> {
+  return await listFrappeResourcePageForContract(
+    env,
+    doctype,
+    filters,
+    limit,
+    0,
+    OFFICE_PRODUCTION_READ_FIELDS,
+    OFFICE_PRODUCTION_FILTER_FIELDS,
   );
 }
 

@@ -1,5 +1,6 @@
 import {
   BriefcaseBusiness,
+  CalendarClock,
   CircleGauge,
   ClipboardCheck,
   Settings,
@@ -12,7 +13,7 @@ export type AppRole = (typeof appRoles)[number];
 
 export interface NavigationItem {
   label: string;
-  to: "/today" | "/check-in" | "/owner" | "/approvals" | "/sales" | "/settings";
+  to: "/today" | "/check-in" | "/owner" | "/approvals" | "/production" | "/sales" | "/settings";
   icon: LucideIcon;
   activeColor: "accent" | "ok" | "warning";
 }
@@ -20,6 +21,7 @@ export interface NavigationItem {
 const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
   owner: [
     { label: "Now", to: "/owner", icon: CircleGauge, activeColor: "warning" },
+    { label: "Production", to: "/production", icon: CalendarClock, activeColor: "ok" },
     { label: "Approvals", to: "/approvals", icon: ShieldCheck, activeColor: "warning" },
     { label: "Today", to: "/today", icon: ClipboardCheck, activeColor: "accent" },
     { label: "Sales", to: "/sales", icon: BriefcaseBusiness, activeColor: "ok" },
@@ -27,6 +29,7 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
   ],
   ops: [
     { label: "Now", to: "/owner", icon: CircleGauge, activeColor: "warning" },
+    { label: "Production", to: "/production", icon: CalendarClock, activeColor: "ok" },
     { label: "Approvals", to: "/approvals", icon: ShieldCheck, activeColor: "warning" },
     { label: "Today", to: "/today", icon: ClipboardCheck, activeColor: "accent" },
     { label: "Sales", to: "/sales", icon: BriefcaseBusiness, activeColor: "ok" },

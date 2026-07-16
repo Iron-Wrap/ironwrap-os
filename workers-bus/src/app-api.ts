@@ -62,6 +62,7 @@ import {
   buildJobProofReadModel,
   buildJobReadModel,
   buildOwnerNowReadModel,
+  buildProductionRunwayReadModel,
   buildSalesReadModel,
   buildTodayReadModel,
 } from "./app-read-models.ts";
@@ -341,6 +342,16 @@ export async function handleAuthenticatedRoute(
     }
     try {
       return privateAppJson(await buildOwnerNowReadModel(env, auth));
+    } catch {
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
+    }
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/production") {
+    if (auth.session.role !== "owner" && auth.session.role !== "ops") {
+      return privateAppJson({ error: "office_role_required" }, 403);
+    }
+    try {
+      return privateAppJson(await buildProductionRunwayReadModel(env, auth));
     } catch {
       return privateAppJson({ error: "upstream_unavailable" }, 502);
     }

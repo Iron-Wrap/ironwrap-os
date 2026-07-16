@@ -25,6 +25,9 @@ const ApprovalInboxPage = lazy(async () => ({
 const SalesDeskPage = lazy(async () => ({
   default: (await import("./sales/sales-desk-page")).SalesDeskPage,
 }));
+const ProductionRunwayPage = lazy(async () => ({
+  default: (await import("./production/production-runway-page")).ProductionRunwayPage,
+}));
 const LeadTriagePreparePage = lazy(async () => ({
   default: (await import("./sales/lead-triage-prepare-page")).LeadTriagePreparePage,
 }));
@@ -232,6 +235,12 @@ const salesRoute = createRoute({
   component: SalesRoute,
 });
 
+const productionRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/production",
+  component: ProductionRoute,
+});
+
 const estimatorWorkbenchRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/estimator/jobs/$jobId",
@@ -266,6 +275,14 @@ function SalesRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
       <SalesDeskPage />
+    </Suspense>
+  );
+}
+
+function ProductionRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <ProductionRunwayPage />
     </Suspense>
   );
 }
@@ -328,6 +345,7 @@ const routeTree = rootRoute.addChildren([
     jobCheckInRoute,
     ownerRoute,
     approvalsRoute,
+    productionRoute,
     salesRoute,
     leadTriagePrepareRoute,
     estimatorWorkbenchRoute,

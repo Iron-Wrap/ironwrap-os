@@ -4,6 +4,7 @@ export type FrappeDocType = keyof typeof FRAPPE_READ_FIELDS;
 export type OfficeSalesDocType = keyof typeof OFFICE_SALES_READ_FIELDS;
 export type OfficeEstimatorDocType = keyof typeof OFFICE_ESTIMATOR_READ_FIELDS;
 export type OfficeEstimatorDetailDocType = keyof typeof OFFICE_ESTIMATOR_DETAIL_READ;
+export type CustomerPortalDocType = keyof typeof CUSTOMER_PORTAL_READ_FIELDS;
 export type FrappeFilter = readonly [
   doctype: FrappeDocType,
   field: string,
@@ -18,6 +19,12 @@ export type OfficeSalesFrappeFilter = readonly [
 ];
 export type OfficeEstimatorFrappeFilter = readonly [
   doctype: OfficeEstimatorDocType,
+  field: string,
+  operator: string,
+  value: unknown,
+];
+export type CustomerPortalFrappeFilter = readonly [
+  doctype: CustomerPortalDocType,
   field: string,
   operator: string,
   value: unknown,
@@ -166,6 +173,42 @@ export const OFFICE_ESTIMATOR_READ_FIELDS = {
 } as const;
 
 /**
+ * Customer capability links deliberately use a fourth Frappe contract. This is not a filtered
+ * version of the office/field contracts: raw storage locations, source systems, internal notes,
+ * operator identities, pricing snapshots, and rich proposal content are absent at the boundary.
+ * The customer-portal projector applies the publication-state predicates again before returning
+ * any record to a browser.
+ */
+export const CUSTOMER_PORTAL_READ_FIELDS = {
+  "Roof Job": [
+    "name", "roof_job_id", "job_number", "brand", "service_type", "job_status", "customer", "quotation", "modified",
+  ],
+  "Customer Quote": [
+    "name", "customer_quote_id", "roof_job", "customer", "quote_version", "status", "quote_total", "currency",
+    "deposit_amount", "amount_due", "amount_paid", "balance_due", "payment_status", "payment_due_date", "valid_until",
+    "approved_at", "accepted_at", "scope_summary", "assumptions", "exclusions", "modified",
+  ],
+  "Proposal Evidence Pack": [
+    "name", "pack_id", "roof_job", "quotation", "status", "prepared_at", "approved_at", "signed_at", "modified",
+  ],
+  "Scope Clause": [
+    "name", "scope_clause_id", "roof_job", "clause_type", "title", "clause_text", "version", "status",
+    "customer_visible", "modified",
+  ],
+  "Evidence Item": [
+    "name", "evidence_id", "roof_job", "evidence_type", "proof_slot", "captured_at", "customer_safe", "summary",
+    "sync_state", "modified",
+  ],
+  "Completion Packet": [
+    "name", "completion_packet_id", "roof_job", "status", "approved_at", "warranty_ready", "modified",
+  ],
+  "Warranty Packet": [
+    "name", "warranty_packet_id", "roof_job", "status", "material_system", "warranty_terms", "coverage_start",
+    "coverage_years", "exclusions", "issued_at", "modified",
+  ],
+} as const;
+
+/**
  * Frappe's direct-document endpoint returns complete records, including child tables. Only these
  * two explicit records need detail reads, and every parent/child field is projected before the
  * result is returned to an app read model.
@@ -248,6 +291,16 @@ const OFFICE_ESTIMATOR_FILTER_FIELDS: Readonly<Record<OfficeEstimatorDocType, Re
   "Scope Clause": new Set(["roof_job", "status"]),
 };
 
+const CUSTOMER_PORTAL_FILTER_FIELDS: Readonly<Record<CustomerPortalDocType, ReadonlySet<string>>> = {
+  "Roof Job": new Set(["name"]),
+  "Customer Quote": new Set(["roof_job", "status"]),
+  "Proposal Evidence Pack": new Set(["roof_job", "quotation", "status"]),
+  "Scope Clause": new Set(["roof_job", "status", "customer_visible"]),
+  "Evidence Item": new Set(["roof_job", "customer_safe", "sync_state"]),
+  "Completion Packet": new Set(["roof_job", "status"]),
+  "Warranty Packet": new Set(["roof_job", "status"]),
+};
+
 const FILTER_OPERATORS = new Set(["=", "in", "like"]);
 const MAX_FRAPPE_READ_RESPONSE_BYTES = 768 * 1024;
 const MAX_ESTIMATOR_DETAIL_CHILD_ROWS = 300;
@@ -318,6 +371,27 @@ export async function listOfficeEstimatorFrappeResource(
     0,
     OFFICE_ESTIMATOR_READ_FIELDS,
     OFFICE_ESTIMATOR_FILTER_FIELDS,
+  );
+}
+
+/**
+ * Dedicated customer-capability lookup. Callers cannot ask for an office field, arbitrary
+ * DocType, or arbitrary filter through this function.
+ */
+export async function listCustomerPortalFrappeResource(
+  env: AppEnv,
+  doctype: CustomerPortalDocType,
+  filters: readonly CustomerPortalFrappeFilter[] = [],
+  limit = 50,
+): Promise<FrappeRow[]> {
+  return await listFrappeResourcePageForContract(
+    env,
+    doctype,
+    filters,
+    limit,
+    0,
+    CUSTOMER_PORTAL_READ_FIELDS,
+    CUSTOMER_PORTAL_FILTER_FIELDS,
   );
 }
 

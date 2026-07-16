@@ -65,6 +65,7 @@ import {
   buildSalesReadModel,
   buildTodayReadModel,
 } from "./app-read-models.ts";
+import { handleCustomerPortalLinks } from "./customer-portal.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import { handleFieldAction } from "./field-actions.ts";
 
@@ -146,6 +147,9 @@ export async function handleAuthenticatedRoute(
   }
   if (req.method === "POST" && url.pathname === "/api/v1/auth/logout") {
     return await logoutAppSession(req, env, auth);
+  }
+  if (url.pathname.startsWith("/api/v1/customer-portal/links")) {
+    return await handleCustomerPortalLinks(req, env, auth);
   }
   if (req.method === "GET" && url.pathname === "/api/v1/quote-revision-approvals") {
     if (!officeRole(auth)) return privateAppJson({ error: "office_role_required" }, 403);

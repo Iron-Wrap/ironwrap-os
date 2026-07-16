@@ -409,7 +409,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'app_magic_links','app_sessions','app_auth_throttles','app_auth_audit',
           'field_actions','field_action_media','app_action_throttles','app_device_pairings',
           'app_devices','lead_ack_receipts','approval_requests','approval_request_events',
-          'quote_revision_approval_requests','quote_revision_approval_request_events') THEN 1 ELSE 0 END), 0) AS table_count,
+          'quote_revision_approval_requests','quote_revision_approval_request_events',
+          'customer_portal_links','customer_portal_access_throttles') THEN 1 ELSE 0 END), 0) AS table_count,
        COALESCE(SUM(CASE WHEN type = 'index' AND name IN
          ('idx_dead_letter_open_envelope','idx_audit_result_ts','idx_envelopes_operational',
           'idx_envelopes_erpnext_error_open','idx_heartbeat_ran_at','idx_qb_receipts_last_seen',
@@ -426,7 +427,9 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'idx_quote_revision_approvals_tenant_state_updated',
           'idx_quote_revision_approvals_state_lease','idx_quote_revision_approvals_pending_expiry',
           'idx_quote_revision_approvals_active_target',
-          'idx_quote_revision_approval_events_tenant_created')
+          'idx_quote_revision_approval_events_tenant_created',
+          'idx_customer_portal_links_tenant_job_active',
+          'idx_customer_portal_access_throttles_expiry')
          THEN 1 ELSE 0 END), 0) AS index_count,
        COALESCE(SUM(CASE WHEN type = 'trigger' AND name IN
          ('validate_source_count_insert','validate_source_count_update',
@@ -477,7 +480,11 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             qrar.state AS quote_revision_approval_state,
             qrar.run_id AS quote_revision_approval_run_id,
             qrare.event_type AS quote_revision_approval_event_type,
-            qrare.request_version AS quote_revision_approval_event_version
+            qrare.request_version AS quote_revision_approval_event_version,
+            cpl.link_id AS customer_portal_link_id,
+            cpl.expires_at AS customer_portal_expires_at,
+            cpat.ip_hash AS customer_portal_throttle_ip_hash,
+            cpat.attempts AS customer_portal_throttle_attempts
      FROM envelopes e
      LEFT JOIN audit_log a ON 1 = 0
      LEFT JOIN dead_letter d ON 1 = 0
@@ -501,10 +508,12 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN approval_request_events are ON 1 = 0
      LEFT JOIN quote_revision_approval_requests qrar ON 1 = 0
      LEFT JOIN quote_revision_approval_request_events qrare ON 1 = 0
+     LEFT JOIN customer_portal_links cpl ON 1 = 0
+     LEFT JOIN customer_portal_access_throttles cpat ON 1 = 0
      LIMIT 0`,
   ).all();
-  return Number(artifacts?.table_count ?? 0) === 23 &&
-    Number(artifacts?.index_count ?? 0) === 30 &&
+  return Number(artifacts?.table_count ?? 0) === 25 &&
+    Number(artifacts?.index_count ?? 0) === 32 &&
     Number(artifacts?.trigger_count ?? 0) === 22;
 }
 

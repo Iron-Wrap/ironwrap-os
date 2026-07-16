@@ -80,6 +80,7 @@
     "ERPNEXT_BASE_URL": "",
     "ERPNEXT_LEAD_ENVELOPE_DOCTYPE": "Lead Envelope",
     "APP_BFF_ENABLED": "false",
+    "APP_CUSTOMER_PORTAL_ENABLED": "false",
     "APP_TENANT_ID": "ironwrap",
     "APP_TENANT_NAME": "IronWrap OS",
     "APP_TENANT_BRAND": "IronWrap",

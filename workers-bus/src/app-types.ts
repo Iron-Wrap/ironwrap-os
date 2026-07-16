@@ -13,6 +13,9 @@ export type AppRole = "owner" | "ops" | "field";
 
 export type AppEnv = Env & {
   APP_BFF_ENABLED?: string;
+  // A customer portal is a separately activated, read-only capability surface. It never
+  // inherits an office BFF session or the office read-model allowlists.
+  APP_CUSTOMER_PORTAL_ENABLED?: string;
   APP_TENANT_ID?: string;
   APP_TENANT_NAME?: string;
   APP_TENANT_BRAND?: string;

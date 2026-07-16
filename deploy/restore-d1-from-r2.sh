@@ -21,7 +21,7 @@ LOCK_FILE="$REPO_ROOT/workers-bus/package-lock.json"
 EXPECTED_ACCOUNT_ID="7ee5775bc1ba46f05c5a65235b60e939"
 EXPECTED_DATABASE_NAME="ironwrap-bus"
 EXPECTED_DATABASE_ID="f0674848-13df-4422-9896-8ba2719663b8"
-REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,quickbooks_webhook_receipts,dedup_claims,replay_requests,field_actions,field_action_media,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit,app_action_throttles,app_device_pairings,app_devices,lead_ack_receipts,approval_requests,approval_request_events,quote_revision_approval_requests,quote_revision_approval_request_events"
+REQUIRED_TABLES="envelopes,audit_log,dead_letter,source_counts,heartbeat,quickbooks_webhook_receipts,dedup_claims,replay_requests,field_actions,field_action_media,app_users,app_magic_links,app_sessions,app_auth_throttles,app_auth_audit,app_action_throttles,app_device_pairings,app_devices,lead_ack_receipts,approval_requests,approval_request_events,quote_revision_approval_requests,quote_revision_approval_request_events,customer_portal_links,customer_portal_access_throttles"
 # A recoverable export must retain both source-count validation and append-only
 # receipt evidence, bound to their intended tables.
 REQUIRED_TRIGGER_BINDINGS="validate_source_count_insert=source_counts,validate_source_count_update=source_counts,prevent_lead_ack_receipts_update=lead_ack_receipts,prevent_lead_ack_receipts_delete=lead_ack_receipts,prevent_approval_request_binding_rewrite=approval_requests,enforce_approval_request_transition=approval_requests,enforce_approval_request_reconciliation=approval_requests,append_approval_request_created_event=approval_requests,append_approval_request_transition_event=approval_requests,append_approval_request_reconciliation_event=approval_requests,prevent_approval_request_event_update=approval_request_events,prevent_approval_request_event_delete=approval_request_events,prevent_approval_request_delete=approval_requests,prevent_quote_revision_approval_binding_rewrite=quote_revision_approval_requests,enforce_quote_revision_approval_transition=quote_revision_approval_requests,enforce_quote_revision_approval_reconciliation=quote_revision_approval_requests,append_quote_revision_approval_created_event=quote_revision_approval_requests,append_quote_revision_approval_transition_event=quote_revision_approval_requests,append_quote_revision_approval_reconciliation_event=quote_revision_approval_requests,prevent_quote_revision_approval_event_update=quote_revision_approval_request_events,prevent_quote_revision_approval_event_delete=quote_revision_approval_request_events,prevent_quote_revision_approval_delete=quote_revision_approval_requests"
@@ -377,7 +377,7 @@ local_counts="$WORK_DIR/local-table-counts.txt"
 for table_name in "${required_tables[@]}"; do
   present="$(sqlite3 "$verification_db" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='$table_name';")"
   if [[ "$present" != "1" ]]; then
-    echo "error: restored D1 export is missing required core/auth table: $table_name" >&2
+    echo "error: restored D1 export is missing required production table: $table_name" >&2
     exit 1
   fi
   row_count="$(sqlite3 "$verification_db" "SELECT COUNT(*) FROM \"$table_name\";")"

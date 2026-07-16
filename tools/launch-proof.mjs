@@ -1,113 +1,329 @@
 #!/usr/bin/env node
-// Launch proof: drives one synthetic lead + one estimator session through the LIVE
-// bus and verifies the owned spine end to end (gate 1 intake, estimate idempotency,
-// admin read-back; ERPNext mirror ids appear in responses when ERPNEXT_ENABLED=true
-// on the Worker, which proves gate 2 wiring).
+// Launch proof: drives one synthetic lead + one estimator session through the live bus, verifies
+// readiness before mutating anything, then records only redacted release evidence. Dry-run is the
+// default; --execute is required before it sends any request.
 //
-// SAFE BY DEFAULT: prints the plan and equivalent curl commands without sending.
-// Pass --execute to actually hit the bus.
-//
-//   BUS_BASE_URL=https://... INGEST_TOKEN=... ADMIN_TOKEN=... node tools/launch-proof.mjs --execute
-//
-// The fixture is clearly marked as a test (brand ironwrap, name "Launch Proof") and
-// uses a per-run phone/email so the dedup window never collapses two runs.
+// BUS_BASE_URL=https://... INGEST_TOKEN=... ADMIN_TOKEN=... node tools/launch-proof.mjs --execute
 import assert from "node:assert/strict";
 
-const EXECUTE = process.argv.includes("--execute");
-const base = (process.env.BUS_BASE_URL ?? "").replace(/\/+$/, "");
-const ingestToken = process.env.INGEST_TOKEN ?? "";
-const adminToken = process.env.ADMIN_TOKEN ?? "";
-
-const stamp = Date.now().toString().slice(-8);
-const leadFixture = {
-  name: "Launch Proof",
-  phone: `587555${stamp.slice(-4)}`,
-  email: `launch-proof+${stamp}@ironwrapexteriors.com`,
-  service: "metal roofing",
-  message: `launch-proof fixture ${stamp}; safe to archive`,
-  brand: "ironwrap",
-  source_url: "https://ironwrapexteriors.com/quote/",
-};
-const estimateFixture = {
-  project_id: `LP-${stamp}`,
-  job_number: `LP-${stamp}`,
-  customer: "Launch Proof",
-  email: leadFixture.email,
-  address: "Edmonton, AB",
-  selected_services: ["Roof"],
-  materials: { roof: "SnapLock Metal Roofing" },
-  total_estimate: "$1.00",
-  project_url: `https://estimator.example/projects/LP-${stamp}`,
-};
-
-const steps = [
-  { name: "health", method: "GET", path: "/health", auth: null },
-  { name: "ingest_website", method: "POST", path: "/ingest/website", auth: "ingest", body: leadFixture },
-  { name: "ingest_estimate", method: "POST", path: "/ingest/estimate", auth: "ingest", body: estimateFixture, idempotencyKey: `lp-${stamp}` },
-  { name: "ingest_estimate_replay", method: "POST", path: "/ingest/estimate", auth: "ingest", body: estimateFixture, idempotencyKey: `lp-${stamp}` },
-  { name: "admin_envelopes", method: "GET", path: "/admin/envelopes?limit=10", auth: "admin" },
-];
-
-function curlFor(step) {
-  const parts = [`curl -sS -X ${step.method} '${base || "$BUS_BASE_URL"}${step.path}'`];
-  if (step.auth === "ingest") parts.push(`-H 'Authorization: Bearer $INGEST_TOKEN'`);
-  if (step.auth === "admin") parts.push(`-H 'Authorization: Bearer $ADMIN_TOKEN'`);
-  if (step.idempotencyKey) parts.push(`-H 'Idempotency-Key: ${step.idempotencyKey}'`);
-  if (step.body) parts.push(`-H 'content-type: application/json' -d '${JSON.stringify(step.body)}'`);
-  return parts.join(" \\\n    ");
+export function createLaunchProofPlan({ stamp = Date.now() } = {}) {
+  const proofStamp = String(stamp)
+    .replace(/\D/g, "")
+    .slice(-8)
+    .padStart(8, "0");
+  const leadFixture = {
+    name: "Launch Proof",
+    phone: `587555${proofStamp.slice(-4)}`,
+    email: `launch-proof+${proofStamp}@ironwrapexteriors.com`,
+    service: "metal roofing",
+    message: `launch-proof fixture ${proofStamp}; safe to archive`,
+    brand: "ironwrap",
+    source_url: "https://ironwrapexteriors.com/quote/",
+  };
+  const estimateFixture = {
+    project_id: `LP-${proofStamp}`,
+    job_number: `LP-${proofStamp}`,
+    customer: "Launch Proof",
+    email: leadFixture.email,
+    address: "Edmonton, AB",
+    selected_services: ["Roof"],
+    materials: { roof: "SnapLock Metal Roofing" },
+    total_estimate: "$1.00",
+    project_url: `https://estimator.example/projects/LP-${proofStamp}`,
+  };
+  const requestId = (name) => `launch-proof:${proofStamp}:${name}`;
+  const steps = [
+    {
+      name: "health",
+      method: "GET",
+      path: "/health",
+      auth: null,
+      requestId: requestId("health"),
+    },
+    {
+      name: "ready",
+      method: "GET",
+      path: "/ready",
+      auth: null,
+      requestId: requestId("ready"),
+    },
+    {
+      name: "ingest_website",
+      method: "POST",
+      path: "/ingest/website",
+      auth: "ingest",
+      body: leadFixture,
+      requestId: requestId("website"),
+    },
+    {
+      name: "ingest_estimate",
+      method: "POST",
+      path: "/ingest/estimate",
+      auth: "ingest",
+      body: estimateFixture,
+      idempotencyKey: `lp-${proofStamp}`,
+      requestId: requestId("estimate"),
+    },
+    {
+      name: "ingest_estimate_replay",
+      method: "POST",
+      path: "/ingest/estimate",
+      auth: "ingest",
+      body: estimateFixture,
+      idempotencyKey: `lp-${proofStamp}`,
+      requestId: requestId("estimate-replay"),
+    },
+    {
+      name: "admin_envelopes",
+      method: "GET",
+      path: "/admin/envelopes?limit=10",
+      auth: "admin",
+      requestId: requestId("envelopes"),
+    },
+    {
+      name: "admin_reconcile",
+      method: "POST",
+      path: "/admin/reconcile",
+      auth: "admin",
+      requestId: requestId("reconcile"),
+    },
+    {
+      name: "admin_status",
+      method: "GET",
+      path: "/admin/status?audit_limit=20",
+      auth: "admin",
+      requestId: requestId("status"),
+    },
+  ];
+  return { proofStamp, leadFixture, estimateFixture, steps };
 }
 
-if (!EXECUTE) {
-  console.log("DRY RUN (pass --execute to send). Plan:\n");
-  for (const step of steps) console.log(`# ${step.name}\n${curlFor(step)}\n`);
-  console.log("Manual follow-ups after --execute:");
-  console.log("- Frappe Desk: Lead Envelope, Roofing Customer/Property, Roof Job + 7 gates exist for the fixture");
-  console.log("- POST /admin/reconcile and confirm the heartbeat row is green");
-  process.exit(0);
+export function curlFor(step, base = "") {
+  const parts = [
+    `curl -sS -X ${step.method} '${base || "$BUS_BASE_URL"}${step.path}'`,
+  ];
+  if (step.auth === "ingest")
+    parts.push("-H 'Authorization: Bearer $INGEST_TOKEN'");
+  if (step.auth === "admin")
+    parts.push("-H 'Authorization: Bearer $ADMIN_TOKEN'");
+  if (step.requestId) parts.push(`-H 'X-Request-ID: ${step.requestId}'`);
+  if (step.idempotencyKey)
+    parts.push(`-H 'Idempotency-Key: ${step.idempotencyKey}'`);
+  if (step.body)
+    parts.push(
+      `-H 'content-type: application/json' -d '${JSON.stringify(step.body)}'`,
+    );
+  return parts.join(" " + "\\" + "\n    ");
 }
 
-assert.ok(base, "BUS_BASE_URL required");
-assert.ok(ingestToken, "INGEST_TOKEN required");
-assert.ok(adminToken, "ADMIN_TOKEN required");
+export async function executeLaunchProof({
+  base,
+  ingestToken,
+  adminToken,
+  fetchImpl = globalThis.fetch,
+  stamp = Date.now(),
+  onStep,
+} = {}) {
+  const normalizedBase = String(base ?? "").replace(/\/+$/, "");
+  assert.ok(normalizedBase, "BUS_BASE_URL required");
+  assert.ok(ingestToken, "INGEST_TOKEN required");
+  assert.ok(adminToken, "ADMIN_TOKEN required");
+  assert.equal(typeof fetchImpl, "function", "fetch implementation required");
 
-async function run(step) {
-  const headers = { accept: "application/json" };
+  const plan = createLaunchProofPlan({ stamp });
+  const results = {};
+  for (const step of plan.steps) {
+    results[step.name] = await runStep(step, {
+      base: normalizedBase,
+      ingestToken,
+      adminToken,
+      fetchImpl,
+    });
+    onStep?.(step.name, results[step.name]);
+    if (step.name === "health")
+      assert.equal(results.health.status, 200, "health failed");
+    if (step.name === "ready") assertReadiness(results.ready);
+  }
+
+  assert.equal(results.ingest_website.status, 200, "website ingest failed");
+  const leadEnvelope = results.ingest_website.json?.envelope_id;
+  assert.ok(leadEnvelope, "website ingest returned no envelope_id");
+  assert.equal(results.ingest_estimate.status, 200, "estimate ingest failed");
+  assert.equal(
+    results.ingest_estimate_replay.status,
+    200,
+    "estimate replay failed",
+  );
+  assert.equal(
+    results.ingest_estimate.json?.envelope_id,
+    results.ingest_estimate_replay.json?.envelope_id,
+    "estimate replay was not idempotent",
+  );
+  assert.equal(results.admin_envelopes.status, 200, "admin read-back failed");
+  const listed = (results.admin_envelopes.json?.envelopes ?? []).map(
+    (envelope) => envelope?.envelope_id,
+  );
+  assert.ok(
+    listed.includes(leadEnvelope),
+    "admin read-back missing the fixture envelope",
+  );
+  assert.equal(results.admin_reconcile.status, 200, "reconciliation failed");
+  assertOperationalStatus(results.admin_status);
+
+  return redactedEvidence({ plan, results, leadEnvelope });
+}
+
+export async function runLaunchProofCli({
+  argv = process.argv.slice(2),
+  env = process.env,
+  fetchImpl = globalThis.fetch,
+  log = console.log,
+  errorLog = console.error,
+} = {}) {
+  const plan = createLaunchProofPlan();
+  if (!argv.includes("--execute")) {
+    log("DRY RUN (pass --execute to send). Plan:\n");
+    for (const step of plan.steps) log(`# ${step.name}\n${curlFor(step)}\n`);
+    log(
+      "After a successful run, archive the redacted JSON evidence and verify the fixture records in Frappe before cleanup.",
+    );
+    return { mode: "dry_run", plan };
+  }
+
+  const evidence = await executeLaunchProof({
+    base: env.BUS_BASE_URL,
+    ingestToken: env.INGEST_TOKEN,
+    adminToken: env.ADMIN_TOKEN,
+    fetchImpl,
+    stamp: plan.proofStamp,
+    onStep: (name, result) => errorLog(`${name}: HTTP ${result.status}`),
+  });
+  log(JSON.stringify(evidence, null, 2));
+  return { mode: "execute", evidence };
+}
+
+async function runStep(step, { base, ingestToken, adminToken, fetchImpl }) {
+  const headers = {
+    accept: "application/json",
+    "x-request-id": step.requestId,
+  };
   if (step.auth === "ingest") headers.authorization = `Bearer ${ingestToken}`;
   if (step.auth === "admin") headers.authorization = `Bearer ${adminToken}`;
   if (step.idempotencyKey) headers["idempotency-key"] = step.idempotencyKey;
   if (step.body) headers["content-type"] = "application/json";
-  const res = await fetch(base + step.path, {
+  const response = await fetchImpl(base + step.path, {
     method: step.method,
     headers,
     body: step.body ? JSON.stringify(step.body) : undefined,
   });
-  const json = await res.json().catch(() => ({}));
-  return { status: res.status, json };
+  let json = null;
+  try {
+    json = await response.json();
+  } catch {
+    // The assertion for the affected endpoint reports the failed proof step without echoing a body.
+  }
+  return {
+    status: response.status,
+    json,
+    requestId:
+      response.headers.get("x-request-id") ??
+      response.headers.get("x-correlation-id") ??
+      null,
+  };
 }
 
-const results = {};
-for (const step of steps) {
-  results[step.name] = await run(step);
-  console.log(`${step.name}: HTTP ${results[step.name].status}`);
+function assertReadiness(result) {
+  assert.equal(result.status, 200, "readiness failed");
+  assert.equal(result.json?.ok, true, "readiness did not report ok");
+  assert.equal(result.json?.status, "ready", "readiness did not report ready");
+  const checks = result.json?.checks;
+  assert.ok(
+    checks &&
+      Object.keys(checks).length > 0 &&
+      Object.values(checks).every(Boolean),
+    "readiness has a failed check",
+  );
 }
 
-// Scorecard assertions: fail loudly if the spine is not actually live.
-assert.equal(results.health.status, 200, "health failed");
-assert.equal(results.ingest_website.status, 200, "website ingest failed");
-const leadEnvelope = results.ingest_website.json.envelope_id;
-assert.ok(leadEnvelope, "website ingest returned no envelope_id");
-assert.equal(results.ingest_estimate.status, 200, "estimate ingest failed");
-const est1 = results.ingest_estimate.json;
-const est2 = results.ingest_estimate_replay.json;
-assert.equal(est1.envelope_id, est2.envelope_id, "estimate replay was not idempotent");
-const listed = (results.admin_envelopes.json.envelopes ?? []).map((e) => e.envelope_id);
-assert.ok(listed.includes(leadEnvelope), "admin read-back missing the fixture envelope");
+function assertOperationalStatus(result) {
+  assert.equal(result.status, 200, "operational status read failed");
+  const status = result.json;
+  assert.equal(status?.status, "ok", "operational status is degraded");
+  assert.ok(status?.heartbeat, "operational heartbeat missing");
+  assert.equal(
+    status.heartbeat.fresh,
+    true,
+    "operational heartbeat is not fresh",
+  );
+  assert.equal(
+    status.heartbeat.reconciled,
+    true,
+    "operational heartbeat is not reconciled",
+  );
+  for (const field of [
+    "open_dead_letters",
+    "stuck",
+    "frappe_errors",
+    "replay_failed",
+    "replay_stuck",
+  ]) {
+    assert.equal(
+      status.counts?.[field],
+      0,
+      `operational count ${field} is not zero`,
+    );
+  }
+  assert.equal(
+    status.recent_audit_failures?.entries?.length,
+    0,
+    "recent audit failures are present",
+  );
+}
 
-console.log(JSON.stringify({
-  gate1_intake_spine: "LIVE",
-  estimate_idempotency: "PROVEN",
-  admin_read_back: "PROVEN",
-  erpnext_mirror_ids: est1.erpnext ?? est1.erpnext_ids ?? "check Worker response fields / Frappe Desk",
-  fixture: { envelope_id: leadEnvelope, project_id: estimateFixture.project_id },
-  next: "verify Roof Job + 7 gates in Frappe Desk, then archive the fixture records",
-}, null, 2));
+function redactedEvidence({ plan, results, leadEnvelope }) {
+  const operational = results.admin_status.json;
+  const reconciliation = results.admin_reconcile.json;
+  return {
+    proof: "ironwrap-launch-proof-v2",
+    fixture: {
+      envelope_id: leadEnvelope,
+      project_id: plan.estimateFixture.project_id,
+    },
+    steps: Object.fromEntries(
+      Object.entries(results).map(([name, result]) => [
+        name,
+        {
+          http_status: result.status,
+          request_id: result.requestId,
+        },
+      ]),
+    ),
+    readiness: { checks: results.ready.json?.checks ?? null },
+    reconciliation: {
+      day: reconciliation?.day ?? null,
+      open_dead_letters: reconciliation?.openDeadLetter ?? null,
+      gaps: Array.isArray(reconciliation?.rows)
+        ? reconciliation.rows.filter((row) => Number(row?.gap) > 0).length
+        : null,
+    },
+    operational_status: {
+      status: operational?.status ?? null,
+      heartbeat: operational?.heartbeat
+        ? {
+            day: operational.heartbeat.day ?? null,
+            ran_at: operational.heartbeat.ran_at ?? null,
+            fresh: operational.heartbeat.fresh ?? null,
+            reconciled: operational.heartbeat.reconciled ?? null,
+          }
+        : null,
+      counts: operational?.counts ?? null,
+      recent_audit_failure_count:
+        operational?.recent_audit_failures?.entries?.length ?? null,
+    },
+    next: "Verify the clearly labelled fixture in Frappe, then archive or remove it under the documented cleanup policy.",
+  };
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  await runLaunchProofCli();
+}

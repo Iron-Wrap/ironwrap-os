@@ -58,12 +58,12 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
    (applies `workers-bus/migrations/0001_init.sql` through
-   `0015_lead_ack_receipts.sql`).
-7. Secrets: fill a tenant-specific `ACCESS.env` and run
-   `bash workers-bus/scripts/apply-secrets.sh` with the tenant's Cloudflare API token, or
-   `printf '%s' '<value>' | npx wrangler secret put <NAME>` per secret. Required set:
+   `0017_quote_revision_approval_requests.sql`).
+7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store;
+   never pass a generic Cloudflare token to a repository script. Required set:
    `INGEST_TOKEN`, `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY` (if bridging),
-   `GOOGLE_SERVICE_ACCOUNT_JSON`, `QB_WEBHOOK_TOKEN`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`.
+   `GOOGLE_SERVICE_ACCOUNT_JSON`, `QB_WEBHOOK_TOKEN`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`,
+   and `APP_AUTH_PEPPER`; add each broker shared secret only when its isolated broker is enabled.
    All tokens are NEW values, never reused from another tenant.
 8. `npm test`, `npm run typecheck`, `npx wrangler deploy --dry-run` in `workers-bus/`,
    then deploy.

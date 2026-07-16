@@ -45,7 +45,7 @@ if [[ "$MODE" == "install" ]]; then
   fi
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  packages=(age ca-certificates curl docker.io git jq nodejs openssl rclone)
+  packages=(age ca-certificates curl docker.io git jq nodejs openssl rclone sqlite3 tar)
   if apt-cache show docker-compose-v2 >/dev/null 2>&1; then
     packages+=(docker-compose-v2)
   elif apt-cache show docker-compose-plugin >/dev/null 2>&1; then
@@ -72,7 +72,7 @@ if ! jq -e '
   (.host_requirements.cpu_cores_minimum | type == "number" and floor == . and . >= 2) and
   (.host_requirements.memory_gib_minimum | type == "number" and floor == . and . >= 8) and
   (.host_requirements.disk_gib_minimum | type == "number" and floor == . and . >= 80) and
-  (.host_requirements.node_major_minimum | type == "number" and floor == . and . >= 20) and
+  (.host_requirements.node_version_minimum | type == "string" and test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
   ((.host_requirements.architectures | sort) == ["aarch64", "x86_64"])
 ' "$LOCK" >/dev/null 2>&1; then
   echo "error: runtime lock host policy is invalid or not Frappe-only" >&2
@@ -82,7 +82,7 @@ readarray -t HOST_LOCK < <(jq -r '
   .host_requirements.cpu_cores_minimum,
   .host_requirements.memory_gib_minimum,
   .host_requirements.disk_gib_minimum,
-  .host_requirements.node_major_minimum,
+  .host_requirements.node_version_minimum,
   (.host_requirements.architectures | join(","))
 ' "$LOCK")
 if (( ${#HOST_LOCK[@]} != 5 )); then
@@ -92,8 +92,26 @@ fi
 CPU_MINIMUM="${HOST_LOCK[0]}"
 MEMORY_GIB_MINIMUM="${HOST_LOCK[1]}"
 DISK_GIB_MINIMUM="${HOST_LOCK[2]}"
-NODE_MAJOR_MINIMUM="${HOST_LOCK[3]}"
+NODE_VERSION_MINIMUM="${HOST_LOCK[3]}"
 SUPPORTED_ARCHITECTURES=",${HOST_LOCK[4]},"
+
+version_at_least() {
+  local actual="$1" minimum="$2" index
+  local -a actual_parts minimum_parts
+  [[ "$actual" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$minimum" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  IFS='.' read -r -a actual_parts <<< "$actual"
+  IFS='.' read -r -a minimum_parts <<< "$minimum"
+  for index in 0 1 2; do
+    if (( 10#${actual_parts[index]} > 10#${minimum_parts[index]} )); then return 0; fi
+    if (( 10#${actual_parts[index]} < 10#${minimum_parts[index]} )); then return 1; fi
+  done
+  return 0
+}
+
+if ! version_at_least "$NODE_VERSION_MINIMUM" "22.12.0"; then
+  echo "error: runtime lock Node.js floor is below 22.12.0" >&2
+  exit 1
+fi
 
 failures=0
 pass() { printf 'PASS  %s\n' "$1"; }
@@ -111,13 +129,13 @@ if [[ "$memory_kib" =~ ^[0-9]+$ ]] && (( memory_kib >= MEMORY_GIB_MINIMUM * 1024
 disk_kib="$(df -Pk / | awk 'NR == 2 {print $4}')"
 if [[ "$disk_kib" =~ ^[0-9]+$ ]] && (( disk_kib >= DISK_GIB_MINIMUM * 1024 * 1024 )); then pass "disk capacity meets the runtime lock"; else fail "disk capacity is below the runtime lock"; fi
 
-for command_name in age curl docker git jq node openssl rclone sha256sum tar; do
+for command_name in age curl docker git jq node openssl rclone sha256sum sqlite3 tar; do
   if command -v "$command_name" >/dev/null 2>&1; then pass "$command_name available"; else fail "$command_name unavailable"; fi
 done
 
 if command -v node >/dev/null 2>&1; then
-  node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || printf '0')"
-  if [[ "$node_major" =~ ^[0-9]+$ ]] && (( node_major >= NODE_MAJOR_MINIMUM )); then pass "Node.js meets the runtime lock"; else fail "Node.js is below the runtime lock"; fi
+  node_version="$(node -p 'process.versions.node' 2>/dev/null || printf '0.0.0')"
+  if version_at_least "$node_version" "$NODE_VERSION_MINIMUM"; then pass "Node.js meets the runtime lock"; else fail "Node.js is below the runtime lock"; fi
 fi
 if command -v docker >/dev/null 2>&1; then
   if docker compose version >/dev/null 2>&1; then pass "Docker Compose v2 available"; else fail "Docker Compose v2 unavailable"; fi

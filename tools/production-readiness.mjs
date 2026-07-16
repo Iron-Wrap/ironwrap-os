@@ -195,6 +195,13 @@ function validIsoDate(value) {
   return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+function validMinimumNodeVersion(value) {
+  const match = typeof value === "string" && value.match(/^(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) return false;
+  const [major, minor, patch] = match.slice(1).map(Number);
+  return major > 22 || (major === 22 && (minor > 12 || (minor === 12 && patch >= 0)));
+}
+
 function hostnameOf(value) {
   try {
     return new URL(value).hostname.toLowerCase();
@@ -257,7 +264,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
     }
     const host = lock.host_requirements ?? {};
     const integerAtLeast = (value, minimum) => Number.isInteger(value) && value >= minimum;
-    checks.push(check("contract.lock.host", host.ubuntu_minimum === "22.04" && integerAtLeast(host.cpu_cores_minimum, 2) && integerAtLeast(host.memory_gib_minimum, 8) && integerAtLeast(host.disk_gib_minimum, 80) && integerAtLeast(host.node_major_minimum, 20) && JSON.stringify([...(host.architectures ?? [])].sort()) === JSON.stringify(["aarch64", "x86_64"]), "host minimums are production-safe and complete", "host minimums are incomplete, malformed, or below the production floor"));
+    checks.push(check("contract.lock.host", host.ubuntu_minimum === "22.04" && integerAtLeast(host.cpu_cores_minimum, 2) && integerAtLeast(host.memory_gib_minimum, 8) && integerAtLeast(host.disk_gib_minimum, 80) && validMinimumNodeVersion(host.node_version_minimum) && JSON.stringify([...(host.architectures ?? [])].sort()) === JSON.stringify(["aarch64", "x86_64"]), "host minimums are production-safe and complete", "host minimums are incomplete, malformed, or below the production floor"));
   }
 
   const containerfile = contents.get("deploy/Containerfile.frappe") ?? "";
@@ -370,7 +377,8 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   checks.push(check("contract.build.secrets", buildScript.includes("--secret \"id=apps_json,src=$APPS_JSON_FILE\"") && !/--build-arg\s+[^\n]*(?:TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(buildScript), "image build passes secret material only through BuildKit secret mounts", "image build must not pass secrets through arguments"));
   checks.push(check("contract.build.no_erpnext", buildScript.includes('architecture !== "frappe-only"') && buildScript.includes('erpnext !== "forbidden"') && buildScript.includes("/erpnext/i.test(JSON.stringify(apps))"), "image build fails closed unless lock and app set are Frappe-only", "image build does not enforce the Frappe-only policy"));
   checks.push(check("contract.host.argv", hostScript.includes("no configuration values are accepted as arguments") && !/eval\s|printenv|\benv\b\s*$/m.test(hostScript), "host preflight refuses configuration in argv and does not dump the environment", "host preflight must refuse configuration arguments and avoid environment dumps"));
-  checks.push(check("contract.host.lock", hostScript.includes("deploy/runtime-lock.json") && hostScript.includes('.policy.architecture == "frappe-only"') && hostScript.includes("CPU_MINIMUM") && hostScript.includes("NODE_MAJOR_MINIMUM"), "host preflight consumes the Frappe-only runtime lock", "host preflight must consume and validate runtime-lock host policy"));
+  checks.push(check("contract.host.lock", hostScript.includes("deploy/runtime-lock.json") && hostScript.includes('.policy.architecture == "frappe-only"') && hostScript.includes("CPU_MINIMUM") && hostScript.includes("NODE_VERSION_MINIMUM") && hostScript.includes("version_at_least"), "host preflight consumes the Frappe-only runtime lock", "host preflight must consume and validate runtime-lock host policy"));
+  checks.push(check("contract.host.dependencies", hostScript.includes("sqlite3") && hostScript.includes("tar"), "host preflight installs and checks the recovery dependencies", "host preflight must install and check sqlite3 and tar"));
 
   for (const relative of ["deploy/backup-to-r2.sh", "deploy/restore-from-r2.sh", "deploy/backup-d1-to-r2.sh", "deploy/restore-d1-from-r2.sh", "deploy/build-production-image.sh", "deploy/host-preflight.sh"]) {
     let executable = false;

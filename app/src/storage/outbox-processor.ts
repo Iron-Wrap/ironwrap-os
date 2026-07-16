@@ -7,7 +7,9 @@ import {
   getOutboxActionWithBlobs,
   markOutboxNeedsAttention,
   markOutboxVerified,
+  OUTBOX_UPLOAD_HEARTBEAT_MS,
   recoverResumableOutboxActions,
+  renewOutboxUploadLease,
   requeueOutboxAction,
 } from "./outbox";
 import type {
@@ -59,19 +61,17 @@ export function flushOutbox(options: FlushOutboxOptions = {}): Promise<FlushOutb
   const key = `${principal.tenantId}\u0000${principal.userId}`;
   const active = activeFlushes.get(key);
   if (active) return active;
-  const next = executeFlush(options, principal).finally(() => {
-    activeFlushes.delete(key);
-  });
+  const now = options.now ?? Date.now;
+  const next = recoverResumableOutboxActions(principal, now())
+    .then(() => executeFlush(options, principal))
+    .finally(() => {
+      activeFlushes.delete(key);
+    });
   activeFlushes.set(key, next);
   return next;
 }
 
-export async function initializeOutbox(
-  options: FlushOutboxOptions = {},
-): Promise<FlushOutboxResult> {
-  const principal = principalFrom(options);
-  if (!principal) return emptyResult();
-  await recoverResumableOutboxActions(principal, options.now?.() ?? Date.now());
+export function initializeOutbox(options: FlushOutboxOptions = {}): Promise<FlushOutboxResult> {
   return flushOutbox(options);
 }
 
@@ -96,17 +96,23 @@ async function executeFlush(
     const withBlobs = await getOutboxActionWithBlobs(action.deviceActionId);
     if (!withBlobs) continue;
 
-    const outcome = await uploadAction(
-      withBlobs.action,
-      withBlobs.blobs,
-      options.fetcher ?? fetch,
-      csrfToken,
-      deviceProof,
-      options.signal,
-      now(),
-    );
+    const stopLeaseHeartbeat = startUploadLeaseHeartbeat(action, now);
+    let outcome: Awaited<ReturnType<typeof uploadAction>>;
+    try {
+      outcome = await uploadAction(
+        withBlobs.action,
+        withBlobs.blobs,
+        options.fetcher ?? fetch,
+        csrfToken,
+        deviceProof,
+        options.signal,
+        now(),
+      );
+    } finally {
+      stopLeaseHeartbeat();
+    }
     if (outcome.ok) {
-      await markOutboxVerified(
+      const verified = await markOutboxVerified(
         action.deviceActionId,
         {
           verifiedAt: now(),
@@ -114,30 +120,43 @@ async function executeFlush(
           ...(outcome.cursor ? { cursor: outcome.cursor } : {}),
         },
         now(),
+        action.uploadLeaseId,
       );
-      result.verified += 1;
+      if (verified) result.verified += 1;
       continue;
     }
 
     if (outcome.failure.kind === "retry") {
       const retryAt =
         now() + (outcome.failure.retryAfterMs ?? retryDelayMilliseconds(action.attempts, random));
-      await requeueOutboxAction(
+      const requeued = await requeueOutboxAction(
         action.deviceActionId,
         { error: outcome.failure.error, nextAttemptAt: retryAt },
         now(),
+        action.uploadLeaseId,
       );
-      result.requeued += 1;
+      if (requeued) result.requeued += 1;
     } else {
-      await markOutboxNeedsAttention(
+      const needsAttention = await markOutboxNeedsAttention(
         action.deviceActionId,
         { error: outcome.failure.error, conflict: outcome.failure.conflict },
         now(),
+        action.uploadLeaseId,
       );
-      result.needsAttention += 1;
+      if (needsAttention) result.needsAttention += 1;
     }
   }
   return result;
+}
+
+function startUploadLeaseHeartbeat(
+  action: OutboxAction & { uploadLeaseId: string },
+  now: () => number,
+): () => void {
+  const interval = setInterval(() => {
+    void renewOutboxUploadLease(action.deviceActionId, action.uploadLeaseId, now()).catch(() => {});
+  }, OUTBOX_UPLOAD_HEARTBEAT_MS);
+  return () => clearInterval(interval);
 }
 
 function principalFrom(options: FlushOutboxOptions): { tenantId: string; userId: string } | null {

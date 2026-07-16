@@ -9,8 +9,12 @@ import {
   claimNextQueuedAction,
   getOutboxAction,
   getOutboxActionWithBlobs,
+  markOutboxVerified,
+  OUTBOX_UPLOAD_LEASE_MS,
   queueOutboxAction,
   recoverResumableOutboxActions,
+  renewOutboxUploadLease,
+  requeueOutboxAction,
   saveOutboxAction,
   transitionOutboxAction,
 } from "./outbox";
@@ -246,7 +250,7 @@ describe("offline outbox", () => {
     expect(retryDelayMilliseconds(20, () => 0)).toBe(300_000);
   });
 
-  it("recovers an interrupted multipart field check-in and verifies the same stable action", async () => {
+  it("recovers an expired multipart field check-in during a direct flush", async () => {
     const photos = [
       new Blob(["photo one"], { type: "image/jpeg" }),
       new Blob(["photo two"], { type: "image/jpeg" }),
@@ -281,11 +285,11 @@ describe("offline outbox", () => {
         server_ref: "FIELD-CHECKIN-1",
       });
     });
-    const result = await initializeOutbox({
+    const result = await flushOutbox({
       ...principal,
       fetcher,
       csrfToken: "current-csrf",
-      now: () => 3_000,
+      now: () => 2_100 + OUTBOX_UPLOAD_LEASE_MS,
     });
     expect(result).toMatchObject({ processed: 1, verified: 1 });
     expect(await getOutboxAction("field-recovery-action")).toMatchObject({
@@ -294,6 +298,130 @@ describe("offline outbox", () => {
       verification: { serverRef: "FIELD-CHECKIN-1" },
     });
     expect((await getOutboxActionWithBlobs("field-recovery-action"))?.blobs).toHaveLength(0);
+  });
+
+  it("does not requeue a live upload during second-tab recovery", async () => {
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "live-cross-tab-action",
+      kind: "field_checkin",
+      endpoint: "/api/v1/jobs/JOB-A/check-ins",
+      payload: { assignment_id: "ASSIGN-A" },
+    });
+    await queueOutboxAction("live-cross-tab-action", 1_000);
+
+    let beginUpload!: () => void;
+    const uploadStarted = new Promise<void>((resolve) => {
+      beginUpload = resolve;
+    });
+    let finishUpload!: (response: Response) => void;
+    const uploadResponse = new Promise<Response>((resolve) => {
+      finishUpload = resolve;
+    });
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => {
+      beginUpload();
+      return uploadResponse;
+    });
+
+    const firstTab = flushOutbox({
+      ...principal,
+      fetcher,
+      csrfToken: "csrf",
+      now: () => 1_000,
+    });
+    await uploadStarted;
+
+    // A second browser context has its own in-memory flush lock, but shares
+    // IndexedDB. Recovery must leave the first tab's fresh persisted lease alone.
+    expect(await recoverResumableOutboxActions(principal, 1_001)).toBe(0);
+    expect(await getOutboxAction("live-cross-tab-action")).toMatchObject({
+      state: "uploading",
+      uploadLeaseExpiresAt: 1_000 + OUTBOX_UPLOAD_LEASE_MS,
+    });
+
+    finishUpload(Response.json({ device_action_id: "live-cross-tab-action", status: "verified" }));
+    await expect(firstTab).resolves.toMatchObject({ processed: 1, verified: 1 });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("renews only the current upload lease", async () => {
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "lease-renewal-action",
+      kind: "field_note",
+      endpoint: "/api/v1/jobs/JOB-A/notes",
+      payload: { note: "Wind delay" },
+    });
+    await queueOutboxAction("lease-renewal-action", 1_000);
+    const claim = await claimNextQueuedAction(principal, 1_000);
+    expect(claim).toBeDefined();
+    if (!claim) throw new Error("Expected queued action to be claimed.");
+
+    expect(await renewOutboxUploadLease(claim.deviceActionId, claim.uploadLeaseId, 4_000)).toBe(
+      true,
+    );
+    expect(await renewOutboxUploadLease(claim.deviceActionId, "stale-lease", 5_000)).toBe(false);
+    expect(await getOutboxAction("lease-renewal-action")).toMatchObject({
+      state: "uploading",
+      uploadLeaseId: claim.uploadLeaseId,
+      uploadLeaseExpiresAt: 4_000 + OUTBOX_UPLOAD_LEASE_MS,
+    });
+  });
+
+  it("fences a stale upload owner from verifying or requeueing a newer lease", async () => {
+    const blob = new Blob(["roof evidence"], { type: "image/jpeg" });
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "fenced-upload-action",
+      kind: "evidence_upload",
+      endpoint: "/api/v1/jobs/JOB-A/evidence",
+      payload: { proof_slot: "arrival" },
+      attachments: [{ attachmentId: "fenced-photo", blob, fileName: "arrival.jpg" }],
+    });
+    await queueOutboxAction("fenced-upload-action", 1_000);
+    const staleClaim = await claimNextQueuedAction(principal, 1_000);
+    expect(staleClaim).toBeDefined();
+    if (!staleClaim) throw new Error("Expected first upload lease.");
+
+    const expiration = 1_000 + OUTBOX_UPLOAD_LEASE_MS;
+    expect(await recoverResumableOutboxActions(principal, expiration)).toBe(1);
+    const currentClaim = await claimNextQueuedAction(principal, expiration);
+    expect(currentClaim).toBeDefined();
+    if (!currentClaim) throw new Error("Expected replacement upload lease.");
+    expect(currentClaim.uploadLeaseId).not.toBe(staleClaim.uploadLeaseId);
+
+    await expect(
+      markOutboxVerified(
+        staleClaim.deviceActionId,
+        { verifiedAt: expiration + 1 },
+        expiration + 1,
+        staleClaim.uploadLeaseId,
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      requeueOutboxAction(
+        staleClaim.deviceActionId,
+        {
+          error: {
+            code: "network_error",
+            message: "Old tab lost its request.",
+            occurredAt: expiration + 1,
+          },
+          nextAttemptAt: expiration + 2,
+        },
+        expiration + 1,
+        staleClaim.uploadLeaseId,
+      ),
+    ).resolves.toBeUndefined();
+
+    const stored = await getOutboxActionWithBlobs("fenced-upload-action");
+    expect(stored).toMatchObject({
+      action: {
+        state: "uploading",
+        uploadLeaseId: currentClaim.uploadLeaseId,
+      },
+      blobs: [{ blobKey: "fenced-upload-action:fenced-photo" }],
+    });
   });
 
   it("recovers Blob-backed local field work interrupted before queueing for its own principal only", async () => {

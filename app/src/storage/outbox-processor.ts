@@ -7,7 +7,7 @@ import {
   getOutboxActionWithBlobs,
   markOutboxNeedsAttention,
   markOutboxVerified,
-  recoverInterruptedUploads,
+  recoverResumableOutboxActions,
   requeueOutboxAction,
 } from "./outbox";
 import type {
@@ -71,7 +71,7 @@ export async function initializeOutbox(
 ): Promise<FlushOutboxResult> {
   const principal = principalFrom(options);
   if (!principal) return emptyResult();
-  await recoverInterruptedUploads(principal, options.now?.() ?? Date.now());
+  await recoverResumableOutboxActions(principal, options.now?.() ?? Date.now());
   return flushOutbox(options);
 }
 

@@ -90,13 +90,32 @@ export async function queueOutboxAction(
   deviceActionId: string,
   now = Date.now(),
 ): Promise<OutboxAction> {
-  const action = await transitionOutboxAction(deviceActionId, "queued", now, {
+  const database = await getDatabase();
+  const transaction = database.transaction("outbox_actions", "readwrite");
+  const store = transaction.objectStore("outbox_actions");
+  const action = await store.get(deviceActionId);
+  if (!action) throw new Error(`Outbox action ${deviceActionId} was not found.`);
+  // Recovery or another tab may already be progressing the same durable action
+  // between the local save and this caller's queue request. Do not regress that
+  // work or turn a successful upload into a false local-save error.
+  if (action.state === "queued" || action.state === "uploading" || action.state === "verified") {
+    await transaction.done;
+    return action;
+  }
+  assertTransition(action.state, "queued");
+  const queued: OutboxAction = {
+    ...action,
+    state: "queued",
     attempts: 0,
     nextAttemptAt: now,
     lastError: undefined,
     conflict: undefined,
-  });
-  return action;
+    updatedAt: now,
+  };
+  await store.put(queued);
+  await transaction.done;
+  notifyOutboxChanged();
+  return queued;
 }
 
 export async function retryOutboxAction(
@@ -227,17 +246,33 @@ export async function requeueOutboxAction(
   });
 }
 
-export async function recoverInterruptedUploads(
+export async function recoverResumableOutboxActions(
   principal: { tenantId: string; userId: string },
   now = Date.now(),
 ): Promise<number> {
   const database = await getDatabase();
   const transaction = database.transaction("outbox_actions", "readwrite");
   const store = transaction.objectStore("outbox_actions");
-  const interrupted = await store
+  const savedLocally = await store
+    .index("by_principal_state")
+    .getAll([principal.tenantId, principal.userId, "saved_locally"]);
+  const interruptedUploads = await store
     .index("by_principal_state")
     .getAll([principal.tenantId, principal.userId, "uploading"]);
-  for (const action of interrupted) {
+  for (const action of savedLocally) {
+    await store.put({
+      ...action,
+      state: "queued",
+      nextAttemptAt: now,
+      updatedAt: now,
+      lastError: {
+        code: "queue_interrupted",
+        message: "Local evidence was saved before queueing. It is queued safely for another try.",
+        occurredAt: now,
+      },
+    });
+  }
+  for (const action of interruptedUploads) {
     await store.put({
       ...action,
       state: "queued",
@@ -251,8 +286,9 @@ export async function recoverInterruptedUploads(
     });
   }
   await transaction.done;
-  if (interrupted.length > 0) notifyOutboxChanged();
-  return interrupted.length;
+  const recoveredCount = savedLocally.length + interruptedUploads.length;
+  if (recoveredCount > 0) notifyOutboxChanged();
+  return recoveredCount;
 }
 
 export function assertTransition(current: OutboxState, next: OutboxState): void {

@@ -10,6 +10,7 @@ import {
   getOutboxAction,
   getOutboxActionWithBlobs,
   queueOutboxAction,
+  recoverResumableOutboxActions,
   saveOutboxAction,
   transitionOutboxAction,
 } from "./outbox";
@@ -293,6 +294,79 @@ describe("offline outbox", () => {
       verification: { serverRef: "FIELD-CHECKIN-1" },
     });
     expect((await getOutboxActionWithBlobs("field-recovery-action"))?.blobs).toHaveLength(0);
+  });
+
+  it("recovers Blob-backed local field work interrupted before queueing for its own principal only", async () => {
+    const blob = new Blob(["saved before queueing"], { type: "image/jpeg" });
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "saved-local-recovery-action",
+      kind: "field_checkin",
+      endpoint: "/api/v1/jobs/JOB-A/check-ins",
+      payload: { assignment_id: "ASSIGN-A", proof_slot: "Production" },
+      attachments: [{ attachmentId: "saved-local-photo", blob, fileName: "roof.jpg" }],
+    });
+
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Idempotency-Key")).toBe("saved-local-recovery-action");
+      const form = init?.body as FormData;
+      const metadata = JSON.parse(String(form.get("metadata"))) as Record<string, unknown>;
+      expect(metadata.device_action_id).toBe("saved-local-recovery-action");
+      expect(form.getAll("attachments")).toHaveLength(1);
+      return Response.json({
+        device_action_id: "saved-local-recovery-action",
+        status: "verified",
+      });
+    });
+
+    const wrongUser = await initializeOutbox({
+      tenantId: principal.tenantId,
+      userId: "field-user-b",
+      csrfToken: "other-user-csrf",
+      fetcher,
+      now: () => 2_000,
+    });
+    expect(wrongUser).toEqual({ processed: 0, verified: 0, requeued: 0, needsAttention: 0 });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(await getOutboxActionWithBlobs("saved-local-recovery-action")).toMatchObject({
+      action: { state: "saved_locally" },
+      blobs: [{ blobKey: "saved-local-recovery-action:saved-local-photo" }],
+    });
+
+    const result = await initializeOutbox({
+      ...principal,
+      csrfToken: "current-user-csrf",
+      fetcher,
+      now: () => 3_000,
+    });
+    expect(result).toEqual({ processed: 1, verified: 1, requeued: 0, needsAttention: 0 });
+    expect(await getOutboxAction("saved-local-recovery-action")).toMatchObject({
+      state: "verified",
+      attempts: 1,
+    });
+    expect((await getOutboxActionWithBlobs("saved-local-recovery-action"))?.blobs).toHaveLength(0);
+    await expect(queueOutboxAction("saved-local-recovery-action", 3_100)).resolves.toMatchObject({
+      state: "verified",
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows the save flow to queue an action already promoted by startup recovery", async () => {
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "recovery-queue-race-action",
+      kind: "field_checkin",
+      endpoint: "/api/v1/jobs/JOB-A/check-ins",
+      payload: { assignment_id: "ASSIGN-A" },
+    });
+
+    expect(await recoverResumableOutboxActions(principal, 2_000)).toBe(1);
+    await expect(queueOutboxAction("recovery-queue-race-action", 2_100)).resolves.toMatchObject({
+      state: "queued",
+      nextAttemptAt: 2_000,
+      lastError: { code: "queue_interrupted" },
+    });
   });
 
   it("rejects invalid state jumps and payload secrets", async () => {

@@ -441,6 +441,19 @@ test("a write requires an unmodified server preview and separately signed human 
         state: "Blocked",
       } }), { headers: { "content-type": "application/json" } });
     }
+    if (init.method === "GET" && target.includes("Evidence%20Item/evidence%3Adeposit-1")) {
+      return new Response(JSON.stringify({ data: {
+        name: "evidence:deposit-1",
+        roof_job: "job:1",
+        sync_state: "Verified",
+        content_checksum: "a".repeat(64),
+        checksum_algorithm: "SHA-256",
+        verified_at: "2026-07-10 10:01:00",
+        verification_source: "ironwrap-worker-r2-frappe",
+        r2_key: "field/v1/job-1/deposit.jpg",
+        proof_slot: "Deposit",
+      } }), { headers: { "content-type": "application/json" } });
+    }
     if (init.method === "GET" && target.includes("Hermes%20Run/run-gate-0001")) {
       return new Response("missing", { status: 404 });
     }
@@ -458,7 +471,12 @@ test("a write requires an unmodified server preview and separately signed human 
     throw new Error(`unexpected request ${init.method} ${target}`);
   });
 
-  const baseArgs = { gate_id: "gate:1", next_state: "Ready", reason: "Deposit verified" };
+  const baseArgs = {
+    gate_id: "gate:1",
+    next_state: "Ready",
+    reason: "Deposit verified",
+    evidence_item_id: "evidence:deposit-1",
+  };
   const dryRun = JSON.parse((await server._registeredTools.dry_run_update_gate.handler(baseArgs)).content[0].text);
   const writeArgs = {
     ...baseArgs,

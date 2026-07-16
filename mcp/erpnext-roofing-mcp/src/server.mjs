@@ -76,6 +76,7 @@ const FIELD_ROOF_JOB_FIELDS = [
 ];
 
 const GateStateSchema = z.enum(["Blocked", "Ready", "Waived", "Done"]);
+const GATE_EVIDENCE_STATES = new Set(["Ready", "Done"]);
 const MaterialTakeoffStatusSchema = z.enum(["Needs Review", "Approved", "Rejected"]);
 const PRODUCTION_SCHEDULING_GATES = Object.freeze([
   "Deposit",
@@ -912,10 +913,14 @@ export function assertWriteApproved(config, args = {}) {
   if (!args.approval_receipt) throw new Error("approval_receipt_required");
 }
 
-export function buildGateUpdatePatch(nextState, reason, approvedBy, nowIso) {
+export function buildGateUpdatePatch(nextState, reason, approvedBy, nowIso, evidenceItemId) {
   const cleanReason = typeof reason === "string" ? reason.trim() : "";
+  const cleanEvidenceItemId = typeof evidenceItemId === "string" ? evidenceItemId.trim() : "";
   if ((nextState === "Blocked" || nextState === "Waived") && !cleanReason) {
     throw new Error("reason_required_for_gate_state");
+  }
+  if (GATE_EVIDENCE_STATES.has(nextState) && !cleanEvidenceItemId) {
+    throw new Error("evidence_item_required_for_gate_state");
   }
   const patch = { state: nextState };
   if (nextState === "Blocked") {
@@ -928,6 +933,7 @@ export function buildGateUpdatePatch(nextState, reason, approvedBy, nowIso) {
     if (approvedBy) patch.waived_by = approvedBy;
     if (nowIso) patch.waived_at = nowIso;
   }
+  if (GATE_EVIDENCE_STATES.has(nextState)) patch.evidence_item = cleanEvidenceItemId;
   return patch;
 }
 
@@ -3624,11 +3630,13 @@ export function buildServer(config) {
         gate_id: z.string().min(1),
         next_state: GateStateSchema,
         reason: z.string().max(2000).optional(),
+        evidence_item_id: IdSchema.optional(),
       },
     },
-    async ({ gate_id, next_state, reason }) => {
+    async ({ gate_id, next_state, reason, evidence_item_id }) => {
       const before = await readResource(config, "Production Gate State", gate_id);
-      const patch = buildGateUpdatePatch(next_state, reason);
+      const patch = buildGateUpdatePatch(next_state, reason, undefined, undefined, evidence_item_id);
+      await assertGateEvidenceForState(config, next_state, patch.evidence_item, before.roof_job);
       return text({
         would_write: false,
         required_tool: "request_update_gate",
@@ -3648,6 +3656,7 @@ export function buildServer(config) {
         gate_id: z.string().min(1),
         next_state: GateStateSchema,
         reason: z.string().max(2000).optional(),
+        evidence_item_id: IdSchema.optional(),
         request_text: z.string().min(1).max(4000),
         approved_by: z.string().min(1),
         run_id: z.string().min(8).max(128),
@@ -3660,7 +3669,19 @@ export function buildServer(config) {
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
       const before = await readResource(config, "Production Gate State", args.gate_id);
-      const patch = buildGateUpdatePatch(args.next_state, args.reason, args.approved_by, now);
+      const patch = buildGateUpdatePatch(
+        args.next_state,
+        args.reason,
+        args.approved_by,
+        now,
+        args.evidence_item_id,
+      );
+      await assertGateEvidenceForState(
+        config,
+        args.next_state,
+        patch.evidence_item,
+        before.roof_job,
+      );
       const dryRun = {
         target: { doctype: "Production Gate State", name: args.gate_id },
         before: summarizeGate(before),
@@ -3675,7 +3696,7 @@ export function buildServer(config) {
         target: { doctype: "Production Gate State", name: args.gate_id },
         roofJob: before.roof_job,
         leadEnvelope: before.lead_envelope,
-        linkedEvidence: before.evidence_item,
+        linkedEvidence: patch.evidence_item ?? before.evidence_item,
         dryRun,
         beforeSummary: summarizeGate(before),
         afterSummary: summarizeGate({ ...before, ...patch }),
@@ -6640,6 +6661,18 @@ async function assertLinkedResourceForJob(config, doctype, name, roofJobId, labe
   return record;
 }
 
+export async function assertGateEvidenceForState(config, nextState, evidenceItemId, roofJobId) {
+  if (!GATE_EVIDENCE_STATES.has(nextState)) return null;
+  if (!evidenceItemId) throw new Error("evidence_item_required_for_gate_state");
+  return await assertLinkedResourceForJob(
+    config,
+    "Evidence Item",
+    evidenceItemId,
+    roofJobId,
+    "gate_readiness",
+  );
+}
+
 async function assertVerifiedEvidenceResource(config, evidenceId, label, evidencePolicy = {}) {
   const evidence = await readResource(config, "Evidence Item", evidenceId);
   assertVerifiedEvidence(evidence, label, evidencePolicy);
@@ -6652,7 +6685,7 @@ export function assertVerifiedEvidence(evidence, label, {
 } = {}) {
   if (evidence?.sync_state !== "Verified") throw new Error(`${label}_evidence_not_verified`);
   if (evidence?.checksum_algorithm !== "SHA-256"
-    || !/^[a-f0-9]{64}$/i.test(String(evidence?.content_checksum ?? ""))) {
+    || !/^[a-f0-9]{64}$/.test(String(evidence?.content_checksum ?? ""))) {
     throw new Error(`${label}_evidence_checksum_invalid`);
   }
   if (!evidence?.verified_at || !evidence?.verification_source) {
@@ -7236,6 +7269,7 @@ function summarizeGate(gate) {
     state: gate.state,
     blocker_reason: gate.blocker_reason ?? "",
     waiver_reason: gate.waiver_reason ?? "",
+    evidence_item: gate.evidence_item ?? "",
   };
 }
 

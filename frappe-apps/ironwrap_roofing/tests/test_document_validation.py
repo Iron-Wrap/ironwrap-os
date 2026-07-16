@@ -28,6 +28,14 @@ LEAD_ENVELOPE_CONTROLLER_PATH = (
     / "lead_envelope"
     / "lead_envelope.py"
 )
+EVIDENCE_ITEM_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "evidence_item"
+    / "evidence_item.py"
+)
 
 
 class FakeValidationError(Exception):
@@ -44,6 +52,23 @@ class FakeDocument(dict):
 
     def get_doc_before_save(self) -> dict | None:
         return self.previous
+
+
+def gate_evidence_rows(gates: list[dict]) -> list[dict]:
+    return [
+        {
+            "name": gate["evidence_item"],
+            "roof_job": gate["roof_job"],
+            "sync_state": "Verified",
+            "content_checksum": "a" * 64,
+            "checksum_algorithm": "SHA-256",
+            "verified_at": "2026-07-10T12:00:00.000Z",
+            "verification_source": "worker-checksum",
+            "r2_key": f"private/{gate['roof_job']}/{gate['evidence_item']}.jpg",
+        }
+        for gate in gates
+        if gate.get("state") in {"Ready", "Done"} and gate.get("evidence_item")
+    ]
 
 
 class DocumentValidationAdapterTests(unittest.TestCase):
@@ -68,6 +93,13 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                         for row in rows.get("Production Gate State Duplicate", [])
                     ]
                 return [dict(row) for row in rows.get("Production Gate State", [])]
+            if "`tabEvidence Item`" in normalized:
+                requested_names = set(values)
+                return [
+                    dict(row)
+                    for row in rows.get("Evidence Item", [])
+                    if row.get("name") in requested_names
+                ]
             raise AssertionError(f"unexpected SQL: {normalized}")
 
         frappe_module.db = types.SimpleNamespace(
@@ -106,6 +138,51 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(FakeValidationError, "write_once_field"):
             adapter.validate_business_document(document, "evidence_item")
+
+    def test_verified_evidence_requires_the_private_worker_issuer_context(self) -> None:
+        adapter, _ = self.load_adapter()
+        issued = FakeDocument(
+            {
+                "evidence_id": "ev-issued-1",
+                "device_action_id": "device-action-1",
+                "roof_job": "job-1",
+                "evidence_type": "Photo",
+                "proof_owner": "crew@example.com",
+                "proof_slot": "Production",
+                "source_system": "ironwrap-pwa",
+                "r2_key": "field/v1/job-1/ev-issued-1.jpg",
+                "content_checksum": "a" * 64,
+                "checksum_algorithm": "SHA-256",
+                "content_type": "image/jpeg",
+                "content_length": 1024,
+                "capture_actor": "crew@example.com",
+                "captured_at": "2026-07-10 08:00:00",
+                "sync_state": "Verified",
+                "verified_at": "2026-07-10 08:01:00",
+                "verification_source": "ironwrap-worker-r2-frappe",
+                "customer_safe": 0,
+            }
+        )
+        with self.assertRaisesRegex(FakeValidationError, "dedicated Worker"):
+            adapter.validate_evidence_verification_mutation(issued)
+        with adapter.field_evidence_issuance_context(issued):
+            adapter.validate_evidence_verification_mutation(issued)
+        with self.assertRaisesRegex(FakeValidationError, "dedicated Worker"):
+            adapter.validate_evidence_verification_mutation(
+                FakeDocument(
+                    {**issued, "summary": "forged after issuer context"},
+                    previous={**issued, "sync_state": "Uploaded"},
+                )
+            )
+        with self.assertRaisesRegex(FakeValidationError, "dedicated Worker"):
+            adapter.validate_evidence_verification_mutation(
+                FakeDocument(
+                    dict(issued), previous={**issued, "sync_state": "Uploaded"}
+                )
+            )
+
+        controller = EVIDENCE_ITEM_CONTROLLER_PATH.read_text(encoding="utf-8")
+        self.assertIn("validate_evidence_verification_mutation(self)", controller)
 
     def test_customer_quote_correction_loads_contract_lineage_context(self) -> None:
         fields = (
@@ -342,6 +419,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
     def test_closed_roof_job_uses_database_context(self) -> None:
         gates = [
             {
+                "roof_job": "job-1",
                 "gate": gate,
                 "state": "Done",
                 "evidence_item": f"ev-{gate.lower()}",
@@ -361,6 +439,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         adapter, calls = self.load_adapter(
             rows={
                 "Production Gate State": gates,
+                "Evidence Item": gate_evidence_rows(gates),
                 "Completion Packet": [{"status": "Approved"}],
                 "Warranty Packet": [{"status": "Issued"}],
                 "Payment Milestone": [{"status": "Matched"}],
@@ -390,16 +469,33 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         self.assertTrue(
             all(filters == {"roof_job": "job-1"} for _, filters, _ in calls)
         )
-        self.assertEqual(len(adapter._test_lock_calls), 2)
+        self.assertEqual(len(adapter._test_lock_calls), 3)
         self.assertTrue(
             all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
         )
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
+        self.assertIn("`tabEvidence Item`", adapter._test_lock_calls[2][0])
+        self.assertIn("FOR UPDATE", adapter._test_lock_calls[2][0])
+
+        invalid_evidence = gate_evidence_rows(gates)
+        invalid_evidence[2]["verification_source"] = ""
+        invalid_adapter, _ = self.load_adapter(
+            rows={
+                "Production Gate State": gates,
+                "Evidence Item": invalid_evidence,
+                "Completion Packet": [{"status": "Approved"}],
+                "Warranty Packet": [{"status": "Issued"}],
+                "Payment Milestone": [{"status": "Matched"}],
+            }
+        )
+        with self.assertRaisesRegex(FakeValidationError, "unverified_gate_evidence"):
+            invalid_adapter.validate_business_document(document, "roof_job")
 
     def test_scheduled_production_assignment_uses_current_database_gate_context(self) -> None:
         gates = [
             {
+                "roof_job": "job-1",
                 "gate": gate,
                 "state": "Done",
                 "evidence_item": f"ev-{gate.lower()}",
@@ -420,14 +516,26 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 "scheduled_start": "2026-07-11 08:00:00",
             }
         )
-        adapter, calls = self.load_adapter(rows={"Production Gate State": gates})
+        adapter, calls = self.load_adapter(
+            rows={"Production Gate State": gates, "Evidence Item": gate_evidence_rows(gates)}
+        )
         adapter.validate_business_document(document, "job_assignment")
         self.assertEqual(calls, [])
-        self.assertEqual(len(adapter._test_lock_calls), 2)
+        self.assertEqual(len(adapter._test_lock_calls), 3)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
+        self.assertIn("`tabEvidence Item`", adapter._test_lock_calls[2][0])
+        self.assertIn("FOR UPDATE", adapter._test_lock_calls[2][0])
         self.assertEqual(adapter._test_lock_calls[0][1], ("job-1",))
         self.assertEqual(adapter._test_lock_calls[1][1], ("job-1",))
+
+        invalid_evidence = gate_evidence_rows(gates)
+        invalid_evidence[2]["sync_state"] = "Uploaded"
+        invalid_adapter, _ = self.load_adapter(
+            rows={"Production Gate State": gates, "Evidence Item": invalid_evidence}
+        )
+        with self.assertRaisesRegex(FakeValidationError, "unverified_gate_evidence"):
+            invalid_adapter.validate_business_document(document, "job_assignment")
 
         missing_adapter, _ = self.load_adapter()
         with self.assertRaisesRegex(FakeValidationError, "production_schedule_gate_block"):
@@ -463,6 +571,32 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         self.assertIn("FOR UPDATE", gate_adapter._test_lock_calls[0][0])
         self.assertIn("`tabProduction Gate State`", gate_adapter._test_lock_calls[1][0])
         self.assertIn("AND gate = %s", gate_adapter._test_lock_calls[1][0])
+
+        ready_gate = FakeDocument(
+            {
+                "gate_id": "gate-safety-ready",
+                "roof_job": "job-1",
+                "gate": "Safety",
+                "state": "Ready",
+                "evidence_item": "ev-safety-ready",
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+                "due_at": "2026-07-11 08:00:00",
+            }
+        )
+        ready_evidence = gate_evidence_rows([dict(ready_gate)])
+        ready_adapter, ready_calls = self.load_adapter(rows={"Evidence Item": ready_evidence})
+        ready_adapter.validate_business_document(ready_gate, "production_gate_state")
+        self.assertEqual(ready_calls, [])
+        self.assertEqual(len(ready_adapter._test_lock_calls), 3)
+        self.assertIn("`tabEvidence Item`", ready_adapter._test_lock_calls[2][0])
+        self.assertIn("FOR UPDATE", ready_adapter._test_lock_calls[2][0])
+
+        forged_evidence = gate_evidence_rows([dict(ready_gate)])
+        forged_evidence[0]["roof_job"] = "job-other"
+        forged_adapter, _ = self.load_adapter(rows={"Evidence Item": forged_evidence})
+        with self.assertRaisesRegex(FakeValidationError, "cross_job_gate_evidence"):
+            forged_adapter.validate_business_document(ready_gate, "production_gate_state")
 
         duplicate_adapter, _ = self.load_adapter(
             rows={"Production Gate State Duplicate": [{"name": "gate-safety-existing"}]}

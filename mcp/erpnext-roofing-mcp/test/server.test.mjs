@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import {
+  assertGateEvidenceForState,
   assertWriteApproved,
   buildGateUpdatePatch,
   buildAuditFinalizationIncidentDraft,
@@ -475,7 +476,16 @@ test("write approval and gate patch helpers enforce narrow mutation rules", () =
     approvalPublicKey: APPROVAL_PUBLIC_KEY,
   }, { dry_run_receipt: "receipt", approval_receipt: "receipt" }));
 
-  assert.deepEqual(buildGateUpdatePatch("Ready", "old reason"), { state: "Ready", blocker_reason: "" });
+  assert.deepEqual(buildGateUpdatePatch("Ready", "old reason", undefined, undefined, "evidence:ready-1"), {
+    state: "Ready",
+    blocker_reason: "",
+    evidence_item: "evidence:ready-1",
+  });
+  assert.deepEqual(buildGateUpdatePatch("Done", undefined, undefined, undefined, "evidence:done-1"), {
+    state: "Done",
+    blocker_reason: "",
+    evidence_item: "evidence:done-1",
+  });
   assert.deepEqual(buildGateUpdatePatch("Blocked", "waiting on deposit"), { state: "Blocked", blocker_reason: "waiting on deposit" });
   assert.deepEqual(buildGateUpdatePatch("Waived", "owner override", "owner@example.com", "2026-07-08T10:00:00.000Z"), {
     state: "Waived",
@@ -486,6 +496,8 @@ test("write approval and gate patch helpers enforce narrow mutation rules", () =
   });
   assert.throws(() => buildGateUpdatePatch("Blocked", ""), /reason_required/);
   assert.throws(() => buildGateUpdatePatch("Waived", ""), /reason_required/);
+  assert.throws(() => buildGateUpdatePatch("Ready", ""), /evidence_item_required/);
+  assert.throws(() => buildGateUpdatePatch("Done", "", undefined, undefined, ""), /evidence_item_required/);
 
   assert.deepEqual(buildMaterialTakeoffStatusPatch("Needs Review", "more photos needed"), {
     status: "Needs Review",
@@ -516,6 +528,28 @@ test("write approval and gate patch helpers enforce narrow mutation rules", () =
     gate_id: "gate_1",
     next_state: "Ready",
   });
+});
+
+test("gate readiness evidence is verified and bound to the gate Roof Job", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url) => {
+    assert.equal(url, "https://erp.example/api/resource/Evidence%20Item/evidence%3Aready-1");
+    return new Response(JSON.stringify({ data: {
+      name: "evidence:ready-1",
+      roof_job: "job-1",
+      sync_state: "Verified",
+      content_checksum: "a".repeat(64),
+      checksum_algorithm: "SHA-256",
+      verified_at: "2026-07-10 10:01:00",
+      verification_source: "ironwrap-worker-r2-frappe",
+      r2_key: "field/v1/job-1/evidence.jpg",
+      proof_slot: "Production",
+    } }), { headers: { "content-type": "application/json" } });
+  });
+  await assert.doesNotReject(assertGateEvidenceForState({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+  }, "Ready", "evidence:ready-1", "job-1"));
 });
 
 test("material takeoff draft converts measurement values into review-gated line items", () => {

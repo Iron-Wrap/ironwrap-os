@@ -348,6 +348,8 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "latitude",
         "longitude",
         "location_accuracy_m",
+        "verified_at",
+        "verification_source",
         "correction_of",
         "correction_reason",
     ),
@@ -762,6 +764,7 @@ def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
             context.get("gates", ()),
             SCHEDULABLE_PRODUCTION_GATE_STATES,
             "production_schedule_gate_block",
+            context,
         )
     status = _get(record, "status")
     _enforce_state_transition(
@@ -2122,7 +2125,51 @@ def _validate_warranty(record: Any, context: Mapping[str, Any]) -> None:
         require_fields(record, "issued_at", "issued_evidence")
 
 
-def _validate_gate(record: Any, _context: Mapping[str, Any]) -> None:
+def _validate_gate_evidence(record: Any, context: Mapping[str, Any]) -> None:
+    evidence_id = _get(record, "evidence_item")
+    sources = context.get("gate_evidence")
+    source = sources.get(str(evidence_id)) if isinstance(sources, Mapping) else None
+    if not isinstance(source, Mapping):
+        raise PolicyViolation(
+            "unverified_gate_evidence",
+            "Ready or Done gate evidence could not be verified",
+            "evidence_item",
+        )
+    if _get(source, "roof_job") != _get(record, "roof_job"):
+        raise PolicyViolation(
+            "cross_job_gate_evidence",
+            "Ready or Done gate evidence must belong to the same Roof Job",
+            "evidence_item",
+        )
+    if _get(source, "sync_state") != "Verified":
+        raise PolicyViolation(
+            "unverified_gate_evidence",
+            "Ready or Done gate evidence must be verified",
+            "evidence_item",
+        )
+    if _get(source, "checksum_algorithm") != "SHA-256":
+        raise PolicyViolation(
+            "unsupported_checksum",
+            "Ready or Done gate evidence must use SHA-256",
+            "evidence_item",
+        )
+    require_sha256(source, "content_checksum")
+    if (
+        _blank(_get(source, "verified_at"))
+        or _blank(_get(source, "verification_source"))
+        or not any(
+            not _blank(_get(source, field))
+            for field in ("source_uri", "r2_key", "drive_file_id")
+        )
+    ):
+        raise PolicyViolation(
+            "unverified_gate_evidence",
+            "Ready or Done gate evidence must retain verification and source proof",
+            "evidence_item",
+        )
+
+
+def _validate_gate(record: Any, context: Mapping[str, Any]) -> None:
     state = _get(record, "state")
     require_fields(record, "owner_user", "assigned_at")
     if state == "Blocked":
@@ -2131,6 +2178,7 @@ def _validate_gate(record: Any, _context: Mapping[str, Any]) -> None:
         require_fields(record, "waived_by", "waived_at", "waiver_reason")
     elif state in {"Ready", "Done"}:
         require_fields(record, "evidence_item")
+        _validate_gate_evidence(record, context)
         if state == "Ready":
             require_fields(record, "due_at")
         if any(
@@ -2160,6 +2208,7 @@ def _require_production_gate_states(
     gate_rows: Sequence[Any],
     allowed_states: frozenset[str],
     violation_code: str,
+    context: Mapping[str, Any],
 ) -> dict[str, Any]:
     gates = _gate_map(gate_rows)
     for gate_name in PRODUCTION_GATES:
@@ -2169,7 +2218,7 @@ def _require_production_gate_states(
                 violation_code,
                 f"{gate_name} gate must be one of {sorted(allowed_states)}",
             )
-        _validate_gate(gate, {})
+        _validate_gate(gate, context)
     return gates
 
 
@@ -2197,7 +2246,7 @@ def _validate_roof_job(record: Any, context: Mapping[str, Any]) -> None:
         else CLOSEOUT_PRODUCTION_GATE_STATES
     )
     gates = _require_production_gate_states(
-        context.get("gates", ()), allowed, "production_gate_block"
+        context.get("gates", ()), allowed, "production_gate_block", context
     )
     if status == "Closed":
         completion_gate = gates.get("Completion")
@@ -2209,7 +2258,7 @@ def _validate_roof_job(record: Any, context: Mapping[str, Any]) -> None:
                 "closeout_gate_block",
                 "Completion gate must be Done or explicitly Waived",
             )
-        _validate_gate(completion_gate, {})
+        _validate_gate(completion_gate, context)
         completion_statuses = {
             _get(row, "status") for row in context.get("completion_packets", [])
         }

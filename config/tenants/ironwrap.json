@@ -4,6 +4,9 @@
     "display_name": "IronWrap OS (IronWrap Exteriors + iRoof Alberta)",
     "status": "live"
   },
+  "runtime": {
+    "app_tenant_name": "IronWrap OS"
+  },
   "brand": {
     "name": "IronWrap",
     "brands": [

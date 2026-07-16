@@ -4,6 +4,9 @@
     "display_name": "Demo Exteriors Co (fake gate-11 clone tenant)",
     "status": "demo"
   },
+  "runtime": {
+    "app_tenant_name": "Demo Exteriors OS"
+  },
   "brand": {
     "name": "Demo Exteriors",
     "brands": [

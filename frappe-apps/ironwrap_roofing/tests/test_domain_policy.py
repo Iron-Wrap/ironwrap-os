@@ -807,6 +807,166 @@ class DomainPolicyTests(unittest.TestCase):
             context=closeout_context,
         )
 
+    def test_scheduled_production_assignment_requires_current_non_closeout_gates(self) -> None:
+        def gate(gate_name: str, state: str) -> dict[str, str]:
+            result = {
+                "gate": gate_name,
+                "state": state,
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+            }
+            if state == "Ready":
+                result.update(
+                    due_at="2026-07-11 08:00:00",
+                    evidence_item=f"ev-{gate_name.lower()}",
+                )
+            elif state == "Done":
+                result.update(evidence_item=f"ev-{gate_name.lower()}")
+            elif state == "Waived":
+                result.update(
+                    waived_by="owner@example.com",
+                    waived_at="2026-07-10 07:30:00",
+                    waiver_reason="Owner-approved exception.",
+                )
+            else:
+                result.update(
+                    due_at="2026-07-11 08:00:00",
+                    blocker_reason="Waiting for source evidence.",
+                )
+            return result
+
+        gates = [
+            gate("Deposit", "Ready"),
+            gate("Materials", "Done"),
+            gate("Safety", "Waived"),
+            gate("Access", "Ready"),
+            gate("Weather", "Done"),
+            gate("Crew", "Ready"),
+        ]
+        assignment = {
+            "assignment_id": "assignment-production-1",
+            "roof_job": "job-1",
+            "assignment_type": "Production",
+            "status": "Assigned",
+            "crew_profile": "crew-1",
+            "assigned_by": "production@example.com",
+            "assigned_at": "2026-07-10 08:00:00",
+            "scheduled_start": "2026-07-11 08:00:00",
+        }
+
+        # Completion is intentionally not required to schedule production work.
+        validate_record("job_assignment", assignment, context={"gates": gates})
+
+        self.assert_policy(
+            "production_schedule_gate_block",
+            validate_record,
+            "job_assignment",
+            assignment,
+            context={"gates": gates[:-1]},
+        )
+        blocked = [
+            gate("Safety", "Blocked") if row["gate"] == "Safety" else row
+            for row in gates
+        ]
+        self.assert_policy(
+            "production_schedule_gate_block",
+            validate_record,
+            "job_assignment",
+            assignment,
+            context={"gates": blocked},
+        )
+        self.assert_policy(
+            "ambiguous_gate",
+            validate_record,
+            "job_assignment",
+            assignment,
+            context={"gates": [*gates, gate("Safety", "Done")]},
+        )
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "job_assignment",
+            assignment,
+            context={
+                "gates": [
+                    {key: value for key, value in row.items() if key != "evidence_item"}
+                    if row["gate"] == "Deposit"
+                    else row
+                    for row in gates
+                ]
+            },
+        )
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "job_assignment",
+            assignment,
+            context={
+                "gates": [
+                    {key: value for key, value in row.items() if key != "waiver_reason"}
+                    if row["gate"] == "Safety"
+                    else row
+                    for row in gates
+                ]
+            },
+        )
+
+        validate_record(
+            "job_assignment",
+            {**assignment, "assignment_id": "assignment-production-unscheduled", "scheduled_start": ""},
+        )
+        validate_record(
+            "job_assignment",
+            {
+                **assignment,
+                "assignment_id": "assignment-inspection-scheduled",
+                "assignment_type": "Inspection",
+            },
+        )
+        self.assert_policy(
+            "scheduled_end_requires_start",
+            validate_record,
+            "job_assignment",
+            {
+                **assignment,
+                "assignment_id": "assignment-orphaned-end",
+                "scheduled_start": "",
+                "scheduled_end": "2026-07-11 16:00:00",
+            },
+        )
+        self.assert_policy(
+            "invalid_assignment_window",
+            validate_record,
+            "job_assignment",
+            {
+                **assignment,
+                "assignment_id": "assignment-zero-window",
+                "scheduled_end": assignment["scheduled_start"],
+            },
+            context={"gates": gates},
+        )
+
+        safety_gate = {
+            "gate_id": "gate-safety-1",
+            "roof_job": "job-1",
+            **gate("Safety", "Ready"),
+        }
+        validate_record("production_gate_state", safety_gate)
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "production_gate_state",
+            {**safety_gate, "roof_job": "job-2"},
+            previous=safety_gate,
+        )
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "production_gate_state",
+            {**safety_gate, "gate": "Weather"},
+            previous=safety_gate,
+        )
+
     def test_review_and_customer_communication_policy(self) -> None:
         review = {
             "review_request_id": "rr-1",

@@ -16,6 +16,8 @@ from typing import Any, Mapping, Sequence
 
 MAX_JSON_BYTES = 1_000_000
 PRODUCTION_GATES = ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
+SCHEDULABLE_PRODUCTION_GATE_STATES = frozenset(("Ready", "Done", "Waived"))
+CLOSEOUT_PRODUCTION_GATE_STATES = frozenset(("Done", "Waived"))
 
 
 class PolicyViolation(ValueError):
@@ -445,6 +447,9 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "raw_key",
         "supersedes",
     ),
+    # A gate's job/gate identity is fixed. Letting either move would bypass the
+    # per-job scheduling lock and corrupt the gate lineage.
+    "production_gate_state": ("roof_job", "gate"),
     "roof_job": (
         "workflow_profile",
         "locale_policy_version",
@@ -744,8 +749,20 @@ def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
         raise PolicyViolation("assignment_target", "assign exactly one crew or user")
     start = _get(record, "scheduled_start")
     end = _get(record, "scheduled_end")
-    if start and end and str(start) > str(end):
+    if not _blank(end) and _blank(start):
+        raise PolicyViolation(
+            "scheduled_end_requires_start",
+            "scheduled end requires a scheduled start",
+            "scheduled_end",
+        )
+    if start and end and str(start) >= str(end):
         raise PolicyViolation("invalid_assignment_window", "scheduled start must precede end")
+    if _get(record, "assignment_type") == "Production" and not _blank(start):
+        _require_production_gate_states(
+            context.get("gates", ()),
+            SCHEDULABLE_PRODUCTION_GATE_STATES,
+            "production_schedule_gate_block",
+        )
     status = _get(record, "status")
     _enforce_state_transition(
         record,
@@ -2139,6 +2156,23 @@ def _gate_map(gates: Sequence[Any]) -> dict[str, Any]:
     return result
 
 
+def _require_production_gate_states(
+    gate_rows: Sequence[Any],
+    allowed_states: frozenset[str],
+    violation_code: str,
+) -> dict[str, Any]:
+    gates = _gate_map(gate_rows)
+    for gate_name in PRODUCTION_GATES:
+        gate = gates.get(gate_name)
+        if gate is None or _get(gate, "state") not in allowed_states:
+            raise PolicyViolation(
+                violation_code,
+                f"{gate_name} gate must be one of {sorted(allowed_states)}",
+            )
+        _validate_gate(gate, {})
+    return gates
+
+
 def _validate_roof_job(record: Any, context: Mapping[str, Any]) -> None:
     status = _get(record, "job_status")
     if status in {"Won", "In Production", "Completed", "Closed"}:
@@ -2157,18 +2191,14 @@ def _validate_roof_job(record: Any, context: Mapping[str, Any]) -> None:
         )
     if status not in {"In Production", "Closed"}:
         return
-    gates = _gate_map(context.get("gates", []))
     allowed = (
-        {"Ready", "Done", "Waived"} if status == "In Production" else {"Done", "Waived"}
+        SCHEDULABLE_PRODUCTION_GATE_STATES
+        if status == "In Production"
+        else CLOSEOUT_PRODUCTION_GATE_STATES
     )
-    for gate_name in PRODUCTION_GATES:
-        gate = gates.get(gate_name)
-        if gate is None or _get(gate, "state") not in allowed:
-            raise PolicyViolation(
-                "production_gate_block",
-                f"{gate_name} gate must be one of {sorted(allowed)}",
-            )
-        _validate_gate(gate, {})
+    gates = _require_production_gate_states(
+        context.get("gates", ()), allowed, "production_gate_block"
+    )
     if status == "Closed":
         completion_gate = gates.get("Completion")
         if completion_gate is None or _get(completion_gate, "state") not in {

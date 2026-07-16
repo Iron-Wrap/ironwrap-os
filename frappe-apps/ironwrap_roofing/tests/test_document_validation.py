@@ -52,11 +52,28 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         counts = counts or {}
         rows = rows or {}
         calls = []
+        lock_calls = []
         frappe_module = types.ModuleType("frappe")
         frappe_module.ValidationError = FakeValidationError
+
+        def sql(query, values, *, as_dict):
+            normalized = " ".join(query.split())
+            lock_calls.append((normalized, values, as_dict))
+            if "`tabRoof Job`" in normalized:
+                return [{"name": values[0]}] if values[0] else []
+            if "`tabProduction Gate State`" in normalized:
+                if "AND gate = %s" in normalized:
+                    return [
+                        dict(row)
+                        for row in rows.get("Production Gate State Duplicate", [])
+                    ]
+                return [dict(row) for row in rows.get("Production Gate State", [])]
+            raise AssertionError(f"unexpected SQL: {normalized}")
+
         frappe_module.db = types.SimpleNamespace(
             get_value=lambda doctype, name, field, **_kwargs: values.get((doctype, name, field)),
             count=lambda doctype, filters=None: counts.get(doctype, 0),
+            sql=sql,
         )
 
         def get_all(doctype, *, filters, fields):
@@ -73,6 +90,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, {"frappe": frappe_module}):
             spec.loader.exec_module(module)
+        module._test_lock_calls = lock_calls
         return module, calls
 
     def test_policy_violations_become_frappe_validation_errors(self) -> None:
@@ -364,7 +382,6 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         self.assertEqual(
             [doctype for doctype, _, _ in calls],
             [
-                "Production Gate State",
                 "Completion Packet",
                 "Warranty Packet",
                 "Payment Milestone",
@@ -373,6 +390,99 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         self.assertTrue(
             all(filters == {"roof_job": "job-1"} for _, filters, _ in calls)
         )
+        self.assertEqual(len(adapter._test_lock_calls), 2)
+        self.assertTrue(
+            all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
+        )
+        self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
+        self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
+
+    def test_scheduled_production_assignment_uses_current_database_gate_context(self) -> None:
+        gates = [
+            {
+                "gate": gate,
+                "state": "Done",
+                "evidence_item": f"ev-{gate.lower()}",
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+            }
+            for gate in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
+        ]
+        document = FakeDocument(
+            {
+                "assignment_id": "assignment-production-1",
+                "roof_job": "job-1",
+                "assignment_type": "Production",
+                "status": "Assigned",
+                "crew_profile": "crew-1",
+                "assigned_by": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+                "scheduled_start": "2026-07-11 08:00:00",
+            }
+        )
+        adapter, calls = self.load_adapter(rows={"Production Gate State": gates})
+        adapter.validate_business_document(document, "job_assignment")
+        self.assertEqual(calls, [])
+        self.assertEqual(len(adapter._test_lock_calls), 2)
+        self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
+        self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
+        self.assertEqual(adapter._test_lock_calls[0][1], ("job-1",))
+        self.assertEqual(adapter._test_lock_calls[1][1], ("job-1",))
+
+        missing_adapter, _ = self.load_adapter()
+        with self.assertRaisesRegex(FakeValidationError, "production_schedule_gate_block"):
+            missing_adapter.validate_business_document(document, "job_assignment")
+
+        unscheduled_adapter, unscheduled_calls = self.load_adapter()
+        unscheduled_adapter.validate_business_document(
+            FakeDocument({**document, "assignment_id": "assignment-unscheduled", "scheduled_start": ""}),
+            "job_assignment",
+        )
+        self.assertEqual(unscheduled_calls, [])
+        self.assertEqual(unscheduled_adapter._test_lock_calls, [])
+
+        gate_adapter, gate_calls = self.load_adapter()
+        gate_adapter.validate_business_document(
+            FakeDocument(
+                {
+                    "gate_id": "gate-safety-1",
+                    "roof_job": "job-1",
+                    "gate": "Safety",
+                    "state": "Blocked",
+                    "owner_user": "production@example.com",
+                    "assigned_at": "2026-07-10 08:00:00",
+                    "due_at": "2026-07-11 08:00:00",
+                    "blocker_reason": "Waiting for a field safety acknowledgement.",
+                }
+            ),
+            "production_gate_state",
+        )
+        self.assertEqual(gate_calls, [])
+        self.assertEqual(len(gate_adapter._test_lock_calls), 2)
+        self.assertIn("`tabRoof Job`", gate_adapter._test_lock_calls[0][0])
+        self.assertIn("FOR UPDATE", gate_adapter._test_lock_calls[0][0])
+        self.assertIn("`tabProduction Gate State`", gate_adapter._test_lock_calls[1][0])
+        self.assertIn("AND gate = %s", gate_adapter._test_lock_calls[1][0])
+
+        duplicate_adapter, _ = self.load_adapter(
+            rows={"Production Gate State Duplicate": [{"name": "gate-safety-existing"}]}
+        )
+        with self.assertRaisesRegex(FakeValidationError, "duplicate_production_gate"):
+            duplicate_adapter.validate_business_document(
+                FakeDocument(
+                    {
+                        "gate_id": "gate-safety-2",
+                        "roof_job": "job-1",
+                        "gate": "Safety",
+                        "state": "Blocked",
+                        "owner_user": "production@example.com",
+                        "assigned_at": "2026-07-10 08:00:00",
+                        "due_at": "2026-07-11 08:00:00",
+                        "blocker_reason": "Waiting for a field safety acknowledgement.",
+                    }
+                ),
+                "production_gate_state",
+            )
 
     def test_safety_acknowledgements_require_the_atomic_append_context(self) -> None:
         adapter, _ = self.load_adapter()

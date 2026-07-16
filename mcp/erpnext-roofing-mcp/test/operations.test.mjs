@@ -28,6 +28,7 @@ import {
   buildInsuranceSupplementEvidencePatch,
   buildInsuranceSupplementTransitionPatch,
   buildJobAssignmentDraft,
+  buildProductionScheduleGatePreview,
   buildReconciliationResolutionPatch,
   buildSafetyAcknowledgementPatch,
   buildSafetyPlanDraft,
@@ -46,6 +47,14 @@ const assignmentInput = {
   scheduled_start: "2026-07-11T14:00:00.000Z",
   scheduled_end: "2026-07-11T22:00:00.000Z",
   assigned_by: "owner@example.com",
+};
+const assignmentDraftInput = {
+  roofJobId: assignmentInput.roof_job_id,
+  assignmentType: assignmentInput.assignment_type,
+  crewProfileId: assignmentInput.crew_profile_id,
+  scheduledStart: assignmentInput.scheduled_start,
+  scheduledEnd: assignmentInput.scheduled_end,
+  assignedBy: assignmentInput.assigned_by,
 };
 
 const consentInput = {
@@ -89,6 +98,35 @@ test("new command schemas reject unknown keys and unsafe acknowledgement methods
     ...safety,
     device_action_id: "x".repeat(141),
   }).success, false);
+});
+
+test("production scheduling eligibility is bounded, excludes closeout, and rejects orphaned ends", () => {
+  const draft = buildJobAssignmentDraft({ ...assignmentDraftInput, nowIso: NOW });
+  const gates = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"].map((gate) => ({
+    gate,
+    state: gate === "Safety" ? "Waived" : "Ready",
+  }));
+  const preview = buildProductionScheduleGatePreview(draft, gates);
+  assert.equal(preview.required, true);
+  assert.equal(preview.state_eligible, true);
+  assert.deepEqual(preview.required_gates, ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"]);
+  assert.equal(preview.gates.some(({ gate }) => gate === "Completion"), false);
+  assert.equal(
+    buildProductionScheduleGatePreview(draft, [...gates, { gate: "Safety", state: "Done" }]).state_eligible,
+    false,
+  );
+  assert.throws(
+    () => buildJobAssignmentDraft({ ...assignmentDraftInput, scheduledStart: undefined, nowIso: NOW }),
+    /scheduled_end_requires_start/,
+  );
+  assert.throws(
+    () => buildJobAssignmentDraft({
+      ...assignmentDraftInput,
+      scheduledEnd: assignmentDraftInput.scheduledStart,
+      nowIso: NOW,
+    }),
+    /assignment_schedule_invalid/,
+  );
 });
 
 test("evidence-backed commands reject unverified, superseded, checksumless, or wrong-slot proof", () => {
@@ -456,6 +494,142 @@ test("a write requires an unmodified server preview and separately signed human 
     /approval_approver_identity_mismatch/,
   );
   assert.equal(gateWrites, 1);
+});
+
+test("production scheduling rechecks the signed gate preview before any write", async (t) => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: true,
+    agentRole: "owner-operator",
+    actorUser: "owner@example.com",
+    approverId: "owner@example.com",
+    dryRunSigningKey: "s".repeat(32),
+    approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+  });
+  let gatesStillEligible = true;
+  let assignmentCreateAttempts = 0;
+  let assignmentCreates = 0;
+  let hermesRunPosts = 0;
+  let hermesRunFinalizations = 0;
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const target = String(url);
+    if (init.method === "GET" && target.includes("Crew%20Profile/crew%3Ametal-1")) {
+      return new Response(JSON.stringify({ data: { name: "crew:metal-1", status: "Active" } }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (init.method === "GET" && target.includes("Job%20Assignment/")) {
+      return new Response("missing", { status: 404 });
+    }
+    if (init.method === "GET" && target.includes("Production%20Gate%20State?")) {
+      const states = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"].map((gate) => ({
+        gate,
+        state: gatesStillEligible ? "Ready" : "Blocked",
+      }));
+      return new Response(JSON.stringify({ data: states }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (init.method === "GET" && target.includes("Hermes%20Run/")) {
+      return new Response("missing", { status: 404 });
+    }
+    if (init.method === "POST" && target.includes("Hermes%20Run")) {
+      hermesRunPosts += 1;
+      return new Response(JSON.stringify({ data: { name: "run-production-schedule" } }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (init.method === "POST" && target.includes("Job%20Assignment")) {
+      assignmentCreateAttempts += 1;
+      if (!gatesStillEligible) {
+        return new Response(JSON.stringify({ exc_type: "ValidationError" }), {
+          status: 422,
+          statusText: "production_schedule_gate_block",
+        });
+      }
+      assignmentCreates += 1;
+      return new Response(JSON.stringify({ data: { name: "assignment:created" } }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (init.method === "PUT" && target.includes("Hermes%20Run/")) {
+      hermesRunFinalizations += 1;
+      return new Response(JSON.stringify({ data: { name: "run-production-schedule" } }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected request ${init.method} ${target}`);
+  });
+
+  const approvedWriteArgs = (input, dryRun, runId) => {
+    const writeArgs = {
+      ...input,
+      request_text: "Schedule the approved production crew.",
+      approved_by: "owner@example.com",
+      run_id: runId,
+      dry_run_receipt: dryRun.approval_request.dry_run_receipt,
+    };
+    writeArgs.approval_receipt = signApprovalReceipt(privateKey, {
+      write_tool: "request_create_job_assignment",
+      dry_run_receipt: writeArgs.dry_run_receipt,
+      agent_role: "owner-operator",
+      actor_user: "owner@example.com",
+      site_id: dryRun.approval_request.site_id,
+      run_id: writeArgs.run_id,
+      approved_by: writeArgs.approved_by,
+      args_digest: digest(approvedArgs(writeArgs)),
+      issued_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    });
+    return writeArgs;
+  };
+
+  const stableInput = { ...assignmentInput, assignment_id: "assignment:production-stable" };
+  const dryRun = JSON.parse(
+    (await server._registeredTools.dry_run_job_assignment.handler(stableInput)).content[0].text,
+  );
+  assert.equal(dryRun.production_schedule_gate_preview.required, true);
+  assert.equal(dryRun.production_schedule_gate_preview.state_eligible, true);
+  assert.deepEqual(dryRun.production_schedule_gate_preview.required_gates, [
+    "Deposit", "Materials", "Safety", "Access", "Weather", "Crew",
+  ]);
+  assert.equal(
+    dryRun.production_schedule_gate_preview.gates.some(({ gate }) => gate === "Completion"),
+    false,
+  );
+  const stableResult = JSON.parse((await server._registeredTools.request_create_job_assignment.handler(
+    approvedWriteArgs(stableInput, dryRun, "run-production-schedule-stable"),
+  )).content[0].text);
+  assert.equal(stableResult.audit_finalized, true);
+  assert.equal(assignmentCreateAttempts, 1);
+  assert.equal(assignmentCreates, 1);
+  assert.equal(hermesRunPosts, 1);
+  assert.equal(hermesRunFinalizations, 1);
+
+  // A previously-green preview is not permission to write. The approval
+  // contract recomputes its deterministic summary before it permits a write.
+  const staleInput = { ...assignmentInput, assignment_id: "assignment:production-stale" };
+  const staleDryRun = JSON.parse(
+    (await server._registeredTools.dry_run_job_assignment.handler(staleInput)).content[0].text,
+  );
+  gatesStillEligible = false;
+  const writeArgs = approvedWriteArgs(
+    staleInput,
+    staleDryRun,
+    "run-production-schedule-stale",
+  );
+
+  await assert.rejects(
+    () => server._registeredTools.request_create_job_assignment.handler(writeArgs),
+    /hermes_dry_run_receipt_mismatch:preview_digest/,
+  );
+  assert.equal(assignmentCreateAttempts, 1);
+  assert.equal(assignmentCreates, 1);
+  assert.equal(hermesRunPosts, 1);
+  assert.equal(hermesRunFinalizations, 1);
 });
 
 test("field completion write rechecks assignment immediately before the mutation", async (t) => {

@@ -11,11 +11,11 @@ from docx.shared import Inches, Pt, RGBColor
 ROOT = Path(__file__).resolve().parents[1]
 DOC_SPECS = [
     (
-        ROOT / "IRONWRAP_TASK1_INTERNAL_OS_RU.md",
+        ROOT / "docs" / "archive" / "2026-06-27" / "IRONWRAP_TASK1_INTERNAL_OS_RU.md",
         ROOT / "output" / "documents" / "IronWrap_Task1_Internal_OS_RU.docx",
     ),
     (
-        ROOT / "IRONWRAP_TASK2_METAL_LAYOUT_PRODUCT_RU.md",
+        ROOT / "docs" / "IRONWRAP_TASK2_METAL_LAYOUT_PRODUCT_RU.md",
         ROOT / "output" / "documents" / "IronWrap_Task2_Metal_Layout_Product_RU.docx",
     ),
 ]

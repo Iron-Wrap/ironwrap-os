@@ -1,0 +1,35 @@
+{
+  "actions": [], "allow_rename": 0, "autoname": "field:consent_id", "creation": "2026-07-10 00:00:00.000000", "custom": 0, "doctype": "DocType", "engine": "InnoDB",
+  "field_order": ["consent_id", "customer", "lead_envelope", "roof_job", "channel", "purpose", "status", "jurisdiction", "consent_basis", "source_system", "source_reference", "captured_by", "captured_at", "effective_from", "expires_at", "proof_evidence", "revoked_at", "supersedes", "correction_reason", "notes"],
+  "fields": [
+    {"fieldname": "consent_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Consent ID", "reqd": 1, "unique": 1},
+    {"fieldname": "customer", "fieldtype": "Link", "label": "Customer", "options": "Roofing Customer"},
+    {"fieldname": "lead_envelope", "fieldtype": "Link", "label": "Lead Envelope", "options": "Lead Envelope"},
+    {"fieldname": "roof_job", "fieldtype": "Link", "in_standard_filter": 1, "label": "Roof Job", "options": "Roof Job"},
+    {"fieldname": "channel", "fieldtype": "Select", "in_list_view": 1, "label": "Channel", "options": "Email\nSMS\nPhone\nWhatsApp", "reqd": 1},
+    {"fieldname": "purpose", "fieldtype": "Select", "label": "Purpose", "options": "Estimate Follow-up\nJob Updates\nMarketing\nReview Request\nCollections\nOther", "reqd": 1},
+    {"fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Status", "options": "Granted\nDenied\nRevoked\nExpired\nSuperseded", "reqd": 1},
+    {"fieldname": "jurisdiction", "fieldtype": "Data", "label": "Jurisdiction", "reqd": 1},
+    {"fieldname": "consent_basis", "fieldtype": "Select", "label": "Consent Basis", "options": "Express\nWritten\nContract\nExisting Business Relationship\nOther", "reqd": 1},
+    {"fieldname": "source_system", "fieldtype": "Data", "label": "Source System", "reqd": 1},
+    {"fieldname": "source_reference", "fieldtype": "Data", "label": "Source Reference", "reqd": 1},
+    {"fieldname": "captured_by", "fieldtype": "Link", "label": "Captured By", "options": "User", "reqd": 1},
+    {"fieldname": "captured_at", "fieldtype": "Datetime", "label": "Captured At", "reqd": 1},
+    {"fieldname": "effective_from", "fieldtype": "Datetime", "label": "Effective From", "reqd": 1},
+    {"fieldname": "expires_at", "fieldtype": "Datetime", "label": "Expires At"},
+    {"fieldname": "proof_evidence", "fieldtype": "Link", "label": "Proof Evidence", "options": "Evidence Item"},
+    {"fieldname": "revoked_at", "fieldtype": "Datetime", "label": "Revoked At"},
+    {"fieldname": "supersedes", "fieldtype": "Link", "label": "Supersedes", "options": "Communication Consent"},
+    {"fieldname": "correction_reason", "fieldtype": "Small Text", "label": "Correction Reason"},
+    {"fieldname": "notes", "fieldtype": "Small Text", "label": "Notes"}
+  ],
+  "index_web_pages_for_search": 0, "istable": 0, "links": [], "modified": "2026-07-10 00:00:00.000000", "modified_by": "Administrator", "module": "IronWrap Roofing", "name": "Communication Consent", "naming_rule": "By fieldname", "owner": "Administrator",
+  "permissions": [
+    {"create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Owner", "write": 1},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Sales", "write": 1},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Closeout"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support"}
+  ],
+  "sort_field": "modified", "sort_order": "DESC", "states": [], "track_changes": 1
+}

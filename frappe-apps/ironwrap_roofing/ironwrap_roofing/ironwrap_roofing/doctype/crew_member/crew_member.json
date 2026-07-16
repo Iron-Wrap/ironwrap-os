@@ -1,0 +1,41 @@
+{
+  "actions": [],
+  "allow_rename": 0,
+  "creation": "2026-07-10 00:00:00.000000",
+  "custom": 0,
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "crew_user",
+    "crew_role",
+    "active",
+    "mobile_phone",
+    "joined_on",
+    "left_on",
+    "certification_summary",
+    "notes"
+  ],
+  "fields": [
+    { "fieldname": "crew_user", "fieldtype": "Link", "in_list_view": 1, "label": "Crew User", "options": "User", "reqd": 1 },
+    { "fieldname": "crew_role", "fieldtype": "Select", "in_list_view": 1, "label": "Crew Role", "options": "Lead\nInstaller\nHelper\nSafety Lead\nDriver\nOther", "reqd": 1 },
+    { "default": "1", "fieldname": "active", "fieldtype": "Check", "in_list_view": 1, "label": "Active" },
+    { "fieldname": "mobile_phone", "fieldtype": "Data", "label": "Mobile Phone" },
+    { "fieldname": "joined_on", "fieldtype": "Date", "label": "Joined On" },
+    { "fieldname": "left_on", "fieldtype": "Date", "label": "Left On" },
+    { "fieldname": "certification_summary", "fieldtype": "Small Text", "label": "Certification Summary" },
+    { "fieldname": "notes", "fieldtype": "Small Text", "label": "Notes" }
+  ],
+  "index_web_pages_for_search": 0,
+  "istable": 1,
+  "links": [],
+  "modified": "2026-07-10 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "IronWrap Roofing",
+  "name": "Crew Member",
+  "owner": "Administrator",
+  "permissions": [],
+  "sort_field": "idx",
+  "sort_order": "ASC",
+  "states": [],
+  "track_changes": 1
+}

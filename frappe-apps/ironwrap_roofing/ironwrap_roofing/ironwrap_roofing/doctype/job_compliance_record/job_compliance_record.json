@@ -1,0 +1,38 @@
+{
+  "actions": [], "allow_rename": 0, "autoname": "field:compliance_record_id", "creation": "2026-07-10 00:00:00.000000", "custom": 0, "doctype": "DocType", "engine": "InnoDB",
+  "field_order": ["compliance_record_id", "roof_job", "jurisdiction", "record_type", "authority_name", "external_reference", "status", "required_before_gate", "applied_at", "effective_date", "expiry_date", "inspected_at", "evidence_item", "owner_user", "due_date", "waived_by", "waived_at", "waiver_reason", "supersedes", "correction_reason", "notes"],
+  "fields": [
+    {"fieldname": "compliance_record_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Compliance Record ID", "reqd": 1, "unique": 1},
+    {"fieldname": "roof_job", "fieldtype": "Link", "in_list_view": 1, "in_standard_filter": 1, "label": "Roof Job", "options": "Roof Job", "reqd": 1},
+    {"fieldname": "jurisdiction", "fieldtype": "Data", "label": "Jurisdiction", "reqd": 1},
+    {"fieldname": "record_type", "fieldtype": "Select", "label": "Record Type", "options": "Permit\nLicence\nInspection\nHOA\nUtility\nOther", "reqd": 1},
+    {"fieldname": "authority_name", "fieldtype": "Data", "label": "Authority Name", "reqd": 1},
+    {"fieldname": "external_reference", "fieldtype": "Data", "label": "External Reference"},
+    {"fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Status", "options": "Required\nApplied\nApproved\nPassed\nFailed\nExpired\nWaived\nSuperseded", "reqd": 1},
+    {"fieldname": "required_before_gate", "fieldtype": "Select", "label": "Required Before Gate", "options": "Proposal\nDeposit\nMaterials\nSafety\nAccess\nWeather\nCrew\nCompletion", "reqd": 1},
+    {"fieldname": "applied_at", "fieldtype": "Datetime", "label": "Applied At"},
+    {"fieldname": "effective_date", "fieldtype": "Date", "label": "Effective Date"},
+    {"fieldname": "expiry_date", "fieldtype": "Date", "label": "Expiry Date"},
+    {"fieldname": "inspected_at", "fieldtype": "Datetime", "label": "Inspected At"},
+    {"fieldname": "evidence_item", "fieldtype": "Link", "label": "Evidence Item", "options": "Evidence Item"},
+    {"fieldname": "owner_user", "fieldtype": "Link", "label": "Owner", "options": "User", "reqd": 1},
+    {"fieldname": "due_date", "fieldtype": "Date", "label": "Due Date"},
+    {"fieldname": "waived_by", "fieldtype": "Link", "label": "Waived By", "options": "User"},
+    {"fieldname": "waived_at", "fieldtype": "Datetime", "label": "Waived At"},
+    {"fieldname": "waiver_reason", "fieldtype": "Small Text", "label": "Waiver Reason"},
+    {"fieldname": "supersedes", "fieldtype": "Link", "label": "Supersedes", "options": "Job Compliance Record"},
+    {"fieldname": "correction_reason", "fieldtype": "Small Text", "label": "Correction Reason"},
+    {"fieldname": "notes", "fieldtype": "Small Text", "label": "Notes"}
+  ],
+  "index_web_pages_for_search": 0, "istable": 0, "links": [], "modified": "2026-07-10 00:00:00.000000", "modified_by": "Administrator", "module": "IronWrap Roofing", "name": "Job Compliance Record", "naming_rule": "By fieldname", "owner": "Administrator",
+  "permissions": [
+    {"create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Owner", "write": 1},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Sales"},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Production", "write": 1},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Field"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Closeout"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support"}
+  ],
+  "sort_field": "modified", "sort_order": "DESC", "states": [], "track_changes": 1
+}

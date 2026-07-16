@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "locked_at": "2026-07-10",
+  "policy": {
+    "architecture": "frappe-only",
+    "erpnext": "forbidden",
+    "floating_references": "forbidden"
+  },
+  "components": {
+    "frappe": {
+      "source": "https://github.com/frappe/frappe.git",
+      "version": "v15.114.0",
+      "git_commit": "105b17938839f4e5c6cdff817d42afc40c3bcc32"
+    },
+    "frappe_docker": {
+      "source": "https://github.com/frappe/frappe_docker.git",
+      "version": "v3.2.1",
+      "git_commit": "d4a310089f5d6fc38ed1317b898d75b9c74901db"
+    },
+    "hermes": {
+      "source": "https://github.com/NousResearch/hermes-agent.git",
+      "version": "v2026.7.7.2",
+      "git_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596"
+    }
+  },
+  "container_bases": {
+    "frappe_build": "docker.io/frappe/build:version-15@sha256:db27282afc1be4e9040e040f92da308e7e4720239bd819ae538299557957b798",
+    "frappe_base": "docker.io/frappe/base:version-15@sha256:e7d48f6bfdcec5c37dc877b7133cf9e6bd86773d6eb4667008e07fb40973dc57"
+  },
+  "host_requirements": {
+    "ubuntu_minimum": "22.04",
+    "cpu_cores_minimum": 2,
+    "memory_gib_minimum": 8,
+    "disk_gib_minimum": 80,
+    "node_version_minimum": "22.12.0",
+    "architectures": [
+      "x86_64",
+      "aarch64"
+    ]
+  }
+}

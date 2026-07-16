@@ -6,12 +6,16 @@ references (e.g. `02 §Phase 3`) point at the spec for detail. No calendar estim
 progress is tracked by proof gates, live account gates, and production evidence.
 For the exhaustive first phase, use `final-spec-pack/18-phase-1-source-truth-and-build-contract.md`.
 
+> **Current authority:** The Worker/D1/R2 spine writes first; the operating core is Frappe-only;
+> JobNimbus, GHL, Make, and Jotform are temporary bridges. Legacy `erpnext-*` identifiers remain
+> for compatibility only. The launch runbook and Phase 1 contract prevail over this historical plan.
+
 ## Current status vs spec — snapshot (2026-07-08)
 
 Honest two-layer view: **Built** = code/config present + unit-verified · **Operating** = running on live
 traffic/data in production. The Worker bus is real and current in code/config: D1/R2/queues/cron, Gmail instant-ack,
 Google Drive filing, temporary JobNimbus push, photo intake, measurement intake, owned estimator intake,
-ERPNext bridge, and signed QuickBooks webhook capture are implemented. The operating gap is live-source cutover:
+Frappe bridge, and signed QuickBooks webhook capture are implemented. The operating gap is live-source cutover:
 website/Make still must feed `/ingest/website`, the 3D estimator must POST to `/ingest/estimate`,
 and A2P/Engage, compliance, QuickBooks Payments/webhook configuration, JobNimbus admin config,
 Jotform live forms, and AssistAI remain account/owner gates. A 2026-07-08
@@ -23,7 +27,7 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
 | 0 · Foundations | 🟢 bus deployed (D1/R2/queues/cron/secrets); maintainer; Google decisions locked | 🟡 bus live; JobNimbus key rotation + A2P/Engage + compliance still owner gates |
 | 1 · Lead + estimator spine | 🟢 spine, dedup, reconcile+heartbeat, dead-letter, brand-tagging, Gmail ack, `/ingest/estimate`, GHL rescue (103) — verified | 🔴 real lead feed not cut over; website/Make must POST to `/ingest/website`; estimator frontend must POST to `/ingest/estimate` |
 | 2 · Messaging + bridge shrink | 🟡 Gmail email path built; CASL drafts | 🔴 needs A2P + temporary Engage or owned replacement proof; GHL/JN bridge routes retire only after owned replacements pass |
-| 3 · Field · docs · proposals | 🟢 photo/measurement/QuickBooks/estimator endpoints + ERPNext estimate/takeoff/proposal proof — verified | 🟡 Google Drive creds exist; Jotform/RoofRuler/QB/estimator live hooks still need cutover; QB OAuth status mirror is intentionally deferred |
+| 3 · Field · docs · proposals | 🟢 photo/measurement/QuickBooks/estimator endpoints + Frappe estimate/takeoff/proposal proof — verified | 🟡 Google Drive creds exist; Jotform/RoofRuler/QB/estimator live hooks still need cutover; QB OAuth status mirror is intentionally deferred |
 | 4 · Phone AI (AssistAI) | 🟡 eval framework doc | 🔴 not configured |
 | 5 · QA · security · compliance · launch | 🟡 compliance drafts + QA matrix (`docs/QA-TEST-MATRIX.md`) | 🔴 not started; keys not rotated; no sign-off |
 

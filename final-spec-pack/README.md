@@ -1,10 +1,15 @@
 # IronWrap OS Final Spec Pack
 
-Date: 2026-06-27 (re-architected 2026-06-28; updated 2026-07-08 for Google Workspace/Drive, Phase 1 source truth, and owned estimator/ERPNext direction).
+Date: 2026-06-27 (re-architected 2026-06-28; updated 2026-07-10 for the plain-Frappe operating core, governed Hermes runtime, Field Companion PWA, and exact D1 recovery contract).
 
 This pack is the final implementation specification for **IronWrap OS**. It is
 not the external metal-layout SaaS idea. It covers the internal system we should
 set up, configure, build, test, and ship for IronWrap.
+
+> **Current authority (2026-07-16):** `18-phase-1-source-truth-and-build-contract.md` prevails
+> whenever this pack's earlier planning language conflicts. The Worker/D1/R2 path is the first
+> write, the operating core is Frappe-only, the Field Companion PWA is primary, and JobNimbus,
+> GHL, Make, and Jotform are bridges. Legacy `erpnext-*` names do not authorize ERPNext.
 
 ## Final Direction
 
@@ -13,18 +18,18 @@ GoHighLevel remain temporary bridge systems only until the owned path covers the
 work. The exhaustive first-phase build contract is `18-phase-1-source-truth-and-build-contract.md`;
 it wins when older provenance docs disagree.
 
-- IronWrap OS / ERPNext as the target operating truth for customer, property,
+- IronWrap OS / plain Frappe as the target operating truth for customer, property,
   job, estimate, stage, task, owner, evidence, and approval state. JobNimbus can
   bridge existing job/CRM operations while owned replacements mature.
-- A thin owned data layer (Cloudflare D1 + R2) is the system of record: Make
-  dual-writes every lead/event to it first, then to bridge systems only when
-  still needed. JobNimbus/GHL are consumers of IronWrap's data, not owners.
+- The owned Worker/D1/R2 path is the system of record: it stores every direct
+  lead/event first, then reaches bridge systems only when still needed. Make
+  may relay a connector event into that path, but is not the canonical bus.
 - The owned estimator/configurator path is first-class: public/internal
   estimate payloads land at `POST /ingest/estimate`, use stable project/idempotency
   keys for retry-safe replay, save raw R2 + D1 truth, and create review-gated
-  ERPNext Instant Estimate Session rows. No generated estimate is binding until
+  IronWrap OS Instant Estimate Session rows. No generated estimate is binding until
   a human approves scope, exclusions, and price.
-- Make as connector/visibility infrastructure and the Cloudflare Worker as the
+- Make is connector/visibility infrastructure while the Cloudflare Worker is the
   owned bus: canonical lead envelope, dedup, dead-letter, retry, and daily
   source-vs-landed reconciliation so no lead is ever silently lost.
 - Instant-response / missed-call-text-back (MCTB) is the headline deliverable:
@@ -36,13 +41,11 @@ it wins when older provenance docs disagree.
 - Phone AI = native JobNimbus AssistAI, behind a written scored eval gate;
   voicemail-to-lead floor; managed Retell only if AssistAI fails the gate. No
   custom multi-vendor voice stack; Google Voice is not usable (no media API).
-- Field photos/geo = the Jotform "Jobsite Photo" form (JobNimbus job picker +
-  Geolocation widget capturing device GPS at submit, coordinates-only, offline-capable
-  in the Jotform Mobile App; multi-photo upload, auto timestamp, offline-queued →
-  webhook → Make → Google Drive + JobNimbus + owned store; $0 incremental). iOS
-  strips photo GPS by default, and direct camera-capture uploads lose metadata
-  regardless — so capture device GPS at submit; don't depend on EXIF. Jotform for
-  structured forms when a workflow needs it. NaturalForms dropped.
+- Field photos/geo = the owned Field Companion PWA first: offline-first photo, voice,
+  blocker, and GPS check-ins queue locally and become verified only after server replay,
+  R2 proof, and Frappe persistence. Jotform "Jobsite Photo" remains a temporary bridge
+  for structured intake. iOS strips photo GPS by default, so capture device GPS at submit
+  and do not depend on EXIF. Local PWA/BFF proof is green; real-device acceptance remains open.
 - Free Canva + free Affinity for design/marketing graphics — not full Adobe
   Creative Cloud (Canva Pro only if brand-kit/team features are needed).
 - Google Drive (Google Workspace) as the first storage authority; QuickBooks for accounting truth.
@@ -104,9 +107,8 @@ Task 1 is shipped only when:
 - Job folders are created once and linked back to JobNimbus and the owned store.
 - Appointment, proposal, deposit, material request, completion, invoice, and
   review paths work end to end.
-- Default field forms/photos (Jotform "Jobsite Photo" form, offline device-GPS)
-  can be dispatched/completed, archived, and reflected back into JobNimbus/Google
-  without manual retyping.
+- Owned Field Companion offline capture, server verification, and real-device weak-signal
+  recovery must be proven; Jotform may bridge until that acceptance gate is complete.
 - AssistAI (behind the eval gate) can qualify, book, update CRM records,
   summarize, trigger follow-up, and escalate; MCTB covers missed/after-hours calls.
 - GHL lead routes are retired after replacement proof; A2P 10DLC + Canadian

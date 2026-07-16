@@ -1,8 +1,9 @@
 # IronWrap OS - Manual Setup Checklist
 
 Human/UI configuration that happens in SaaS tools, not in repo code. This file tracks the current
-Google Workspace / Google Drive / owned bus + ERPNext direction. JobNimbus and GoHighLevel are
-temporary bridges until the owned path covers the same work.
+Google Workspace / Google Drive / owned bus + Frappe-only direction. JobNimbus and GoHighLevel are
+temporary bridges until the owned path covers the same work. Legacy `erpnext-*` names are
+compatibility identifiers, not permission to install ERPNext.
 
 Legend: `[ ]` todo, `[x]` done/verified, `[~]` temporary bridge.
 
@@ -55,7 +56,7 @@ Worker: `https://ironwrap-bus.yellow-rain-7498.workers.dev`
 - [x] R2 `ironwrap-bus-raw` stores raw inbound bodies first.
 - [x] Queues `ironwrap-jn-push` and `ironwrap-jn-dlq` configured.
 - [x] Cron retry/reconcile configured.
-- [x] Estimator intake route exists: `POST /ingest/estimate` stores raw R2 + D1 and syncs ERPNext Instant Estimate Session when enabled.
+- [x] Estimator intake route exists: `POST /ingest/estimate` stores raw R2 + D1 and syncs a Frappe Instant Estimate Session when enabled.
 - [x] Secrets set for current code path: `INGEST_TOKEN`, `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`.
 - [ ] Set `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`, `ERPNEXT_BASE_URL`, and `ERPNEXT_ENABLED=true` after the Frappe app is installed.
 - [ ] Switch/refresh Wrangler auth for the configured IronWrap account `7ee5775bc1ba46f05c5a65235b60e939`; current local login reads Mindburn Labs and cannot inventory this account.

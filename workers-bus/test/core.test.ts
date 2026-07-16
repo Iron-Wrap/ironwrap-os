@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
   normalizePhone, extractContact, normalizeEnvelope, dedupKey, validateInbound,
   classifyIntent, reconcileDiff, isStuck, backoffMs, newEnvelopeId,
+  validateSourceCount, MAX_SOURCE_COUNT,
 } from "../src/core.ts";
 
 test("normalizePhone → E.164 (+1 for bare CA/US 10-digit)", () => {
@@ -59,6 +60,18 @@ test("reconcileDiff flags gaps (source > landed), worst-first", () => {
   assert.equal(rows[0].channel, "website");
   assert.equal(rows[0].gap, 2);
   assert.equal(rows.find((r) => r.channel === "phone").gap, 0);
+});
+
+test("validateSourceCount requires a real ISO day, allowed channel, and bounded integer", () => {
+  assert.deepEqual(validateSourceCount("2026-07-10", "website", 42), {
+    ok: true, day: "2026-07-10", channel: "website", count: 42,
+  });
+  assert.deepEqual(validateSourceCount("2026-02-30", "website", 1), { ok: false, reason: "invalid_day" });
+  assert.deepEqual(validateSourceCount("2026-07-10T00:00:00Z", "website", 1), { ok: false, reason: "invalid_day" });
+  assert.deepEqual(validateSourceCount("2026-07-10", "email", 1), { ok: false, reason: "invalid_channel" });
+  assert.deepEqual(validateSourceCount("2026-07-10", "website", -1), { ok: false, reason: "invalid_count" });
+  assert.deepEqual(validateSourceCount("2026-07-10", "website", 1.5), { ok: false, reason: "invalid_count" });
+  assert.deepEqual(validateSourceCount("2026-07-10", "website", MAX_SOURCE_COUNT + 1), { ok: false, reason: "invalid_count" });
 });
 
 test("isStuck respects the threshold; unparseable ts ⇒ re-drive", () => {

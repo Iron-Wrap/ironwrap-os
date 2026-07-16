@@ -86,8 +86,13 @@ export async function googleToken(env: Env, sub: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------- gmail
+export interface GmailSendReceipt {
+  /** Gmail's provider-side acceptance identifier; it is not delivery proof. */
+  providerMessageId: string;
+}
+
 /** Send one email as FROM_EMAIL (impersonated). Subject is RFC2047-encoded for non-ASCII. */
-export async function sendGmail(env: Env, to: string, subject: string, html: string): Promise<void> {
+export async function sendGmail(env: Env, to: string, subject: string, html: string): Promise<GmailSendReceipt> {
   const token = await googleToken(env, env.FROM_EMAIL);
   const subj = `=?UTF-8?B?${btoa(String.fromCharCode(...new TextEncoder().encode(subject)))}?=`;
   const raw = b64url([
@@ -100,6 +105,17 @@ export async function sendGmail(env: Env, to: string, subject: string, html: str
     body: JSON.stringify({ raw }),
   });
   if (!res.ok) throw new Error(`gmail_send_${res.status}: ${(await res.text()).slice(0, 200)}`);
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    throw new Error("gmail_send_invalid_receipt");
+  }
+  const id = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? (payload as { id?: unknown }).id
+    : null;
+  if (typeof id !== "string" || !id.trim()) throw new Error("gmail_send_invalid_receipt");
+  return { providerMessageId: id };
 }
 
 // ---------------------------------------------------------------- drive

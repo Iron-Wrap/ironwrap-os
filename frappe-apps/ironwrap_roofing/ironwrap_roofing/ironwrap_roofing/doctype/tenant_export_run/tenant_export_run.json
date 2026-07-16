@@ -1,0 +1,34 @@
+{
+  "actions": [], "allow_rename": 0, "autoname": "field:export_run_id", "creation": "2026-07-10 00:00:00.000000", "custom": 0, "doctype": "DocType", "engine": "InnoDB",
+  "field_order": ["export_run_id", "tenant", "status", "requested_by", "requested_at", "started_at", "completed_at", "scope_json", "manifest_key", "manifest_checksum", "archive_key", "archive_checksum", "record_count", "evidence_count", "byte_count", "encryption_key_ref", "failure_reason", "supersedes", "correction_reason", "notes"],
+  "fields": [
+    {"fieldname": "export_run_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Export Run ID", "reqd": 1, "unique": 1},
+    {"fieldname": "tenant", "fieldtype": "Link", "in_list_view": 1, "label": "Tenant", "options": "White-Label Tenant", "reqd": 1},
+    {"fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Status", "options": "Requested\nRunning\nCompleted\nFailed\nSuperseded", "reqd": 1},
+    {"fieldname": "requested_by", "fieldtype": "Link", "label": "Requested By", "options": "User", "reqd": 1},
+    {"fieldname": "requested_at", "fieldtype": "Datetime", "label": "Requested At", "reqd": 1},
+    {"fieldname": "started_at", "fieldtype": "Datetime", "label": "Started At"},
+    {"fieldname": "completed_at", "fieldtype": "Datetime", "label": "Completed At"},
+    {"fieldname": "scope_json", "fieldtype": "Code", "label": "Scope JSON", "options": "JSON", "reqd": 1},
+    {"fieldname": "manifest_key", "fieldtype": "Data", "label": "Manifest Key", "read_only": 1},
+    {"fieldname": "manifest_checksum", "fieldtype": "Data", "label": "Manifest Checksum", "read_only": 1},
+    {"fieldname": "archive_key", "fieldtype": "Data", "label": "Archive Key", "read_only": 1},
+    {"fieldname": "archive_checksum", "fieldtype": "Data", "label": "Archive Checksum", "read_only": 1},
+    {"default": "0", "fieldname": "record_count", "fieldtype": "Int", "label": "Record Count", "read_only": 1},
+    {"default": "0", "fieldname": "evidence_count", "fieldtype": "Int", "label": "Evidence Count", "read_only": 1},
+    {"default": "0", "fieldname": "byte_count", "fieldtype": "Int", "label": "Byte Count", "read_only": 1},
+    {"fieldname": "encryption_key_ref", "fieldtype": "Data", "label": "Encryption Key Reference", "read_only": 1},
+    {"fieldname": "failure_reason", "fieldtype": "Small Text", "label": "Failure Reason"},
+    {"fieldname": "supersedes", "fieldtype": "Link", "label": "Supersedes", "options": "Tenant Export Run"},
+    {"fieldname": "correction_reason", "fieldtype": "Small Text", "label": "Correction Reason"},
+    {"fieldname": "notes", "fieldtype": "Small Text", "label": "Notes"}
+  ],
+  "index_web_pages_for_search": 0, "istable": 0, "links": [], "modified": "2026-07-10 00:00:00.000000", "modified_by": "Administrator", "module": "IronWrap Roofing", "name": "Tenant Export Run", "naming_rule": "By fieldname", "owner": "Administrator",
+  "permissions": [
+    {"create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Owner", "write": 1},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Finance"},
+    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support", "write": 1}
+  ],
+  "sort_field": "modified", "sort_order": "DESC", "states": [], "track_changes": 1
+}

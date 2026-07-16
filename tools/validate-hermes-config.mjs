@@ -68,6 +68,7 @@ assert.equal(reads.size + dryRuns.size + requests.size, inventory.size,
 assert.deepEqual(new Set(requestDefinitions.keys()), requests,
   "every request_* tool must be a directly inspectable registerTool definition");
 const frappeSource = serverSources.get("erpnext-roofing-mcp");
+const busSource = serverSources.get("ironwrap-bus-mcp");
 const approvedHelper = frappeSource.match(
   /export function approvedWriteInputSchema\(baseSchema\)[\s\S]*?return baseSchema\.extend\(approvalShape\)\.strict\(\);\n\}/,
 )?.[0];
@@ -118,6 +119,12 @@ assert.match(frappeSource, /HERMES_APPROVER_ID is required when writes are enabl
   "Frappe MCP runtime must bind its approval key to one configured approver identity");
 assert.match(frappeSource, /approval_approver_identity_mismatch/,
   "Frappe MCP must reject an approved_by identity not bound to the approval key");
+assert.match(busSource, /function createAuthorizedRegistrar\(/,
+  "Bus MCP must register tools through runtime role authorization");
+assert.match(busSource, /if \(!allowedTools\.has\(name\)\) return;/,
+  "Bus MCP must omit tools not granted to the configured role");
+assert.match(busSource, /HERMES_AGENT_ROLE must name a role in roles\.json/,
+  "Bus MCP runtime must require a named role from canonical roles.json");
 
 // Canonical approved-write -> dry_run pairing. Names are not purely mechanical
 // (request_create_material_takeoff pairs with dry_run_material_takeoff), so the map is
@@ -399,6 +406,10 @@ for (const [serverName, spec] of Object.entries(manifest.mcpServers)) {
   // No literal secrets: env values must be ${PLACEHOLDER} references only.
   for (const [k, v] of Object.entries(spec.env ?? {})) {
     assert.match(String(v), /^\$\{[A-Z0-9_]+\}$/, `${label}.env.${k} must be a \${ENV} placeholder, not a literal value`);
+  }
+  for (const requiredRoleEnv of ["HERMES_AGENT_ROLE", "HERMES_ROLE_POLICY_PATH"]) {
+    assert.equal(spec.env?.[requiredRoleEnv], `\${${requiredRoleEnv}}`,
+      `${label}.env.${requiredRoleEnv} must bind the canonical runtime role policy`);
   }
 }
 

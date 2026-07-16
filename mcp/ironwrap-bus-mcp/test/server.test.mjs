@@ -1,21 +1,52 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assertWriteApproved, busGet, busPost, busReadiness, configFromEnv } from "../src/server.mjs";
+import {
+  assertWriteApproved,
+  buildServer,
+  busGet,
+  busPost,
+  busReadiness,
+  configFromEnv,
+} from "../src/server.mjs";
 
 test("configFromEnv requires bus URL and admin token", () => {
   assert.throws(() => configFromEnv({}), /IRONWRAP_BUS_BASE_URL/);
   assert.throws(() => configFromEnv({ IRONWRAP_BUS_BASE_URL: "https://bus.example" }), /IRONWRAP_ADMIN_TOKEN/);
-  assert.deepEqual(configFromEnv({
+  assert.throws(() => configFromEnv({
     IRONWRAP_BUS_BASE_URL: "https://bus.example/",
     IRONWRAP_ADMIN_TOKEN: "token",
-  }), { baseUrl: "https://bus.example", adminToken: "token", writeEnabled: false, writeToken: undefined, requestTimeoutMs: 10_000 });
-  assert.deepEqual(configFromEnv({
+  }), /HERMES_AGENT_ROLE/);
+  assert.throws(() => configFromEnv({
+    IRONWRAP_BUS_BASE_URL: "https://bus.example/",
+    IRONWRAP_ADMIN_TOKEN: "token",
+    HERMES_AGENT_ROLE: "unknown-role",
+  }), /HERMES_AGENT_ROLE/);
+
+  const readOnly = configFromEnv({
+    IRONWRAP_BUS_BASE_URL: "https://bus.example/",
+    IRONWRAP_ADMIN_TOKEN: "token",
+    HERMES_AGENT_ROLE: "lead-concierge",
+  });
+  assert.equal(readOnly.baseUrl, "https://bus.example");
+  assert.equal(readOnly.writeEnabled, false);
+  assert.equal(readOnly.agentRole, "lead-concierge");
+  assert.equal(readOnly.agentRoleTitle, "Lead Concierge");
+  assert.ok(readOnly.allowedTools.includes("get_envelope"));
+  assert.equal(readOnly.allowedTools.includes("request_replay"), false);
+
+  const writable = configFromEnv({
     IRONWRAP_BUS_BASE_URL: "https://bus.example/",
     IRONWRAP_ADMIN_TOKEN: "token",
     IRONWRAP_BUS_WRITE_ENABLED: "true",
     HERMES_WRITE_TOKEN: "approve",
     IRONWRAP_BUS_REQUEST_TIMEOUT_MS: "2500",
-  }), { baseUrl: "https://bus.example", adminToken: "token", writeEnabled: true, writeToken: "approve", requestTimeoutMs: 2500 });
+    HERMES_AGENT_ROLE: "support-admin",
+  });
+  assert.equal(writable.writeEnabled, true);
+  assert.equal(writable.writeToken, "approve");
+  assert.equal(writable.requestTimeoutMs, 2500);
+  assert.equal(writable.agentRole, "support-admin");
+  assert.ok(writable.allowedTools.includes("request_replay"));
 });
 
 test("configFromEnv requires HTTPS except explicitly enabled localhost", () => {
@@ -31,6 +62,7 @@ test("configFromEnv requires HTTPS except explicitly enabled localhost", () => {
     IRONWRAP_BUS_BASE_URL: "http://127.0.0.1:8787/",
     IRONWRAP_ADMIN_TOKEN: "token",
     IRONWRAP_BUS_ALLOW_INSECURE_LOCAL: "true",
+    HERMES_AGENT_ROLE: "lead-concierge",
   }).baseUrl, "http://127.0.0.1:8787");
   assert.throws(() => configFromEnv({
     IRONWRAP_BUS_BASE_URL: "https://user:secret@bus.example?token=x",
@@ -40,6 +72,7 @@ test("configFromEnv requires HTTPS except explicitly enabled localhost", () => {
     IRONWRAP_BUS_BASE_URL: "https://bus.example",
     IRONWRAP_ADMIN_TOKEN: "token",
     IRONWRAP_BUS_REQUEST_TIMEOUT_MS: "0",
+    HERMES_AGENT_ROLE: "lead-concierge",
   }), /must be an integer/);
 });
 
@@ -125,4 +158,26 @@ test("write approval helper gates replay mutations", () => {
   assert.throws(() => assertWriteApproved({ writeEnabled: true }, "x"), /bus_write_token_required/);
   assert.throws(() => assertWriteApproved({ writeEnabled: true, writeToken: "right" }, "wrong"), /approval_token_invalid/);
   assert.doesNotThrow(() => assertWriteApproved({ writeEnabled: true, writeToken: "right" }, "right"));
+});
+
+test("bus MCP registers only tools granted to the runtime Hermes role", () => {
+  const leadConcierge = buildServer({
+    baseUrl: "https://bus.example",
+    adminToken: "token",
+    agentRole: "lead-concierge",
+  });
+  assert.ok(leadConcierge._registeredTools.list_recent_envelopes);
+  assert.ok(leadConcierge._registeredTools.get_envelope);
+  assert.equal(leadConcierge._registeredTools.get_bus_readiness, undefined);
+  assert.equal(leadConcierge._registeredTools.dry_run_replay, undefined);
+  assert.equal(leadConcierge._registeredTools.request_replay, undefined);
+
+  const supportAdmin = buildServer({
+    baseUrl: "https://bus.example",
+    adminToken: "token",
+    agentRole: "support-admin",
+  });
+  assert.ok(supportAdmin._registeredTools.get_operational_status);
+  assert.ok(supportAdmin._registeredTools.dry_run_replay);
+  assert.ok(supportAdmin._registeredTools.request_replay);
 });

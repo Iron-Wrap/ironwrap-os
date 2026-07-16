@@ -18,9 +18,21 @@ const allowedTransitions: Record<OutboxState, readonly OutboxState[]> = {
   needs_attention: ["queued"],
 };
 
+// This mirrors the server-side field-action lease. The client renews while a
+// request is active; an expired/missing lease is a recovery heuristic, never
+// proof that the server did not finish the idempotent device action.
+export const OUTBOX_UPLOAD_LEASE_MS = 90_000;
+export const OUTBOX_UPLOAD_HEARTBEAT_MS = 30_000;
+
 export interface OutboxActionWithBlobs {
   action: OutboxAction;
   blobs: OutboxBlobRecord[];
+}
+
+export interface ClaimedOutboxAction extends OutboxAction {
+  state: "uploading";
+  uploadLeaseId: string;
+  uploadLeaseExpiresAt: number;
 }
 
 export interface OutboxClock {
@@ -108,6 +120,8 @@ export async function queueOutboxAction(
     state: "queued",
     attempts: 0,
     nextAttemptAt: now,
+    uploadLeaseId: undefined,
+    uploadLeaseExpiresAt: undefined,
     lastError: undefined,
     conflict: undefined,
     updatedAt: now,
@@ -130,14 +144,31 @@ export async function transitionOutboxAction(
   nextState: OutboxState,
   now = Date.now(),
   patch: Partial<OutboxAction> = {},
-): Promise<OutboxAction> {
+  expectedUploadLeaseId?: string,
+): Promise<OutboxAction | undefined> {
   const database = await getDatabase();
   const transaction = database.transaction("outbox_actions", "readwrite");
   const store = transaction.objectStore("outbox_actions");
   const action = await store.get(deviceActionId);
   if (!action) throw new Error(`Outbox action ${deviceActionId} was not found.`);
+  if (
+    expectedUploadLeaseId !== undefined &&
+    (action.state !== "uploading" || action.uploadLeaseId !== expectedUploadLeaseId)
+  ) {
+    await transaction.done;
+    return undefined;
+  }
   assertTransition(action.state, nextState);
-  const updated = { ...action, ...patch, deviceActionId, state: nextState, updatedAt: now };
+  const updated: OutboxAction = {
+    ...action,
+    ...patch,
+    deviceActionId,
+    state: nextState,
+    ...(nextState === "uploading"
+      ? {}
+      : { uploadLeaseId: undefined, uploadLeaseExpiresAt: undefined }),
+    updatedAt: now,
+  };
   await store.put(updated);
   await transaction.done;
   notifyOutboxChanged();
@@ -147,7 +178,7 @@ export async function transitionOutboxAction(
 export async function claimNextQueuedAction(
   principal: { tenantId: string; userId: string },
   now = Date.now(),
-): Promise<OutboxAction | undefined> {
+): Promise<ClaimedOutboxAction | undefined> {
   const database = await getDatabase();
   const transaction = database.transaction("outbox_actions", "readwrite");
   const store = transaction.objectStore("outbox_actions");
@@ -164,16 +195,41 @@ export async function claimNextQueuedAction(
     return undefined;
   }
   assertTransition(candidate.state, "uploading");
-  const claimed: OutboxAction = {
+  const claimed: ClaimedOutboxAction = {
     ...candidate,
     state: "uploading",
     attempts: candidate.attempts + 1,
+    uploadLeaseId: systemClock.randomId(),
+    uploadLeaseExpiresAt: now + OUTBOX_UPLOAD_LEASE_MS,
     updatedAt: now,
   };
   await store.put(claimed);
   await transaction.done;
   notifyOutboxChanged();
   return claimed;
+}
+
+export async function renewOutboxUploadLease(
+  deviceActionId: string,
+  uploadLeaseId: string,
+  now = Date.now(),
+): Promise<boolean> {
+  const database = await getDatabase();
+  const transaction = database.transaction("outbox_actions", "readwrite");
+  const store = transaction.objectStore("outbox_actions");
+  const action = await store.get(deviceActionId);
+  if (action?.state !== "uploading" || action.uploadLeaseId !== uploadLeaseId) {
+    await transaction.done;
+    return false;
+  }
+  await store.put({
+    ...action,
+    uploadLeaseExpiresAt: now + OUTBOX_UPLOAD_LEASE_MS,
+    updatedAt: now,
+  });
+  await transaction.done;
+  notifyOutboxChanged();
+  return true;
 }
 
 export async function getOutboxAction(deviceActionId: string): Promise<OutboxAction | undefined> {
@@ -199,17 +255,27 @@ export async function markOutboxVerified(
   deviceActionId: string,
   verification: OutboxVerification,
   now = Date.now(),
-): Promise<OutboxAction> {
+  expectedUploadLeaseId?: string,
+): Promise<OutboxAction | undefined> {
   const database = await getDatabase();
   const transaction = database.transaction(["outbox_actions", "outbox_blobs"], "readwrite");
   const actionStore = transaction.objectStore("outbox_actions");
   const action = await actionStore.get(deviceActionId);
   if (!action) throw new Error(`Outbox action ${deviceActionId} was not found.`);
+  if (
+    expectedUploadLeaseId !== undefined &&
+    (action.state !== "uploading" || action.uploadLeaseId !== expectedUploadLeaseId)
+  ) {
+    await transaction.done;
+    return undefined;
+  }
   assertTransition(action.state, "verified");
   const updated: OutboxAction = {
     ...action,
     state: "verified",
     verification,
+    uploadLeaseId: undefined,
+    uploadLeaseExpiresAt: undefined,
     lastError: undefined,
     conflict: undefined,
     updatedAt: now,
@@ -228,22 +294,36 @@ export async function markOutboxNeedsAttention(
   deviceActionId: string,
   detail: { error: OutboxErrorDetail; conflict?: OutboxConflict },
   now = Date.now(),
-): Promise<OutboxAction> {
-  return transitionOutboxAction(deviceActionId, "needs_attention", now, {
-    lastError: detail.error,
-    conflict: detail.conflict,
-  });
+  expectedUploadLeaseId?: string,
+): Promise<OutboxAction | undefined> {
+  return transitionOutboxAction(
+    deviceActionId,
+    "needs_attention",
+    now,
+    {
+      lastError: detail.error,
+      conflict: detail.conflict,
+    },
+    expectedUploadLeaseId,
+  );
 }
 
 export async function requeueOutboxAction(
   deviceActionId: string,
   detail: { error: OutboxErrorDetail; nextAttemptAt: number },
   now = Date.now(),
-): Promise<OutboxAction> {
-  return transitionOutboxAction(deviceActionId, "queued", now, {
-    lastError: detail.error,
-    nextAttemptAt: detail.nextAttemptAt,
-  });
+  expectedUploadLeaseId?: string,
+): Promise<OutboxAction | undefined> {
+  return transitionOutboxAction(
+    deviceActionId,
+    "queued",
+    now,
+    {
+      lastError: detail.error,
+      nextAttemptAt: detail.nextAttemptAt,
+    },
+    expectedUploadLeaseId,
+  );
 }
 
 export async function recoverResumableOutboxActions(
@@ -264,6 +344,8 @@ export async function recoverResumableOutboxActions(
       ...action,
       state: "queued",
       nextAttemptAt: now,
+      uploadLeaseId: undefined,
+      uploadLeaseExpiresAt: undefined,
       updatedAt: now,
       lastError: {
         code: "queue_interrupted",
@@ -272,11 +354,14 @@ export async function recoverResumableOutboxActions(
       },
     });
   }
-  for (const action of interruptedUploads) {
+  const expiredUploads = interruptedUploads.filter((action) => !hasActiveUploadLease(action, now));
+  for (const action of expiredUploads) {
     await store.put({
       ...action,
       state: "queued",
       nextAttemptAt: now,
+      uploadLeaseId: undefined,
+      uploadLeaseExpiresAt: undefined,
       updatedAt: now,
       lastError: {
         code: "upload_interrupted",
@@ -286,9 +371,18 @@ export async function recoverResumableOutboxActions(
     });
   }
   await transaction.done;
-  const recoveredCount = savedLocally.length + interruptedUploads.length;
+  const recoveredCount = savedLocally.length + expiredUploads.length;
   if (recoveredCount > 0) notifyOutboxChanged();
   return recoveredCount;
+}
+
+function hasActiveUploadLease(action: OutboxAction, now: number): boolean {
+  return (
+    typeof action.uploadLeaseId === "string" &&
+    action.uploadLeaseId.length > 0 &&
+    typeof action.uploadLeaseExpiresAt === "number" &&
+    action.uploadLeaseExpiresAt > now
+  );
 }
 
 export function assertTransition(current: OutboxState, next: OutboxState): void {

@@ -61,6 +61,9 @@ export interface OutboxAction {
   state: OutboxState;
   attempts: number;
   nextAttemptAt: number;
+  /** Optional so uploads created before client leases are treated as stale on recovery. */
+  uploadLeaseId?: string;
+  uploadLeaseExpiresAt?: number;
   createdAt: number;
   updatedAt: number;
   lastError?: OutboxErrorDetail;

@@ -119,6 +119,15 @@ Create a dedicated non-interactive API user for the Worker/MCP path with the min
 roles required by its tools. Do not reuse the Administrator account. Store its API key and secret
 only in the Worker and MCP secret stores.
 
+Bind the Field Companion evidence issuer to that exact Worker user before enabling the Worker
+bridge. This is a site-local allowlist, not a Worker variable; it prevents ordinary Desk/REST
+writes from creating or promoting gate-eligible `Verified` evidence:
+
+```bash
+docker exec <backend> bench --site os.ironwrapexteriors.com set-config \
+  ironwrap_field_evidence_issuer_user '<worker-api-user-email>'
+```
+
 ## 6. Configure HTTPS Ingress
 
 Create a Cloudflare Tunnel, route the production hostname, and install a filled copy of

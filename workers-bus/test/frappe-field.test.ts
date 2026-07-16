@@ -112,6 +112,51 @@ test("a field correction cannot link to another job", async () => {
   );
 });
 
+test("new Field Companion evidence uses the trusted Frappe issuer command", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  await withFetch(
+    async (input, init) => {
+      requests.push({ url: String(input), init });
+      if (init?.method === "GET") return Response.json({ data: [] });
+      assert.equal(
+        String(input),
+        "https://frappe.example.com/api/method/ironwrap_roofing.field_evidence_api.record_verified_field_evidence",
+      );
+      assert.equal(init?.method, "POST");
+      const outer = JSON.parse(String(init?.body)) as { evidence_json?: unknown };
+      assert.equal(typeof outer.evidence_json, "string");
+      const document = JSON.parse(String(outer.evidence_json)) as Record<string, unknown>;
+      assert.deepEqual(document, {
+        evidence_id: evidenceInput.evidenceId,
+        device_action_id: evidenceInput.deviceActionId,
+        roof_job: evidenceInput.jobId,
+        evidence_type: evidenceInput.evidenceType,
+        proof_slot: evidenceInput.proofSlot,
+        r2_key: evidenceInput.r2Key,
+        content_checksum: evidenceInput.checksum,
+        checksum_algorithm: "SHA-256",
+        content_type: evidenceInput.contentType,
+        content_length: evidenceInput.contentLength,
+        capture_actor: evidenceInput.captureActor,
+        captured_at: "2026-07-10 10:00:00",
+        customer_safe: 0,
+        summary: evidenceInput.summary,
+      });
+      assert.equal(document.sync_state, undefined);
+      assert.equal(document.verified_at, undefined);
+      assert.equal(document.verification_source, undefined);
+      return Response.json({ message: { name: "EVIDENCE-ISSUED-1" } });
+    },
+    async () => {
+      assert.deepEqual(await frappeFieldWriter(env).persistEvidence(evidenceInput), {
+        name: "EVIDENCE-ISSUED-1",
+      });
+    },
+  );
+  assert.equal(requests.length, 2);
+  assert.match(requests[0]!.url, /\/api\/resource\/Evidence%20Item\?/);
+});
+
 test("an exact existing Field Check-in replay is accepted without a second write", async () => {
   let calls = 0;
   await withFetch(

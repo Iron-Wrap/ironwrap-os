@@ -87,6 +87,7 @@ LEAD_TRIAGE_FIELDS = (
     "triage_summary",
 )
 PRODUCTION_GATE_CONTEXT_FIELDS = (
+    "roof_job",
     "gate",
     "state",
     "owner_user",
@@ -99,6 +100,19 @@ PRODUCTION_GATE_CONTEXT_FIELDS = (
     "waiver_reason",
 )
 _PRODUCTION_GATE_CONTEXT_SELECT = ", ".join(PRODUCTION_GATE_CONTEXT_FIELDS)
+GATE_EVIDENCE_CONTEXT_FIELDS = (
+    "name",
+    "roof_job",
+    "sync_state",
+    "content_checksum",
+    "checksum_algorithm",
+    "verified_at",
+    "verification_source",
+    "source_uri",
+    "r2_key",
+    "drive_file_id",
+)
+_GATE_EVIDENCE_CONTEXT_SELECT = ", ".join(GATE_EVIDENCE_CONTEXT_FIELDS)
 _ATOMIC_SAFETY_ACKNOWLEDGEMENT_APPEND: ContextVar[tuple[str, str] | None] = ContextVar(
     "ironwrap_atomic_safety_acknowledgement_append",
     default=None,
@@ -108,6 +122,46 @@ _APPROVED_LEAD_TRIAGE_TRANSITION: ContextVar[
 ] = ContextVar(
     "ironwrap_approved_lead_triage_transition",
     default=None,
+)
+_TRUSTED_FIELD_EVIDENCE_ISSUANCE: ContextVar[
+    tuple[tuple[str, str], ...] | None
+] = ContextVar(
+    "ironwrap_trusted_field_evidence_issuance",
+    default=None,
+)
+
+# A Field Companion verification is a service fact, not a value a Desk/REST
+# caller may write into an Evidence Item.  The narrow issuer command builds
+# this exact snapshot after it has authenticated the dedicated Worker user.
+# Keep it separate from the pure domain policy: that policy intentionally
+# remains usable for offline contract validation without a Frappe request.
+FIELD_EVIDENCE_ISSUANCE_FIELDS = (
+    "evidence_id",
+    "device_action_id",
+    "roof_job",
+    "evidence_type",
+    "proof_owner",
+    "proof_slot",
+    "source_system",
+    "source_uri",
+    "r2_key",
+    "drive_file_id",
+    "content_checksum",
+    "checksum_algorithm",
+    "content_type",
+    "content_length",
+    "capture_actor",
+    "captured_at",
+    "latitude",
+    "longitude",
+    "location_accuracy_m",
+    "sync_state",
+    "verified_at",
+    "verification_source",
+    "correction_of",
+    "correction_reason",
+    "customer_safe",
+    "summary",
 )
 
 
@@ -150,6 +204,18 @@ def _lead_triage_snapshot(document: Any) -> tuple[str, str, str, str]:
         "" if document.get("triaged_by") is None else str(document.get("triaged_by")),
         "" if document.get("triaged_at") is None else str(document.get("triaged_at")),
         "" if document.get("triage_summary") is None else str(document.get("triage_summary")),
+    )
+
+
+def _field_evidence_issuance_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
+    """Canonicalize the service-owned Evidence Item facts for ContextVar matching."""
+
+    return tuple(
+        (
+            field,
+            "" if document.get(field) is None else str(document.get(field)),
+        )
+        for field in FIELD_EVIDENCE_ISSUANCE_FIELDS
     )
 
 
@@ -199,6 +265,42 @@ def lead_triage_transition_context(
         yield
     finally:
         _APPROVED_LEAD_TRIAGE_TRANSITION.reset(token)
+
+
+@contextmanager
+def field_evidence_issuance_context(document: Any):
+    """Authorize one exact service-issued verified Field Companion evidence save.
+
+    The ContextVar is set only inside ``field_evidence_api`` after the
+    configured Worker integration principal is authenticated.  A generic
+    Desk/REST update cannot provide or recreate this private execution state.
+    """
+
+    token = _TRUSTED_FIELD_EVIDENCE_ISSUANCE.set(
+        _field_evidence_issuance_snapshot(document)
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_FIELD_EVIDENCE_ISSUANCE.reset(token)
+
+
+def validate_evidence_verification_mutation(document: Any) -> None:
+    """Keep generic document writes from creating or promoting verified evidence."""
+
+    if document.get("sync_state") != "Verified":
+        return
+    previous = _previous(document)
+    if previous is not None and previous.get("sync_state") == "Verified":
+        return
+    if _TRUSTED_FIELD_EVIDENCE_ISSUANCE.get() == _field_evidence_issuance_snapshot(
+        document
+    ):
+        return
+    frappe.throw(
+        "Evidence Item verification can only be issued by the dedicated Worker command.",
+        exc=frappe.ValidationError,
+    )
 
 
 def validate_lead_envelope_triage_mutation(document: Any) -> None:
@@ -340,11 +442,39 @@ def _lock_roof_job(roof_job: Any) -> str:
     return str(rows[0]["name"])
 
 
-def _locked_production_gates(roof_job: Any) -> list[dict[str, Any]]:
+def _locked_gate_evidence(evidence_ids: list[Any]) -> dict[str, dict[str, Any]]:
+    names = tuple(
+        sorted(
+            {
+                evidence_id.strip()
+                for evidence_id in evidence_ids
+                if isinstance(evidence_id, str) and evidence_id.strip()
+            }
+        )
+    )
+    if not names:
+        return {}
+    placeholders = ", ".join("%s" for _ in names)
+    rows = frappe.db.sql(
+        f"""
+        SELECT {_GATE_EVIDENCE_CONTEXT_SELECT}
+        FROM `tabEvidence Item`
+        WHERE name IN ({placeholders})
+        FOR UPDATE
+        """,
+        names,
+        as_dict=True,
+    )
+    return {str(row["name"]): dict(row) for row in rows if row.get("name")}
+
+
+def _locked_production_gates(
+    roof_job: Any,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     """Read the gate set under the same transaction locks as the schedule write."""
 
     _lock_roof_job(roof_job)
-    return [
+    gates = [
         dict(row)
         for row in frappe.db.sql(
             f"""
@@ -357,6 +487,7 @@ def _locked_production_gates(roof_job: Any) -> list[dict[str, Any]]:
             as_dict=True,
         )
     ]
+    return gates, _locked_gate_evidence([gate.get("evidence_item") for gate in gates])
 
 
 def _assert_unique_production_gate(document: Any) -> None:
@@ -626,7 +757,7 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
         "Closed",
     }:
         roof_job = document.get("name") or document.get("roof_job_id")
-        context["gates"] = _locked_production_gates(roof_job)
+        context["gates"], context["gate_evidence"] = _locked_production_gates(roof_job)
         if document.get("job_status") == "Closed":
             context["completion_packets"] = frappe.get_all(
                 "Completion Packet", filters={"roof_job": roof_job}, fields=["status"]
@@ -642,11 +773,15 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
         and document.get("assignment_type") == "Production"
         and document.get("scheduled_start")
     ):
-        context["gates"] = _locked_production_gates(document.get("roof_job"))
+        context["gates"], context["gate_evidence"] = _locked_production_gates(
+            document.get("roof_job")
+        )
     elif kind == "production_gate_state":
         # Gate creates and updates take the same per-job lock as scheduling, so
         # a validation snapshot cannot race a gate transition into a commit.
         _assert_unique_production_gate(document)
+        if document.get("state") in {"Ready", "Done"}:
+            context["gate_evidence"] = _locked_gate_evidence([document.get("evidence_item")])
     elif kind == "white_label_tenant" and document.get("status") == "Active":
         filters: dict[str, Any] = {"status": "Active"}
         if document.get("name"):

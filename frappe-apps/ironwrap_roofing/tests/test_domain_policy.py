@@ -151,6 +151,28 @@ def price_rule_snapshot_context(**overrides: object) -> dict[str, object]:
     return context
 
 
+def verified_gate_evidence(roof_job: str = "job-1", **overrides: object) -> dict[str, object]:
+    source: dict[str, object] = {
+        "roof_job": roof_job,
+        "sync_state": "Verified",
+        "content_checksum": "a" * 64,
+        "checksum_algorithm": "SHA-256",
+        "verified_at": "2026-07-10T12:00:00.000Z",
+        "verification_source": "worker-checksum",
+        "r2_key": f"private/{roof_job}/evidence.jpg",
+    }
+    source.update(overrides)
+    return source
+
+
+def gate_evidence_context(gates: list[dict[str, object]]) -> dict[str, dict[str, object]]:
+    return {
+        str(gate["evidence_item"]): verified_gate_evidence(str(gate["roof_job"]))
+        for gate in gates
+        if gate.get("state") in {"Ready", "Done"} and gate.get("evidence_item")
+    }
+
+
 class DomainPolicyTests(unittest.TestCase):
     def assert_policy(self, code: str, function, *args, **kwargs) -> PolicyViolation:
         with self.assertRaises(PolicyViolation) as caught:
@@ -745,6 +767,7 @@ class DomainPolicyTests(unittest.TestCase):
     def test_production_and_closeout_gates_fail_closed(self) -> None:
         gates = [
             {
+                "roof_job": "job-1",
                 "gate": gate,
                 "state": "Ready",
                 "evidence_item": f"ev-{gate.lower()}",
@@ -754,6 +777,7 @@ class DomainPolicyTests(unittest.TestCase):
             }
             for gate in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
         ]
+        gate_evidence = gate_evidence_context(gates)
         validate_record(
             "roof_job",
             {
@@ -763,7 +787,7 @@ class DomainPolicyTests(unittest.TestCase):
                 "locale_policy_version": "ca-ab-2026-01",
                 "locale_policy_snapshot_json": '{"country":"CA","province":"AB"}',
             },
-            context={"gates": gates},
+            context={"gates": gates, "gate_evidence": gate_evidence},
         )
         self.assert_policy(
             "production_gate_block",
@@ -776,12 +800,13 @@ class DomainPolicyTests(unittest.TestCase):
                 "locale_policy_version": "ca-ab-2026-01",
                 "locale_policy_snapshot_json": '{"country":"CA","province":"AB"}',
             },
-            context={"gates": gates[:-1]},
+            context={"gates": gates[:-1], "gate_evidence": gate_evidence},
         )
 
         closed_gates = [{**gate, "state": "Done"} for gate in gates]
         closed_gates.append(
             {
+                "roof_job": "job-1",
                 "gate": "Completion",
                 "state": "Done",
                 "evidence_item": "ev-complete",
@@ -791,6 +816,7 @@ class DomainPolicyTests(unittest.TestCase):
         )
         closeout_context = {
             "gates": closed_gates,
+            "gate_evidence": gate_evidence_context(closed_gates),
             "completion_packets": [{"status": "Approved"}],
             "warranty_packets": [{"status": "Issued"}],
             "payment_milestones": [{"status": "Matched"}],
@@ -810,6 +836,7 @@ class DomainPolicyTests(unittest.TestCase):
     def test_scheduled_production_assignment_requires_current_non_closeout_gates(self) -> None:
         def gate(gate_name: str, state: str) -> dict[str, str]:
             result = {
+                "roof_job": "job-1",
                 "gate": gate_name,
                 "state": state,
                 "owner_user": "production@example.com",
@@ -843,6 +870,7 @@ class DomainPolicyTests(unittest.TestCase):
             gate("Weather", "Done"),
             gate("Crew", "Ready"),
         ]
+        gate_evidence = gate_evidence_context(gates)
         assignment = {
             "assignment_id": "assignment-production-1",
             "roof_job": "job-1",
@@ -855,14 +883,16 @@ class DomainPolicyTests(unittest.TestCase):
         }
 
         # Completion is intentionally not required to schedule production work.
-        validate_record("job_assignment", assignment, context={"gates": gates})
+        validate_record(
+            "job_assignment", assignment, context={"gates": gates, "gate_evidence": gate_evidence}
+        )
 
         self.assert_policy(
             "production_schedule_gate_block",
             validate_record,
             "job_assignment",
             assignment,
-            context={"gates": gates[:-1]},
+            context={"gates": gates[:-1], "gate_evidence": gate_evidence},
         )
         blocked = [
             gate("Safety", "Blocked") if row["gate"] == "Safety" else row
@@ -873,14 +903,14 @@ class DomainPolicyTests(unittest.TestCase):
             validate_record,
             "job_assignment",
             assignment,
-            context={"gates": blocked},
+            context={"gates": blocked, "gate_evidence": gate_evidence},
         )
         self.assert_policy(
             "ambiguous_gate",
             validate_record,
             "job_assignment",
             assignment,
-            context={"gates": [*gates, gate("Safety", "Done")]},
+            context={"gates": [*gates, gate("Safety", "Done")], "gate_evidence": gate_evidence},
         )
         self.assert_policy(
             "required_fields",
@@ -893,7 +923,8 @@ class DomainPolicyTests(unittest.TestCase):
                     if row["gate"] == "Deposit"
                     else row
                     for row in gates
-                ]
+                ],
+                "gate_evidence": gate_evidence,
             },
         )
         self.assert_policy(
@@ -907,7 +938,8 @@ class DomainPolicyTests(unittest.TestCase):
                     if row["gate"] == "Safety"
                     else row
                     for row in gates
-                ]
+                ],
+                "gate_evidence": gate_evidence,
             },
         )
 
@@ -943,7 +975,7 @@ class DomainPolicyTests(unittest.TestCase):
                 "assignment_id": "assignment-zero-window",
                 "scheduled_end": assignment["scheduled_start"],
             },
-            context={"gates": gates},
+            context={"gates": gates, "gate_evidence": gate_evidence},
         )
 
         safety_gate = {
@@ -951,7 +983,11 @@ class DomainPolicyTests(unittest.TestCase):
             "roof_job": "job-1",
             **gate("Safety", "Ready"),
         }
-        validate_record("production_gate_state", safety_gate)
+        validate_record(
+            "production_gate_state",
+            safety_gate,
+            context={"gate_evidence": gate_evidence_context([safety_gate])},
+        )
         self.assert_policy(
             "write_once_field",
             validate_record,
@@ -965,6 +1001,111 @@ class DomainPolicyTests(unittest.TestCase):
             "production_gate_state",
             {**safety_gate, "gate": "Weather"},
             previous=safety_gate,
+        )
+
+    def test_ready_and_done_gates_require_verified_same_job_evidence(self) -> None:
+        invalid_sources = (
+            ("missing", None, "unverified_gate_evidence"),
+            ("cross_job", verified_gate_evidence("job-2"), "cross_job_gate_evidence"),
+            (
+                "unverified",
+                verified_gate_evidence(sync_state="Uploaded"),
+                "unverified_gate_evidence",
+            ),
+            (
+                "bad_checksum",
+                verified_gate_evidence(content_checksum="not-a-sha256"),
+                "invalid_sha256",
+            ),
+            (
+                "wrong_algorithm",
+                verified_gate_evidence(checksum_algorithm="SHA-1"),
+                "unsupported_checksum",
+            ),
+            (
+                "no_source_pointer",
+                verified_gate_evidence(source_uri="", r2_key="", drive_file_id=""),
+                "unverified_gate_evidence",
+            ),
+        )
+        for state in ("Ready", "Done"):
+            gate = {
+                "gate_id": f"gate-safety-{state.lower()}",
+                "roof_job": "job-1",
+                "gate": "Safety",
+                "state": state,
+                "evidence_item": "ev-safety",
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+                **({"due_at": "2026-07-11 08:00:00"} if state == "Ready" else {}),
+            }
+            with self.subTest(state=state, source="valid"):
+                validate_record(
+                    "production_gate_state",
+                    gate,
+                    context={"gate_evidence": {"ev-safety": verified_gate_evidence()}},
+                )
+            for label, source, code in invalid_sources:
+                with self.subTest(state=state, source=label):
+                    self.assert_policy(
+                        code,
+                        validate_record,
+                        "production_gate_state",
+                        gate,
+                        context={
+                            "gate_evidence": {} if source is None else {"ev-safety": source}
+                        },
+                    )
+
+    def test_legacy_invalid_gate_evidence_blocks_scheduling_and_closeout(self) -> None:
+        gates = [
+            {
+                "roof_job": "job-1",
+                "gate": gate,
+                "state": "Done",
+                "evidence_item": f"ev-{gate.lower()}",
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+            }
+            for gate in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion")
+        ]
+        evidence = gate_evidence_context(gates)
+        evidence["ev-safety"]["sync_state"] = "Uploaded"
+        assignment = {
+            "assignment_id": "assignment-legacy-evidence",
+            "roof_job": "job-1",
+            "assignment_type": "Production",
+            "status": "Assigned",
+            "crew_profile": "crew-1",
+            "assigned_by": "production@example.com",
+            "assigned_at": "2026-07-10 08:00:00",
+            "scheduled_start": "2026-07-11 08:00:00",
+        }
+        self.assert_policy(
+            "unverified_gate_evidence",
+            validate_record,
+            "job_assignment",
+            assignment,
+            context={"gates": gates[:-1], "gate_evidence": evidence},
+        )
+        self.assert_policy(
+            "unverified_gate_evidence",
+            validate_record,
+            "roof_job",
+            {
+                "roof_job_id": "job-1",
+                "job_status": "Closed",
+                "workflow_profile": "Residential Retail",
+                "locale_policy_version": "ca-ab-2026-01",
+                "locale_policy_snapshot_json": '{"country":"CA","province":"AB"}',
+            },
+            context={
+                "gates": gates,
+                "gate_evidence": evidence,
+                "completion_packets": [{"status": "Approved"}],
+                "warranty_packets": [{"status": "Issued"}],
+                "payment_milestones": [{"status": "Matched"}],
+            },
         )
 
     def test_review_and_customer_communication_policy(self) -> None:
@@ -1058,6 +1199,13 @@ class DomainPolicyTests(unittest.TestCase):
             validate_record,
             "evidence_item",
             {**evidence, "device_action_id": "device-action-2"},
+            previous=evidence,
+        )
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "evidence_item",
+            {**evidence, "verification_source": "forged source"},
             previous=evidence,
         )
         self.assert_policy(

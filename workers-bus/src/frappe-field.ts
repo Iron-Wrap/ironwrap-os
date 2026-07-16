@@ -63,18 +63,14 @@ export function frappeFieldWriter(env: AppEnv): FieldFrappeWriter {
         assertExistingEvidence(existing[0]!, input);
         return { name: existingName };
       }
-      const now = frappeDatetime(new Date().toISOString());
-      return await createFrappeResource(
+      return await createVerifiedFieldEvidence(
         env,
-        "Evidence Item",
         compact({
           evidence_id: input.evidenceId,
           device_action_id: input.deviceActionId,
           roof_job: input.jobId,
           evidence_type: input.evidenceType,
-          proof_owner: input.captureActor,
           proof_slot: input.proofSlot,
-          source_system: "ironwrap-pwa",
           r2_key: input.r2Key,
           content_checksum: input.checksum,
           checksum_algorithm: "SHA-256",
@@ -85,9 +81,6 @@ export function frappeFieldWriter(env: AppEnv): FieldFrappeWriter {
           latitude: input.latitude,
           longitude: input.longitude,
           location_accuracy_m: input.locationAccuracyM,
-          sync_state: "Verified",
-          verified_at: now,
-          verification_source: "ironwrap-worker-r2-frappe",
           correction_of: input.correctionOf,
           correction_reason: input.correctionReason,
           customer_safe: input.customerSafe ? 1 : 0,
@@ -205,14 +198,43 @@ function assertExistingCheckIn(row: Record<string, unknown>, input: PersistField
 
 async function createFrappeResource(
   env: AppEnv,
-  doctype: "Evidence Item" | "Field Check-in",
+  doctype: "Field Check-in",
   document: Record<string, unknown>,
 ): Promise<{ name: string }> {
+  const decoded = await postFrappeJson(
+    env,
+    `/api/resource/${encodeURIComponent(doctype)}`,
+    document,
+  ) as { data?: { name?: unknown } };
+  const name = text(decoded?.data?.name);
+  if (!name) throw new Error("frappe_field_invalid_shape");
+  return { name };
+}
+
+async function createVerifiedFieldEvidence(
+  env: AppEnv,
+  document: Record<string, unknown>,
+): Promise<{ name: string }> {
+  const decoded = await postFrappeJson(
+    env,
+    "/api/method/ironwrap_roofing.field_evidence_api.record_verified_field_evidence",
+    { evidence_json: JSON.stringify(document) },
+  ) as { message?: { name?: unknown } };
+  const name = text(decoded?.message?.name);
+  if (!name) throw new Error("frappe_field_invalid_shape");
+  return { name };
+}
+
+async function postFrappeJson(
+  env: AppEnv,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<unknown> {
   if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET) throw new Error("frappe_field_not_configured");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), frappeRequestTimeout(env.APP_FRAPPE_REQUEST_TIMEOUT_MS));
   try {
-    const response = await fetch(`${frappeBaseUrl(env)}/api/resource/${encodeURIComponent(doctype)}`, {
+    const response = await fetch(`${frappeBaseUrl(env)}${path}`, {
       method: "POST",
       redirect: "error",
       signal: controller.signal,
@@ -222,13 +244,10 @@ async function createFrappeResource(
         "content-type": "application/json",
         "user-agent": "ironwrap-bff/1.0",
       },
-      body: JSON.stringify(document),
+      body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error(`frappe_field_http_${response.status}`);
-    const decoded = (await response.json()) as { data?: { name?: unknown } };
-    const name = text(decoded?.data?.name);
-    if (!name) throw new Error("frappe_field_invalid_shape");
-    return { name };
+    return await response.json();
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw new Error("frappe_field_timeout");
     if (error instanceof Error && error.message.startsWith("frappe_field_")) throw error;

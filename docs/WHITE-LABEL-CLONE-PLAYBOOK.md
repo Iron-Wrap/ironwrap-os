@@ -89,6 +89,11 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 4. Create a tenant-scoped API key/secret pair for the bus, plus a separate pair for every
    Hermes MCP actor. Each MCP pair must be issued to exactly that process's
    `HERMES_ACTOR_USER`; never use the bus pair to attest an actor action.
+5. Bind the exact bus API user as the verified Field Companion evidence issuer:
+   `bench --site <tenant-site> set-config ironwrap_field_evidence_issuer_user
+   '<worker-api-user-email>'`. The Frappe app rejects `Verified` evidence through
+   ordinary Desk/REST writes, so this site-local configuration is required before
+   field evidence can become gate-eligible.
 5. Never adopt frappe/press (AGPL, Frappe Cloud's control plane): per-tenant provisioning
    stays on IronWrap's own scripts (`config/tenants/` + validators + this playbook).
 
@@ -154,7 +159,8 @@ Gate 11 (blueprint): "A second demo company runs with separate brand/config/data
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
 - [ ] All 18 D1 migrations through `0018_customer_portal_links.sql` applied to the tenant database.
-- [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed and its own API key pair.
+- [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
+  and `ironwrap_field_evidence_issuer_user` bound to that dedicated Worker user.
 - [ ] Tenant Shared Drives + R2 bucket receive a test job's files.
 - [ ] Tenant QuickBooks webhook verified (signature accepted on `POST /webhook/quickbooks`).
 - [ ] Tenant Hermes profile answers a read-only question from tenant data via both MCP servers.

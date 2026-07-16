@@ -32,7 +32,7 @@
     "cpu_cores_minimum": 2,
     "memory_gib_minimum": 8,
     "disk_gib_minimum": 80,
-    "node_major_minimum": 20,
+    "node_version_minimum": "22.12.0",
     "architectures": [
       "x86_64",
       "aarch64"

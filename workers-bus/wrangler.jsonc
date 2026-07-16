@@ -58,7 +58,7 @@
   // */5 = retry sweep (re-drive stuck pushes); 0 14 * * * = daily reconciliation digest/heartbeat.
   "triggers": { "crons": ["*/5 * * * *", "0 14 * * *"] },
 
-  // Non-secret config. Secrets go via `wrangler secret put` (or scripts/apply-secrets.sh):
+  // Non-secret config. Secrets go only via `wrangler secret put`:
   //   INGEST_TOKEN, ADMIN_TOKEN, JOBNIMBUS_API_KEY, GOOGLE_SERVICE_ACCOUNT_JSON,
   //   QB_WEBHOOK_TOKEN, ERPNEXT_API_KEY, ERPNEXT_API_SECRET, APP_AUTH_PEPPER,
   //   APPROVAL_BROKER_SHARED_SECRET, QUOTE_REVISION_BROKER_SHARED_SECRET. Broker secrets

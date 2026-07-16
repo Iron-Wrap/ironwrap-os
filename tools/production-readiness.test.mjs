@@ -816,6 +816,20 @@ test("contract mode rejects a floating runtime reference", async (t) => {
   assert.equal(result.checks.find((item) => item.id === "contract.lock.hermes.version")?.status, "fail");
 });
 
+test("contract mode rejects a Node.js floor below the PWA requirement", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
+  const lockPath = path.join(root, "deploy/runtime-lock.json");
+  const lock = JSON.parse(await readFile(lockPath, "utf8"));
+  lock.host_requirements.node_version_minimum = "22.11.9";
+  await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+
+  const result = await validateContract({ repoRoot: root });
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.find((item) => item.id === "contract.lock.host")?.status, "fail");
+});
+
 test("contract mode rejects an overridable container pin", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
   t.after(() => rm(root, { recursive: true, force: true }));

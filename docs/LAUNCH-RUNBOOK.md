@@ -33,7 +33,7 @@ Never mark launch complete from repository checks alone.
 | Dedicated Frappe, bus, Hermes-approval, ingest, and backup credentials | Keeps privileges separated by purpose |
 
 The host floor is locked at Ubuntu 22.04+, 2 CPU cores, 8 GiB RAM, 80 GiB free disk,
-Node.js 20+, and either `x86_64` or `aarch64`. Capacity is a floor, not a sizing promise.
+Node.js 22.12.0+, and either `x86_64` or `aarch64`. Capacity is a floor, not a sizing promise.
 
 ## 1. Prove The Repository Contract
 
@@ -50,7 +50,7 @@ encrypted backup protocol; and the environment-name inventory. A failure blocks 
 
 ## 2. Prepare And Prove The Host
 
-Install Docker with Compose v2, Git, Node.js, `age`, `curl`, `jq`, `openssl`, `rclone`,
+Install Docker with Compose v2, Git, Node.js 22.12.0+, `age`, `curl`, `jq`, `openssl`, `rclone`,
 `sha256sum`, `sqlite3`, and `tar`. Ensure the Docker daemon is reachable by the deployment account and
 the host clock is synchronized. Then run:
 
@@ -60,6 +60,8 @@ deploy/host-preflight.sh
 
 The preflight reads only `deploy/runtime-lock.json`; it accepts no command-line configuration
 and does not print the environment. Do not continue until every host check passes.
+The distribution `nodejs` package may be older than the lock; install an approved Node.js 22.12.0+
+runtime before running the preflight.
 
 ## 3. Publish A Tagged App Release
 
@@ -139,21 +141,24 @@ Set Frappe credentials with `wrangler secret put`, enable the Frappe consumer, a
 migration, and deploy from the release commit:
 
 ```bash
+npm ci --prefix app
+npm run build --prefix app
 cd workers-bus
 npm ci --ignore-scripts
 npm run typegen
 npm test
 npm run typecheck
 npm run deploy -- --dry-run
-npx wrangler secret put ERPNEXT_BASE_URL
 npx wrangler secret put ERPNEXT_API_KEY
 npx wrangler secret put ERPNEXT_API_SECRET
 npm run db:migrate
 npm run deploy
 ```
 
-Set `ERPNEXT_ENABLED="true"` in the deployed Worker configuration. Then prove both health
-surfaces:
+Set the reviewed non-secret Worker vars `ERPNEXT_ENABLED="true"` and
+`ERPNEXT_BASE_URL="https://<frappe-host>"` in the production configuration before deployment.
+The legacy `ERPNEXT_*` names address the Frappe-only core; only the API key and secret are Worker
+secrets. Then prove both health surfaces:
 
 The Worker pair is a dedicated integration credential. Do not mount it in Hermes: every Hermes
 MCP process needs its own Frappe API pair issued to exactly its `HERMES_ACTOR_USER`, so the
@@ -224,7 +229,7 @@ Before enabling the BFF in the intended Cloudflare account:
 
 1. Apply the exact D1 migration sequence remotely, including `0016_approval_requests.sql`, then
    run the Frappe app migration so legacy Lead Envelopes become explicit `Unknown` triage rows.
-   Verify `/ready` against the intended database. The 21-table backup/restore inventory must be
+   Verify `/ready` against the intended database. The 23-table backup/restore inventory must be
    deployed with the same release.
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
@@ -311,8 +316,8 @@ CRON_TZ=UTC
 `backup-d1-to-r2.sh` is bound to Cloudflare account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
-the SQL into isolated SQLite, checks integrity and all 19 current core/auth/operational tables,
-plus the four release-state invariant trigger bindings, packages manifest plus SQL, encrypts
+the SQL into isolated SQLite, checks integrity and all 23 current core/auth/operational tables,
+plus the 22 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
 locally, uploads immutably, remotely checks the objects, and publishes
 `IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
 `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Never discover or infer `latest`.
@@ -339,7 +344,7 @@ For the launch remote drill, create a fresh empty D1 database named
 `ironwrap-restore-drill-<label>` in the same committed account and record its exact UUID. The
 name and UUID must both differ from production. Bind one approval to that exact pair; the script
 generates a target-only Wrangler config, rechecks emptiness, imports, then compares the complete
-table-to-row-count map for all 19 required tables and the exact four trigger-to-table bindings
+table-to-row-count map for all 23 required tables and the exact 22 trigger-to-table bindings
 with the locally verified SQLite export:
 
 ```bash
@@ -356,13 +361,14 @@ export D1_RESTORE_MODE=verify
 
 Any new D1 migration that adds a persistent table must update the required-table allowlist in
 both D1 scripts and their readiness tests before deployment. Any migration that adds or changes
-an invariant trigger must update the trigger inventory too. The current 21 are `envelopes`,
+an invariant trigger must update the trigger inventory too. The current 23 are `envelopes`,
 `audit_log`, `dead_letter`, `source_counts`, `heartbeat`, `quickbooks_webhook_receipts`,
 `dedup_claims`, `replay_requests`, `field_actions`, `field_action_media`, `app_users`,
 `app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`,
 `app_action_throttles`, `app_device_pairings`, `app_devices`, `lead_ack_receipts`,
-`approval_requests`, and `approval_request_events`. The required triggers include source-count
-validation, immutable lead-ack receipts, and the approval ledger's transition/event/immutability
+`approval_requests`, `approval_request_events`, `quote_revision_approval_requests`, and
+`quote_revision_approval_request_events`. The 22 required triggers include source-count
+validation, immutable lead-ack receipts, and each approval ledger's transition/event/immutability
 rules. Approval binding rewrites must raise `ABORT, 'approval_request_binding_immutable'`; approval
 event updates/deletes must raise `ABORT, 'approval_request_events_immutable'` in both local export
 verification and remote drill proof.

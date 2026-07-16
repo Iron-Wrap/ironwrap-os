@@ -5,12 +5,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SessionProvider } from "../auth/session-context";
 import type { AuthenticatedSession } from "../auth/session";
-import type { OwnerNowResponse } from "./owner-contracts";
-import { loadOwnerNow } from "./owner-api";
+import type { MeasurementIntakeOwnerExceptionsResponse, OwnerNowResponse } from "./owner-contracts";
+import { loadMeasurementIntakeExceptions, loadOwnerNow } from "./owner-api";
 import { OwnerNowPage } from "./owner-now-page";
 import { buildDecisionLanes, formatOwnerDate, validJobId } from "./owner-now-utils";
 
-vi.mock("./owner-api", () => ({ loadOwnerNow: vi.fn() }));
+vi.mock("./owner-api", () => ({
+  loadOwnerNow: vi.fn(),
+  loadMeasurementIntakeExceptions: vi.fn(),
+}));
 vi.mock("@tanstack/react-router", () => ({
   Link: ({
     children,
@@ -201,6 +204,39 @@ function ownerNowModel(): OwnerNowResponse {
   };
 }
 
+function measurementExceptionsModel(): MeasurementIntakeOwnerExceptionsResponse {
+  return {
+    measurements: [
+      {
+        id: `measurement_${"c".repeat(64)}`,
+        provider: "RoofRuler",
+        job_number: null,
+        status: "unmatched",
+        reason: "job_number_missing",
+        drive_report_url: "https://drive.google.com/open?id=report-a",
+        drive_folder_url: "https://drive.google.com/drive/folders/folder-a",
+        attempts: 1,
+        recovery_disposition: "manual_review",
+        created_at: "2026-07-16T12:00:00.000Z",
+        updated_at: "2026-07-16T12:01:00.000Z",
+      },
+      {
+        id: `measurement_${"d".repeat(64)}`,
+        provider: "AppliCad",
+        job_number: "26-0042",
+        status: "retryable_error",
+        reason: "report_fetch_failed",
+        drive_report_url: "https://not-drive.example.invalid/report",
+        drive_folder_url: null,
+        attempts: 3,
+        recovery_disposition: "retry_scheduled",
+        created_at: "2026-07-16T12:00:00.000Z",
+        updated_at: "2026-07-16T12:02:00.000Z",
+      },
+    ],
+  };
+}
+
 function renderOwner({
   session = ownerSession,
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
@@ -220,6 +256,7 @@ function renderOwner({
 describe("OwnerNowPage", () => {
   beforeEach(() => {
     vi.mocked(loadOwnerNow).mockResolvedValue(ownerNowModel());
+    vi.mocked(loadMeasurementIntakeExceptions).mockResolvedValue(measurementExceptionsModel());
   });
 
   it("turns proof-safe exceptions into a decision board without fabricating actions or delivery", async () => {
@@ -269,6 +306,73 @@ describe("OwnerNowPage", () => {
 
     await screen.findByRole("heading", { name: "Work stopped" });
     expect(screen.queryByRole("link", { name: /Open job packet/i })).not.toBeInTheDocument();
+  });
+
+  it("shows durable measurement exceptions without exposing raw receipt data or trusting arbitrary links", async () => {
+    const { container } = renderOwner();
+
+    expect(
+      await screen.findByRole("heading", { name: "Measurement reports needing attention" }),
+    ).toBeVisible();
+    expect(screen.getByText("RoofRuler report needs a job match")).toBeVisible();
+    expect(screen.getByText("AppliCad report is retrying")).toBeVisible();
+    expect(screen.getByText(/No job number was supplied/i)).toBeVisible();
+    expect(screen.getByText(/report source could not be fetched/i)).toBeVisible();
+    expect(screen.getByText(/will retry automatically when due/i)).toBeVisible();
+    expect(screen.getByText("Attempts:")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open report" })).toHaveAttribute(
+      "href",
+      "https://drive.google.com/open?id=report-a",
+    );
+    expect(screen.getByRole("link", { name: "Open folder" })).toHaveAttribute("rel", "noreferrer");
+    expect(screen.queryByRole("link", { name: /not-drive/i })).not.toBeInTheDocument();
+    expect(container.textContent).not.toContain(`measurement_${"c".repeat(64)}`);
+    expect(container.textContent).not.toContain("raw_key");
+  });
+
+  it("does not promise retries for blocked or exhausted measurement recovery", async () => {
+    const exceptions = measurementExceptionsModel();
+    const retryable = exceptions.measurements[1]!;
+    exceptions.measurements[1] = {
+      ...retryable,
+      reason: "raw_source_missing",
+      attempts: 12,
+      recovery_disposition: "recovery_blocked",
+    };
+    exceptions.measurements.push({
+      id: `measurement_${"e".repeat(64)}`,
+      provider: "RoofRuler",
+      job_number: "26-0043",
+      status: "retryable_error",
+      reason: "report_fetch_failed",
+      drive_report_url: null,
+      drive_folder_url: null,
+      attempts: 12,
+      recovery_disposition: "retry_exhausted",
+      created_at: "2026-07-16T12:00:00.000Z",
+      updated_at: "2026-07-16T12:03:00.000Z",
+    });
+    vi.mocked(loadMeasurementIntakeExceptions).mockResolvedValueOnce(exceptions);
+
+    renderOwner();
+
+    expect(await screen.findByText("AppliCad report needs recovery")).toBeVisible();
+    expect(screen.getByText("RoofRuler report needs recovery")).toBeVisible();
+    expect(screen.getByText("Recovery blocked")).toBeVisible();
+    expect(screen.getByText("Retry limit reached")).toBeVisible();
+    expect(screen.getByText(/saved raw source is unavailable/i)).toBeVisible();
+    expect(screen.getByText(/Automatic recovery is blocked/i)).toBeVisible();
+    expect(screen.getByText(/automatic retry limit has been reached/i)).toBeVisible();
+    expect(screen.queryByText("Automatic retry")).not.toBeInTheDocument();
+  });
+
+  it("keeps an empty measurement queue honest", async () => {
+    vi.mocked(loadMeasurementIntakeExceptions).mockResolvedValueOnce({ measurements: [] });
+    renderOwner();
+
+    expect(
+      await screen.findByText("No unmatched or retryable measurement reports were returned."),
+    ).toBeVisible();
   });
 
   it("keeps a prior read visible when refresh fails", async () => {

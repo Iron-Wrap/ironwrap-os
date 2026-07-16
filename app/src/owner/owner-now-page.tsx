@@ -16,8 +16,13 @@ import {
 import { useSession } from "../auth/session-context";
 import { Button } from "../components/ui/button";
 import { RoleGuard } from "../components/role-guard";
-import type { OwnerException, OwnerNowResponse } from "./owner-contracts";
-import { loadOwnerNow } from "./owner-api";
+import type {
+  MeasurementIntakeOwnerException,
+  MeasurementIntakeOwnerExceptionsResponse,
+  OwnerException,
+  OwnerNowResponse,
+} from "./owner-contracts";
+import { loadMeasurementIntakeExceptions, loadOwnerNow } from "./owner-api";
 import {
   buildDecisionLanes,
   canOpenJob,
@@ -43,6 +48,10 @@ function OwnerNowContent() {
     queryKey: ["owner-now", session.tenant.id, session.user.id],
     queryFn: () => loadOwnerNow(),
   });
+  const measurementQuery = useQuery({
+    queryKey: ["measurement-intake-exceptions", session.tenant.id, session.user.id],
+    queryFn: () => loadMeasurementIntakeExceptions(),
+  });
   const model = query.data;
 
   if (!model && query.isPending) return <OwnerNowSkeleton />;
@@ -55,6 +64,10 @@ function OwnerNowContent() {
       locale={{ locale: session.tenant.locale, timeZone: session.tenant.time_zone }}
       refreshFailed={query.isError}
       onRetry={() => void query.refetch()}
+      measurementExceptions={measurementQuery.data}
+      measurementLoading={measurementQuery.isPending}
+      measurementRefreshFailed={measurementQuery.isError}
+      onRetryMeasurements={() => void measurementQuery.refetch()}
     />
   );
 }
@@ -64,11 +77,19 @@ function OwnerNowScreen({
   locale,
   refreshFailed,
   onRetry,
+  measurementExceptions,
+  measurementLoading,
+  measurementRefreshFailed,
+  onRetryMeasurements,
 }: {
   model: OwnerNowResponse;
   locale: OwnerDateFormatOptions;
   refreshFailed: boolean;
   onRetry: () => void;
+  measurementExceptions: MeasurementIntakeOwnerExceptionsResponse | undefined;
+  measurementLoading: boolean;
+  measurementRefreshFailed: boolean;
+  onRetryMeasurements: () => void;
 }) {
   const dueTimingAvailable = !model.stale_fields.includes("exceptions.due_at");
   const lanes = buildDecisionLanes(model.exceptions, { dueTimingAvailable });
@@ -111,6 +132,13 @@ function OwnerNowScreen({
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start">
         <main className="min-w-0 space-y-8">
           <DecisionSummary model={model} />
+          <MeasurementIntakeExceptionsPanel
+            data={measurementExceptions}
+            loading={measurementLoading}
+            refreshFailed={measurementRefreshFailed}
+            locale={locale}
+            onRetry={onRetryMeasurements}
+          />
           {lanes.length > 0 ? (
             <div className="space-y-9">
               {lanes.map((lane) => (
@@ -183,6 +211,228 @@ function DecisionSummary({ model }: { model: OwnerNowResponse }) {
       ))}
     </dl>
   );
+}
+
+function MeasurementIntakeExceptionsPanel({
+  data,
+  loading,
+  refreshFailed,
+  locale,
+  onRetry,
+}: {
+  data: MeasurementIntakeOwnerExceptionsResponse | undefined;
+  loading: boolean;
+  refreshFailed: boolean;
+  locale: OwnerDateFormatOptions;
+  onRetry: () => void;
+}) {
+  if (!data && loading) {
+    return (
+      <section
+        className="border-y border-border py-5"
+        aria-busy="true"
+        aria-label="Loading measurement intake exceptions"
+      >
+        <p className="text-sm leading-6 text-muted">
+          Loading measurement reports needing attention…
+        </p>
+      </section>
+    );
+  }
+  if (!data && refreshFailed) {
+    return (
+      <section className="border-y border-warning/35 bg-warning-soft px-4 py-4" role="status">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="font-bold tracking-[-0.015em]">Measurement intake read unavailable</h2>
+            <p className="mt-1 text-sm leading-6 text-muted">
+              The report exception queue could not load. Retrying does not reprocess or change a
+              report.
+            </p>
+          </div>
+          <Button variant="outline" size="compact" onClick={onRetry}>
+            <RotateCcw aria-hidden="true" />
+            Retry read
+          </Button>
+        </div>
+      </section>
+    );
+  }
+  if (!data) return null;
+
+  const reports = data.measurements;
+  return (
+    <section aria-labelledby="measurement-intake-exceptions-heading">
+      <header className="flex flex-wrap items-end justify-between gap-3 pb-3">
+        <div>
+          <h2
+            id="measurement-intake-exceptions-heading"
+            className="text-xl font-black tracking-[-0.025em] text-balance sm:text-2xl"
+          >
+            Measurement reports needing attention
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            Unmatched reports wait for a job decision. The server marks other reports as scheduled,
+            blocked, or at the retry limit; this panel cannot replay, assign, or alter either one.
+          </p>
+        </div>
+        <p className="text-sm font-semibold text-muted">
+          {reports.length} {reports.length === 1 ? "report" : "reports"}
+        </p>
+      </header>
+      {refreshFailed ? (
+        <p
+          className="mb-3 border-y border-warning/35 bg-warning-soft px-3 py-2 text-sm text-muted"
+          role="status"
+        >
+          Showing the previous measurement read.
+        </p>
+      ) : null}
+      {reports.length === 0 ? (
+        <div className="border-y border-border py-5">
+          <p className="font-semibold">
+            No unmatched or retryable measurement reports were returned.
+          </p>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            This is a read-only exception list, not a proof that every provider feed is operating.
+          </p>
+        </div>
+      ) : (
+        <ol className="border-y border-border divide-y divide-border">
+          {reports.map((report) => (
+            <MeasurementIntakeExceptionRow key={report.id} report={report} locale={locale} />
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function MeasurementIntakeExceptionRow({
+  report,
+  locale,
+}: {
+  report: MeasurementIntakeOwnerException;
+  locale: OwnerDateFormatOptions;
+}) {
+  const unmatched = report.status === "unmatched";
+  const retryScheduled = report.recovery_disposition === "retry_scheduled";
+  const recoveryBlocked = report.recovery_disposition === "recovery_blocked";
+  const retryExhausted = report.recovery_disposition === "retry_exhausted";
+  const needsRecovery = recoveryBlocked || retryExhausted;
+  const reportUrl = trustedDriveUrl(report.drive_report_url);
+  const folderUrl = trustedDriveUrl(report.drive_folder_url);
+  const updatedAt = safeFormattedDate(report.updated_at, locale);
+  return (
+    <li className="py-4 sm:py-5">
+      <div className="flex min-w-0 gap-3">
+        <span
+          className={`mt-0.5 grid size-9 shrink-0 place-items-center rounded-md ${unmatched || needsRecovery ? "bg-warning-soft text-warning" : "bg-info-soft text-info"}`}
+        >
+          {unmatched || needsRecovery ? (
+            <AlertTriangle className="size-4" aria-hidden="true" />
+          ) : (
+            <RotateCcw className="size-4" aria-hidden="true" />
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <p className="font-bold tracking-[-0.015em]">
+              {report.provider}{" "}
+              {unmatched
+                ? "report needs a job match"
+                : retryScheduled
+                  ? "report is retrying"
+                  : "report needs recovery"}
+            </p>
+            <span
+              className={`inline-flex items-center gap-1.5 text-sm font-semibold ${unmatched || needsRecovery ? "text-warning" : "text-info"}`}
+            >
+              <span
+                className={`size-1.5 rounded-full ${unmatched || needsRecovery ? "bg-warning" : "bg-info"}`}
+                aria-hidden="true"
+              />
+              {unmatched
+                ? "Manual review"
+                : retryScheduled
+                  ? "Automatic retry"
+                  : recoveryBlocked
+                    ? "Recovery blocked"
+                    : "Retry limit reached"}
+            </span>
+          </div>
+          <p className="mt-1.5 max-w-3xl text-sm leading-6 text-muted">
+            {measurementExceptionCopy(report)}
+          </p>
+          <dl className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm leading-5 text-muted">
+            {report.job_number ? <Metadata label="Supplied job" value={report.job_number} /> : null}
+            {!unmatched ? <Metadata label="Attempts" value={String(report.attempts)} /> : null}
+            {updatedAt ? <Metadata label="Last update" value={updatedAt} /> : null}
+          </dl>
+          {reportUrl || folderUrl ? (
+            <p className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm font-semibold">
+              {reportUrl ? <GoogleDriveLink href={reportUrl} label="Open report" /> : null}
+              {folderUrl ? <GoogleDriveLink href={folderUrl} label="Open folder" /> : null}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function GoogleDriveLink({ href, label }: { href: string; label: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-foreground focus-visible:outline-offset-3"
+    >
+      {label}
+    </a>
+  );
+}
+
+function measurementExceptionCopy(report: MeasurementIntakeOwnerException): string {
+  if (report.status === "unmatched") {
+    if (report.reason === "job_number_missing") {
+      return "No job number was supplied. This report waits for an operator to decide its job relationship and is not retried automatically.";
+    }
+    return "The supplied job did not resolve. This report waits for an operator to decide its job relationship and is not retried automatically.";
+  }
+  const reason = {
+    drive_not_configured: "Drive filing is not configured.",
+    report_fetch_failed: "The report source could not be fetched.",
+    raw_source_missing: "The saved raw source is unavailable.",
+    frappe_sync_failed: "The Frappe measurement sync needs recovery.",
+    retry_pending: "The prior retry did not complete.",
+  } as const;
+  const summary =
+    reason[report.reason as keyof typeof reason] ?? "The prior retry did not complete.";
+  if (report.recovery_disposition === "retry_scheduled") {
+    return `${summary} The Worker will retry automatically when due.`;
+  }
+  if (report.recovery_disposition === "recovery_blocked") {
+    return `${summary} Automatic recovery is blocked and needs operator investigation.`;
+  }
+  if (report.recovery_disposition === "retry_exhausted") {
+    return `${summary} The automatic retry limit has been reached and needs operator investigation.`;
+  }
+  return summary;
+}
+
+function trustedDriveUrl(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" &&
+      (url.hostname === "drive.google.com" || url.hostname === "docs.google.com")
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function DecisionLane({

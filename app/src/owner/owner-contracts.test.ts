@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { ownerNowResponseSchema } from "./owner-contracts";
+import {
+  measurementIntakeOwnerExceptionsResponseSchema,
+  ownerNowResponseSchema,
+} from "./owner-contracts";
 
 function ownerNowPayload() {
   return {
@@ -64,5 +67,39 @@ describe("Owner Now read model contract", () => {
     invalid.summary.blocked_gates = -1;
 
     expect(ownerNowResponseSchema.safeParse(invalid).success).toBe(false);
+  });
+
+  it("accepts only the browser-safe measurement exception projection", () => {
+    const payload = {
+      measurements: [
+        {
+          id: `measurement_${"b".repeat(64)}`,
+          provider: "RoofRuler",
+          job_number: "26-0004",
+          status: "retryable_error",
+          reason: "drive_not_configured",
+          drive_report_url: "https://drive.google.com/open?id=report",
+          drive_folder_url: null,
+          attempts: 2,
+          recovery_disposition: "retry_scheduled",
+          created_at: "2026-07-16T12:00:00.000Z",
+          updated_at: "2026-07-16T12:01:00.000Z",
+        },
+      ],
+    };
+
+    expect(measurementIntakeOwnerExceptionsResponseSchema.safeParse(payload).success).toBe(true);
+    expect(
+      measurementIntakeOwnerExceptionsResponseSchema.safeParse({
+        ...payload,
+        measurements: [{ ...payload.measurements[0], lease_token: "must-not-reach-browser" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      measurementIntakeOwnerExceptionsResponseSchema.safeParse({
+        ...payload,
+        measurements: [{ ...payload.measurements[0], recovery_disposition: "manual_review" }],
+      }).success,
+    ).toBe(false);
   });
 });

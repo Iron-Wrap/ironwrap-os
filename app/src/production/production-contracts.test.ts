@@ -35,7 +35,15 @@ function payload() {
         lane: "ready_for_review",
         next_action: "Review for scheduling; this view does not dispatch work",
         gate_coverage: "complete",
-        gate_summary: { expected: 7, blocked: 0, ready: 7, waived: 0, done: 0 },
+        gate_summary: { expected: 6, blocked: 0, ready: 6, waived: 0, done: 0 },
+        scheduling_gates: [
+          { name: "Deposit", state: "Ready" },
+          { name: "Materials", state: "Ready" },
+          { name: "Safety", state: "Ready" },
+          { name: "Access", state: "Ready" },
+          { name: "Weather", state: "Ready" },
+          { name: "Crew", state: "Ready" },
+        ],
         material_attention: [],
       },
     ],
@@ -50,6 +58,20 @@ describe("Production runway read model contract", () => {
   it("rejects a response that attempts to widen the browser contract", () => {
     const widened = payload();
     widened.jobs[0] = { ...widened.jobs[0], customer_email: "private@example.com" } as never;
+
+    expect(productionRunwayResponseSchema.safeParse(widened).success).toBe(false);
+  });
+
+  it("rejects a scheduling-gate projection that adds a closeout gate", () => {
+    const widened = payload();
+    const firstJob = widened.jobs[0];
+    if (!firstJob) throw new Error("missing_test_job");
+    widened.jobs[0] = {
+      ...firstJob,
+      scheduling_gates: firstJob.scheduling_gates.map((gate, index) =>
+        index === 5 ? { ...gate, name: "Completion" } : gate,
+      ),
+    } as never;
 
     expect(productionRunwayResponseSchema.safeParse(widened).success).toBe(false);
   });

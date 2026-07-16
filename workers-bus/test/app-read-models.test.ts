@@ -384,7 +384,7 @@ test("owner Now is an office-only, exception-first roofing read model", async ()
 
 test("production runway is an office-only, bounded read that never treats a gate summary as dispatch authority", async () => {
   const readyGates = ["JOB-B", "JOB-C"].flatMap((roofJob) =>
-    ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"].map((gate) => ({
+    ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"].map((gate) => ({
       name: `GATE-${roofJob}-${gate}`,
       gate_id: `gate_${roofJob.toLowerCase()}_${gate.toLowerCase()}`,
       roof_job: roofJob,
@@ -414,6 +414,11 @@ test("production runway is an office-only, bounded read that never treats a gate
         blocker_reason: "Delivery not confirmed", modified: MODIFIED,
       },
       ...readyGates,
+      {
+        name: "GATE-C-COMPLETION", gate_id: "gate_job_c_completion", roof_job: "JOB-C", gate: "Completion",
+        state: "Blocked", owner_user: "office-owner@example.com", due_at: null,
+        blocker_reason: "Awaiting closeout", modified: MODIFIED,
+      },
     ],
     "Supplier Order": [{
       name: "ORDER-A", supplier_order_id: "order_a", roof_job: "JOB-A", status: "Ordered",
@@ -435,6 +440,17 @@ test("production runway is an office-only, bounded read that never treats a gate
     assert.equal(model.jobs.find((job) => job.id === "JOB-B")?.assignment, null);
     assert.equal(model.jobs.find((job) => job.id === "JOB-C")?.lane, "ready_for_review");
     assert.equal(model.jobs.find((job) => job.id === "JOB-C")?.gate_coverage, "complete");
+    assert.deepEqual(model.jobs.find((job) => job.id === "JOB-C")?.gate_summary, {
+      expected: 6, blocked: 0, ready: 6, waived: 0, done: 0,
+    });
+    assert.deepEqual(model.jobs.find((job) => job.id === "JOB-C")?.scheduling_gates, [
+      { name: "Deposit", state: "Ready" },
+      { name: "Materials", state: "Ready" },
+      { name: "Safety", state: "Ready" },
+      { name: "Access", state: "Ready" },
+      { name: "Weather", state: "Ready" },
+      { name: "Crew", state: "Ready" },
+    ]);
     assert.deepEqual(model.allowed_actions, ["job.read", "production.read"]);
     assert.equal(model.jobs.find((job) => job.id === "JOB-C")?.next_action.includes("does not dispatch"), true);
     const serialized = JSON.stringify(model);
@@ -467,6 +483,37 @@ test("production runway is an office-only, bounded read that never treats a gate
   }
 });
 
+test("production runway does not collapse duplicate scheduling gates into a schedule-ready job", async () => {
+  const readyGates = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"].map((gate) => ({
+    name: `GATE-C-${gate}`,
+    roof_job: "JOB-C",
+    gate,
+    state: "Ready",
+    modified: MODIFIED,
+  }));
+  const mock = installFrappeMock({
+    "Job Assignment": [{
+      name: "ASSIGN-C", roof_job: "JOB-C", assignment_type: "Production", status: "Assigned",
+      scheduled_start: null, scheduled_end: null, modified: MODIFIED,
+    }],
+    "Production Gate State": [
+      ...readyGates,
+      {
+        name: "GATE-C-MATERIALS-OLD", roof_job: "JOB-C", gate: "Materials", state: "Blocked",
+        modified: "2026-07-10T10:00:00.000Z",
+      },
+    ],
+  });
+  try {
+    const model = await buildProductionRunwayReadModel(env(), auth("ops", "ops@example.com"));
+    const job = model.jobs.find((row) => row.id === "JOB-C");
+    assert.equal(job?.gate_coverage, "incomplete");
+    assert.equal(job?.lane, "needs_verification");
+  } finally {
+    mock.restore();
+  }
+});
+
 test("production runway with a truncated assignment source does not claim an unreturned crew is missing", async () => {
   const partialAssignments = Array.from({ length: 100 }, (_, index) => ({
     name: `ASSIGN-PARTIAL-${index}`,
@@ -489,7 +536,7 @@ test("production runway with a truncated assignment source does not claim an unr
 });
 
 test("production runway with a truncated material source never promotes a job to ready for review", async () => {
-  const readyGates = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"].map((gate) => ({
+  const readyGates = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"].map((gate) => ({
     name: `GATE-B-${gate}`,
     roof_job: "JOB-B",
     gate,

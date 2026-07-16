@@ -54,6 +54,15 @@ const ownerSession = {
   stale_fields: [],
 } satisfies AuthenticatedSession;
 
+const schedulingGateNames = [
+  "Deposit",
+  "Materials",
+  "Safety",
+  "Access",
+  "Weather",
+  "Crew",
+] as const;
+
 function job(
   id: string,
   number: string,
@@ -81,12 +90,16 @@ function job(
         : "Review the source-backed operational condition",
     gate_coverage: lane === "needs_verification" ? "incomplete" : "complete",
     gate_summary: {
-      expected: 7,
+      expected: 6,
       blocked: lane === "blocked" ? 1 : 0,
-      ready: lane === "blocked" ? 0 : 7,
+      ready: lane === "blocked" ? 0 : 6,
       waived: 0,
       done: 0,
     },
+    scheduling_gates: schedulingGateNames.map((name) => ({
+      name,
+      state: lane === "blocked" && name === "Materials" ? "Blocked" : "Ready",
+    })),
     material_attention:
       lane === "blocked" ? [{ status: "Shortage", requested_delivery_date: null }] : [],
   };
@@ -145,6 +158,10 @@ describe("ProductionRunwayPage", () => {
     expect(screen.getByRole("heading", { name: "Blocked" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Ready to review" })).toBeVisible();
     expect(screen.getByText("Material attention: Shortage.")).toBeVisible();
+    expect(screen.getAllByText("Scheduling locks").length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("Deposit: Ready").length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText(/Completion:/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Completion is reviewed at closeout/i).length).toBeGreaterThan(0);
     expect(screen.getByRole("link", { name: "Open IW-1001" })).toHaveAttribute(
       "href",
       "/jobs/JOB-A",

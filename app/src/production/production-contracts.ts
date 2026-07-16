@@ -30,6 +30,35 @@ export const productionRunwayLaneSchema = z.enum([
   "needs_verification",
 ]);
 
+const schedulingGateNames = [
+  "Deposit",
+  "Materials",
+  "Safety",
+  "Access",
+  "Weather",
+  "Crew",
+] as const;
+const schedulingGateProjectionSchema = z
+  .array(
+    z
+      .object({
+        name: z.enum(schedulingGateNames),
+        state: nullableText,
+      })
+      .strict(),
+  )
+  .length(schedulingGateNames.length)
+  .superRefine((gates, context) => {
+    gates.forEach((gate, index) => {
+      if (gate.name === schedulingGateNames[index]) return;
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [index, "name"],
+        message: "scheduling_gate_order_invalid",
+      });
+    });
+  });
+
 const productionJobSchema = z
   .object({
     id: z.string().min(1),
@@ -50,6 +79,7 @@ const productionJobSchema = z
         done: z.number().int().nonnegative(),
       })
       .strict(),
+    scheduling_gates: schedulingGateProjectionSchema,
     material_attention: z.array(
       z
         .object({

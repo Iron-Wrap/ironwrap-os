@@ -31,7 +31,11 @@ const MAX_ESTIMATOR_TAKEOFF_ITEMS = 250;
 const MAX_ESTIMATOR_GEOMETRY_LABEL = 240;
 const MAX_ESTIMATOR_GEOMETRY_DETAIL = 600;
 const MCTB_SLA_MS = 60_000;
-const PRODUCTION_GATES = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"] as const;
+// Completion is created with the other lifecycle gates, but it is closeout-only.
+// Keep the read model aligned with the authoritative scheduling policy instead of
+// treating an expected incomplete closeout record as a dispatch blocker.
+const SCHEDULING_PRODUCTION_GATES = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"] as const;
+const SCHEDULING_PRODUCTION_GATE_NAMES = new Set<string>(SCHEDULING_PRODUCTION_GATES);
 const NON_BLOCKING_GATE_STATES = new Set(["Ready", "Waived", "Done"]);
 
 interface ReadModelEnvelope {
@@ -127,6 +131,10 @@ export interface ProductionRunwayReadModel extends ReadModelEnvelope {
       waived: number;
       done: number;
     };
+    scheduling_gates: Array<{
+      name: string;
+      state: string | null;
+    }>;
     material_attention: Array<{
       status: string;
       requested_delivery_date: string | null;
@@ -745,19 +753,34 @@ export async function buildProductionRunwayReadModel(
     if (!id) return [];
     const assignmentRow = assignmentByJob.get(id);
     const assignment = assignmentRow ? productionAssignmentModel(assignmentRow) : null;
-    const latestGatesByName = latestRowsByReference(gateRowsByJob.get(id) ?? [], "gate");
-    const knownGates = [...latestGatesByName.values()];
+    const jobGateRows = gateRowsByJob.get(id) ?? [];
+    const latestGatesByName = latestRowsByReference(jobGateRows, "gate");
+    const schedulingGateRowCounts = new Map<string, number>();
+    for (const row of jobGateRows) {
+      const gate = text(row.gate);
+      if (!gate || !SCHEDULING_PRODUCTION_GATE_NAMES.has(gate)) continue;
+      schedulingGateRowCounts.set(gate, (schedulingGateRowCounts.get(gate) ?? 0) + 1);
+    }
+    const hasDuplicateSchedulingGate = [...schedulingGateRowCounts.values()].some((count) => count > 1);
+    const schedulingGates = SCHEDULING_PRODUCTION_GATES.flatMap((gate) => {
+      const row = latestGatesByName.get(gate);
+      return row ? [row] : [];
+    });
+    const schedulingGateProjection = SCHEDULING_PRODUCTION_GATES.map((name) => ({
+      name,
+      state: text(latestGatesByName.get(name)?.state),
+    }));
     const gateCoverage: ProductionRunwayReadModel["jobs"][number]["gate_coverage"] = !gateRowsComplete
       ? "unknown"
-      : PRODUCTION_GATES.every((gate) => latestGatesByName.has(gate))
+      : !hasDuplicateSchedulingGate && SCHEDULING_PRODUCTION_GATES.every((gate) => latestGatesByName.has(gate))
       ? "complete"
       : "incomplete";
     const gateSummary = {
-      expected: PRODUCTION_GATES.length,
-      blocked: knownGates.filter((gate) => text(gate.state) === "Blocked").length,
-      ready: knownGates.filter((gate) => text(gate.state) === "Ready").length,
-      waived: knownGates.filter((gate) => text(gate.state) === "Waived").length,
-      done: knownGates.filter((gate) => text(gate.state) === "Done").length,
+      expected: SCHEDULING_PRODUCTION_GATES.length,
+      blocked: schedulingGates.filter((gate) => text(gate.state) === "Blocked").length,
+      ready: schedulingGates.filter((gate) => text(gate.state) === "Ready").length,
+      waived: schedulingGates.filter((gate) => text(gate.state) === "Waived").length,
+      done: schedulingGates.filter((gate) => text(gate.state) === "Done").length,
     };
     const materialAttention = (materialRowsByJob.get(id) ?? []).flatMap((row) => {
       const status = text(row.status);
@@ -766,7 +789,7 @@ export async function buildProductionRunwayReadModel(
     const allReturnedGatesNonBlocking =
       materialExceptionRowsComplete &&
       gateCoverage === "complete" &&
-      PRODUCTION_GATES.every((gate) => {
+      SCHEDULING_PRODUCTION_GATES.every((gate) => {
         const state = text(latestGatesByName.get(gate)?.state);
         return !!state && NON_BLOCKING_GATE_STATES.has(state);
       });
@@ -793,7 +816,7 @@ export async function buildProductionRunwayReadModel(
       ? "Assign a crew and review gates before scheduling"
       : lane === "ready_for_review"
       ? "Review for scheduling; this view does not dispatch work"
-      : "Verify the missing production-gate record before scheduling";
+      : "Verify the production-gate records before scheduling";
 
     return [{
       id,
@@ -806,6 +829,7 @@ export async function buildProductionRunwayReadModel(
       next_action: nextAction,
       gate_coverage: gateCoverage,
       gate_summary: gateSummary,
+      scheduling_gates: schedulingGateProjection,
       material_attention: materialAttention,
     }];
   }).sort((left, right) => productionLanePriority(left.lane) - productionLanePriority(right.lane)

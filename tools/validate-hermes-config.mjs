@@ -194,7 +194,7 @@ assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 27,
   "Frappe MCP must expose 27 dry-run tools");
 assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 27,
   "Frappe MCP must expose 27 approved-write tools");
-assert.equal(inventory.size, 136, "two-server Hermes inventory must stay at 136 tools");
+assert.equal(inventory.size, 137, "two-server Hermes inventory must stay at 137 tools");
 
 // Contract Acceptance is evidence produced by the customer/provider, never an agent mutation.
 assert.ok(reads.has("get_contract_acceptance") && reads.has("list_contract_acceptances_for_job"),

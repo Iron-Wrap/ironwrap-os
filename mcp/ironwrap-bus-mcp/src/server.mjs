@@ -166,6 +166,16 @@ export function buildServer(config) {
   );
 
   server.registerTool(
+    "list_measurement_intake_exceptions",
+    {
+      title: "List Measurement Intake Exceptions",
+      description: "Read unmatched or retryable measurement reports that need an operator to review or assign them. Request-key hash fields and processing leases are not exposed.",
+      inputSchema: { limit: z.number().int().min(1).max(100).optional() },
+    },
+    async ({ limit = 25 }) => text(await busGet(config, `/admin/measurements/exceptions?limit=${limit}`)),
+  );
+
+  server.registerTool(
     "dry_run_replay",
     {
       title: "Dry Run Replay",

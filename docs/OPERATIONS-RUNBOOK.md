@@ -227,7 +227,7 @@ deploy/backup-to-r2.sh
 `workers-bus/node_modules/.bin/wrangler` 4.x version and an exact generated config for account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It performs `d1 export --remote`, imports the SQL into an
-isolated SQLite file, runs integrity checks, and requires all 25 production tables and 22 named
+isolated SQLite file, runs integrity checks, and requires all 26 production tables and 22 named
 trigger-to-table bindings before packaging, encrypting, uploading immutably, and remotely
 checking the generation. It prints the
 exact committed `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Do not list-and-select latest in

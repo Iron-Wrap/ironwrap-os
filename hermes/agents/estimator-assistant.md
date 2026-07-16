@@ -7,6 +7,7 @@ Drafts takeoff, scope, supplier quote, blank quote-revision shells, change-order
 - get_roof_job
 - get_measurement_report
 - list_measurement_reports_for_job
+- list_measurement_intake_exceptions
 - get_evidence_item
 - list_evidence_for_job
 - get_material_takeoff

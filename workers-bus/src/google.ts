@@ -121,12 +121,18 @@ export async function sendGmail(env: Env, to: string, subject: string, html: str
 // ---------------------------------------------------------------- drive
 const driveQS = "supportsAllDrives=true";
 
-async function driveFind(env: Env, token: string, q: string): Promise<{ id: string; name: string } | null> {
+interface DriveFile {
+  id: string;
+  name: string;
+  webViewLink?: string;
+}
+
+async function driveFind(env: Env, token: string, q: string): Promise<DriveFile | null> {
   const url = `${DRIVE}/files?q=${encodeURIComponent(q)}&corpora=drive&driveId=${env.SHARED_DRIVE_ID_JOBS}` +
-    `&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name)&pageSize=5`;
+    `&includeItemsFromAllDrives=true&supportsAllDrives=true&fields=files(id,name,webViewLink)&pageSize=5`;
   const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error(`drive_list_${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const j = (await res.json()) as { files?: Array<{ id: string; name: string }> };
+  const j = (await res.json()) as { files?: DriveFile[] };
   return j.files?.[0] ?? null;
 }
 
@@ -171,10 +177,18 @@ async function ensureSubfolder(env: Env, token: string, parentId: string, name: 
 export interface UploadResult { name: string; webUrl?: string; driveFileId?: string; error?: string }
 export interface FiledBatch { folderId: string; folderUrl: string; files: UploadResult[] }
 
+const DRIVE_IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/;
+
+function driveIdempotencyKey(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  if (!DRIVE_IDEMPOTENCY_KEY.test(value)) throw new Error("drive_invalid_idempotency_key");
+  return value;
+}
+
 /** Upload files into a job's template subfolder (e.g. "03 Photos"). One bad file never sinks the batch. */
 export async function fileToJobFolder(
   env: Env, jobNumber: string, subfolder: (typeof JOB_SUBFOLDERS)[number],
-  files: Array<{ name: string; bytes: ArrayBuffer; contentType: string }>,
+  files: Array<{ name: string; bytes: ArrayBuffer; contentType: string; idempotencyKey?: string }>,
 ): Promise<FiledBatch> {
   const token = await googleToken(env, env.FROM_EMAIL);
   const job = await ensureJobFolder(env, jobNumber);
@@ -183,8 +197,27 @@ export async function fileToJobFolder(
   const out: UploadResult[] = [];
   for (const f of files) {
     try {
-      const meta = JSON.stringify({ name: safeSegment(f.name), parents: [parent] });
-      const boundary = "ironwrapbus" + Math.random().toString(36).slice(2);
+      const idempotencyKey = driveIdempotencyKey(f.idempotencyKey);
+      if (idempotencyKey) {
+        const existing = await driveFind(env, token,
+          `'${parent}' in parents and appProperties has { key='ironwrap_intake_key' and value='${esc(idempotencyKey)}' } and trashed=false`);
+        if (existing) {
+          out.push({
+            name: safeSegment(f.name),
+            webUrl: existing.webViewLink ?? `https://drive.google.com/file/d/${existing.id}`,
+            driveFileId: existing.id,
+          });
+          continue;
+        }
+      }
+      const meta = JSON.stringify({
+        name: safeSegment(f.name),
+        parents: [parent],
+        ...(idempotencyKey ? { appProperties: { ironwrap_intake_key: idempotencyKey } } : {}),
+      });
+      // The boundary separates untrusted report bytes from JSON metadata. It is not an auth token,
+      // but must still be unpredictable so a crafted payload cannot terminate the multipart body.
+      const boundary = "ironwrapbus" + crypto.randomUUID().replaceAll("-", "");
       const head = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n` +
         `--${boundary}\r\nContent-Type: ${f.contentType}\r\n\r\n`;
       const tail = `\r\n--${boundary}--`;

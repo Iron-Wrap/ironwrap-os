@@ -2,7 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { handleMeasurementIngest, parseMeasurementSubmission, reportExt } from "../src/measurements.ts";
+import { deriveMeasurementIntakeIdentity, parseMeasurementSubmission, reportExt } from "../src/measurements.ts";
+import { pushMeasurementToErpNext } from "../src/erpnext.ts";
 import { handleQuickbooksWebhook, parseQbEvents, verifyIntuitSignature } from "../src/quickbooks.ts";
 
 test("parseMeasurementSubmission: job + report + numeric measurements", () => {
@@ -26,72 +27,82 @@ test("reportExt: from url, then content-type, then pdf default", () => {
   assert.equal(reportExt("https://x/noext", ""), "pdf");
 });
 
-test("handleMeasurementIngest: raw capture plus ERPNext Measurement Report sync", async (t) => {
+test("deriveMeasurementIntakeIdentity: provider identity wins over retry headers and remains opaque", async () => {
+  const submission = { jobNumber: "26-0001", reportUrl: null, measurements: { squares: 24 } };
+  const withHeader = await deriveMeasurementIntakeIdentity({
+    rawText: '{"job_number":"26-0001","squares":24}',
+    raw: { job_number: "26-0001", squares: 24 },
+    submission,
+    geometry: null,
+    requestIdempotencyKey: "measurement-header-0001",
+  });
+  const changedBodySameHeader = await deriveMeasurementIntakeIdentity({
+    rawText: '{"job_number":"26-0001","squares":25}',
+    raw: { job_number: "26-0001", squares: 25 },
+    submission: { ...submission, measurements: { squares: 25 } },
+    geometry: null,
+    requestIdempotencyKey: "measurement-header-0001",
+  });
+  const providerAttachment = await deriveMeasurementIntakeIdentity({
+    rawText: '{"job_number":"26-0001","report_id":"provider-private-id"}',
+    raw: { job_number: "26-0001", report_id: "provider-private-id" },
+    submission,
+    geometry: null,
+    requestIdempotencyKey: "measurement-provider-retry-a",
+  });
+  const providerAttachmentRetry = await deriveMeasurementIntakeIdentity({
+    rawText: '{"job_number":"26-0001","report_id":"provider-private-id"}',
+    raw: { job_number: "26-0001", report_id: "provider-private-id" },
+    submission,
+    geometry: null,
+    requestIdempotencyKey: "measurement-provider-retry-b",
+  });
+
+  assert.equal(withHeader.keyStrategy, "request_header");
+  assert.equal(withHeader.idempotencyKeyHash, changedBodySameHeader.idempotencyKeyHash);
+  assert.notEqual(withHeader.payloadHash, changedBodySameHeader.payloadHash);
+  assert.equal(providerAttachment.keyStrategy, "provider_attachment");
+  assert.equal(providerAttachment.idempotencyKeyHash, providerAttachmentRetry.idempotencyKeyHash);
+  assert.doesNotMatch(JSON.stringify(providerAttachment), /provider-private-id/);
+  assert.match(providerAttachment.rawKey, /^raw\/measurements\/[0-9a-f]{64}\.json$/);
+});
+
+test("pushMeasurementToErpNext: an unmatched report is unlinked and explicitly needs review", async (t) => {
   const fetches: Array<{ url: string; init: RequestInit }> = [];
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     fetches.push({ url, init: init ?? {} });
-    if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0001" }] });
+    if (url.includes("/api/resource/Roof%20Job?")) throw new Error("unmatched intake must not search with an empty job number");
     if (url.includes("/api/resource/Measurement%20Report?")) return json({ data: [] });
-    if (url.endsWith("/api/resource/Measurement%20Report")) return json({ data: { name: "MR-0001" } });
+    if (url.endsWith("/api/resource/Measurement%20Report")) return json({ data: { name: "MR-UNMATCHED" } });
     if (url.includes("/api/resource/Evidence%20Item?")) return json({ data: [] });
-    if (url.endsWith("/api/resource/Evidence%20Item")) return json({ data: { name: "EV-0001" } });
+    if (url.endsWith("/api/resource/Evidence%20Item")) return json({ data: { name: "EV-UNMATCHED" } });
     throw new Error(`unexpected fetch ${url}`);
   });
 
-  const writes: Array<{ sql: string; args: unknown[] }> = [];
-  const rawWrites: Array<{ key: string; body: string }> = [];
-  const env = {
+  const result = await pushMeasurementToErpNext({
     ERPNEXT_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://erp.example.com",
     ERPNEXT_API_KEY: "erp-key",
     ERPNEXT_API_SECRET: "erp-secret",
-    RAW: { put: async (key: string, body: string) => { rawWrites.push({ key, body }); } },
-    DB: {
-      prepare(sql: string) {
-        return {
-          bind(...args: unknown[]) {
-            return { run: async () => { writes.push({ sql, args }); return { success: true }; } };
-          },
-        };
-      },
-    },
-  };
+  } as never, {
+    measurementId: `measurement:${"a".repeat(64)}`,
+    jobNumber: null,
+    reportUrl: null,
+    rawKey: `raw/measurements/${"b".repeat(64)}.json`,
+    parsedAt: "2026-07-16T10:00:00.000Z",
+    measurements: { squares: 24 },
+  });
 
-  const res = await handleMeasurementIngest(env as never, JSON.stringify({
-    job_number: "26-0001",
-    report_url: "https://reports.example.com/r.pdf",
-    squares: 24,
-    ridge_ft: 100,
-  }), "application/json");
-  const body = await res.json() as {
-    erpnext_measurement_id?: string;
-    erpnext_evidence_id?: string;
-    erpnext_error?: string | null;
-  };
-
-  assert.equal(res.status, 200);
-  assert.equal(body.erpnext_measurement_id, "MR-0001");
-  assert.equal(body.erpnext_evidence_id, "EV-0001");
-  assert.equal(body.erpnext_error, null);
-  assert.equal(rawWrites.length, 1);
-  assert.match(rawWrites[0].key, /^raw\/measurements\/\d{4}-\d{2}-\d{2}\/ow_/);
-  const posted = JSON.parse(String(fetches.find((f) => f.url.endsWith("/api/resource/Measurement%20Report"))?.init.body));
-  assert.equal(posted.roof_job, "RJ-0001");
-  assert.equal(posted.measurement_id.startsWith("measurement:ow_"), true);
-  assert.equal(posted.report_url, "https://reports.example.com/r.pdf");
-  assert.deepEqual(posted.measurements.map((m: { metric: string; unit?: string }) => [m.metric, m.unit]), [
-    ["squares", "sq"],
-    ["ridge_ft", "ft"],
-  ]);
+  assert.equal(result?.name, "MR-UNMATCHED");
+  assert.equal(result?.evidenceItemName, "EV-UNMATCHED");
+  assert.equal(result?.roofJobMatched, false);
+  const report = JSON.parse(String(fetches.find((f) => f.url.endsWith("/api/resource/Measurement%20Report"))?.init.body));
+  assert.equal(report.review_status, "Needs Review");
+  assert.equal("roof_job" in report, false);
   const evidence = JSON.parse(String(fetches.find((f) => f.url.endsWith("/api/resource/Evidence%20Item"))?.init.body));
-  assert.equal(evidence.roof_job, "RJ-0001");
-  assert.equal(evidence.evidence_id.startsWith("evidence:measurement:ow_"), true);
+  assert.equal("roof_job" in evidence, false);
   assert.equal(evidence.evidence_type, "Measurement Report");
-  assert.equal(evidence.source_system, "RoofRuler");
-  assert.match(evidence.r2_key, /^raw\/measurements\/\d{4}-\d{2}-\d{2}\/ow_/);
-  assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") &&
-    w.args.includes("measurement_report:MR-0001,evidence_item:EV-0001")));
 });
 
 test("parseQbEvents: flattens entity changes; tolerates junk", () => {

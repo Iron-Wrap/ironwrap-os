@@ -32,9 +32,15 @@ export interface ErpNextPhotoEvidenceResult {
   fieldCheckInName?: string;
 }
 
+export interface ErpNextMeasurementResult extends ErpNextResult {
+  /** Whether the supplied job number resolved to a canonical Roof Job. */
+  roofJobMatched: boolean;
+}
+
 export interface ErpNextMeasurementInput {
   measurementId: string;
-  jobNumber: string;
+  /** A report can arrive before dispatch has matched it to a Roof Job. */
+  jobNumber: string | null;
   reportUrl: string | null;
   reportFileUrl?: string | null;
   rawKey: string;
@@ -359,14 +365,19 @@ async function syncRoofJobTransport(
 export async function pushMeasurementToErpNext(
   env: Env,
   input: ErpNextMeasurementInput,
-): Promise<ErpNextResult | null> {
+): Promise<ErpNextMeasurementResult | null> {
   const cfg = env as ErpEnv;
   if (!isOn(cfg.ERPNEXT_ENABLED)) return null;
   if (!cfg.ERPNEXT_API_KEY || !cfg.ERPNEXT_API_SECRET) throw new Error("erpnext_no_token");
 
   const base = normalizeBaseUrl(cfg.ERPNEXT_BASE_URL);
   const provider = input.provider ?? "RoofRuler";
-  const roofJob = await findByTerm(cfg, base, "Roof Job", "job_number", input.jobNumber);
+  // Unmatched intake belongs in the Control Center as a Needs Review report.  Do not issue an
+  // empty-term lookup: it could bind an unrelated Roof Job and turn a recoverable exception into
+  // false operational evidence.
+  const roofJob = input.jobNumber
+    ? await findByTerm(cfg, base, "Roof Job", "job_number", input.jobNumber)
+    : null;
   const report = await upsertByField(cfg, base, "Measurement Report", "measurement_id", input.measurementId, {
     measurement_id: input.measurementId,
     roof_job: roofJob ?? undefined,
@@ -375,7 +386,9 @@ export async function pushMeasurementToErpNext(
     report_url: input.reportUrl ?? undefined,
     raw_key: input.rawKey,
     parsed_at: input.parsedAt,
-    review_status: input.needsReview || !Object.keys(input.measurements).length ? "Needs Review" : "Parsed",
+    review_status: input.needsReview || !roofJob || !Object.keys(input.measurements).length
+      ? "Needs Review"
+      : "Parsed",
     measurements: Object.entries(input.measurements).map(([metric, value]) => ({
       metric,
       value,
@@ -396,7 +409,7 @@ export async function pushMeasurementToErpNext(
     customer_safe: 1,
     summary: `Measurement report ${report.name}`,
   });
-  return { ...report, evidenceItemName: evidence.name };
+  return { ...report, evidenceItemName: evidence.name, roofJobMatched: !!roofJob };
 }
 
 export async function pushPhotoEvidenceToErpNext(

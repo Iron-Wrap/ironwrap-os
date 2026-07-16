@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import {
   normalizePhone, extractContact, normalizeEnvelope, dedupKey, validateInbound,
   classifyIntent, reconcileDiff, isStuck, backoffMs, newEnvelopeId,
-  validateSourceCount, MAX_SOURCE_COUNT,
+  validateSourceCount, MAX_SOURCE_COUNT, parseBody,
 } from "../src/core.ts";
 
 test("normalizePhone → E.164 (+1 for bare CA/US 10-digit)", () => {
@@ -21,6 +21,12 @@ test("dedupKey prefers phone, falls back to email, else null", () => {
   assert.equal(dedupKey({ phone: "+15875551234", email: "a@b.com" }), "p:+15875551234");
   assert.equal(dedupKey({ email: "a@b.com" }), "e:a@b.com");
   assert.equal(dedupKey({}), null);
+});
+
+test("parseBody preserves valid non-object JSON as raw instead of returning a false record", () => {
+  assert.deepEqual(parseBody("null", "application/json"), { _raw: "null" });
+  assert.deepEqual(parseBody("[1,2,3]", "application/json"), { _raw: "[1,2,3]" });
+  assert.deepEqual(parseBody('{"name":"Jane"}', "application/json"), { name: "Jane" });
 });
 
 test("extractContact normalizes varied inbound field names", () => {

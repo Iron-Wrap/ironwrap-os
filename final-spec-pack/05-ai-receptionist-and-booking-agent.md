@@ -1,5 +1,11 @@
 # 05 - Phone AI Automation Layer
 
+> **Current authority (2026-07-16):** This retained phone-automation record is planning/provenance.
+> [`18-phase-1-source-truth-and-build-contract.md`](./18-phase-1-source-truth-and-build-contract.md)
+> prevails on conflict: Worker/D1/R2 is the first write, the operating core is Frappe-only, the
+> Field Companion PWA is primary, and JobNimbus, GHL, Make, and Jotform are bridges. Legacy
+> `erpnext-*` names do not authorize ERPNext or DocuSeal.
+
 ## Final AI Decision
 
 Phone AI is a phone automation layer, not only a missed-call bot. Its scope is

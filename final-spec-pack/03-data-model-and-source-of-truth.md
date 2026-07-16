@@ -1,31 +1,37 @@
 # 03 - Data Model And Source Of Truth
 
+> **Current authority (2026-07-16):** This retained data-model record is planning/provenance.
+> [`18-phase-1-source-truth-and-build-contract.md`](./18-phase-1-source-truth-and-build-contract.md)
+> prevails on conflict: Worker/D1/R2 is the first write, the operating core is Frappe-only, the
+> Field Companion PWA is primary, and JobNimbus, GHL, Make, and Jotform are bridges. Legacy
+> `erpnext-*` names do not authorize ERPNext or DocuSeal.
+
 ## Source Of Truth Map
 
-The owned store (Cloudflare D1 + R2) is the canonical system of record for raw
-inbound events: every Make scenario dual-writes the canonical lead envelope to the
-owned store FIRST, then pushes to JobNimbus. JobNimbus is the operational CRM /
-job-truth consumer of IronWrap's data, not the owner of the raw event stream.
+The owned Worker/D1/R2 path is the canonical system of record for raw inbound
+events: it writes the canonical lead envelope FIRST, then calls bridge systems only
+when needed. Frappe is the owned operating core; JobNimbus remains a temporary
+consumer while the owned slices gain live proof.
 
 | Data Area | System Of Record | Mirror Allowed In | Notes |
 |---|---|---|---|
-| Raw inbound events | **Owned store (D1+R2)** (canonical) | JobNimbus, Make logs | Dual-write FIRST, then push to JobNimbus; canonical lead envelope |
+| Raw inbound events | **Owned Worker/D1+R2 path** (canonical) | JobNimbus, Make logs | Write FIRST, then bridge only when required; canonical lead envelope |
 | Brand | **Owned store (D1+R2)** (on the envelope) | JobNimbus | `ironwrap \| iroof`, captured at intake; selects sender mailbox / GBP / review link |
 | Lead source and marketing attribution | **Owned store (D1+R2)** + JobNimbus | JobNimbus Lead Source field | Preserve original source/campaign; attribution via UTM + manual Lead Source (call-tracking deferred) |
 | Conversations | JobNimbus (Engage SMS) + Google Workspace brand mailboxes (email sender) + **owned store** | JobNimbus notes summary | Store summaries, not every raw log everywhere; raw envelope retained in owned store; email sends from brand mailboxes (dedicated ESP deferred) |
-| Customer/contact | JobNimbus after qualification | Owned store | JobNimbus is the operational CRM and job-facing truth |
-| Property | JobNimbus | Owned store | Normalize address early |
-| Job | JobNimbus | Owned store | JobNimbus owns job number and stage |
-| Appointment | JobNimbus Calendar | Owned store, AssistAI booking event | Booked via Make webhook; avoid competing calendars |
+| Customer/contact | Frappe IronWrap OS | JobNimbus bridge, owned store | JobNimbus remains temporary while owned records prove live |
+| Property | Frappe IronWrap OS | JobNimbus bridge, owned store | Normalize address early |
+| Job | Frappe IronWrap OS | JobNimbus bridge, owned store | Bridge job identifiers until owned job records prove live |
+| Appointment | Frappe IronWrap OS | JobNimbus Calendar bridge, owned store, AssistAI booking event | Avoid competing calendars |
 | Files | Google Drive (Google Workspace) + R2 | Links in JobNimbus | Archive only; R2 holds raw submission payloads |
 | Measurements | JobNimbus + folder | Proposal workspace | Extracted values need review status |
 | Proposal | JobNimbus/proposal generator | Folder, JobNimbus status | Versioned |
-| Field forms/signatures | Jotform "Jobsite Photo" form (photos/geo, sole tool, $0 incremental) + Jotform (structured) | JobNimbus notes/tasks, folder PDFs | Webhook -> Make -> Google Drive + JobNimbus + owned store; JobNimbus owns job state |
+| Field forms/signatures | Field Companion PWA | Jotform bridge, JobNimbus notes/tasks, folder PDFs | Offline actions replay through the Worker into R2/D1/Frappe; Jotform is temporary structured intake |
 | Materials | JobNimbus | Jotform material-request form | Manual flow first; Paradigm deferred |
 | Invoice/payment | QuickBooks | JobNimbus status fields | QuickBooks owns accounting truth |
 | Reviews/nurture | JobNimbus automation + Engage (SMS) + Google Workspace brand mailboxes (email sender) | Owned store event/status | Must respect consent/stop conditions; nurture on a pipe separate from instant-ack; email from brand mailboxes (SPF/DKIM/DMARC), dedicated ESP deferred for bulk |
 | CASL consent | JobNimbus (consent ledger) | Owned store | Per-contact consent basis + date + source; required to keep texting/emailing |
-| Automation logs | Make plus owned-store audit table | Exceptions view + dead-letter | Every critical mutation logged; failures route to dead-letter |
+| Automation logs | Worker audit and dead-letter records | Make bridge logs, exceptions view | Every critical mutation logged; failures route to dead-letter |
 
 ## IDs And External References
 

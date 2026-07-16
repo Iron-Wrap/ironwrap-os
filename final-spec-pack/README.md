@@ -6,6 +6,11 @@ This pack is the final implementation specification for **IronWrap OS**. It is
 not the external metal-layout SaaS idea. It covers the internal system we should
 set up, configure, build, test, and ship for IronWrap.
 
+> **Current authority (2026-07-16):** `18-phase-1-source-truth-and-build-contract.md` prevails
+> whenever this pack's earlier planning language conflicts. The Worker/D1/R2 path is the first
+> write, the operating core is Frappe-only, the Field Companion PWA is primary, and JobNimbus,
+> GHL, Make, and Jotform are bridges. Legacy `erpnext-*` names do not authorize ERPNext.
+
 ## Final Direction
 
 Consolidate onto the owned Cloudflare bus and IronWrap OS operating core. JobNimbus and
@@ -16,15 +21,15 @@ it wins when older provenance docs disagree.
 - IronWrap OS / plain Frappe as the target operating truth for customer, property,
   job, estimate, stage, task, owner, evidence, and approval state. JobNimbus can
   bridge existing job/CRM operations while owned replacements mature.
-- A thin owned data layer (Cloudflare D1 + R2) is the system of record: Make
-  dual-writes every lead/event to it first, then to bridge systems only when
-  still needed. JobNimbus/GHL are consumers of IronWrap's data, not owners.
+- The owned Worker/D1/R2 path is the system of record: it stores every direct
+  lead/event first, then reaches bridge systems only when still needed. Make
+  may relay a connector event into that path, but is not the canonical bus.
 - The owned estimator/configurator path is first-class: public/internal
   estimate payloads land at `POST /ingest/estimate`, use stable project/idempotency
   keys for retry-safe replay, save raw R2 + D1 truth, and create review-gated
   IronWrap OS Instant Estimate Session rows. No generated estimate is binding until
   a human approves scope, exclusions, and price.
-- Make as connector/visibility infrastructure and the Cloudflare Worker as the
+- Make is connector/visibility infrastructure while the Cloudflare Worker is the
   owned bus: canonical lead envelope, dedup, dead-letter, retry, and daily
   source-vs-landed reconciliation so no lead is ever silently lost.
 - Instant-response / missed-call-text-back (MCTB) is the headline deliverable:

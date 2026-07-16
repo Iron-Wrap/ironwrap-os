@@ -21,8 +21,8 @@ materials → completion → invoice → review, on a portable owned-data spine.
 | `hermes/` | **Agent runtime layer** — `agents/roles.json` (per-role MCP tool allowlists, source of truth), agent profiles, `mcp-servers.json`, and the `skills/` procedure packs. | Buildable |
 | `config/tenants/` | **White-label tenant configs** — one JSON per contractor (brands, geography, gates, agents), secrets by env-var name only. Validated. | Buildable |
 | `deploy/` | **Launch kit** (free-tier path): app-repo split script, frappe_docker apps.json template, Cloudflare Tunnel config, R2 backup cron script, env inventory. Runbook: `docs/LAUNCH-RUNBOOK.md`; live-spine proof: `tools/launch-proof.mjs`. | Buildable |
-| `samples/` | Real RoofRuler measurement-report PDFs + one AppliCad XML (the extraction inputs the spec references). `samples/_duplicates/` = byte-identical dupes, safe to delete. | Inputs |
-| `docs/` | Loose summaries/plans plus the Hermes/ERPNext blueprint, proof pack, clone playbook, and operations runbook. | Reference |
+| `samples/` | Real RoofRuler measurement-report PDFs + one AppliCad XML (the extraction inputs the spec references). | Inputs |
+| `docs/` | Current runbooks, Frappe/Hermes blueprint/proof, scoped references, and archived planning records. | Reference |
 | `output/` | Generated deliverables (Russian `.docx`, overview PDF, website audit). | Generated |
 | `task1-spec/` | Original source material (v9.1 planning docs, early PDFs, pricing, a build script). | Legacy source |
 | `tools/` | Zero-dep validators run in CI/manually: `validate-erpnext-doctypes.mjs`, `validate-tenant-config.mjs`, `validate-hermes-config.mjs`, plus the AppliCad XML proof. | Active |
@@ -38,9 +38,8 @@ materials → completion → invoice → review, on a portable owned-data spine.
 - **Estimator/configurator** = owned path first. `POST /ingest/estimate` stores raw estimator
   payloads, creates/updates Frappe-site Lead Envelope / Roof Job / Instant Estimate Session when
   enabled, and keeps all pricing non-binding until human review.
-- **Integration bus** = Make (on the **Core** plan, ~$9/mo, already subscribed) **or** the
-  `workers-bus/` Cloudflare Worker. Recommended hybrid: Worker does the heavy lifting; keep the
-  Make Core seat for native connectors + observability.
+- **Integration bus** = the `workers-bus/` Cloudflare Worker. Keep Make Core only for native
+  connectors and observability while bridge routes remain necessary.
 - **Instant-ack / MCTB** is the headline: provider acceptance within 60 seconds is tracked as
   evidence, not delivery or human-follow-up proof. Interim (pre-A2P) ack = email + owner alert;
   the prospect-SMS leg switches on at A2P approval.
@@ -123,12 +122,10 @@ node tools/validate-hermes-config.mjs      # agent roles vs implemented MCP sour
 
 - **Builder/operator = Ilia (owner) via Claude Code:** CC is the engineering/ops capacity; run
   changes through CC sessions. IronWrap builds, operates, and resells this platform as an owned
-  product, so owning the custom code (bus, ERPNext app, MCP/Hermes layer) is the strategy. Design
+  product, so owning the custom code (bus, Frappe app, MCP/Hermes layer) is the strategy. Design
   for multi-tenant operation and resale from the start.
 - **The owned IronWrap OS path is the target.** Don't "fix the spec" to match temporary
   JobNimbus/GHL behavior; migrate toward the bus + Frappe (IronWrap OS)/Hermes estimator/proof spine.
 - **Never commit secrets.** The JobNimbus API key was shared in chat during setup — **rotate it**
   and issue a dedicated key for the bus.
 - Spec house style: terse, declarative, tables + mermaid; heavy cross-referencing is intentional.
-- **Cleanup pending (deletion gated to you):** `tmp/` and `samples/_duplicates/` are pure cruft —
-  `rm -rf tmp samples/_duplicates` to reclaim ~35M.

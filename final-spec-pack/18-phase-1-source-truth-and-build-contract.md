@@ -16,7 +16,7 @@ remaining live acceptance gates without treating one as proof of another.
 Repository evidence rechecked on 2026-07-10; external-account facts below remain
 last-known evidence until the named admin revalidates them:
 
-- Task branch: `codex/hermes-end-product` is published as draft PR [#8](https://github.com/ironwrap/ironwrap-ops/pull/8); CI/merge truth remains separate from repository proof.
+- Repository review used task branch `codex/hermes-end-product` and PR [#8](https://github.com/ironwrap/ironwrap-ops/pull/8) as its then-current context. Recheck live Git, CI, and merge state before any release claim.
 - Worker code: `workers-bus/src/index.ts`, `photos.ts`, `measurements.ts`,
   `quickbooks.ts`, `google.ts`, `jobnimbus.ts`, `store.ts`, and D1 migration.
 - Cloudflare config: `workers-bus/wrangler.jsonc`.

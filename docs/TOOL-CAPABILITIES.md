@@ -1,8 +1,10 @@
-# Tool & Service Capabilities — verified reference
+# Tool & Service Capabilities — reference snapshot
 
-The single source of truth for **what each tool in the IronWrap stack can and cannot do**, so we
-stop re-researching. Verified 2026-07-01 via vendor docs + live testing. Markers: ✅ verified · ⚠️
-gotcha/limit · ❓ confirm-with-vendor · 💲 cost. Re-check prices before purchase.
+This is a dated capability/account reference, not the current operating source of truth. Revalidate
+vendor behavior, pricing, access, and live configurations before action. The binding launch contract is
+[`LAUNCH-RUNBOOK.md`](./LAUNCH-RUNBOOK.md); the Phase 1 source of truth is
+[`../final-spec-pack/18-phase-1-source-truth-and-build-contract.md`](../final-spec-pack/18-phase-1-source-truth-and-build-contract.md).
+Markers: ✅ verified · ⚠️ gotcha/limit · ❓ confirm-with-vendor · 💲 cost.
 
 ---
 
@@ -32,7 +34,7 @@ NOT need a native Cloudflare app — the bus's HTTP endpoints ARE the integratio
 
 ---
 
-## JobNimbus (CRM core — the spine)
+## JobNimbus (temporary CRM bridge)
 - ✅ **Record types (account-validated, live-checked):** contact `Customer`, job `Retail`. `"Lead"`
   is **rejected (HTTP 400)**. Contact status `New` exists.
 - ✅ **Automation engine:** event-based (Settings → Automations). Can **send Engage SMS + email

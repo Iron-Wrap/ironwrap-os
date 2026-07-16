@@ -13,10 +13,13 @@ describe("role-shaped navigation", () => {
 
   it("shows exception and sales surfaces only to office roles", () => {
     expect(navigationForRole("owner").map((item) => item.to)).toContain("/owner");
+    expect(navigationForRole("owner").map((item) => item.to)).toContain("/production");
     expect(navigationForRole("owner").map((item) => item.to)).toContain("/approvals");
     expect(navigationForRole("ops").map((item) => item.to)).toContain("/sales");
+    expect(navigationForRole("ops").map((item) => item.to)).toContain("/production");
     expect(navigationForRole("ops").map((item) => item.to)).toContain("/approvals");
     expect(navigationForRole("field").map((item) => item.to)).not.toContain("/approvals");
+    expect(navigationForRole("field").map((item) => item.to)).not.toContain("/production");
     expect(roleCanAccess("field", "owner")).toBe(false);
     expect(roleCanAccess("field", "sales")).toBe(false);
     expect(roleCanAccess("owner", "field")).toBe(true);

@@ -5,6 +5,7 @@ import {
   listFrappeResource,
   listFrappeResourcePage,
   listOfficeEstimatorFrappeResource,
+  listOfficeProductionFrappeResource,
   listOfficeSalesFrappeResource,
   publicFrappeRow,
   readOfficeEstimatorFrappeResource,
@@ -21,6 +22,7 @@ const FIELD_PACKET_PROOF_PAGE_SIZE = 100;
 const OWNER_NOW_SOURCE_LIMIT = 50;
 const SALES_SOURCE_LIMIT = 100;
 const ESTIMATOR_SOURCE_LIMIT = 100;
+const PRODUCTION_SOURCE_LIMIT = 100;
 const MAX_ESTIMATOR_RAW_BYTES = 2 * 1024 * 1024;
 const MAX_ESTIMATOR_CHECKS = 80;
 const MAX_ESTIMATOR_FACETS = 120;
@@ -29,6 +31,8 @@ const MAX_ESTIMATOR_TAKEOFF_ITEMS = 250;
 const MAX_ESTIMATOR_GEOMETRY_LABEL = 240;
 const MAX_ESTIMATOR_GEOMETRY_DETAIL = 600;
 const MCTB_SLA_MS = 60_000;
+const PRODUCTION_GATES = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"] as const;
+const NON_BLOCKING_GATE_STATES = new Set(["Ready", "Waived", "Done"]);
 
 interface ReadModelEnvelope {
   version: number;
@@ -75,6 +79,58 @@ export interface TodayReadModel extends ReadModelEnvelope {
     blocked_gate_count: number;
     next_action: string;
     assignment: AssignmentReadModel | null;
+  }>;
+}
+
+export type ProductionRunwayLane =
+  | "blocked"
+  | "scheduled"
+  | "needs_assignment"
+  | "ready_for_review"
+  | "needs_verification";
+
+/**
+ * Read-only operating view. A lane is a source-backed review cue, never a dispatch command or
+ * proof that a job may proceed. In particular, a full gate set only means all expected rows were
+ * returned as non-blocking by this bounded read.
+ */
+export interface ProductionRunwayReadModel extends ReadModelEnvelope {
+  /** Sources that reached the bounded query limit; displayed totals are lower bounds. */
+  partial_sources: string[];
+  summary: {
+    active_jobs: number;
+    blocked: number;
+    scheduled: number;
+    needs_assignment: number;
+    ready_for_review: number;
+    needs_verification: number;
+  };
+  jobs: Array<{
+    id: string;
+    job_number: string | null;
+    brand: string | null;
+    service_type: string | null;
+    status: string | null;
+    assignment: {
+      type: string | null;
+      status: string | null;
+      scheduled_start: string | null;
+      scheduled_end: string | null;
+    } | null;
+    lane: ProductionRunwayLane;
+    next_action: string;
+    gate_coverage: "complete" | "incomplete" | "unknown";
+    gate_summary: {
+      expected: number;
+      blocked: number;
+      ready: number;
+      waived: number;
+      done: number;
+    };
+    material_attention: Array<{
+      status: string;
+      requested_delivery_date: string | null;
+    }>;
   }>;
 }
 
@@ -622,6 +678,155 @@ export async function buildTodayReadModel(env: AppEnv, auth: AuthContext): Promi
   return {
     ...envelope(auth, [...assignments, ...jobs, ...blockedGates, ...properties], stale),
     date: tenantDate(env.APP_TIME_ZONE),
+    jobs: shaped,
+  };
+}
+
+export async function buildProductionRunwayReadModel(
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<ProductionRunwayReadModel> {
+  if (auth.session.role !== "owner" && auth.session.role !== "ops") throw new Error("owner_scope_required");
+
+  const [jobs, assignments] = await Promise.all([
+    listOfficeProductionFrappeResource(
+      env,
+      "Roof Job",
+      [["Roof Job", "job_status", "in", [...ACTIVE_JOB_STATUSES]]],
+      PRODUCTION_SOURCE_LIMIT,
+    ),
+    listOfficeProductionFrappeResource(
+      env,
+      "Job Assignment",
+      [
+        ["Job Assignment", "status", "in", [...ACTIVE_ASSIGNMENT_STATUSES]],
+        ["Job Assignment", "assignment_type", "=", "Production"],
+      ],
+      PRODUCTION_SOURCE_LIMIT,
+    ),
+  ]);
+  const jobIds = jobs.map((row) => text(row.name)).filter(notNull);
+  const [gates, materialExceptions] = await Promise.all([
+    jobIds.length > 0
+      ? listOfficeProductionFrappeResource(
+        env,
+        "Production Gate State",
+        [["Production Gate State", "roof_job", "in", jobIds]],
+        PRODUCTION_SOURCE_LIMIT,
+      )
+      : Promise.resolve([]),
+    jobIds.length > 0
+      ? listOfficeProductionFrappeResource(
+        env,
+        "Supplier Order",
+        [
+          ["Supplier Order", "roof_job", "in", jobIds],
+          ["Supplier Order", "status", "in", ["Needs Review", "Shortage"]],
+        ],
+        PRODUCTION_SOURCE_LIMIT,
+      )
+      : Promise.resolve([]),
+  ]);
+
+  const partialSources: string[] = [];
+  if (jobs.length === PRODUCTION_SOURCE_LIMIT) partialSources.push("active_jobs");
+  if (assignments.length === PRODUCTION_SOURCE_LIMIT) partialSources.push("active_assignments");
+  if (gates.length === PRODUCTION_SOURCE_LIMIT) partialSources.push("gate_states");
+  if (materialExceptions.length === PRODUCTION_SOURCE_LIMIT) partialSources.push("material_exceptions");
+
+  const gateRowsByJob = groupBy(gates, "roof_job");
+  const materialRowsByJob = groupBy(materialExceptions, "roof_job");
+  const assignmentByJob = preferredAssignmentsByJob(assignments);
+  const gateRowsComplete = !partialSources.includes("gate_states");
+  const assignmentRowsComplete = !partialSources.includes("active_assignments");
+  const materialExceptionRowsComplete = !partialSources.includes("material_exceptions");
+  const shaped = jobs.flatMap((job) => {
+    const id = text(job.name);
+    if (!id) return [];
+    const assignmentRow = assignmentByJob.get(id);
+    const assignment = assignmentRow ? productionAssignmentModel(assignmentRow) : null;
+    const latestGatesByName = latestRowsByReference(gateRowsByJob.get(id) ?? [], "gate");
+    const knownGates = [...latestGatesByName.values()];
+    const gateCoverage: ProductionRunwayReadModel["jobs"][number]["gate_coverage"] = !gateRowsComplete
+      ? "unknown"
+      : PRODUCTION_GATES.every((gate) => latestGatesByName.has(gate))
+      ? "complete"
+      : "incomplete";
+    const gateSummary = {
+      expected: PRODUCTION_GATES.length,
+      blocked: knownGates.filter((gate) => text(gate.state) === "Blocked").length,
+      ready: knownGates.filter((gate) => text(gate.state) === "Ready").length,
+      waived: knownGates.filter((gate) => text(gate.state) === "Waived").length,
+      done: knownGates.filter((gate) => text(gate.state) === "Done").length,
+    };
+    const materialAttention = (materialRowsByJob.get(id) ?? []).flatMap((row) => {
+      const status = text(row.status);
+      return status ? [{ status, requested_delivery_date: text(row.requested_delivery_date) }] : [];
+    });
+    const allReturnedGatesNonBlocking =
+      materialExceptionRowsComplete &&
+      gateCoverage === "complete" &&
+      PRODUCTION_GATES.every((gate) => {
+        const state = text(latestGatesByName.get(gate)?.state);
+        return !!state && NON_BLOCKING_GATE_STATES.has(state);
+      });
+    const blocked =
+      gateSummary.blocked > 0 ||
+      assignment?.status === "Blocked" ||
+      materialAttention.length > 0;
+    const lane: ProductionRunwayLane = blocked
+      ? "blocked"
+      : assignment?.scheduled_start
+      ? "scheduled"
+      : !assignment && assignmentRowsComplete
+      ? "needs_assignment"
+      : !assignment
+      ? "needs_verification"
+      : allReturnedGatesNonBlocking
+      ? "ready_for_review"
+      : "needs_verification";
+    const nextAction = lane === "blocked"
+      ? "Resolve the source-backed blocker before dispatch review"
+      : lane === "scheduled"
+      ? "Confirm the schedule against current gate coverage"
+      : lane === "needs_assignment"
+      ? "Assign a crew and review gates before scheduling"
+      : lane === "ready_for_review"
+      ? "Review for scheduling; this view does not dispatch work"
+      : "Verify the missing production-gate record before scheduling";
+
+    return [{
+      id,
+      job_number: text(job.job_number),
+      brand: text(job.brand),
+      service_type: text(job.service_type),
+      status: text(job.job_status),
+      assignment,
+      lane,
+      next_action: nextAction,
+      gate_coverage: gateCoverage,
+      gate_summary: gateSummary,
+      material_attention: materialAttention,
+    }];
+  }).sort((left, right) => productionLanePriority(left.lane) - productionLanePriority(right.lane)
+    || compareSchedule(left.assignment?.scheduled_start ?? null, right.assignment?.scheduled_start ?? null)
+    || left.id.localeCompare(right.id));
+
+  const stale: string[] = [];
+  if (partialSources.length > 0) stale.push("jobs.partial_sources");
+  if (shaped.some((job) => job.gate_coverage !== "complete")) stale.push("jobs.gate_coverage");
+  return {
+    ...envelope(auth, [...jobs, ...assignments, ...gates, ...materialExceptions], stale),
+    allowed_actions: ["job.read", "production.read"],
+    partial_sources: partialSources,
+    summary: {
+      active_jobs: shaped.length,
+      blocked: shaped.filter((job) => job.lane === "blocked").length,
+      scheduled: shaped.filter((job) => job.lane === "scheduled").length,
+      needs_assignment: shaped.filter((job) => job.lane === "needs_assignment").length,
+      ready_for_review: shaped.filter((job) => job.lane === "ready_for_review").length,
+      needs_verification: shaped.filter((job) => job.lane === "needs_verification").length,
+    },
     jobs: shaped,
   };
 }
@@ -1380,6 +1585,17 @@ function assignmentModel(row: FrappeRow): AssignmentReadModel {
     scheduled_start: text(row.scheduled_start),
     scheduled_end: text(row.scheduled_end),
     blocker_reason: text(row.blocker_reason),
+  };
+}
+
+function productionAssignmentModel(
+  row: FrappeRow,
+): NonNullable<ProductionRunwayReadModel["jobs"][number]["assignment"]> {
+  return {
+    type: text(row.assignment_type),
+    status: text(row.status),
+    scheduled_start: text(row.scheduled_start),
+    scheduled_end: text(row.scheduled_end),
   };
 }
 
@@ -2323,6 +2539,10 @@ function compareSchedule(left: string | null, right: string | null): number {
   if (!left) return 1;
   if (!right) return -1;
   return dateValue(left) - dateValue(right);
+}
+
+function productionLanePriority(lane: ProductionRunwayLane): number {
+  return ["blocked", "scheduled", "needs_assignment", "ready_for_review", "needs_verification"].indexOf(lane);
 }
 
 function dateValue(value: string | null): number {

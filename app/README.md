@@ -64,10 +64,12 @@ data.
   blocker reporting is explicit, notes and location remain optional, and the visible outbox state
   distinguishes device save, queued work, upload, verification, and attention without implying
   delivery or onsite proof.
-- A route placeholder for the later customer Portal slice. Today, Job, Check-in, Owner Now,
-  Approvals, Sales, Measurement Workbench, Draft Revision review, and Settings have implemented
-  North Star foundations. The inbox remains a decision surface, not a generic lead editor; live
-  broker/Frappe/operator proof remains a deployment gate.
+- A capability-limited customer Portal: a share link resolves only a published project projection
+  and does not expose raw evidence, internal notes, prices outside the approved proposal record,
+  or an office session. Today, Job, Check-in, Owner Now, Production Runway, Approvals, Sales,
+  Measurement Workbench, Draft Revision review, and Settings have implemented North Star
+  foundations. The inbox and production runway remain review surfaces, not generic editors or
+  dispatch controls; live broker/Frappe/operator proof remains a deployment gate.
 
 ## Run it
 

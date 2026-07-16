@@ -14,6 +14,7 @@ import {
 
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
+import { GateChip } from "../field/gate-chip";
 import { Button } from "../components/ui/button";
 import { ErrorState } from "../components/ui/state-panel";
 import { cn } from "../lib/cn";
@@ -356,7 +357,7 @@ function RunwayJobCard({
           <dd className="mt-0.5 leading-5">{schedule ?? "No start time returned"}</dd>
         </div>
         <div>
-          <dt className="font-semibold text-muted">Gate coverage</dt>
+          <dt className="font-semibold text-muted">Scheduling-gate coverage</dt>
           <dd className="mt-0.5 leading-5">{gateCoverage}</dd>
         </div>
         <div>
@@ -368,6 +369,18 @@ function RunwayJobCard({
           </dd>
         </div>
       </dl>
+
+      <div className="mt-4">
+        <p className="text-sm font-semibold text-muted">Scheduling locks</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {job.scheduling_gates.map((gate) => (
+            <GateChip key={gate.name} name={gate.name} state={gate.state ?? "Unavailable"} />
+          ))}
+        </div>
+        <p className="mt-2 text-xs leading-5 text-muted">
+          Completion is reviewed at closeout, not before scheduling.
+        </p>
+      </div>
 
       {job.material_attention.length > 0 ? (
         <p className="mt-3 text-sm leading-6 text-danger">

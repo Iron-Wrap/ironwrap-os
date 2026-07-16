@@ -20,13 +20,14 @@ Two MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, pe
 `tool_filter`, and env var names):
 
 - `mcp/ironwrap-bus-mcp/src/server.mjs`: readiness and operational truth
-  (`get_bus_readiness`, `get_operational_status`), envelope/dead-letter reads, and approved,
-  envelope-scoped recovery (`dry_run_replay` / `request_replay`). Bulk replay is not exposed.
+  (`get_bus_readiness`, `get_operational_status`), envelope/dead-letter and measurement-exception
+  reads, and approved, envelope-scoped recovery (`dry_run_replay` / `request_replay`). Bulk replay
+  is not exposed.
 - `mcp/erpnext-roofing-mcp/src/server.mjs`: IronWrap OS Frappe operating core with reads,
   deterministic policy checks (`check_consent`, `check_quiet_hours`), dry-run previews, and
   review-gated `request_*` writes. Its legacy name is retained for deployment compatibility.
 
-The validated implemented-source inventory is **136 tools** across both servers: the bus contributes 7;
+The validated implemented-source inventory is **137 tools** across both servers: the bus contributes 8;
 the Frappe server contributes **129 (75 reads, 27 dry-runs, 27 approved writes)**.
 
 ## Tool filtering per agent role
@@ -121,5 +122,5 @@ It parses the implemented tool inventory from both server sources, checks that e
 in `roles.json` exists, that reads are read-only, dry-runs are previews, approved-writes are
 `request_*` mutations each paired with its dry-run counterpart in the same role, and that all
 eight blueprint roles are present with no duplicate grants.
-It also freezes the 136-tool inventory, enforces Contract Acceptance as read-only, checks
+It also freezes the 137-tool inventory, enforces Contract Acceptance as read-only, checks
 least-privilege boundaries for field/finance roles, and validates manifest union exactness.

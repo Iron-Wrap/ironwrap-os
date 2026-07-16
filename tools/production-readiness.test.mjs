@@ -344,7 +344,7 @@ const REQUIRED_D1_TABLES = [
   "app_action_throttles", "app_device_pairings", "app_devices", "lead_ack_receipts",
   "approval_requests", "approval_request_events",
   "quote_revision_approval_requests", "quote_revision_approval_request_events",
-  "customer_portal_links", "customer_portal_access_throttles",
+  "customer_portal_links", "customer_portal_access_throttles", "measurement_intake_receipts",
 ];
 
 const REQUIRED_D1_TRIGGER_BINDINGS = [

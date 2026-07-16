@@ -77,6 +77,7 @@ src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   JobNimbus push adapter (live-tested; enabled by config)
 src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, estimate, measurement, evidence, field check-in, and payment milestone rows
 src/estimates.ts   Owned estimator/configurator intake; idempotent by project/key; no JobNimbus/GHL queue
+src/measurement-intake-store.ts Durable, hashed measurement receipt/lease ledger and exception query
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
 src/operations.ts  readiness, operational status, and dead-letter replay safety orchestration
@@ -88,7 +89,7 @@ src/app-api.ts     /api/v1 routing/CORS plus admin-token app-user provisioning a
 src/approval-store.ts immutable D1 approval-request projection/event ledger and CAS transitions
 src/approval-broker-client.ts Worker-to-private-broker HMAC client; no Frappe write capability in Worker
 src/index.ts       the Worker: fetch + queue + scheduled
-migrations/0001_init.sql   D1 schema; 0002–0010 add operating and replay safety; 0011 adds app auth/audit state
+migrations/0001_init.sql   D1 schema; 0002–0010 add operating and replay safety; 0011 adds app auth/audit state; 0019 adds measurement receipt leases
 test/core.test.ts  zero-dep self-test (`node --test`)
 ```
 
@@ -132,7 +133,7 @@ npx wrangler deploy
 | POST | `/ingest/:source` | `Bearer INGEST_TOKEN` | ingest a lead (`source` ∈ website,phone,gbp,ad,referral,manual) |
 | POST | `/ingest/estimate` | `Bearer INGEST_TOKEN` | ingest public estimator/configurator payloads into owned R2/D1 and ERPNext without a JobNimbus/GHL queue dependency; accepts stable project ids or `Idempotency-Key`/`X-Idempotency-Key` for retry-safe replay |
 | POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos, file them to Google Drive, and optionally sync ERPNext Evidence Items |
-| POST | `/ingest/measurement` | `Bearer INGEST_TOKEN` | ingest RoofRuler/AppliCad measurement metadata/report files |
+| POST | `/ingest/measurement` | `Bearer INGEST_TOKEN` | ingest RoofRuler/AppliCad measurement metadata/report files; provider attachment identity takes precedence over a retry header, raw is stored before downstream work, and completed receipts replay safely |
 | GET | `/health` | — | backward-compatible, dependency-free liveness probe (`{"ok":true}`) |
 | GET | `/ready` | — | detailed public readiness booleans; never returns secret values |
 | GET | `/admin/status?audit_limit=20` | `Bearer ADMIN_TOKEN` | latest heartbeat, open dead letters, pending/stuck/Frappe/replay-ledger counts, 24h audit failures, and latest QB receipt freshness |
@@ -141,6 +142,7 @@ npx wrangler deploy
 | GET | `/admin/envelopes?limit=50` | `Bearer ADMIN_TOKEN` | read recent bus envelopes for owner/Hermes diagnostics |
 | GET | `/admin/envelope/:id` | `Bearer ADMIN_TOKEN` | read one canonical bus envelope |
 | GET | `/admin/dead-letter?limit=50` | `Bearer ADMIN_TOKEN` | read unrecovered dead-letter rows |
+| GET | `/admin/measurements/exceptions?limit=50` | `Bearer ADMIN_TOKEN` | read unmatched or retryable measurement receipts without idempotency/payload hash fields or lease tokens; opaque receipt ids and raw pointers remain available for review. Retryable and expired-lease receipts re-drive sequentially from verified R2 raw sources with bounded backoff |
 | POST | `/admin/app-users` | `Bearer ADMIN_TOKEN` | provision/update/deactivate one user on this deployment's configured tenant |
 | POST | `/webhook/quickbooks` | `intuit-signature` | capture signed QuickBooks invoice/payment events with payload-hash replay protection |
 | POST | `/api/v1/auth/magic-link/request` | exact allowed `Origin` | request a link; active/unknown/inactive/throttled identities receive the same `202` body |
@@ -473,8 +475,9 @@ the ledger attempt failed, so the same exact request can CAS the ledger into a n
    non-binding and review-required; `/ingest/estimate` stores configurator totals, project links,
    selected services, material choices, the stable estimator submission key, and the ERPNext
    Instant Estimate Session id when present. The Worker does not generate final pricing.
-   Measurement sync creates a linked
-   Evidence Item for the raw/report artifact. Photo sync creates one photo Evidence
+   Measurement sync creates a linked Evidence Item for the raw/report artifact. An unmatched
+   measurement is intentionally unlinked and `Needs Review`, so dispatch can attach it to the
+   correct Roof Job instead of accepting a false match. Photo sync creates one photo Evidence
    Item per submitted Jotform photo, links Drive file ids/URLs when available, and
    creates a Field Check-in summary row for the submission. QuickBooks webhook
    sync creates Payment Milestone event rows and links invoice events to Roof Job

@@ -236,9 +236,9 @@ Field Companion deployment and must not be described as one.
 
 Before enabling the BFF in the intended Cloudflare account:
 
-1. Apply the exact D1 migration sequence remotely, including `0018_customer_portal_links.sql`, then
+1. Apply the exact D1 migration sequence remotely, including `0019_measurement_intake_receipts.sql`, then
    run the Frappe app migration so legacy Lead Envelopes become explicit `Unknown` triage rows.
-   Verify `/ready` against the intended database. The 25-table backup/restore inventory must be
+   Verify `/ready` against the intended database. The 26-table backup/restore inventory must be
    deployed with the same release.
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
@@ -276,7 +276,7 @@ unapproved estimates, and office session data never cross the public boundary.
 
 Before enabling it in the intended Cloudflare account:
 
-1. Apply `0018_customer_portal_links.sql` with the same release and prove `/ready` against the
+1. Apply the migration sequence through `0019_measurement_intake_receipts.sql` with the same release and prove `/ready` against the
    migrated D1 database. Keep `APP_CUSTOMER_PORTAL_ENABLED=false` until this is complete.
 2. Complete the Field Companion BFF configuration above, including the exact HTTPS
    `APP_PUBLIC_ORIGIN`, matching `APP_ALLOWED_ORIGINS`, Frappe read credentials, and the
@@ -323,7 +323,7 @@ Gate State rows. Remove or clearly label fixture records after proof.
 | Website | Real consented submission reaches `/ingest/website`, raw R2, D1, Frappe, provider-acceptance receipt (not delivery proof), and temporary JobNimbus bridge |
 | 3D estimator | Repeated `/ingest/estimate` idempotency key returns the original session and remains review-gated |
 | Jotform field intake | Device submission reaches `/ingest/photo`, Drive/R2, evidence, and check-in with photos plus one voice note |
-| RoofRuler/AppliCad | `/ingest/measurement` stores raw source and source-referenced values; uncertain values remain review-gated |
+| RoofRuler/AppliCad | `/ingest/measurement` records one hashed receipt per provider/idempotency identity, stores raw source first, routes no-job or unresolved-job reports and retryable failures to `/admin/measurements/exceptions`, sequentially re-drives verified raw sources with bounded backoff, and keeps uncertain values review-gated |
 | QuickBooks | Valid signed webhook receipt is visible in `/admin/status`; invalid signature is rejected |
 
 JobNimbus and GHL remain bridges until each replacement slice has live evidence. SMS remains
@@ -362,7 +362,7 @@ CRON_TZ=UTC
 `backup-d1-to-r2.sh` is bound to Cloudflare account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
-the SQL into isolated SQLite, checks integrity and all 25 current core/auth/operational tables,
+the SQL into isolated SQLite, checks integrity and all 26 current core/auth/operational tables,
 plus the 22 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
 locally, uploads immutably, remotely checks the objects, and publishes
 `IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
@@ -390,7 +390,7 @@ For the launch remote drill, create a fresh empty D1 database named
 `ironwrap-restore-drill-<label>` in the same committed account and record its exact UUID. The
 name and UUID must both differ from production. Bind one approval to that exact pair; the script
 generates a target-only Wrangler config, rechecks emptiness, imports, then compares the complete
-table-to-row-count map for all 25 required tables and the exact 22 trigger-to-table bindings
+table-to-row-count map for all 26 required tables and the exact 22 trigger-to-table bindings
 with the locally verified SQLite export:
 
 ```bash
@@ -407,14 +407,14 @@ export D1_RESTORE_MODE=verify
 
 Any new D1 migration that adds a persistent table must update the required-table allowlist in
 both D1 scripts and their readiness tests before deployment. Any migration that adds or changes
-an invariant trigger must update the trigger inventory too. The current 25 are `envelopes`,
+an invariant trigger must update the trigger inventory too. The current 26 are `envelopes`,
 `audit_log`, `dead_letter`, `source_counts`, `heartbeat`, `quickbooks_webhook_receipts`,
 `dedup_claims`, `replay_requests`, `field_actions`, `field_action_media`, `app_users`,
 `app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`,
 `app_action_throttles`, `app_device_pairings`, `app_devices`, `lead_ack_receipts`,
 `approval_requests`, `approval_request_events`, `quote_revision_approval_requests`,
 `quote_revision_approval_request_events`, `customer_portal_links`, and
-`customer_portal_access_throttles`. The 22 required triggers include source-count
+`customer_portal_access_throttles`, and `measurement_intake_receipts`. The 22 required triggers include source-count
 validation, immutable lead-ack receipts, and each approval ledger's transition/event/immutability
 rules. Approval binding rewrites must raise `ABORT, 'approval_request_binding_immutable'`; approval
 event updates/deletes must raise `ABORT, 'approval_request_events_immutable'` in both local export

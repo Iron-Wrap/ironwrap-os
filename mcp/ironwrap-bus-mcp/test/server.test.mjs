@@ -168,6 +168,7 @@ test("bus MCP registers only tools granted to the runtime Hermes role", () => {
   });
   assert.ok(leadConcierge._registeredTools.list_recent_envelopes);
   assert.ok(leadConcierge._registeredTools.get_envelope);
+  assert.equal(leadConcierge._registeredTools.list_measurement_intake_exceptions, undefined);
   assert.equal(leadConcierge._registeredTools.get_bus_readiness, undefined);
   assert.equal(leadConcierge._registeredTools.dry_run_replay, undefined);
   assert.equal(leadConcierge._registeredTools.request_replay, undefined);
@@ -178,6 +179,15 @@ test("bus MCP registers only tools granted to the runtime Hermes role", () => {
     agentRole: "support-admin",
   });
   assert.ok(supportAdmin._registeredTools.get_operational_status);
+  assert.ok(supportAdmin._registeredTools.list_measurement_intake_exceptions);
   assert.ok(supportAdmin._registeredTools.dry_run_replay);
   assert.ok(supportAdmin._registeredTools.request_replay);
+
+  const estimator = buildServer({
+    baseUrl: "https://bus.example",
+    adminToken: "token",
+    agentRole: "estimator-assistant",
+  });
+  assert.ok(estimator._registeredTools.list_measurement_intake_exceptions);
+  assert.equal(estimator._registeredTools.list_dead_letters, undefined);
 });

@@ -241,10 +241,16 @@ export function isVoiceNoteUri(uri: string): boolean {
 export function parseBody(text: string, contentType: string | null): Record<string, unknown> {
   const ct = (contentType ?? "").toLowerCase();
   try {
-    if (ct.includes("application/json")) return JSON.parse(text) as Record<string, unknown>;
+    if (ct.includes("application/json")) return parsedObjectOrRaw(JSON.parse(text), text);
     if (ct.includes("application/x-www-form-urlencoded")) return Object.fromEntries(new URLSearchParams(text));
-    return JSON.parse(text) as Record<string, unknown>; // best-effort
+    return parsedObjectOrRaw(JSON.parse(text), text); // best-effort
   } catch {
     return { _raw: text };
   }
+}
+
+function parsedObjectOrRaw(value: unknown, raw: string): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : { _raw: raw };
 }

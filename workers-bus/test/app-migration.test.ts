@@ -54,6 +54,20 @@ test("0018 customer portal migration stores only revocable capability hashes", a
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
+test("0019 measurement intake migration keeps retries hash-addressed and reviewable", async () => {
+  const sql = await readFile(new URL("../migrations/0019_measurement_intake_receipts.sql", import.meta.url), "utf8");
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS measurement_intake_receipts\b/);
+  assert.match(sql, /idempotency_key_hash TEXT NOT NULL UNIQUE/);
+  assert.match(sql, /measurement_id TEXT NOT NULL UNIQUE/);
+  assert.match(sql, /content_type TEXT NOT NULL/);
+  assert.match(sql, /key_strategy IN \('request_header', 'provider_attachment', 'attachment_job', 'payload_hash'\)/);
+  assert.match(sql, /status IN \('processing', 'matched', 'unmatched', 'retryable_error'\)/);
+  assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_measurement_intake_receipts_exception_updated\b/);
+  assert.match(sql, /raw_key GLOB 'raw\/measurements\/\[0-9a-f\]\*\.json'/);
+  assert.doesNotMatch(sql, /raw_provider_id|attachment_identifier|signed_report_url/i);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
 test("0012 field migration preserves idempotent actions and immutable media receipts", async () => {
   const sql = await readFile(new URL("../migrations/0012_field_companion.sql", import.meta.url), "utf8");
   for (const table of ["field_actions", "field_action_media"]) {

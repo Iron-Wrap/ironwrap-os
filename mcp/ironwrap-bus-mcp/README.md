@@ -8,6 +8,8 @@ Read tools:
 - `get_operational_status`: authenticated heartbeat, queue, dead-letter, Frappe, replay-ledger,
   audit, and QuickBooks receipt state.
 - `list_recent_envelopes`, `get_envelope`, and `list_dead_letters`: canonical operating truth.
+- `list_measurement_intake_exceptions`: unmatched or retryable measurement reports, projected
+  without idempotency/payload hash fields or processing leases; opaque operational ids remain for review.
 
 Recovery is deliberately envelope-scoped in Hermes:
 

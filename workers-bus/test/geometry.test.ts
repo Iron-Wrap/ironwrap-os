@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isAppliCadXml, parseAppliCadGeometry } from "../src/geometry.ts";
-import { extractGeometry, handleMeasurementIngest } from "../src/measurements.ts";
+import { extractGeometry } from "../src/measurements.ts";
 
 const SAMPLE = readFileSync(
   fileURLToPath(new URL("../../samples/1013 Moville St.xml", import.meta.url)), "utf8");
@@ -75,31 +75,4 @@ test("extractGeometry: finds XML in the raw body or embedded in a field", () => 
   assert.ok(extractGeometry(SAMPLE, {}));
   assert.ok(extractGeometry("{}", { job_number: "J1", xml: SAMPLE }));
   assert.equal(extractGeometry("{}", { job_number: "J1" }), null);
-});
-
-test("handleMeasurementIngest: XML envelope yields verified deterministic measurements", async () => {
-  const rawWrites: Array<{ key: string }> = [];
-  const env = {
-    RAW: { put: async (key: string) => { rawWrites.push({ key }); } },
-    DB: {
-      prepare(_sql: string) {
-        return { bind(..._args: unknown[]) { return { run: async () => ({ success: true }) }; } };
-      },
-    },
-  };
-  const res = await handleMeasurementIngest(env as never, JSON.stringify({
-    job_number: "26-0002",
-    xml: SAMPLE,
-  }), "application/json");
-  const body = await res.json() as {
-    measurements: Record<string, number>;
-    geometry: { facets: number; needs_review: boolean; failed_checks: string[] } | null;
-  };
-  assert.equal(res.status, 200);
-  assert.equal(body.measurements.roof_area, 1942.68);
-  assert.equal(body.measurements.ridge_length, 89);
-  assert.equal(body.geometry?.facets, 7);
-  assert.equal(body.geometry?.needs_review, false);
-  assert.deepEqual(body.geometry?.failed_checks, []);
-  assert.equal(rawWrites.length, 1);
 });

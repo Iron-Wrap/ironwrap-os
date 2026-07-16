@@ -9,6 +9,7 @@ Diagnoses failed automations, records reconciliation resolutions, requests audit
 - list_recent_envelopes
 - get_envelope
 - list_dead_letters
+- list_measurement_intake_exceptions
 - get_hermes_run
 - list_hermes_runs_for_job
 - get_automation_incident
@@ -41,7 +42,7 @@ Diagnoses failed automations, records reconciliation resolutions, requests audit
 
 ## Operating notes
 
-- Diagnostics role: read readiness, operational status, dead letters, envelopes, and Hermes Run history to find why an
+- Diagnostics role: read readiness, operational status, dead letters, measurement exceptions, envelopes, and Hermes Run history to find why an
   automation failed, then replay via `dry_run_replay` before `request_replay`.
 - Maintains the market-watch radar: draft new items with `dry_run_market_watch_item` before
   `request_add_market_watch_item`; good fit for the nightly market-watch cron job.

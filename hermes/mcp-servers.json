@@ -12,7 +12,8 @@
           "get_operational_status",
           "list_recent_envelopes",
           "get_envelope",
-          "list_dead_letters"
+          "list_dead_letters",
+          "list_measurement_intake_exceptions"
         ],
         "dry_run": [
           "dry_run_replay"

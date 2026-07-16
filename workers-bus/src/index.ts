@@ -22,7 +22,7 @@ import { pushToJobNimbus } from "./jobnimbus.ts";
 import { pushToErpNext, syncLeadTransportToErpNext } from "./erpnext.ts";
 import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
 import { handlePhotoIngest } from "./photos.ts";
-import { handleMeasurementIngest } from "./measurements.ts";
+import { handleMeasurementIngest, retryMeasurementIntakeReceipts } from "./measurements.ts";
 import { handleEstimateIngest } from "./estimates.ts";
 import { handleQuickbooksWebhook } from "./quickbooks.ts";
 import { ensureJobFolder, googleConfigured } from "./google.ts";
@@ -30,6 +30,11 @@ import { handleAdminAppUserProvision, handleAppApi } from "./app-api.ts";
 import { pruneAuthRecords } from "./app-auth-store.ts";
 import { handleCustomerPortalResolve } from "./customer-portal.ts";
 import { pruneCustomerPortalRecords } from "./customer-portal-store.ts";
+import {
+  listMeasurementIntakeExceptions,
+  pruneMeasurementIntakeReceipts,
+  type MeasurementIntakeReceipt,
+} from "./measurement-intake-store.ts";
 import { markExpiredExecutionLeases } from "./approval-store.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 
@@ -69,10 +74,12 @@ export default {
         runReconcile(env),
         pruneAuthRecords(env).catch((error) => log({ at: "auth_prune", error: String(error) })),
         pruneCustomerPortalRecords(env).catch((error) => log({ at: "customer_portal_prune", error: String(error) })),
+        pruneMeasurementIntakeReceipts(env).catch((error) => log({ at: "measurement_receipt_prune", error: String(error) })),
       ]).then(() => {}));
     }
     else ctx.waitUntil(Promise.all([
       retrySweep(env),
+      retryMeasurementIntakeReceipts(env).catch((error) => log({ at: "measurement_intake_retry", error: String(error) })),
       // A broker timeout must never trigger an invisible second Frappe write.
       // The durable request becomes owner-visible reconciliation work instead.
       markExpiredExecutionLeases(env, new Date().toISOString())
@@ -116,7 +123,12 @@ async function routeRequest(req: Request, env: Env, ctx: ExecutionContext): Prom
     if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN)) return json({ error: "unauthorized" }, 401);
     const body = await readBounded(req);
     if (body === null) return json({ error: "payload_too_large" }, 413);
-    return await handleMeasurementIngest(env, body, req.headers.get("content-type"));
+    return await handleMeasurementIngest(
+      env,
+      body,
+      req.headers.get("content-type"),
+      req.headers.get("idempotency-key") ?? req.headers.get("x-idempotency-key"),
+    );
   }
   // Estimator/configurator handoff: own the lead/session first; do not depend on JobNimbus/GHL.
   if (req.method === "POST" && url.pathname === "/ingest/estimate") {
@@ -140,6 +152,9 @@ async function routeRequest(req: Request, env: Env, ctx: ExecutionContext): Prom
     if (req.method === "GET" && url.pathname === "/admin/envelopes") return json(await handleListEnvelopes(env, url));
     if (req.method === "GET" && url.pathname.startsWith("/admin/envelope/")) return json(await handleGetEnvelope(env, url));
     if (req.method === "GET" && url.pathname === "/admin/dead-letter") return json(await handleListDeadLetters(env, url));
+    if (req.method === "GET" && url.pathname === "/admin/measurements/exceptions") {
+      return json(await handleListMeasurementExceptions(env, url));
+    }
     if (req.method === "GET" && url.pathname === "/admin/status") {
       return json(await getOperationalStatus(env, clampLimit(url.searchParams.get("audit_limit"), 20, 100)));
     }
@@ -480,6 +495,56 @@ async function handleGetEnvelope(env: Env, url: URL): Promise<{ envelope: Return
 async function handleListDeadLetters(env: Env, url: URL): Promise<{ dead_letters: Awaited<ReturnType<typeof store.listOpenDeadLetters>> }> {
   const limit = clampLimit(url.searchParams.get("limit"), 50, 100);
   return { dead_letters: await store.listOpenDeadLetters(env, limit) };
+}
+
+async function handleListMeasurementExceptions(
+  env: Env,
+  url: URL,
+): Promise<{ measurements: ReturnType<typeof adminMeasurementException>[] }> {
+  const limit = clampLimit(url.searchParams.get("limit"), 50, 100);
+  return { measurements: (await listMeasurementIntakeExceptions(env, limit)).map(adminMeasurementException) };
+}
+
+/** Admin response excludes idempotency/payload hash fields and leases; opaque operational ids stay visible for review. */
+function adminMeasurementException(receipt: MeasurementIntakeReceipt): {
+  receipt_id: string;
+  measurement_id: string;
+  provider: string;
+  job_number: string | null;
+  raw_key: string;
+  status: "unmatched" | "retryable_error";
+  drive_report_url: string | null;
+  drive_folder_url: string | null;
+  frappe_measurement_id: string | null;
+  frappe_evidence_id: string | null;
+  frappe_error: string | null;
+  last_error: string | null;
+  attempts: number;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+} {
+  if (receipt.status !== "unmatched" && receipt.status !== "retryable_error") {
+    throw new Error("measurement_exception_status_invalid");
+  }
+  return {
+    receipt_id: receipt.receipt_id,
+    measurement_id: receipt.measurement_id,
+    provider: receipt.provider,
+    job_number: receipt.job_number,
+    raw_key: receipt.raw_key,
+    status: receipt.status,
+    drive_report_url: receipt.drive_report_url,
+    drive_folder_url: receipt.drive_folder_url,
+    frappe_measurement_id: receipt.frappe_measurement_id,
+    frappe_evidence_id: receipt.frappe_evidence_id,
+    frappe_error: receipt.frappe_error,
+    last_error: receipt.last_error,
+    attempts: receipt.attempts,
+    created_at: receipt.created_at,
+    updated_at: receipt.updated_at,
+    completed_at: receipt.completed_at,
+  };
 }
 
 function adminEnvelope(rec: EnvelopeRecord): Omit<EnvelopeRecord, "payload_json"> & { payload: Record<string, unknown> } {

@@ -10,7 +10,7 @@
       "title": "Owner Operator",
       "summary": "Broadest supervisor. Reads all system truth, approves any drafted mutation. Cannot send legal/contract communications or mutate accounting because no such tool exists.",
       "reads": [
-        "get_bus_readiness", "get_operational_status", "list_recent_envelopes", "get_envelope", "list_dead_letters",
+        "get_bus_readiness", "get_operational_status", "list_recent_envelopes", "get_envelope", "list_dead_letters", "list_measurement_intake_exceptions",
         "get_roof_job", "get_lead_envelope", "list_untriaged_lead_envelopes", "list_job_gates", "list_blocked_jobs",
         "get_measurement_report", "list_measurement_reports_for_job",
         "get_material_takeoff", "list_material_takeoffs_for_job",
@@ -99,7 +99,7 @@
       "summary": "Drafts takeoff, scope, supplier quote, change-order, and proposal proof from approved evidence. Customer decisions are evidence records only; Contract Acceptance stays read-only.",
       "reads": [
         "get_roof_job",
-        "get_measurement_report", "list_measurement_reports_for_job",
+        "get_measurement_report", "list_measurement_reports_for_job", "list_measurement_intake_exceptions",
         "get_evidence_item", "list_evidence_for_job",
         "get_material_takeoff", "list_material_takeoffs_for_job",
         "get_supplier_quote", "list_supplier_quotes_for_job",
@@ -228,7 +228,7 @@
       "title": "Support/Admin Agent",
       "summary": "Diagnoses failed automations, records reconciliation resolutions, requests audited tenant exports, and maintains the market-watch radar. Single-site isolation prevents cross-tenant access.",
       "reads": [
-        "get_bus_readiness", "get_operational_status", "list_recent_envelopes", "get_envelope", "list_dead_letters",
+        "get_bus_readiness", "get_operational_status", "list_recent_envelopes", "get_envelope", "list_dead_letters", "list_measurement_intake_exceptions",
         "get_hermes_run", "list_hermes_runs_for_job",
         "get_automation_incident", "list_automation_incidents",
         "get_white_label_tenant", "list_white_label_tenants",

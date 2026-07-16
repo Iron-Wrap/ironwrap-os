@@ -9,6 +9,7 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - list_recent_envelopes
 - get_envelope
 - list_dead_letters
+- list_measurement_intake_exceptions
 - get_roof_job
 - get_lead_envelope
 - list_untriaged_lead_envelopes

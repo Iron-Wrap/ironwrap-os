@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from ironwrap_roofing.control_center import build_job_runway, sort_action_queue
+from ironwrap_roofing.control_center import (
+    build_customer_portal_scope_actions,
+    build_job_runway,
+    sort_action_queue,
+)
 
 
 class ControlCenterProjectionTests(unittest.TestCase):
@@ -45,6 +49,72 @@ class ControlCenterProjectionTests(unittest.TestCase):
             [item["name"] for item in sort_action_queue(items, limit=2)],
             ["new", "old"],
         )
+
+    def test_customer_portal_scope_actions_only_flags_unpublishable_clauses(
+        self,
+    ) -> None:
+        clauses = [
+            {
+                "name": "scope-job-missing",
+                "customer_quote": "quote-1",
+                "status": "Approved",
+                "customer_visible": 1,
+            },
+            {
+                "name": "scope-valid",
+                "roof_job": "job-1",
+                "customer_quote": "quote-1",
+                "status": "Approved",
+                "customer_visible": 1,
+            },
+            {
+                "name": "scope-quote-missing",
+                "roof_job": "job-1",
+                "customer_quote": "",
+                "status": "Approved",
+                "customer_visible": 1,
+            },
+            {
+                "name": "scope-quote-unknown",
+                "roof_job": "job-1",
+                "customer_quote": "quote-unknown",
+                "status": "Approved",
+                "customer_visible": 1,
+            },
+            {
+                "name": "scope-quote-mismatch",
+                "roof_job": "job-1",
+                "customer_quote": "quote-2",
+                "status": "Approved",
+                "customer_visible": 1,
+            },
+            {
+                "name": "scope-internal",
+                "roof_job": "job-1",
+                "status": "Approved",
+                "customer_visible": 0,
+            },
+        ]
+        actions = build_customer_portal_scope_actions(
+            clauses,
+            [
+                {"name": "quote-1", "roof_job": "job-1"},
+                {"name": "quote-2", "roof_job": "job-2"},
+            ],
+        )
+
+        self.assertEqual(
+            [action["name"] for action in actions],
+            [
+                "scope-job-missing",
+                "scope-quote-missing",
+                "scope-quote-unknown",
+                "scope-quote-mismatch",
+            ],
+        )
+        self.assertTrue(all(action["priority"] == 1 for action in actions))
+        self.assertIn("Do not repoint", actions[-2]["detail"])
+        self.assertIn("another Roof Job", actions[-1]["detail"])
 
 
 if __name__ == "__main__":

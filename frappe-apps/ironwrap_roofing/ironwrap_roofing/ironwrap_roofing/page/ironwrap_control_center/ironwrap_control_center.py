@@ -13,6 +13,7 @@ from frappe.utils import add_to_date, get_datetime, now_datetime
 
 from ironwrap_roofing.control_center import (
     GATE_ORDER,
+    build_customer_portal_scope_actions,
     build_job_runway,
     sort_action_queue,
 )
@@ -94,6 +95,7 @@ def _records(
 def _build_action_queue(
     blocked_gates: list[dict[str, Any]],
     incidents: list[dict[str, Any]],
+    extra_actions: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     for gate in blocked_gates:
@@ -149,7 +151,44 @@ def _build_action_queue(
                     "modified": row.get("modified"),
                 }
             )
+    actions.extend(extra_actions or [])
     return sort_action_queue(actions, limit=40)
+
+
+def _customer_portal_scope_actions(roles: list[str]) -> list[dict[str, Any]]:
+    """Show legacy portal-lineage repairs only to owners who can verify both sides."""
+
+    if not {"IronWrap Owner", "System Manager"}.intersection(roles):
+        return []
+    if not frappe.has_permission("Scope Clause", ptype="read") or not frappe.has_permission(
+        "Customer Quote", ptype="read"
+    ):
+        return []
+
+    clauses = _records(
+        "Scope Clause",
+        ["name", "roof_job", "customer_quote", "status", "customer_visible", "modified"],
+        filters={"status": "Approved", "customer_visible": 1},
+        limit=100,
+    )
+    quote_names = sorted(
+        {
+            str(clause["customer_quote"])
+            for clause in clauses
+            if clause.get("customer_quote")
+        }
+    )
+    quotes = (
+        _records(
+            "Customer Quote",
+            ["name", "roof_job"],
+            filters={"name": ["in", quote_names]},
+            limit=len(quote_names),
+        )
+        if quote_names
+        else []
+    )
+    return build_customer_portal_scope_actions(clauses, quotes)
 
 
 def _selected_job(
@@ -439,7 +478,11 @@ def get_control_center(roof_job: str | None = None) -> dict[str, Any]:
         filters={"status": ["in", ["Open", "Acknowledged"]]},
         limit=100,
     )
-    actions = _build_action_queue(blocked_gates, incidents)
+    actions = _build_action_queue(
+        blocked_gates,
+        incidents,
+        _customer_portal_scope_actions(roles),
+    )
     selected = _selected_job(roof_job, jobs, blocked_gates)
     snapshot = _snapshot(selected)
 

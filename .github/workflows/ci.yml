@@ -88,6 +88,8 @@ jobs:
         run: npm ci --ignore-scripts --prefix workers-bus
       - name: Generate Worker binding types
         run: npm run typegen --prefix workers-bus
+      - name: Apply every Worker migration to an isolated local D1 state
+        run: npm run db:migrate:local --prefix workers-bus -- --persist-to "$RUNNER_TEMP/ironwrap-d1"
       - name: Test Worker bus
         run: npm test --prefix workers-bus
       - name: Typecheck Worker bus

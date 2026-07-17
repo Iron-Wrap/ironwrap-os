@@ -33,7 +33,9 @@ Never mark launch complete from repository checks alone.
 | Dedicated Frappe, bus, Hermes-approval, ingest, and backup credentials | Keeps privileges separated by purpose |
 
 The host floor is locked at Ubuntu 22.04+, 2 CPU cores, 8 GiB RAM, 80 GiB free disk,
-Node.js 22.12.0+, and either `x86_64` or `aarch64`. Capacity is a floor, not a sizing promise.
+Node.js 22.12.0+, and `x86_64`. The pinned upstream frappe_docker compose topology is
+`linux/amd64`; do not represent `aarch64` as a native supported deployment until a separate
+multi-architecture build and compose proof is recorded. Capacity is a floor, not a sizing promise.
 
 ## 1. Prove The Repository Contract
 
@@ -50,9 +52,10 @@ encrypted backup protocol; and the environment-name inventory. A failure blocks 
 
 ## 2. Prepare And Prove The Host
 
-Install Docker with Compose v2, Git, Node.js 22.12.0+, `age`, `curl`, `jq`, `openssl`, `rclone`,
-`sha256sum`, `sqlite3`, and `tar`. Ensure the Docker daemon is reachable by the deployment account and
-the host clock is synchronized. Then run:
+Install Docker with Compose v2, Git, Node.js 22.12.0+, `age`, `cloudflared`, `curl`, `jq`, `openssl`,
+`rclone`, `sha256sum`, `sqlite3`, and `tar`. Install `cloudflared` from an approved Cloudflare package
+source before the preflight; `--install` intentionally does not select or add that package source.
+Ensure the Docker daemon is reachable by the deployment account and the host clock is synchronized. Then run:
 
 ```bash
 deploy/host-preflight.sh
@@ -99,9 +102,23 @@ digest, never `latest` or an unqualified tag.
 
 ## 5. Create The Frappe Site
 
-Use the compose topology from the pinned frappe_docker checkout, replacing the backend/frontend
-image with the digest-pinned IronWrap image. Persist MariaDB, sites, logs, and Redis according to
-the pinned upstream configuration. Create the site and install only the proprietary app:
+Use the exact pinned frappe_docker compose topology plus the checked-in IronWrap overlay. It replaces
+the image for configurator, backend, frontend, websocket, both queues, and scheduler; replacing only
+backend/frontend leaves app processes on the upstream image. Validate the rendered topology before
+starting it, then persist MariaDB, sites, logs, and Redis according to the pinned upstream configuration:
+
+```bash
+export FRAPPE_DOCKER_DIR=/opt/src/frappe_docker
+export IRONWRAP_OS_IMAGE=registry.example.com/ironwrap/os@sha256:<64-hex-digest>
+deploy/validate-frappe-compose.sh
+docker compose --project-directory "$FRAPPE_DOCKER_DIR" \
+  -f "$FRAPPE_DOCKER_DIR/compose.yaml" \
+  -f "$FRAPPE_DOCKER_DIR/overrides/compose.mariadb.yaml" \
+  -f "$FRAPPE_DOCKER_DIR/overrides/compose.redis.yaml" \
+  -f /opt/ironwrap/deploy/frappe-compose.override.yml up -d
+```
+
+Create the site and install only the proprietary app:
 
 ```bash
 docker exec <backend> bench new-site os.ironwrapexteriors.com --admin-password '<from-secret-store>'
@@ -308,7 +325,7 @@ unapproved estimates, and office session data never cross the public boundary.
 
 Before enabling it in the intended Cloudflare account:
 
-1. Apply the migration sequence through `0019_measurement_intake_receipts.sql` with the same release and prove `/ready` against the
+1. Apply the migration sequence through `0020_production_schedule_approval_requests.sql` with the same release and prove `/ready` against the
    migrated D1 database. Keep `APP_CUSTOMER_PORTAL_ENABLED=false` until this is complete.
 2. Complete the Field Companion BFF configuration above, including the exact HTTPS
    `APP_PUBLIC_ORIGIN`, matching `APP_ALLOWED_ORIGINS`, Frappe read credentials, and the
@@ -394,8 +411,8 @@ CRON_TZ=UTC
 `backup-d1-to-r2.sh` is bound to Cloudflare account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
-the SQL into isolated SQLite, checks integrity and all 26 current core/auth/operational tables,
-plus the 22 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
+the SQL into isolated SQLite, checks integrity and all 28 current core/auth/operational tables,
+plus the 31 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
 locally, uploads immutably, remotely checks the objects, and publishes
 `IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
 `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Never discover or infer `latest`.
@@ -422,7 +439,7 @@ For the launch remote drill, create a fresh empty D1 database named
 `ironwrap-restore-drill-<label>` in the same committed account and record its exact UUID. The
 name and UUID must both differ from production. Bind one approval to that exact pair; the script
 generates a target-only Wrangler config, rechecks emptiness, imports, then compares the complete
-table-to-row-count map for all 26 required tables and the exact 22 trigger-to-table bindings
+table-to-row-count map for all 28 required tables and the exact 31 trigger-to-table bindings
 with the locally verified SQLite export:
 
 ```bash
@@ -439,15 +456,16 @@ export D1_RESTORE_MODE=verify
 
 Any new D1 migration that adds a persistent table must update the required-table allowlist in
 both D1 scripts and their readiness tests before deployment. Any migration that adds or changes
-an invariant trigger must update the trigger inventory too. The current 26 are `envelopes`,
+an invariant trigger must update the trigger inventory too. The current 28 are `envelopes`,
 `audit_log`, `dead_letter`, `source_counts`, `heartbeat`, `quickbooks_webhook_receipts`,
 `dedup_claims`, `replay_requests`, `field_actions`, `field_action_media`, `app_users`,
 `app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`,
 `app_action_throttles`, `app_device_pairings`, `app_devices`, `lead_ack_receipts`,
 `approval_requests`, `approval_request_events`, `quote_revision_approval_requests`,
-`quote_revision_approval_request_events`, `customer_portal_links`, and
-`customer_portal_access_throttles`, and `measurement_intake_receipts`. The 22 required triggers include source-count
-validation, immutable lead-ack receipts, and each approval ledger's transition/event/immutability
+`quote_revision_approval_request_events`, `production_schedule_approval_requests`,
+`production_schedule_approval_request_events`, `customer_portal_links`, and
+`customer_portal_access_throttles`, and `measurement_intake_receipts`. The 31 required triggers include source-count
+validation, immutable lead-ack receipts, and all three approval ledgers' transition/event/immutability
 rules. Approval binding rewrites must raise `ABORT, 'approval_request_binding_immutable'`; approval
 event updates/deletes must raise `ABORT, 'approval_request_events_immutable'` in both local export
 verification and remote drill proof.

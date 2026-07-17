@@ -14,13 +14,20 @@ const REQUIRED_DEPLOY_FILES = [
   "deploy/env.example",
   "deploy/cloudflared-config.example.yml",
   "deploy/approval-broker.service.example",
+  "deploy/approval-broker.env.example",
   "deploy/quote-revision-approval-broker.service.example",
+  "deploy/quote-revision-approval-broker.env.example",
+  "deploy/production-schedule-approval-broker.service.example",
+  "deploy/production-schedule-approval-broker.env.example",
   "deploy/backup-to-r2.sh",
   "deploy/restore-from-r2.sh",
   "deploy/backup-d1-to-r2.sh",
   "deploy/restore-d1-from-r2.sh",
   "deploy/build-production-image.sh",
+  "deploy/frappe-compose.override.yml",
+  "deploy/validate-frappe-compose.sh",
   "deploy/host-preflight.sh",
+  "deploy/split-app-repo.sh",
 ];
 
 const REQUIRED_ENV_NAMES = [
@@ -44,6 +51,7 @@ const REQUIRED_ENV_NAMES = [
   "HERMES_ACTOR_USER",
   "HERMES_APPROVER_ID",
   "HERMES_DRY_RUN_SIGNING_KEY",
+  "APPROVAL_BROKER_SHARED_SECRET",
   "HERMES_APPROVAL_PUBLIC_KEY_FILE",
   "IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE",
   "IRONWRAP_HERMES_SITE_BASE_URL",
@@ -93,6 +101,7 @@ const SECRET_ENV_NAMES = [
   "IRONWRAP_ADMIN_TOKEN",
   "HERMES_WRITE_TOKEN",
   "HERMES_DRY_RUN_SIGNING_KEY",
+  "APPROVAL_BROKER_SHARED_SECRET",
   "INGEST_TOKEN",
   "ADMIN_TOKEN",
   "D1_BACKUP_API_TOKEN",
@@ -136,6 +145,66 @@ function parseEnvTemplate(text) {
     values.set(match[1], match[2]);
   }
   return { values, duplicates };
+}
+
+function validSafeAbsolutePath(value) {
+  return typeof value === "string" &&
+    /^\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+$/.test(value) &&
+    !/(?:^|\/)\.\.?($|\/)/.test(value);
+}
+
+function normalizedProductionUrl(value) {
+  if (!isHttpsProductionUrl(value)) return null;
+  try {
+    const parsed = new URL(value);
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function privateBrokerEnvTemplate(text, {
+  role,
+  actor,
+  publicKeyPath,
+  privateKeyPath,
+  prefix,
+  keyId,
+  port,
+}) {
+  const parsed = parseEnvTemplate(text);
+  const { values } = parsed;
+  const expected = {
+    ERPNEXT_REQUEST_TIMEOUT_MS: "10000",
+    ERPNEXT_WRITE_ENABLED: "true",
+    HERMES_AGENT_ROLE: role,
+    HERMES_ACTOR_USER: actor,
+    HERMES_APPROVER_ID: "owner@ironwrapexteriors.com",
+    HERMES_ROLE_POLICY_PATH: "/srv/ironwrap/hermes/agents/roles.json",
+    HERMES_APPROVAL_PUBLIC_KEY_FILE: publicKeyPath,
+    HERMES_APPROVAL_PRIVATE_KEY_FILE: privateKeyPath,
+    [`${prefix}_TENANT_ID`]: "ironwrap",
+    [`${prefix}_KEY_ID`]: keyId,
+    [`${prefix}_LISTEN_HOST`]: "127.0.0.1",
+    [`${prefix}_PORT`]: port,
+    [`${prefix}_MAX_CLOCK_SKEW_MS`]: "60000",
+    [`${prefix}_MAX_APPROVAL_LIFETIME_MS`]: "300000",
+  };
+  const placeholderKeys = [
+    "ERPNEXT_BASE_URL",
+    "ERPNEXT_API_KEY",
+    "ERPNEXT_API_SECRET",
+    "HERMES_DRY_RUN_SIGNING_KEY",
+    `${prefix}_SHARED_SECRET`,
+  ];
+  return {
+    values,
+    ok: parsed.duplicates.size === 0 &&
+      Object.entries(expected).every(([name, value]) => values.get(name) === value) &&
+      placeholderKeys.every((name) => isPlaceholder(values.get(name))) &&
+      values.get(`${prefix}_SHARED_SECRET`) !== values.get("HERMES_DRY_RUN_SIGNING_KEY"),
+  };
 }
 
 export function isPlaceholder(value) {
@@ -266,7 +335,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
     }
     const host = lock.host_requirements ?? {};
     const integerAtLeast = (value, minimum) => Number.isInteger(value) && value >= minimum;
-    checks.push(check("contract.lock.host", host.ubuntu_minimum === "22.04" && integerAtLeast(host.cpu_cores_minimum, 2) && integerAtLeast(host.memory_gib_minimum, 8) && integerAtLeast(host.disk_gib_minimum, 80) && validMinimumNodeVersion(host.node_version_minimum) && JSON.stringify([...(host.architectures ?? [])].sort()) === JSON.stringify(["aarch64", "x86_64"]), "host minimums are production-safe and complete", "host minimums are incomplete, malformed, or below the production floor"));
+    checks.push(check("contract.lock.host", host.ubuntu_minimum === "22.04" && integerAtLeast(host.cpu_cores_minimum, 2) && integerAtLeast(host.memory_gib_minimum, 8) && integerAtLeast(host.disk_gib_minimum, 80) && validMinimumNodeVersion(host.node_version_minimum) && JSON.stringify([...(host.architectures ?? [])].sort()) === JSON.stringify(["x86_64"]), "host minimums are production-safe and complete", "host minimums are incomplete, malformed, or below the production floor"));
   }
 
   const containerfile = contents.get("deploy/Containerfile.frappe") ?? "";
@@ -338,6 +407,53 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   checks.push(check("contract.approval_broker.service", approvalBrokerService.includes("User=ironwrap-broker") && approvalBrokerService.includes("EnvironmentFile=/etc/ironwrap/approval-broker.env") && approvalBrokerService.includes("approval-broker.mjs") && approvalBrokerService.includes("NoNewPrivileges=true") && approvalBrokerService.includes("ProtectSystem=strict") && approvalBrokerService.includes("UMask=0077"), "approval broker service is least-privilege and environment-file scoped", "approval broker service must run under a dedicated account with no-new-privileges, strict filesystem protection, and a root-owned environment file"));
   const quoteRevisionApprovalBrokerService = contents.get("deploy/quote-revision-approval-broker.service.example") ?? "";
   checks.push(check("contract.quote_revision_approval_broker.service", quoteRevisionApprovalBrokerService.includes("User=ironwrap-broker") && quoteRevisionApprovalBrokerService.includes("EnvironmentFile=/etc/ironwrap/quote-revision-approval-broker.env") && quoteRevisionApprovalBrokerService.includes("quote-revision-approval-broker.mjs") && !quoteRevisionApprovalBrokerService.includes("EnvironmentFile=/etc/ironwrap/approval-broker.env") && !quoteRevisionApprovalBrokerService.includes("ExecStart=/usr/bin/node /srv/ironwrap/mcp/erpnext-roofing-mcp/src/approval-broker.mjs") && quoteRevisionApprovalBrokerService.includes("NoNewPrivileges=true") && quoteRevisionApprovalBrokerService.includes("ProtectSystem=strict") && quoteRevisionApprovalBrokerService.includes("UMask=0077"), "quote-revision approval broker has an isolated least-privilege process and environment file", "quote-revision approval broker must stay a distinct least-privilege process with its own environment file and command"));
+  const productionScheduleApprovalBrokerService = contents.get("deploy/production-schedule-approval-broker.service.example") ?? "";
+  checks.push(check("contract.production_schedule_approval_broker.service", productionScheduleApprovalBrokerService.includes("User=ironwrap-broker") && productionScheduleApprovalBrokerService.includes("EnvironmentFile=/etc/ironwrap/production-schedule-approval-broker.env") && productionScheduleApprovalBrokerService.includes("production-schedule-approval-broker.mjs") && !productionScheduleApprovalBrokerService.includes("ExecStart=/usr/bin/node /srv/ironwrap/mcp/erpnext-roofing-mcp/src/approval-broker.mjs") && productionScheduleApprovalBrokerService.includes("NoNewPrivileges=true") && productionScheduleApprovalBrokerService.includes("ProtectSystem=strict") && productionScheduleApprovalBrokerService.includes("UMask=0077"), "production-schedule approval broker has an isolated least-privilege process and environment file", "production-schedule approval broker must stay a distinct least-privilege process with its own environment file and command"));
+
+  const approvalBrokerEnv = privateBrokerEnvTemplate(contents.get("deploy/approval-broker.env.example") ?? "", {
+    role: "lead-concierge",
+    actor: "lead-concierge@ironwrapexteriors.com",
+    publicKeyPath: "/run/secrets/hermes-approval-public.pem",
+    privateKeyPath: "/run/secrets/hermes-approval-private.pem",
+    prefix: "APPROVAL_BROKER",
+    keyId: "approval-v1",
+    port: "8788",
+  });
+  const quoteRevisionBrokerEnv = privateBrokerEnvTemplate(contents.get("deploy/quote-revision-approval-broker.env.example") ?? "", {
+    role: "estimator-assistant",
+    actor: "estimator@ironwrapexteriors.com",
+    publicKeyPath: "/run/secrets/hermes-approval-public.pem",
+    privateKeyPath: "/run/secrets/hermes-approval-private.pem",
+    prefix: "QUOTE_REVISION_BROKER",
+    keyId: "quote-revision-v1",
+    port: "8789",
+  });
+  const productionScheduleBrokerEnv = privateBrokerEnvTemplate(contents.get("deploy/production-schedule-approval-broker.env.example") ?? "", {
+    role: "production-controller",
+    actor: "production-controller@ironwrapexteriors.com",
+    publicKeyPath: "/run/secrets/hermes-production-schedule-approval-public.pem",
+    privateKeyPath: "/run/secrets/hermes-production-schedule-approval-private.pem",
+    prefix: "PRODUCTION_SCHEDULE_BROKER",
+    keyId: "production-schedule-v1",
+    port: "8790",
+  });
+  checks.push(check("contract.approval_broker.env", approvalBrokerEnv.ok, "lead-triage broker environment is complete and placeholder-only", "lead-triage broker environment must be complete, role-bound, and placeholder-only"));
+  checks.push(check("contract.quote_revision_approval_broker.env", quoteRevisionBrokerEnv.ok, "quote-revision broker environment is complete and placeholder-only", "quote-revision broker environment must be complete, role-bound, and placeholder-only"));
+  checks.push(check("contract.production_schedule_approval_broker.env", productionScheduleBrokerEnv.ok, "production-schedule broker environment is complete and placeholder-only", "production-schedule broker environment must be complete, role-bound, and placeholder-only"));
+  checks.push(check(
+    "contract.approval_brokers.isolation",
+    new Set([
+      approvalBrokerEnv.values.get("APPROVAL_BROKER_KEY_ID"),
+      quoteRevisionBrokerEnv.values.get("QUOTE_REVISION_BROKER_KEY_ID"),
+      productionScheduleBrokerEnv.values.get("PRODUCTION_SCHEDULE_BROKER_KEY_ID"),
+    ]).size === 3 && new Set([
+      approvalBrokerEnv.values.get("APPROVAL_BROKER_PORT"),
+      quoteRevisionBrokerEnv.values.get("QUOTE_REVISION_BROKER_PORT"),
+      productionScheduleBrokerEnv.values.get("PRODUCTION_SCHEDULE_BROKER_PORT"),
+    ]).size === 3,
+    "approval broker templates use distinct key IDs and loopback ports",
+    "approval broker templates must keep their key IDs and loopback ports distinct",
+  ));
 
   const backup = contents.get("deploy/backup-to-r2.sh") ?? "";
   checks.push(check("contract.backup.safety", backup.includes("set -euo pipefail") && backup.includes("set +x") && backup.includes("umask 077") && backup.includes("this command accepts no arguments") && backup.includes("mktemp -d") && backup.includes("trap cleanup EXIT") && backup.includes("flock -n"), "backup script uses fail-closed input, temporary-file, and concurrency controls", "backup script lacks fail-closed input, temporary-file, or concurrency controls"));
@@ -361,28 +477,37 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   checks.push(check("contract.d1_backup.safety", d1Backup.includes("set -euo pipefail") && d1Backup.includes("set +x") && d1Backup.includes("umask 077") && d1Backup.includes("this command accepts no arguments") && d1Backup.includes("mktemp -d") && d1Backup.includes("flock -n") && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Backup), "D1 backup uses strict no-argv, no-tracing, private-temp, locking, and signal controls", "D1 backup lacks strict no-argv, no-tracing, private-temp, locking, or signal controls"));
   checks.push(check("contract.d1_backup.source", d1Backup.includes('EXPECTED_ACCOUNT_ID="7ee5775bc1ba46f05c5a65235b60e939"') && d1Backup.includes('EXPECTED_DATABASE_NAME="ironwrap-bus"') && d1Backup.includes('EXPECTED_DATABASE_ID="f0674848-13df-4422-9896-8ba2719663b8"') && d1Backup.includes('"account_id": "$D1_PRODUCTION_ACCOUNT_ID"') && d1Backup.includes('"database_id": "$D1_PRODUCTION_DATABASE_ID"'), "D1 backup is bound to the exact production account, name, UUID, and generated config", "D1 backup must bind an exact generated config to the committed production D1 coordinates"));
   checks.push(check("contract.d1_backup.wrangler", d1Backup.includes('workers-bus/node_modules/.bin/wrangler') && d1Backup.includes('workers-bus/package-lock.json') && d1Backup.includes('CLOUDFLARE_API_TOKEN="$d1_backup_api_token" "$WRANGLER" d1 export') && d1Backup.includes("--remote --config") && d1Backup.includes("exact Wrangler 4 version") && d1Backup.includes("unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN"), "D1 backup uses the locked local Wrangler 4 remote export with command-scoped read authority", "D1 backup must use exact Wrangler 4 and command-scope only the dedicated D1 backup token"));
-  checks.push(check("contract.d1_backup.validation", d1Backup.includes("sqlite3 -bail") && d1Backup.includes("PRAGMA integrity_check") && d1Backup.includes("quote_revision_approval_requests,quote_revision_approval_request_events,customer_portal_links,customer_portal_access_throttles,measurement_intake_receipts") && d1Backup.includes("prevent_quote_revision_approval_binding_rewrite=quote_revision_approval_requests") && d1Backup.includes("REQUIRED_APPROVAL_TRIGGER_SEMANTICS=") && d1Backup.includes("quote_revision_approval_events_immutable") && d1Backup.includes("type='trigger'") && d1Backup.includes("IRONWRAP-D1-BACKUP-MANIFEST.txt") && d1Backup.includes("sql_sha256="), "D1 backup proves an isolated SQLite import, all required production tables, both approval-ledger invariants, and a hashed manifest", "D1 backup must validate all 26 production tables, both immutable approval ledgers, and bind the exported SQL to a manifest before encryption"));
+  checks.push(check("contract.d1_backup.validation", d1Backup.includes("sqlite3 -bail") && d1Backup.includes("PRAGMA integrity_check") && d1Backup.includes("measurement_intake_receipts,production_schedule_approval_requests,production_schedule_approval_request_events") && d1Backup.includes("prevent_production_schedule_approval_binding_rewrite=production_schedule_approval_requests") && d1Backup.includes("REQUIRED_APPROVAL_TRIGGER_SEMANTICS=") && d1Backup.includes("production_schedule_approval_events_immutable") && d1Backup.includes("type='trigger'") && d1Backup.includes("IRONWRAP-D1-BACKUP-MANIFEST.txt") && d1Backup.includes("sql_sha256="), "D1 backup proves an isolated SQLite import, all required production tables, all approval-ledger invariants, and a hashed manifest", "D1 backup must validate all 28 production tables, all three immutable approval ledgers, and bind the exported SQL to a manifest before encryption"));
   checks.push(check("contract.d1_backup.atomic", d1Backup.includes("age --encrypt") && d1Backup.includes("rclone copy") && d1Backup.includes("--immutable") && d1Backup.includes("rclone check") && d1Backup.includes("IRONWRAP-D1-BACKUP-COMPLETE") && d1Backup.indexOf("rclone check") < d1Backup.lastIndexOf("rclone copyto") && d1Backup.includes("remote_complete=1"), "D1 backup encrypts, uploads immutably, verifies, and commits its marker last", "D1 backup must encrypt and remotely verify immutable objects before publishing its completion marker"));
   checks.push(check("contract.d1_backup.retention", d1Backup.includes("MARKER_RETENTION_HOURS") && d1Backup.includes("DATA_RETENTION_HOURS=$((MARKER_RETENTION_HOURS + 1))") && d1Backup.indexOf("**/IRONWRAP-D1-BACKUP-COMPLETE") < d1Backup.indexOf("**/*.age") && d1Backup.includes("remote_started == 1 && remote_complete == 0") && d1Backup.includes("rclone purge"), "D1 retention hides markers before data and incomplete generations are purged", "D1 retention and incomplete-upload cleanup must preserve atomic visibility"));
 
   const d1Restore = contents.get("deploy/restore-d1-from-r2.sh") ?? "";
   checks.push(check("contract.d1_restore.safety", d1Restore.includes("set -euo pipefail") && d1Restore.includes("set +x") && d1Restore.includes("umask 077") && d1Restore.includes("this command accepts no arguments") && d1Restore.includes('mode="${D1_RESTORE_MODE:-verify}"') && d1Restore.includes("mktemp -d") && d1Restore.includes("flock -n") && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Restore), "D1 restore defaults to local verification with strict no-argv, private-temp, lock, and signal controls", "D1 restore must default to verification and fail closed around argv, plaintext, concurrency, and signals"));
   checks.push(check("contract.d1_restore.selection", d1Restore.includes("D1_RESTORE_R2_COMPLETED_PREFIX") && d1Restore.includes("IRONWRAP-D1-BACKUP-COMPLETE") && !/rclone\s+ls[fdj]?\b/.test(d1Restore), "D1 restore requires one exact marker-bearing prefix and never discovers latest", "D1 restore must never discover latest or accept an uncommitted generation"));
-  checks.push(check("contract.d1_restore.local", d1Restore.includes("sha256sum --check") && d1Restore.includes("age --decrypt") && d1Restore.indexOf("sha256sum --check") < d1Restore.indexOf("age --decrypt") && d1Restore.includes("sqlite3 -bail") && d1Restore.includes("PRAGMA integrity_check") && d1Restore.includes("customer_portal_links,customer_portal_access_throttles,measurement_intake_receipts") && d1Restore.includes("local-trigger-inventory.txt") && d1Restore.includes("verify_receipt_trigger_semantics") && d1Restore.includes("verify_approval_trigger_semantics") && d1Restore.includes("no remote mutation performed"), "D1 restore cryptographically and structurally verifies tables, trigger identity, and immutable approval-ledger semantics locally before any remote mutation", "D1 restore must verify ciphertext, manifest, SQL import, integrity, required tables, trigger identity, and immutable approval-ledger semantics locally first"));
-  checks.push(check("contract.d1_restore.remote", d1Restore.includes("ironwrap-restore-drill-") && d1Restore.includes("production D1 database can never be a restore target") && d1Restore.includes('RESTORE_D1:$D1_RESTORE_TARGET_DATABASE_NAME@$D1_RESTORE_TARGET_DATABASE_ID') && d1Restore.includes('"database_id": "$D1_RESTORE_TARGET_DATABASE_ID"') && d1Restore.includes("target must be an empty dedicated drill database") && d1Restore.includes("local-table-counts.txt") && d1Restore.includes("target-trigger-verify.sql") && d1Restore.includes("sql AS trigger_sql") && d1Restore.includes("immutableSemantics") && d1Restore.includes("quote_revision_approval_events_immutable") && d1Restore.includes("remote D1 restore table row counts differ") && d1Restore.includes("remote D1 restore trigger inventory or receipt semantics differ") && d1Restore.includes('CLOUDFLARE_API_TOKEN="$d1_restore_api_token" "$WRANGLER" d1 execute') && d1Restore.includes('"$d1_backup_api_token" == "$d1_restore_api_token"') && d1Restore.includes("unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN D1_RESTORE_API_TOKEN"), "remote D1 restore is exact-target-confirmed, empty-target-only, account-bound, production-denied, table-row-count and both approval-ledger trigger-semantics equivalent, and command-scoped to separate authority", "remote D1 restore must reject unsafe targets, match every row count plus invariant-trigger bindings and both immutable approval ledgers, and use a distinct ephemeral write token"));
+  checks.push(check("contract.d1_restore.local", d1Restore.includes("sha256sum --check") && d1Restore.includes("age --decrypt") && d1Restore.indexOf("sha256sum --check") < d1Restore.indexOf("age --decrypt") && d1Restore.includes("sqlite3 -bail") && d1Restore.includes("PRAGMA integrity_check") && d1Restore.includes("measurement_intake_receipts,production_schedule_approval_requests,production_schedule_approval_request_events") && d1Restore.includes("local-trigger-inventory.txt") && d1Restore.includes("verify_receipt_trigger_semantics") && d1Restore.includes("verify_approval_trigger_semantics") && d1Restore.includes("no remote mutation performed"), "D1 restore cryptographically and structurally verifies tables, trigger identity, and immutable approval-ledger semantics locally before any remote mutation", "D1 restore must verify ciphertext, manifest, SQL import, integrity, required tables, trigger identity, and all approval-ledger semantics locally first"));
+  checks.push(check("contract.d1_restore.remote", d1Restore.includes("ironwrap-restore-drill-") && d1Restore.includes("production D1 database can never be a restore target") && d1Restore.includes('RESTORE_D1:$D1_RESTORE_TARGET_DATABASE_NAME@$D1_RESTORE_TARGET_DATABASE_ID') && d1Restore.includes('"database_id": "$D1_RESTORE_TARGET_DATABASE_ID"') && d1Restore.includes("target must be an empty dedicated drill database") && d1Restore.includes("local-table-counts.txt") && d1Restore.includes("target-trigger-verify.sql") && d1Restore.includes("sql AS trigger_sql") && d1Restore.includes("immutableSemantics") && d1Restore.includes("production_schedule_approval_events_immutable") && d1Restore.includes("remote D1 restore table row counts differ") && d1Restore.includes("remote D1 restore trigger inventory or receipt semantics differ") && d1Restore.includes('CLOUDFLARE_API_TOKEN="$d1_restore_api_token" "$WRANGLER" d1 execute') && d1Restore.includes('"$d1_backup_api_token" == "$d1_restore_api_token"') && d1Restore.includes("unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN D1_RESTORE_API_TOKEN"), "remote D1 restore is exact-target-confirmed, empty-target-only, account-bound, production-denied, table-row-count and all approval-ledger trigger-semantics equivalent, and command-scoped to separate authority", "remote D1 restore must reject unsafe targets, match every row count plus invariant-trigger bindings and all immutable approval ledgers, and use a distinct ephemeral write token"));
   checks.push(check("contract.d1_restore.cleanup", d1Restore.includes('rm -rf -- "$WORK_DIR"') && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Restore), "D1 restore removes decrypted plaintext on success, failure, and signals", "D1 restore must clean decrypted plaintext in every exit path"));
 
   const buildScript = contents.get("deploy/build-production-image.sh") ?? "";
+  const composeOverlay = contents.get("deploy/frappe-compose.override.yml") ?? "";
+  const composeValidator = contents.get("deploy/validate-frappe-compose.sh") ?? "";
   const hostScript = contents.get("deploy/host-preflight.sh") ?? "";
-  checks.push(check("contract.scripts.strict", [buildScript, hostScript].every((script) => script.includes("set -euo pipefail") && script.includes("set +x")), "deployment scripts use strict mode with tracing disabled", "deployment scripts must use strict mode and disable tracing"));
+  const splitAppRepo = contents.get("deploy/split-app-repo.sh") ?? "";
+  checks.push(check("contract.scripts.strict", [buildScript, composeValidator, hostScript, splitAppRepo].every((script) => script.includes("set -euo pipefail") && script.includes("set +x")), "deployment scripts use strict mode with tracing disabled", "deployment scripts must use strict mode and disable tracing"));
   checks.push(check("contract.build.lock", buildScript.includes("deploy/runtime-lock.json") && buildScript.includes("Containerfile does not consume the exact non-overridable runtime lock") && buildScript.includes("status --porcelain=v1 --untracked-files=all"), "image build validates the complete lock and a pristine pinned context", "image build must validate the lock, Containerfile, and pinned context"));
   checks.push(check("contract.build.secrets", buildScript.includes("--secret \"id=apps_json,src=$APPS_JSON_FILE\"") && !/--build-arg\s+[^\n]*(?:TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(buildScript), "image build passes secret material only through BuildKit secret mounts", "image build must not pass secrets through arguments"));
   checks.push(check("contract.build.no_erpnext", buildScript.includes('architecture !== "frappe-only"') && buildScript.includes('erpnext !== "forbidden"') && buildScript.includes("/erpnext/i.test(JSON.stringify(apps))"), "image build fails closed unless lock and app set are Frappe-only", "image build does not enforce the Frappe-only policy"));
   checks.push(check("contract.host.argv", hostScript.includes("no configuration values are accepted as arguments") && !/eval\s|printenv|\benv\b\s*$/m.test(hostScript), "host preflight refuses configuration in argv and does not dump the environment", "host preflight must refuse configuration arguments and avoid environment dumps"));
   checks.push(check("contract.host.lock", hostScript.includes("deploy/runtime-lock.json") && hostScript.includes('.policy.architecture == "frappe-only"') && hostScript.includes("CPU_MINIMUM") && hostScript.includes("NODE_VERSION_MINIMUM") && hostScript.includes("version_at_least"), "host preflight consumes the Frappe-only runtime lock", "host preflight must consume and validate runtime-lock host policy"));
-  checks.push(check("contract.host.dependencies", hostScript.includes("sqlite3") && hostScript.includes("tar"), "host preflight installs and checks the recovery dependencies", "host preflight must install and check sqlite3 and tar"));
+  checks.push(check("contract.host.dependencies", hostScript.includes("cloudflared") && hostScript.includes("sqlite3") && hostScript.includes("tar"), "host preflight checks ingress and recovery dependencies", "host preflight must check cloudflared, sqlite3, and tar"));
+  checks.push(check("contract.split_app_repo", splitAppRepo.includes('EXPECTED_APP_REPO_URL="https://github.com/ironwrap/ironwrap_roofing.git"') && splitAppRepo.includes("git check-ref-format --branch") && splitAppRepo.includes('git push "$APP_REPO_URL" "$BRANCH:main"') && !splitAppRepo.includes('pushed to $APP_REPO_URL'), "app split requires the canonical credential-free repository URL", "app split must reject credential-bearing or non-canonical repository URLs and avoid printing them"));
+  const appProcessNames = ["configurator", "backend", "frontend", "websocket", "queue-short", "queue-long", "scheduler"];
+  const overlayAppliesEveryImage = appProcessNames.every((name) => new RegExp("^  " + name + ":\\n    image: \\$\\{IRONWRAP_OS_IMAGE:\\?", "m").test(composeOverlay));
+  const overlayAppliesEveryPlatform = appProcessNames.every((name) => new RegExp(`^  ${name}:\\n(?:    .+\\n)*?    platform: linux/amd64`, "m").test(composeOverlay));
+  checks.push(check("contract.frappe_compose.overlay", overlayAppliesEveryImage && overlayAppliesEveryPlatform, "Frappe overlay pins every app process to the x86_64 IronWrap image", "Frappe overlay must replace configurator, backend, frontend, websocket, queues, and scheduler with the x86_64 IronWrap image"));
+  checks.push(check("contract.frappe_compose.validation", composeValidator.includes("config --quiet") && composeValidator.includes("config --format json") && composeValidator.includes("overrides/compose.mariadb.yaml") && composeValidator.includes("overrides/compose.redis.yaml") && appProcessNames.every((name) => composeValidator.includes(`\"${name}\"`)), "compose validation renders the exact locked Frappe topology and every app process", "compose validation must render the locked base and overrides then verify every app process image"));
 
-  for (const relative of ["deploy/backup-to-r2.sh", "deploy/restore-from-r2.sh", "deploy/backup-d1-to-r2.sh", "deploy/restore-d1-from-r2.sh", "deploy/build-production-image.sh", "deploy/host-preflight.sh"]) {
+  for (const relative of ["deploy/backup-to-r2.sh", "deploy/restore-from-r2.sh", "deploy/backup-d1-to-r2.sh", "deploy/restore-d1-from-r2.sh", "deploy/build-production-image.sh", "deploy/validate-frappe-compose.sh", "deploy/host-preflight.sh", "deploy/split-app-repo.sh"]) {
     let executable = false;
     try { executable = Boolean((await stat(path.join(repoRoot, relative))).mode & 0o111); } catch { /* missing reported above */ }
     checks.push(check(`contract.executable.${relative}`, executable, `${relative} is executable`, `${relative} must be executable`));
@@ -428,6 +553,27 @@ export async function validateLiveEnv({
   }
   checks.push(check("live.url.bus_consistency", env.BUS_BASE_URL === env.IRONWRAP_BUS_BASE_URL, "bus URLs are consistent", "BUS_BASE_URL and IRONWRAP_BUS_BASE_URL must match"));
   checks.push(check("live.url.site_consistency", hostnameOf(env.ERPNEXT_BASE_URL) === env.FRAPPE_SITE, "Frappe base URL matches FRAPPE_SITE", "ERPNEXT_BASE_URL hostname and FRAPPE_SITE must match"));
+  const frappeApprovalPublicKeyPath = env.IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE ?? "";
+  checks.push(check(
+    "live.frappe.approval_public_key_path",
+    validSafeAbsolutePath(frappeApprovalPublicKeyPath),
+    "Frappe approval public-key path is absolute and safe",
+    "IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE must be an absolute safe path",
+  ));
+  const normalizedFrappeSiteUrl = normalizedProductionUrl(env.IRONWRAP_HERMES_SITE_BASE_URL);
+  const normalizedErpNextUrl = normalizedProductionUrl(env.ERPNEXT_BASE_URL);
+  checks.push(check(
+    "live.frappe.site_base_url",
+    normalizedFrappeSiteUrl !== null,
+    "Frappe receipt site URL is a credential-free production HTTPS URL",
+    "IRONWRAP_HERMES_SITE_BASE_URL must be a credential-free production HTTPS URL",
+  ));
+  checks.push(check(
+    "live.frappe.site_base_url_consistency",
+    normalizedFrappeSiteUrl !== null && normalizedFrappeSiteUrl === normalizedErpNextUrl,
+    "Frappe receipt site URL matches ERPNEXT_BASE_URL",
+    "IRONWRAP_HERMES_SITE_BASE_URL must normalize to ERPNEXT_BASE_URL",
+  ));
 
   const secretMinimums = {
     ERPNEXT_API_KEY: 10,
@@ -435,6 +581,7 @@ export async function validateLiveEnv({
     IRONWRAP_ADMIN_TOKEN: 24,
     HERMES_WRITE_TOKEN: 32,
     HERMES_DRY_RUN_SIGNING_KEY: 32,
+    APPROVAL_BROKER_SHARED_SECRET: 32,
     INGEST_TOKEN: 24,
     ADMIN_TOKEN: 24,
     D1_BACKUP_API_TOKEN: 24,
@@ -452,6 +599,7 @@ export async function validateLiveEnv({
     env.INGEST_TOKEN,
     env.HERMES_WRITE_TOKEN,
     env.HERMES_DRY_RUN_SIGNING_KEY,
+    env.APPROVAL_BROKER_SHARED_SECRET,
     env.D1_BACKUP_API_TOKEN,
     env.RCLONE_CONFIG_R2_ACCESS_KEY_ID,
     env.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
@@ -487,7 +635,7 @@ export async function validateLiveEnv({
     "HERMES_APPROVER_ID must be the principal bound to the approval signing key",
   ));
   const approvalPublicKeyPath = env.HERMES_APPROVAL_PUBLIC_KEY_FILE ?? "";
-  const approvalPublicKeyPathSafe = /^\/[A-Za-z0-9_./-]+$/.test(approvalPublicKeyPath);
+  const approvalPublicKeyPathSafe = validSafeAbsolutePath(approvalPublicKeyPath);
   checks.push(check(
     "live.hermes.approval_public_key_path",
     approvalPublicKeyPathSafe,

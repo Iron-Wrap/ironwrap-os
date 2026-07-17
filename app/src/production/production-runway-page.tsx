@@ -128,6 +128,7 @@ function ProductionRunwayScreen({
     model.source_updated_at === null ||
     model.partial_sources.length > 0 ||
     model.stale_fields.length > 0;
+  const canPrepareSchedule = model.allowed_actions.includes("production_schedule_approval.prepare");
 
   return (
     <section className="mx-auto max-w-7xl space-y-6 pb-4">
@@ -162,7 +163,14 @@ function ProductionRunwayScreen({
 
       <div className="space-y-9">
         {lanes.map(({ lane, jobs }) => (
-          <RunwayLane key={lane} lane={lane} jobs={jobs} locale={locale} timeZone={timeZone} />
+          <RunwayLane
+            key={lane}
+            lane={lane}
+            jobs={jobs}
+            locale={locale}
+            timeZone={timeZone}
+            canPrepareSchedule={canPrepareSchedule}
+          />
         ))}
       </div>
     </section>
@@ -252,11 +260,13 @@ function RunwayLane({
   jobs,
   locale,
   timeZone,
+  canPrepareSchedule,
 }: {
   lane: ProductionRunwayLane;
   jobs: readonly ProductionRunwayJob[];
   locale: string;
   timeZone: string;
+  canPrepareSchedule: boolean;
 }) {
   const copy = laneCopy[lane];
   const Icon = copy.icon;
@@ -283,7 +293,13 @@ function RunwayLane({
         <ol className="grid gap-3 lg:grid-cols-2">
           {jobs.map((job) => (
             <li key={job.id}>
-              <RunwayJobCard job={job} locale={locale} timeZone={timeZone} tone={copy.tone} />
+              <RunwayJobCard
+                job={job}
+                locale={locale}
+                timeZone={timeZone}
+                tone={copy.tone}
+                canPrepareSchedule={canPrepareSchedule}
+              />
             </li>
           ))}
         </ol>
@@ -301,11 +317,13 @@ function RunwayJobCard({
   locale,
   timeZone,
   tone,
+  canPrepareSchedule,
 }: {
   job: ProductionRunwayJob;
   locale: string;
   timeZone: string;
   tone: string;
+  canPrepareSchedule: boolean;
 }) {
   const schedule = formatDateTime(job.assignment?.scheduled_start ?? null, locale, timeZone);
   const gateCoverage =
@@ -328,16 +346,30 @@ function RunwayJobCard({
               "Operational state unavailable"}
           </p>
         </div>
-        <Button asChild variant="outline" size="compact" className="shrink-0">
-          <Link
-            to="/jobs/$jobId"
-            params={{ jobId: job.id }}
-            aria-label={`Open ${job.job_number ?? job.id}`}
-          >
-            Open
-            <ChevronRight aria-hidden="true" />
-          </Link>
-        </Button>
+        <div className="flex shrink-0 flex-col gap-2">
+          <Button asChild variant="outline" size="compact">
+            <Link
+              to="/jobs/$jobId"
+              params={{ jobId: job.id }}
+              aria-label={`Open ${job.job_number ?? job.id}`}
+            >
+              Open
+              <ChevronRight aria-hidden="true" />
+            </Link>
+          </Button>
+          {canPrepareSchedule && job.scheduling_preparation_allowed ? (
+            <Button asChild variant="outline" size="compact">
+              <Link
+                to="/production/schedule/$jobId"
+                params={{ jobId: job.id }}
+                aria-label={`Prepare schedule request for ${job.job_number ?? job.id}`}
+              >
+                Prepare schedule
+                <ChevronRight aria-hidden="true" />
+              </Link>
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       <dl className="mt-4 grid gap-x-4 gap-y-3 border-y border-border/80 py-3 text-sm sm:grid-cols-2">

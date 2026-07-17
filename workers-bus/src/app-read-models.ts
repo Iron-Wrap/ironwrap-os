@@ -1,6 +1,8 @@
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import { approvalBrokerConfig, approvalDecisionConfig } from "./approval-broker-client.ts";
 import { quoteRevisionApprovalBrokerConfig } from "./quote-revision-approval-broker-client.ts";
+import { productionScheduleApprovalBrokerConfig } from "./production-schedule-approval-broker-client.ts";
+import { productionScheduleApprovalDecisionConfig } from "./production-schedule-approval-authority.ts";
 import {
   listFrappeResource,
   listFrappeResourcePage,
@@ -116,11 +118,14 @@ export interface ProductionRunwayReadModel extends ReadModelEnvelope {
     service_type: string | null;
     status: string | null;
     assignment: {
+      id: string;
       type: string | null;
       status: string | null;
       scheduled_start: string | null;
       scheduled_end: string | null;
     } | null;
+    /** A source-backed preparation grant, never proof that a write may run. */
+    scheduling_preparation_allowed: boolean;
     lane: ProductionRunwayLane;
     next_action: string;
     gate_coverage: "complete" | "incomplete" | "unknown";
@@ -139,6 +144,11 @@ export interface ProductionRunwayReadModel extends ReadModelEnvelope {
       status: string;
       requested_delivery_date: string | null;
     }>;
+  }>;
+  /** Bounded active crew profiles for the owner-only schedule-preparation form. */
+  crews: Array<{
+    id: string;
+    name: string;
   }>;
 }
 
@@ -706,7 +716,12 @@ export async function buildProductionRunwayReadModel(
 ): Promise<ProductionRunwayReadModel> {
   if (auth.session.role !== "owner" && auth.session.role !== "ops") throw new Error("owner_scope_required");
 
-  const [jobs, assignments] = await Promise.all([
+  const schedulePreparationConfigured =
+    auth.session.role === "owner" &&
+    Boolean(auth.session.frappe_user_id?.trim()) &&
+    productionScheduleApprovalBrokerConfig(env) !== null &&
+    productionScheduleApprovalDecisionConfig(env) !== null;
+  const [jobs, assignments, crewProfiles] = await Promise.all([
     listOfficeProductionFrappeResource(
       env,
       "Roof Job",
@@ -722,6 +737,16 @@ export async function buildProductionRunwayReadModel(
       ],
       PRODUCTION_SOURCE_LIMIT,
     ),
+    // The roster is a bounded input list for schedule preparation, not a
+    // dispatch authority. Avoid requesting it for Ops or disabled rails.
+    schedulePreparationConfigured
+      ? listOfficeProductionFrappeResource(
+        env,
+        "Crew Profile",
+        [["Crew Profile", "status", "=", "Active"]],
+        PRODUCTION_SOURCE_LIMIT,
+      )
+      : Promise.resolve([]),
   ]);
   const jobIds = jobs.map((row) => text(row.name)).filter(notNull);
   const [gates, materialExceptions] = await Promise.all([
@@ -751,6 +776,7 @@ export async function buildProductionRunwayReadModel(
   if (assignments.length === PRODUCTION_SOURCE_LIMIT) partialSources.push("active_assignments");
   if (gates.length === PRODUCTION_SOURCE_LIMIT) partialSources.push("gate_states");
   if (materialExceptions.length === PRODUCTION_SOURCE_LIMIT) partialSources.push("material_exceptions");
+  if (crewProfiles.length === PRODUCTION_SOURCE_LIMIT) partialSources.push("crew_profiles");
 
   const gateRowsByJob = groupBy(gates, "roof_job");
   const materialRowsByJob = groupBy(materialExceptions, "roof_job");
@@ -758,6 +784,12 @@ export async function buildProductionRunwayReadModel(
   const gateRowsComplete = !partialSources.includes("gate_states");
   const assignmentRowsComplete = !partialSources.includes("active_assignments");
   const materialExceptionRowsComplete = !partialSources.includes("material_exceptions");
+  const crewProfilesComplete = !partialSources.includes("crew_profiles");
+  const crews = crewProfiles.flatMap((row) => {
+    const id = text(row.name) ?? text(row.crew_profile_id);
+    const name = text(row.crew_name);
+    return id && name ? [{ id, name }] : [];
+  }).sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
   const shaped = jobs.flatMap((job) => {
     const id = text(job.name);
     if (!id) return [];
@@ -827,6 +859,13 @@ export async function buildProductionRunwayReadModel(
       : lane === "ready_for_review"
       ? "Review for scheduling; this view does not dispatch work"
       : "Verify the production-gate records before scheduling";
+    const schedulingPreparationAllowed =
+      schedulePreparationConfigured &&
+      crewProfilesComplete &&
+      crews.length > 0 &&
+      assignmentRowsComplete &&
+      !blocked &&
+      allReturnedGatesNonBlocking;
 
     return [{
       id,
@@ -835,6 +874,7 @@ export async function buildProductionRunwayReadModel(
       service_type: text(job.service_type),
       status: text(job.job_status),
       assignment,
+      scheduling_preparation_allowed: schedulingPreparationAllowed,
       lane,
       next_action: nextAction,
       gate_coverage: gateCoverage,
@@ -850,8 +890,14 @@ export async function buildProductionRunwayReadModel(
   if (partialSources.length > 0) stale.push("jobs.partial_sources");
   if (shaped.some((job) => job.gate_coverage !== "complete")) stale.push("jobs.gate_coverage");
   return {
-    ...envelope(auth, [...jobs, ...assignments, ...gates, ...materialExceptions], stale),
-    allowed_actions: ["job.read", "production.read"],
+    ...envelope(auth, [...jobs, ...assignments, ...gates, ...materialExceptions, ...crewProfiles], stale),
+    allowed_actions: [
+      "job.read",
+      "production.read",
+      ...(schedulePreparationConfigured && crewProfilesComplete && crews.length > 0
+        ? ["production_schedule_approval.prepare"]
+        : []),
+    ],
     partial_sources: partialSources,
     summary: {
       active_jobs: shaped.length,
@@ -862,6 +908,7 @@ export async function buildProductionRunwayReadModel(
       needs_verification: shaped.filter((job) => job.lane === "needs_verification").length,
     },
     jobs: shaped,
+    crews,
   };
 }
 
@@ -1652,6 +1699,7 @@ function productionAssignmentModel(
   row: FrappeRow,
 ): NonNullable<ProductionRunwayReadModel["jobs"][number]["assignment"]> {
   return {
+    id: text(row.name)!,
     type: text(row.assignment_type),
     status: text(row.status),
     scheduled_start: text(row.scheduled_start),

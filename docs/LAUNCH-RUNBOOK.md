@@ -236,7 +236,7 @@ Field Companion deployment and must not be described as one.
 
 Before enabling the BFF in the intended Cloudflare account:
 
-1. Apply the exact D1 migration sequence remotely, including `0019_measurement_intake_receipts.sql`, then
+1. Apply the exact D1 migration sequence remotely, including `0020_production_schedule_approval_requests.sql`, then
    run the Frappe app migration so legacy Lead Envelopes become explicit `Unknown` triage rows.
    Verify `/ready` against the intended database. The 26-table backup/restore inventory must be
    deployed with the same release.
@@ -266,6 +266,38 @@ Before enabling the BFF in the intended Cloudflare account:
    with no eligible email to prove the queue shows a no-channel exception rather than a false
    “sent” result. For an intentionally rejected staging send, wait past the 60-second deadline
    and prove the queue shows an unproven exception.
+
+### Production Schedule Approval Enablement Gate
+
+The Production Runway remains a read surface until this gate closes. A local
+broker test, a Worker bundle, or a populated schedule card is not permission to
+dispatch a crew or call a production assignment live.
+
+1. Apply the remote D1 migration through `0020_production_schedule_approval_requests.sql` and
+   the matching Frappe migration. Confirm the Frappe document policy is installed before the
+   broker receives a write-capable credential: it must lock the Roof Job, reject current
+   `Needs Review`/`Shortage` supplier exceptions, and reject any initial or correction assignment
+   that would create a second logical current scheduled Production assignment.
+2. Install the separate loopback-only service and owner-readable environment from
+   `deploy/production-schedule-approval-broker.service.example` and
+   `deploy/production-schedule-approval-broker.env.example`. Use a distinct
+   `production-controller` Frappe API identity, HMAC secret, and approval signing key; never
+   reuse the lead-triage or quote-revision broker credentials.
+3. Configure only the scoped Worker variables in `deploy/env.example`, then set
+   `PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET` with `wrangler secret put`. Do not put the private
+   broker environment, its API credential, or its signing key in Worker vars, browser assets, or
+   deployment logs. Keep the broker origin private behind the reviewed tunnel/access path.
+4. With a disposable test Roof Job, prove an eligible owner can create one *pending* approval that
+   contains only the projected crew/timing/correction data. Prove a field/ops session, stale owner
+   session, unknown Crew Profile, individual-user target, missing gate, and material shortage all
+   fail before an assignment is written.
+5. Approve exactly one test request and archive the request id, Job Assignment id, Hermes Run id,
+   source-state timestamps, and redacted result. Then prove a second initial request and a second
+   correction of the same source assignment are rejected. Do not describe provider acceptance as
+   crew notification, dispatch, customer contact, or completed work.
+
+Remote migration, broker reachability, authenticated owner acceptance, and this live proof remain
+open until those exact checks are captured.
 
 ### Customer Portal Capability Enablement Gate
 

@@ -108,6 +108,18 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                     for row in rows.get("Evidence Item", [])
                     if row.get("name") in requested_names
                 ]
+            if "`tabJob Assignment`" in normalized:
+                return [
+                    dict(row)
+                    for row in rows.get("Job Assignment", [])
+                    if row.get("roof_job") == values[0]
+                ]
+            if "`tabSupplier Order`" in normalized:
+                return [
+                    dict(row)
+                    for row in rows.get("Supplier Order", [])
+                    if row.get("roof_job") == values[0]
+                ]
             raise AssertionError(f"unexpected SQL: {normalized}")
 
         frappe_module.db = types.SimpleNamespace(
@@ -562,11 +574,16 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         )
         adapter.validate_business_document(document, "job_assignment")
         self.assertEqual(calls, [])
-        self.assertEqual(len(adapter._test_lock_calls), 3)
+        self.assertEqual(len(adapter._test_lock_calls), 5)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
         self.assertIn("`tabEvidence Item`", adapter._test_lock_calls[2][0])
+        self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[3][0])
+        self.assertIn("`tabSupplier Order`", adapter._test_lock_calls[4][0])
         self.assertIn("FOR UPDATE", adapter._test_lock_calls[2][0])
+        self.assertTrue(
+            all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
+        )
         self.assertEqual(adapter._test_lock_calls[0][1], ("job-1",))
         self.assertEqual(adapter._test_lock_calls[1][1], ("job-1",))
 
@@ -658,6 +675,140 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 ),
                 "production_gate_state",
             )
+
+    def test_scheduled_production_assignment_uses_locked_assignment_and_material_context(
+        self,
+    ) -> None:
+        gates = [
+            {
+                "roof_job": "job-1",
+                "gate": gate,
+                "state": "Done",
+                "evidence_item": f"ev-{gate.lower()}",
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+            }
+            for gate in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
+        ]
+        source = {
+            "name": "assignment:current",
+            "assignment_id": "assignment:current",
+            "roof_job": "job-1",
+            "assignment_type": "Production",
+            "status": "Assigned",
+            "scheduled_start": "2026-07-11 08:00:00",
+        }
+        correction = FakeDocument(
+            {
+                "assignment_id": "assignment:correction",
+                "roof_job": "job-1",
+                "assignment_type": "Production",
+                "status": "Assigned",
+                "crew_profile": "crew-2",
+                "assigned_by": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+                "scheduled_start": "2026-07-12 08:00:00",
+                "supersedes": "assignment:current",
+                "correction_reason": "Access moved the production window.",
+            }
+        )
+        adapter, _ = self.load_adapter(
+            values={("Job Assignment", "assignment:current", ("roof_job",)): source},
+            rows={
+                "Production Gate State": gates,
+                "Evidence Item": gate_evidence_rows(gates),
+                "Job Assignment": [source],
+            },
+        )
+        adapter.validate_business_document(correction, "job_assignment")
+        self.assertEqual(len(adapter._test_lock_calls), 5)
+        self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
+        self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[3][0])
+        self.assertIn("`tabSupplier Order`", adapter._test_lock_calls[4][0])
+        self.assertTrue(
+            all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
+        )
+
+        stale_adapter, _ = self.load_adapter(
+            values={("Job Assignment", "assignment:current", ("roof_job",)): source},
+            rows={
+                "Production Gate State": gates,
+                "Evidence Item": gate_evidence_rows(gates),
+                "Job Assignment": [source, {**correction, "name": "assignment:correction"}],
+            },
+        )
+        with self.assertRaisesRegex(
+            FakeValidationError, "stale_production_assignment_correction"
+        ):
+            stale_adapter.validate_business_document(
+                FakeDocument({**correction, "assignment_id": "assignment:second-correction"}),
+                "job_assignment",
+            )
+
+        material_adapter, _ = self.load_adapter(
+            rows={
+                "Production Gate State": gates,
+                "Evidence Item": gate_evidence_rows(gates),
+                "Supplier Order": [
+                    {
+                        "name": "supplier-order-1",
+                        "supplier_order_id": "supplier-order-1",
+                        "roof_job": "job-1",
+                        "status": "Shortage",
+                    }
+                ],
+            }
+        )
+        with self.assertRaisesRegex(
+            FakeValidationError, "material_exception_blocks_production_schedule"
+        ):
+            material_adapter.validate_business_document(
+                FakeDocument(
+                    {
+                        "assignment_id": "assignment:new",
+                        "roof_job": "job-1",
+                        "assignment_type": "Production",
+                        "status": "Assigned",
+                        "crew_profile": "crew-2",
+                        "assigned_by": "production@example.com",
+                        "assigned_at": "2026-07-10 08:00:00",
+                        "scheduled_start": "2026-07-12 08:00:00",
+                    }
+                ),
+                "job_assignment",
+            )
+
+    def test_supplier_order_shares_the_roof_job_lock_with_scheduling(self) -> None:
+        order = FakeDocument(
+            {
+                "supplier_order_id": "supplier-order-1",
+                "status": "Shortage",
+                "roof_job": "job-1",
+                "material_takeoff": "takeoff-1",
+                "source_quote": "supplier-quote-1",
+                "supplier": "supplier-1",
+                "approved_by": "owner@example.com",
+                "approved_at": "2026-07-10 08:00:00",
+                "received_at": "2026-07-10 09:00:00",
+                "order_summary_json": '{"source":"test"}',
+                "receipt_evidence_json": '{"receipt":"test"}',
+                "items": [{"quantity": 1, "received_qty": 0, "shortage_qty": 1}],
+            }
+        )
+        adapter, _ = self.load_adapter(
+            values={
+                ("Material Takeoff", "takeoff-1", "status"): "Approved",
+                ("Supplier Quote", "supplier-quote-1", "status"): "Approved",
+            }
+        )
+
+        adapter.validate_business_document(order, "supplier_order")
+
+        self.assertEqual(len(adapter._test_lock_calls), 1)
+        query, values, _ = adapter._test_lock_calls[0]
+        self.assertIn("`tabRoof Job`", query)
+        self.assertIn("FOR UPDATE", query)
+        self.assertEqual(values, ("job-1",))
 
     def test_safety_acknowledgements_require_the_atomic_append_context(self) -> None:
         adapter, _ = self.load_adapter()

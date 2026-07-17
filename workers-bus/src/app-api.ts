@@ -45,6 +45,16 @@ import {
   quoteRevisionApprovalBrokerConfig,
 } from "./quote-revision-approval-broker-client.ts";
 import {
+  ProductionScheduleApprovalBrokerError,
+  executeProductionScheduleApproval,
+  previewProductionScheduleApproval,
+  productionScheduleApprovalBrokerConfig,
+} from "./production-schedule-approval-broker-client.ts";
+import {
+  productionScheduleApprovalDecisionConfig,
+  sessionIsRecentForProductionScheduleApproval,
+} from "./production-schedule-approval-authority.ts";
+import {
   claimQuoteRevisionApprovalExecution,
   createQuoteRevisionApprovalRequest,
   denyQuoteRevisionApprovalRequest,
@@ -56,6 +66,18 @@ import {
   quoteRevisionApprovalProjection,
   reconcileQuoteRevisionApprovalUncertainty,
 } from "./quote-revision-approval-store.ts";
+import {
+  claimProductionScheduleApprovalExecution,
+  createProductionScheduleApprovalRequest,
+  denyProductionScheduleApprovalRequest,
+  finalizeProductionScheduleApprovalExecution,
+  getCurrentProductionScheduleApprovalRequest,
+  getProductionScheduleApprovalRequestByPrepareKey,
+  listProductionScheduleApprovalRequests,
+  matchesProductionScheduleApprovalPreparation,
+  productionScheduleApprovalProjection,
+  reconcileProductionScheduleApprovalUncertainty,
+} from "./production-schedule-approval-store.ts";
 import {
   activeAssignmentForJob,
   buildEstimatorWorkbenchReadModel,
@@ -270,6 +292,84 @@ export async function handleAuthenticatedRoute(
     } catch {
       return privateAppJson(
         { error: "quote_revision_approval_store_unavailable" },
+        502,
+      );
+    }
+  }
+  if (
+    req.method === "GET" &&
+    url.pathname === "/api/v1/production-schedule-approvals"
+  ) {
+    if (auth.session.role !== "owner")
+      return privateAppJson({ error: "owner_role_required" }, 403);
+    try {
+      const approvals = await listProductionScheduleApprovalRequests(
+        env,
+        auth.session.tenant_id,
+        new Date().toISOString(),
+        parsedListLimit(url.searchParams.get("limit")),
+      );
+      return privateAppJson(
+        productionScheduleApprovalReadEnvelope(env, auth, {
+          approvals: approvals.map(productionScheduleApprovalProjection),
+        }),
+      );
+    } catch {
+      return privateAppJson(
+        { error: "production_schedule_approval_store_unavailable" },
+        502,
+      );
+    }
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/production-schedule-approvals"
+  ) {
+    return await prepareProductionScheduleApproval(req, env, auth);
+  }
+  const productionScheduleDecisionMatch = url.pathname.match(
+    /^\/api\/v1\/production-schedule-approvals\/([^/]+)\/(approve|reject|reconcile)$/,
+  );
+  if (req.method === "POST" && productionScheduleDecisionMatch) {
+    const requestId = decodedProductionScheduleApprovalId(
+      productionScheduleDecisionMatch[1],
+    );
+    if (!requestId) return privateAppJson({ error: "not_found" }, 404);
+    if (productionScheduleDecisionMatch[2] === "approve") {
+      return await approveProductionScheduleApproval(req, env, auth, requestId);
+    }
+    if (productionScheduleDecisionMatch[2] === "reject") {
+      return await rejectProductionScheduleApproval(req, env, auth, requestId);
+    }
+    return await reconcileProductionScheduleApproval(req, env, auth, requestId);
+  }
+  const productionScheduleDetailMatch = url.pathname.match(
+    /^\/api\/v1\/production-schedule-approvals\/([^/]+)$/,
+  );
+  if (req.method === "GET" && productionScheduleDetailMatch) {
+    if (auth.session.role !== "owner")
+      return privateAppJson({ error: "owner_role_required" }, 403);
+    const requestId = decodedProductionScheduleApprovalId(
+      productionScheduleDetailMatch[1],
+    );
+    if (!requestId) return privateAppJson({ error: "not_found" }, 404);
+    try {
+      const approval = await getCurrentProductionScheduleApprovalRequest(
+        env,
+        auth.session.tenant_id,
+        requestId,
+        new Date().toISOString(),
+      );
+      return approval
+        ? privateAppJson(
+            productionScheduleApprovalReadEnvelope(env, auth, {
+              approval: productionScheduleApprovalProjection(approval),
+            }),
+          )
+        : privateAppJson({ error: "not_found" }, 404);
+    } catch {
+      return privateAppJson(
+        { error: "production_schedule_approval_store_unavailable" },
         502,
       );
     }
@@ -916,6 +1016,413 @@ async function reconcileQuoteRevisionApproval(
   }
 }
 
+async function prepareProductionScheduleApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  const identity = productionScheduleApprovalBrokerDecisionIdentity(env, auth);
+  if (!identity.ok)
+    return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const prepareIdempotencyKey = idempotencyKey(req);
+  if (!prepareIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const input = parseProductionScheduleApprovalPreparation(parsed.value);
+  if (!input)
+    return privateAppJson(
+      { error: "invalid_production_schedule_approval_request" },
+      400,
+    );
+  const requestText = productionScheduleRequestText(input);
+
+  try {
+    const existing = await getProductionScheduleApprovalRequestByPrepareKey(
+      env,
+      auth.session.tenant_id,
+      prepareIdempotencyKey,
+    );
+    if (existing) {
+      return matchesProductionScheduleApprovalPreparation(existing, {
+        requestedByUserId: auth.session.user_id,
+        roofJobId: input.roofJobId,
+        targetAssignmentId: existing.target_assignment_id,
+        crewProfileId: input.crewProfileId,
+        scheduledStart: input.scheduledStart,
+        scheduledEnd: input.scheduledEnd,
+        supersedesAssignmentId: input.supersedesAssignmentId,
+        correctionReason: input.correctionReason,
+        requestText,
+      })
+        ? privateAppJson({
+            approval: productionScheduleApprovalProjection(existing),
+            replayed: true,
+          })
+        : privateAppJson(
+            {
+              error: "idempotency_conflict",
+              approval: productionScheduleApprovalProjection(existing),
+            },
+            409,
+          );
+    }
+  } catch {
+    return privateAppJson(
+      { error: "production_schedule_approval_store_unavailable" },
+      502,
+    );
+  }
+
+  const eligibility = await validateProductionSchedulePreparation(
+    env,
+    auth,
+    input,
+  );
+  if (!eligibility.ok)
+    return privateAppJson({ error: eligibility.error }, eligibility.status);
+
+  const approvalRequestId = `production-schedule-approval:${randomToken()}`;
+  const runId = `run:production-schedule:${randomToken()}`;
+  let packet;
+  try {
+    packet = await previewProductionScheduleApproval(env, {
+      approvalRequestId,
+      tenantId: auth.session.tenant_id,
+      runId,
+      roofJobId: input.roofJobId,
+      crewProfileId: input.crewProfileId,
+      scheduledStart: input.scheduledStart,
+      scheduledEnd: input.scheduledEnd,
+      supersedesAssignmentId: input.supersedesAssignmentId,
+      correctionReason: input.correctionReason,
+      requestText,
+      requestedByUserId: auth.session.user_id,
+      requestedByFrappeUser: identity.frappeUserId,
+    });
+  } catch (error) {
+    return privateAppJson(
+      { error: productionScheduleBrokerPrepareError(error) },
+      productionScheduleBrokerPrepareStatus(error),
+    );
+  }
+
+  try {
+    const created = await createProductionScheduleApprovalRequest(env, {
+      id: approvalRequestId,
+      tenantId: auth.session.tenant_id,
+      prepareIdempotencyKey,
+      intentFingerprint: packet.intentFingerprint,
+      actorUser: packet.actorUser,
+      siteId: packet.siteId,
+      roofJobId: packet.roofJobId,
+      targetAssignmentId: packet.targetName,
+      crewProfileId: packet.crewProfileId,
+      scheduledStart: packet.scheduledStart,
+      scheduledEnd: packet.scheduledEnd,
+      supersedesAssignmentId: packet.supersedesAssignmentId,
+      correctionReason: packet.correctionReason,
+      requestText: packet.requestText,
+      writeArgsJson: packet.writeArgsJson,
+      previewJson: packet.previewJson,
+      argsDigest: packet.argsDigest,
+      previewDigest: packet.previewDigest,
+      receiptPreviewDigest: packet.receiptPreviewDigest,
+      dryRunReceipt: packet.dryRunReceipt,
+      expiresAt: packet.expiresAt,
+      requestedByUserId: auth.session.user_id,
+      requestedByFrappeUser: identity.frappeUserId,
+      runId: packet.runId,
+      now: new Date().toISOString(),
+    });
+    if (created.kind === "conflict") {
+      return privateAppJson(
+        {
+          error: "idempotency_conflict",
+          approval: productionScheduleApprovalProjection(created.request),
+        },
+        409,
+      );
+    }
+    return privateAppJson(
+      {
+        approval: productionScheduleApprovalProjection(created.request),
+        replayed: created.kind === "replayed",
+      },
+      created.kind === "created" ? 201 : 200,
+    );
+  } catch {
+    return privateAppJson(
+      { error: "production_schedule_approval_store_unavailable" },
+      502,
+    );
+  }
+}
+
+async function approveProductionScheduleApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  requestId: string,
+): Promise<Response> {
+  const identity = productionScheduleApprovalBrokerDecisionIdentity(env, auth);
+  if (!identity.ok)
+    return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const decisionIdempotencyKey = idempotencyKey(req);
+  if (!decisionIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const expectedVersion = parseExpectedVersion(parsed.value);
+  if (expectedVersion === null)
+    return privateAppJson(
+      { error: "invalid_production_schedule_approval_decision" },
+      400,
+    );
+
+  const now = new Date();
+  let claimed;
+  try {
+    claimed = await claimProductionScheduleApprovalExecution(env, {
+      tenantId: auth.session.tenant_id,
+      requestId,
+      expectedVersion,
+      decisionIdempotencyKey,
+      approvedByUserId: auth.session.user_id,
+      approvedByFrappeUser: identity.frappeUserId,
+      now: now.toISOString(),
+      leaseExpiresAt: new Date(
+        now.getTime() + identity.broker.executionLeaseSeconds * 1000,
+      ).toISOString(),
+    });
+  } catch {
+    return privateAppJson(
+      { error: "production_schedule_approval_store_unavailable" },
+      502,
+    );
+  }
+  if (claimed.kind !== "claimed")
+    return productionScheduleDecisionResultResponse(claimed);
+
+  let outcome;
+  try {
+    outcome = await executeProductionScheduleApproval(env, claimed.request);
+  } catch (error) {
+    return await finalizeProductionScheduleBrokerFailure(
+      env,
+      auth,
+      claimed.request,
+      decisionIdempotencyKey,
+      error,
+    );
+  }
+  try {
+    const finalized = await finalizeProductionScheduleApprovalExecution(env, {
+      tenantId: auth.session.tenant_id,
+      requestId,
+      decisionIdempotencyKey,
+      state: outcome.state,
+      hermesRunId: outcome.hermesRunId,
+      resultJson: outcome.resultJson,
+      errorCode: outcome.errorCode,
+      now: new Date().toISOString(),
+    });
+    if (finalized.kind === "lost_claim") {
+      return finalized.request
+        ? privateAppJson(
+            {
+              error: "production_schedule_approval_state_changed",
+              approval: productionScheduleApprovalProjection(finalized.request),
+            },
+            409,
+          )
+        : privateAppJson({ error: "not_found" }, 404);
+    }
+    const status =
+      outcome.state === "executed"
+        ? 200
+        : outcome.state === "execution_uncertain"
+          ? 502
+          : 422;
+    return privateAppJson(
+      { approval: productionScheduleApprovalProjection(finalized.request) },
+      status,
+    );
+  } catch {
+    // A verified private broker may already have created the assignment. Leave
+    // the claim intact so the cron sweep makes it reconciliation work instead
+    // of inviting a second append-only write.
+    return privateAppJson(
+      { error: "production_schedule_execution_finalization_unavailable" },
+      502,
+    );
+  }
+}
+
+async function finalizeProductionScheduleBrokerFailure(
+  env: AppEnv,
+  auth: AuthContext,
+  request: Parameters<typeof executeProductionScheduleApproval>[1],
+  decisionIdempotencyKey: string,
+  error: unknown,
+): Promise<Response> {
+  const errorCode =
+    error instanceof ProductionScheduleApprovalBrokerError &&
+    error.code === "production_schedule_broker_unavailable"
+      ? "production_schedule_broker_unavailable"
+      : "production_schedule_broker_response_unverified";
+  try {
+    const finalized = await finalizeProductionScheduleApprovalExecution(env, {
+      tenantId: auth.session.tenant_id,
+      requestId: request.production_schedule_approval_id,
+      decisionIdempotencyKey,
+      state: "execution_uncertain",
+      hermesRunId: request.run_id,
+      errorCode,
+      now: new Date().toISOString(),
+    });
+    if (finalized.kind === "finalized") {
+      return privateAppJson(
+        {
+          error: "execution_uncertain",
+          approval: productionScheduleApprovalProjection(finalized.request),
+        },
+        502,
+      );
+    }
+    return finalized.request
+      ? privateAppJson(
+          {
+            error: "production_schedule_approval_state_changed",
+            approval: productionScheduleApprovalProjection(finalized.request),
+          },
+          409,
+        )
+      : privateAppJson({ error: "not_found" }, 404);
+  } catch {
+    return privateAppJson(
+      { error: "production_schedule_execution_finalization_unavailable" },
+      502,
+    );
+  }
+}
+
+async function rejectProductionScheduleApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  requestId: string,
+): Promise<Response> {
+  const identity = productionScheduleApprovalDecisionIdentity(env, auth);
+  if (!identity.ok)
+    return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const decisionIdempotencyKey = idempotencyKey(req);
+  if (!decisionIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const decision = parseRejectionDecision(parsed.value);
+  if (!decision)
+    return privateAppJson(
+      { error: "invalid_production_schedule_approval_decision" },
+      400,
+    );
+  try {
+    const denied = await denyProductionScheduleApprovalRequest(env, {
+      tenantId: auth.session.tenant_id,
+      requestId,
+      expectedVersion: decision.version,
+      decisionIdempotencyKey,
+      approvedByUserId: auth.session.user_id,
+      approvedByFrappeUser: identity.frappeUserId,
+      rejectionReason: decision.reason,
+      now: new Date().toISOString(),
+    });
+    if (denied.kind === "denied")
+      return privateAppJson({
+        approval: productionScheduleApprovalProjection(denied.request),
+      });
+    return productionScheduleDecisionResultResponse(denied);
+  } catch {
+    return privateAppJson(
+      { error: "production_schedule_approval_store_unavailable" },
+      502,
+    );
+  }
+}
+
+async function reconcileProductionScheduleApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  requestId: string,
+): Promise<Response> {
+  const identity = productionScheduleApprovalDecisionIdentity(env, auth);
+  if (!identity.ok)
+    return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const reconciliation = parseReconciliation(parsed.value);
+  if (!reconciliation)
+    return privateAppJson(
+      { error: "invalid_production_schedule_reconciliation" },
+      400,
+    );
+  try {
+    const result = await reconcileProductionScheduleApprovalUncertainty(env, {
+      tenantId: auth.session.tenant_id,
+      requestId,
+      expectedVersion: reconciliation.version,
+      reconciledByUserId: auth.session.user_id,
+      reconciledByFrappeUser: identity.frappeUserId,
+      outcome: reconciliation.outcome,
+      evidence: reconciliation.evidence,
+      now: new Date().toISOString(),
+    });
+    if (result.kind === "reconciled")
+      return privateAppJson({
+        approval: productionScheduleApprovalProjection(result.request),
+      });
+    if (result.kind === "already_reconciled") {
+      return privateAppJson({
+        approval: productionScheduleApprovalProjection(result.request),
+        replayed: true,
+      });
+    }
+    if (result.kind === "missing")
+      return privateAppJson({ error: "not_found" }, 404);
+    if (result.kind === "not_uncertain") {
+      return privateAppJson(
+        {
+          error: "production_schedule_approval_not_uncertain",
+          approval: productionScheduleApprovalProjection(result.request),
+        },
+        409,
+      );
+    }
+    return privateAppJson(
+      {
+        error: "production_schedule_approval_version_conflict",
+        approval: productionScheduleApprovalProjection(result.request),
+      },
+      409,
+    );
+  } catch {
+    return privateAppJson(
+      { error: "production_schedule_approval_store_unavailable" },
+      502,
+    );
+  }
+}
+
 async function prepareLeadTriageApproval(
   req: Request,
   env: AppEnv,
@@ -1270,6 +1777,126 @@ function officeRole(auth: AuthContext): boolean {
   return auth.session.role === "owner" || auth.session.role === "ops";
 }
 
+async function validateProductionSchedulePreparation(
+  env: AppEnv,
+  auth: AuthContext,
+  input: NonNullable<ReturnType<typeof parseProductionScheduleApprovalPreparation>>,
+): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+  try {
+    const runway = await buildProductionRunwayReadModel(env, auth);
+    const job = runway.jobs.find((candidate) => candidate.id === input.roofJobId);
+    if (
+      !runway.allowed_actions.includes("production_schedule_approval.prepare") ||
+      !job ||
+      !job.scheduling_preparation_allowed
+    ) {
+      return {
+        ok: false,
+        error: "production_schedule_not_eligible",
+        status: 409,
+      };
+    }
+    if (!runway.crews.some((crew) => crew.id === input.crewProfileId)) {
+      return {
+        ok: false,
+        error: "active_crew_profile_required",
+        status: 409,
+      };
+    }
+    if (job.assignment) {
+      if (
+        input.supersedesAssignmentId !== job.assignment.id ||
+        input.correctionReason === null
+      ) {
+        return {
+          ok: false,
+          error: "production_schedule_supersede_required",
+          status: 409,
+        };
+      }
+    } else if (
+      input.supersedesAssignmentId !== null ||
+      input.correctionReason !== null
+    ) {
+      return {
+        ok: false,
+        error: "production_schedule_supersede_invalid",
+        status: 409,
+      };
+    }
+    return { ok: true };
+  } catch {
+    return {
+      ok: false,
+      error: "production_schedule_preparation_unavailable",
+      status: 502,
+    };
+  }
+}
+
+function productionScheduleApprovalDecisionIdentity(
+  env: AppEnv,
+  auth: AuthContext,
+):
+  | {
+      ok: true;
+      config: NonNullable<
+        ReturnType<typeof productionScheduleApprovalDecisionConfig>
+      >;
+      frappeUserId: string;
+    }
+  | { ok: false; error: string; status: number } {
+  if (auth.session.role !== "owner")
+    return { ok: false, error: "owner_role_required", status: 403 };
+  const config = productionScheduleApprovalDecisionConfig(env);
+  if (!config) {
+    return {
+      ok: false,
+      error: "production_schedule_approver_not_configured",
+      status: 503,
+    };
+  }
+  const frappeUserId = auth.session.frappe_user_id?.trim() ?? "";
+  if (!frappeUserId || frappeUserId !== config.approverId) {
+    return { ok: false, error: "configured_approver_required", status: 403 };
+  }
+  if (!sessionIsRecentForProductionScheduleApproval(
+    auth.session.session_created_at,
+    config,
+  )) {
+    return { ok: false, error: "recent_session_required", status: 403 };
+  }
+  return { ok: true, config, frappeUserId };
+}
+
+function productionScheduleApprovalBrokerDecisionIdentity(
+  env: AppEnv,
+  auth: AuthContext,
+):
+  | {
+      ok: true;
+      decision: NonNullable<
+        ReturnType<typeof productionScheduleApprovalDecisionConfig>
+      >;
+      broker: NonNullable<
+        ReturnType<typeof productionScheduleApprovalBrokerConfig>
+      >;
+      frappeUserId: string;
+    }
+  | { ok: false; error: string; status: number } {
+  const decision = productionScheduleApprovalDecisionIdentity(env, auth);
+  if (!decision.ok) return decision;
+  const broker = productionScheduleApprovalBrokerConfig(env);
+  if (!broker) {
+    return {
+      ok: false,
+      error: "production_schedule_broker_not_configured",
+      status: 503,
+    };
+  }
+  return { ok: true, decision: decision.config, broker, frappeUserId: decision.frappeUserId };
+}
+
 function quoteRevisionApprovalBrokerDecisionIdentity(
   env: AppEnv,
   auth: AuthContext,
@@ -1435,6 +2062,56 @@ function quoteRevisionDecisionResultResponse(
   );
 }
 
+function productionScheduleDecisionResultResponse(
+  result:
+    | Exclude<
+        Awaited<ReturnType<typeof claimProductionScheduleApprovalExecution>>,
+        { kind: "claimed" }
+      >
+    | Exclude<
+        Awaited<ReturnType<typeof denyProductionScheduleApprovalRequest>>,
+        { kind: "denied" }
+      >,
+): Response {
+  if (result.kind === "missing")
+    return privateAppJson({ error: "not_found" }, 404);
+  if (result.kind === "expired") {
+    return privateAppJson(
+      {
+        error: "production_schedule_approval_expired",
+        approval: productionScheduleApprovalProjection(result.request),
+      },
+      410,
+    );
+  }
+  if (result.kind === "version_conflict") {
+    return privateAppJson(
+      {
+        error: "production_schedule_approval_version_conflict",
+        approval: productionScheduleApprovalProjection(result.request),
+      },
+      409,
+    );
+  }
+  if (result.kind === "replayed") {
+    const status = result.request.state === "executing" ? 202 : 200;
+    return privateAppJson(
+      {
+        approval: productionScheduleApprovalProjection(result.request),
+        replayed: true,
+      },
+      status,
+    );
+  }
+  return privateAppJson(
+    {
+      error: "production_schedule_approval_already_decided",
+      approval: productionScheduleApprovalProjection(result.request),
+    },
+    409,
+  );
+}
+
 function approvalReadEnvelope(
   env: AppEnv,
   auth: AuthContext,
@@ -1459,6 +2136,20 @@ function quoteRevisionApprovalReadEnvelope(
     read_model_generated_at: new Date().toISOString(),
     permissions: auth.permissions,
     allowed_actions: quoteRevisionApprovalAllowedActions(env, auth),
+    ...body,
+  };
+}
+
+function productionScheduleApprovalReadEnvelope(
+  env: AppEnv,
+  auth: AuthContext,
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    version: 1,
+    read_model_generated_at: new Date().toISOString(),
+    permissions: auth.permissions,
+    allowed_actions: productionScheduleApprovalAllowedActions(env, auth),
     ...body,
   };
 }
@@ -1497,6 +2188,27 @@ function quoteRevisionApprovalAllowedActions(
     actions.push("quote_revision_approval.reconcile");
   if (quoteRevisionApprovalBrokerDecisionIdentity(env, auth).ok)
     actions.push("quote_revision_approval.approve");
+  return actions;
+}
+
+function productionScheduleApprovalAllowedActions(
+  env: AppEnv,
+  auth: AuthContext,
+): string[] {
+  if (auth.session.role !== "owner") return [];
+  const actions = ["production_schedule_approval.read"];
+  if (productionScheduleApprovalDecisionIdentity(env, auth).ok) {
+    actions.push(
+      "production_schedule_approval.reject",
+      "production_schedule_approval.reconcile",
+    );
+  }
+  if (productionScheduleApprovalBrokerDecisionIdentity(env, auth).ok) {
+    actions.push(
+      "production_schedule_approval.prepare",
+      "production_schedule_approval.approve",
+    );
+  }
   return actions;
 }
 
@@ -1540,6 +2252,75 @@ function parseQuoteRevisionApprovalPreparation(value: unknown): {
 
 function quoteRevisionRequestText(correctionReason: string): string {
   return `Prepare an append-only Draft Customer Quote revision shell after human review. Reason: ${correctionReason}`;
+}
+
+function parseProductionScheduleApprovalPreparation(value: unknown): {
+  roofJobId: string;
+  crewProfileId: string;
+  scheduledStart: string;
+  scheduledEnd: string | null;
+  supersedesAssignmentId: string | null;
+  correctionReason: string | null;
+} | null {
+  const requiredKeys = [
+    "roof_job_id",
+    "crew_profile_id",
+    "scheduled_start",
+    "scheduled_end",
+    "supersedes_assignment_id",
+    "correction_reason",
+  ];
+  if (
+    !isRecord(value) ||
+    !onlyKeys(value, requiredKeys) ||
+    !requiredKeys.every((key) => Object.hasOwn(value, key))
+  ) {
+    return null;
+  }
+  const roofJobId = idText(value.roof_job_id, 1, 140);
+  const crewProfileId = idText(value.crew_profile_id, 1, 140);
+  const scheduledStart = normalizedIso(value.scheduled_start);
+  const scheduledEnd =
+    value.scheduled_end === null ? null : normalizedIso(value.scheduled_end);
+  const supersedesAssignmentId =
+    value.supersedes_assignment_id === null
+      ? null
+      : idText(value.supersedes_assignment_id, 1, 140);
+  const correctionReason =
+    value.correction_reason === null
+      ? null
+      : boundedText(value.correction_reason, 1, 2_000);
+  if (
+    !roofJobId ||
+    !crewProfileId ||
+    !scheduledStart ||
+    (value.scheduled_end !== null && !scheduledEnd) ||
+    (value.supersedes_assignment_id !== null && !supersedesAssignmentId) ||
+    (value.correction_reason !== null && !correctionReason) ||
+    (scheduledEnd !== null && Date.parse(scheduledEnd) <= Date.parse(scheduledStart)) ||
+    (supersedesAssignmentId === null) !== (correctionReason === null)
+  ) {
+    return null;
+  }
+  return {
+    roofJobId,
+    crewProfileId,
+    scheduledStart,
+    scheduledEnd,
+    supersedesAssignmentId,
+    correctionReason,
+  };
+}
+
+function productionScheduleRequestText(
+  input: NonNullable<ReturnType<typeof parseProductionScheduleApprovalPreparation>>,
+): string {
+  const timing = input.scheduledEnd
+    ? `${input.scheduledStart} to ${input.scheduledEnd}`
+    : `starting ${input.scheduledStart}`;
+  return input.supersedesAssignmentId
+    ? `Prepare an append-only Production Job Assignment correction for ${input.crewProfileId} ${timing}. Reason: ${input.correctionReason}`
+    : `Prepare an append-only Production Job Assignment for ${input.crewProfileId} ${timing}.`;
 }
 
 function parseExpectedVersion(value: unknown): number | null {
@@ -1603,6 +2384,14 @@ function decodedQuoteRevisionApprovalId(value: string): string | null {
     : null;
 }
 
+function decodedProductionScheduleApprovalId(value: string): string | null {
+  const decoded = decodedPathSegment(value);
+  return decoded &&
+    /^production-schedule-approval:[A-Za-z0-9_-]{16,64}$/.test(decoded)
+    ? decoded
+    : null;
+}
+
 function parsedListLimit(value: string | null): number {
   if (value === null || value === "") return 50;
   const parsed = Number(value);
@@ -1618,6 +2407,13 @@ function idText(value: unknown, min: number, max: number): string | null {
     new RegExp(`^[A-Za-z0-9._:-]{${min},${max}}$`).test(value)
     ? value
     : null;
+}
+
+function normalizedIso(value: unknown): string | null {
+  if (typeof value !== "string" || value.length < 1 || value.length > 80)
+    return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 }
 
 function boundedText(value: unknown, min: number, max: number): string | null {
@@ -1655,6 +2451,23 @@ function quoteRevisionBrokerPrepareError(error: unknown): string {
 function quoteRevisionBrokerPrepareStatus(error: unknown): number {
   return error instanceof QuoteRevisionApprovalBrokerError &&
     error.code === "quote_revision_broker_not_configured"
+    ? 503
+    : 502;
+}
+
+function productionScheduleBrokerPrepareError(error: unknown): string {
+  if (
+    error instanceof ProductionScheduleApprovalBrokerError &&
+    error.code === "production_schedule_broker_not_configured"
+  ) {
+    return error.code;
+  }
+  return "production_schedule_broker_unavailable";
+}
+
+function productionScheduleBrokerPrepareStatus(error: unknown): number {
+  return error instanceof ProductionScheduleApprovalBrokerError &&
+    error.code === "production_schedule_broker_not_configured"
     ? 503
     : 502;
 }

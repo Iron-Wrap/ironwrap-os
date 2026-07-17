@@ -10,6 +10,7 @@
     "start": "node src/server.mjs",
     "approval-broker": "node src/approval-broker.mjs",
     "quote-revision-approval-broker": "node src/quote-revision-approval-broker.mjs",
+    "production-schedule-approval-broker": "node src/production-schedule-approval-broker.mjs",
     "test": "node --test"
   },
   "dependencies": {

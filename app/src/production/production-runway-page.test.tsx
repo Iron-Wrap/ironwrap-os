@@ -46,7 +46,7 @@ const ownerSession = {
     currency: "CAD",
   },
   permissions: ["jobs:read:any"],
-  allowed_actions: ["job.read", "production.read"],
+  allowed_actions: ["job.read", "production.read", "production_schedule_approval.prepare"],
   csrf_token: "csrf",
   session_expires_at: "2026-07-16T13:00:00.000Z",
   source_updated_at: null,
@@ -78,12 +78,14 @@ function job(
       lane === "needs_assignment"
         ? null
         : {
+            id: `assignment:${id}`,
             type: "Production",
             status: lane === "blocked" ? "Blocked" : "Assigned",
             scheduled_start: lane === "scheduled" ? "2026-07-17T15:00:00.000Z" : null,
             scheduled_end: null,
           },
     lane,
+    scheduling_preparation_allowed: id === "JOB-D",
     next_action:
       lane === "ready_for_review"
         ? "Review for scheduling; this view does not dispatch work"
@@ -112,7 +114,7 @@ function model(overrides: Partial<ProductionRunwayResponse> = {}): ProductionRun
     read_model_generated_at: "2026-07-16T12:00:01.000Z",
     stale_fields: [],
     permissions: ["jobs:read:any"],
-    allowed_actions: ["job.read", "production.read"],
+    allowed_actions: ["job.read", "production.read", "production_schedule_approval.prepare"],
     partial_sources: [],
     summary: {
       active_jobs: 5,
@@ -129,6 +131,7 @@ function model(overrides: Partial<ProductionRunwayResponse> = {}): ProductionRun
       job("JOB-D", "IW-1004", "ready_for_review"),
       job("JOB-E", "IW-1005", "needs_verification"),
     ],
+    crews: [{ id: "crew:install", name: "Install team" }],
     ...overrides,
   };
 }
@@ -150,7 +153,7 @@ describe("ProductionRunwayPage", () => {
     vi.mocked(loadProductionRunway).mockResolvedValue(model());
   });
 
-  it("renders source-backed operating lanes without adding a scheduling or dispatch control", async () => {
+  it("keeps the runway read-only and links only eligible jobs to a schedule request", async () => {
     renderRunway();
 
     await screen.findByRole("heading", { name: "Production runway" });
@@ -166,6 +169,12 @@ describe("ProductionRunwayPage", () => {
       "href",
       "/jobs/JOB-A",
     );
+    expect(
+      screen.getByRole("link", { name: "Prepare schedule request for IW-1004" }),
+    ).toHaveAttribute("href", "/production/schedule/JOB-D");
+    expect(
+      screen.queryByRole("link", { name: "Prepare schedule request for IW-1001" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /schedule|dispatch/i })).not.toBeInTheDocument();
   });
 

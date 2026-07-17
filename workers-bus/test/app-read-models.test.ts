@@ -147,6 +147,20 @@ function envWithLeadTriageBroker(): AppEnv {
   } as AppEnv;
 }
 
+function envWithProductionScheduleBroker(): AppEnv {
+  return {
+    ...env(),
+    APP_ALLOW_INSECURE_LOCAL: "true",
+    APP_PRODUCTION_SCHEDULE_BROKER_URL: "http://127.0.0.1:8790",
+    APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID: "production-schedule-test-key",
+    PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET: "production-schedule-shared-secret-for-test-0001",
+    APP_PRODUCTION_SCHEDULE_APPROVER_ID: "owner@example.com",
+    APP_PRODUCTION_SCHEDULE_MAX_SESSION_AGE_SECONDS: "900",
+    APP_PRODUCTION_SCHEDULE_BROKER_TIMEOUT_MS: "5000",
+    APP_PRODUCTION_SCHEDULE_EXECUTION_LEASE_SECONDS: "45",
+  } as AppEnv;
+}
+
 function installFrappeMock(sourceOverrides: Record<string, Array<Record<string, unknown>>> = {}) {
   const original = globalThis.fetch;
   const requests: Array<{ doctype: string; fields: string[]; filters: unknown[]; offset: number; limit: number }> = [];
@@ -176,6 +190,10 @@ function rowsFor(doctype: string): Array<Record<string, unknown>> {
     name: "CREW-MEMBER-1", parent: "CREW-1", parenttype: "Crew Profile", parentfield: "members",
     crew_user: "crew@example.com", crew_role: "Installer", active: 1, joined_on: "2026-01-01",
     left_on: null, certification_summary: "private", notes: "private", modified: MODIFIED,
+  }];
+  if (doctype === "Crew Profile") return [{
+    name: "CREW-1", crew_profile_id: "crew-1", crew_name: "Northside Metal",
+    status: "Active", primary_lead: "private@example.com", notes: "private", modified: MODIFIED,
   }];
   if (doctype === "Roofing Property") return jobs.map((row, index) => ({
     name: row.roofing_property,
@@ -501,6 +519,58 @@ test("production runway is an office-only, bounded read that never treats a gate
     await assert.rejects(
       async () => await buildProductionRunwayReadModel(env(), auth("field", "crew@example.com")),
       /owner_scope_required/,
+    );
+  } finally {
+    mock.restore();
+  }
+});
+
+test("production runway grants schedule preparation only to the configured owner with active bounded crews", async () => {
+  const readyGates = ["JOB-B", "JOB-C"].flatMap((roofJob) =>
+    ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"].map((gate) => ({
+      name: `GATE-${roofJob}-${gate}`,
+      roof_job: roofJob,
+      gate,
+      state: "Ready",
+      modified: MODIFIED,
+    })),
+  );
+  const mock = installFrappeMock({
+    "Job Assignment": [{
+      name: "ASSIGN-C", roof_job: "JOB-C", assignment_type: "Production", status: "Assigned",
+      scheduled_start: "2026-07-18T08:00:00.000Z", scheduled_end: null, modified: MODIFIED,
+    }],
+    "Production Gate State": readyGates,
+    "Supplier Order": [],
+  });
+  try {
+    const ownerModel = await buildProductionRunwayReadModel(
+      envWithProductionScheduleBroker(),
+      auth("owner", "owner@example.com"),
+    );
+    assert.deepEqual(ownerModel.crews, [{ id: "CREW-1", name: "Northside Metal" }]);
+    assert.ok(ownerModel.allowed_actions.includes("production_schedule_approval.prepare"));
+    assert.equal(
+      ownerModel.jobs.find((job) => job.id === "JOB-B")?.scheduling_preparation_allowed,
+      true,
+    );
+    assert.equal(
+      ownerModel.jobs.find((job) => job.id === "JOB-C")?.scheduling_preparation_allowed,
+      true,
+    );
+    assert.equal(
+      JSON.stringify(ownerModel).includes("private@example.com"),
+      false,
+    );
+
+    const opsModel = await buildProductionRunwayReadModel(
+      envWithProductionScheduleBroker(),
+      auth("ops", "ops@example.com"),
+    );
+    assert.deepEqual(opsModel.crews, []);
+    assert.equal(
+      opsModel.allowed_actions.includes("production_schedule_approval.prepare"),
+      false,
     );
   } finally {
     mock.restore();

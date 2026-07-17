@@ -199,6 +199,20 @@ session, expected version, and stable idempotency key. It is not queued offline 
 becomes a visible no-retry reconciliation state whose evidence can be appended without reopening the write.
 Remote D1/Frappe migration, private broker reachability,
 live source freshness, real browser/device operation, and the phone acceptance gate remain open.
+
+Production Runway is likewise still a source-backed read, but an eligible owner can now enter a
+dedicated local `/production/schedule/:jobId` preparation page. It is shown only when the Worker
+has current complete non-blocking scheduling gates, complete active-assignment coverage, a bounded
+active Crew Profile list, and the distinct `production_schedule_approval.prepare` grant. The page
+submits only job, crew profile, bounded start/end, and optional supersede/reason; it stages an
+append-only approval request rather than scheduling or dispatching directly. The Worker re-reads
+that source condition, the separate signed `production-controller` broker reruns the Job Assignment
+dry run and gate check before a receipt-bound write, and the D1 projection excludes tools, receipts,
+raw args, gate detail, and broker output. A correction is a new superseding assignment, never an
+edit. The final Frappe document-validation fence locks the Roof Job, rejects
+new `Needs Review`/`Shortage` material exceptions, and accepts a correction
+only when it supersedes the one logical current Production assignment. This is local/application and mocked-broker proof only: remote migration, private broker
+deployment, Frappe execution, authenticated-browser, and owner operator acceptance remain open.
 Beats: JN Insights ("AWFUL" per their own users) and gives the agent layer a human surface
 nobody in the market has: governed AI with a one-thumb approval queue.
 Proof gate: "what is blocked and why" answered in one tap in under 3 seconds; one real

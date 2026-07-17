@@ -27,11 +27,13 @@ function payload() {
         service_type: "Roofing",
         status: "In Production",
         assignment: {
+          id: "assignment:iw-1001-production",
           type: "Production",
           status: "Assigned",
           scheduled_start: null,
           scheduled_end: null,
         },
+        scheduling_preparation_allowed: true,
         lane: "ready_for_review",
         next_action: "Review for scheduling; this view does not dispatch work",
         gate_coverage: "complete",
@@ -47,6 +49,7 @@ function payload() {
         material_attention: [],
       },
     ],
+    crews: [{ id: "crew:metal-a", name: "Metal A" }],
   };
 }
 

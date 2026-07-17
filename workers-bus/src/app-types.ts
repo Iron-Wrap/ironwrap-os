@@ -44,6 +44,16 @@ export type AppEnv = Env & {
   APP_QUOTE_REVISION_BROKER_TIMEOUT_MS?: string;
   APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS?: string;
   QUOTE_REVISION_BROKER_SHARED_SECRET?: string;
+  // Production scheduling is a separate high-consequence authority from lead
+  // triage and commercial quote revisions. Its broker identity, approver, and
+  // recent-session limit must never inherit another mutation rail by default.
+  APP_PRODUCTION_SCHEDULE_BROKER_URL?: string;
+  APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID?: string;
+  APP_PRODUCTION_SCHEDULE_APPROVER_ID?: string;
+  APP_PRODUCTION_SCHEDULE_MAX_SESSION_AGE_SECONDS?: string;
+  APP_PRODUCTION_SCHEDULE_BROKER_TIMEOUT_MS?: string;
+  APP_PRODUCTION_SCHEDULE_EXECUTION_LEASE_SECONDS?: string;
+  PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET?: string;
   ERPNEXT_BASE_URL?: string;
   ERPNEXT_API_KEY?: string;
   ERPNEXT_API_SECRET?: string;

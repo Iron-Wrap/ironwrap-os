@@ -15,7 +15,6 @@ export async function loadToday(
   session: AuthenticatedSession,
   fetcher: typeof fetch = fetch,
 ): Promise<TodayResponse> {
-  const key = cacheKey(session, "today");
   try {
     const model = await apiRequest({
       path: "/api/v1/today",
@@ -23,11 +22,18 @@ export async function loadToday(
       fetcher,
       deviceProof: proofFor(session),
     });
-    await cacheFieldModel(key, model, model.source_updated_at);
+    await cacheToday(session, model);
     return model;
   } catch (error) {
-    return await offlineModel(key, todayResponseSchema, error);
+    return await offlineModel(cacheKey(session, "today"), todayResponseSchema, error);
   }
+}
+
+export async function cacheToday(
+  session: AuthenticatedSession,
+  model: TodayResponse,
+): Promise<void> {
+  await cacheFieldModel(cacheKey(session, "today"), model, model.source_updated_at);
 }
 
 export async function loadJob(

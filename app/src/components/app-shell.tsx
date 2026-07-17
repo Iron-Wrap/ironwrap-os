@@ -15,9 +15,9 @@ import { Button } from "./ui/button";
 import { SystemStatus } from "./system-status";
 
 const activeClasses: Record<NavigationItem["activeColor"], string> = {
-  accent: "bg-accent text-accent-foreground",
-  ok: "bg-ok-soft text-ok",
-  warning: "bg-warning-soft text-warning",
+  accent: "bg-accent !text-accent-foreground",
+  ok: "bg-ok-soft !text-ok",
+  warning: "bg-warning-soft !text-warning",
 };
 
 export function AppShell() {
@@ -47,6 +47,12 @@ export function AppShell() {
 
   return (
     <div className="min-h-dvh bg-background">
+      <a
+        href="#main-content"
+        className="fixed left-4 top-4 z-[60] -translate-y-24 rounded-md bg-foreground px-4 py-3 font-bold text-background transition-transform focus:translate-y-0"
+      >
+        Skip to main content
+      </a>
       <header className="safe-top sticky top-0 z-40 border-b bg-surface/95 backdrop-blur-lg">
         <div className="mx-auto flex min-h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
           <Link to="/today" className="flex min-w-0 items-center gap-3 rounded-md">
@@ -87,7 +93,11 @@ export function AppShell() {
             ))}
           </nav>
         </aside>
-        <main id="main-content" className="min-w-0 px-4 py-6 pb-32 sm:px-6 sm:py-8 lg:pb-10">
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="min-w-0 px-4 py-6 pb-32 sm:px-6 sm:py-8 lg:pb-10"
+        >
           <Outlet />
         </main>
       </div>

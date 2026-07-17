@@ -1,5 +1,6 @@
 import { Cloud, CloudOff, Download, RefreshCw, ShieldAlert, UploadCloud } from "lucide-react";
-import { useRegisterSW } from "virtual:pwa-register/react";
+import { registerSW } from "virtual:pwa-register";
+import { useEffect, useRef, useState } from "react";
 
 import { useInstallPrompt } from "../hooks/use-install-prompt";
 import { useOnlineStatus } from "../hooks/use-online-status";
@@ -23,16 +24,12 @@ export function SystemStatus() {
   const canSync = online && Boolean(csrfToken);
   const storage = useStorageDurability();
   const storageWarning = storage.checked ? storage.warning : undefined;
+  const storageNeedsEscalation =
+    Boolean(storageWarning) &&
+    (outbox.pending > 0 || outbox.uploading > 0 || outbox.needsAttention > 0);
   useAppOpenOutboxSync(outboxPrincipal, csrfToken, deviceProof);
-  const {
-    offlineReady: [offlineReady, setOfflineReady],
-    needRefresh: [needRefresh, setNeedRefresh],
-    updateServiceWorker,
-  } = useRegisterSW({
-    onRegisterError(error) {
-      console.error("Service worker registration failed", error);
-    },
-  });
+  const { offlineReady, needRefresh, setNeedRefresh, updateServiceWorker } =
+    useDeferredServiceWorkerRegistration();
 
   const hasBanner =
     !online ||
@@ -40,14 +37,13 @@ export function SystemStatus() {
     outbox.uploading > 0 ||
     outbox.needsAttention > 0 ||
     outbox.unclaimed > 0 ||
-    Boolean(storageWarning) ||
-    needRefresh ||
-    offlineReady;
+    storageNeedsEscalation ||
+    needRefresh;
 
   return (
     <>
       <div
-        className="mx-auto flex max-w-7xl flex-wrap items-center gap-2 px-4 pb-3 text-xs font-bold sm:px-6"
+        className="mx-auto flex max-w-7xl flex-nowrap items-center gap-2 overflow-x-auto px-4 pb-3 text-xs font-bold sm:flex-wrap sm:overflow-visible sm:px-6"
         aria-label="App status"
       >
         <StatusPill
@@ -78,6 +74,11 @@ export function SystemStatus() {
             Device storage warning
           </StatusPill>
         ) : null}
+        {offlineReady ? (
+          <StatusPill tone="info" icon={<Cloud aria-hidden="true" />}>
+            Offline shell ready
+          </StatusPill>
+        ) : null}
         {install.canInstall ? (
           <Button size="compact" variant="outline" onClick={() => void install.promptInstall()}>
             <Download aria-hidden="true" />
@@ -92,7 +93,7 @@ export function SystemStatus() {
             "border-b px-4 py-3 text-sm sm:px-6",
             outbox.needsAttention > 0
               ? "border-danger/30 bg-danger-soft text-danger"
-              : !online || outbox.uploading > 0 || Boolean(storageWarning)
+              : !online || outbox.uploading > 0 || storageNeedsEscalation
                 ? "border-warning/30 bg-warning-soft text-warning"
                 : "border-info/30 bg-info-soft text-info",
           )}
@@ -111,19 +112,15 @@ export function SystemStatus() {
                       ? "Reconnect and verify this sign-in before syncing. Every saved item remains on this device."
                       : outbox.uploading > 0
                         ? "Syncing now. Keep IronWrap OS open until the server verifies every item."
-                        : storageWarning === "low_storage"
+                        : storageNeedsEscalation && storageWarning === "low_storage"
                           ? "Device storage is low. Existing work stays intact; free space before a large photo run."
-                          : storageWarning === "persistence_denied"
+                          : storageNeedsEscalation && storageWarning === "persistence_denied"
                             ? "This device did not grant durable storage. Capture still works, but sync saved work promptly."
-                            : storageWarning === "check_failed"
+                            : storageNeedsEscalation && storageWarning === "check_failed"
                               ? "Device storage durability could not be verified. Capture still works; sync saved work promptly."
                               : needRefresh
                                 ? "A safer, newer version of IronWrap OS is ready."
-                                : storage.checked && storage.persistent
-                                  ? "Offline shell ready. This device granted durable storage for saved field work."
-                                  : storage.checked && !storage.supported
-                                    ? "The app shell is available offline. This browser cannot report storage durability, so sync promptly."
-                                    : "The app shell is available offline. Save and sync field work as soon as signal returns."}
+                                : "Saved work needs attention before you continue."}
             </p>
             <div className="flex flex-wrap gap-2">
               {canSync && outbox.pending > 0 && outbox.uploading === 0 ? (
@@ -151,17 +148,44 @@ export function SystemStatus() {
                   Later
                 </Button>
               ) : null}
-              {offlineReady && !needRefresh ? (
-                <Button size="compact" variant="ghost" onClick={() => setOfflineReady(false)}>
-                  Got it
-                </Button>
-              ) : null}
             </div>
           </div>
         </div>
       ) : null}
     </>
   );
+}
+
+const SERVICE_WORKER_START_DELAY_MS = 1_000;
+
+function useDeferredServiceWorkerRegistration() {
+  const [offlineReady, setOfflineReady] = useState(false);
+  const [needRefresh, setNeedRefresh] = useState(false);
+  const updateServiceWorkerRef = useRef<(reloadPage?: boolean) => Promise<void>>(async () => {});
+
+  useEffect(() => {
+    // The verified run sheet is the first operationally useful field view. Register the
+    // worker just after it has a chance to commit, rather than contending with its first
+    // network and render cycle. Existing installed workers still control immediately.
+    const timeout = window.setTimeout(() => {
+      updateServiceWorkerRef.current = registerSW({
+        immediate: true,
+        onOfflineReady: () => setOfflineReady(true),
+        onNeedRefresh: () => setNeedRefresh(true),
+        onRegisterError(error) {
+          console.error("Service worker registration failed", error);
+        },
+      });
+    }, SERVICE_WORKER_START_DELAY_MS);
+    return () => window.clearTimeout(timeout);
+  }, []);
+
+  return {
+    offlineReady,
+    needRefresh,
+    setNeedRefresh,
+    updateServiceWorker: (reloadPage?: boolean) => updateServiceWorkerRef.current(reloadPage),
+  };
 }
 
 function StatusPill({
@@ -182,7 +206,7 @@ function StatusPill({
   return (
     <span
       className={cn(
-        "inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3",
+        "inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-full border px-3",
         tones[tone],
       )}
     >

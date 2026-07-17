@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
-import { useSession } from "../auth/session-context";
+import { useInitialToday, useSession } from "../auth/session-context";
 import { getDeviceSecret } from "../auth/device-credential";
 import { OutboxStateBadge } from "../components/outbox-state-badge";
 import { RoleGuard } from "../components/role-guard";
@@ -28,6 +28,7 @@ import { flushOutbox } from "../storage/outbox-processor";
 import type { OutboxAction } from "../storage/outbox-types";
 import {
   hasCachedJobPacket,
+  cacheToday,
   loadJob,
   loadProofPage,
   loadToday,
@@ -80,6 +81,7 @@ type FieldDateOptions = { locale?: string; timeZone?: string };
 
 export function TodayPage() {
   const session = useSession();
+  const initialToday = useInitialToday();
   const queryClient = useQueryClient();
   const [packetAvailability, setPacketAvailability] = useState<Record<string, PacketAvailability>>(
     {},
@@ -88,8 +90,21 @@ export function TodayPage() {
   const query = useQuery({
     queryKey: ["today", session.tenant.id, session.user.id],
     queryFn: () => loadToday(session),
+    ...(initialToday
+      ? {
+          initialData: initialToday,
+          staleTime: 30_000,
+        }
+      : {}),
   });
   const today = query.data;
+
+  useEffect(() => {
+    if (!initialToday) return;
+    void cacheToday(session, initialToday).catch((error: unknown) => {
+      console.error("Could not cache the initial Field Companion run sheet", error);
+    });
+  }, [initialToday, session]);
 
   useEffect(() => {
     const retryPacketPreparation = () => {

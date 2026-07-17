@@ -67,48 +67,61 @@ export async function fetchSession(fetcher: typeof fetch = fetch): Promise<Sessi
       fetcher,
       deviceProof: getDeviceSecret,
     });
-    if (session.authenticated) {
-      const expiresAt = Date.parse(session.session_expires_at);
-      if (Number.isFinite(expiresAt) && expiresAt > Date.now()) {
-        await setMeta(SNAPSHOT_KEY, {
-          session: { ...session, csrf_token: "offline-session-no-csrf" },
-          expiresAt,
-        } satisfies OfflineSessionSnapshot);
-      }
-    } else {
-      const snapshot = await getMeta<OfflineSessionSnapshot>(SNAPSHOT_KEY);
-      await clearSessionSnapshot();
-      if (snapshot?.session.user.role !== "field") return session;
-      await clearDeviceSecret();
-      return {
-        ...session,
-        stale_fields: [...new Set([...session.stale_fields, "field_device_repair_required"])],
-      };
-    }
-    return session;
+    return await persistOrInvalidateSession(session);
   } catch (error) {
-    if (!isRetryableApiError(error)) throw error;
-    const snapshot = await getMeta<OfflineSessionSnapshot>(SNAPSHOT_KEY);
-    if (!snapshot || snapshot.expiresAt <= Date.now()) {
-      await clearSessionSnapshot();
-      throw error;
-    }
-    const parsed = sessionResponseSchema.safeParse(snapshot.session);
-    if (!parsed.success || !parsed.data.authenticated) {
-      await clearSessionSnapshot();
-      throw new ApiError({
-        status: 0,
-        code: "offline_session_invalid",
-        message: "The saved sign-in could not be verified. Reconnect and sign in again.",
-        cause: parsed.success ? undefined : parsed.error,
-      });
-    }
-    return {
-      ...parsed.data,
-      csrf_token: "offline-session-no-csrf",
-      stale_fields: [...new Set([...parsed.data.stale_fields, "session.offline_snapshot"])],
-    };
+    return await recoverOfflineSession(error);
   }
+}
+
+export async function persistOrInvalidateSession(
+  session: SessionResponse,
+): Promise<SessionResponse> {
+  if (session.authenticated) {
+    await persistAuthenticatedSession(session);
+    return session;
+  }
+
+  const snapshot = await getMeta<OfflineSessionSnapshot>(SNAPSHOT_KEY);
+  await clearSessionSnapshot();
+  if (snapshot?.session.user.role !== "field") return session;
+  await clearDeviceSecret();
+  return {
+    ...session,
+    stale_fields: [...new Set([...session.stale_fields, "field_device_repair_required"])],
+  };
+}
+
+export async function persistAuthenticatedSession(session: AuthenticatedSession): Promise<void> {
+  const expiresAt = Date.parse(session.session_expires_at);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return;
+  await setMeta(SNAPSHOT_KEY, {
+    session: { ...session, csrf_token: "offline-session-no-csrf" },
+    expiresAt,
+  } satisfies OfflineSessionSnapshot);
+}
+
+export async function recoverOfflineSession(error: unknown): Promise<SessionResponse> {
+  if (!isRetryableApiError(error)) throw error;
+  const snapshot = await getMeta<OfflineSessionSnapshot>(SNAPSHOT_KEY);
+  if (!snapshot || snapshot.expiresAt <= Date.now()) {
+    await clearSessionSnapshot();
+    throw error;
+  }
+  const parsed = sessionResponseSchema.safeParse(snapshot.session);
+  if (!parsed.success || !parsed.data.authenticated) {
+    await clearSessionSnapshot();
+    throw new ApiError({
+      status: 0,
+      code: "offline_session_invalid",
+      message: "The saved sign-in could not be verified. Reconnect and sign in again.",
+      cause: parsed.success ? undefined : parsed.error,
+    });
+  }
+  return {
+    ...parsed.data,
+    csrf_token: "offline-session-no-csrf",
+    stale_fields: [...new Set([...parsed.data.stale_fields, "session.offline_snapshot"])],
+  };
 }
 
 export async function clearSessionSnapshot(): Promise<void> {

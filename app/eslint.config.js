@@ -37,7 +37,7 @@ export default [
     },
   },
   {
-    files: ["src/router.tsx"],
+    files: ["src/router.tsx", "src/main.tsx", "src/auth/session-context.tsx"],
     rules: {
       "react-refresh/only-export-components": "off",
     },
@@ -49,9 +49,15 @@ export default [
     },
   },
   {
-    files: ["*.config.js", "scripts/**/*.mjs"],
+    files: ["*.cjs", "*.config.js", "scripts/**/*.{mjs,cjs}"],
     languageOptions: {
-      globals: { ...globals.node },
+      globals: { ...globals.node, ...globals.browser },
+    },
+  },
+  {
+    files: ["public/**/*.js"],
+    languageOptions: {
+      globals: { ...globals.browser },
     },
   },
 ];

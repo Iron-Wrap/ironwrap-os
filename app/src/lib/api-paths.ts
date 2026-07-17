@@ -1,5 +1,6 @@
 export const API_PATHS = {
   session: "/api/v1/session",
+  fieldBootstrap: "/api/v1/field/bootstrap",
   magicLinkRequest: "/api/v1/auth/magic-link/request",
   magicLinkConsume: "/api/v1/auth/magic-link/consume",
   devicePairingConsume: "/api/v1/auth/device-pairing/consume",

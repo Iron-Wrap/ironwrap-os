@@ -6,10 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionProvider } from "../auth/session-context";
 import type { AuthenticatedSession } from "../auth/session";
 import type { TodayResponse } from "./field-contracts";
-import { hasCachedJobPacket, loadToday, prefetchAssignedPackets } from "./field-cache";
+import { cacheToday, hasCachedJobPacket, loadToday, prefetchAssignedPackets } from "./field-cache";
 import { TodayPage } from "./field-pages";
 
 vi.mock("./field-cache", () => ({
+  cacheToday: vi.fn().mockResolvedValue(undefined),
   hasCachedJobPacket: vi.fn(),
   loadToday: vi.fn(),
   prefetchAssignedPackets: vi.fn(),
@@ -117,13 +118,13 @@ function todayModel(overrides: Partial<TodayResponse> = {}): TodayResponse {
   };
 }
 
-function renderToday(model = todayModel()) {
+function renderToday(model = todayModel(), initialToday?: TodayResponse) {
   vi.mocked(loadToday).mockResolvedValue(model);
   return render(
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
-      <SessionProvider session={fieldSession}>
+      <SessionProvider session={fieldSession} initialToday={initialToday}>
         <TodayPage />
       </SessionProvider>
     </QueryClientProvider>,
@@ -163,6 +164,15 @@ describe("TodayPage", () => {
     expect(screen.queryByText("Ready offline")).not.toBeInTheDocument();
     expect(screen.queryByText("Needs download")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Start work/i })).not.toBeInTheDocument();
+  });
+
+  it("renders the verified bootstrap run sheet without a second initial today request", async () => {
+    const bootstrapToday = todayModel();
+    renderToday(todayModel(), bootstrapToday);
+
+    expect(await screen.findByRole("heading", { name: "Run sheet" })).toBeVisible();
+    expect(loadToday).not.toHaveBeenCalled();
+    expect(cacheToday).toHaveBeenCalledWith(fieldSession, bootstrapToday);
   });
 
   it("keeps availability in checking state until the local packet probe resolves", async () => {

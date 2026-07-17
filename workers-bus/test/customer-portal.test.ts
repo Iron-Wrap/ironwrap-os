@@ -502,6 +502,62 @@ test("customer portal is fragment-only, revocable, and projects no internal fiel
   }
 });
 
+test("customer portal never projects quote terms before matching proposal publication", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  const frappe = installFrappeMock();
+  try {
+    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
+    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
+    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
+
+    const published = await worker.fetch(
+      resolveRequest(token),
+      appEnv as never,
+      {} as never,
+    );
+    const publishedModel = (await published.json()) as {
+      proposal: { quote: { total: number } | null } | null;
+      scope: Array<{ id: string }>;
+    };
+    assert.equal(published.status, 200);
+    assert.equal(publishedModel.proposal?.quote?.total, 14_750);
+    assert.deepEqual(
+      publishedModel.scope.map((row) => row.id),
+      ["scope-a"],
+    );
+
+    frappe.rows["Proposal Evidence Pack"][0].status = "Draft";
+    const unpublished = await worker.fetch(
+      resolveRequest(token),
+      appEnv as never,
+      {} as never,
+    );
+    const unpublishedModel = (await unpublished.json()) as Record<string, unknown>;
+    assert.equal(unpublished.status, 200);
+    assert.equal(unpublishedModel.proposal, null);
+    assert.deepEqual(unpublishedModel.scope, []);
+    assert.equal(JSON.stringify(unpublishedModel).includes("14750"), false);
+    assert.equal(
+      JSON.stringify(unpublishedModel).includes("Install the approved roofing system."),
+      false,
+    );
+
+    frappe.rows["Proposal Evidence Pack"][0].status = "Approved";
+    frappe.rows["Proposal Evidence Pack"][0].quotation = "QUOTE-OTHER";
+    const wrongQuote = await worker.fetch(
+      resolveRequest(token),
+      appEnv as never,
+      {} as never,
+    );
+    const wrongQuoteModel = (await wrongQuote.json()) as Record<string, unknown>;
+    assert.equal(wrongQuoteModel.proposal, null);
+    assert.deepEqual(wrongQuoteModel.scope, []);
+  } finally {
+    frappe.restore();
+  }
+});
+
 test("customer portal fails closed for an untrusted origin, customer reassignment, and a saturated IP window", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);

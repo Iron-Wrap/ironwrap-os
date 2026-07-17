@@ -389,21 +389,28 @@ export async function buildCustomerPortalReadModel(
           customerQuoteStatus(text(row.status, 80)),
       )
     : undefined;
+  // Quote terms are customer-visible only through a separately published, quote-owned proof
+  // pack. An approved quote by itself remains office-only: a portal link must not bypass the
+  // Owner Operator publication gate.
   const proposal = quote
-    ? proposalPacks.find(
-        (row) =>
-          text(row.roof_job, 140) === link.roof_job_id &&
-          text(row.quotation, 140) === quoteName &&
-          customerProposalStatus(text(row.status, 80)),
+    ? newest(
+        proposalPacks.filter(
+          (row) =>
+            text(row.roof_job, 140) === link.roof_job_id &&
+            text(row.quotation, 140) === quoteName &&
+            customerProposalStatus(text(row.status, 80)),
+        ),
       )
     : undefined;
-  const scope = clauses
-    .filter(
-      (row) =>
-        text(row.roof_job, 140) === link.roof_job_id &&
-        text(row.status, 80) === "Approved" &&
-        truthy(row.customer_visible),
-    )
+  const scopeRows = proposal
+    ? clauses.filter(
+        (row) =>
+          text(row.roof_job, 140) === link.roof_job_id &&
+          text(row.status, 80) === "Approved" &&
+          truthy(row.customer_visible),
+      )
+    : [];
+  const scope = scopeRows
     .map((row) => ({
       id: text(row.scope_clause_id, 140) ?? text(row.name, 140) ?? "",
       type: text(row.clause_type, 120),
@@ -447,9 +454,9 @@ export async function buildCustomerPortalReadModel(
   );
   const rowsUsed = [
     job,
-    ...(quote ? [quote] : []),
+    ...(proposal && quote ? [quote] : []),
     ...(proposal ? [proposal] : []),
-    ...clauses,
+    ...scopeRows,
     ...evidence,
     ...completionPackets,
     ...warrantyPackets,
@@ -466,7 +473,7 @@ export async function buildCustomerPortalReadModel(
       status: text(job.job_status, 120),
     },
     proposal:
-      quote || proposal
+      proposal && quote
         ? {
             status: proposal ? text(proposal.status, 80) : null,
             prepared_at: proposal ? iso(proposal.prepared_at) : null,

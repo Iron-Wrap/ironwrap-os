@@ -151,7 +151,7 @@ describe("TodayPage", () => {
     expect(await screen.findByRole("heading", { name: "Run sheet" })).toBeVisible();
     expect(screen.getByText("1 gate blocks work")).toBeVisible();
     expect(screen.getByText("Delivery confirmation is missing")).toBeVisible();
-    expect(screen.getAllByText("Saved on this device").length).toBeGreaterThan(0);
+    expect(screen.getByText(/\d+ of \d+ saved on this device\./i)).toBeVisible();
     expect(screen.getByRole("link", { name: "Review gate and packet" })).toHaveAttribute(
       "href",
       "/jobs/JOB-BLOCKED",

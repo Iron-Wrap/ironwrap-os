@@ -43,6 +43,73 @@ def _record_step(
     return {"key": key, "label": label, "state": state, "detail": status}
 
 
+def build_customer_portal_scope_actions(
+    clauses: Sequence[Mapping[str, Any]] | None,
+    quotes: Sequence[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Return repairs for customer-visible clauses excluded from the portal.
+
+    New writes are rejected by the domain policy, but a pre-existing record can
+    still lack quote lineage. The portal keeps such a record hidden while an
+    owner repairs it; this function merely explains that state.
+    """
+
+    quotes_by_name = {
+        str(quote.get("name")): quote
+        for quote in (quotes or [])
+        if quote.get("name")
+    }
+    actions: list[dict[str, Any]] = []
+    for clause in clauses or []:
+        if clause.get("status") != "Approved" or clause.get(
+            "customer_visible"
+        ) not in (True, 1, "1"):
+            continue
+
+        roof_job = clause.get("roof_job")
+        customer_quote = clause.get("customer_quote")
+        if not roof_job:
+            detail = (
+                "Hidden from the customer portal: link this clause to its Roof Job "
+                "and matching Customer Quote before publication."
+            )
+        elif not customer_quote:
+            detail = (
+                "Hidden from the customer portal: link this clause to the approved "
+                "Customer Quote for this Roof Job before publication."
+            )
+        else:
+            quote = quotes_by_name.get(str(customer_quote))
+            if quote is None:
+                detail = (
+                    "Hidden from the customer portal: its linked Customer Quote is no "
+                    "longer available. Do not repoint this approved clause; create a "
+                    "replacement for the intended quote and retire this record."
+                )
+            elif quote.get("roof_job") != roof_job:
+                detail = (
+                    "Hidden from the customer portal: the linked Customer Quote belongs "
+                    "to another Roof Job. Do not repoint this approved clause; create a "
+                    "replacement for the intended quote and retire this record."
+                )
+            else:
+                continue
+
+        actions.append(
+            {
+                "priority": 1,
+                "kind": "Portal lineage repair",
+                "summary": "Customer-visible scope clause is hidden from the portal",
+                "detail": detail,
+                "doctype": "Scope Clause",
+                "name": clause.get("name"),
+                "roof_job": roof_job,
+                "modified": clause.get("modified"),
+            }
+        )
+    return actions
+
+
 def build_job_runway(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Build a stable, color-independent job runway from already-authorized rows."""
 

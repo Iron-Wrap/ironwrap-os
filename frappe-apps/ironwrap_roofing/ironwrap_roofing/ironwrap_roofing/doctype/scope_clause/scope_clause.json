@@ -9,6 +9,7 @@
   "field_order": [
     "scope_clause_id",
     "roof_job",
+    "customer_quote",
     "clause_type",
     "title",
     "clause_text",
@@ -25,6 +26,7 @@
   "fields": [
     { "fieldname": "scope_clause_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Scope Clause ID", "reqd": 1, "unique": 1 },
     { "fieldname": "roof_job", "fieldtype": "Link", "in_standard_filter": 1, "label": "Roof Job", "options": "Roof Job" },
+    { "fieldname": "customer_quote", "fieldtype": "Link", "in_standard_filter": 1, "label": "Customer Quote", "options": "Customer Quote" },
     { "fieldname": "clause_type", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Clause Type", "options": "Included\nExcluded\nAssumption\nRisk\nOptional Upgrade\nWarranty", "reqd": 1 },
     { "fieldname": "title", "fieldtype": "Data", "in_global_search": 1, "in_list_view": 1, "label": "Title", "reqd": 1 },
     { "fieldname": "clause_text", "fieldtype": "Text", "label": "Clause Text", "reqd": 1 },

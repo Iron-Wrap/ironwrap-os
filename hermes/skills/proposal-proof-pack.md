@@ -24,6 +24,7 @@ Assemble the customer-facing evidence narrative for a proposal into a review-gat
 ## Guardrails
 - Never set a customer-facing price, scope, option selection, or payment term. Those require separate human approval before send.
 - Never include non-`customer_safe`, missing, or ambiguous evidence in the pack.
+- Never expose a customer-visible Scope Clause unless it is bound to the same Customer Quote as the pack; legacy job-only clauses require explicit lineage repair first.
 - Never add source URIs, R2/Drive keys, raw evidence summaries, or a customer message to the pack.
 - Never promote a pack except through the Owner Operator-only receipt-bound publication command, and never beyond `Approved`.
 - Never treat publication as a portal-link issuance, document render/download, customer message, e-sign action, or customer acceptance.

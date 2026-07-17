@@ -443,6 +443,7 @@ const SCOPE_CLAUSE_FIELDS = [
   "name",
   "scope_clause_id",
   "roof_job",
+  "customer_quote",
   "clause_type",
   "title",
   "version",

@@ -243,6 +243,7 @@ function installFrappeMock() {
         name: "SCOPE-A",
         scope_clause_id: "scope-a",
         roof_job: "JOB-A",
+        customer_quote: "QUOTE-A",
         clause_type: "Included",
         title: "Approved roofing scope",
         clause_text: "Install approved roofing system.",
@@ -527,6 +528,34 @@ test("customer portal never projects quote terms before matching proposal public
       ["scope-a"],
     );
 
+    frappe.rows["Proposal Evidence Pack"][0].status = "Signed";
+    const signed = await worker.fetch(
+      resolveRequest(token),
+      appEnv as never,
+      {} as never,
+    );
+    const signedModel = (await signed.json()) as {
+      proposal: { quote: { total: number } | null } | null;
+      scope: Array<{ id: string }>;
+    };
+    assert.equal(signedModel.proposal?.quote?.total, 14_750);
+    assert.deepEqual(signedModel.scope.map((row) => row.id), ["scope-a"]);
+
+    frappe.rows["Proposal Evidence Pack"][0].status = "Approved";
+    frappe.rows["Scope Clause"][0].customer_quote = "QUOTE-OTHER";
+    const wrongScopeQuote = await worker.fetch(
+      resolveRequest(token),
+      appEnv as never,
+      {} as never,
+    );
+    const wrongScopeQuoteModel = (await wrongScopeQuote.json()) as {
+      proposal: { quote: { total: number } | null } | null;
+      scope: unknown[];
+    };
+    assert.equal(wrongScopeQuoteModel.proposal?.quote?.total, 14_750);
+    assert.deepEqual(wrongScopeQuoteModel.scope, []);
+
+    frappe.rows["Scope Clause"][0].customer_quote = "QUOTE-A";
     frappe.rows["Proposal Evidence Pack"][0].status = "Draft";
     const unpublished = await worker.fetch(
       resolveRequest(token),

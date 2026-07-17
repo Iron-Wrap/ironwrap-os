@@ -656,6 +656,15 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
                         ],
                     )
                 }
+    elif kind == "scope_clause":
+        customer_quote = document.get("customer_quote")
+        context["scope_clause_quote"] = (
+            frappe.db.get_value(
+                "Customer Quote", customer_quote, ("roof_job",), as_dict=True
+            )
+            if customer_quote
+            else None
+        )
     elif kind == "material_takeoff":
         context["measurement_status"] = _value(
             "Measurement Report", document.get("measurement_report"), "review_status"

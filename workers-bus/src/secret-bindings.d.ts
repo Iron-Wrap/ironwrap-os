@@ -16,6 +16,7 @@ interface Env {
   APP_AUTH_PEPPER: string;
   APPROVAL_BROKER_SHARED_SECRET: string;
   QUOTE_REVISION_BROKER_SHARED_SECRET: string;
+  PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET: string;
 }
 
 declare namespace Cloudflare {
@@ -30,5 +31,6 @@ declare namespace Cloudflare {
     APP_AUTH_PEPPER: string;
     APPROVAL_BROKER_SHARED_SECRET: string;
     QUOTE_REVISION_BROKER_SHARED_SECRET: string;
+    PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET: string;
   }
 }

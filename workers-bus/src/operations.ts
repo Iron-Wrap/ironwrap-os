@@ -3,6 +3,8 @@
 import * as store from "./store.ts";
 import { appBffConfigured } from "./app-auth.ts";
 import { customerPortalConfigured } from "./customer-portal.ts";
+import { productionScheduleApprovalDecisionConfig } from "./production-schedule-approval-authority.ts";
+import { productionScheduleApprovalBrokerConfig } from "./production-schedule-approval-broker-client.ts";
 import type { AppEnv } from "./app-types.ts";
 
 export const BULK_REPLAY_CONFIRMATION = "REPLAY_ALL_OPEN_DEAD_LETTERS";
@@ -40,6 +42,7 @@ export interface ReadinessReport {
     frappe_configuration: boolean;
     app_bff_configuration: boolean;
     customer_portal_configuration: boolean;
+    production_schedule_configuration: boolean;
   };
 }
 
@@ -106,6 +109,7 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
     ),
     app_bff_configuration: appBffConfigured(extended),
     customer_portal_configuration: customerPortalConfigured(extended),
+    production_schedule_configuration: productionScheduleConfigured(extended),
   };
 
   if (typeof db?.prepare === "function") {
@@ -120,6 +124,24 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
 
   const ok = Object.values(checks).every(Boolean);
   return { ok, status: ok ? "ready" : "not_ready", checks };
+}
+
+function productionScheduleConfigured(env: AppEnv): boolean {
+  // Numeric schedule values have safe defaults in wrangler.jsonc. A rail is
+  // intentionally disabled only when every primary credential/identity input
+  // is blank; any supplied primary input must form a complete, enabled BFF
+  // configuration before /ready can be green.
+  const primaryInputs = [
+    env.APP_PRODUCTION_SCHEDULE_BROKER_URL,
+    env.APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID,
+    env.APP_PRODUCTION_SCHEDULE_APPROVER_ID,
+    env.PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET,
+  ];
+  if (!primaryInputs.some(nonEmpty)) return true;
+  return String(env.APP_BFF_ENABLED) === "true" &&
+    appBffConfigured(env) &&
+    productionScheduleApprovalBrokerConfig(env) !== null &&
+    productionScheduleApprovalDecisionConfig(env) !== null;
 }
 
 export async function getOperationalStatus(

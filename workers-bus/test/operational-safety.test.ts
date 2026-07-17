@@ -61,7 +61,7 @@ function fakeEnv(options: FakeOptions = {}) {
     sqlCalls.push({ sql, args });
     if (options.d1Throws && sql.includes("sqlite_master")) throw new Error("d1_unavailable");
     if (sql.includes("sqlite_master")) {
-      return { table_count: 26, index_count: options.missingSchemaArtifact ? 32 : 33, trigger_count: 22 };
+      return { table_count: 28, index_count: options.missingSchemaArtifact ? 37 : 38, trigger_count: 31 };
     }
     if (sql.includes("COUNT(*) AS n FROM dead_letter")) {
       return { n: deadLetters.filter((row) => row.recovered === 0).length };
@@ -284,6 +284,19 @@ function enableAppBff(env: Record<string, unknown>): void {
   });
 }
 
+function enableProductionScheduleApproval(env: Record<string, unknown>): void {
+  enableAppBff(env);
+  Object.assign(env, {
+    APP_PRODUCTION_SCHEDULE_BROKER_URL: "https://schedule-broker.example.com",
+    APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID: "production-schedule-v1",
+    APP_PRODUCTION_SCHEDULE_APPROVER_ID: "owner@example.com",
+    APP_PRODUCTION_SCHEDULE_MAX_SESSION_AGE_SECONDS: "900",
+    APP_PRODUCTION_SCHEDULE_BROKER_TIMEOUT_MS: "15000",
+    APP_PRODUCTION_SCHEDULE_EXECUTION_LEASE_SECONDS: "45",
+    PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET: "production-schedule-shared-secret-longer-than-thirty-two-bytes",
+  });
+}
+
 const ctx = {} as never;
 const adminHeaders = { authorization: "Bearer admin-secret", "content-type": "application/json" };
 
@@ -299,7 +312,11 @@ test("public readiness probes D1/bindings without exposing configured secrets", 
   assert.equal(body.ok, true);
   assert.equal(body.status, "ready");
   assert.ok(Object.values(body.checks).every(Boolean));
-  assert.ok(sqlCalls.some((call) => call.sql.includes("sqlite_master")), "D1 was queried");
+  const schemaQuery = sqlCalls.find((call) => call.sql.includes("sqlite_master"));
+  assert.ok(schemaQuery, "D1 was queried");
+  assert.match(schemaQuery.sql, /production_schedule_approval_requests/);
+  assert.match(schemaQuery.sql, /prevent_production_schedule_approval_binding_rewrite/);
+  assert.equal(body.checks.production_schedule_configuration, true, "blank primary schedule inputs keep the rail intentionally disabled");
   assert.equal(JSON.stringify(body).includes("ingest-secret"), false);
   assert.equal(JSON.stringify(body).includes("jobnimbus-secret"), false);
   assert.equal(response.headers.get("cache-control"), "no-store");
@@ -344,6 +361,47 @@ test("readiness fails closed when the operational migration artifacts are missin
   assert.equal(body.ok, false);
   assert.equal(body.checks.d1, true);
   assert.equal(body.checks.schema, false);
+});
+
+test("readiness accepts a complete enabled production-schedule approval rail", async () => {
+  const { env } = fakeEnv();
+  enableProductionScheduleApproval(env as Record<string, unknown>);
+
+  const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  const body = await response.json() as { ok: boolean; checks: Record<string, boolean> };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.checks.production_schedule_configuration, true);
+});
+
+test("readiness fails closed when production scheduling is partially configured", async () => {
+  const { env } = fakeEnv();
+  (env as Record<string, unknown>).APP_PRODUCTION_SCHEDULE_BROKER_URL = "https://schedule-broker.example.com";
+
+  const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  const body = await response.json() as { ok: boolean; checks: Record<string, boolean> };
+
+  assert.equal(response.status, 503);
+  assert.equal(body.ok, false);
+  assert.equal(body.checks.production_schedule_configuration, false);
+});
+
+test("readiness requires the BFF before an otherwise complete production-schedule rail is ready", async () => {
+  const { env } = fakeEnv();
+  Object.assign(env as Record<string, unknown>, {
+    APP_PRODUCTION_SCHEDULE_BROKER_URL: "https://schedule-broker.example.com",
+    APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID: "production-schedule-v1",
+    APP_PRODUCTION_SCHEDULE_APPROVER_ID: "owner@example.com",
+    PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET: "production-schedule-shared-secret-longer-than-thirty-two-bytes",
+  });
+
+  const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  const body = await response.json() as { ok: boolean; checks: Record<string, boolean> };
+
+  assert.equal(response.status, 503);
+  assert.equal(body.ok, false);
+  assert.equal(body.checks.production_schedule_configuration, false);
 });
 
 test("readiness fails closed when the redundant alert path is not configured", async () => {

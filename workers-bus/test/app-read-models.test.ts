@@ -303,6 +303,25 @@ test("field Today uses direct and active crew membership assignments, never gene
   }
 });
 
+test("field bootstrap keeps an upstream failure private", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("frappe unavailable");
+  };
+  try {
+    const response = await handleAuthenticatedRoute(
+      new Request("https://app.example.com/api/v1/field/bootstrap"),
+      env(),
+      auth("field", "crew@example.com"),
+    );
+    assert.equal(response.status, 502);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await response.json(), { error: "upstream_unavailable" });
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("field is denied an unassigned job while office reads it and Today does not hide it", async () => {
   const mock = installFrappeMock();
   try {

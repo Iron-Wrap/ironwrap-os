@@ -21,6 +21,7 @@ function payload() {
       needs_verification: 0,
     },
     jobs: [],
+    crews: [],
   };
 }
 

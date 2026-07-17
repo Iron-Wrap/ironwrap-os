@@ -113,6 +113,27 @@ GATE_EVIDENCE_CONTEXT_FIELDS = (
     "drive_file_id",
 )
 _GATE_EVIDENCE_CONTEXT_SELECT = ", ".join(GATE_EVIDENCE_CONTEXT_FIELDS)
+JOB_ASSIGNMENT_SCHEDULE_CONTEXT_FIELDS = (
+    "name",
+    "assignment_id",
+    "roof_job",
+    "assignment_type",
+    "status",
+    "scheduled_start",
+    "supersedes",
+)
+_JOB_ASSIGNMENT_SCHEDULE_CONTEXT_SELECT = ", ".join(
+    JOB_ASSIGNMENT_SCHEDULE_CONTEXT_FIELDS
+)
+SUPPLIER_ORDER_EXCEPTION_CONTEXT_FIELDS = (
+    "name",
+    "supplier_order_id",
+    "roof_job",
+    "status",
+)
+_SUPPLIER_ORDER_EXCEPTION_CONTEXT_SELECT = ", ".join(
+    SUPPLIER_ORDER_EXCEPTION_CONTEXT_FIELDS
+)
 _ATOMIC_SAFETY_ACKNOWLEDGEMENT_APPEND: ContextVar[tuple[str, str] | None] = ContextVar(
     "ironwrap_atomic_safety_acknowledgement_append",
     default=None,
@@ -569,6 +590,47 @@ def _locked_production_gates(
     return gates, _locked_gate_evidence([gate.get("evidence_item") for gate in gates])
 
 
+def _locked_scheduled_production_context(
+    roof_job: Any,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    """Load every scheduling fence only after the parent Roof Job is locked."""
+
+    gates, gate_evidence = _locked_production_gates(roof_job)
+    assignments = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_JOB_ASSIGNMENT_SCHEDULE_CONTEXT_SELECT}
+            FROM `tabJob Assignment`
+            WHERE roof_job = %s
+            FOR UPDATE
+            """,
+            (roof_job,),
+            as_dict=True,
+        )
+    ]
+    supplier_order_exceptions = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_SUPPLIER_ORDER_EXCEPTION_CONTEXT_SELECT}
+            FROM `tabSupplier Order`
+            WHERE roof_job = %s
+              AND status IN ('Needs Review', 'Shortage')
+            FOR UPDATE
+            """,
+            (roof_job,),
+            as_dict=True,
+        )
+    ]
+    return gates, gate_evidence, assignments, supplier_order_exceptions
+
+
 def _assert_unique_production_gate(document: Any) -> None:
     """Keep one current gate record per Roof Job/gate pair under the parent lock."""
 
@@ -596,8 +658,18 @@ def _assert_unique_production_gate(document: Any) -> None:
 
 def _context(document: Any, kind: str) -> dict[str, Any]:
     context: dict[str, Any] = {}
+    scheduled_production_assignment = (
+        kind == "job_assignment"
+        and document.get("assignment_type") == "Production"
+        and document.get("scheduled_start")
+    )
+    # Supplier Order status changes and scheduled Production assignments share
+    # this parent lock. Without it, a Shortage could commit after scheduling
+    # has read its exception set but before the assignment commits.
+    if kind == "supplier_order" and document.get("roof_job"):
+        _lock_roof_job(document.get("roof_job"))
     correction = CORRECTION_TARGETS.get(kind)
-    if correction:
+    if correction and not scheduled_production_assignment:
         link_field, doctype, fields = correction
         target = document.get(link_field)
         if target:
@@ -872,14 +944,23 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
             context["payment_milestones"] = frappe.get_all(
                 "Payment Milestone", filters={"roof_job": roof_job}, fields=["status"]
             )
-    elif (
-        kind == "job_assignment"
-        and document.get("assignment_type") == "Production"
-        and document.get("scheduled_start")
-    ):
-        context["gates"], context["gate_evidence"] = _locked_production_gates(
-            document.get("roof_job")
-        )
+    elif scheduled_production_assignment:
+        (
+            context["gates"],
+            context["gate_evidence"],
+            context["job_assignment_rows"],
+            context["supplier_order_exception_rows"],
+        ) = _locked_scheduled_production_context(document.get("roof_job"))
+        target = document.get("supersedes")
+        if target:
+            context["superseded_record"] = next(
+                (
+                    row
+                    for row in context["job_assignment_rows"]
+                    if target in {row.get("name"), row.get("assignment_id")}
+                ),
+                None,
+            )
     elif kind == "production_gate_state":
         # Gate creates and updates take the same per-job lock as scheduling, so
         # a validation snapshot cannot race a gate transition into a commit.

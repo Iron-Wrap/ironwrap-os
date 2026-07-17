@@ -1049,6 +1049,93 @@ class DomainPolicyTests(unittest.TestCase):
             previous=safety_gate,
         )
 
+    def test_scheduled_production_assignment_enforces_current_assignment_and_material_fences(
+        self,
+    ) -> None:
+        gates = [
+            {
+                "roof_job": "job-1",
+                "gate": gate,
+                "state": "Waived",
+                "owner_user": "owner@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+                "waived_by": "owner@example.com",
+                "waived_at": "2026-07-10 08:00:00",
+                "waiver_reason": "Owner-approved exception.",
+            }
+            for gate in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
+        ]
+        current = {
+            "name": "assignment:current",
+            "assignment_id": "assignment:current",
+            "roof_job": "job-1",
+            "assignment_type": "Production",
+            "status": "Assigned",
+            "scheduled_start": "2026-07-11 08:00:00",
+        }
+        assignment = {
+            "assignment_id": "assignment:next",
+            "roof_job": "job-1",
+            "assignment_type": "Production",
+            "status": "Assigned",
+            "crew_profile": "crew-2",
+            "assigned_by": "production@example.com",
+            "assigned_at": "2026-07-10 08:00:00",
+            "scheduled_start": "2026-07-12 08:00:00",
+        }
+        context = {
+            "gates": gates,
+            "gate_evidence": {},
+            "job_assignment_rows": [current],
+            "supplier_order_exception_rows": [],
+        }
+
+        self.assert_policy(
+            "duplicate_current_production_assignment",
+            validate_record,
+            "job_assignment",
+            assignment,
+            context=context,
+        )
+
+        correction = {
+            **assignment,
+            "assignment_id": "assignment:correction",
+            "supersedes": "assignment:current",
+            "correction_reason": "Move the crew after access changed.",
+        }
+        validate_record(
+            "job_assignment",
+            correction,
+            context={**context, "superseded_record": current},
+        )
+
+        self.assert_policy(
+            "stale_production_assignment_correction",
+            validate_record,
+            "job_assignment",
+            {**correction, "assignment_id": "assignment:second-correction"},
+            context={
+                **context,
+                "job_assignment_rows": [current, {**correction, "name": "assignment:correction"}],
+                "superseded_record": current,
+            },
+        )
+        for status in ("Needs Review", "Shortage"):
+            self.assert_policy(
+                "material_exception_blocks_production_schedule",
+                validate_record,
+                "job_assignment",
+                {**assignment, "assignment_id": f"assignment:{status.lower()}"},
+                context={
+                    **context,
+                    "job_assignment_rows": [],
+                    "supplier_order_exception_rows": [
+                        {"name": "supplier-order-1", "roof_job": "job-1", "status": status}
+                    ],
+                },
+            )
+
     def test_ready_and_done_gates_require_verified_same_job_evidence(self) -> None:
         invalid_sources = (
             ("missing", None, "unverified_gate_evidence"),

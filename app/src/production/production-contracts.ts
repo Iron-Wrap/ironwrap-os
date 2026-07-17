@@ -15,6 +15,7 @@ const readModelEnvelopeSchema = z
 
 const assignmentSchema = z
   .object({
+    id: z.string().min(1),
     type: nullableText,
     status: nullableText,
     scheduled_start: nullableText,
@@ -67,6 +68,7 @@ const productionJobSchema = z
     service_type: nullableText,
     status: nullableText,
     assignment: assignmentSchema.nullable(),
+    scheduling_preparation_allowed: z.boolean(),
     lane: productionRunwayLaneSchema,
     next_action: z.string().min(1),
     gate_coverage: z.enum(["complete", "incomplete", "unknown"]),
@@ -105,6 +107,14 @@ export const productionRunwayResponseSchema = readModelEnvelopeSchema
       })
       .strict(),
     jobs: z.array(productionJobSchema),
+    crews: z.array(
+      z
+        .object({
+          id: z.string().min(1),
+          name: z.string().min(1),
+        })
+        .strict(),
+    ),
   })
   .strict();
 

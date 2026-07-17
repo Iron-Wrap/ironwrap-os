@@ -18,6 +18,10 @@ MAX_JSON_BYTES = 1_000_000
 PRODUCTION_GATES = ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
 SCHEDULABLE_PRODUCTION_GATE_STATES = frozenset(("Ready", "Done", "Waived"))
 CLOSEOUT_PRODUCTION_GATE_STATES = frozenset(("Done", "Waived"))
+ACTIVE_SCHEDULED_PRODUCTION_ASSIGNMENT_STATUSES = frozenset(
+    ("Assigned", "Accepted", "In Progress", "Blocked")
+)
+ACTIVE_SUPPLIER_ORDER_EXCEPTION_STATUSES = frozenset(("Needs Review", "Shortage"))
 
 
 class PolicyViolation(ValueError):
@@ -747,6 +751,103 @@ def _validate_crew_profile(record: Any, _context: Mapping[str, Any]) -> None:
             raise PolicyViolation("invalid_crew_lead", "primary lead must be an active member")
 
 
+def _assignment_references(record: Any) -> set[str]:
+    return {
+        str(value)
+        for value in (_get(record, "name"), _get(record, "assignment_id"))
+        if not _blank(value)
+    }
+
+
+def _logical_current_scheduled_production_assignments(
+    rows: Sequence[Any],
+) -> list[Any]:
+    superseded = {
+        str(_get(row, "supersedes"))
+        for row in rows
+        if not _blank(_get(row, "supersedes"))
+    }
+    return [
+        row
+        for row in rows
+        if _get(row, "assignment_type") == "Production"
+        and not _blank(_get(row, "scheduled_start"))
+        and _get(row, "status") in ACTIVE_SCHEDULED_PRODUCTION_ASSIGNMENT_STATUSES
+        and _assignment_references(row).isdisjoint(superseded)
+    ]
+
+
+def _validate_scheduled_production_execution_fences(
+    record: Any, context: Mapping[str, Any]
+) -> None:
+    """Apply the locked, same-job execution facts supplied by the Frappe adapter."""
+
+    if not (
+        _get(record, "assignment_type") == "Production"
+        and not _blank(_get(record, "scheduled_start"))
+        and _get(record, "status")
+        in ACTIVE_SCHEDULED_PRODUCTION_ASSIGNMENT_STATUSES
+    ):
+        return
+
+    if any(
+        _get(row, "status") in ACTIVE_SUPPLIER_ORDER_EXCEPTION_STATUSES
+        for row in context.get("supplier_order_exception_rows", ())
+    ):
+        raise PolicyViolation(
+            "material_exception_blocks_production_schedule",
+            "resolve Supplier Order Needs Review or Shortage exceptions before scheduling production",
+        )
+
+    rows = tuple(context.get("job_assignment_rows", ()))
+    current_rows = _logical_current_scheduled_production_assignments(rows)
+    self_references = _assignment_references(record)
+    other_current_rows = [
+        row
+        for row in current_rows
+        if self_references.isdisjoint(_assignment_references(row))
+    ]
+    supersedes = _get(record, "supersedes")
+    previous = context.get("_previous")
+
+    if _blank(supersedes):
+        if other_current_rows:
+            raise PolicyViolation(
+                "duplicate_current_production_assignment",
+                "only one current active scheduled Production assignment may exist per Roof Job",
+            )
+        return
+
+    # An existing correction is revalidated during lifecycle updates. Its source is
+    # intentionally absent from the logical-current set because this record supersedes it.
+    if previous is not None and _get(previous, "supersedes") == supersedes:
+        if other_current_rows:
+            raise PolicyViolation(
+                "duplicate_current_production_assignment",
+                "only one current active scheduled Production assignment may exist per Roof Job",
+            )
+        return
+
+    if len(current_rows) > 1:
+        raise PolicyViolation(
+            "duplicate_current_production_assignment",
+            "only one current active scheduled Production assignment may exist per Roof Job",
+        )
+    if any(str(supersedes) in _assignment_references(row) for row in current_rows):
+        return
+    if any(str(supersedes) in _assignment_references(row) for row in rows):
+        raise PolicyViolation(
+            "stale_production_assignment_correction",
+            "a schedule correction must supersede the current active Production assignment",
+            "supersedes",
+        )
+    raise PolicyViolation(
+        "invalid_production_assignment_correction",
+        "a schedule correction must supersede the current active Production assignment",
+        "supersedes",
+    )
+
+
 def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
     has_crew = not _blank(_get(record, "crew_profile"))
     has_user = not _blank(_get(record, "assigned_user"))
@@ -796,6 +897,7 @@ def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
     if status == "Blocked":
         require_fields(record, "blocker_reason")
     _validate_correction(record, context)
+    _validate_scheduled_production_execution_fences(record, context)
 
 
 def _validate_lead_envelope(record: Any, context: Mapping[str, Any]) -> None:

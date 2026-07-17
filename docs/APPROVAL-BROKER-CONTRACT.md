@@ -9,6 +9,7 @@ audited mutation. It is deliberately not a generic remote-control API.
 | --- | --- | --- | --- | --- |
 | Lead triage | `dry_run_mark_lead_triaged` → `request_mark_lead_triaged` | `lead-concierge` | `approval_requests` / `approval_request_events` | `/v1/lead-triage/preview`, `/v1/lead-triage/execute` |
 | Quote-revision shell | `dry_run_quote_revision` → `request_create_quote_revision` | `estimator-assistant` | `quote_revision_approval_requests` / `quote_revision_approval_request_events` | `/v1/quote-revision/preview`, `/v1/quote-revision/execute` |
+| Production schedule | `dry_run_job_assignment` → `request_create_job_assignment` | `production-controller` | `production_schedule_approval_requests` / `production_schedule_approval_request_events` | `/v1/production-schedule/preview`, `/v1/production-schedule/execute` |
 
 The brokers are distinct processes with different private URLs, HMAC secrets,
 key IDs, listener ports, and role-scoped MCP children. Neither is a generic
@@ -31,8 +32,10 @@ flowchart LR
   PWA["Owner PWA"] -->|"session + CSRF"| Worker["Worker BFF / D1"]
   Worker -->|"lead HMAC secret"| LeadBroker["Private lead-triage broker"]
   Worker -->|"revision HMAC secret"| RevisionBroker["Private quote-revision broker"]
+  Worker -->|"schedule HMAC secret"| ScheduleBroker["Private production-schedule broker"]
   LeadBroker -->|"MCP stdio, lead-concierge"| MCP["Hermes Frappe MCP"]
   RevisionBroker -->|"MCP stdio, estimator-assistant"| MCP
+  ScheduleBroker -->|"MCP stdio, production-controller"| MCP
   MCP -->|"receipt-bound write"| Frappe["Frappe + Hermes Run"]
 ```
 
@@ -86,6 +89,29 @@ redacted and receipt-bound digests, source, target, version, and supersedes
 lineage to match. Any drift fails before write; a post-invocation failure is
 `Execution Uncertain` and is never retried.
 
+### Production-schedule vertical
+
+The production schedule authority can create only an append-only `Production`
+`Job Assignment` for one active Crew Profile with a required scheduled start.
+The browser may provide only the Roof Job, Crew Profile, bounded timing, and
+an optional superseded assignment plus correction reason. It cannot select an
+individual user, assignment type/status, target ID, tool, actor, site, receipt,
+or write arguments. The private broker derives the deterministic assignment
+target, uses fixed `Production` / `Assigned` semantics, requires the complete
+non-blocking Deposit, Materials, Safety, Access, Weather, and Crew gate set,
+and rechecks those facts immediately before the receipt-bound Frappe write.
+At that final Frappe document-validation fence, the Roof Job lock also rejects
+an active `Needs Review` or `Shortage` Supplier Order and prevents competing
+logical current scheduled Production assignments. A correction is valid only
+when it supersedes the sole current assignment; the browser, Worker preview,
+and broker packet are never authority for either fact.
+
+The D1 projection contains only the safe target, crew, timing, correction
+lineage, a boolean eligible-gate signal, and no-effect flags. It never exposes
+raw gate detail, Frappe credentials, receipts, tool names, private args, or
+broker output. A correction is always a new request and new assignment that
+supersedes the previous assignment; no existing assignment is edited.
+
 ## User-facing contract
 
 - Office users can read the approval inbox. Only the configured approver whose
@@ -106,6 +132,12 @@ lineage to match. Any drift fails before write; a post-invocation failure is
 - Decision actions are online-only. The PWA never places an approval in its
   field outbox, retries a timed-out broker call, or displays a success state
   without the returned terminal ledger state.
+- Production Runway remains a source-backed read. Its owner-only contextual
+  `/production/schedule/:jobId` page can submit a bounded schedule preparation
+  only when the Worker grants `production_schedule_approval.prepare` for that
+  exact job and active Crew Profile list. It stages a request; it does not
+  schedule or dispatch directly. Its configured approver is separate:
+  `APP_PRODUCTION_SCHEDULE_APPROVER_ID` with its own recent-session bound.
 
 ## Worker BFF routes
 
@@ -126,6 +158,12 @@ exact allowed origin and session CSRF token.
 | POST | `/api/v1/quote-revision-approvals/:id/approve` | configured owner only | distinct broker, recent session, expected version, decision idempotency, terminal ledger event |
 | POST | `/api/v1/quote-revision-approvals/:id/reject` | configured owner only | durable rejection; no broker invocation |
 | POST | `/api/v1/quote-revision-approvals/:id/reconcile` | configured owner only | one immutable uncertainty evidence/outcome append; no reopen/retry |
+| GET | `/api/v1/production-schedule-approvals` | configured owner only | isolated safe schedule-approval ledger; no generic production writer |
+| GET | `/api/v1/production-schedule-approvals/:id` | configured owner only | current safe DTO; pending expiry is re-evaluated before return |
+| POST | `/api/v1/production-schedule-approvals` | configured owner only | contextual source-backed strict `{roof_job_id,crew_profile_id,scheduled_start,scheduled_end,supersedes_assignment_id,correction_reason}` preparation; target/tool/role/site stay server-derived |
+| POST | `/api/v1/production-schedule-approvals/:id/approve` | configured owner only | independent broker, recent session, expected version, decision idempotency, terminal ledger event |
+| POST | `/api/v1/production-schedule-approvals/:id/reject` | configured owner only | durable rejection; no broker invocation |
+| POST | `/api/v1/production-schedule-approvals/:id/reconcile` | configured owner only | immutable uncertainty evidence/outcome append; no reopen/retry |
 
 `Execution Uncertain` is a terminal mutation state, not a temporary UI error.
 The stored `run_id` is the reconciliation key; a later reconciliation records

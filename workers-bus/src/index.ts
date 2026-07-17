@@ -49,6 +49,7 @@ import {
 } from "./measurement-intake-store.ts";
 import { markExpiredExecutionLeases } from "./approval-store.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
+import { markExpiredProductionScheduleApprovalExecutionLeases } from "./production-schedule-approval-store.ts";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
@@ -141,6 +142,18 @@ export default {
           ).catch((error) =>
             log({
               at: "quote_revision_approval_lease_sweep",
+              error: String(error),
+            }),
+          ),
+          // Scheduling has an independent append-only assignment ledger. An
+          // orphaned execution lease must likewise become reconciliation work,
+          // never a second dispatch attempt.
+          markExpiredProductionScheduleApprovalExecutionLeases(
+            env,
+            new Date().toISOString(),
+          ).catch((error) =>
+            log({
+              at: "production_schedule_approval_lease_sweep",
               error: String(error),
             }),
           ),

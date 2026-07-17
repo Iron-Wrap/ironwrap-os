@@ -123,6 +123,9 @@ export const OFFICE_PRODUCTION_READ_FIELDS = {
   ],
   "Production Gate State": ["name", "roof_job", "gate", "state", "modified"],
   "Supplier Order": ["name", "roof_job", "status", "requested_delivery_date", "modified"],
+  // A schedule request may select only an active crew profile. Individual
+  // members, contacts, coverage, and notes stay out of this browser contract.
+  "Crew Profile": ["name", "crew_profile_id", "crew_name", "status", "modified"],
 } as const;
 
 /**
@@ -303,6 +306,7 @@ const OFFICE_PRODUCTION_FILTER_FIELDS: Readonly<Record<OfficeProductionDocType, 
   "Job Assignment": new Set(["roof_job", "assignment_type", "status"]),
   "Production Gate State": new Set(["roof_job", "state"]),
   "Supplier Order": new Set(["roof_job", "status"]),
+  "Crew Profile": new Set(["status"]),
 };
 
 const OFFICE_SALES_FILTER_FIELDS: Readonly<Record<OfficeSalesDocType, ReadonlySet<string>>> = {

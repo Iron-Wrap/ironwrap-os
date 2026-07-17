@@ -15,6 +15,15 @@ export const API_PATHS = {
   logout: "/api/v1/auth/logout",
   ownerMeasurementIntakeExceptions: "/api/v1/owner/measurement-intake-exceptions",
   production: "/api/v1/production",
+  productionScheduleApprovals: "/api/v1/production-schedule-approvals",
+  productionScheduleApproval: (approvalId: string) =>
+    `/api/v1/production-schedule-approvals/${encodeURIComponent(approvalId)}`,
+  productionScheduleApprovalApprove: (approvalId: string) =>
+    `/api/v1/production-schedule-approvals/${encodeURIComponent(approvalId)}/approve`,
+  productionScheduleApprovalReject: (approvalId: string) =>
+    `/api/v1/production-schedule-approvals/${encodeURIComponent(approvalId)}/reject`,
+  productionScheduleApprovalReconcile: (approvalId: string) =>
+    `/api/v1/production-schedule-approvals/${encodeURIComponent(approvalId)}/reconcile`,
   sales: "/api/v1/sales",
   estimatorJob: (jobId: string) => `/api/v1/estimator/jobs/${encodeURIComponent(jobId)}`,
   quoteRevisionApprovals: "/api/v1/quote-revision-approvals",

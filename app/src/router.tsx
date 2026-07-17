@@ -14,7 +14,11 @@ import { takeMagicLinkTokenFromWindow } from "./auth/magic-link-fragment";
 import { takePairingTokenFromWindow } from "./auth/pairing-fragment";
 import { AppShell } from "./components/app-shell";
 import { NotFoundPage, SettingsPage } from "./pages/placeholders";
-import { CustomerPortalPage } from "./portal/customer-portal-page";
+
+const loadCustomerPortalPage = () => import("./portal/customer-portal-page");
+const CustomerPortalPage = lazy(async () => ({
+  default: (await loadCustomerPortalPage()).CustomerPortalPage,
+}));
 
 const OwnerNowPage = lazy(async () => ({
   default: (await import("./owner/owner-now-page")).OwnerNowPage,
@@ -46,15 +50,32 @@ const QuoteRevisionApprovalPreparePage = lazy(async () => ({
   default: (await import("./estimator/quote-revision-approval-page"))
     .QuoteRevisionApprovalPreparePage,
 }));
+const loadFieldPages = () => import("./field/field-pages");
 const TodayPage = lazy(async () => ({
-  default: (await import("./field/field-pages")).TodayPage,
+  default: (await loadFieldPages()).TodayPage,
 }));
 const JobPage = lazy(async () => ({
-  default: (await import("./field/field-pages")).JobPage,
+  default: (await loadFieldPages()).JobPage,
 }));
 const CheckInPage = lazy(async () => ({
-  default: (await import("./field/field-pages")).CheckInPage,
+  default: (await loadFieldPages()).CheckInPage,
 }));
+
+// Field Companion is the PWA's default entry point. Start loading its module while the
+// session boundary verifies the device instead of serializing the authenticated read
+// model behind a second route-bundle round trip. Other role surfaces remain lazy.
+if (typeof window !== "undefined" && isFieldPath(window.location.pathname)) {
+  void loadFieldPages();
+}
+
+function isFieldPath(pathname: string): boolean {
+  return (
+    pathname === "/" ||
+    pathname === "/today" ||
+    pathname.startsWith("/jobs/") ||
+    pathname.startsWith("/check-in")
+  );
+}
 
 const rootRoute = createRootRoute({
   component: Outlet,
@@ -102,8 +123,22 @@ function PairRoute() {
 const portalRootRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/portal",
-  component: CustomerPortalPage,
+  component: CustomerPortalRoute,
 });
+
+function CustomerPortalRoute() {
+  return (
+    <Suspense
+      fallback={
+        <main className="grid min-h-dvh place-items-center p-4" aria-busy="true">
+          Opening your private project portal…
+        </main>
+      }
+    >
+      <CustomerPortalPage />
+    </Suspense>
+  );
+}
 
 const authenticatedRoute = createRoute({
   getParentRoute: () => rootRoute,

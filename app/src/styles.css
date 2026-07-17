@@ -37,10 +37,10 @@
   --muted: oklch(0.45 0.018 118);
   --border: oklch(0.84 0.012 118);
   --accent: oklch(0.77 0.17 82);
-  --accent-foreground: oklch(0.18 0.02 82);
-  --ok: oklch(0.49 0.13 145);
+  --accent-foreground: oklch(0.16 0.02 82);
+  --ok: oklch(0.43 0.12 145);
   --ok-soft: oklch(0.93 0.045 145);
-  --warning: oklch(0.63 0.17 65);
+  --warning: oklch(0.48 0.15 65);
   --warning-soft: oklch(0.94 0.055 75);
   --danger: oklch(0.49 0.18 27);
   --danger-soft: oklch(0.94 0.04 27);

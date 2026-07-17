@@ -3,15 +3,17 @@ import type { ReactNode } from "react";
 
 import { ApiError } from "../lib/api";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { takePrimedFieldBootstrap, type FieldBootstrap } from "./field-bootstrap";
 import { MagicLinkForm } from "./magic-link-form";
 import { fetchSession } from "./session";
 import { SessionProvider } from "./session-context";
 import { sessionQueryKey } from "./session-query";
 
 export function AuthBoundary({ children }: { children: ReactNode }) {
+  const fieldEntry = isPrimaryFieldEntry();
   const sessionQuery = useQuery({
     queryKey: sessionQueryKey,
-    queryFn: () => fetchSession(),
+    queryFn: () => (fieldEntry ? takePrimedFieldBootstrap() : fetchSessionOnly()),
     staleTime: 60_000,
     retry(failureCount, error) {
       return error instanceof ApiError && error.status === 0 && failureCount < 1;
@@ -34,10 +36,11 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
       </div>
     );
   }
-  if (!sessionQuery.data.authenticated) {
+  const { session, today } = sessionQuery.data;
+  if (!session.authenticated) {
     return (
       <main className="flex min-h-dvh items-center justify-center p-4 sm:p-8">
-        {sessionQuery.data.stale_fields.includes("field_device_repair_required") ? (
+        {session.stale_fields.includes("field_device_repair_required") ? (
           <ErrorState
             title="This field device needs a new pairing"
             message="Its trusted device session is no longer active. Ask the office to issue a fresh QR code before using Field Companion again."
@@ -48,5 +51,17 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
       </main>
     );
   }
-  return <SessionProvider session={sessionQuery.data}>{children}</SessionProvider>;
+  return (
+    <SessionProvider session={session} initialToday={today}>
+      {children}
+    </SessionProvider>
+  );
+}
+
+async function fetchSessionOnly(): Promise<FieldBootstrap> {
+  return { session: await fetchSession() };
+}
+
+function isPrimaryFieldEntry(): boolean {
+  return typeof window !== "undefined" && window.location.pathname === "/today";
 }

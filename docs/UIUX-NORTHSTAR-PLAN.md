@@ -121,21 +121,28 @@ marketed or shipped until its own prerequisite proof gates pass.
 ### P0: Foundation (design system + shell + auth + BFF)
 
 Repository status: shell, session/magic-link boundaries, BFF read routes, principal-bound
-outbox, and QR crew pairing/revocation are implemented. Live-backend enablement, browser
-accessibility, real-device, and performance acceptance remain open.
+outbox, QR crew pairing/revocation, fixture-backed browser accessibility, and install/offline
+acceptance are implemented. A local mobile Lighthouse measurement is wired; live-backend
+enablement, real-device, and deployed-performance acceptance remain open.
 
 Tokens, component tier, app shell with role-based navigation, session auth, `/api/*` read
 models for jobs/gates/evidence, outbox plumbing, CI wiring (build, Playwright, pinned
-@lhci/cli 0.15.x asserting category scores and metric values, not legacy audit ids).
+@lhci/cli 0.15.x asserting private-app UX category scores and metric values, not legacy audit
+ids). The operator PWA is deliberately non-indexable: `noindex,nofollow` and `robots.txt`
+`Disallow: /` are build-verified privacy controls, not a reason to loosen access or game an SEO
+score.
 P0 also fixes the cross-system contracts that fresh roofing demand shows cannot be deferred:
 one canonical tenant/property/job identity; source/destination/freshness/mismatch truth for every
 integration; complete tenant export/restore; role-shaped read models; and Canada/U.S. currency,
 tax, consent, licence, and template policy.
-Proof gate: 95+ on the four current Lighthouse categories (performance, accessibility,
-best-practices, SEO; the PWA category was removed in Lighthouse 12) on a mid-range phone
-profile, PLUS an explicit Playwright installability check (valid manifest, registered
-service worker, offline response), login by QR pairing works, one job renders its Proof
-Stream from live-shaped fixtures.
+Proof gate: on a paired, authenticated `/today` fixture with one visible assigned job, Lighthouse requires
+performance ≥90, accessibility ≥95, best-practices ≥95, FCP ≤2.0s, TBT ≤200ms, and verified
+run-sheet LCP ≤4.0s on a mid-range phone profile (the PWA category was removed in Lighthouse 12).
+The LCP element must be actual dispatch/job-packet content—not boot chrome, a status banner, or an
+install prompt. PLUS an explicit Playwright installability check (valid manifest, registered
+service worker, offline response), login by QR pairing works, one job renders its Proof Stream
+from live-shaped fixtures. Search quality belongs to the public IronWrap/iRoof marketing surfaces,
+where crawling is intentional and must be validated separately.
 
 ### P1: Field Companion (the crew app; biggest differentiator)
 
@@ -279,8 +286,8 @@ demo tenant re-skinned end to end. Proof gate: second brand fully themed by conf
 | --- | --- | --- |
 | Field check-in | 15s, 4 taps or fewer, works offline with server-verified replay | Current competitors claim offline; IronWrap must prove zero-loss weak-signal recovery |
 | Owner "what is blocked" | 1 tap, under 3s | JN Insights: called "AWFUL" by its own users |
-| Cold load | LCP 2.0s or less under Lighthouse default mobile throttling (moto-g-class, 4G); CWV baseline is 2.5s, so this is a deliberate stretch | JN/GHL mobile lag complaints |
-| Lighthouse (performance/accessibility/best-practices/SEO) | 95+ each, enforced in CI via pinned @lhci/cli; installability proven separately in Playwright (PWA category removed in Lighthouse 12) | Not published by any competitor |
+| Cold verified dispatch | FCP 2.0s or less and actual run-sheet LCP 4.0s or less under Lighthouse default mobile throttling (moto-g-class, 4G). The extra budget is the deliberate device-proof + authenticated-read boundary; the first safe boot state must never pretend that work is cleared. | JN/GHL mobile lag complaints |
+| Lighthouse (performance/accessibility/best-practices) | 90+/95+/95+, enforced in CI via pinned @lhci/cli; it also asserts FCP ≤2.0s, verified run-sheet LCP ≤4.0s, and TBT ≤200ms. Installability is proven separately in Playwright (PWA category removed in Lighthouse 12). SEO is intentionally excluded because this authenticated operator PWA must remain noindex + crawler-disallowed. | Not published by any competitor |
 | Responsiveness | Field INP under 200ms at p75 via web-vitals RUM; CI lab proxy TBT under 200ms (INP is not lab-measurable) | Unpublished by competitors |
 | Data loss under bad signal | Zero (outbox replay proof test) | JN documented mid-entry estimate loss |
 | Judge panel | Multi-agent design evals + one real crew, screen vs screen | JN/GHL/Roofr equivalents |

@@ -6,11 +6,55 @@
     <meta name="referrer" content="no-referrer" />
     <meta name="theme-color" content="#121611" />
     <meta name="description" content="IronWrap OS — proof-first roofing operations." />
+    <meta name="robots" content="noindex,nofollow" />
+    <script defer src="/field-bootstrap-preload.js"></script>
+    <style>
+      html {
+        background: #f5f6f4;
+        color: #121611;
+      }
+      #app-boot-shell {
+        position: fixed;
+        inset: 0;
+        z-index: 70;
+        display: grid;
+        place-items: center;
+        padding: 1rem;
+        background: #f5f6f4;
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      }
+      #app-boot-shell > div {
+        width: min(100%, 25rem);
+        border: 1px solid #d9ddd5;
+        border-radius: 0.75rem;
+        background: #fff;
+        padding: 1.5rem;
+        box-shadow: 0 1px 2px rgb(18 22 17 / 0.08);
+      }
+      #app-boot-shell p {
+        margin: 0;
+        color: #54574c;
+        font-size: 0.875rem;
+        line-height: 1.5;
+      }
+      #app-boot-shell h1 {
+        margin: 0.5rem 0;
+        font-size: 1.5rem;
+        line-height: 1.25;
+      }
+    </style>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <title>IronWrap OS</title>
   </head>
   <body>
+    <div id="app-boot-shell" role="status" aria-live="polite">
+      <div>
+        <p>IronWrap OS</p>
+        <h1>Checking this field device</h1>
+        <p>Verifying a trusted session before showing assigned work.</p>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

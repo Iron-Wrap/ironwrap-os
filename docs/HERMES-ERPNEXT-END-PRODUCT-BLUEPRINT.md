@@ -220,6 +220,12 @@ their lineage. The read-only Control Center queues those repairs only for an Own
 Manager who can verify both the clause and quote. There is still no browser assembler, customer renderer/send, e-sign,
 or live Frappe/R2/operator proof.
 
+Sales Desk keeps its office-only view equally explicit: it shows the latest working pack for the
+selected quote separately from the existence of a last `Approved`/`Sent`/`Signed` pack for that
+same quote, so a newer Draft cannot make a recorded customer publication look revoked. If the
+bounded proposal read is partial, the browser reports publication as inconclusive rather than
+claiming either state. It cannot send, sign, issue a portal link, or expose proposal evidence.
+
 Quote price-rule provenance checkpoint (2026-07-12): a Draft or Needs Review Customer Quote can
 now bind one internal, immutable Price Book Rule snapshot through the receipt-bound
 `dry_run_bind_quote_price_rules` → `request_bind_quote_price_rules` pair. The MCP fetches the

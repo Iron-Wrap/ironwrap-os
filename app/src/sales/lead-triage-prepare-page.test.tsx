@@ -114,6 +114,7 @@ function salesModel(overrides: Partial<SalesResponse> = {}): SalesResponse {
           accepted_at: null,
           scope_summary: "Never show this here.",
         },
+        proposal: null,
         consent: { context: "recorded", records: [] },
         attention: ["triage_unresolved"],
       },

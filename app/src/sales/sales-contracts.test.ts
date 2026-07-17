@@ -63,6 +63,15 @@ function salesPayload() {
           accepted_at: null,
           scope_summary: "Replace affected roof system.",
         },
+        proposal: {
+          id: "pack_a",
+          status: "Draft",
+          prepared_at: "2026-07-11T12:00:00.000Z",
+          approved_at: null,
+          signed_at: null,
+          has_published_pack: false,
+          published_status: null,
+        },
         consent: {
           context: "recorded",
           records: [
@@ -111,6 +120,20 @@ describe("Sales browser contract", () => {
           {
             ...quoteLead,
             quote: { ...quoteLead.quote, tax_policy_snapshot_json: "private" },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    const rawProposal = salesPayload();
+    const proposalLead = rawProposal.leads[0]!;
+    expect(
+      salesResponseSchema.safeParse({
+        ...rawProposal,
+        leads: [
+          {
+            ...proposalLead,
+            proposal: { ...proposalLead.proposal, evidence_summary_json: "private" },
           },
         ],
       }).success,

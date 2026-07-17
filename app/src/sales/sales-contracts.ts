@@ -100,6 +100,18 @@ const salesLeadSchema = z
       })
       .strict()
       .nullable(),
+    proposal: z
+      .object({
+        id: z.string().min(1),
+        status: nullableText,
+        prepared_at: nullableText,
+        approved_at: nullableText,
+        signed_at: nullableText,
+        has_published_pack: z.boolean().nullable(),
+        published_status: nullableText,
+      })
+      .strict()
+      .nullable(),
     consent: z
       .object({
         context: z.enum(["recorded", "no_linked_record", "partial"]),

@@ -255,6 +255,11 @@ function rowsFor(doctype: string): Array<Record<string, unknown>> {
     payment_status: "Not Due", prepared_at: MODIFIED, approved_at: null, accepted_at: null,
     scope_summary: "Replace affected roof system.", tax_policy_snapshot_json: "private-tax-policy", modified: MODIFIED,
   }];
+  if (doctype === "Proposal Evidence Pack") return [{
+    name: "PROPOSAL-A", pack_id: "pack_a", roof_job: "JOB-A", quotation: "QUOTE-A", status: "Draft",
+    prepared_at: MODIFIED, approved_at: null, signed_at: null, evidence_summary_json: "private-proposal-summary",
+    modified: MODIFIED,
+  }];
   if (doctype === "Communication Consent") return [{
     name: "CONSENT-A", consent_id: "consent_a", customer: "CUSTOMER-A", lead_envelope: "LEAD-A", roof_job: "JOB-A",
     channel: "Email", purpose: "Estimate Follow-up", status: "Granted", jurisdiction: "AB",
@@ -635,6 +640,15 @@ test("Sales Desk receives a bounded office contract without widening Owner Now o
         accepted_at: null,
         scope_summary: "Replace affected roof system.",
       },
+      proposal: {
+        id: "pack_a",
+        status: "Draft",
+        prepared_at: MODIFIED,
+        approved_at: null,
+        signed_at: null,
+        has_published_pack: false,
+        published_status: null,
+      },
       consent: {
         context: "recorded",
         records: [{
@@ -655,7 +669,7 @@ test("Sales Desk receives a bounded office contract without widening Owner Now o
     const serialized = JSON.stringify(model);
     for (const secret of [
       "raw-intake-secret", "r2-private-key", "private-estimate-json", "private-tax-policy",
-      "private-form-reference", "private-consent-note",
+      "private-proposal-summary", "private-form-reference", "private-consent-note",
     ]) assert.equal(serialized.includes(secret), false, `leaked ${secret}`);
 
     const officeLeadRequest = mock.requests.find((request) =>
@@ -669,6 +683,9 @@ test("Sales Desk receives a bounded office contract without widening Owner Now o
       && request.filters.some((filter) => Array.isArray(filter) && filter[1] === "name" && filter[2] === "in"),
     );
     assert.deepEqual(legacyJobReferenceRequest?.filters, [["Roof Job", "name", "in", ["JOB-A"]]]);
+    const proposalRequest = mock.requests.find((request) => request.doctype === "Proposal Evidence Pack");
+    assert.deepEqual(proposalRequest?.fields, OFFICE_SALES_READ_FIELDS["Proposal Evidence Pack"]);
+    assert.deepEqual(proposalRequest?.filters, [["Proposal Evidence Pack", "quotation", "in", ["QUOTE-A"]]]);
 
     const ownerModel = await buildOwnerNowReadModel(env(), auth("owner", "owner@example.com"));
     assert.equal(ownerModel.summary.untriaged_leads, 1);
@@ -699,6 +716,82 @@ test("Sales grants the bounded triage-prepare action only for a configured broke
 
     const noBroker = await buildSalesReadModel(env(), auth("ops", "ops@example.com"));
     assert.equal(noBroker.allowed_actions.includes("approval.prepare"), false);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("Sales Desk projects proposal publication only from the selected quote version", async () => {
+  const mock = installFrappeMock({
+    "Customer Quote": [
+      {
+        name: "QUOTE-OLD", customer_quote_id: "quote_old", roof_job: "JOB-A", quote_version: 1,
+        status: "Approved", quote_total: 12_000, currency: "CAD", modified: "2026-07-09T10:00:00.000Z",
+      },
+      {
+        name: "QUOTE-CURRENT", customer_quote_id: "quote_current", roof_job: "JOB-A", quote_version: 2,
+        status: "Approved", quote_total: 14_750, currency: "CAD", modified: MODIFIED,
+      },
+    ],
+    "Proposal Evidence Pack": [
+      {
+        name: "PACK-OLD", pack_id: "pack_old", roof_job: "JOB-A", quotation: "QUOTE-OLD", status: "Approved",
+        approved_at: "2026-07-09T10:30:00.000Z", modified: "2026-07-09T10:30:00.000Z",
+      },
+      {
+        name: "PACK-CURRENT-PUBLISHED", pack_id: "pack_current_published", roof_job: "JOB-A", quotation: "QUOTE-CURRENT", status: "Approved",
+        approved_at: "2026-07-10T10:30:00.000Z", modified: "2026-07-10T10:30:00.000Z",
+      },
+      {
+        name: "PACK-CURRENT-DRAFT", pack_id: "pack_current_draft", roof_job: "JOB-A", quotation: "QUOTE-CURRENT", status: "Draft",
+        prepared_at: MODIFIED, modified: MODIFIED,
+      },
+    ],
+  });
+  try {
+    const model = await buildSalesReadModel(env(), auth("ops", "ops@example.com"));
+    const lead = model.leads[0];
+    assert.equal(lead?.quote?.id, "quote_current");
+    assert.deepEqual(lead?.proposal, {
+      id: "pack_current_draft",
+      status: "Draft",
+      prepared_at: MODIFIED,
+      approved_at: null,
+      signed_at: null,
+      has_published_pack: true,
+      published_status: "Approved",
+    });
+  } finally {
+    mock.restore();
+  }
+});
+
+test("Sales Desk makes proposal publication inconclusive when its bounded source is partial", async () => {
+  const proposalRows = Array.from({ length: 100 }, (_, index) => ({
+    name: `PACK-${String(index).padStart(3, "0")}`,
+    pack_id: `pack_${index}`,
+    roof_job: "JOB-A",
+    quotation: "QUOTE-A",
+    status: index === 1 ? "Approved" : "Draft",
+    prepared_at: index === 0 ? MODIFIED : null,
+    approved_at: index === 1 ? "2026-07-10T10:59:59.000Z" : null,
+    signed_at: null,
+    modified: new Date(Date.parse(MODIFIED) - index * 1_000).toISOString(),
+  }));
+  const mock = installFrappeMock({ "Proposal Evidence Pack": proposalRows });
+  try {
+    const model = await buildSalesReadModel(env(), auth("ops", "ops@example.com"));
+    const lead = model.leads[0];
+    assert.equal(model.partial_sources.includes("proposal_evidence_packs"), true);
+    assert.deepEqual(lead?.proposal, {
+      id: "pack_0",
+      status: "Draft",
+      prepared_at: MODIFIED,
+      approved_at: null,
+      signed_at: null,
+      has_published_pack: null,
+      published_status: null,
+    });
   } finally {
     mock.restore();
   }

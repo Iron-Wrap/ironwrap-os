@@ -108,6 +108,7 @@ function SalesDeskScreen({
   const canReviewApprovals = model.allowed_actions.includes("approval.read");
   const canPrepareTriage = model.allowed_actions.includes("approval.prepare");
   const canOpenWorkbench = model.allowed_actions.includes("estimator.read");
+  const proposalSourcePartial = model.partial_sources.includes("proposal_evidence_packs");
 
   return (
     <section className="mx-auto max-w-7xl space-y-6 pb-4">
@@ -161,6 +162,7 @@ function SalesDeskScreen({
             currency={currency}
             canOpenWorkbench={canOpenWorkbench}
             canPrepareTriage={canPrepareTriage}
+            proposalSourcePartial={proposalSourcePartial}
           />
         </main>
       </div>
@@ -271,6 +273,7 @@ function LeadQueue({
   currency,
   canOpenWorkbench,
   canPrepareTriage,
+  proposalSourcePartial,
 }: {
   leads: SalesLead[];
   filter: SalesFilter;
@@ -278,6 +281,7 @@ function LeadQueue({
   currency: string;
   canOpenWorkbench: boolean;
   canPrepareTriage: boolean;
+  proposalSourcePartial: boolean;
 }) {
   if (leads.length === 0) {
     return (
@@ -315,6 +319,7 @@ function LeadQueue({
               defaultCurrency={currency}
               canOpenWorkbench={canOpenWorkbench}
               canPrepareTriage={canPrepareTriage}
+              proposalSourcePartial={proposalSourcePartial}
             />
           </li>
         ))}
@@ -329,12 +334,14 @@ function LeadRow({
   defaultCurrency,
   canOpenWorkbench,
   canPrepareTriage,
+  proposalSourcePartial,
 }: {
   lead: SalesLead;
   locale: string;
   defaultCurrency: string;
   canOpenWorkbench: boolean;
   canPrepareTriage: boolean;
+  proposalSourcePartial: boolean;
 }) {
   const receivedAt = formatDate(lead.received_at, locale);
   const contact = [lead.contact.phone, lead.contact.email].filter((value): value is string =>
@@ -384,7 +391,13 @@ function LeadRow({
             <EstimateSummary estimate={lead.estimate} locale={locale} currency={defaultCurrency} />
           </ReviewCell>
           <ReviewCell label="Quote">
-            <QuoteSummary quote={lead.quote} locale={locale} defaultCurrency={defaultCurrency} />
+            <QuoteSummary
+              quote={lead.quote}
+              proposal={lead.proposal}
+              proposalSourcePartial={proposalSourcePartial}
+              locale={locale}
+              defaultCurrency={defaultCurrency}
+            />
           </ReviewCell>
           <ReviewCell label="Communication record" last>
             <ConsentSummary consent={lead.consent} locale={locale} />
@@ -483,10 +496,14 @@ function EstimateSummary({
 
 function QuoteSummary({
   quote,
+  proposal,
+  proposalSourcePartial,
   locale,
   defaultCurrency,
 }: {
   quote: SalesLead["quote"];
+  proposal: SalesLead["proposal"];
+  proposalSourcePartial: boolean;
   locale: string;
   defaultCurrency: string;
 }) {
@@ -516,6 +533,66 @@ function QuoteSummary({
       {quote.scope_summary ? (
         <p className="text-sm leading-6 text-muted">{quote.scope_summary}</p>
       ) : null}
+      <div className="mt-3 border-t border-border pt-3">
+        <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted">
+          Customer proposal
+        </p>
+        <ProposalPublicationSummary proposal={proposal} sourcePartial={proposalSourcePartial} />
+      </div>
+    </div>
+  );
+}
+
+function ProposalPublicationSummary({
+  proposal,
+  sourcePartial,
+}: {
+  proposal: SalesLead["proposal"];
+  sourcePartial: boolean;
+}) {
+  if (sourcePartial || proposal?.has_published_pack === null) {
+    return (
+      <div className="mt-2 space-y-1">
+        {proposal ? (
+          <StatusChip
+            label={humanize(proposal.status) ?? "State unavailable"}
+            tone={proposalTone(proposal.status)}
+          />
+        ) : null}
+        <p className="text-sm font-bold text-warning">Publication state inconclusive</p>
+        <p className="text-sm leading-6 text-warning">
+          Proposal evidence reached its safe read boundary. Do not infer customer publication.
+        </p>
+      </div>
+    );
+  }
+  if (!proposal) {
+    return (
+      <p className="mt-2 text-sm leading-6 text-warning">
+        {sourcePartial
+          ? "Proposal evidence reached its safe read boundary. Do not infer customer publication."
+          : "No proposal evidence links to this quote. Quote terms remain office-only."}
+      </p>
+    );
+  }
+  const published = proposal.has_published_pack === true;
+  const newestIsPublished = proposalIsPublished(proposal.status);
+  return (
+    <div className="mt-2 space-y-1">
+      <StatusChip
+        label={humanize(proposal.status) ?? "State unavailable"}
+        tone={proposalTone(proposal.status)}
+      />
+      <p className={cn("text-sm font-bold", published ? "text-ok" : "text-warning")}>
+        {published ? "Publication recorded" : "Not published"}
+      </p>
+      <p className="text-sm leading-6 text-muted">
+        {published
+          ? newestIsPublished
+            ? "A valid customer link may show its safe summary when the portal capability is enabled."
+            : `The latest returned office pack is ${humanize(proposal.status) ?? "draft"}; a valid customer link may still show the last published safe summary when the portal capability is enabled.`
+          : "This pack cannot make quote terms customer-visible."}
+      </p>
     </div>
   );
 }
@@ -720,6 +797,16 @@ function quoteTone(status: string | null): string {
   if (status === "Needs Review") return "bg-warning-soft text-warning";
   if (status === "Expired" || status === "Rejected") return "bg-danger-soft text-danger";
   return "bg-surface-muted text-muted";
+}
+
+function proposalTone(status: string | null): string {
+  if (proposalIsPublished(status)) return "bg-ok-soft text-ok";
+  if (status === "Draft" || status === "Ready") return "bg-warning-soft text-warning";
+  return "bg-surface-muted text-muted";
+}
+
+function proposalIsPublished(status: string | null): boolean {
+  return status === "Approved" || status === "Sent" || status === "Signed";
 }
 
 function estimateValue(

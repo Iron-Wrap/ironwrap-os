@@ -122,6 +122,15 @@ function salesModel(overrides: Partial<SalesResponse> = {}): SalesResponse {
           accepted_at: null,
           scope_summary: "Replace affected roof system.",
         },
+        proposal: {
+          id: "pack_a",
+          status: "Draft",
+          prepared_at: "2026-07-11T12:00:00.000Z",
+          approved_at: null,
+          signed_at: null,
+          has_published_pack: false,
+          published_status: null,
+        },
         consent: {
           context: "recorded",
           records: [
@@ -153,6 +162,7 @@ function salesModel(overrides: Partial<SalesResponse> = {}): SalesResponse {
         job: null,
         estimate: null,
         quote: null,
+        proposal: null,
         consent: { context: "no_linked_record", records: [] },
         attention: [],
       },
@@ -188,6 +198,9 @@ describe("SalesDeskPage", () => {
     expect(screen.getByText("Pat Prospect")).toBeVisible();
     expect(screen.getByText("Triage unresolved")).toBeVisible();
     expect(screen.getByText("Non-binding")).toBeVisible();
+    expect(screen.getByText("Customer proposal")).toBeVisible();
+    expect(screen.getByText("Not published")).toBeVisible();
+    expect(screen.getByText(/cannot make quote terms customer-visible/i)).toBeVisible();
     expect(screen.getByText("Email · Estimate Follow-up · Granted")).toBeVisible();
     expect(screen.getByRole("link", { name: "Review approvals" })).toHaveAttribute(
       "href",
@@ -237,6 +250,59 @@ describe("SalesDeskPage", () => {
     await screen.findByRole("heading", { name: "Sales desk" });
     expect(screen.getByText("Approved", { exact: true })).toBeVisible();
     expect(screen.queryByText("Non-binding", { exact: true })).not.toBeInTheDocument();
+  });
+
+  it("does not invent a missing proposal state when its source hit the bounded read limit", async () => {
+    const model = salesModel();
+    const firstLead = model.leads[0]!;
+    vi.mocked(loadSales).mockResolvedValue({
+      ...model,
+      partial_sources: ["proposal_evidence_packs"],
+      leads: [{ ...firstLead, proposal: null }],
+    });
+    renderSales();
+
+    await screen.findByRole("heading", { name: "Sales desk" });
+    expect(screen.getByText(/Do not infer customer publication/i)).toBeVisible();
+    expect(screen.queryByText(/No proposal evidence links to this quote/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps a returned proposal publication-inconclusive when its bounded source is partial", async () => {
+    const model = salesModel();
+    vi.mocked(loadSales).mockResolvedValue({
+      ...model,
+      partial_sources: ["proposal_evidence_packs"],
+    });
+    renderSales();
+
+    await screen.findByRole("heading", { name: "Sales desk" });
+    expect(screen.getByText("Publication state inconclusive")).toBeVisible();
+    expect(screen.getByText(/Do not infer customer publication/i)).toBeVisible();
+    expect(screen.queryByText("Publication recorded")).not.toBeInTheDocument();
+    expect(screen.queryByText("Not published")).not.toBeInTheDocument();
+  });
+
+  it("keeps a recorded publication visible when a newer office draft exists", async () => {
+    const model = salesModel();
+    const firstLead = model.leads[0]!;
+    vi.mocked(loadSales).mockResolvedValue({
+      ...model,
+      leads: [
+        {
+          ...firstLead,
+          proposal: {
+            ...firstLead.proposal!,
+            has_published_pack: true,
+            published_status: "Approved",
+          },
+        },
+      ],
+    });
+    renderSales();
+
+    await screen.findByRole("heading", { name: "Sales desk" });
+    expect(screen.getByText("Publication recorded")).toBeVisible();
+    expect(screen.getByText(/latest returned office pack is Draft/i)).toBeVisible();
   });
 
   it("opens the source workbench only when the BFF grants estimator review", async () => {

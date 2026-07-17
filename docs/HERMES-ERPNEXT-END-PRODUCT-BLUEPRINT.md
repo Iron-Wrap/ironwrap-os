@@ -214,7 +214,9 @@ Frappe mutation boundary locks the pack and Hermes Run, independently verifies t
 capability, and records the server-owned approval facts; the portal can then show only its safe
 summary when a separately issued private capability link already exists. Publication does not issue
 or revoke a portal link, render/archive a document, send a customer message, collect a signature,
-or create Contract Acceptance. There is still no browser assembler, customer renderer/send, e-sign,
+or create Contract Acceptance. A customer-visible Scope Clause must bind the same Customer Quote;
+unlinked or job-mismatched legacy clauses stay out of the portal until an owner explicitly repairs
+their lineage. There is still no browser assembler, customer renderer/send, e-sign,
 or live Frappe/R2/operator proof.
 
 Quote price-rule provenance checkpoint (2026-07-12): a Draft or Needs Review Customer Quote can

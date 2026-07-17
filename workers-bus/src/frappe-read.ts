@@ -215,7 +215,7 @@ export const CUSTOMER_PORTAL_READ_FIELDS = {
     "name", "pack_id", "roof_job", "quotation", "status", "prepared_at", "approved_at", "signed_at", "modified",
   ],
   "Scope Clause": [
-    "name", "scope_clause_id", "roof_job", "clause_type", "title", "clause_text", "version", "status",
+    "name", "scope_clause_id", "roof_job", "customer_quote", "clause_type", "title", "clause_text", "version", "status",
     "customer_visible", "modified",
   ],
   "Evidence Item": [

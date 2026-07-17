@@ -239,6 +239,39 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         ):
             accepted_adapter.validate_business_document(revision, "customer_quote")
 
+    def test_customer_visible_scope_clause_requires_its_quote_to_share_the_job(self) -> None:
+        document = FakeDocument(
+            {
+                "scope_clause_id": "scope-1",
+                "roof_job": "job-1",
+                "customer_quote": "quote-1",
+                "status": "Approved",
+                "clause_type": "Included",
+                "title": "Roofing scope",
+                "clause_text": "Install the reviewed roofing system.",
+                "version": "1",
+                "source_ref": "scope-library:v1",
+                "customer_visible": 1,
+                "approved_by": "owner@example.com",
+                "approved_at": "2026-07-17 10:00:00",
+                "approval_note": "Quote wording reviewed.",
+            }
+        )
+        adapter, _ = self.load_adapter(
+            values={
+                ("Customer Quote", "quote-1", ("roof_job",)): {"roof_job": "job-1"}
+            }
+        )
+        adapter.validate_business_document(document, "scope_clause")
+
+        mismatch_adapter, _ = self.load_adapter(
+            values={
+                ("Customer Quote", "quote-1", ("roof_job",)): {"roof_job": "other-job"}
+            }
+        )
+        with self.assertRaisesRegex(FakeValidationError, "scope_clause_quote_mismatch"):
+            mismatch_adapter.validate_business_document(document, "scope_clause")
+
     def test_customer_quote_snapshot_loads_verified_price_rule_context(self) -> None:
         rule = {
             "name": "rule-1",

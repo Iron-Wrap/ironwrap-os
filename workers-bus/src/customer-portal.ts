@@ -406,6 +406,7 @@ export async function buildCustomerPortalReadModel(
     ? clauses.filter(
         (row) =>
           text(row.roof_job, 140) === link.roof_job_id &&
+          text(row.customer_quote, 140) === quoteName &&
           text(row.status, 80) === "Approved" &&
           truthy(row.customer_visible),
       )

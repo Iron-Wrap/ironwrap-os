@@ -1900,12 +1900,15 @@ class DomainPolicyTests(unittest.TestCase):
             },
             "scope_clause": {
                 "scope_clause_id": "clause-1",
+                "roof_job": "job-1",
+                "customer_quote": "quote-1",
                 "status": "Approved",
                 "clause_type": "Included",
                 "title": "Tear-off",
                 "clause_text": "Remove one existing layer.",
                 "version": "1.0",
                 "source_ref": "scope-library:v1",
+                "customer_visible": 1,
                 "approved_by": "owner@example.com",
                 "approved_at": "2026-07-10 10:00:00",
                 "approval_note": "Legal wording reviewed.",
@@ -1913,7 +1916,37 @@ class DomainPolicyTests(unittest.TestCase):
         }
         for kind, record in records.items():
             with self.subTest(kind=kind):
-                validate_record(kind, record)
+                validate_record(
+                    kind,
+                    record,
+                    context=(
+                        {"scope_clause_quote": {"roof_job": "job-1"}}
+                        if kind == "scope_clause"
+                        else None
+                    ),
+                )
+
+        self.assert_policy(
+            "scope_clause_quote_missing",
+            validate_record,
+            "scope_clause",
+            records["scope_clause"],
+        )
+        self.assert_policy(
+            "scope_clause_quote_mismatch",
+            validate_record,
+            "scope_clause",
+            records["scope_clause"],
+            context={"scope_clause_quote": {"roof_job": "other-job"}},
+        )
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "scope_clause",
+            {**records["scope_clause"], "customer_quote": "quote-2"},
+            previous=records["scope_clause"],
+            context={"scope_clause_quote": {"roof_job": "job-1"}},
+        )
 
         self.assert_policy(
             "value_out_of_range",

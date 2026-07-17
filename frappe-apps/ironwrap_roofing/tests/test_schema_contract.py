@@ -139,6 +139,7 @@ NEW_BLUEPRINT_FIELDS = {
     },
     "Scope Clause": {
         "scope_clause_id",
+        "customer_quote",
         "clause_type",
         "title",
         "clause_text",

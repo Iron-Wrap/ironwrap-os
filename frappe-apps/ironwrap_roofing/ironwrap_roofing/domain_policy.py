@@ -462,6 +462,9 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "jobnimbus_job_id",
         "qb_invoice_ref",
     ),
+    # A customer-visible clause is quote-owned. Once an operator associates it with a job/quote,
+    # it must not be silently repointed to a later commercial revision.
+    "scope_clause": ("roof_job", "customer_quote"),
     "safety_plan": ("roof_job", "version", "prepared_by", "prepared_at", "supersedes"),
     "tenant_export_run": ("tenant", "requested_by", "requested_at", "scope_json", "supersedes"),
     "visual_property_model": ("provider", "provider_model_id", "model_uri", "raw_key"),
@@ -2626,13 +2629,28 @@ def _validate_option_package(record: Any, _context: Mapping[str, Any]) -> None:
     )
 
 
-def _validate_scope_clause(record: Any, _context: Mapping[str, Any]) -> None:
+def _validate_scope_clause(record: Any, context: Mapping[str, Any]) -> None:
     if _get(record, "status") != "Approved":
         return
     require_fields(
         record, "clause_type", "title", "clause_text", "version", "source_ref"
     )
     require_approval(record, note="approval_note")
+    if _get(record, "customer_visible") in (True, 1, "1"):
+        require_fields(record, "roof_job", "customer_quote")
+        quote = context.get("scope_clause_quote")
+        if not isinstance(quote, Mapping):
+            raise PolicyViolation(
+                "scope_clause_quote_missing",
+                "customer-visible scope clause needs an existing Customer Quote",
+                "customer_quote",
+            )
+        if quote.get("roof_job") != _get(record, "roof_job"):
+            raise PolicyViolation(
+                "scope_clause_quote_mismatch",
+                "customer-visible scope clause must belong to the same Roof Job as its Customer Quote",
+                "customer_quote",
+            )
 
 
 def _validate_incident(record: Any, _context: Mapping[str, Any]) -> None:

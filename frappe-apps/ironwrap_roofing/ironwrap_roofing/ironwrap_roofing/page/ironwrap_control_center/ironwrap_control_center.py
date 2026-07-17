@@ -206,6 +206,7 @@ def _selected_job(
                 "brand",
                 "service_type",
                 "job_status",
+                "quotation",
                 "current_gate_state",
                 "modified",
             ],
@@ -222,6 +223,7 @@ def _selected_job(
                     "brand",
                     "service_type",
                     "job_status",
+                    "quotation",
                     "current_gate_state",
                     "modified",
                 ],
@@ -243,9 +245,36 @@ def _selected_job(
     return active or (jobs[0] if jobs else None)
 
 
-def _snapshot(job: dict[str, Any] | None) -> dict[str, Any]:
+def _prepend_unique_rows(
+    preferred: list[dict[str, Any]], existing: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Keep exact lineage reads first without duplicating a Frappe document."""
+
+    rows: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for row in [*preferred, *existing]:
+        name = str(row.get("name") or "")
+        if name and name in names:
+            continue
+        if name:
+            names.add(name)
+        rows.append(row)
+    return rows
+
+
+def _snapshot(job: dict[str, Any] | None, roles: list[str]) -> dict[str, Any]:
+    quote_access = bool(frappe.has_permission("Customer Quote", ptype="read"))
+    quote_lineage_access = bool({"IronWrap Owner", "System Manager"}.intersection(roles)) and quote_access
+    publication_access = quote_lineage_access and bool(
+        frappe.has_permission("Proposal Evidence Pack", ptype="read")
+    )
     snapshot: dict[str, Any] = {
         "job": job,
+        "proposal_access": {
+            "quote": quote_access,
+            "quote_lineage": quote_lineage_access,
+            "publication": publication_access,
+        },
         "gates": [],
         "estimates": [],
         "measurements": [],
@@ -264,6 +293,23 @@ def _snapshot(job: dict[str, Any] | None) -> dict[str, Any]:
     if not job:
         return snapshot
     name = str(job["name"])
+    quote_fields = [
+        "name",
+        "customer_quote_id",
+        "roof_job",
+        "status",
+        "quote_total",
+        "currency",
+        "modified",
+    ]
+    proposal_fields = [
+        "name",
+        "pack_id",
+        "roof_job",
+        "quotation",
+        "status",
+        "modified",
+    ]
     specs = {
         "gates": (
             "Production Gate State",
@@ -294,14 +340,7 @@ def _snapshot(job: dict[str, Any] | None) -> dict[str, Any]:
         ),
         "quotes": (
             "Customer Quote",
-            [
-                "name",
-                "customer_quote_id",
-                "status",
-                "quote_total",
-                "currency",
-                "modified",
-            ],
+            quote_fields,
             5,
         ),
         "supplier_quotes": (
@@ -329,7 +368,7 @@ def _snapshot(job: dict[str, Any] | None) -> dict[str, Any]:
         ),
         "proposals": (
             "Proposal Evidence Pack",
-            ["name", "pack_id", "status", "modified"],
+            proposal_fields,
             5,
         ),
         "field_check_ins": (
@@ -382,6 +421,37 @@ def _snapshot(job: dict[str, Any] | None) -> dict[str, Any]:
         snapshot[key] = _records(
             doctype, fields, filters={"roof_job": name}, limit=limit
         )
+    quote_name = str(job.get("quotation") or "")
+    if quote_name and quote_access:
+        # The generic history rails are deliberately short. Read the exact current lineage too,
+        # so a historical pack cannot decide the runway and an older published pack is retained.
+        current_quote = _records(
+            "Customer Quote",
+            quote_fields,
+            filters={"name": quote_name, "roof_job": name},
+            limit=1,
+        )
+        snapshot["quotes"] = _prepend_unique_rows(current_quote, snapshot["quotes"])
+        if publication_access:
+            latest_current_pack = _records(
+                "Proposal Evidence Pack",
+                proposal_fields,
+                filters={"quotation": quote_name, "roof_job": name},
+                limit=1,
+            )
+            published_current_pack = _records(
+                "Proposal Evidence Pack",
+                proposal_fields,
+                filters={
+                    "quotation": quote_name,
+                    "roof_job": name,
+                    "status": ["in", ["Approved", "Sent", "Signed"]],
+                },
+                limit=1,
+            )
+            snapshot["proposals"] = _prepend_unique_rows(
+                [*latest_current_pack, *published_current_pack], snapshot["proposals"]
+            )
     gate_position = {gate: index for index, gate in enumerate(GATE_ORDER)}
     snapshot["gates"].sort(key=lambda row: gate_position.get(str(row.get("gate")), 99))
     return snapshot
@@ -451,6 +521,7 @@ def get_control_center(roof_job: str | None = None) -> dict[str, Any]:
             "brand",
             "service_type",
             "job_status",
+            "quotation",
             "current_gate_state",
             "modified",
         ],
@@ -484,7 +555,7 @@ def get_control_center(roof_job: str | None = None) -> dict[str, Any]:
         _customer_portal_scope_actions(roles),
     )
     selected = _selected_job(roof_job, jobs, blocked_gates)
-    snapshot = _snapshot(selected)
+    snapshot = _snapshot(selected, roles)
 
     pipeline_counts = {status: 0 for status in PIPELINE_ORDER}
     for job in jobs:

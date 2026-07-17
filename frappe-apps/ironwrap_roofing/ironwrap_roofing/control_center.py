@@ -43,6 +43,120 @@ def _record_step(
     return {"key": key, "label": label, "state": state, "detail": status}
 
 
+def _proposal_runway_step(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Project proposal truth only from the Roof Job's current quote anchor.
+
+    A job can retain historical quotes and proof packs. Those records must not
+    make the current quote look customer-published: the portal itself requires
+    the exact Roof Job -> Customer Quote -> Proposal Evidence Pack lineage.
+    """
+
+    job = snapshot.get("job") or {}
+    job_name = str(job.get("name") or "")
+    quote_name = str(job.get("quotation") or "")
+    access = snapshot.get("proposal_access")
+    quote_access = bool(access.get("quote")) if isinstance(access, Mapping) else True
+    quote_lineage_access = (
+        bool(access.get("quote_lineage")) if isinstance(access, Mapping) else True
+    )
+    publication_access = (
+        bool(access.get("publication")) if isinstance(access, Mapping) else True
+    )
+    if not quote_access:
+        return {
+            "key": "proposal",
+            "label": "Proposal",
+            "state": "pending",
+            "detail": "Customer quote is not available in your role",
+        }
+    if not quote_name:
+        return {
+            "key": "proposal",
+            "label": "Proposal",
+            "state": "pending",
+            "detail": "No current quote linked",
+        }
+
+    quote = next(
+        (
+            row
+            for row in (snapshot.get("quotes") or [])
+            if str(row.get("name") or "") == quote_name
+            and str(row.get("roof_job") or "") == job_name
+        ),
+        None,
+    )
+    if not quote:
+        return {
+            "key": "proposal",
+            "label": "Proposal",
+            "state": "attention" if quote_lineage_access else "pending",
+            "detail": (
+                "Current quote link cannot be verified"
+                if quote_lineage_access
+                else "Current quote is unavailable in this view"
+            ),
+        }
+
+    quote_status = str(quote.get("status") or "Unknown")
+    if quote_status not in {"Approved", "Accepted"}:
+        return _record_step(
+            "proposal",
+            "Proposal",
+            [quote],
+            complete=set(),
+            attention={"Needs Review", "Rejected", "Expired"},
+        )
+
+    if not publication_access:
+        return {
+            "key": "proposal",
+            "label": "Proposal",
+            "state": "active",
+            "detail": "Customer publication is not available in your role",
+        }
+
+    matching_packs = [
+        row
+        for row in (snapshot.get("proposals") or [])
+        if str(row.get("quotation") or "") == quote_name
+        and str(row.get("roof_job") or "") == job_name
+    ]
+    published_packs = [
+        row
+        for row in matching_packs
+        if row.get("status") in {"Approved", "Sent", "Signed"}
+    ]
+    if not published_packs:
+        latest_pack = _latest(matching_packs)
+        if latest_pack:
+            status = str(latest_pack.get("status") or "Unknown")
+            detail = f"Quote approved; latest proposal pack {status} is not published"
+        else:
+            detail = "Quote approved; customer publication pending"
+        return {
+            "key": "proposal",
+            "label": "Proposal",
+            "state": "attention",
+            "detail": detail,
+        }
+
+    latest_pack = _latest(matching_packs)
+    latest_status = (
+        str(latest_pack.get("status") or "Unknown") if latest_pack else "Unknown"
+    )
+    if latest_status in {"Approved", "Sent", "Signed"}:
+        detail = latest_status
+    else:
+        detail = f"Published; latest returned office pack {latest_status}"
+    return {
+        "key": "proposal",
+        "label": "Proposal",
+        "state": "complete",
+        "detail": detail,
+    }
+
+
 def build_customer_portal_scope_actions(
     clauses: Sequence[Mapping[str, Any]] | None,
     quotes: Sequence[Mapping[str, Any]] | None,
@@ -155,16 +269,7 @@ def build_job_runway(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
         ),
     ]
 
-    proposal_records = snapshot.get("proposals") or snapshot.get("quotes")
-    runway.append(
-        _record_step(
-            "proposal",
-            "Proposal",
-            proposal_records,
-            complete={"Approved", "Accepted", "Sent", "Signed"},
-            attention={"Needs Review", "Rejected", "Expired"},
-        )
-    )
+    runway.append(_proposal_runway_step(snapshot))
 
     orders = snapshot.get("supplier_orders") or []
     supplier_quotes = snapshot.get("supplier_quotes") or []

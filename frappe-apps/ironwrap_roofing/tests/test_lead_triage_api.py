@@ -99,6 +99,8 @@ class LeadTriageApiTests(unittest.TestCase):
                     }
                 ),
                 "dry_run_json": "{}",
+                "dry_run_receipt": "signed-dry-run-receipt",
+                "approval_receipt": "signed-approval-receipt",
                 "policy_check_json": json.dumps(
                     {
                         "allowed": True,
@@ -134,6 +136,21 @@ class LeadTriageApiTests(unittest.TestCase):
         validation_module.lead_triage_transition_context = (
             lead_triage_transition_context
         )
+        approval_module = types.ModuleType("ironwrap_roofing.approval_receipt")
+
+        class FakeApprovalReceiptError(Exception):
+            def __init__(self, code: str) -> None:
+                self.code = code
+                super().__init__(code)
+
+        def assert_approved_hermes_run_receipt(run, **_kwargs) -> None:
+            if run.get("receipt_error"):
+                raise FakeApprovalReceiptError(run["receipt_error"])
+
+        approval_module.ApprovalReceiptError = FakeApprovalReceiptError
+        approval_module.assert_approved_hermes_run_receipt = (
+            assert_approved_hermes_run_receipt
+        )
         frappe_module = types.ModuleType("frappe")
         frappe_module.ValidationError = FakeValidationError
         frappe_module.PermissionError = FakePermissionError
@@ -165,6 +182,7 @@ class LeadTriageApiTests(unittest.TestCase):
             sys.modules,
             {
                 "frappe": frappe_module,
+                "ironwrap_roofing.approval_receipt": approval_module,
                 "ironwrap_roofing.document_validation": validation_module,
             },
         ):
@@ -213,6 +231,15 @@ class LeadTriageApiTests(unittest.TestCase):
     def test_command_rejects_other_user_or_nonmatching_approved_run(self) -> None:
         api, fixtures, _, _ = self.load_api(session_user="support@example.com")
         with self.assertRaisesRegex(FakePermissionError, "requester_mismatch"):
+            self.call(api)
+        self.assertEqual(fixtures["envelope"].save_count, 0)
+
+    def test_command_rejects_an_expired_signed_capability(self) -> None:
+        fixtures = self.fixture_data()
+        fixtures["run"]["receipt_error"] = "expired"
+        api, fixtures, _, _ = self.load_api(fixtures)
+
+        with self.assertRaisesRegex(FakeValidationError, "approval_receipt_expired"):
             self.call(api)
         self.assertEqual(fixtures["envelope"].save_count, 0)
 

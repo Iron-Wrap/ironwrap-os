@@ -148,7 +148,7 @@
       "support_admin_agent"
     ],
     "approval_policy": "dry_run_then_human_approval",
-    "write_guard_envs": ["ERPNEXT_WRITE_ENABLED", "HERMES_DRY_RUN_SIGNING_KEY", "HERMES_APPROVAL_PUBLIC_KEY_FILE"]
+    "write_guard_envs": ["ERPNEXT_WRITE_ENABLED", "HERMES_DRY_RUN_SIGNING_KEY", "HERMES_APPROVAL_PUBLIC_KEY_FILE", "IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE", "IRONWRAP_HERMES_SITE_BASE_URL"]
   },
   "market_defense": {
     "competitor_set": [

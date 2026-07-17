@@ -4,7 +4,7 @@ Narrow MCP server for the proprietary IronWrap OS Frappe app. The `erpnext-*`
 name is retained only for compatibility; ERPNext is not installed or linked.
 
 This server is the Hermes command surface over IronWrap OS business truth. It uses
-Frappe token auth. The implemented source contract is **129 tools: 75 reads, 27 dry-runs, and 27
+Frappe token auth. The implemented source contract is **131 tools: 75 reads, 28 dry-runs, and 28
 approved writes**. The manifest in `hermes/mcp-servers.json` is the exact source-registration
 inventory; deployed runtime proof remains a launch gate.
 
@@ -68,6 +68,8 @@ Baseline reads and command pairs:
 - `request_create_quote_revision`
 - `dry_run_proposal_evidence_pack`
 - `request_create_proposal_evidence_pack`
+- `dry_run_publish_proposal_evidence_pack`
+- `request_publish_proposal_evidence_pack`
 - `dry_run_completion_packet`
 - `request_create_completion_packet`
 - `dry_run_warranty_packet`
@@ -120,8 +122,10 @@ process must also bind one canonical `HERMES_AGENT_ROLE` and `HERMES_ACTOR_USER`
 the server registers only that role's `roles.json` allowlist. An approved request
 needs a stable `run_id`, request text, approver, a short-lived server-issued
 `dry_run_receipt`, and an independently signed `approval_receipt` for the exact
-arguments, role, actor, and Frappe site. Receipt fields are redacted from the
-`Hermes Run` audit payload. Creating the unique `Hermes Run` is the one mutation
+arguments, role, actor, and Frappe site. Receipts are retained in dedicated
+`Hermes Run` audit fields, excluded from `tool_args_json` and result payloads,
+and independently verified by Frappe before its guarded mutation commands act.
+Creating the unique `Hermes Run` is the one mutation
 claim. A source change or an already-created append-only target fails closed during
 preview revalidation; an in-flight, failed, or audit-failed claim never re-executes
 the mutation.
@@ -148,6 +152,12 @@ Current approved-write tools:
   and verified customer-safe evidence; retains a quote-owned Draft identity; and
   persists only a redacted summary. It does not approve pricing, scope, payment
   terms, material orders, or customer send.
+- `request_publish_proposal_evidence_pack` is Owner Operator-only and can promote one quote-owned Draft
+  `Proposal Evidence Pack` to `Approved` only through a signed preview, human
+  approval, audited Frappe command, and exact Draft-state recheck. The existing
+  private portal may then display it, but this tool does not issue a link, send
+  a message, render a PDF, create Contract Acceptance, sign, accept, charge, or
+  mutate the Customer Quote.
 - `request_create_supplier_quote` creates or updates one review-gated
   `Supplier Quote` (with `valid_until` and per-line prices) from an approved
   `Material Takeoff`. It does not place orders or commit pricing.
@@ -206,6 +216,12 @@ HERMES_APPROVAL_PUBLIC_KEY_FILE=/run/secrets/hermes-approval-public.pem
 ERPNEXT_REQUEST_TIMEOUT_MS=10000
 ```
 
+The Frappe backend independently needs the same public-key-only mount as
+`IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE` and
+`IRONWRAP_HERMES_SITE_BASE_URL` set to the same public `ERPNEXT_BASE_URL`.
+Both runtimes normalize that public URL before hashing it into `site_id`; this
+prevents a valid capability for another site from being consumed locally.
+
 The private brokers hold the Ed25519 private key and start a fresh, fixed-role
 MCP child only for their bounded endpoints. Lead triage remains
 `node src/approval-broker.mjs` behind
@@ -228,7 +244,9 @@ Frappe integration credential for that process.
 
 Production URLs must use HTTPS. Plain HTTP is rejected unless the hostname is
 localhost and `ERPNEXT_ALLOW_INSECURE_LOCAL=true` is explicitly set for local
-development.
+development. An approved write over that local-only connection also requires
+`IRONWRAP_HERMES_ALLOW_INSECURE_LOCAL=true` in the Frappe site configuration;
+both switches must remain absent or false outside local development.
 
 Run locally:
 

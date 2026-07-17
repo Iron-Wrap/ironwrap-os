@@ -1808,7 +1808,12 @@ def _validate_proposal(record: Any, context: Mapping[str, Any]) -> None:
             "must be derived from the linked Customer Quote",
             "pack_id",
         )
-    if _get(record, "status") != "Draft":
+    status = _get(record, "status")
+    if status == "Draft":
+        pass
+    elif status == "Approved" and _is_approved_proposal_publication(record, context):
+        require_approval(record)
+    else:
         raise PolicyViolation(
             "proposal_pack_draft_only",
             "status changes require a dedicated receipt-verifying delivery command",
@@ -1855,6 +1860,35 @@ def _validate_proposal(record: Any, context: Mapping[str, Any]) -> None:
             "customer messages require a dedicated approved delivery workflow",
             "customer_message",
         )
+
+
+def _is_approved_proposal_publication(
+    record: Any, context: Mapping[str, Any]
+) -> bool:
+    """Accept only the exact private Draft-to-Approved command context.
+
+    ``domain_policy`` stays independently useful for contract validation, so it
+    cannot import request-local Frappe state.  The document adapter injects this
+    small, server-derived context only while the receipt-verifying command holds
+    its private ContextVar; every other non-Draft proposal state remains invalid.
+    """
+
+    publication = context.get("proposal_publication")
+    previous = context.get("_previous")
+    if not isinstance(publication, Mapping) or previous is None:
+        return False
+    approved_by = _get(record, "approved_by")
+    approved_at = _get(record, "approved_at")
+    return (
+        _get(previous, "status") == "Draft"
+        and _get(record, "name") == publication.get("proposal_evidence_pack_id")
+        and isinstance(publication.get("hermes_run_id"), str)
+        and not _blank(publication.get("hermes_run_id"))
+        and approved_by == publication.get("approved_by")
+        and approved_at == publication.get("approved_at")
+        and not _blank(approved_by)
+        and _safe_iso_timestamp(approved_at)
+    )
 
 
 def _validate_proposal_evidence_summary(
@@ -2401,7 +2435,13 @@ def _validate_hermes_run(record: Any, _context: Mapping[str, Any]) -> None:
                     "policy_check_block",
                     "approved write requires policy_check_json.allowed=true",
                 )
-            require_fields(record, "policy_checked_by", "policy_checked_at")
+            require_fields(
+                record,
+                "policy_checked_by",
+                "policy_checked_at",
+                "dry_run_receipt",
+                "approval_receipt",
+            )
             require_approval(record)
         if approval == "Executed":
             require_fields(

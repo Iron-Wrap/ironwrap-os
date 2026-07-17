@@ -73,7 +73,7 @@ const approvedHelper = frappeSource.match(
   /export function approvedWriteInputSchema\(baseSchema\)[\s\S]*?return baseSchema\.extend\(approvalShape\)\.strict\(\);\n\}/,
 )?.[0];
 assert.ok(approvedHelper, "approvedWriteInputSchema must remain directly inspectable");
-assert.match(approvedHelper, /request_text:\s*z\.string\(\)\.min\(1\)\.max\(4000\)/);
+assert.match(approvedHelper, /request_text:\s*z\.string\(\)\.trim\(\)\.min\(1\)\.max\(4000\)/);
 assert.match(approvedHelper, /approved_by:\s*z\.string\(\)\.min\(1\)\.max\(140\)/);
 assert.match(approvedHelper, /run_id:\s*z\.string\(\)\.min\(8\)\.max\(128\)/);
 assert.match(approvedHelper, /dry_run_receipt:\s*z\.string\(\)\.min\(32\)\.max\(4096\)/);
@@ -139,6 +139,7 @@ const WRITE_PAIRS = {
   request_create_quote_revision: "dry_run_quote_revision",
   request_bind_quote_price_rules: "dry_run_bind_quote_price_rules",
   request_create_proposal_evidence_pack: "dry_run_proposal_evidence_pack",
+  request_publish_proposal_evidence_pack: "dry_run_publish_proposal_evidence_pack",
   request_create_completion_packet: "dry_run_completion_packet",
   request_create_warranty_packet: "dry_run_warranty_packet",
   request_create_review_request: "dry_run_review_request",
@@ -187,14 +188,14 @@ for (const tool of NEW_STRICT_READS) {
 }
 
 const frappeTools = new Set([...inventory].filter((tool) => toolServer.get(tool) === "erpnext-roofing-mcp"));
-assert.equal(frappeTools.size, 129, "Frappe MCP inventory must stay at the reviewed 129-tool contract");
+assert.equal(frappeTools.size, 131, "Frappe MCP inventory must stay at the reviewed 131-tool contract");
 assert.equal([...frappeTools].filter((tool) => reads.has(tool)).length, 75,
   "Frappe MCP must expose 75 read tools");
-assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 27,
-  "Frappe MCP must expose 27 dry-run tools");
-assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 27,
-  "Frappe MCP must expose 27 approved-write tools");
-assert.equal(inventory.size, 137, "two-server Hermes inventory must stay at 137 tools");
+assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 28,
+  "Frappe MCP must expose 28 dry-run tools");
+assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 28,
+  "Frappe MCP must expose 28 approved-write tools");
+assert.equal(inventory.size, 139, "two-server Hermes inventory must stay at 139 tools");
 
 // Contract Acceptance is evidence produced by the customer/provider, never an agent mutation.
 assert.ok(reads.has("get_contract_acceptance") && reads.has("list_contract_acceptances_for_job"),

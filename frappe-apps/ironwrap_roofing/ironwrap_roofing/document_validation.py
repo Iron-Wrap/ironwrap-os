@@ -123,6 +123,12 @@ _APPROVED_LEAD_TRIAGE_TRANSITION: ContextVar[
     "ironwrap_approved_lead_triage_transition",
     default=None,
 )
+_APPROVED_PROPOSAL_PUBLICATION: ContextVar[
+    tuple[str, str, str, str] | None
+] = ContextVar(
+    "ironwrap_approved_proposal_publication",
+    default=None,
+)
 _TRUSTED_FIELD_EVIDENCE_ISSUANCE: ContextVar[
     tuple[tuple[str, str], ...] | None
 ] = ContextVar(
@@ -207,6 +213,16 @@ def _lead_triage_snapshot(document: Any) -> tuple[str, str, str, str]:
     )
 
 
+def _proposal_publication_snapshot(document: Any) -> tuple[str, str, str]:
+    """Normalize the server-owned proposal publication facts for mutation checks."""
+
+    return (
+        "" if document.get("status") is None else str(document.get("status")),
+        "" if document.get("approved_by") is None else str(document.get("approved_by")),
+        "" if document.get("approved_at") is None else str(document.get("approved_at")),
+    )
+
+
 def _field_evidence_issuance_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
     """Canonicalize the service-owned Evidence Item facts for ContextVar matching."""
 
@@ -265,6 +281,30 @@ def lead_triage_transition_context(
         yield
     finally:
         _APPROVED_LEAD_TRIAGE_TRANSITION.reset(token)
+
+
+@contextmanager
+def proposal_publication_context(
+    proposal_evidence_pack_id: str,
+    hermes_run_id: str,
+    approved_by: str,
+    approved_at: str,
+):
+    """Authorize exactly one Draft-to-Approved proposal publication save.
+
+    The narrow Frappe command sets this private context only after it locks and
+    validates the signed, approved Hermes Run.  Proposal Evidence Pack write
+    permission alone must never be enough to expose a pack through the customer
+    portal, so Desk/REST payloads cannot populate this ContextVar.
+    """
+
+    token = _APPROVED_PROPOSAL_PUBLICATION.set(
+        (proposal_evidence_pack_id, hermes_run_id, approved_by, approved_at)
+    )
+    try:
+        yield
+    finally:
+        _APPROVED_PROPOSAL_PUBLICATION.reset(token)
 
 
 @contextmanager
@@ -338,6 +378,45 @@ def validate_lead_envelope_triage_mutation(document: Any) -> None:
     ):
         frappe.throw(
             "Lead Envelope triage mutation did not match the approved Hermes command.",
+            exc=frappe.ValidationError,
+        )
+
+
+def validate_proposal_publication_mutation(document: Any) -> None:
+    """Keep generic Desk/REST writes from publishing a Proposal Evidence Pack."""
+
+    current = _proposal_publication_snapshot(document)
+    previous_document = _previous(document)
+    if previous_document is None:
+        # The regular draft builder may create a Draft pack, but a new document
+        # can never arrive already customer-portal-visible through a generic
+        # resource write.  The pure policy also rejects this state independently.
+        if current[0] == "Approved":
+            frappe.throw(
+                "Proposal Evidence Pack publication can only be changed through the approved Hermes command.",
+                exc=frappe.ValidationError,
+            )
+        return
+
+    previous = _proposal_publication_snapshot(previous_document)
+    if current == previous:
+        return
+
+    publication = _APPROVED_PROPOSAL_PUBLICATION.get()
+    if not publication:
+        frappe.throw(
+            "Proposal Evidence Pack publication can only be changed through the approved Hermes command.",
+            exc=frappe.ValidationError,
+        )
+    proposal_evidence_pack_id, _hermes_run_id, approved_by, approved_at = publication
+    expected = ("Approved", approved_by, approved_at)
+    if (
+        document.get("name") != proposal_evidence_pack_id
+        or previous[0] != "Draft"
+        or current != expected
+    ):
+        frappe.throw(
+            "Proposal Evidence Pack publication did not match the approved Hermes command.",
             exc=frappe.ValidationError,
         )
 
@@ -590,6 +669,22 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
                 "Supplier Quote", document.get("source_quote"), "status"
             )
     elif kind == "proposal_evidence_pack":
+        publication = _APPROVED_PROPOSAL_PUBLICATION.get()
+        if publication:
+            proposal_evidence_pack_id, hermes_run_id, approved_by, approved_at = (
+                publication
+            )
+            if (
+                document.get("name") == proposal_evidence_pack_id
+                and _proposal_publication_snapshot(document)
+                == ("Approved", approved_by, approved_at)
+            ):
+                context["proposal_publication"] = {
+                    "proposal_evidence_pack_id": proposal_evidence_pack_id,
+                    "hermes_run_id": hermes_run_id,
+                    "approved_by": approved_by,
+                    "approved_at": approved_at,
+                }
         quotation = document.get("quotation")
         quote = (
             frappe.db.get_value(

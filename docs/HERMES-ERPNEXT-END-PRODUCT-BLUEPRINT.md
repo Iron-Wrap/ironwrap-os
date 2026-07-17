@@ -99,7 +99,9 @@ MCP/deploy checkpoint (2026-07-10): both MCP clients enforce production HTTPS, b
 redirect refusal, and structured transport errors. The Frappe MCP server requires a canonical role
 and actor, registers only that role's allowlist, assignment-scopes Field Companion, requires
 verified evidence, and binds every write to a current dry-run receipt plus separately signed human
-approval receipt for one approver and one site. A stable `run_id` is a single mutation claim; a
+approval receipt for one approver and one site. The signed receipts are stored separately from
+mutable tool arguments; Frappe re-verifies the Ed25519 approval capability at guarded mutation
+boundaries, so changing an audit row cannot manufacture approval. A stable `run_id` is a single mutation claim; a
 completed run returns stored truth and an in-flight/failed claim never re-applies a mutation.
 Audit finalization fails closed and distinguishes a non-mutating `Failed` run from an
 `Audit Failed` run where the target mutation applied and an Automation Incident must reconcile
@@ -499,7 +501,7 @@ Build narrow MCP servers, not one giant god tool.
 | MCP server | Repository state | Capability boundary |
 | --- | --- | --- |
 | `ironwrap-bus-mcp` | Implemented: 7 tools | Read readiness/status/envelopes/dead letters; preview and request one targeted replay. No bulk Hermes replay |
-| `erpnext-roofing-mcp` | Implemented under compatibility name: 129 tools | 75 bounded reads plus 27 dry-run/request pairs across job, proof, estimator, price-rule provenance, insurance supplement, production, safety, compliance, consent, customer-decision, lead triage, reconciliation, export, closeout, comms, and market truth; runtime role/actor filtering is enforced in-server |
+| `erpnext-roofing-mcp` | Implemented under compatibility name: 131 tools | 75 bounded reads plus 28 dry-run/request pairs across job, proof, estimator, price-rule provenance, insurance supplement, production, safety, compliance, consent, customer-decision, lead triage, reconciliation, export, closeout, comms, and market truth; runtime role/actor filtering is enforced in-server |
 | `evidence-mcp` | Planned split | Evidence search, packet assembly, and approved attachment only |
 | `measurement-mcp` | Planned split | Deterministic parsing/comparison and review flags |
 | `instant-estimate-mcp` | Planned split | Range/qualification drafts and quote-review request |
@@ -510,7 +512,7 @@ Build narrow MCP servers, not one giant god tool.
 | `tenant-admin-mcp` | Planned split | Tenant readiness and clone dry-run; no cross-tenant data access |
 
 `tools/validate-hermes-config.mjs` currently validates all eight roles and the launch manifest
-against 137 implemented tools. It also rejects an approved-write grant that lacks the matching
+against 139 implemented tools. It also rejects an approved-write grant that lacks the matching
 dry-run grant in the same role and verifies the runtime receipt/role/evidence enforcement seams.
 
 Mutation pattern:
@@ -691,7 +693,7 @@ Repository support means code/contracts/tests exist. It is not the same as a pas
 | 0 | Source truth | Documented and contract-validated | Reconcile Cloudflare, Frappe, Hermes, QB, Drive, bridge, and admin inventory |
 | 1 | Intake spine | Worker route/storage/consumer/reconcile tests exist | One real source lands in R2, D1, Frappe, audit, ack, and bridge with zero gap |
 | 2 | Operating core | 48 DocTypes, shared policy/RBAC, atomic safety append, and packaging tests exist | Install/migrate on plain Frappe; role-specific fixture workflow passes |
-| 3 | Read-only Hermes | Eight roles and 137-tool inventory validate | Hermes answers owner questions from live bus/Frappe truth with zero writes |
+| 3 | Read-only Hermes | Eight roles and 139-tool inventory validate | Hermes answers owner questions from live bus/Frappe truth with zero writes |
 | 4 | Approved-write Hermes | Dry-run/receipt/approval, single-claim idempotency, verified evidence, actor scope, and audit-failure tests exist | One approved live mutation has complete Hermes Run, receipt, and replay-safe proof |
 | 5 | Instant estimate parity | Owned idempotent ingest/session contract exists | Public widget, range policy, consent, owner follow-up, and estimator review pass |
 | 6 | Proposal proof | Evidence/takeoff/options/scope/quote/proposal records and tools exist | Customer-quality renderer plus selected e-sign path complete one signed packet |

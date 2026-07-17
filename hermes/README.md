@@ -27,8 +27,8 @@ Two MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, pe
   deterministic policy checks (`check_consent`, `check_quiet_hours`), dry-run previews, and
   review-gated `request_*` writes. Its legacy name is retained for deployment compatibility.
 
-The validated implemented-source inventory is **137 tools** across both servers: the bus contributes 8;
-the Frappe server contributes **129 (75 reads, 27 dry-runs, 27 approved writes)**.
+The validated implemented-source inventory is **139 tools** across both servers: the bus contributes 8;
+the Frappe server contributes **131 (75 reads, 28 dry-runs, 28 approved writes)**.
 
 ## Tool filtering per agent role
 
@@ -55,7 +55,9 @@ read -> propose -> dry_run -> policy_check -> human_approval -> write -> audit_e
 No tool can send a customer message or mutate accounting. Frappe approved writes require
 `ERPNEXT_WRITE_ENABLED=true`, a role/actor-bound short-lived `dry_run_receipt`, and an
 independently Ed25519-signed `approval_receipt` for the exact mutation, approver, actor, and
-Frappe site. `HERMES_APPROVER_ID` binds the broker key to the required approver principal. The caller supplies a stable unique `run_id`; the first successful Hermes Run create
+Frappe site. The receipt is retained separately from mutable tool arguments and Frappe verifies
+it again with its public-key-only mount before a guarded mutation can consume the run.
+`HERMES_APPROVER_ID` binds the broker key to the required approver principal. The caller supplies a stable unique `run_id`; the first successful Hermes Run create
 is the mutation claim, and any in-flight or failed claim fails closed instead of resuming. The bus
 retains its separate `IRONWRAP_BUS_WRITE_ENABLED` plus `HERMES_WRITE_TOKEN` replay gate. Frappe
 writes record Hermes Run rows; bus replay records envelope-scoped recovery and approval context.
@@ -122,5 +124,5 @@ It parses the implemented tool inventory from both server sources, checks that e
 in `roles.json` exists, that reads are read-only, dry-runs are previews, approved-writes are
 `request_*` mutations each paired with its dry-run counterpart in the same role, and that all
 eight blueprint roles are present with no duplicate grants.
-It also freezes the 137-tool inventory, enforces Contract Acceptance as read-only, checks
+It also freezes the 139-tool inventory, enforces Contract Acceptance as read-only, checks
 least-privilege boundaries for field/finance roles, and validates manifest union exactness.

@@ -27,6 +27,7 @@ const REQUEST_TO_DRY_RUN = Object.freeze({
   request_create_quote_revision: "dry_run_quote_revision",
   request_bind_quote_price_rules: "dry_run_bind_quote_price_rules",
   request_create_proposal_evidence_pack: "dry_run_proposal_evidence_pack",
+  request_publish_proposal_evidence_pack: "dry_run_publish_proposal_evidence_pack",
   request_create_job_assignment: "dry_run_job_assignment",
   request_create_change_order: "dry_run_change_order",
   request_transition_change_order: "dry_run_change_order_transition",
@@ -1656,6 +1657,9 @@ export const LeadTriageInputSchema = z.object({
   lead_envelope_id: IdSchema,
   triage_summary: z.string().trim().min(1).max(2000),
 }).strict();
+export const ProposalEvidencePackPublicationInputSchema = z.object({
+  proposal_evidence_pack_id: IdSchema,
+}).strict();
 const IsoDateTimeSchema = z.string().datetime({ offset: true });
 const DateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -1940,7 +1944,7 @@ export const TenantExportInputSchema = z.object({
 
 export function approvedWriteInputSchema(baseSchema) {
   const approvalShape = {
-    request_text: z.string().min(1).max(4000),
+    request_text: z.string().trim().min(1).max(4000),
     approved_by: z.string().min(1).max(140),
     run_id: z.string().min(8).max(128),
     dry_run_receipt: z.string().min(32).max(4096),
@@ -2742,14 +2746,18 @@ function resolveRuntimeConfig(config = {}) {
   const agentRole = config.agentRole ?? "owner-operator";
   const role = rolePolicy.roles?.[agentRole];
   if (!role) throw new Error("hermes_agent_role_unknown");
+  const baseUrl = config.baseUrl
+    ? normalizeFrappeBaseUrl(config.baseUrl, config.allowInsecureLocal === true)
+    : config.baseUrl;
   return {
     ...config,
+    baseUrl,
     agentRole,
     agentRoleTitle: config.agentRoleTitle ?? role.title,
     actorUser: config.actorUser ?? "test-owner@example.com",
     approverId: config.approverId ?? "test-owner@example.com",
     allowedTools: config.allowedTools ?? roleTools(role),
-    siteId: config.siteId ?? digest({ frappe_base_url: config.baseUrl ?? "" }),
+    siteId: config.siteId ?? digest({ frappe_base_url: baseUrl ?? "" }),
   };
 }
 
@@ -3617,6 +3625,71 @@ export function buildServer(config) {
         afterSummary: summarizeProposalPack({ ...(before ?? {}), ...draft, name: draft.pack_id }),
         execute: upsertDraftExecutor(config, "Proposal Evidence Pack", draft.pack_id, draft, before),
         responseExtra: { upserted: true, operation, proposal_evidence_pack_id: draft.pack_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_publish_proposal_evidence_pack",
+    {
+      title: "Dry Run Publish Proposal Evidence Pack",
+      description: "Preview one Draft Proposal Evidence Pack publication to the existing private customer portal without sending, linking, signing, or accepting anything.",
+      inputSchema: ProposalEvidencePackPublicationInputSchema,
+    },
+    async ({ proposal_evidence_pack_id }) => {
+      const before = await readResource(config, "Proposal Evidence Pack", proposal_evidence_pack_id);
+      assertProposalPackPublishable(before, proposal_evidence_pack_id);
+      const quote = await readResource(config, "Customer Quote", before.quotation);
+      assertProposalQuotePreparable(quote, before.roof_job);
+      return text({
+        would_write: false,
+        required_tool: "request_publish_proposal_evidence_pack",
+        ...proposalPublicationPreview(before, config.approverId),
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_publish_proposal_evidence_pack",
+    {
+      title: "Request Publish Proposal Evidence Pack",
+      description: "Approved-write: publish one reviewed Draft Proposal Evidence Pack to the existing private customer portal and record a Hermes Run. It never sends, links, renders, signs, accepts, charges, or changes the quote.",
+      inputSchema: approvedWriteInputSchema(ProposalEvidencePackPublicationInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const before = await readResource(config, "Proposal Evidence Pack", args.proposal_evidence_pack_id);
+      assertProposalPackPublishable(before, args.proposal_evidence_pack_id);
+      const quote = await readResource(config, "Customer Quote", before.quotation);
+      assertProposalQuotePreparable(quote, before.roof_job);
+      const dryRun = proposalPublicationPreview(before, args.approved_by);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_publish_proposal_evidence_pack",
+        target: { doctype: "Proposal Evidence Pack", name: args.proposal_evidence_pack_id },
+        roofJob: before.roof_job,
+        dryRun,
+        beforeSummary: summarizeProposalPack(before),
+        afterSummary: (result) => summarizeProposalPublicationCommandResult(before, result),
+        execute: () => erpPost(
+          config,
+          "/api/method/ironwrap_roofing.proposal_delivery_api.publish_proposal_evidence_pack",
+          {
+            proposal_evidence_pack_id: args.proposal_evidence_pack_id,
+            hermes_run_id: args.run_id,
+          },
+        ),
+        responseExtra: {
+          published: true,
+          proposal_evidence_pack_id: args.proposal_evidence_pack_id,
+          customer_delivery_mutated: false,
+          customer_portal_link_issued: false,
+          contract_acceptance_mutated: false,
+        },
       }));
     },
   );
@@ -6848,6 +6921,11 @@ export async function executeAuditedWrite(config, {
     capability_level: "Approved-write",
     tool_name: toolName,
     tool_args_json: JSON.stringify(safeArgs),
+    // The resource-side mutation commands independently verify this capability.
+    // Keep receipts outside tool_args_json so ordinary audit projections never
+    // confuse signed authority with mutable business arguments.
+    dry_run_receipt: args.dry_run_receipt,
+    approval_receipt: args.approval_receipt,
     dry_run_json: JSON.stringify(dryRun),
     policy_check_json: JSON.stringify({
       allowed: true,
@@ -7091,6 +7169,36 @@ function assertProposalPackWritable(before, draft) {
   if (!before) return;
   if (before.status !== "Draft") throw new Error("proposal_evidence_pack_not_draft");
   assertImmutableFields(before, draft, ["roof_job", "quotation"], "proposal_evidence_pack");
+}
+
+export function assertProposalPackPublishable(pack, proposalEvidencePackId) {
+  if (!pack || pack.name !== proposalEvidencePackId || pack.pack_id !== proposalEvidencePackId) {
+    throw new Error("proposal_evidence_pack_identity_mismatch");
+  }
+  if (pack.status !== "Draft") throw new Error("proposal_evidence_pack_not_draft");
+  if (!str(pack.roof_job) || !str(pack.quotation)) {
+    throw new Error("proposal_evidence_pack_anchor_missing");
+  }
+}
+
+function proposalPublicationPreview(pack, approvedBy) {
+  return {
+    target: { doctype: "Proposal Evidence Pack", name: pack.name },
+    before: summarizeProposalPack(pack),
+    publication: {
+      status: "Approved",
+      approved_by: approvedBy,
+      approved_at: "Frappe server time at execution",
+    },
+    customer_portal: {
+      visible_after_publication: true,
+      portal_link_issued: false,
+      human_portal_link_issuance_required: true,
+    },
+    customer_delivery_mutated: false,
+    contract_acceptance_mutated: false,
+    customer_quote_mutated: false,
+  };
 }
 
 async function buildMaterialTakeoffDraftFromErp(config, roofJobId, {
@@ -7393,6 +7501,15 @@ function summarizeLeadTriageCommandResult(before, result) {
   return summarizeLeadTriage({
     ...before,
     ...(leadEnvelope && typeof leadEnvelope === "object" ? leadEnvelope : {}),
+  });
+}
+
+function summarizeProposalPublicationCommandResult(before, result) {
+  const payload = result?.message ?? result ?? {};
+  const pack = payload?.proposal_evidence_pack;
+  return summarizeProposalPack({
+    ...before,
+    ...(pack && typeof pack === "object" ? pack : {}),
   });
 }
 

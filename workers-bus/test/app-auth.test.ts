@@ -694,6 +694,26 @@ test("session envelope is exact, unauthenticated session is 200, and logout requ
   assert.equal(afterBody.csrf_token, null);
 });
 
+test("field bootstrap returns only the unauthenticated session envelope", async () => {
+  const env = baseEnv();
+  const response = await worker.fetch(new Request(
+    "https://worker.example.com/api/v1/field/bootstrap",
+    { headers: { origin: "https://app.example.com" } },
+  ), env, waitContext().ctx as never);
+  const body = await response.json() as {
+    version: number;
+    session: Record<string, unknown>;
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  assert.equal(response.headers.get("access-control-allow-origin"), "https://app.example.com");
+  assert.deepEqual(Object.keys(body).sort(), ["session", "version"]);
+  assert.equal(body.version, 1);
+  assert.equal(body.session.authenticated, false);
+  assert.equal("today" in body, false);
+});
+
 test("auth mutations reject missing/unlisted origins and never emit wildcard CORS", async () => {
   const env = baseEnv();
   const missing = await worker.fetch(new Request("https://worker.example.com/api/v1/auth/magic-link/request", {
@@ -884,6 +904,18 @@ test("office-issued QR pairing is fragment-only, proof-bound, and revocable", as
   }), env, ctx.ctx as never);
   assert.equal((await withoutProof.json() as { authenticated: boolean }).authenticated, false);
 
+  const bootstrapWithoutProof = await worker.fetch(new Request("https://worker.example.com/api/v1/field/bootstrap", {
+    headers: { cookie: fieldCookie, origin: "https://app.example.com" },
+  }), env, ctx.ctx as never);
+  const bootstrapWithoutProofBody = await bootstrapWithoutProof.json() as {
+    version: number;
+    session: { authenticated: boolean };
+  };
+  assert.equal(bootstrapWithoutProof.status, 200);
+  assert.deepEqual(Object.keys(bootstrapWithoutProofBody).sort(), ["session", "version"]);
+  assert.equal(bootstrapWithoutProofBody.version, 1);
+  assert.equal(bootstrapWithoutProofBody.session.authenticated, false);
+
   const wrongProof = await worker.fetch(new Request("https://worker.example.com/api/v1/session", {
     headers: {
       cookie: fieldCookie,
@@ -901,6 +933,32 @@ test("office-issued QR pairing is fragment-only, proof-bound, and revocable", as
     },
   }), env, ctx.ctx as never);
   assert.equal((await fieldSession.json() as { authenticated: boolean; user: { role: string } }).authenticated, true);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ data: [] });
+  try {
+    const fieldBootstrap = await worker.fetch(new Request("https://worker.example.com/api/v1/field/bootstrap", {
+      headers: {
+        cookie: fieldCookie,
+        origin: "https://app.example.com",
+        "x-ironwrap-device-proof": deviceProof,
+      },
+    }), env, ctx.ctx as never);
+    const bootstrap = await fieldBootstrap.json() as {
+      version: number;
+      session: { authenticated: boolean; user: { role: string } };
+      today: { jobs: unknown[] };
+    };
+    assert.equal(fieldBootstrap.status, 200);
+    assert.equal(fieldBootstrap.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(Object.keys(bootstrap).sort(), ["session", "today", "version"]);
+    assert.equal(bootstrap.version, 1);
+    assert.equal(bootstrap.session.authenticated, true);
+    assert.equal(bootstrap.session.user.role, "field");
+    assert.deepEqual(bootstrap.today.jobs, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 
   const fieldDeviceList = await worker.fetch(new Request("https://worker.example.com/api/v1/device-pairings", {
     headers: {

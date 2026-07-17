@@ -67,7 +67,7 @@ import {
   buildTodayReadModel,
 } from "./app-read-models.ts";
 import { handleCustomerPortalLinks } from "./customer-portal.ts";
-import type { AppEnv, AuthContext } from "./app-types.ts";
+import { APP_API_VERSION, type AppEnv, type AuthContext } from "./app-types.ts";
 import { handleFieldAction } from "./field-actions.ts";
 import {
   listMeasurementIntakeExceptions,
@@ -117,9 +117,17 @@ export async function handleAppApi(
   } else {
     const auth = await authenticateAppRequest(req, appEnv);
     if (!auth) {
-      if (req.method === "GET" && url.pathname === "/api/v1/session") {
-        response = appJson(unauthenticatedSessionPayload(appEnv));
-        response.headers.set("cache-control", "private, no-store");
+      if (
+        req.method === "GET" &&
+        (url.pathname === "/api/v1/session" ||
+          url.pathname === "/api/v1/field/bootstrap")
+      ) {
+        response = url.pathname === "/api/v1/field/bootstrap"
+          ? privateAppJson({
+              version: APP_API_VERSION,
+              session: unauthenticatedSessionPayload(appEnv),
+            })
+          : privateAppJson(unauthenticatedSessionPayload(appEnv));
         response.headers.set("set-cookie", expiredSessionCookie());
       } else {
         response = appJson({ error: "unauthorized" }, 401);
@@ -170,6 +178,17 @@ export async function handleAuthenticatedRoute(
     const response = appJson(sessionPayload(auth, env));
     response.headers.set("cache-control", "private, no-store");
     return response;
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/field/bootstrap") {
+    try {
+      return privateAppJson({
+        version: APP_API_VERSION,
+        session: sessionPayload(auth, env),
+        today: await buildTodayReadModel(env, auth),
+      });
+    } catch {
+      return privateAppJson({ error: "upstream_unavailable" }, 502);
+    }
   }
   if (req.method === "POST" && url.pathname === "/api/v1/auth/logout") {
     return await logoutAppSession(req, env, auth);

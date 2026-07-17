@@ -217,8 +217,17 @@ or revoke a portal link, render/archive a document, send a customer message, col
 or create Contract Acceptance. A customer-visible Scope Clause must bind the same Customer Quote;
 unlinked or job-mismatched legacy clauses stay out of the portal until an owner explicitly repairs
 their lineage. The read-only Control Center queues those repairs only for an Owner or System
-Manager who can verify both the clause and quote. There is still no browser assembler, customer renderer/send, e-sign,
-or live Frappe/R2/operator proof.
+Manager who can verify both the clause and quote. The capability-scoped portal is a read-only
+customer renderer for safe, published project data; it is not a browser proposal assembler,
+customer-send, e-sign, or acceptance path, and it still lacks live Frappe/R2/operator proof.
+
+Control Center's proposal runway follows the same lineage rule: it reads the Roof Job's current
+Customer Quote anchor and only quote-owned packs, never an arbitrary historical pack from the same
+job. An approved/accepted quote without an `Approved`/`Sent`/`Signed` matching pack is an explicit
+publication-pending attention state; a newer office Draft does not erase an earlier recorded
+publication. An Owner or System Manager who can read the quote sees an unresolvable current anchor
+as attention; other roles without the necessary quote or pack visibility get a restricted state,
+never a false lineage exception.
 
 Sales Desk keeps its office-only view equally explicit: it shows the latest working pack for the
 selected quote separately from the existence of a last `Approved`/`Sent`/`Signed` pack for that

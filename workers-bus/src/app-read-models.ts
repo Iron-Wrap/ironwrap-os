@@ -328,6 +328,16 @@ export interface SalesReadModel extends ReadModelEnvelope {
       accepted_at: string | null;
       scope_summary: string | null;
     } | null;
+    proposal: {
+      id: string;
+      status: string | null;
+      prepared_at: string | null;
+      approved_at: string | null;
+      signed_at: string | null;
+      // `null` means the bounded source was truncated, so absence/presence is not conclusive.
+      has_published_pack: boolean | null;
+      published_status: string | null;
+    } | null;
     consent: {
       context: "recorded" | "no_linked_record" | "partial";
       records: Array<{
@@ -1144,9 +1154,9 @@ export async function buildOwnerNowReadModel(
 }
 
 /**
- * Office-only Sales Desk payload. This joins only the lead, estimate, quote, and consent context
- * needed for a human review. It intentionally excludes raw intake payloads, outbound controls,
- * price-book internals, and generic Frappe queries.
+ * Office-only Sales Desk payload. This joins only the lead, estimate, quote, proposal-publication,
+ * and consent context needed for a human review. It intentionally excludes raw intake payloads,
+ * outbound controls, price-book internals, and generic Frappe queries.
  */
 export async function buildSalesReadModel(env: AppEnv, auth: AuthContext): Promise<SalesReadModel> {
   if (auth.session.role !== "owner" && auth.session.role !== "ops") throw new Error("office_scope_required");
@@ -1204,11 +1214,26 @@ export async function buildSalesReadModel(env: AppEnv, auth: AuthContext): Promi
       )
       : Promise.resolve([]),
   ]);
+  const quoteNames = quotes.map((row) => text(row.name)).filter(notNull);
+  const proposals = quoteNames.length > 0
+    ? await listOfficeSalesFrappeResource(
+      env,
+      "Proposal Evidence Pack",
+      [["Proposal Evidence Pack", "quotation", "in", quoteNames]],
+      SALES_SOURCE_LIMIT,
+    )
+    : [];
+  const proposalSourcePartial = proposals.length === SALES_SOURCE_LIMIT;
 
   const jobById = mapRowsByReference(jobs, "name");
   const latestJobsByLead = latestRowsByReference(jobs, "lead_envelope");
   const estimatesByLead = latestRowsByReference(estimates, "lead_envelope");
   const quotesByJob = latestRowsByReference(quotes, "roof_job", "quote_version");
+  const proposalsByQuote = latestRowsByReference(proposals, "quotation");
+  const publishedProposalsByQuote = latestRowsByReference(
+    proposals.filter((row) => proposalStatusIsPublished(text(row.status))),
+    "quotation",
+  );
   const consentRows = uniqueRows([...leadConsents, ...jobConsents, ...customerConsents]);
   const directConsentsByLead = groupBy(consentRows, "lead_envelope");
   const consentsByJob = groupBy(consentRows, "roof_job");
@@ -1228,7 +1253,16 @@ export async function buildSalesReadModel(env: AppEnv, auth: AuthContext): Promi
     ]);
     const consentRecords = linkedConsents.map(salesConsentRecord).filter(notNull);
     const estimate = salesEstimateModel(estimatesByLead.get(leadId));
-    const quote = jobId ? salesQuoteModel(quotesByJob.get(jobId)) : null;
+    const quoteRow = jobId ? quotesByJob.get(jobId) : undefined;
+    const quote = salesQuoteModel(quoteRow);
+    const quoteName = quoteRow ? text(quoteRow.name) : null;
+    const proposal = quoteName
+      ? salesProposalModel(
+        proposalsByQuote.get(quoteName),
+        publishedProposalsByQuote.get(quoteName),
+        proposalSourcePartial,
+      )
+      : null;
     const attention = salesAttention(lead, estimate, quote);
     const consentContext: SalesReadModel["leads"][number]["consent"]["context"] = consentSourcesPartial
       ? "partial"
@@ -1260,6 +1294,7 @@ export async function buildSalesReadModel(env: AppEnv, auth: AuthContext): Promi
       } : null,
       estimate,
       quote,
+      proposal,
       consent: {
         context: consentContext,
         records: consentRecords,
@@ -1274,13 +1309,14 @@ export async function buildSalesReadModel(env: AppEnv, auth: AuthContext): Promi
     ["roof_jobs_by_reference", jobsByReference],
     ["instant_estimates", estimates],
     ["customer_quotes", quotes],
+    ["proposal_evidence_packs", proposals],
     ["lead_consents", leadConsents],
     ["job_consents", jobConsents],
     ["customer_consents", customerConsents],
   ];
   const partialSources = sourceRows.flatMap(([name, rows]) => rows.length === SALES_SOURCE_LIMIT ? [name] : []);
   const base = envelope(auth, [
-    ...leads, ...jobs, ...estimates, ...quotes, ...leadConsents, ...jobConsents, ...customerConsents,
+    ...leads, ...jobs, ...estimates, ...quotes, ...proposals, ...leadConsents, ...jobConsents, ...customerConsents,
   ], partialSources.length > 0 ? ["sales.partial_sources"] : []);
   const leadTriagePreparationAvailable = Boolean(
     approvalBrokerConfig(env) && auth.session.frappe_user_id?.trim(),
@@ -1900,6 +1936,28 @@ function salesQuoteModel(
     accepted_at: text(row.accepted_at),
     scope_summary: text(row.scope_summary),
   };
+}
+
+function salesProposalModel(
+  row: FrappeRow | undefined,
+  publishedRow: FrappeRow | undefined,
+  sourcePartial: boolean,
+): SalesReadModel["leads"][number]["proposal"] {
+  const id = row ? text(row.pack_id) ?? text(row.name) : null;
+  if (!row || !id) return null;
+  return {
+    id,
+    status: text(row.status),
+    prepared_at: text(row.prepared_at),
+    approved_at: text(row.approved_at),
+    signed_at: text(row.signed_at),
+    has_published_pack: sourcePartial ? null : Boolean(publishedRow),
+    published_status: sourcePartial ? null : text(publishedRow?.status),
+  };
+}
+
+function proposalStatusIsPublished(status: string | null): boolean {
+  return status === "Approved" || status === "Sent" || status === "Signed";
 }
 
 function salesConsentRecord(

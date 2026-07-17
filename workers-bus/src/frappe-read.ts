@@ -148,6 +148,9 @@ export const OFFICE_SALES_READ_FIELDS = {
     "name", "customer_quote_id", "roof_job", "quote_version", "status", "quote_total", "currency",
     "valid_until", "payment_status", "prepared_at", "approved_at", "accepted_at", "scope_summary", "modified",
   ],
+  "Proposal Evidence Pack": [
+    "name", "pack_id", "roof_job", "quotation", "status", "prepared_at", "approved_at", "signed_at", "modified",
+  ],
   "Communication Consent": [
     "name", "consent_id", "customer", "lead_envelope", "roof_job", "channel", "purpose", "status",
     "jurisdiction", "consent_basis", "captured_at", "effective_from", "expires_at", "revoked_at", "modified",
@@ -307,6 +310,7 @@ const OFFICE_SALES_FILTER_FIELDS: Readonly<Record<OfficeSalesDocType, ReadonlySe
   "Roof Job": new Set(["name", "lead_envelope"]),
   "Instant Estimate Session": new Set(["lead_envelope", "roof_job", "status"]),
   "Customer Quote": new Set(["roof_job", "status"]),
+  "Proposal Evidence Pack": new Set(["roof_job", "quotation", "status"]),
   "Communication Consent": new Set(["lead_envelope", "roof_job", "customer", "status"]),
 };
 

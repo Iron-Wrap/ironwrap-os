@@ -237,8 +237,10 @@ server-granted actions only, stable idempotency, and reconciliation instead of r
 A separate governed proposal-pack MCP slice can now create only a Draft pack for one explicit,
 same-job `Approved`/`Accepted` quote: it requires an approved measurement and customer-safe,
 checksum/provenance-verified evidence, creates a quote-owned identity, and persists only a
-redacted summary. Frappe re-resolves every retained source ID and rejects customer messages or any
-non-Draft status until a dedicated delivery path exists. A quote can now carry a server-bound,
+redacted summary. Frappe re-resolves every retained source ID and rejects customer messages; only
+the Owner Operator's receipt-bound publication command can promote one locked `Draft` pack to
+`Approved`. That promotion exposes a safe summary only through an already-issued private portal
+capability and never issues a link, sends, renders, signs, or accepts for the customer. A quote can now carry a server-bound,
 immutable Price Book Rule snapshot: it is created only for Draft/Needs Review quotes from approved,
 effective source rules; required before quote approval or proof-pack assembly; and redacted from
 the browser. This protects real supplier-cost volatility without presenting a timestamp as live

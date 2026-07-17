@@ -208,8 +208,14 @@ customer-safe Evidence Items with verified provenance, checksum, and proof slot;
 quote-owned pack identity; redacts source URIs, R2 keys, raw summaries, and customer messages; and
 re-reads the quote before any audited write. Frappe resolves every retained source ID back to a
 same-job approved/verified record, repeats the quote-anchor and immutable identity checks, and
-permits only Draft status until a receipt-verifying delivery command exists. There is still no browser
-assembler, customer renderer/send, e-sign, or live Frappe/R2/operator proof.
+permits one receipt-verifying `Draft` -> `Approved` publication through the Owner Operator-only
+`dry_run_publish_proposal_evidence_pack` -> `request_publish_proposal_evidence_pack` pair. The
+Frappe mutation boundary locks the pack and Hermes Run, independently verifies the signed
+capability, and records the server-owned approval facts; the portal can then show only its safe
+summary when a separately issued private capability link already exists. Publication does not issue
+or revoke a portal link, render/archive a document, send a customer message, collect a signature,
+or create Contract Acceptance. There is still no browser assembler, customer renderer/send, e-sign,
+or live Frappe/R2/operator proof.
 
 Quote price-rule provenance checkpoint (2026-07-12): a Draft or Needs Review Customer Quote can
 now bind one internal, immutable Price Book Rule snapshot through the receipt-bound

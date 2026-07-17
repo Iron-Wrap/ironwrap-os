@@ -82,6 +82,8 @@ Drafts takeoff, scope, supplier quote, blank quote-revision shells, change-order
 - Chain the draft: `dry_run_material_takeoff` -> `request_create_material_takeoff`, then
   `dry_run_supplier_quote` and `dry_run_proposal_evidence_pack` before their `request_*`
   counterparts. Every write stays review-gated and audited.
+- Owner Operator publishes reviewed Draft packs through the private portal. Estimator Assistant
+  may prepare the evidence pack but cannot execute that customer-visible state transition.
 - `dry_run_quote_revision` -> `request_create_quote_revision` can create only one new,
   append-only Draft shell tied to a non-accepted predecessor. It never carries price, tax,
   scope, payment, approval, acceptance, or customer-facing terms forward; an accepted quote

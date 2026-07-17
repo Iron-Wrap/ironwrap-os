@@ -16,6 +16,10 @@ from typing import Any
 
 import frappe
 
+from ironwrap_roofing.approval_receipt import (
+    ApprovalReceiptError,
+    assert_approved_hermes_run_receipt,
+)
 from ironwrap_roofing.document_validation import lead_triage_transition_context
 
 
@@ -108,8 +112,8 @@ def _lock_hermes_run(hermes_run_id: str) -> dict[str, Any]:
         """
         SELECT name, run_id, agent_role, requested_by, target_doctype, target_name,
                lead_envelope, capability_level, tool_name, tool_args_json,
-               dry_run_json, policy_check_json, approval_status, approved_by,
-               approved_at, mutation_applied, result_status
+               dry_run_json, dry_run_receipt, approval_receipt, policy_check_json,
+               approval_status, approved_by, approved_at, mutation_applied, result_status
         FROM `tabHermes Run`
         WHERE name = %s
         FOR UPDATE
@@ -219,6 +223,22 @@ def _parse_allowed_policy(raw: Any, *, lead_envelope_id: str) -> None:
         )
 
 
+def _assert_signed_approval_capability(
+    run: Mapping[str, Any], *, approved_args: Mapping[str, str]
+) -> None:
+    try:
+        assert_approved_hermes_run_receipt(
+            run,
+            write_tool=TRIAGE_TOOL_NAME,
+            approved_args=approved_args,
+        )
+    except ApprovalReceiptError as exc:
+        _fail(
+            f"lead_triage_approval_receipt_{exc.code}",
+            "Hermes Run does not contain a current signed approval capability for this exact triage",
+        )
+
+
 def _assert_approved_run(
     run: Mapping[str, Any],
     *,
@@ -282,6 +302,7 @@ def _assert_approved_run(
             "lead_triage_approved_args_mismatch",
             "tool_args_json does not match the approved Hermes Run identity",
         )
+    _assert_signed_approval_capability(run, approved_args=args)
     _parse_allowed_policy(
         run.get("policy_check_json"), lead_envelope_id=lead_envelope_id
     )

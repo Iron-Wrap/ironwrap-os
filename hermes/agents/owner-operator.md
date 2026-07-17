@@ -97,6 +97,7 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - dry_run_quote_revision
 - dry_run_bind_quote_price_rules
 - dry_run_proposal_evidence_pack
+- dry_run_publish_proposal_evidence_pack
 - dry_run_job_assignment
 - dry_run_change_order
 - dry_run_change_order_transition
@@ -128,6 +129,7 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - request_create_quote_revision
 - request_bind_quote_price_rules
 - request_create_proposal_evidence_pack
+- request_publish_proposal_evidence_pack
 - request_create_job_assignment
 - request_create_change_order
 - request_transition_change_order
@@ -169,6 +171,10 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - Lead triage is an approved local annotation: use `dry_run_mark_lead_triaged` then
   `request_mark_lead_triaged`. It cannot alter bus transport status and does not create or
   update a Communication Event.
+- Only Owner Operator can use `dry_run_publish_proposal_evidence_pack` and
+  `request_publish_proposal_evidence_pack`. It exposes an already-reviewed pack through the
+  existing private portal only; it cannot issue a link, deliver a message, render, sign, accept,
+  charge, or change a quote.
 - Bind price provenance only while a quote is Draft or Needs Review with
   `dry_run_bind_quote_price_rules` then `request_bind_quote_price_rules`; the resulting immutable
   snapshot is not a live supplier-price claim and must exist before approval or proof-pack assembly.

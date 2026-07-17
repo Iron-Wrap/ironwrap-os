@@ -375,7 +375,7 @@ device.
 | `ERPNEXT_API_KEY` / `ERPNEXT_API_SECRET` | Worker uses a dedicated integration user. Each Hermes MCP process uses a separate pair issued to exactly `HERMES_ACTOR_USER`; never share either credential or rotate them as one binding. |
 | `HERMES_WRITE_TOKEN` | Dedicated bus-replay token only; keep bus write flag false outside approved windows |
 | `HERMES_DRY_RUN_SIGNING_KEY` | Unique per Frappe tenant/runtime; rotate with a controlled preview-receipt cutover |
-| approval broker key pair / `HERMES_APPROVER_ID` | Private key stays only in authenticated owner approval broker; MCP retains public key and exact bound approver identity |
+| approval broker key pair / `HERMES_APPROVER_ID` | Private key stays only in authenticated owner approval broker; rotate the public key atomically in MCP and the Frappe backend's `IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE`, then verify a new receipt and fail-closed old receipt |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Mint new key, verify Drive/email, then revoke old key |
 | `QB_WEBHOOK_TOKEN` | Change Worker binding and Intuit verifier token together |
 | `D1_BACKUP_API_TOKEN` | Persist only the exact production D1 read/export scope in `backup.env`; never reuse restore or R2 credentials; run a backup after rotation |

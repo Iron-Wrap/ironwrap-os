@@ -36,6 +36,14 @@ EVIDENCE_ITEM_CONTROLLER_PATH = (
     / "evidence_item"
     / "evidence_item.py"
 )
+PROPOSAL_EVIDENCE_PACK_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "proposal_evidence_pack"
+    / "proposal_evidence_pack.py"
+)
 
 
 class FakeValidationError(Exception):
@@ -782,6 +790,53 @@ class DocumentValidationAdapterTests(unittest.TestCase):
 
         controller = LEAD_ENVELOPE_CONTROLLER_PATH.read_text(encoding="utf-8")
         self.assertIn("validate_lead_envelope_triage_mutation(self)", controller)
+
+    def test_proposal_publication_requires_the_approved_command_context(self) -> None:
+        adapter, _ = self.load_adapter()
+        draft = {
+            "name": "proposal:cq-1",
+            "pack_id": "proposal:cq-1",
+            "status": "Draft",
+            "approved_by": "",
+            "approved_at": "",
+        }
+        published = {
+            **draft,
+            "status": "Approved",
+            "approved_by": "owner@example.com",
+            "approved_at": "2026-07-17 10:00:00",
+        }
+        with self.assertRaisesRegex(FakeValidationError, "approved Hermes command"):
+            adapter.validate_proposal_publication_mutation(
+                FakeDocument(published, previous=draft)
+            )
+        with adapter.proposal_publication_context(
+            "proposal:cq-1",
+            "run-proposal-publication-0001",
+            "owner@example.com",
+            "2026-07-17 10:00:00",
+        ):
+            adapter.validate_proposal_publication_mutation(
+                FakeDocument(published, previous=draft)
+            )
+        with (
+            adapter.proposal_publication_context(
+                "proposal:cq-1",
+                "run-proposal-publication-0001",
+                "owner@example.com",
+                "2026-07-17 10:00:01",
+            ),
+            self.assertRaisesRegex(FakeValidationError, "did not match"),
+        ):
+            adapter.validate_proposal_publication_mutation(
+                FakeDocument(published, previous=draft)
+            )
+
+        controller = PROPOSAL_EVIDENCE_PACK_CONTROLLER_PATH.read_text(encoding="utf-8")
+        self.assertLess(
+            controller.index("validate_proposal_publication_mutation(self)"),
+            controller.index('validate_business_document(self, "proposal_evidence_pack")'),
+        )
 
 
 if __name__ == "__main__":

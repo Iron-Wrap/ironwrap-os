@@ -723,6 +723,52 @@ class DomainPolicyTests(unittest.TestCase):
             context=proposal_context(quote_roof_job="job-2"),
         )
 
+    def test_proposal_publication_requires_exact_private_context(self) -> None:
+        draft = {
+            "name": "proposal:cq-1",
+            "pack_id": "proposal:cq-1",
+            "status": "Draft",
+            "roof_job": "job-1",
+            "quotation": "cq-1",
+            "evidence_summary_json": proposal_evidence_summary(),
+        }
+        published = {
+            **draft,
+            "status": "Approved",
+            "approved_by": "owner@example.com",
+            "approved_at": "2026-07-17 10:00:00",
+        }
+        self.assert_policy(
+            "proposal_pack_draft_only",
+            validate_record,
+            "proposal_evidence_pack",
+            published,
+            previous=draft,
+            context=proposal_context(),
+        )
+        publication = {
+            "proposal_evidence_pack_id": "proposal:cq-1",
+            "hermes_run_id": "run-proposal-publication-0001",
+            "approved_by": "owner@example.com",
+            "approved_at": "2026-07-17 10:00:00",
+        }
+        validate_record(
+            "proposal_evidence_pack",
+            published,
+            previous=draft,
+            context=proposal_context(proposal_publication=publication),
+        )
+        self.assert_policy(
+            "proposal_pack_draft_only",
+            validate_record,
+            "proposal_evidence_pack",
+            published,
+            previous=draft,
+            context=proposal_context(
+                proposal_publication={**publication, "approved_by": "other@example.com"}
+            ),
+        )
+
         completion = {
             "completion_packet_id": "cp-1",
             "status": "Approved",
@@ -1696,10 +1742,12 @@ class DomainPolicyTests(unittest.TestCase):
             "target_name": "job-1",
             "tool_name": "erpnext_update_gate_approved",
             "tool_args_json": '{"gate_id":"gate-1"}',
+            "dry_run_receipt": "signed-dry-run-receipt",
             "dry_run_json": '{"allowed":true,"changes":["state"]}',
             "policy_check_json": '{"allowed":true}',
             "policy_checked_by": "owner@example.com",
             "policy_checked_at": "2026-07-10 15:00:00",
+            "approval_receipt": "signed-human-approval-receipt",
             "approved_by": "owner@example.com",
             "approved_at": "2026-07-10 15:01:00",
             "audit_event_id": "audit-1",
@@ -1717,6 +1765,12 @@ class DomainPolicyTests(unittest.TestCase):
             validate_record,
             "hermes_run",
             {**run, "policy_checked_at": None},
+        )
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "hermes_run",
+            {**run, "approval_receipt": None},
         )
         self.assert_policy(
             "audit_state_mismatch",
@@ -1741,10 +1795,12 @@ class DomainPolicyTests(unittest.TestCase):
             "target_name": "job-1",
             "tool_name": "erpnext_update_gate_approved",
             "tool_args_json": '{"gate_id":"gate-1"}',
+            "dry_run_receipt": "signed-dry-run-receipt",
             "dry_run_json": '{"allowed":true,"changes":["state"]}',
             "policy_check_json": '{"allowed":true}',
             "policy_checked_by": "owner@example.com",
             "policy_checked_at": "2026-07-10 15:00:00",
+            "approval_receipt": "signed-human-approval-receipt",
             "approved_by": "owner@example.com",
             "approved_at": "2026-07-10 15:01:00",
             "audit_incident_id": "incident-audit-1",

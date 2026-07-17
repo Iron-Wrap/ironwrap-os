@@ -345,6 +345,7 @@ const REQUIRED_D1_TABLES = [
   "approval_requests", "approval_request_events",
   "quote_revision_approval_requests", "quote_revision_approval_request_events",
   "customer_portal_links", "customer_portal_access_throttles", "measurement_intake_receipts",
+  "production_schedule_approval_requests", "production_schedule_approval_request_events",
 ];
 
 const REQUIRED_D1_TRIGGER_BINDINGS = [
@@ -370,6 +371,15 @@ const REQUIRED_D1_TRIGGER_BINDINGS = [
   ["prevent_quote_revision_approval_event_update", "quote_revision_approval_request_events"],
   ["prevent_quote_revision_approval_event_delete", "quote_revision_approval_request_events"],
   ["prevent_quote_revision_approval_delete", "quote_revision_approval_requests"],
+  ["prevent_production_schedule_approval_binding_rewrite", "production_schedule_approval_requests"],
+  ["enforce_production_schedule_approval_transition", "production_schedule_approval_requests"],
+  ["enforce_production_schedule_approval_reconciliation", "production_schedule_approval_requests"],
+  ["append_production_schedule_approval_created_event", "production_schedule_approval_requests"],
+  ["append_production_schedule_approval_transition_event", "production_schedule_approval_requests"],
+  ["append_production_schedule_approval_reconciliation_event", "production_schedule_approval_requests"],
+  ["prevent_production_schedule_approval_event_update", "production_schedule_approval_request_events"],
+  ["prevent_production_schedule_approval_event_delete", "production_schedule_approval_request_events"],
+  ["prevent_production_schedule_approval_delete", "production_schedule_approval_requests"],
 ];
 
 function d1TriggerSql(name, table, {
@@ -396,11 +406,28 @@ function d1TriggerSql(name, table, {
     return `CREATE TRIGGER ${name} BEFORE ${timing} ON ${table} BEGIN SELECT 1; END;`;
   }
   if (name === wrongTimingApprovalTrigger) {
-    const abort = name === "prevent_quote_revision_approval_binding_rewrite"
-      ? "quote_revision_approval_binding_immutable"
-      : name === "prevent_quote_revision_approval_delete"
-        ? "quote_revision_approvals_append_only"
-        : "quote_revision_approval_events_immutable";
+    const [bindingAbort, eventAbort, deleteAbort] = name.startsWith("prevent_production_schedule_")
+      ? [
+        "production_schedule_approval_binding_immutable",
+        "production_schedule_approval_events_immutable",
+        "production_schedule_approvals_append_only",
+      ]
+      : name.startsWith("prevent_quote_revision_")
+        ? [
+          "quote_revision_approval_binding_immutable",
+          "quote_revision_approval_events_immutable",
+          "quote_revision_approvals_append_only",
+        ]
+        : [
+          "approval_request_binding_immutable",
+          "approval_request_events_immutable",
+          "approval_requests_append_only",
+        ];
+    const abort = name.endsWith("binding_rewrite")
+      ? bindingAbort
+      : name.endsWith("_delete") && !name.includes("_event_")
+        ? deleteAbort
+        : eventAbort;
     return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, '${abort}'); END;`;
   }
   if (name === "prevent_lead_ack_receipts_update") {
@@ -433,10 +460,25 @@ function d1TriggerSql(name, table, {
   if (name === "prevent_quote_revision_approval_delete") {
     return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'quote_revision_approvals_append_only'); END;`;
   }
+  if (name === "prevent_production_schedule_approval_binding_rewrite") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'production_schedule_approval_binding_immutable'); END;`;
+  }
+  if (name === "prevent_production_schedule_approval_event_update") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'production_schedule_approval_events_immutable'); END;`;
+  }
+  if (name === "prevent_production_schedule_approval_event_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'production_schedule_approval_events_immutable'); END;`;
+  }
+  if (name === "prevent_production_schedule_approval_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'production_schedule_approvals_append_only'); END;`;
+  }
   if (name.startsWith("append_approval_request_")) {
     return `CREATE TRIGGER ${name} AFTER INSERT ON ${table} BEGIN SELECT 1; END;`;
   }
   if (name.startsWith("append_quote_revision_approval_")) {
+    return `CREATE TRIGGER ${name} AFTER INSERT ON ${table} BEGIN SELECT 1; END;`;
+  }
+  if (name.startsWith("append_production_schedule_approval_")) {
     return `CREATE TRIGGER ${name} AFTER INSERT ON ${table} BEGIN SELECT 1; END;`;
   }
   return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT 1; END;`;
@@ -451,7 +493,7 @@ function d1Sql({
   wrongTimingApprovalTrigger = "",
 } = {}) {
   const tables = REQUIRED_D1_TABLES.filter((name) => name !== missingTable);
-  const triggers = REQUIRED_D1_TRIGGER_BINDINGS.filter(([name]) => name !== missingTrigger);
+  const triggers = REQUIRED_D1_TRIGGER_BINDINGS.filter(([name, table]) => name !== missingTrigger && table !== missingTable);
   return `BEGIN TRANSACTION;\n${tables.map((name, index) => `CREATE TABLE ${name} (id TEXT PRIMARY KEY);\nINSERT INTO ${name} (id) VALUES ('row-${index}');`).join("\n")}\n${triggers.map(([name, table]) => d1TriggerSql(name, table, { weakReceiptTrigger, wrongTimingReceiptTrigger, weakApprovalTrigger, wrongTimingApprovalTrigger })).join("\n")}\nCOMMIT;\n`;
 }
 
@@ -761,7 +803,10 @@ function validLiveEnv() {
     HERMES_ACTOR_USER: "owner@ironwrapexteriors.com",
     HERMES_APPROVER_ID: "owner@ironwrapexteriors.com",
     HERMES_DRY_RUN_SIGNING_KEY: "dry_run_0a9e8f7d6c5b4a392817161514131211",
+    APPROVAL_BROKER_SHARED_SECRET: "lead_broker_9f1a4c27d8e6b5a49382716151413121",
     HERMES_APPROVAL_PUBLIC_KEY_FILE: "/run/secrets/hermes-approval-public.pem",
+    IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE: "/run/secrets/hermes-approval-public.pem",
+    IRONWRAP_HERMES_SITE_BASE_URL: "https://os.ironwrapexteriors.com",
     IRONWRAP_BUS_REQUEST_TIMEOUT_MS: "10000",
     ERPNEXT_REQUEST_TIMEOUT_MS: "10000",
     BUS_BASE_URL: "https://bus.ironwrapexteriors.com",
@@ -846,6 +891,25 @@ test("contract mode rejects an overridable container pin", async (t) => {
   assert.equal(result.checks.find((item) => item.id === "contract.container.non_overridable")?.status, "fail");
 });
 
+test("contract mode rejects a committed lead-broker secret", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
+  const envPath = path.join(root, "deploy/env.example");
+  const env = await readFile(envPath, "utf8");
+  await writeFile(
+    envPath,
+    env.replace(
+      "APPROVAL_BROKER_SHARED_SECRET=<unique-at-least-32-byte-worker-broker-secret>",
+      "APPROVAL_BROKER_SHARED_SECRET=committed-secret-must-never-be-here",
+    ),
+  );
+
+  const result = await validateContract({ repoRoot: root });
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.find((item) => item.id === "contract.env.secret.APPROVAL_BROKER_SHARED_SECRET")?.status, "fail");
+});
+
 test("live-env mode accepts a complete locked production environment", async () => {
   const result = await validateLiveEnv({ env: validLiveEnv(), ...validApprovalPublicKeyOptions() });
   assert.equal(result.ok, true, renderHuman(result));
@@ -905,6 +969,21 @@ test("live-env mode fails closed on placeholders, HTTP URLs, and implicit gates"
     "live.gate.ERPNEXT_WRITE_ENABLED",
     "live.timeout.IRONWRAP_BUS_REQUEST_TIMEOUT_MS",
     "live.backup.encryption",
+  ]) {
+    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
+  }
+});
+
+test("live-env mode binds Frappe receipt verification to a safe public key path and matching site URL", async () => {
+  const env = validLiveEnv();
+  env.IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE = "/run/secrets/../approval-public.pem";
+  env.IRONWRAP_HERMES_SITE_BASE_URL = "https://other.ironwrapexteriors.com";
+
+  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
+  assert.equal(result.ok, false);
+  for (const id of [
+    "live.frappe.approval_public_key_path",
+    "live.frappe.site_base_url_consistency",
   ]) {
     assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
   }
@@ -1217,6 +1296,14 @@ test("D1 backup fails before upload when a required customer-portal table is mis
   assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-backup.") && entry !== "ironwrap-d1-backup.lock"), false);
 });
 
+test("D1 backup fails before upload when a production-schedule ledger table is missing", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { missingTable: "production_schedule_approval_request_events" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required production table: production_schedule_approval_request_events/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
 test("D1 backup fails before upload when an invariant trigger is missing", async (t) => {
   const mock = await mockD1BackupEnvironment(t, { missingTrigger: "prevent_lead_ack_receipts_delete" });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
@@ -1374,6 +1461,14 @@ test("D1 recovery rejects a local quote-revision ledger trigger without immutabl
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_quote_revision_approval_event_update/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
+test("D1 recovery rejects a local production-schedule ledger trigger without immutable semantics", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { weakApprovalTrigger: "prevent_production_schedule_approval_event_delete" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_production_schedule_approval_event_delete/);
   await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
 });
 

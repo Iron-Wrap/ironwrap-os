@@ -73,7 +73,7 @@ if ! jq -e '
   (.host_requirements.memory_gib_minimum | type == "number" and floor == . and . >= 8) and
   (.host_requirements.disk_gib_minimum | type == "number" and floor == . and . >= 80) and
   (.host_requirements.node_version_minimum | type == "string" and test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
-  ((.host_requirements.architectures | sort) == ["aarch64", "x86_64"])
+  ((.host_requirements.architectures | sort) == ["x86_64"])
 ' "$LOCK" >/dev/null 2>&1; then
   echo "error: runtime lock host policy is invalid or not Frappe-only" >&2
   exit 1
@@ -129,7 +129,10 @@ if [[ "$memory_kib" =~ ^[0-9]+$ ]] && (( memory_kib >= MEMORY_GIB_MINIMUM * 1024
 disk_kib="$(df -Pk / | awk 'NR == 2 {print $4}')"
 if [[ "$disk_kib" =~ ^[0-9]+$ ]] && (( disk_kib >= DISK_GIB_MINIMUM * 1024 * 1024 )); then pass "disk capacity meets the runtime lock"; else fail "disk capacity is below the runtime lock"; fi
 
-for command_name in age curl docker git jq node openssl rclone sha256sum sqlite3 tar; do
+# cloudflared is intentionally not installed by --install: the supported
+# Cloudflare package source must be selected by the operator before this
+# fail-closed preflight runs.
+for command_name in age cloudflared curl docker git jq node openssl rclone sha256sum sqlite3 tar; do
   if command -v "$command_name" >/dev/null 2>&1; then pass "$command_name available"; else fail "$command_name unavailable"; fi
 done
 

@@ -34,8 +34,7 @@
     "disk_gib_minimum": 80,
     "node_version_minimum": "22.12.0",
     "architectures": [
-      "x86_64",
-      "aarch64"
+      "x86_64"
     ]
   }
 }

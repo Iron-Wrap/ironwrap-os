@@ -30,6 +30,8 @@ function readyBody() {
       jobnimbus_configuration: true,
       frappe_configuration: true,
       app_bff_configuration: true,
+      customer_portal_configuration: true,
+      production_schedule_configuration: true,
     },
   };
 }

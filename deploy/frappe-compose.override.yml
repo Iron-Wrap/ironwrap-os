@@ -1,0 +1,30 @@
+# Apply this after the exact frappe_docker compose.yaml plus its MariaDB and
+# Redis overrides. Every process that loads Frappe apps must use the same
+# digest-pinned IronWrap image; replacing only backend/frontend leaves queues,
+# scheduler, websocket, or configurator on the upstream ERPNext image.
+#
+# The locked upstream compose is linux/amd64, so this deployment contract is
+# intentionally x86_64-only until a separate multi-architecture build and
+# compose proof is recorded.
+services:
+  configurator:
+    image: ${IRONWRAP_OS_IMAGE:?IRONWRAP_OS_IMAGE must be a digest-pinned release image}
+    platform: linux/amd64
+  backend:
+    image: ${IRONWRAP_OS_IMAGE:?IRONWRAP_OS_IMAGE must be a digest-pinned release image}
+    platform: linux/amd64
+  frontend:
+    image: ${IRONWRAP_OS_IMAGE:?IRONWRAP_OS_IMAGE must be a digest-pinned release image}
+    platform: linux/amd64
+  websocket:
+    image: ${IRONWRAP_OS_IMAGE:?IRONWRAP_OS_IMAGE must be a digest-pinned release image}
+    platform: linux/amd64
+  queue-short:
+    image: ${IRONWRAP_OS_IMAGE:?IRONWRAP_OS_IMAGE must be a digest-pinned release image}
+    platform: linux/amd64
+  queue-long:
+    image: ${IRONWRAP_OS_IMAGE:?IRONWRAP_OS_IMAGE must be a digest-pinned release image}
+    platform: linux/amd64
+  scheduler:
+    image: ${IRONWRAP_OS_IMAGE:?IRONWRAP_OS_IMAGE must be a digest-pinned release image}
+    platform: linux/amd64

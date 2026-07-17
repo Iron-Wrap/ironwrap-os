@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 
 test("0011 auth migration contains every readiness artifact and never stores raw tokens", async () => {
   const sql = await readFile(new URL("../migrations/0011_app_bff_auth.sql", import.meta.url), "utf8");
@@ -131,4 +132,68 @@ test("0015 lead-ack receipts preserve provider-acceptance evidence without recip
   assert.match(sql, /provider_message_id TEXT/);
   assert.doesNotMatch(schema, /recipient|contact_email|message_body|raw_message/i);
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
+test("the complete D1 migration chain applies cleanly and carries every schedule-ledger invariant", async () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    const migrations = (await readdir(new URL("../migrations/", import.meta.url)))
+      .filter((name) => /^\d{4}_.+\.sql$/.test(name))
+      .sort();
+    assert.equal(migrations.length, 20);
+    assert.equal(migrations[0], "0001_init.sql");
+    assert.equal(migrations.at(-1), "0020_production_schedule_approval_requests.sql");
+    for (const migration of migrations) {
+      db.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
+    }
+
+    assert.equal(
+      (db.prepare("PRAGMA integrity_check").get() as { integrity_check: string }).integrity_check,
+      "ok",
+    );
+    assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+    const counts = db.prepare(
+      `SELECT
+         SUM(type = 'table' AND name NOT LIKE 'sqlite_%') AS tables,
+         SUM(type = 'index' AND name LIKE 'idx_%') AS indexes,
+         SUM(type = 'trigger') AS triggers
+       FROM sqlite_master`,
+    ).get() as { tables: number; indexes: number; triggers: number };
+    assert.deepEqual({ ...counts }, { tables: 28, indexes: 48, triggers: 31 });
+
+    const scheduleTables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'production_schedule_approval_%' ORDER BY name",
+    ).all() as Array<{ name: string }>;
+    assert.deepEqual(scheduleTables.map(({ name }) => name), [
+      "production_schedule_approval_request_events",
+      "production_schedule_approval_requests",
+    ]);
+    const scheduleIndexes = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_production_schedule_%' ORDER BY name",
+    ).all() as Array<{ name: string }>;
+    assert.deepEqual(scheduleIndexes.map(({ name }) => name), [
+      "idx_production_schedule_approval_events_tenant_created",
+      "idx_production_schedule_approvals_active_target",
+      "idx_production_schedule_approvals_pending_expiry",
+      "idx_production_schedule_approvals_state_lease",
+      "idx_production_schedule_approvals_tenant_state_updated",
+    ]);
+    const scheduleTriggers = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE '%production_schedule_approval%' ORDER BY name",
+    ).all() as Array<{ name: string }>;
+    assert.deepEqual(scheduleTriggers.map(({ name }) => name), [
+      "append_production_schedule_approval_created_event",
+      "append_production_schedule_approval_reconciliation_event",
+      "append_production_schedule_approval_transition_event",
+      "enforce_production_schedule_approval_reconciliation",
+      "enforce_production_schedule_approval_transition",
+      "prevent_production_schedule_approval_binding_rewrite",
+      "prevent_production_schedule_approval_delete",
+      "prevent_production_schedule_approval_event_delete",
+      "prevent_production_schedule_approval_event_update",
+    ]);
+  } finally {
+    db.close();
+  }
 });

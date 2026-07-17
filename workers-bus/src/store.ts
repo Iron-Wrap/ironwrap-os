@@ -410,6 +410,7 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'field_actions','field_action_media','app_action_throttles','app_device_pairings',
           'app_devices','lead_ack_receipts','approval_requests','approval_request_events',
           'quote_revision_approval_requests','quote_revision_approval_request_events',
+          'production_schedule_approval_requests','production_schedule_approval_request_events',
           'customer_portal_links','customer_portal_access_throttles',
           'measurement_intake_receipts') THEN 1 ELSE 0 END), 0) AS table_count,
        COALESCE(SUM(CASE WHEN type = 'index' AND name IN
@@ -429,6 +430,11 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'idx_quote_revision_approvals_state_lease','idx_quote_revision_approvals_pending_expiry',
           'idx_quote_revision_approvals_active_target',
           'idx_quote_revision_approval_events_tenant_created',
+          'idx_production_schedule_approvals_tenant_state_updated',
+          'idx_production_schedule_approvals_state_lease',
+          'idx_production_schedule_approvals_pending_expiry',
+          'idx_production_schedule_approvals_active_target',
+          'idx_production_schedule_approval_events_tenant_created',
           'idx_customer_portal_links_tenant_job_active',
           'idx_customer_portal_access_throttles_expiry',
           'idx_measurement_intake_receipts_exception_updated')
@@ -449,7 +455,16 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'append_quote_revision_approval_reconciliation_event',
           'prevent_quote_revision_approval_event_update',
           'prevent_quote_revision_approval_event_delete',
-          'prevent_quote_revision_approval_delete') THEN 1 ELSE 0 END), 0) AS trigger_count
+          'prevent_quote_revision_approval_delete',
+          'prevent_production_schedule_approval_binding_rewrite',
+          'enforce_production_schedule_approval_transition',
+          'enforce_production_schedule_approval_reconciliation',
+          'append_production_schedule_approval_created_event',
+          'append_production_schedule_approval_transition_event',
+          'append_production_schedule_approval_reconciliation_event',
+          'prevent_production_schedule_approval_event_update',
+          'prevent_production_schedule_approval_event_delete',
+          'prevent_production_schedule_approval_delete') THEN 1 ELSE 0 END), 0) AS trigger_count
      FROM sqlite_master`,
   ).first<{ table_count: number; index_count: number; trigger_count: number }>();
 
@@ -483,6 +498,11 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             qrar.run_id AS quote_revision_approval_run_id,
             qrare.event_type AS quote_revision_approval_event_type,
             qrare.request_version AS quote_revision_approval_event_version,
+            psar.production_schedule_approval_id,
+            psar.state AS production_schedule_approval_state,
+            psar.run_id AS production_schedule_approval_run_id,
+            psare.event_type AS production_schedule_approval_event_type,
+            psare.request_version AS production_schedule_approval_event_version,
             cpl.link_id AS customer_portal_link_id,
             cpl.expires_at AS customer_portal_expires_at,
             cpat.ip_hash AS customer_portal_throttle_ip_hash,
@@ -513,14 +533,16 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN approval_request_events are ON 1 = 0
      LEFT JOIN quote_revision_approval_requests qrar ON 1 = 0
      LEFT JOIN quote_revision_approval_request_events qrare ON 1 = 0
+     LEFT JOIN production_schedule_approval_requests psar ON 1 = 0
+     LEFT JOIN production_schedule_approval_request_events psare ON 1 = 0
      LEFT JOIN customer_portal_links cpl ON 1 = 0
      LEFT JOIN customer_portal_access_throttles cpat ON 1 = 0
      LEFT JOIN measurement_intake_receipts mir ON 1 = 0
      LIMIT 0`,
   ).all();
-  return Number(artifacts?.table_count ?? 0) === 26 &&
-    Number(artifacts?.index_count ?? 0) === 33 &&
-    Number(artifacts?.trigger_count ?? 0) === 22;
+  return Number(artifacts?.table_count ?? 0) === 28 &&
+    Number(artifacts?.index_count ?? 0) === 38 &&
+    Number(artifacts?.trigger_count ?? 0) === 31;
 }
 
 /** Envelopes still pending past the threshold — the retry sweep re-drives these. */

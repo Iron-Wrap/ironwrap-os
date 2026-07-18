@@ -61,7 +61,7 @@ function fakeEnv(options: FakeOptions = {}) {
     sqlCalls.push({ sql, args });
     if (options.d1Throws && sql.includes("sqlite_master")) throw new Error("d1_unavailable");
     if (sql.includes("sqlite_master")) {
-      return { table_count: 29, index_count: options.missingSchemaArtifact ? 38 : 39, trigger_count: 31 };
+      return { table_count: 33, index_count: options.missingSchemaArtifact ? 47 : 48, trigger_count: 31 };
     }
     if (sql.includes("COUNT(*) AS n FROM dead_letter")) {
       return { n: deadLetters.filter((row) => row.recovered === 0).length };
@@ -335,6 +335,91 @@ test("public readiness exposes only a generic state while admins receive the dia
   assert.equal(diagnostic.checks.public_estimate_configuration, true, "blank public-estimate config keeps the route intentionally disabled");
   assert.equal(JSON.stringify(diagnostic).includes("ingest-secret"), false);
   assert.equal(JSON.stringify(diagnostic).includes("jobnimbus-secret"), false);
+});
+
+test("Newo production readiness requires credentials, live actor/webhooks, Frappe, and clear owned failures", async (t) => {
+  const { env } = fakeEnv();
+  Object.assign(env, {
+    NEWO_PRODUCTION_REQUIRED: "true",
+    NEWO_ENABLED: "true",
+    NEWO_CONTROL_WRITE_ENABLED: "false",
+    NEWO_OUTBOUND_ENABLED: "false",
+    NEWO_WEBHOOK_TOKEN: "webhook-secret-not-returned",
+    NEWO_BOOKING_TOKEN: "booking-secret-not-returned",
+    NEWO_CONTROL_SIGNING_SECRET: "control-signing-secret-longer-than-thirty-two-characters",
+    NEWO_API_BASE_URL: "https://api.newo.example",
+    NEWO_API_KEY: "provider-secret-not-returned",
+    NEWO_API_TIMEOUT_MS: "1000",
+    NEWO_PROJECT_ID: "project-1",
+    NEWO_AGENT_ID: "agent-1",
+    NEWO_REPORT_WEBHOOK_ID: "report-hook",
+    NEWO_REPORT_WEBHOOK_URL: "https://bus.example/webhook/newo/report",
+    NEWO_HANDOFF_WEBHOOK_ID: "handoff-hook",
+    NEWO_HANDOFF_WEBHOOK_URL: "https://bus.example/webhook/newo/handoff",
+    NEWO_EXPECTED_CONFIG_VERSION: "newo.production.v1",
+    NEWO_TOOL_SCHEMA_SHA256: "a".repeat(64),
+    NEWO_REPORT_SCHEMA_SHA256: "b".repeat(64),
+    NEWO_KB_VERSION: "ironwrap-receptionist.v1",
+    NEWO_KB_SHA256: "c".repeat(64),
+    NEWO_PHONE_NUMBER: "+14035550100",
+    NEWO_ENABLED_CHANNELS: "voice",
+    NEWO_TRANSFER_POLICY: "owner_then_voicemail",
+    NEWO_USAGE_LIMIT_MINUTES: "1000",
+    NEWO_USAGE_ALERT_PERCENT: "80",
+    NEWO_BOOKING_MODE: "request_only",
+    NEWO_JOBNIMBUS_BOOKING_PROVEN: "false",
+    NEWO_QUEUE: { send: async () => {}, sendBatch: async () => {} },
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://frappe.example.com",
+    ERPNEXT_API_KEY: "frappe-key",
+    ERPNEXT_API_SECRET: "frappe-secret",
+  });
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/auth/api-key/token")) {
+      return new Response(JSON.stringify({
+        access_token: "access-not-returned",
+        refresh_token: "refresh-not-returned",
+        token_type: "Bearer",
+        expires_in: 900,
+      }), { headers: { "content-type": "application/json" } });
+    }
+    if (url.endsWith("/api/v1/actors/agent/agent-1")) {
+      return new Response(JSON.stringify({ id: "agent-1" }), { headers: { "content-type": "application/json" } });
+    }
+    if (url.endsWith("/api/v1/webhooks")) {
+      return new Response(JSON.stringify([
+        { id: "report-hook", url: "https://bus.example/webhook/newo/report" },
+        { id: "handoff-hook", url: "https://bus.example/webhook/newo/handoff" },
+      ]), { headers: { "content-type": "application/json" } });
+    }
+    if (url.endsWith("/api/method/ping")) {
+      return new Response(JSON.stringify({ message: "pong" }), { headers: { "content-type": "application/json" } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  const response = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
+  const body = await response.json() as {
+    ok: boolean;
+    checks: Record<string, boolean>;
+    newo: { required: boolean; api_authenticated: boolean; frappe_reachable: boolean };
+  };
+  assert.equal(response.status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.newo.required, true);
+  assert.equal(body.newo.api_authenticated, true);
+  assert.equal(body.newo.frappe_reachable, true);
+  assert.ok(Object.entries(body.checks).filter(([name]) => name.startsWith("newo_")).every(([, value]) => value));
+  assert.equal(JSON.stringify(body).includes("not-returned"), false);
+
+  delete (env as { NEWO_WEBHOOK_TOKEN?: string }).NEWO_WEBHOOK_TOKEN;
+  (env as { ERPNEXT_ENABLED?: string }).ERPNEXT_ENABLED = "false";
+  const blocked = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
+  const blockedBody = await blocked.json() as { checks: Record<string, boolean> };
+  assert.equal(blocked.status, 503);
+  assert.equal(blockedBody.checks.newo_webhook_credentials, false);
+  assert.equal(blockedBody.checks.newo_frappe_readiness, false);
 });
 
 test("health remains a backward-compatible liveness check when dependencies are unavailable", async () => {

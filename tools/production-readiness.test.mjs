@@ -346,6 +346,7 @@ const REQUIRED_D1_TABLES = [
   "quote_revision_approval_requests", "quote_revision_approval_request_events",
   "customer_portal_links", "customer_portal_access_throttles", "measurement_intake_receipts",
   "production_schedule_approval_requests", "production_schedule_approval_request_events",
+  "public_estimate_rate_limits",
 ];
 
 const REQUIRED_D1_TRIGGER_BINDINGS = [
@@ -794,6 +795,18 @@ function validLiveEnv() {
     ERPNEXT_BASE_URL: "https://os.ironwrapexteriors.com",
     ERPNEXT_API_KEY: "frappe_key_8c921",
     ERPNEXT_API_SECRET: "frappe_secret_d1a9f80c42",
+    ERPNEXT_INTEGRATION_USER: "worker@ironwrapexteriors.com",
+    PUBLIC_ESTIMATE_ENABLED: "true",
+    PUBLIC_ESTIMATE_ALLOWED_ORIGINS: "https://bus.ironwrapexteriors.com",
+    PUBLIC_ESTIMATE_ALLOWED_BRANDS: "ironwrap,iroof",
+    PUBLIC_ESTIMATE_CONSENT_JURISDICTION: "Alberta, Canada",
+    PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY: "0x4AAAAAABusEstimatorKey",
+    PUBLIC_ESTIMATE_TURNSTILE_SECRET: "turnstile_secret_4c1b9e2f8a7d",
+    PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER: "estimate_rate_pepper_4c1b9e2f8a7d6c5b4a3",
+    PUBLIC_ESTIMATE_RATE_LIMIT_WINDOW_SECONDS: "900",
+    PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX: "12",
+    PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX: "3",
+    PUBLIC_ESTIMATE_RANGE_RULES_JSON: "[]",
     IRONWRAP_BUS_BASE_URL: "https://bus.ironwrapexteriors.com",
     IRONWRAP_ADMIN_TOKEN: adminToken,
     IRONWRAP_BUS_WRITE_ENABLED: "false",
@@ -914,6 +927,57 @@ test("live-env mode accepts a complete locked production environment", async () 
   const result = await validateLiveEnv({ env: validLiveEnv(), ...validApprovalPublicKeyOptions() });
   assert.equal(result.ok, true, renderHuman(result));
   assert.equal(result.summary.failed, 0);
+});
+
+test("live-env mode accepts an explicitly disabled public estimator without its enable-time secrets", async () => {
+  const env = validLiveEnv();
+  env.PUBLIC_ESTIMATE_ENABLED = "false";
+  for (const name of [
+    "ERPNEXT_INTEGRATION_USER",
+    "PUBLIC_ESTIMATE_ALLOWED_ORIGINS",
+    "PUBLIC_ESTIMATE_ALLOWED_BRANDS",
+    "PUBLIC_ESTIMATE_CONSENT_JURISDICTION",
+    "PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY",
+    "PUBLIC_ESTIMATE_TURNSTILE_SECRET",
+    "PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER",
+    "PUBLIC_ESTIMATE_RATE_LIMIT_WINDOW_SECONDS",
+    "PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX",
+    "PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX",
+    "PUBLIC_ESTIMATE_RANGE_RULES_JSON",
+  ]) delete env[name];
+
+  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
+  assert.equal(result.ok, true, renderHuman(result));
+  assert.equal(result.checks.find((item) => item.id === "live.gate.public_estimate")?.status, "pass");
+  assert.equal(result.checks.find((item) => item.id === "live.secret.PUBLIC_ESTIMATE_TURNSTILE_SECRET"), undefined);
+});
+
+test("live-env mode fails closed when public-estimator controls drift from the tenant contract", async () => {
+  const env = validLiveEnv();
+  env.PUBLIC_ESTIMATE_ALLOWED_ORIGINS = "https://marketing.ironwrapexteriors.com";
+  env.PUBLIC_ESTIMATE_ALLOWED_BRANDS = "ironwrap,other";
+  env.PUBLIC_ESTIMATE_CONSENT_JURISDICTION = "Unspecified";
+  env.PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX = "101";
+  env.PUBLIC_ESTIMATE_RANGE_RULES_JSON = JSON.stringify([{
+    rule_id: "wrong-service-v1",
+    brand: "ironwrap",
+    service: "invented_service",
+    province: "AB",
+    min_cad: 100,
+    max_cad: 200,
+  }]);
+
+  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
+  assert.equal(result.ok, false);
+  for (const id of [
+    "live.public_estimate.origin",
+    "live.public_estimate.brands",
+    "live.public_estimate.jurisdiction",
+    "live.public_estimate.rate_limits",
+    "live.public_estimate.rules",
+  ]) {
+    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
+  }
 });
 
 test("live-env mode requires a readable Ed25519 approval public key", async () => {
@@ -1304,6 +1368,14 @@ test("D1 backup fails before upload when a production-schedule ledger table is m
   await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
 });
 
+test("D1 backup fails before upload when the privacy-safe public-estimate rate-limit table is missing", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { missingTable: "public_estimate_rate_limits" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required production table: public_estimate_rate_limits/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
 test("D1 backup fails before upload when an invariant trigger is missing", async (t) => {
   const mock = await mockD1BackupEnvironment(t, { missingTrigger: "prevent_lead_ack_receipts_delete" });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
@@ -1445,6 +1517,14 @@ test("D1 recovery rejects an export missing a required customer-portal table", a
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /missing required production table: customer_portal_access_throttles/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
+test("D1 recovery rejects an export missing the privacy-safe public-estimate rate-limit table", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { missingTable: "public_estimate_rate_limits" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required production table: public_estimate_rate_limits/);
   await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
 });
 

@@ -9,6 +9,12 @@ type ErpEnv = Env & {
   ERPNEXT_API_KEY?: string;
   ERPNEXT_API_SECRET?: string;
   ERPNEXT_LEAD_ENVELOPE_DOCTYPE?: string;
+  /**
+   * Exact Frappe User behind the dedicated Worker API pair.  Public-estimator
+   * consent is an immutable business fact, so its capture actor must never be
+   * inferred from untrusted browser input.
+   */
+  ERPNEXT_INTEGRATION_USER?: string;
 };
 
 export interface ErpNextResult {
@@ -107,6 +113,15 @@ export async function pushToErpNext(
   );
   const productionGateCount = await ensureInitialProductionGates(cfg, base, roofJob.name);
   const instantEstimate = await upsertInstantEstimateSession(cfg, base, rec, p, lead.name, roofJob.name);
+  await mirrorPublicEstimatorConsent(
+    cfg,
+    base,
+    rec,
+    p,
+    lead.name,
+    roofJob.name,
+    customer.name,
+  );
 
   return {
     name: lead.name,
@@ -116,6 +131,131 @@ export async function pushToErpNext(
     productionGateCount,
     ...(instantEstimate ? { instantEstimateSessionName: instantEstimate.name } : {}),
   };
+}
+
+/**
+ * A public estimator checkbox alone is not operational consent.  For the
+ * hardened public flow, retain the exact raw request in R2 as an Evidence
+ * Item and append one channel-specific Communication Consent record.  The
+ * source records are immutable; a later opt-out must supersede rather than
+ * rewrite them.
+ *
+ * This intentionally accepts only the canonical marker set by the public
+ * Worker route, never a look-alike value from another estimator integration.
+ */
+async function mirrorPublicEstimatorConsent(
+  env: ErpEnv,
+  base: string,
+  rec: EnvelopeRecord,
+  payload: Record<string, unknown>,
+  leadEnvelopeName: string,
+  roofJobName: string,
+  customerName: string,
+): Promise<void> {
+  const consent = publicEstimatorConsent(payload);
+  if (!consent) return;
+
+  const actor = str(env.ERPNEXT_INTEGRATION_USER);
+  if (!actor) throw new Error("erpnext_public_estimate_integration_user_missing");
+  if (!rec.raw_key) throw new Error("erpnext_public_estimate_raw_evidence_missing");
+
+  const raw = await env.RAW.get(rec.raw_key);
+  if (!raw) throw new Error("erpnext_public_estimate_raw_evidence_unavailable");
+  const bytes = new Uint8Array(await raw.arrayBuffer());
+  const evidence = await createIfMissingByField(
+    env,
+    base,
+    "Evidence Item",
+    "evidence_id",
+    publicEstimateConsentEvidenceId(rec),
+    {
+      evidence_id: publicEstimateConsentEvidenceId(rec),
+      lead_envelope: leadEnvelopeName,
+      roof_job: roofJobName,
+      evidence_type: "Other",
+      proof_owner: actor,
+      proof_slot: "Communication",
+      source_system: "ironwrap-public-estimator",
+      r2_key: rec.raw_key,
+      content_checksum: await sha256Bytes(bytes),
+      checksum_algorithm: "SHA-256",
+      content_type: "application/json",
+      content_length: bytes.byteLength,
+      capture_actor: actor,
+      captured_at: frappeDatetime(consent.recordedAt),
+      // The Worker has durably stored the raw object but no human has reviewed
+      // it.  Do not overstate that as Verified evidence.
+      sync_state: "Uploaded",
+      customer_safe: 0,
+      summary: "Public instant-estimate follow-up consent source.",
+    },
+  );
+
+  for (const channel of consentChannels(rec)) {
+    const consentId = publicEstimateConsentId(rec, channel);
+    await createIfMissingByField(
+      env,
+      base,
+      "Communication Consent",
+      "consent_id",
+      consentId,
+      {
+        consent_id: consentId,
+        customer: customerName,
+        lead_envelope: leadEnvelopeName,
+        roof_job: roofJobName,
+        channel,
+        purpose: "Estimate Follow-up",
+        status: "Granted",
+        jurisdiction: consent.jurisdiction,
+        consent_basis: "Express",
+        source_system: "ironwrap-public-estimator",
+        source_reference: rec.envelope_id,
+        captured_by: actor,
+        captured_at: frappeDatetime(consent.recordedAt),
+        effective_from: frappeDatetime(consent.recordedAt),
+        proof_evidence: evidence.name,
+        notes: "Captured by the public instant-estimate flow; customer follow-up only.",
+      },
+    );
+  }
+}
+
+function publicEstimatorConsent(
+  payload: Record<string, unknown>,
+): { recordedAt: string; jurisdiction: string } | null {
+  if (str(payload.source_detail) !== "ironwrap_public_estimator") return null;
+  const publicEstimator = object(payload.public_estimator);
+  if (publicEstimator === null) return null;
+  const consent = object(publicEstimator.consent);
+  if (consent?.contact !== true || consent.privacy !== true) return null;
+  const recordedAt = str(consent.recorded_at);
+  if (!recordedAt || Number.isNaN(new Date(recordedAt).getTime())) {
+    throw new Error("erpnext_public_estimate_consent_timestamp_invalid");
+  }
+  const jurisdiction = str(publicEstimator.jurisdiction);
+  if (!jurisdiction) {
+    throw new Error("erpnext_public_estimate_consent_jurisdiction_missing");
+  }
+  return { recordedAt, jurisdiction };
+}
+
+function consentChannels(rec: EnvelopeRecord): Array<"Email" | "Phone"> {
+  const channels: Array<"Email" | "Phone"> = [];
+  if (str(rec.contact_email)) channels.push("Email");
+  if (str(rec.contact_phone)) channels.push("Phone");
+  return channels;
+}
+
+function publicEstimateConsentEvidenceId(rec: EnvelopeRecord): string {
+  return `evidence:public-estimate-consent:${rec.envelope_id}`;
+}
+
+function publicEstimateConsentId(
+  rec: EnvelopeRecord,
+  channel: "Email" | "Phone",
+): string {
+  return `consent:public-estimate:${rec.envelope_id}:${channel.toLowerCase()}`;
 }
 
 /**
@@ -633,8 +773,25 @@ function safeJson(s: string): Record<string, unknown> {
   try { return JSON.parse(s) as Record<string, unknown>; } catch { return {}; }
 }
 
+function object(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
+}
+
+function frappeDatetime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) throw new Error("erpnext_public_estimate_consent_timestamp_invalid");
+  return parsed.toISOString().replace("T", " ").slice(0, 19);
+}
+
+async function sha256Bytes(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function customerId(rec: EnvelopeRecord): string {

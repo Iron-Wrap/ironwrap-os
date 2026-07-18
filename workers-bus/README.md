@@ -118,6 +118,8 @@ npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
 npx wrangler secret put QB_WEBHOOK_TOKEN   # when the QuickBooks webhook is connected
 npx wrangler secret put ERPNEXT_API_KEY    # when ERPNext bridge is enabled
 npx wrangler secret put ERPNEXT_API_SECRET
+npx wrangler secret put PUBLIC_ESTIMATE_TURNSTILE_SECRET
+npx wrangler secret put PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER  # 32+ random characters
 npx wrangler secret put APP_AUTH_PEPPER    # 32+ random characters; required before APP_BFF_ENABLED=true
 npx wrangler secret put APPROVAL_BROKER_SHARED_SECRET  # only when the governed approval broker is enabled
 
@@ -134,6 +136,8 @@ npx wrangler deploy
 | POST | `/ingest/:source` | `Bearer INGEST_TOKEN` | ingest a lead (`source` ∈ website,phone,gbp,ad,referral,manual) |
 | POST | `/webhook/newo` | `Bearer NEWO_WEBHOOK_TOKEN` | receive an authenticated Newo Custom Tool handoff as canonical `phone` intake; raw provider body is retained first and duplicate retries do not repeat acknowledgement/queue work. See [`docs/NEWO-INTEGRATION.md`](../docs/NEWO-INTEGRATION.md). |
 | POST | `/ingest/estimate` | `Bearer INGEST_TOKEN` | ingest public estimator/configurator payloads into owned R2/D1 and ERPNext without a JobNimbus/GHL queue dependency; accepts stable project ids or `Idempotency-Key`/`X-Idempotency-Key` for retry-safe replay |
+| GET | `/public/instant-estimate/config` | exact configured `Origin` when supplied | public Turnstile/site availability envelope; an Origin-less same-origin GET is allowed without CORS headers |
+| POST | `/public/instant-estimate` | exact configured `Origin` + Turnstile | public estimate qualification; raw canonical consent is stored first, client/IP rate keys are HMAC hashes only, and a non-binding CAD range is returned only from an enabled server rule |
 | POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos, file them to Google Drive, and optionally sync ERPNext Evidence Items |
 | POST | `/ingest/measurement` | `Bearer INGEST_TOKEN` | ingest RoofRuler/AppliCad measurement metadata/report files; provider attachment identity takes precedence over a retry header, raw is stored before downstream work, and completed receipts replay safely |
 | GET | `/health` | — | backward-compatible, dependency-free liveness probe (`{"ok":true}`) |
@@ -218,6 +222,34 @@ fails closed when any enabled-BFF dependency is missing or malformed.
 HTTPS origins. `APP_ALLOW_INSECURE_LOCAL=true` permits explicit localhost HTTP origins for local
 development only. `APP_PUBLIC_ORIGIN` must be in the exact comma-separated origin allowlist.
 There is never a wildcard credentialed CORS response.
+
+### Public instant-estimate activation
+
+Leave `PUBLIC_ESTIMATE_ENABLED=false` until every control below is set. When enabled, `/ready`
+fails closed unless the exact browser origin, tenant brand allowlist, consent jurisdiction,
+Turnstile site/secret pair, HMAC rate-limit pepper, numeric rate limits, and valid JSON rule set are present. `[]` is a valid rule set and accepts a
+review-required lead without returning dollars; a missing or invalid rule set disables the public
+endpoint. If `ERPNEXT_ENABLED=true`, `ERPNEXT_INTEGRATION_USER` is also required so captured
+follow-up consent is mirrored under a deterministic integration identity.
+
+```text
+PUBLIC_ESTIMATE_ENABLED=true
+PUBLIC_ESTIMATE_ALLOWED_ORIGINS=https://<the PWA/Worker origin>
+PUBLIC_ESTIMATE_ALLOWED_BRANDS=ironwrap,iroof
+PUBLIC_ESTIMATE_CONSENT_JURISDICTION="Alberta, Canada"
+PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY=<public Turnstile site key>
+PUBLIC_ESTIMATE_RATE_LIMIT_WINDOW_SECONDS=900
+PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX=12
+PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX=3
+PUBLIC_ESTIMATE_RANGE_RULES_JSON=[]
+ERPNEXT_INTEGRATION_USER=<Frappe integration user when ERPNext is enabled>
+```
+
+`PUBLIC_ESTIMATE_ALLOWED_ORIGINS` controls browser CORS to this Worker only. It is deliberately
+separate from any website iframe `frame-ancestors` policy: configure each surface explicitly; do
+not add an iframe parent merely to the Worker CORS allowlist. Every range rule must use one of
+the configured tenant-brand keys and a service id from the tenant config; the browser never
+calculates a range.
 
 ### Governed approval broker (optional BFF slice)
 

@@ -31,7 +31,7 @@ test("Wrangler asset routing keeps all dynamic/auth surfaces Worker-first", asyn
   const config = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   assert.match(config, /"directory": "\.\.\/app\/dist"/);
   assert.match(config, /"not_found_handling": "single-page-application"/);
-  for (const route of ["/api/*", "/health", "/ready", "/admin/*", "/ingest/*", "/webhook/*"]) {
+  for (const route of ["/api/*", "/health", "/ready", "/admin/*", "/ingest/*", "/public/*", "/webhook/*"]) {
     assert.ok(config.includes(`"${route}"`), `missing Worker-first route ${route}`);
   }
 });
@@ -66,6 +66,18 @@ test("0019 measurement intake migration keeps retries hash-addressed and reviewa
   assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_measurement_intake_receipts_exception_updated\b/);
   assert.match(sql, /raw_key GLOB 'raw\/measurements\/\[0-9a-f\]\*\.json'/);
   assert.doesNotMatch(sql, /raw_provider_id|attachment_identifier|signed_report_url/i);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
+test("0021 public estimate rate guard stores only bounded keyed hashes", async () => {
+  const sql = await readFile(new URL("../migrations/0021_public_estimate_rate_limits.sql", import.meta.url), "utf8");
+  const schema = sql.replace(/^--.*$/gm, "");
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS public_estimate_rate_limits\b/);
+  assert.match(sql, /PRIMARY KEY \(scope, subject_hash\)/);
+  assert.match(sql, /scope IN \('ip', 'client'\)/);
+  assert.match(sql, /length\(subject_hash\) = 64/);
+  assert.match(sql, /idx_public_estimate_rate_limits_expiry/);
+  assert.doesNotMatch(schema, /raw_ip|ip_address|client_submission_id|turnstile|contact_email|contact_phone|customer_name/i);
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
@@ -162,9 +174,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     const migrations = (await readdir(new URL("../migrations/", import.meta.url)))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 20);
+    assert.equal(migrations.length, 21);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0020_production_schedule_approval_requests.sql");
+    assert.equal(migrations.at(-1), "0021_public_estimate_rate_limits.sql");
     for (const migration of migrations) {
       db.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -181,7 +193,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
          SUM(type = 'trigger') AS triggers
        FROM sqlite_master`,
     ).get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 28, indexes: 48, triggers: 31 });
+    assert.deepEqual({ ...counts }, { tables: 29, indexes: 49, triggers: 31 });
 
     const scheduleTables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'production_schedule_approval_%' ORDER BY name",

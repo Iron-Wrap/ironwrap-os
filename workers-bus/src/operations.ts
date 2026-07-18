@@ -109,6 +109,8 @@ export interface NewoReadinessDetail {
     failed_events: number;
     failed_sync: number;
     pending_sync: number;
+    missing_reports: number;
+    control_failures: number;
   } | null;
   drift_reasons: string[];
   api_error: string | null;
@@ -279,7 +281,8 @@ async function getNewoReadiness(env: Env, databaseReady: boolean): Promise<NewoR
       }
     }
   }
-  const dlqClear = counts !== null && counts.failed_events === 0 && counts.failed_sync === 0;
+  const dlqClear = counts !== null && counts.failed_events === 0 && counts.failed_sync === 0 &&
+    counts.missing_reports === 0 && counts.control_failures === 0;
 
   return {
     required,
@@ -300,6 +303,8 @@ async function getNewoReadiness(env: Env, databaseReady: boolean): Promise<NewoR
       failed_events: counts.failed_events,
       failed_sync: counts.failed_sync,
       pending_sync: counts.pending_sync,
+      missing_reports: counts.missing_reports,
+      control_failures: counts.control_failures,
     } : null,
     drift_reasons: driftReasons,
     api_error: apiError,
@@ -377,6 +382,51 @@ async function checkFrappeReachability(env: AppEnv & ExtendedEnv): Promise<{ ok:
     return response.ok ? { ok: true, error: null } : { ok: false, error: `frappe_http_${response.status}` };
   } catch {
     return { ok: false, error: controller.signal.aborted ? "frappe_timeout" : "frappe_unreachable" };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function getNewoOpenIncidentCount(env: Env): Promise<number | null> {
+  const runtime = env as AppEnv & ExtendedEnv;
+  if (String(runtime.ERPNEXT_ENABLED ?? "false") !== "true" || !nonEmpty(runtime.ERPNEXT_BASE_URL) ||
+    !nonEmpty(runtime.ERPNEXT_API_KEY) || !nonEmpty(runtime.ERPNEXT_API_SECRET)) return null;
+  let base: URL;
+  try {
+    base = new URL(String(runtime.ERPNEXT_BASE_URL));
+  } catch {
+    return null;
+  }
+  if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) return null;
+  const query = new URLSearchParams({
+    fields: JSON.stringify(["name"]),
+    filters: JSON.stringify([
+      ["Automation Incident", "source_system", "=", "Newo"],
+      ["Automation Incident", "status", "in", ["Open", "Acknowledged"]],
+    ]),
+    limit_page_length: "501",
+  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3_000);
+  try {
+    const response = await fetch(
+      `${base.toString().replace(/\/+$/, "")}/api/resource/Automation%20Incident?${query}`,
+      {
+        method: "GET",
+        redirect: "error",
+        signal: controller.signal,
+        headers: {
+          accept: "application/json",
+          authorization: `token ${runtime.ERPNEXT_API_KEY}:${runtime.ERPNEXT_API_SECRET}`,
+        },
+      },
+    );
+    if (!response.ok) return null;
+    const body = await response.json() as { data?: unknown };
+    if (!Array.isArray(body.data) || body.data.length > 500) return null;
+    return body.data.length;
+  } catch {
+    return null;
   } finally {
     clearTimeout(timeout);
   }

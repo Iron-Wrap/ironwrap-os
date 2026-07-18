@@ -23,6 +23,7 @@ import {
   BULK_REPLAY_CONFIRMATION,
   executeReplayRequest,
   getOperationalStatus,
+  getNewoOpenIncidentCount,
   getReadiness,
   validateReplayApprovalContext,
 } from "./operations.ts";
@@ -58,14 +59,25 @@ import { markExpiredProductionScheduleApprovalExecutionLeases } from "./producti
 import {
   handleNewoQueueMessage,
   handleNewoWebhook,
+  reconcileNewoSessions,
   type NewoQueueMessage,
 } from "./newo.ts";
 import { handleNewoAdmin } from "./newo-admin.ts";
+import {
+  newoOperationalCounts,
+  recordNewoReconciliationRun,
+} from "./newo-store.ts";
 
 type BusQueueMessage = { envelope_id: string } | NewoQueueMessage;
 
 const MAX_BODY_BYTES = 256 * 1024;
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
+const escapeHtml = (value: string): string => value
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;")
+  .replace(/'/g, "&#039;");
 const safeJson = (s: string): Record<string, unknown> => {
   try {
     return JSON.parse(s) as Record<string, unknown>;
@@ -126,6 +138,9 @@ export default {
       ctx.waitUntil(
         Promise.all([
           runReconcile(env),
+          runNewoDailyReconcile(env).catch((error) =>
+            log({ at: "newo_daily_reconcile", error: String(error) })
+          ),
           pruneAuthRecords(env).catch((error) =>
             log({ at: "auth_prune", error: String(error) }),
           ),
@@ -144,6 +159,9 @@ export default {
       ctx.waitUntil(
         Promise.all([
           retrySweep(env),
+          reconcileNewoSessions(env).catch((error) =>
+            log({ at: "newo_five_minute_reconcile", error: String(error) })
+          ),
           retryMeasurementIntakeReceipts(env).catch((error) =>
             log({ at: "measurement_intake_retry", error: String(error) }),
           ),
@@ -639,6 +657,71 @@ async function runReconcile(env: Env): Promise<{
   ).catch((e) => log({ at: "reconcile_digest_failed", day, error: String(e) }));
   log({ at: "reconcile", day, gaps: gaps.length, openDeadLetter: openDlq });
   return { day, rows, openDeadLetter: openDlq };
+}
+
+async function runNewoDailyReconcile(env: Env): Promise<void> {
+  const runtime = env as Env & {
+    NEWO_ENABLED?: string;
+    NEWO_PRODUCTION_REQUIRED?: string;
+    NEWO_USAGE_LIMIT_MINUTES?: string;
+  };
+  if (String(runtime.NEWO_ENABLED) !== "true" && String(runtime.NEWO_PRODUCTION_REQUIRED) !== "true") return;
+  const ranAt = new Date().toISOString();
+  const [readiness, counts, unresolvedIncidents] = await Promise.all([
+    getReadiness(env),
+    newoOperationalCounts(env),
+    getNewoOpenIncidentCount(env),
+  ]);
+  const driftReasons = [
+    ...readiness.newo.drift_reasons,
+    ...(readiness.newo.api_error ? [readiness.newo.api_error] : []),
+    ...(readiness.newo.frappe_error ? [readiness.newo.frappe_error] : []),
+  ];
+  const usageLimit = Number(runtime.NEWO_USAGE_LIMIT_MINUTES ?? "0");
+  const degraded = !readiness.ok || counts.failed_events > 0 || counts.failed_sync > 0 ||
+    counts.missing_reports > 0 || counts.control_failures > 0 ||
+    unresolvedIncidents === null || unresolvedIncidents > 0;
+  await recordNewoReconciliationRun(env, {
+    run_id: `newo:daily:${crypto.randomUUID()}`,
+    run_type: "daily",
+    status: degraded ? "degraded" : "ok",
+    ran_at: ranAt,
+    retryable_syncs_requeued: 0,
+    missing_reports: counts.missing_reports,
+    failed_handoffs: counts.failed_handoffs,
+    pending_bookings: counts.pending_bookings,
+    unresolved_incidents: unresolvedIncidents,
+    drift_reasons_json: JSON.stringify([...new Set(driftReasons)]),
+    usage_status: "unavailable_from_documented_api",
+    usage_minutes: null,
+    usage_limit_minutes: Number.isFinite(usageLimit) && usageLimit > 0 ? usageLimit : null,
+    detail_json: JSON.stringify({
+      readiness_status: readiness.status,
+      last_event_at: counts.last_event_at,
+      last_report_at: counts.last_report_at,
+      control_failures: counts.control_failures,
+      usage_evidence: "Newo documented session aggregates do not expose call minutes; verify provider-console alerts.",
+    }),
+  });
+  if (degraded) {
+    await sendOwnerAlert(
+      env,
+      "Newo daily reconciliation requires review",
+      `<p>Newo readiness or owned landing checks are degraded.</p>
+       <p>Missing reports: ${counts.missing_reports}; failed syncs: ${counts.failed_sync};
+       unresolved callback incidents: ${unresolvedIncidents ?? "unavailable"}.</p>
+       <p>Configuration/API reasons: ${driftReasons.map(escapeHtml).join(", ") || "none"}.</p>`,
+    ).catch(() => {});
+  }
+  log({
+    at: "newo_daily_reconcile",
+    status: degraded ? "degraded" : "ok",
+    missing_reports: counts.missing_reports,
+    failed_syncs: counts.failed_sync,
+    unresolved_incidents: unresolvedIncidents,
+    drift_count: driftReasons.length,
+    usage_status: "unavailable_from_documented_api",
+  });
 }
 
 async function handleReplay(req: Request, env: Env): Promise<Response> {

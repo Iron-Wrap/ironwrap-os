@@ -397,9 +397,14 @@ test("pushNewoSessionToErpNext keeps appointment review state human-owned on ret
     started_at: "2026-07-18T18:00:00.000Z",
     ended_at: null,
     duration_seconds: null,
+    report_expected_at: "2026-07-18T18:31:00.000Z",
+    report_received_at: null,
+    report_event_id: null,
+    missing_report_detected_at: null,
     sync_status: "pending",
     sync_attempts: 0,
     last_error: null,
+    sync_updated_at: "2026-07-18T18:01:00.000Z",
     created_at: "2026-07-18T18:00:00.000Z",
     updated_at: "2026-07-18T18:01:00.000Z",
   };
@@ -431,6 +436,97 @@ test("pushNewoSessionToErpNext keeps appointment review state human-owned on ret
   ]) {
     assert.equal(Object.hasOwn(body, humanOwned), false, `${humanOwned} must remain human-owned`);
   }
+});
+
+test("pushNewoSessionToErpNext creates one owned urgent-callback incident for a failed handoff", async (t) => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    if (url.includes("/api/resource/Reception%20Session?")) {
+      return json({ data: [{ name: "RS-session-failed" }] });
+    }
+    if (url.endsWith("/api/resource/Reception%20Session/RS-session-failed")) {
+      return json({ data: { name: "RS-session-failed" } });
+    }
+    if (url.includes("/api/resource/Automation%20Incident?")) return json({ data: [] });
+    if (url.endsWith("/api/resource/Automation%20Incident")) {
+      return json({ data: { name: "incident:newo-callback:session-failed" } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const session: NewoSessionRecord = {
+    session_id: "session-failed",
+    project_id: "project-001",
+    agent_id: "agent-001",
+    user_actor_id: "actor-001",
+    conversation_id: "conversation-failed",
+    channel: "phone",
+    direction: "inbound",
+    status: "session_failed",
+    outcome: "handoff_failed",
+    contact_name: "Callback Caller",
+    contact_phone: "+15875557799",
+    contact_email: null,
+    address_line1: "456 Main Street",
+    city: "Edmonton",
+    province: "AB",
+    postal_code: "T5J 0N4",
+    division: "residential",
+    service: "Emergency leak",
+    urgency: "emergency",
+    lead_envelope_id: rec.envelope_id,
+    appointment_request_id: null,
+    handoff_status: "failed",
+    booking_status: null,
+    summary: "Owner transfer failed; urgent callback required.",
+    transcript_ref: "newo:transcript:session-failed",
+    recording_ref: "newo:recording:session-failed",
+    ai_disclosed: 1,
+    recording_disclosed: 1,
+    structured_json: JSON.stringify({ handoff: { reason: "Active leak" } }),
+    raw_key: "raw/newo/events/2026-07-18/event-failed.json",
+    payload_hash: "b".repeat(64),
+    started_at: "2026-07-18T19:00:00.000Z",
+    ended_at: "2026-07-18T19:02:00.000Z",
+    duration_seconds: 120,
+    report_expected_at: null,
+    report_received_at: "2026-07-18T19:02:00.000Z",
+    report_event_id: "event-failed",
+    missing_report_detected_at: null,
+    sync_status: "pending",
+    sync_attempts: 1,
+    last_error: null,
+    sync_updated_at: "2026-07-18T19:02:30.000Z",
+    created_at: "2026-07-18T19:00:00.000Z",
+    updated_at: "2026-07-18T19:02:00.000Z",
+  };
+
+  const result = await pushNewoSessionToErpNext({
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
+    NEWO_CALLBACK_OWNER_USER: "owner@example.com",
+  } as never, session, { leadEnvelopeName: "LE-0001", roofJobName: "RJ-0001" });
+
+  assert.deepEqual(result, {
+    receptionSessionName: "RS-session-failed",
+    automationIncidentName: "incident:newo-callback:session-failed",
+  });
+  const incident = JSON.parse(String(calls.find((call) =>
+    call.url.endsWith("/api/resource/Automation%20Incident") && call.init.method === "POST"
+  )?.init.body));
+  assert.equal(incident.incident_id, "incident:newo-callback:session-failed");
+  assert.equal(incident.status, "Open");
+  assert.equal(incident.severity, "Critical");
+  assert.equal(incident.assigned_to, "owner@example.com");
+  assert.equal(incident.record_ref, "Reception Session:RS-session-failed");
+  assert.equal(incident.correlation_id, "session-failed");
+  assert.equal(incident.lead_envelope, "LE-0001");
+  assert.equal(incident.roof_job, "RJ-0001");
+  assert.equal(JSON.stringify(incident).includes("transcript"), false);
+  assert.equal(JSON.stringify(incident).includes("recording"), false);
 });
 
 function json(body: unknown): Response {

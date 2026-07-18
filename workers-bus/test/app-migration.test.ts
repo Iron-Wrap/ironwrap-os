@@ -174,9 +174,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     const migrations = (await readdir(new URL("../migrations/", import.meta.url)))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 24);
+    assert.equal(migrations.length, 25);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0024_newo_control_evidence.sql");
+    assert.equal(migrations.at(-1), "0025_newo_reconciliation.sql");
     for (const migration of migrations) {
       db.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -193,7 +193,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
          SUM(type = 'trigger') AS triggers
        FROM sqlite_master`,
     ).get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 33, indexes: 58, triggers: 31 });
+    assert.deepEqual({ ...counts }, { tables: 34, indexes: 60, triggers: 31 });
 
     const newoTables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'newo_%' ORDER BY name",
@@ -201,6 +201,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     assert.deepEqual(newoTables.map(({ name }) => name), [
       "newo_control_actions",
       "newo_event_receipts",
+      "newo_reconciliation_runs",
       "newo_sessions",
       "newo_slot_reservations",
     ]);
@@ -217,6 +218,22 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
       "approval_reason", "dry_run_expires_at", "approval_expires_at", "result_json", "consumed_at",
     ]) {
       assert.equal(controlColumns.some((column) => column.name === name), true, `missing ${name}`);
+    }
+    const sessionColumns = db.prepare("PRAGMA table_info(newo_sessions)").all() as Array<{ name: string }>;
+    for (const name of [
+      "report_expected_at", "report_received_at", "report_event_id",
+      "missing_report_detected_at", "sync_updated_at",
+    ]) {
+      assert.equal(sessionColumns.some((column) => column.name === name), true, `missing ${name}`);
+    }
+    const reconciliationColumns = db.prepare("PRAGMA table_info(newo_reconciliation_runs)").all() as Array<{
+      name: string;
+    }>;
+    for (const name of [
+      "run_type", "status", "missing_reports", "unresolved_incidents",
+      "drift_reasons_json", "usage_status", "usage_minutes", "usage_limit_minutes",
+    ]) {
+      assert.equal(reconciliationColumns.some((column) => column.name === name), true, `missing ${name}`);
     }
 
     const scheduleTables = db.prepare(

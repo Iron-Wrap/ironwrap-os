@@ -17,6 +17,7 @@ type ErpEnv = Env & {
    */
   ERPNEXT_INTEGRATION_USER?: string;
   NEWO_BOOKING_MODE?: string;
+  NEWO_CALLBACK_OWNER_USER?: string;
 };
 
 export interface ErpNextResult {
@@ -37,6 +38,7 @@ export interface ErpNextTransportSyncResult {
 export interface ErpNextNewoSyncResult {
   receptionSessionName: string;
   appointmentRequestName?: string;
+  automationIncidentName?: string;
 }
 
 export interface ErpNextNewoLinks {
@@ -314,8 +316,12 @@ export async function pushNewoSessionToErpNext(
     session.session_id,
     receptionSessionDoc(session, links),
   );
+  const incident = await ensureNewoCallbackIncident(cfg, base, session, reception.name, links);
   if (!session.appointment_request_id) {
-    return { receptionSessionName: reception.name };
+    return {
+      receptionSessionName: reception.name,
+      ...(incident ? { automationIncidentName: incident.name } : {}),
+    };
   }
   const appointmentDoc = appointmentRequestDoc(cfg, session, reception.name, links);
   const existingAppointment = await findByTerm(
@@ -338,7 +344,42 @@ export async function pushNewoSessionToErpNext(
   return {
     receptionSessionName: reception.name,
     appointmentRequestName: appointment.name,
+    ...(incident ? { automationIncidentName: incident.name } : {}),
   };
+}
+
+async function ensureNewoCallbackIncident(
+  env: ErpEnv,
+  base: string,
+  session: NewoSessionRecord,
+  receptionSessionName: string,
+  links: ErpNextNewoLinks,
+): Promise<ErpNextResult | null> {
+  if (session.status !== "session_failed" && session.handoff_status !== "failed") return null;
+  const incidentId = `incident:newo-callback:${session.session_id}`;
+  return await createIfMissingByField(
+    env,
+    base,
+    "Automation Incident",
+    "incident_id",
+    incidentId,
+    {
+      incident_id: incidentId,
+      status: "Open",
+      severity: session.urgency === "emergency" ? "Critical" : "High",
+      source_system: "Newo",
+      category: "Integration",
+      summary: "Urgent callback required after failed receptionist transfer",
+      details: "Newo could not complete the requested handoff. Contact the caller using the verified reception session details.",
+      roof_job: links.roofJobName ?? undefined,
+      lead_envelope: links.leadEnvelopeName ?? undefined,
+      record_ref: `Reception Session:${receptionSessionName}`,
+      correlation_id: session.session_id,
+      detected_at: frappeDatetime(session.updated_at),
+      retry_count: session.sync_attempts,
+      assigned_to: str(env.NEWO_CALLBACK_OWNER_USER) || undefined,
+    },
+  );
 }
 
 function receptionSessionDoc(

@@ -12,6 +12,10 @@ import {
   failNewoReceipt,
   getNewoReceipt,
   getNewoSession,
+  listRetryableNewoEventIds,
+  markNewoMissingReports,
+  newoOperationalCounts,
+  recordNewoReconciliationRun,
   restartFailedNewoReceipt,
   markNewoSessionSync,
   touchNewoReceipt,
@@ -148,6 +152,9 @@ type NewoRuntimeEnv = Env & {
   NEWO_ENABLED?: string;
   NEWO_BOOKING_MODE?: string;
   NEWO_BOOKING_HORIZON_DAYS?: string;
+  NEWO_REPORT_TIMEOUT_MINUTES?: string;
+  NEWO_SYNC_RETRY_MINUTES?: string;
+  NEWO_PRODUCTION_REQUIRED?: string;
   NEWO_BOOKING_TOKEN?: string;
   NEWO_QUEUE: Queue<NewoQueueMessage>;
 };
@@ -248,6 +255,9 @@ export async function handleNewoQueueMessage(
         synced.appointmentRequestName
           ? `appointment_request:${synced.appointmentRequestName}`
           : null,
+        synced.automationIncidentName
+          ? `automation_incident:${synced.automationIncidentName}`
+          : null,
       ].filter(Boolean).join(","),
       action: "sync",
       result: "ok",
@@ -256,6 +266,80 @@ export async function handleNewoQueueMessage(
     await markNewoSessionSync(env, session.session_id, "failed", String(error), now).catch(() => {});
     throw error;
   }
+}
+
+export async function reconcileNewoSessions(
+  env: Env,
+  now = new Date(),
+): Promise<{
+  retryable_syncs_requeued: number;
+  newly_missing_reports: number;
+}> {
+  const runtime = env as NewoRuntimeEnv;
+  if (String(runtime.NEWO_ENABLED) !== "true" && String(runtime.NEWO_PRODUCTION_REQUIRED) !== "true") {
+    return { retryable_syncs_requeued: 0, newly_missing_reports: 0 };
+  }
+  const ranAt = now.toISOString();
+  const configured = Number(runtime.NEWO_SYNC_RETRY_MINUTES ?? "5");
+  const retryMinutes = Number.isInteger(configured) && configured >= 1 && configured <= 60
+    ? configured
+    : 5;
+  const retryCutoff = new Date(now.getTime() - retryMinutes * 60_000).toISOString();
+  const retryEventIds = await listRetryableNewoEventIds(env, retryCutoff, 100);
+  if (retryEventIds.length > 0) {
+    await runtime.NEWO_QUEUE.sendBatch(
+      retryEventIds.map((eventId) => ({ body: { newo_event_id: eventId } })),
+    );
+  }
+
+  const missing = await markNewoMissingReports(env, ranAt, 100);
+  for (const session of missing) {
+    await store.recordAudit(env, {
+      automation: "newo_report_reconciliation",
+      trigger: "five_minute_cron",
+      envelope_id: session.lead_envelope_id,
+      source_ids: `session:${session.session_id}`,
+      action: "missing_report_detected",
+      result: "error",
+      error: "newo_session_report_missing",
+      recovery_owner: env.OWNER_ALERT_EMAIL,
+    });
+  }
+  if (missing.length > 0) {
+    const listed = missing.slice(0, 20).map((session) => escapeHtml(session.session_id)).join(", ");
+    await sendOwnerAlert(
+      env,
+      `${missing.length} Newo session report${missing.length === 1 ? " is" : "s are"} missing`,
+      `<p>Structured session reports did not arrive by their deadline.</p><p>Sessions: ${listed}</p>`,
+    ).catch(() => {});
+  }
+
+  const counts = await newoOperationalCounts(env);
+  const degraded = counts.failed_events > 0 || counts.failed_sync > 0 ||
+    counts.missing_reports > 0 || counts.control_failures > 0;
+  await recordNewoReconciliationRun(env, {
+    run_id: `newo:five-minute:${crypto.randomUUID()}`,
+    run_type: "five_minute",
+    status: degraded ? "degraded" : "ok",
+    ran_at: ranAt,
+    retryable_syncs_requeued: retryEventIds.length,
+    missing_reports: counts.missing_reports,
+    failed_handoffs: counts.failed_handoffs,
+    pending_bookings: counts.pending_bookings,
+    unresolved_incidents: null,
+    drift_reasons_json: "[]",
+    usage_status: "not_checked",
+    usage_minutes: null,
+    usage_limit_minutes: null,
+    detail_json: JSON.stringify({
+      retry_event_ids: retryEventIds,
+      newly_missing_session_ids: missing.map((session) => session.session_id),
+    }),
+  });
+  return {
+    retryable_syncs_requeued: retryEventIds.length,
+    newly_missing_reports: missing.length,
+  };
 }
 
 export function parseNewoEvent(rawText: string): ParseResult<NewoEventV1> {
@@ -457,6 +541,7 @@ async function acceptEvent(
     const response = toolReceipt(event, envelope?.envelope_id ?? existingSession?.lead_envelope_id ?? null,
       appointmentRequestId, bookingMode(env));
     await upsertNewoSession(env, sessionRecord(
+      env,
       event,
       rawKey,
       hash,
@@ -553,6 +638,7 @@ async function ensureSessionEnvelope(
 }
 
 function sessionRecord(
+  env: NewoRuntimeEnv,
   event: NewoEventV1,
   rawKey: string,
   hash: string,
@@ -596,9 +682,16 @@ function sessionRecord(
     started_at: event.outcome.started_at,
     ended_at: event.outcome.ended_at,
     duration_seconds: event.outcome.duration_seconds,
+    report_expected_at: isSessionReport(event.event_type) ? null : reportExpectedAt(env, event.occurred_at),
+    report_received_at: isSessionReport(event.event_type) ? event.occurred_at : existing?.report_received_at ?? null,
+    report_event_id: isSessionReport(event.event_type) ? event.event_id : existing?.report_event_id ?? null,
+    missing_report_detected_at: isSessionReport(event.event_type)
+      ? null
+      : existing?.missing_report_detected_at ?? null,
     sync_status: "pending",
     sync_attempts: existing?.sync_attempts ?? 0,
     last_error: null,
+    sync_updated_at: now,
     created_at: existing?.created_at ?? now,
     updated_at: event.occurred_at,
   };
@@ -945,6 +1038,18 @@ function sessionStatus(type: NewoEventType): string {
     booking_requested: "appointment_requested",
     booking_cancelled: "appointment_cancelled",
   } as const)[type];
+}
+
+function isSessionReport(type: NewoEventType): boolean {
+  return type === "session_ended" || type === "session_failed" || type === "missed_call";
+}
+
+function reportExpectedAt(env: NewoRuntimeEnv, occurredAt: string): string {
+  const configured = Number(env.NEWO_REPORT_TIMEOUT_MINUTES ?? "30");
+  const minutes = Number.isInteger(configured) && configured >= 5 && configured <= 24 * 60
+    ? configured
+    : 30;
+  return new Date(Date.parse(occurredAt) + minutes * 60_000).toISOString();
 }
 
 function bookingStatus(event: NewoEventV1): string | null {

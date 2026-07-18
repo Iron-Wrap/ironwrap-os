@@ -187,8 +187,9 @@ function fakeNewoEnv() {
                     summary: args[23], transcript_ref: args[24], recording_ref: args[25], ai_disclosed: args[26],
                     recording_disclosed: args[27], structured_json: args[28], raw_key: args[29],
                     payload_hash: args[30], started_at: args[31], ended_at: args[32], duration_seconds: args[33],
-                    sync_status: args[34], sync_attempts: args[35], last_error: args[36], created_at: args[37],
-                    updated_at: args[38],
+                    report_expected_at: args[34], report_received_at: args[35], report_event_id: args[36],
+                    missing_report_detected_at: args[37], sync_status: args[38], sync_attempts: args[39],
+                    last_error: args[40], sync_updated_at: args[41], created_at: args[42], updated_at: args[43],
                   };
                   const previous = sessions.get(String(args[0]));
                   sessions.set(String(args[0]), previous ? { ...previous, ...row } : row);

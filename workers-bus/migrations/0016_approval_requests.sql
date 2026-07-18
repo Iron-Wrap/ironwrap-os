@@ -305,7 +305,8 @@ BEGIN
       WHEN NEW.state = 'failed' THEN 'failed'
       WHEN NEW.state = 'audit_failed' THEN 'audit_failed'
       WHEN NEW.state = 'execution_uncertain' THEN 'execution_uncertain'
-    END,
+    -- Wrangler's SQL splitter recognizes a CASE terminator only after whitespace.
+    END ,
     OLD.state,
     NEW.state,
     NEW.transition_actor_kind,

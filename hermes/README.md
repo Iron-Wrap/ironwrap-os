@@ -9,14 +9,15 @@ state and never mutates a system of record with a free-form write.
 
 - Hermes plans, drafts, and proposes. It composes MCP tool calls to read job/lead/evidence
   state and to draft mutations.
-- Every mutation is a `request_*` command tool that only drafts a record or sets a
-  review-gated status. No tool sends a customer message and no tool mutates accounting.
+- Every mutation is a `request_*` command tool behind a reviewed preview. Frappe commands draft
+  records or set review-gated status; Newo customer sends exist only on the owner surface and fail
+  closed unless exact receipts and the separate outbound gate are both present. No tool mutates accounting.
 - Truth lives downstream: IronWrap OS (Frappe) for the roofing operating core, the bus for envelope and
   dead-letter truth, QuickBooks for accounting. Hermes reflects them; it does not replace them.
 
 ## MCP servers
 
-Two MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, per-server
+Three MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, per-server
 `tool_filter`, and env var names):
 
 - `mcp/ironwrap-bus-mcp/src/server.mjs`: readiness and operational truth
@@ -26,9 +27,12 @@ Two MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, pe
 - `mcp/erpnext-roofing-mcp/src/server.mjs`: IronWrap OS Frappe operating core with reads,
   deterministic policy checks (`check_consent`, `check_quiet_hours`), dry-run previews, and
   review-gated `request_*` writes. Its legacy name is retained for deployment compatibility.
+- `mcp/newo-mcp/src/server.mjs`: bounded Worker-backed session, conversation, actor, webhook,
+  analytics, and control access. It never receives the provider API key or exposes a raw proxy.
 
-The validated implemented-source inventory is **139 tools** across both servers: the bus contributes 8;
-the Frappe server contributes **131 (75 reads, 28 dry-runs, 28 approved writes)**.
+The validated implemented-source inventory is **159 tools** across all three servers: the bus contributes 8,
+the Frappe server contributes **131 (75 reads, 28 dry-runs, 28 approved writes)**, and Newo contributes
+**20 (17 reads, 1 exact-argument dry-run, 2 approval/execution actions)**.
 
 ## Tool filtering per agent role
 
@@ -39,7 +43,8 @@ agent roles may call. Each role declares `reads`, `dry_run`, `approved_write`, a
 `hermes/mcp-servers.json` `tool_filter` arrays are the UNION of each bucket across the roles
 that use that server for host discovery only. The Frappe MCP server itself requires
 `HERMES_AGENT_ROLE` and `HERMES_ACTOR_USER`, loads canonical `roles.json`, and registers only
-that role's tools. Its Frappe API key pair must belong to exactly `HERMES_ACTOR_USER`, not a
+that role's tools. The Newo MCP applies the same runtime role registration and connects only to
+bounded Worker routes. Its Frappe API key pair must belong to exactly `HERMES_ACTOR_USER`, not a
 shared service principal; Field Companion calls are additionally checked against an active assignment.
 `tools/validate-hermes-config.mjs` validates the source/runtime contract against the implemented-source tool
 inventory (see below).
@@ -52,7 +57,7 @@ Every write follows the same sequence, with no step skippable:
 read -> propose -> dry_run -> policy_check -> human_approval -> write -> audit_event
 ```
 
-No tool can send a customer message or mutate accounting. Frappe approved writes require
+No tool can mutate accounting. Frappe approved writes require
 `ERPNEXT_WRITE_ENABLED=true`, a role/actor-bound short-lived `dry_run_receipt`, and an
 independently Ed25519-signed `approval_receipt` for the exact mutation, approver, actor, and
 Frappe site. The receipt is retained separately from mutable tool arguments and Frappe verifies
@@ -61,8 +66,11 @@ it again with its public-key-only mount before a guarded mutation can consume th
 is the mutation claim, and any in-flight or failed claim fails closed instead of resuming. The bus
 retains its separate `IRONWRAP_BUS_WRITE_ENABLED` plus `HERMES_WRITE_TOKEN` replay gate. Frappe
 writes record Hermes Run rows; bus replay records envelope-scoped recovery and approval context.
+Newo provider mutations require a Worker-signed exact-argument dry-run receipt, a separately
+recorded human approval receipt, a one-time D1 execution claim, the MCP and Worker write gates,
+and an audit record. Customer sends additionally require `NEWO_OUTBOUND_ENABLED=true`.
 
-Additional hard boundaries in the committed 48-DocType model:
+Additional hard boundaries in the committed 50-DocType model:
 
 - Crew Profile and Contract Acceptance are read-only. No Hermes tool signs, accepts, or
   rejects on a customer's behalf.
@@ -120,9 +128,9 @@ its separate write token gate.
 node tools/validate-hermes-config.mjs
 ```
 
-It parses the implemented tool inventory from both server sources, checks that every tool referenced
+It parses the implemented tool inventory from all three server sources, checks that every tool referenced
 in `roles.json` exists, that reads are read-only, dry-runs are previews, approved-writes are
 `request_*` mutations each paired with its dry-run counterpart in the same role, and that all
 eight blueprint roles are present with no duplicate grants.
-It also freezes the 139-tool inventory, enforces Contract Acceptance as read-only, checks
+It also freezes the 159-tool inventory, enforces Contract Acceptance as read-only, checks
 least-privilege boundaries for field/finance roles, and validates manifest union exactness.

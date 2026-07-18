@@ -61,7 +61,7 @@ function fakeEnv(options: FakeOptions = {}) {
     sqlCalls.push({ sql, args });
     if (options.d1Throws && sql.includes("sqlite_master")) throw new Error("d1_unavailable");
     if (sql.includes("sqlite_master")) {
-      return { table_count: 28, index_count: options.missingSchemaArtifact ? 37 : 38, trigger_count: 31 };
+      return { table_count: 29, index_count: options.missingSchemaArtifact ? 38 : 39, trigger_count: 31 };
     }
     if (sql.includes("COUNT(*) AS n FROM dead_letter")) {
       return { n: deadLetters.filter((row) => row.recovered === 0).length };
@@ -317,6 +317,7 @@ test("public readiness probes D1/bindings without exposing configured secrets", 
   assert.match(schemaQuery.sql, /production_schedule_approval_requests/);
   assert.match(schemaQuery.sql, /prevent_production_schedule_approval_binding_rewrite/);
   assert.equal(body.checks.production_schedule_configuration, true, "blank primary schedule inputs keep the rail intentionally disabled");
+  assert.equal(body.checks.public_estimate_configuration, true, "blank public-estimate config keeps the route intentionally disabled");
   assert.equal(JSON.stringify(body).includes("ingest-secret"), false);
   assert.equal(JSON.stringify(body).includes("jobnimbus-secret"), false);
   assert.equal(response.headers.get("cache-control"), "no-store");
@@ -361,6 +362,18 @@ test("readiness fails closed when the operational migration artifacts are missin
   assert.equal(body.ok, false);
   assert.equal(body.checks.d1, true);
   assert.equal(body.checks.schema, false);
+});
+
+test("readiness fails closed when the public estimator is enabled without its complete boundary", async () => {
+  const { env } = fakeEnv();
+  (env as Record<string, unknown>).PUBLIC_ESTIMATE_ENABLED = "true";
+
+  const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  const body = await response.json() as { ok: boolean; checks: Record<string, boolean> };
+
+  assert.equal(response.status, 503);
+  assert.equal(body.ok, false);
+  assert.equal(body.checks.public_estimate_configuration, false);
 });
 
 test("readiness accepts a complete enabled production-schedule approval rail", async () => {

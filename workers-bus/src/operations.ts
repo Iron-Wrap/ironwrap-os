@@ -5,6 +5,7 @@ import { appBffConfigured } from "./app-auth.ts";
 import { customerPortalConfigured } from "./customer-portal.ts";
 import { productionScheduleApprovalDecisionConfig } from "./production-schedule-approval-authority.ts";
 import { productionScheduleApprovalBrokerConfig } from "./production-schedule-approval-broker-client.ts";
+import { publicEstimateConfigured, type PublicEstimatorEnv } from "./public-estimator.ts";
 import type { AppEnv } from "./app-types.ts";
 
 export const BULK_REPLAY_CONFIRMATION = "REPLAY_ALL_OPEN_DEAD_LETTERS";
@@ -43,6 +44,7 @@ export interface ReadinessReport {
     app_bff_configuration: boolean;
     customer_portal_configuration: boolean;
     production_schedule_configuration: boolean;
+    public_estimate_configuration: boolean;
   };
 }
 
@@ -86,7 +88,7 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
   const db = runtime.DB as { prepare?: unknown } | undefined;
   const raw = runtime.RAW as { put?: unknown } | undefined;
   const queue = runtime.JN_QUEUE as { send?: unknown; sendBatch?: unknown } | undefined;
-  const extended = env as AppEnv & ExtendedEnv;
+  const extended = env as AppEnv & ExtendedEnv & PublicEstimatorEnv;
 
   const checks: ReadinessReport["checks"] = {
     d1: false,
@@ -110,6 +112,7 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
     app_bff_configuration: appBffConfigured(extended),
     customer_portal_configuration: customerPortalConfigured(extended),
     production_schedule_configuration: productionScheduleConfigured(extended),
+    public_estimate_configuration: publicEstimateConfigured(extended),
   };
 
   if (typeof db?.prepare === "function") {

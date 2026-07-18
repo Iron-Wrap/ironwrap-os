@@ -429,7 +429,7 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'quote_revision_approval_requests','quote_revision_approval_request_events',
           'production_schedule_approval_requests','production_schedule_approval_request_events',
           'customer_portal_links','customer_portal_access_throttles',
-          'measurement_intake_receipts') THEN 1 ELSE 0 END), 0) AS table_count,
+          'measurement_intake_receipts','public_estimate_rate_limits') THEN 1 ELSE 0 END), 0) AS table_count,
        COALESCE(SUM(CASE WHEN type = 'index' AND name IN
          ('idx_dead_letter_open_envelope','idx_audit_result_ts','idx_envelopes_operational',
           'idx_envelopes_erpnext_error_open','idx_heartbeat_ran_at','idx_qb_receipts_last_seen',
@@ -454,7 +454,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'idx_production_schedule_approval_events_tenant_created',
           'idx_customer_portal_links_tenant_job_active',
           'idx_customer_portal_access_throttles_expiry',
-          'idx_measurement_intake_receipts_exception_updated')
+          'idx_measurement_intake_receipts_exception_updated',
+          'idx_public_estimate_rate_limits_expiry')
          THEN 1 ELSE 0 END), 0) AS index_count,
        COALESCE(SUM(CASE WHEN type = 'trigger' AND name IN
          ('validate_source_count_insert','validate_source_count_update',
@@ -526,7 +527,9 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             cpat.attempts AS customer_portal_throttle_attempts,
             mir.receipt_id AS measurement_receipt_id,
             mir.status AS measurement_receipt_status,
-            mir.measurement_id AS measurement_receipt_measurement_id
+            mir.measurement_id AS measurement_receipt_measurement_id,
+            perl.scope AS public_estimate_rate_limit_scope,
+            perl.attempts AS public_estimate_rate_limit_attempts
      FROM envelopes e
      LEFT JOIN audit_log a ON 1 = 0
      LEFT JOIN dead_letter d ON 1 = 0
@@ -555,10 +558,11 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN customer_portal_links cpl ON 1 = 0
      LEFT JOIN customer_portal_access_throttles cpat ON 1 = 0
      LEFT JOIN measurement_intake_receipts mir ON 1 = 0
+     LEFT JOIN public_estimate_rate_limits perl ON 1 = 0
      LIMIT 0`,
   ).all();
-  return Number(artifacts?.table_count ?? 0) === 28 &&
-    Number(artifacts?.index_count ?? 0) === 38 &&
+  return Number(artifacts?.table_count ?? 0) === 29 &&
+    Number(artifacts?.index_count ?? 0) === 39 &&
     Number(artifacts?.trigger_count ?? 0) === 31;
 }
 

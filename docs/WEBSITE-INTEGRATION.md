@@ -65,6 +65,44 @@ export async function POST(req: Request) {
 3. Ensure forms send `brand` + the hidden attribution fields (`source_url`, `page_type`, `utm_*`).
 4. Deploy; submit one test from each form; confirm it appears in JobNimbus (and in the bus D1).
 
+## Public Instant-Estimate Embed
+
+The public estimator is a separate browser route: `GET /estimate` loads the PWA and its own
+same-origin `GET/POST /public/instant-estimate*` calls. It never receives `INGEST_TOKEN` and must
+not be proxied through a marketing form handler.
+
+After the Worker/PWA release is configured and live-proven, embed it with a fixed HTTPS source:
+
+```html
+<iframe
+  src="https://<estimate-pwa-origin>/estimate?brand=ironwrap"
+  title="Request a non-binding exterior estimate"
+  loading="lazy"
+  style="width:100%; min-height:900px; border:0"
+></iframe>
+```
+
+For the iRoof Alberta site, use the same release with `?brand=iroof`. The query value is a
+bounded tenant-brand key, becomes part of the canonical lead envelope, and must be present in
+`PUBLIC_ESTIMATE_ALLOWED_BRANDS`; do not infer the brand from `Referer` or a free-form browser
+field.
+
+Two allowlists protect different boundaries and must not be mixed up:
+
+- `PUBLIC_ESTIMATE_ALLOWED_ORIGINS` is the exact origin serving the PWA/Worker route (the
+  iframe's own origin). It governs browser API requests.
+- `app/public/_headers` limits `/estimate` embedding with `frame-ancestors`; add only the exact
+  marketing sites authorized to host the iframe.
+
+Do not enable the embed until the Worker has a real Turnstile widget/secret, a unique rate-limit
+pepper, the dedicated `ERPNEXT_INTEGRATION_USER`, and either owner-approved range rules or an
+explicit empty rule array for estimator-review-only mode, plus the tenant's explicit
+`PUBLIC_ESTIMATE_CONSENT_JURISDICTION`. A live proof must show that the public response contains no
+submitted contact/address data and that consent reaches the owned raw/Frappe evidence path. Every
+rule's `brand` and `service` must exactly match an allowed tenant brand and the configured tenant
+service id (`roofing`, `metal_roofing`, `siding`, `gutters`, or
+`soffit_fascia` for IronWrap).
+
 ## Quick test (server-side, replace the token)
 ```bash
 curl -X POST https://ironwrap-bus.yellow-rain-7498.workers.dev/ingest/website \

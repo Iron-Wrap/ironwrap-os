@@ -1,4 +1,6 @@
 export const API_PATHS = {
+  publicInstantEstimateConfig: "/public/instant-estimate/config",
+  publicInstantEstimate: "/public/instant-estimate",
   session: "/api/v1/session",
   fieldBootstrap: "/api/v1/field/bootstrap",
   magicLinkRequest: "/api/v1/auth/magic-link/request",

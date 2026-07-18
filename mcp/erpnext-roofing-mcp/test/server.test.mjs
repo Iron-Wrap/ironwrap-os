@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import {
+  attestFrappeServicePrincipal,
   assertGateEvidenceForState,
   assertWriteApproved,
   buildGateUpdatePatch,
@@ -105,6 +106,33 @@ test("erpGet sends Frappe token auth and parses JSON", async (t) => {
   }, resourcePath("Roof Job", "job:ow_1")), {
     data: { name: "job:ow_1" },
   });
+});
+
+test("Frappe service-key principal attestation succeeds only for the configured Hermes actor", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    assert.equal(url, "https://erp.example/api/method/frappe.auth.get_logged_user");
+    assert.equal(init.method, "GET");
+    assert.equal(init.headers.authorization, "token key:secret");
+    return Response.json({ message: "owner@example.com" });
+  });
+
+  assert.equal(await attestFrappeServicePrincipal({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    actorUser: "owner@example.com",
+  }), "owner@example.com");
+});
+
+test("Frappe service-key principal attestation fails closed on actor mismatch", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => Response.json({ message: "different-user@example.com" }));
+
+  await assert.rejects(() => attestFrappeServicePrincipal({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    actorUser: "owner@example.com",
+  }), /frappe_service_principal_mismatch/);
 });
 
 test("erpGet reports non-2xx ERPNext responses", async (t) => {

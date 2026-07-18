@@ -7,7 +7,10 @@ vi.mock("./session", async (importOriginal) => {
   return { ...actual, fetchSession: vi.fn() };
 });
 
+vi.mock("./field-bootstrap", () => ({ takePrimedFieldBootstrap: vi.fn() }));
+
 import { AuthBoundary } from "./auth-boundary";
+import { takePrimedFieldBootstrap } from "./field-bootstrap";
 import { fetchSession, type SessionResponse } from "./session";
 
 const pairingRequiredSession: SessionResponse = {
@@ -70,6 +73,23 @@ describe("AuthBoundary", () => {
     );
 
     expect(await screen.findByText("Pair this Field Companion device")).toBeVisible();
+    expect(screen.queryByLabelText(/Work email/i)).not.toBeInTheDocument();
+  });
+
+  it("directs the primary Field Companion entry to QR pairing before a run sheet can load", async () => {
+    window.history.replaceState({}, "", "/today");
+    vi.mocked(takePrimedFieldBootstrap).mockResolvedValue({ session: unpairedSession });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <AuthBoundary>
+          <div>Authenticated work</div>
+        </AuthBoundary>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Pair this Field Companion device")).toBeVisible();
+    expect(screen.queryByText("Authenticated work")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Work email/i)).not.toBeInTheDocument();
   });
 

@@ -23,14 +23,17 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
 
   if (sessionQuery.isPending) return <LoadingState label="Checking this device…" />;
   if (sessionQuery.isError) {
+    const offline = sessionQuery.error instanceof ApiError && sessionQuery.error.status === 0;
     return (
       <div className="grid min-h-dvh place-items-center p-4">
         <ErrorState
-          title="This device is not ready offline"
+          title={offline ? "This device is not ready offline" : "IronWrap OS is unavailable"}
           message={
-            sessionQuery.error instanceof ApiError
+            offline && sessionQuery.error instanceof ApiError
               ? sessionQuery.error.message
-              : "Reconnect once so IronWrap OS can verify this device."
+              : offline
+                ? "Reconnect once so IronWrap OS can verify this device."
+                : "This app is not available yet. Try again after it has been activated."
           }
           onRetry={() => void sessionQuery.refetch()}
         />

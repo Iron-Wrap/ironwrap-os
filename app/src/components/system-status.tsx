@@ -123,6 +123,14 @@ export function SystemStatus() {
                                 : "Saved work needs attention before you continue."}
             </p>
             <div className="flex flex-wrap gap-2">
+              {session.user.role === "field" && outbox.needsAttention > 0 ? (
+                <Button asChild size="compact" variant="outline">
+                  <a href="/today#saved-work">
+                    <ShieldAlert aria-hidden="true" />
+                    Review saved work
+                  </a>
+                </Button>
+              ) : null}
               {canSync && outbox.pending > 0 && outbox.uploading === 0 ? (
                 <Button
                   size="compact"

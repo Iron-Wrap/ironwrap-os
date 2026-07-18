@@ -160,7 +160,10 @@ describe("ProductionRunwayPage", () => {
     expect(screen.getByText(/does not schedule, dispatch, or alter a job/i)).toBeVisible();
     expect(screen.getByRole("heading", { name: "Blocked" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Ready to review" })).toBeVisible();
-    expect(screen.getByText("Material attention: Shortage.")).toBeVisible();
+    expect(screen.getByText("Material attention")).toBeVisible();
+    expect(
+      screen.getByText("Shortage · Requested delivery: Delivery date unavailable"),
+    ).toBeVisible();
     expect(screen.getAllByText("Scheduling locks").length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText("Deposit: Ready").length).toBeGreaterThan(0);
     expect(screen.queryByLabelText(/Completion:/)).not.toBeInTheDocument();
@@ -191,5 +194,22 @@ describe("ProductionRunwayPage", () => {
     expect(screen.getByRole("heading", { name: "Source boundary needs review" })).toBeVisible();
     expect(screen.getByText(/Limited source: gate states/i)).toBeVisible();
     expect(screen.getByText(/does not infer missing gates/i)).toBeVisible();
+  });
+
+  it("keeps a returned requested-delivery date visible without shifting the calendar day", async () => {
+    vi.mocked(loadProductionRunway).mockResolvedValue(
+      model({
+        jobs: [
+          {
+            ...job("JOB-A", "IW-1001", "blocked"),
+            material_attention: [{ status: "Shortage", requested_delivery_date: "2026-07-22" }],
+          },
+        ],
+      }),
+    );
+    renderRunway();
+
+    await screen.findByRole("heading", { name: "Production runway" });
+    expect(screen.getByText("Shortage · Requested delivery: Jul 22, 2026")).toBeVisible();
   });
 });

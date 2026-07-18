@@ -300,26 +300,16 @@ function enableProductionScheduleApproval(env: Record<string, unknown>): void {
 const ctx = {} as never;
 const adminHeaders = { authorization: "Bearer admin-secret", "content-type": "application/json" };
 
-test("public readiness probes D1/bindings without exposing configured secrets", async () => {
+test("public readiness exposes only a generic state while admins receive the diagnostic map", async () => {
   const { env, sqlCalls } = fakeEnv();
   const correlationId = "corr-12345678";
   const response = await worker.fetch(new Request("https://bus.example/ready", {
     headers: { "x-correlation-id": correlationId },
   }), env as never, ctx);
-  const body = await response.json() as { ok: boolean; status: string; checks: Record<string, boolean> };
+  const body = await response.json() as { ok: boolean };
 
   assert.equal(response.status, 200);
-  assert.equal(body.ok, true);
-  assert.equal(body.status, "ready");
-  assert.ok(Object.values(body.checks).every(Boolean));
-  const schemaQuery = sqlCalls.find((call) => call.sql.includes("sqlite_master"));
-  assert.ok(schemaQuery, "D1 was queried");
-  assert.match(schemaQuery.sql, /production_schedule_approval_requests/);
-  assert.match(schemaQuery.sql, /prevent_production_schedule_approval_binding_rewrite/);
-  assert.equal(body.checks.production_schedule_configuration, true, "blank primary schedule inputs keep the rail intentionally disabled");
-  assert.equal(body.checks.public_estimate_configuration, true, "blank public-estimate config keeps the route intentionally disabled");
-  assert.equal(JSON.stringify(body).includes("ingest-secret"), false);
-  assert.equal(JSON.stringify(body).includes("jobnimbus-secret"), false);
+  assert.deepEqual(body, { ok: true });
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(response.headers.get("content-security-policy"), "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
   assert.equal(response.headers.get("referrer-policy"), "no-referrer");
@@ -328,6 +318,23 @@ test("public readiness probes D1/bindings without exposing configured secrets", 
   assert.equal(response.headers.get("x-frame-options"), "DENY");
   assert.equal(response.headers.get("x-request-id"), correlationId);
   assert.equal(response.headers.get("x-correlation-id"), correlationId);
+
+  const diagnosticResponse = await worker.fetch(new Request("https://bus.example/ready", {
+    headers: adminHeaders,
+  }), env as never, ctx);
+  const diagnostic = await diagnosticResponse.json() as { ok: boolean; status: string; checks: Record<string, boolean> };
+  assert.equal(diagnosticResponse.status, 200);
+  assert.equal(diagnostic.ok, true);
+  assert.equal(diagnostic.status, "ready");
+  assert.ok(Object.values(diagnostic.checks).every(Boolean));
+  const schemaQuery = sqlCalls.find((call) => call.sql.includes("sqlite_master"));
+  assert.ok(schemaQuery, "D1 was queried");
+  assert.match(schemaQuery.sql, /production_schedule_approval_requests/);
+  assert.match(schemaQuery.sql, /prevent_production_schedule_approval_binding_rewrite/);
+  assert.equal(diagnostic.checks.production_schedule_configuration, true, "blank primary schedule inputs keep the rail intentionally disabled");
+  assert.equal(diagnostic.checks.public_estimate_configuration, true, "blank public-estimate config keeps the route intentionally disabled");
+  assert.equal(JSON.stringify(diagnostic).includes("ingest-secret"), false);
+  assert.equal(JSON.stringify(diagnostic).includes("jobnimbus-secret"), false);
 });
 
 test("health remains a backward-compatible liveness check when dependencies are unavailable", async () => {
@@ -341,9 +348,29 @@ test("health remains a backward-compatible liveness check when dependencies are 
   assert.equal(sqlCalls.length, 0, "liveness must not query D1");
 });
 
-test("readiness fails closed when D1 cannot be queried", async () => {
+test("health and readiness support HEAD without emitting a response body", async () => {
+  const { env, sqlCalls } = fakeEnv();
+  const health = await worker.fetch(new Request("https://bus.example/health", { method: "HEAD" }), env as never, ctx);
+  assert.equal(health.status, 200);
+  assert.equal(await health.text(), "");
+  assert.equal(sqlCalls.length, 0, "HEAD health remains a cheap liveness probe");
+
+  const ready = await worker.fetch(new Request("https://bus.example/ready", { method: "HEAD" }), env as never, ctx);
+  assert.equal(ready.status, 200);
+  assert.equal(await ready.text(), "");
+  assert.ok(sqlCalls.some((call) => call.sql.includes("sqlite_master")), "HEAD readiness still verifies the schema");
+});
+
+test("a failed public readiness probe stays generic", async () => {
   const { env } = fakeEnv({ d1Throws: true });
   const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { ok: false });
+});
+
+test("readiness fails closed when D1 cannot be queried", async () => {
+  const { env } = fakeEnv({ d1Throws: true });
+  const response = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
   const body = await response.json() as { ok: boolean; checks: { d1: boolean; schema: boolean } };
 
   assert.equal(response.status, 503);
@@ -355,7 +382,7 @@ test("readiness fails closed when D1 cannot be queried", async () => {
 
 test("readiness fails closed when the operational migration artifacts are missing", async () => {
   const { env } = fakeEnv({ missingSchemaArtifact: true });
-  const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  const response = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
   const body = await response.json() as { ok: boolean; checks: { d1: boolean; schema: boolean } };
 
   assert.equal(response.status, 503);
@@ -368,7 +395,7 @@ test("readiness fails closed when the public estimator is enabled without its co
   const { env } = fakeEnv();
   (env as Record<string, unknown>).PUBLIC_ESTIMATE_ENABLED = "true";
 
-  const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  const response = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
   const body = await response.json() as { ok: boolean; checks: Record<string, boolean> };
 
   assert.equal(response.status, 503);
@@ -380,7 +407,7 @@ test("readiness accepts a complete enabled production-schedule approval rail", a
   const { env } = fakeEnv();
   enableProductionScheduleApproval(env as Record<string, unknown>);
 
-  const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  const response = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
   const body = await response.json() as { ok: boolean; checks: Record<string, boolean> };
 
   assert.equal(response.status, 200);
@@ -392,7 +419,7 @@ test("readiness fails closed when production scheduling is partially configured"
   const { env } = fakeEnv();
   (env as Record<string, unknown>).APP_PRODUCTION_SCHEDULE_BROKER_URL = "https://schedule-broker.example.com";
 
-  const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  const response = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
   const body = await response.json() as { ok: boolean; checks: Record<string, boolean> };
 
   assert.equal(response.status, 503);
@@ -409,7 +436,7 @@ test("readiness requires the BFF before an otherwise complete production-schedul
     PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET: "production-schedule-shared-secret-longer-than-thirty-two-bytes",
   });
 
-  const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  const response = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
   const body = await response.json() as { ok: boolean; checks: Record<string, boolean> };
 
   assert.equal(response.status, 503);
@@ -420,7 +447,7 @@ test("readiness requires the BFF before an otherwise complete production-schedul
 test("readiness fails closed when the redundant alert path is not configured", async () => {
   const { env } = fakeEnv();
   delete (env as { BACKUP_ALERT_EMAIL?: string }).BACKUP_ALERT_EMAIL;
-  const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  const response = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
   const body = await response.json() as { ok: boolean; checks: { notification_configuration: boolean } };
 
   assert.equal(response.status, 503);
@@ -431,7 +458,7 @@ test("readiness fails closed when the redundant alert path is not configured", a
 test("readiness accepts a complete enabled app BFF configuration", async () => {
   const { env } = fakeEnv();
   enableAppBff(env);
-  const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+  const response = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
   const body = await response.json() as { ok: boolean; checks: { app_bff_configuration: boolean } };
 
   assert.equal(response.status, 200);
@@ -457,7 +484,7 @@ test("readiness fails closed for missing or malformed enabled app BFF metadata",
     const { env } = fakeEnv();
     enableAppBff(env);
     (env as Record<string, unknown>)[key] = invalidValue;
-    const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);
+    const response = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
     const body = await response.json() as { ok: boolean; checks: { app_bff_configuration: boolean } };
     assert.equal(response.status, 503, key);
     assert.equal(body.ok, false, key);

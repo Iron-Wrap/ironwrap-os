@@ -12,7 +12,7 @@ request body, log line, incident ticket, or command history.
 | Surface | Auth | Meaning | Healthy state |
 | --- | --- | --- | --- |
 | `GET /health` | none | Worker isolate liveness only | HTTP 200; does not prove dependencies |
-| `GET /ready` | none | D1 schema query plus R2/Queue binding and auth/notification/JobNimbus/enabled-Frappe config presence | HTTP 200 and every check true; HTTP 503 blocks traffic cutover |
+| `GET /ready` | none for `{ok}`; admin for diagnostic checks | D1 schema query plus R2/Queue binding and auth/notification/JobNimbus/enabled-Frappe config presence | HTTP 200 and every authenticated check true; HTTP 503 blocks traffic cutover |
 | `GET /admin/status` | admin | Heartbeat freshness, pending/stuck/dead counts, Frappe errors, audit failures, latest QB receipt | `status: ok`; investigate every degraded reason |
 | `GET /admin/dead-letter` | admin | Open forensic dead-letter rows | Empty |
 | `GET /admin/envelopes` | admin | Recent canonical envelopes and status | No unexplained pending/dead records |
@@ -25,8 +25,10 @@ Its heartbeat freshness window is 36 hours and recent-audit window is 24 hours. 
 latest QuickBooks receipt and 24-hour freshness separately; lack of recent QB activity is not by
 itself a system outage.
 
-`/ready` does not contact every configured downstream API or perform an R2/Queue mutation. Pair it
-with targeted Frappe/JobNimbus/Google/QuickBooks smoke evidence during launch and incidents.
+`/ready` does not contact every configured downstream API or perform an R2/Queue mutation. Its
+unauthenticated response is deliberately limited to `{ok}`; send `ADMIN_TOKEN` to receive the
+diagnostic check map. Pair it with targeted Frappe/JobNimbus/Google/QuickBooks smoke evidence
+during launch and incidents.
 
 The scheduled `0 14 * * *` reconcile email is also a heartbeat. If no digest arrives, check
 `/admin/status`, the D1 heartbeat row, cron execution, and email delivery before assuming the

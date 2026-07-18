@@ -198,7 +198,9 @@ atomic safety acknowledgement command cannot impersonate a field actor.
 
 ```bash
 curl --fail --silent --show-error "$BUS_BASE_URL/health"
-curl --fail --silent --show-error "$BUS_BASE_URL/ready"
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$BUS_BASE_URL/ready"
 curl --fail --silent --show-error \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   "$BUS_BASE_URL/admin/status"
@@ -208,10 +210,11 @@ docker exec <backend> bench --site os.ironwrapexteriors.com set-config \
 
 `/health` proves isolate liveness only. `/ready` queries the D1 operational schema and checks that
 R2/Queue bindings plus auth, notification, JobNimbus, and enabled-Frappe configuration are
-present; it does not contact every downstream service. `/admin/status` is the authenticated
+present; it returns only `{ok}` without auth and the diagnostic map only with `ADMIN_TOKEN`.
+It does not contact every downstream service. `/admin/status` is the authenticated
 operating view for heartbeat freshness, queue/dead-letter counts, Frappe
 errors, failed/stuck replay requests, audit failures, and QuickBooks receipt freshness.
-The non-secret site config lets the Control Center show the public `/ready` result; it never
+The non-secret site config lets the Control Center show the public `{ok}` result; it never
 stores or uses the Worker admin token.
 
 ### Public Instant-Estimate Activation Gate

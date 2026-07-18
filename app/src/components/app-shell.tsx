@@ -136,12 +136,12 @@ function MobileNavItem({ item }: { item: NavigationItem }) {
     <Link
       to={item.to}
       className={cn(
-        "flex min-h-16 min-w-14 flex-col items-center justify-center gap-1 rounded-lg px-2 text-[0.6875rem] font-bold text-muted transition-colors",
+        "flex min-h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-1 text-[0.6875rem] font-bold text-muted transition-colors",
       )}
       activeProps={{ className: activeClasses[item.activeColor] }}
     >
       <Icon className="size-5" aria-hidden="true" />
-      <span>{item.label}</span>
+      <span className="max-w-full truncate">{item.mobileLabel ?? item.label}</span>
     </Link>
   );
 }

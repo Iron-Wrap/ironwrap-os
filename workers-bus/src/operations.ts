@@ -8,7 +8,7 @@ import { productionScheduleApprovalBrokerConfig } from "./production-schedule-ap
 import { publicEstimateConfigured, type PublicEstimatorEnv } from "./public-estimator.ts";
 import type { AppEnv } from "./app-types.ts";
 import { NewoApiClient, newoClientConfigFromEnv, type NewoJson } from "./newo-client.ts";
-import { newoOperationalCounts } from "./newo-store.ts";
+import { countOpenNewoDeadLetters, newoOperationalCounts } from "./newo-store.ts";
 
 export const BULK_REPLAY_CONFIRMATION = "REPLAY_ALL_OPEN_DEAD_LETTERS";
 const HEARTBEAT_FRESHNESS_HOURS = 36;
@@ -244,6 +244,7 @@ async function getNewoReadiness(env: Env, databaseReady: boolean): Promise<NewoR
   let frappeReachable = false;
   let frappeError: string | null = null;
   let counts: Awaited<ReturnType<typeof newoOperationalCounts>> | null = null;
+  let openDeadLetters: number | null = null;
 
   if (required && enabled && nonEmpty(runtime.NEWO_API_KEY) && nonEmpty(runtime.NEWO_API_BASE_URL)) {
     try {
@@ -277,14 +278,19 @@ async function getNewoReadiness(env: Env, databaseReady: boolean): Promise<NewoR
     frappeError = frappe.error;
     if (databaseReady) {
       try {
-        counts = await newoOperationalCounts(env);
+        [counts, openDeadLetters] = await Promise.all([
+          newoOperationalCounts(env),
+          countOpenNewoDeadLetters(env),
+        ]);
       } catch {
         counts = null;
+        openDeadLetters = null;
       }
     }
   }
-  const dlqClear = counts !== null && counts.failed_events === 0 && counts.failed_sync === 0 &&
-    counts.missing_reports === 0 && counts.control_failures === 0;
+  const dlqClear = counts !== null && openDeadLetters !== null && openDeadLetters === 0 &&
+    counts.failed_events === 0 && counts.failed_sync === 0 && counts.missing_reports === 0 &&
+    counts.control_failures === 0;
 
   return {
     required,

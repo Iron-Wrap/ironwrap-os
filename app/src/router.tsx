@@ -35,6 +35,9 @@ const SalesDeskPage = lazy(async () => ({
 const ProductionRunwayPage = lazy(async () => ({
   default: (await import("./production/production-runway-page")).ProductionRunwayPage,
 }));
+const NewoOperationsPage = lazy(async () => ({
+  default: (await import("./newo/newo-operations-page")).NewoOperationsPage,
+}));
 const ProductionScheduleApprovalPreparePage = lazy(async () => ({
   default: (await import("./production/production-schedule-approval-page"))
     .ProductionScheduleApprovalPreparePage,
@@ -303,6 +306,12 @@ const productionRoute = createRoute({
   component: ProductionRoute,
 });
 
+const newoOperationsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/newo",
+  component: NewoOperationsRoute,
+});
+
 const productionScheduleApprovalPrepareRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/production/schedule/$jobId",
@@ -351,6 +360,14 @@ function ProductionRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
       <ProductionRunwayPage />
+    </Suspense>
+  );
+}
+
+function NewoOperationsRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <NewoOperationsPage />
     </Suspense>
   );
 }
@@ -422,6 +439,7 @@ const routeTree = rootRoute.addChildren([
     jobCheckInRoute,
     ownerRoute,
     approvalsRoute,
+    newoOperationsRoute,
     productionRoute,
     productionScheduleApprovalPrepareRoute,
     salesRoute,

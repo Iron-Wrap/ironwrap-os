@@ -10,7 +10,7 @@ export function RoleGuard({
   surface,
   children,
 }: {
-  surface: "owner" | "sales" | "field";
+  surface: "owner" | "sales" | "newo" | "field";
   children: ReactNode;
 }) {
   const { user } = useSession();

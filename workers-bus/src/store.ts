@@ -319,6 +319,23 @@ export async function setErpNextError(env: Env, id: string, error: string): Prom
   ).bind(error, nowIso(), id).run();
 }
 
+/**
+ * Stamp a failed ERPNext mirror attempt without changing `last_error`.
+ *
+ * `last_error` represents an intake/bridge failure that changes the envelope's primary
+ * workflow state. Estimate intake is already durably accepted, so a transient mirror
+ * outage must remain separately observable and retryable rather than making the intake
+ * look invalid on a later idempotent request.
+ */
+export async function bumpErpNextMirrorAttempt(env: Env, id: string, error: string): Promise<number> {
+  await env.DB.prepare(
+    `UPDATE envelopes SET attempts = attempts + 1, erpnext_error = ?, updated_at = ? WHERE envelope_id = ?`,
+  ).bind(error, nowIso(), id).run();
+  const row = await env.DB.prepare(`SELECT attempts FROM envelopes WHERE envelope_id = ?`)
+    .bind(id).first<{ attempts: number }>();
+  return row?.attempts ?? 0;
+}
+
 /** Atomically bump attempts and stamp the error; returns the new attempt count. */
 export async function bumpAttempt(env: Env, id: string, error: string): Promise<number> {
   await env.DB.prepare(
@@ -550,6 +567,26 @@ export async function listStuck(env: Env, thresholdMin: number, limit: number): 
   const cutoff = new Date(Date.now() - thresholdMin * 60_000).toISOString();
   const res = await env.DB.prepare(
     `SELECT * FROM envelopes WHERE status = 'pending_jn_push' AND updated_at < ?
+     ORDER BY updated_at ASC LIMIT ?`,
+  ).bind(cutoff, limit).all<EnvelopeRecord>();
+  return res.results ?? [];
+}
+
+/**
+ * Estimate intake does not use the JobNimbus queue, so ERPNext mirror failures need their
+ * own durable retry sweep. The partial error index keeps this bounded by unresolved rows.
+ */
+export async function listRetryableEstimateErpNextSyncs(
+  env: Env,
+  thresholdMin: number,
+  limit: number,
+): Promise<EnvelopeRecord[]> {
+  const cutoff = new Date(Date.now() - thresholdMin * 60_000).toISOString();
+  const res = await env.DB.prepare(
+    `SELECT * FROM envelopes INDEXED BY idx_envelopes_erpnext_error_open
+     WHERE estimate_submission_key IS NOT NULL
+       AND erpnext_error IS NOT NULL AND trim(erpnext_error) != ''
+       AND updated_at < ?
      ORDER BY updated_at ASC LIMIT ?`,
   ).bind(cutoff, limit).all<EnvelopeRecord>();
   return res.results ?? [];

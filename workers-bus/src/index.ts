@@ -34,7 +34,7 @@ import {
   handleMeasurementIngest,
   retryMeasurementIntakeReceipts,
 } from "./measurements.ts";
-import { handleEstimateIngest } from "./estimates.ts";
+import { handleEstimateIngest, retryEstimateErpNextSyncs } from "./estimates.ts";
 import { handleQuickbooksWebhook } from "./quickbooks.ts";
 import { ensureJobFolder, googleConfigured } from "./google.ts";
 import { handleAdminAppUserProvision, handleAppApi } from "./app-api.ts";
@@ -126,6 +126,9 @@ export default {
           retrySweep(env),
           retryMeasurementIntakeReceipts(env).catch((error) =>
             log({ at: "measurement_intake_retry", error: String(error) }),
+          ),
+          retryEstimateErpNextSyncs(env).catch((error) =>
+            log({ at: "estimate_erpnext_retry", error: String(error) }),
           ),
           // A broker timeout must never trigger an invisible second Frappe write.
           // The durable request becomes owner-visible reconciliation work instead.

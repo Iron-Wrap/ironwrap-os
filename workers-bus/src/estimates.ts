@@ -1,6 +1,7 @@
 import {
   classifyIntent,
   dedupKey,
+  isOn,
   newEnvelopeId,
   normalizeEnvelope,
   parseBody,
@@ -9,6 +10,8 @@ import {
 } from "./core.ts";
 import { pushToErpNext } from "./erpnext.ts";
 import * as store from "./store.ts";
+
+const ESTIMATE_ERP_RETRY_BATCH_SIZE = 25;
 
 export async function handleEstimateIngest(
   env: Env,
@@ -78,25 +81,7 @@ export async function handleEstimateIngest(
   try {
     const erp = await pushToErpNext(env, rec);
     if (erp) {
-      await store.setErpNextSync(env, id, {
-        leadEnvelopeId: erp.name,
-        roofingPropertyId: erp.roofingPropertyName ?? null,
-        roofJobId: erp.roofJobName ?? null,
-        instantEstimateSessionId: erp.instantEstimateSessionName ?? null,
-      });
-      await store.recordAudit(env, {
-        automation: "erpnext_estimate",
-        trigger: "estimator",
-        envelope_id: id,
-        target_ids: [
-          `lead_envelope:${erp.name}`,
-          erp.roofingPropertyName ? `roofing_property:${erp.roofingPropertyName}` : null,
-          erp.roofJobName ? `roof_job:${erp.roofJobName}` : null,
-          erp.instantEstimateSessionName ? `instant_estimate:${erp.instantEstimateSessionName}` : null,
-        ].filter(Boolean).join(","),
-        action: erp.reused ? "upsert_existing" : "create",
-        result: "ok",
-      });
+      await recordEstimateErpNextSync(env, rec, erp, "estimator");
     }
     return json({
       ok: true,
@@ -107,16 +92,35 @@ export async function handleEstimateIngest(
     });
   } catch (err) {
     const error = `erpnext_estimate: ${String(err)}`;
-    await store.setErpNextError(env, id, error).catch(() => {});
-    await store.recordAudit(env, {
-      automation: "erpnext_estimate",
-      trigger: "estimator",
-      envelope_id: id,
-      action: "push",
-      result: "error",
-      error,
-    });
-    return json({ ok: true, envelope_id: id, erpnext_error: error });
+    await recordEstimateErpNextFailure(env, rec, "estimator", error);
+    return retryPendingResponse(id);
+  }
+}
+
+/**
+ * Re-drive durably accepted estimator submissions whose Frappe mirror is unavailable.
+ * Unlike lead intake, estimator submissions have no JobNimbus queue to trigger a later retry.
+ */
+export async function retryEstimateErpNextSyncs(env: Env): Promise<void> {
+  if (!isOn(env.ERPNEXT_ENABLED)) return;
+  const thresholdMin = retryThresholdMinutes(env);
+  const candidates = await store.listRetryableEstimateErpNextSyncs(
+    env,
+    thresholdMin,
+    ESTIMATE_ERP_RETRY_BATCH_SIZE,
+  );
+
+  for (const rec of candidates) {
+    try {
+      const erp = await pushToErpNext(env, rec);
+      // The feature flag is checked above, but preserving this branch makes the helper safe
+      // should the flag be changed between the sweep query and an individual attempt.
+      if (!erp) continue;
+      await recordEstimateErpNextSync(env, rec, erp, "scheduled_retry");
+    } catch (err) {
+      const error = `erpnext_estimate: ${String(err)}`;
+      await recordEstimateErpNextFailure(env, rec, "scheduled_retry", error);
+    }
   }
 }
 
@@ -149,12 +153,14 @@ function cleanKey(raw: unknown): string | null {
 }
 
 async function idempotentEstimateResponse(env: Env, rec: EnvelopeRecord): Promise<Response> {
+  const mirrorPending = Boolean(rec.erpnext_error?.trim());
   await store.recordAudit(env, {
     automation: "estimate",
     trigger: "estimator",
     envelope_id: rec.envelope_id,
     action: "idempotent_replay",
-    result: "ok",
+    result: mirrorPending ? "error" : "ok",
+    error: mirrorPending ? rec.erpnext_error : null,
   });
   if (rec.last_error) {
     return json({
@@ -163,6 +169,7 @@ async function idempotentEstimateResponse(env: Env, rec: EnvelopeRecord): Promis
       error: rec.last_error,
     }, 400);
   }
+  if (mirrorPending) return retryPendingResponse(rec.envelope_id, true);
   return json({
     ok: true,
     envelope_id: rec.envelope_id,
@@ -171,6 +178,68 @@ async function idempotentEstimateResponse(env: Env, rec: EnvelopeRecord): Promis
     erpnext_roof_job_id: rec.erpnext_roof_job_id ?? null,
     erpnext_instant_estimate_id: rec.erpnext_instant_estimate_session_id ?? null,
   });
+}
+
+async function recordEstimateErpNextSync(
+  env: Env,
+  rec: EnvelopeRecord,
+  erp: NonNullable<Awaited<ReturnType<typeof pushToErpNext>>>,
+  trigger: "estimator" | "scheduled_retry",
+): Promise<void> {
+  await store.setErpNextSync(env, rec.envelope_id, {
+    leadEnvelopeId: erp.name,
+    roofingPropertyId: erp.roofingPropertyName ?? null,
+    roofJobId: erp.roofJobName ?? null,
+    instantEstimateSessionId: erp.instantEstimateSessionName ?? null,
+  });
+  await store.recordAudit(env, {
+    automation: "erpnext_estimate",
+    trigger,
+    envelope_id: rec.envelope_id,
+    target_ids: [
+      `lead_envelope:${erp.name}`,
+      erp.roofingPropertyName ? `roofing_property:${erp.roofingPropertyName}` : null,
+      erp.roofJobName ? `roof_job:${erp.roofJobName}` : null,
+      erp.instantEstimateSessionName ? `instant_estimate:${erp.instantEstimateSessionName}` : null,
+    ].filter(Boolean).join(","),
+    action: trigger === "estimator"
+      ? (erp.reused ? "upsert_existing" : "create")
+      : (erp.reused ? "retry_upsert_existing" : "retry_create"),
+    result: "ok",
+  });
+}
+
+async function recordEstimateErpNextFailure(
+  env: Env,
+  rec: EnvelopeRecord,
+  trigger: "estimator" | "scheduled_retry",
+  error: string,
+): Promise<void> {
+  const attempt = await store.bumpErpNextMirrorAttempt(env, rec.envelope_id, error);
+  await store.recordAudit(env, {
+    automation: "erpnext_estimate",
+    trigger,
+    envelope_id: rec.envelope_id,
+    action: trigger === "estimator" ? `push_attempt_${attempt}` : `retry_attempt_${attempt}`,
+    result: "error",
+    error,
+    recovery_owner: env.OWNER_ALERT_EMAIL,
+  });
+}
+
+function retryPendingResponse(envelopeId: string, idempotentReplay = false): Response {
+  return json({
+    accepted: true,
+    completed: false,
+    envelope_id: envelopeId,
+    ...(idempotentReplay ? { idempotent_replay: true } : {}),
+    erpnext_mirror_status: "retry_pending",
+  }, 202);
+}
+
+function retryThresholdMinutes(env: Env): number {
+  const configured = Number(env.STUCK_THRESHOLD_MIN ?? "15");
+  return Number.isFinite(configured) && configured > 0 ? configured : 15;
 }
 
 function isUniqueConstraintError(err: unknown): boolean {

@@ -165,6 +165,7 @@ class SafetyAcknowledgementApiTests(unittest.TestCase):
         session_user: str = "crew@example.com",
         request_method: str = "POST",
         can_read: bool = True,
+        can_read_plan: bool = True,
     ):
         fixtures = fixtures or self.fixture_data()
         db = FakeDb(fixtures)
@@ -178,7 +179,12 @@ class SafetyAcknowledgementApiTests(unittest.TestCase):
         frappe_module.utils = types.SimpleNamespace(
             now_datetime=lambda: "2026-07-10 07:32:00"
         )
-        frappe_module.has_permission = lambda *args, **kwargs: can_read
+        def has_permission(doctype: str, *args, **kwargs) -> bool:
+            if doctype == "Safety Plan" and kwargs.get("doc") is not None:
+                return can_read_plan
+            return can_read
+
+        frappe_module.has_permission = has_permission
         frappe_module.whitelist = lambda: lambda function: function
         frappe_module.get_doc = lambda doctype, name: (
             fixtures["plan"]
@@ -331,6 +337,19 @@ class SafetyAcknowledgementApiTests(unittest.TestCase):
             FakePermissionError, "safety_acknowledgement_post_required"
         ):
             self.call(api)
+
+    def test_record_level_safety_plan_access_is_required_before_the_narrow_save(
+        self,
+    ) -> None:
+        api, fixtures, _ = self.load_api(can_read=True, can_read_plan=False)
+
+        with self.assertRaisesRegex(
+            FakePermissionError, "safety_acknowledgement_plan_permission_denied"
+        ):
+            self.call(api)
+
+        self.assertEqual(fixtures["plan"].save_count, 0)
+        self.assertEqual(fixtures["plan"]["acknowledgements"], [])
 
 
 if __name__ == "__main__":

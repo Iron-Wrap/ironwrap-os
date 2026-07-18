@@ -418,6 +418,14 @@ def append_safety_acknowledgement(
     # This lock and the implicit Frappe POST transaction make the child-table
     # append serializable.  Do not replace ``acknowledgements`` from client data.
     plan = _lock_safety_plan(safety_plan_id)
+    if not frappe.has_permission(
+        "Safety Plan", ptype="read", doc=plan, user=actor_user
+    ):
+        _fail(
+            "safety_acknowledgement_plan_permission_denied",
+            "the authenticated actor cannot access this Safety Plan",
+            permission=True,
+        )
     if plan.get("roof_job") != roof_job_id:
         _fail(
             "safety_acknowledgement_plan_job_mismatch",

@@ -5,6 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.ts";
+import { retryEstimateErpNextSyncs } from "../src/estimates.ts";
 
 function fakeEnv() {
   const r2: Array<{ key: string; body: string }> = [];
@@ -73,6 +74,16 @@ function fakeEnv() {
                     row.erpnext_instant_estimate_session_id = args[3];
                     row.erpnext_synced_at = args[4];
                     row.updated_at = args[5];
+                    row.erpnext_error = null;
+                  }
+                }
+                if (sql.includes("UPDATE envelopes SET attempts = attempts + 1, erpnext_error")) {
+                  const id = String(args[2]);
+                  const row = envelopesById.get(id);
+                  if (row) {
+                    row.attempts = Number(row.attempts ?? 0) + 1;
+                    row.erpnext_error = args[0];
+                    row.updated_at = args[1];
                   }
                 }
                 if (sql.includes("INSERT INTO dedup_claims")) {
@@ -108,14 +119,29 @@ function fakeEnv() {
                 }
                 return null;
               },
-              all: async () => { db.push({ sql, args }); return { results: [] }; },
+              all: async () => {
+                db.push({ sql, args });
+                if (sql.includes("estimate_submission_key IS NOT NULL")) {
+                  const cutoff = String(args[0]);
+                  const limit = Number(args[1]);
+                  return {
+                    results: [...envelopesById.values()]
+                      .filter((row) => Boolean(row.estimate_submission_key) &&
+                        typeof row.erpnext_error === "string" && row.erpnext_error.trim() &&
+                        String(row.updated_at) < cutoff)
+                      .sort((a, b) => String(a.updated_at).localeCompare(String(b.updated_at)))
+                      .slice(0, limit),
+                  };
+                }
+                return { results: [] };
+              },
             };
           },
         };
       },
     },
   };
-  return { env, r2, queue, db };
+  return { env, r2, queue, db, envelopesById };
 }
 
 const fakeCtx = () => ({ waitUntil: (p: Promise<unknown>) => { void Promise.resolve(p).catch(() => {}); } });
@@ -345,6 +371,80 @@ test("POST /ingest/estimate: replay of invalid project id returns original valid
   assert.equal(secondBody.error, "no_contact_handle");
   assert.equal(r2.length, 1);
   assert.equal(db.filter((c) => c.sql.includes("INSERT INTO envelopes")).length, 1);
+});
+
+test("POST /ingest/estimate: transient ERPNext failure stays accepted, then the scheduled retry mirrors it", async (t) => {
+  const { env, envelopesById, queue } = fakeEnv();
+  let erpAvailable = false;
+  const erpCalls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    erpCalls.push(url);
+    if (!erpAvailable) throw new Error("ERP temporarily unavailable");
+    if ((init?.method ?? "GET") === "GET") return json({ data: [] });
+    if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-EST-RETRY" } });
+    if (url.endsWith("/api/resource/Roofing%20Customer")) return json({ data: { name: "RC-EST-RETRY" } });
+    if (url.endsWith("/api/resource/Roofing%20Property")) return json({ data: { name: "RP-EST-RETRY" } });
+    if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-EST-RETRY" } });
+    if (url.endsWith("/api/resource/Production%20Gate%20State")) {
+      const body = JSON.parse(String(init?.body));
+      return json({ data: { name: body.gate_id } });
+    }
+    if (url.endsWith("/api/resource/Instant%20Estimate%20Session")) return json({ data: { name: "IES-EST-RETRY" } });
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  Object.assign(env, {
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "erp-key",
+    ERPNEXT_API_SECRET: "erp-secret",
+  });
+
+  const bodyText = JSON.stringify({
+    project_id: "retry-project-1",
+    customer: "Retry Customer",
+    email: "retry@example.com",
+    total_estimate: "$12,000",
+  });
+  const request = () => new Request("https://bus.example/ingest/estimate", {
+    method: "POST",
+    headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+    body: bodyText,
+  });
+
+  const first = await worker.fetch(request(), env as never, fakeCtx() as never);
+  const firstBody = await first.json() as {
+    accepted?: boolean;
+    completed?: boolean;
+    envelope_id: string;
+    erpnext_mirror_status?: string;
+  };
+
+  assert.equal(first.status, 202);
+  assert.equal(firstBody.accepted, true);
+  assert.equal(firstBody.completed, false);
+  assert.equal(firstBody.erpnext_mirror_status, "retry_pending");
+  assert.equal(queue.length, 0);
+  const pending = envelopesById.get(firstBody.envelope_id)!;
+  assert.match(String(pending.erpnext_error), /ERP temporarily unavailable/);
+  assert.equal(pending.last_error, null, "mirror failure must not turn accepted intake into invalid input");
+  assert.equal(pending.attempts, 1);
+
+  pending.updated_at = "2000-01-01T00:00:00.000Z";
+  erpAvailable = true;
+  await retryEstimateErpNextSyncs(env as never);
+
+  assert.equal(pending.erpnext_error, null);
+  assert.equal(pending.erpnext_lead_envelope_id, "LE-EST-RETRY");
+  assert.equal(pending.erpnext_roof_job_id, "RJ-EST-RETRY");
+  assert.equal(pending.erpnext_instant_estimate_session_id, "IES-EST-RETRY");
+
+  const replay = await worker.fetch(request(), env as never, fakeCtx() as never);
+  const replayBody = await replay.json() as { idempotent_replay?: boolean; erpnext_instant_estimate_id?: string };
+  assert.equal(replay.status, 200);
+  assert.equal(replayBody.idempotent_replay, true);
+  assert.equal(replayBody.erpnext_instant_estimate_id, "IES-EST-RETRY");
+  assert.equal(erpCalls.filter((url) => url.endsWith("/api/resource/Lead%20Envelope")).length, 1);
 });
 
 test("auth: missing/wrong bearer token → 401, nothing written", async () => {

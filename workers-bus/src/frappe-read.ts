@@ -163,7 +163,7 @@ export const OFFICE_SALES_READ_FIELDS = {
 /**
  * Estimator work is commercial and source-sensitive, so it has a separate static contract from
  * both the field packet and Sales Desk. Raw report locations and unbounded evidence JSON never
- * cross the BFF boundary; the two direct document readers below use those fields only to derive
+ * cross the BFF boundary; the fixed direct document readers below use those fields only to derive
  * a safe, bounded workbench projection.
  */
 export const OFFICE_ESTIMATOR_READ_FIELDS = {
@@ -172,6 +172,12 @@ export const OFFICE_ESTIMATOR_READ_FIELDS = {
   ],
   "Measurement Report": [
     "name", "measurement_id", "roof_job", "provider", "review_status", "parsed_at", "approved_at", "modified",
+  ],
+  "Visual Property Model": [
+    "name", "roof_job", "provider", "status", "confidence", "needs_review", "captured_at", "approved_at", "modified",
+  ],
+  "Roof Area": [
+    "name", "roof_job", "visual_model", "measurement_report", "modified",
   ],
   "Material Takeoff": [
     "name", "takeoff_id", "roof_job", "measurement_report", "status", "prepared_at", "approved_at", "modified",
@@ -239,7 +245,7 @@ export const CUSTOMER_PORTAL_READ_FIELDS = {
 
 /**
  * Frappe's direct-document endpoint returns complete records, including child tables. Only these
- * two explicit records need detail reads, and every parent/child field is projected before the
+ * fixed records need detail reads, and every parent/child field is projected before the
  * result is returned to an app read model.
  */
 const OFFICE_ESTIMATOR_DETAIL_READ = {
@@ -250,6 +256,12 @@ const OFFICE_ESTIMATOR_DETAIL_READ = {
     children: {
       measurements: ["metric", "value", "unit", "confidence", "source_ref", "needs_review"],
     },
+  },
+  "Visual Property Model": {
+    fields: [
+      "name", "roof_job", "provider", "status", "confidence", "needs_review", "screenshots_json", "captured_at", "approved_at", "modified",
+    ],
+    children: {},
   },
   "Material Takeoff": {
     fields: [
@@ -321,6 +333,8 @@ const OFFICE_SALES_FILTER_FIELDS: Readonly<Record<OfficeSalesDocType, ReadonlySe
 const OFFICE_ESTIMATOR_FILTER_FIELDS: Readonly<Record<OfficeEstimatorDocType, ReadonlySet<string>>> = {
   "Roof Job": new Set(["name"]),
   "Measurement Report": new Set(["roof_job", "review_status"]),
+  "Visual Property Model": new Set(["roof_job", "status"]),
+  "Roof Area": new Set(["roof_job", "visual_model", "measurement_report", "status"]),
   "Material Takeoff": new Set(["roof_job", "measurement_report", "status"]),
   "Customer Quote": new Set(["roof_job", "status"]),
   "Proposal Evidence Pack": new Set(["roof_job", "quotation", "status"]),

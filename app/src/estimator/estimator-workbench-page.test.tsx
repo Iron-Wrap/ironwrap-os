@@ -134,6 +134,20 @@ function workbenchModel(
         },
       },
     },
+    visual_model: {
+      provider: "Roof capture provider",
+      model_state: "needs_review",
+      confidence: 82,
+      review_required: true,
+      approval_recorded: false,
+      captured_at: "2026-07-11T12:00:00.000Z",
+      approved_at: null,
+      measurement_link: "selected_measurement",
+      preview: {
+        state: "not_recorded",
+        url: null,
+      },
+    },
     takeoffs: {
       records: [
         {
@@ -381,6 +395,65 @@ describe("EstimatorWorkbenchPage", () => {
     expect(screen.getByText("The retained measurement source was not found.")).toBeVisible();
     expect(screen.queryByText("Geometry recomputed from source file")).not.toBeInTheDocument();
     expect(screen.queryByText(/field verified/i)).not.toBeInTheDocument();
+  });
+
+  it("renders a safe visual evidence preview with provenance but no model controls", async () => {
+    const base = workbenchModel();
+    const visual = {
+      ...base.visual_model!,
+      model_state: "approved" as const,
+      review_required: false,
+      approval_recorded: true,
+      approved_at: "2026-07-11T12:30:00.000Z",
+      preview: {
+        state: "available" as const,
+        url: "https://preview.ironwrap.example/roof-a.webp?signature=allowed",
+      },
+      model_uri: "https://private.example/models/roof-a",
+      raw_key: "raw/visual/private-model.json",
+    } as unknown as NonNullable<EstimatorWorkbenchResponse["visual_model"]>;
+    vi.mocked(loadEstimatorWorkbench).mockResolvedValue(workbenchModel({ visual_model: visual }));
+    renderWorkbench();
+
+    await screen.findByRole("heading", { name: "Visual evidence" });
+    expect(screen.getByText("Approved model")).toBeVisible();
+    expect(screen.getByText("Linked to selected measurement")).toBeVisible();
+    expect(screen.getByText("82%")).toBeVisible();
+    const preview = screen.getByRole("img", { name: "Visual property evidence preview" });
+    expect(preview).toHaveAttribute(
+      "src",
+      "https://preview.ironwrap.example/roof-a.webp?signature=allowed",
+    );
+    expect(preview).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(screen.queryByText("https://private.example/models/roof-a")).not.toBeInTheDocument();
+    expect(screen.queryByText("raw/visual/private-model.json")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /approve|publish|open model|change visual/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps blocked or unapproved visual evidence useful without rendering its URL", async () => {
+    const base = workbenchModel();
+    const visual = {
+      ...base.visual_model!,
+      model_state: "needs_review" as const,
+      review_required: true,
+      approval_recorded: false,
+      measurement_link: "other_measurement" as const,
+      preview: { state: "blocked" as const, url: null },
+      screenshots_json: "https://blocked.example/roof.webp",
+    } as unknown as NonNullable<EstimatorWorkbenchResponse["visual_model"]>;
+    vi.mocked(loadEstimatorWorkbench).mockResolvedValue(workbenchModel({ visual_model: visual }));
+    renderWorkbench();
+
+    await screen.findByRole("heading", { name: "Visual evidence" });
+    expect(screen.getByText("Model needs review")).toBeVisible();
+    expect(screen.getByText("Linked to another measurement")).toBeVisible();
+    expect(screen.getByText("Preview blocked")).toBeVisible();
+    expect(
+      screen.queryByRole("img", { name: "Visual property evidence preview" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("https://blocked.example/roof.webp")).not.toBeInTheDocument();
   });
 
   it("shows the restricted insurance evidence lane without claim details or write controls", async () => {

@@ -214,6 +214,49 @@ errors, failed/stuck replay requests, audit failures, and QuickBooks receipt fre
 The non-secret site config lets the Control Center show the public `/ready` result; it never
 stores or uses the Worker admin token.
 
+### Public Instant-Estimate Activation Gate
+
+`/public/instant-estimate` is the browser-safe route; it is deliberately separate from the
+private bearer-authenticated `/ingest/estimate` handoff. Do not put `INGEST_TOKEN`, a price rule,
+or a Turnstile secret in a website or PWA bundle.
+
+Before setting `PUBLIC_ESTIMATE_ENABLED=true` in the intended Cloudflare account:
+
+1. Apply migration `0021_public_estimate_rate_limits.sql` with the same release. It stores only
+   keyed IP/client hashes for a bounded abuse window; it does not store raw IPs, tokens, or form
+   fields.
+2. Create the Turnstile widget for the exact HTTPS PWA/Worker hostname, set the site key as the
+   non-secret `PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY`, then set both
+   `PUBLIC_ESTIMATE_TURNSTILE_SECRET` and `PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER` with
+   `wrangler secret put`. The Worker validates every first submission with Siteverify; the browser
+   token alone is not proof.
+3. Set `PUBLIC_ESTIMATE_ALLOWED_ORIGINS` to the exact origin serving `/estimate` (normally the
+   Worker/PWA origin). This is not the marketing-site iframe parent: iframe parents are separately
+   constrained by the `/estimate` `frame-ancestors` rule. Keep
+   `PUBLIC_ESTIMATE_ALLOW_INSECURE_LOCAL=false` outside explicit localhost development.
+4. Set `PUBLIC_ESTIMATE_ALLOWED_BRANDS` to the exact tenant keys (`ironwrap,iroof` for the
+   current tenant) and pin each marketing iframe to `/estimate?brand=<key>`. The visible brand and
+   canonical lead must agree. Set `PUBLIC_ESTIMATE_CONSENT_JURISDICTION` to the tenant's explicit
+   governing jurisdiction (`Alberta, Canada` here); never derive either value from an untrusted
+   `Referer` or free-form field.
+5. Set bounded rate controls and a valid JSON rule array. Leave
+   `PUBLIC_ESTIMATE_RANGE_RULES_JSON=[]` until the owner has loaded real, supplier-reviewed,
+   versioned ranges using those brand keys and the tenant service ids. An empty array safely
+   accepts a review request but returns no range; never deploy illustrative prices.
+6. Set `ERPNEXT_INTEGRATION_USER` to the exact dedicated Worker Frappe user. When Frappe is
+   enabled, the public route stays disabled until this identity is present: explicit follow-up
+   consent is mirrored as append-only channel records linked to the raw R2 evidence.
+7. Build the PWA and deploy the Worker, then verify `/ready` is green. A failed configuration
+   returns a disabled form rather than accepting unauditable browser intake.
+
+Use a real Turnstile test submission from the live `/estimate` route to prove the full path:
+the public response must contain only acceptance, an opaque envelope id, an optional non-binding
+range, and `review_required=true`. In D1/R2 and Frappe, prove the corresponding raw record,
+Lead Envelope, Roof Job, Instant Estimate Session, source Evidence Item, and one
+`Communication Consent` record per supplied follow-up channel. Also prove a rejected challenge,
+wrong Origin, mismatched idempotency key, and rate-limited request create no accepted estimate.
+Archive only redacted request ids and the release evidence.
+
 ## 8. Configure Hermes And MCP
 
 Install Hermes at the tag and commit in `deploy/runtime-lock.json`. Register only the two MCP
@@ -259,9 +302,9 @@ Field Companion deployment and must not be described as one.
 
 Before enabling the BFF in the intended Cloudflare account:
 
-1. Apply the exact D1 migration sequence remotely, including `0020_production_schedule_approval_requests.sql`, then
+1. Apply the exact D1 migration sequence remotely, including `0021_public_estimate_rate_limits.sql`, then
    run the Frappe app migration so legacy Lead Envelopes become explicit `Unknown` triage rows.
-   Verify `/ready` against the intended database. The 26-table backup/restore inventory must be
+   Verify `/ready` against the intended database. The 29-table backup/restore inventory must be
    deployed with the same release.
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
@@ -296,7 +339,7 @@ The Production Runway remains a read surface until this gate closes. A local
 broker test, a Worker bundle, or a populated schedule card is not permission to
 dispatch a crew or call a production assignment live.
 
-1. Apply the remote D1 migration through `0020_production_schedule_approval_requests.sql` and
+1. Apply the remote D1 migration through `0021_public_estimate_rate_limits.sql` and
    the matching Frappe migration. Confirm the Frappe document policy is installed before the
    broker receives a write-capable credential: it must lock the Roof Job, reject current
    `Needs Review`/`Shortage` supplier exceptions, and reject any initial or correction assignment
@@ -331,7 +374,7 @@ unapproved estimates, and office session data never cross the public boundary.
 
 Before enabling it in the intended Cloudflare account:
 
-1. Apply the migration sequence through `0020_production_schedule_approval_requests.sql` with the same release and prove `/ready` against the
+1. Apply the migration sequence through `0021_public_estimate_rate_limits.sql` with the same release and prove `/ready` against the
    migrated D1 database. Keep `APP_CUSTOMER_PORTAL_ENABLED=false` until this is complete.
 2. Complete the Field Companion BFF configuration above, including the exact HTTPS
    `APP_PUBLIC_ORIGIN`, matching `APP_ALLOWED_ORIGINS`, Frappe read credentials, and the
@@ -350,9 +393,9 @@ Before enabling it in the intended Cloudflare account:
    capability token. Confirm a fresh link revokes the prior active link for that job.
 
 Do not add proof-photo/download, invoice, warranty-file, or proposal-file URLs to this route
-without a separate short-lived attachment-authorization design and browser proof. A public
-`/ingest/estimate` path remains out of scope until its own consent, rate-limit, pricing, and abuse
-controls are reviewed.
+without a separate short-lived attachment-authorization design and browser proof. The private
+`/ingest/estimate` route remains bearer-authenticated; public estimation is limited to the
+separate review-gated `/public/instant-estimate` contract above.
 
 ## 10. Prove The End-To-End Intake Slice
 
@@ -376,7 +419,8 @@ Gate State rows. Remove or clearly label fixture records after proof.
 | Source | Runtime proof |
 | --- | --- |
 | Website | Real consented submission reaches `/ingest/website`, raw R2, D1, Frappe, provider-acceptance receipt (not delivery proof), and temporary JobNimbus bridge |
-| 3D estimator | Repeated `/ingest/estimate` idempotency key returns the original session and remains review-gated |
+| Public estimator | Live `/estimate` Turnstile challenge and exact-origin POST create a raw-first, idempotent, review-gated session; the response leaks no submitted PII and explicit follow-up consent is mirrored with source evidence |
+| 3D estimator handoff | Repeated private `/ingest/estimate` idempotency key returns the original session and remains review-gated |
 | Jotform field intake | Device submission reaches `/ingest/photo`, Drive/R2, evidence, and check-in with photos plus one voice note |
 | RoofRuler/AppliCad | `/ingest/measurement` records one hashed receipt per provider/idempotency identity, stores raw source first, routes no-job or unresolved-job reports and retryable failures to `/admin/measurements/exceptions`, sequentially re-drives verified raw sources with bounded backoff, and keeps uncertain values review-gated |
 | QuickBooks | Valid signed webhook receipt is visible in `/admin/status`; invalid signature is rejected |

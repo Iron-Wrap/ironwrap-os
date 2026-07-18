@@ -324,6 +324,256 @@ test("estimator workbench derives safe measurement geometry and commercial trace
   }
 });
 
+test("estimator workbench projects only an allowlisted visual preview with measurement provenance", async () => {
+  const allowedPreview = "https://preview.ironwrap.example/models/visual-a.png?signature=opaque";
+  const blockedPreview = "https://untrusted.example/models/visual-a.png";
+  const dataset = {
+    ...rows,
+    "Visual Property Model": [{
+      name: "VISUAL-A",
+      roof_job: "JOB-A",
+      provider: "Renoworks Capture",
+      status: "Approved",
+      confidence: 82,
+      needs_review: 0,
+      screenshots_json: JSON.stringify([blockedPreview, allowedPreview]),
+      captured_at: MODIFIED,
+      approved_at: MODIFIED,
+      model_uri: "https://private.example/models/visual-a.glb",
+      raw_key: "raw/visual/visual-a.json",
+      provider_model_id: "provider-private-id",
+      modified: MODIFIED,
+    }],
+    "Roof Area": [{
+      name: "ROOF-AREA-A",
+      roof_job: "JOB-A",
+      visual_model: "VISUAL-A",
+      measurement_report: "MEASURE-A",
+      modified: MODIFIED,
+    }],
+  };
+  const mock = installFrappeMock(dataset);
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(
+      { ...env(), APP_VISUAL_PREVIEW_ALLOWED_ORIGINS: "https://preview.ironwrap.example" },
+      auth("owner"),
+      "JOB-A",
+    );
+    assert.ok(model?.visual_model);
+    assert.equal(model.visual_model.model_state, "approved");
+    assert.equal(model.visual_model.approval_recorded, true);
+    assert.equal(model.visual_model.measurement_link, "selected_measurement");
+    assert.deepEqual(model.visual_model.preview, { state: "available", url: allowedPreview });
+
+    const serialized = JSON.stringify(model);
+    for (const privateValue of [
+      "https://private.example/models/visual-a.glb",
+      "raw/visual/visual-a.json",
+      "provider-private-id",
+      blockedPreview,
+    ]) assert.equal(serialized.includes(privateValue), false, `leaked ${privateValue}`);
+
+    const visualList = mock.requests.find(
+      (request) => request.doctype === "Visual Property Model" && request.name === null,
+    );
+    assert.deepEqual(visualList?.fields, OFFICE_ESTIMATOR_READ_FIELDS["Visual Property Model"]);
+    for (const field of ["model_uri", "raw_key", "provider_model_id", "screenshots_json", "measurements_json"]) {
+      assert.equal(visualList?.fields.includes(field), false, `visual list leaked ${field}`);
+    }
+    assert.ok(
+      mock.requests.some(
+        (request) => request.doctype === "Visual Property Model" && request.name === "VISUAL-A",
+      ),
+      "selected visual model should be read only through the fixed direct-detail contract",
+    );
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench fails closed for an unapproved model and a blocked preview origin", async () => {
+  const blockedPreview = "https://untrusted.example/models/unapproved.png";
+  const dataset = {
+    ...rows,
+    "Visual Property Model": [{
+      name: "VISUAL-REVIEW",
+      roof_job: "JOB-A",
+      provider: "Provider",
+      status: "Approved",
+      confidence: 55,
+      needs_review: 1,
+      screenshots_json: JSON.stringify([blockedPreview]),
+      captured_at: MODIFIED,
+      approved_at: MODIFIED,
+      modified: MODIFIED,
+    }],
+    "Roof Area": [],
+  };
+  const mock = installFrappeMock(dataset);
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(
+      { ...env(), APP_VISUAL_PREVIEW_ALLOWED_ORIGINS: "https://preview.ironwrap.example" },
+      auth("ops"),
+      "JOB-A",
+    );
+    assert.ok(model?.visual_model);
+    assert.equal(model.visual_model.model_state, "needs_review");
+    assert.equal(model.visual_model.review_required, true);
+    assert.equal(model.visual_model.approval_recorded, false);
+    assert.equal(model.visual_model.measurement_link, "unlinked");
+    assert.deepEqual(model.visual_model.preview, { state: "blocked", url: null });
+    assert.equal(JSON.stringify(model).includes(blockedPreview), false);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench marks malformed visual preview payloads and other measurement links safely", async () => {
+  const malformedScreenshotPayload = "{not-an-array";
+  const dataset = {
+    ...rows,
+    "Visual Property Model": [{
+      name: "VISUAL-OTHER",
+      roof_job: "JOB-A",
+      provider: "Provider",
+      status: "Needs Review",
+      confidence: 70,
+      needs_review: 1,
+      screenshots_json: malformedScreenshotPayload,
+      captured_at: MODIFIED,
+      approved_at: null,
+      modified: MODIFIED,
+    }],
+    "Roof Area": [{
+      name: "ROOF-AREA-OTHER",
+      roof_job: "JOB-A",
+      visual_model: "VISUAL-OTHER",
+      measurement_report: "MEASURE-OTHER",
+      modified: MODIFIED,
+    }],
+  };
+  const mock = installFrappeMock(dataset);
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
+    assert.ok(model?.visual_model);
+    assert.equal(model.visual_model.model_state, "needs_review");
+    assert.equal(model.visual_model.measurement_link, "other_measurement");
+    assert.deepEqual(model.visual_model.preview, { state: "invalid", url: null });
+    assert.equal(JSON.stringify(model).includes(malformedScreenshotPayload), false);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench suppresses an invalid visual model detail rather than projecting it", async () => {
+  const dataset = {
+    ...rows,
+    "Visual Property Model": [{
+      name: "VISUAL-INVALID",
+      roof_job: "JOB-A",
+      provider: "Provider",
+      status: "Approved",
+      confidence: 101,
+      needs_review: 0,
+      screenshots_json: JSON.stringify(["https://preview.ironwrap.example/models/invalid.png"]),
+      captured_at: MODIFIED,
+      approved_at: MODIFIED,
+      modified: MODIFIED,
+    }],
+    "Roof Area": [],
+  };
+  const mock = installFrappeMock(dataset);
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(
+      { ...env(), APP_VISUAL_PREVIEW_ALLOWED_ORIGINS: "https://preview.ironwrap.example" },
+      auth("owner"),
+      "JOB-A",
+    );
+    assert.deepEqual(model?.visual_model, {
+      provider: null,
+      model_state: "unavailable",
+      confidence: null,
+      review_required: true,
+      approval_recorded: false,
+      captured_at: null,
+      approved_at: null,
+      measurement_link: "unavailable",
+      preview: { state: "unavailable", url: null },
+    });
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench rejects a stale visual detail that no longer belongs to the selected roof job", async () => {
+  const dataset = {
+    ...rows,
+    "Visual Property Model": [{
+      name: "VISUAL-STALE",
+      roof_job: "JOB-A",
+      provider: "Provider",
+      status: "Approved",
+      confidence: 80,
+      needs_review: 0,
+      screenshots_json: JSON.stringify(["https://preview.ironwrap.example/models/stale.png"]),
+      captured_at: MODIFIED,
+      approved_at: MODIFIED,
+      modified: MODIFIED,
+    }],
+    "Roof Area": [],
+  };
+  const mock = installFrappeMock(dataset, {
+    detailRows: {
+      "Visual Property Model/VISUAL-STALE": {
+        ...dataset["Visual Property Model"][0],
+        roof_job: "JOB-OTHER",
+      },
+    },
+  });
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(
+      { ...env(), APP_VISUAL_PREVIEW_ALLOWED_ORIGINS: "https://preview.ironwrap.example" },
+      auth("owner"),
+      "JOB-A",
+    );
+    assert.equal(model?.visual_model?.model_state, "unavailable");
+    assert.equal(model?.visual_model?.preview.url, null);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench does not select a visual model from a truncated source window", async () => {
+  const visualModels = Array.from({ length: 100 }, (_, index) => ({
+    name: `VISUAL-${index}`,
+    roof_job: "JOB-A",
+    provider: "Provider",
+    status: "Approved",
+    confidence: 80,
+    needs_review: 0,
+    screenshots_json: JSON.stringify(["https://preview.ironwrap.example/models/window.png"]),
+    captured_at: MODIFIED,
+    approved_at: MODIFIED,
+    modified: MODIFIED,
+  }));
+  const mock = installFrappeMock({ ...rows, "Visual Property Model": visualModels, "Roof Area": [] });
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(
+      { ...env(), APP_VISUAL_PREVIEW_ALLOWED_ORIGINS: "https://preview.ironwrap.example" },
+      auth("owner"),
+      "JOB-A",
+    );
+    assert.equal(model?.visual_model?.model_state, "unavailable");
+    assert.equal(
+      mock.requests.some((request) => request.doctype === "Visual Property Model" && request.name !== null),
+      false,
+      "a partial visual window must not be promoted through a direct record read",
+    );
+  } finally {
+    mock.restore();
+  }
+});
+
 test("estimator workbench projects restricted insurance evidence without claim or storage leakage", async () => {
   const dataset = {
     ...rows,

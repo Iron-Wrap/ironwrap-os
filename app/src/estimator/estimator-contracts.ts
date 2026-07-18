@@ -90,6 +90,37 @@ const selectedMeasurementSchema = measurementReportSchema
   })
   .strict();
 
+const visualModelSchema = z
+  .object({
+    provider: nullableText,
+    model_state: z.enum(["draft", "needs_review", "approved", "rejected", "unavailable"]),
+    confidence: nullableNumber,
+    review_required: z.boolean(),
+    approval_recorded: z.boolean(),
+    captured_at: nullableText,
+    approved_at: nullableText,
+    measurement_link: z.enum([
+      "selected_measurement",
+      "other_measurement",
+      "unlinked",
+      "unavailable",
+    ]),
+    preview: z
+      .object({
+        state: z.enum([
+          "available",
+          "not_recorded",
+          "not_configured",
+          "blocked",
+          "invalid",
+          "unavailable",
+        ]),
+        url: nullableText,
+      })
+      .strict(),
+  })
+  .strict();
+
 const takeoffSummarySchema = z
   .object({
     id: z.string().min(1),
@@ -337,6 +368,7 @@ export const estimatorWorkbenchResponseSchema = envelopeSchema
         selected: selectedMeasurementSchema.nullable(),
       })
       .strict(),
+    visual_model: visualModelSchema.nullable(),
     takeoffs: z
       .object({
         records: z.array(takeoffSummarySchema),

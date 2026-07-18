@@ -49,6 +49,23 @@ if (missing.length > 0) {
   throw new Error(`dist/_headers is missing required security directives: ${missing.join(", ")}`);
 }
 
+const requiredEstimateEmbedDirectives = [
+  "/estimate",
+  "! Content-Security-Policy",
+  "! X-Frame-Options",
+  "frame-ancestors https://ironwrapexteriors.com https://www.ironwrapexteriors.com https://iroofalberta.ca https://www.iroofalberta.ca",
+  "script-src 'self' https://challenges.cloudflare.com",
+  "frame-src https://challenges.cloudflare.com",
+];
+const missingEstimateEmbedDirectives = requiredEstimateEmbedDirectives.filter(
+  (directive) => !headers.includes(directive),
+);
+if (missingEstimateEmbedDirectives.length > 0) {
+  throw new Error(
+    `dist/_headers is missing required public-estimator embed directives: ${missingEstimateEmbedDirectives.join(", ")}`,
+  );
+}
+
 const requiredIcons = new Map([
   ["/icon-192.png", "any"],
   ["/icon-512.png", "any"],

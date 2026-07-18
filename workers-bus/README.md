@@ -112,6 +112,7 @@ npm run typegen              # generate worker-configuration.d.ts (Env types)
 # secrets (never commit): see .dev.vars.example
 npx wrangler secret put INGEST_TOKEN
 npx wrangler secret put ADMIN_TOKEN
+npx wrangler secret put NEWO_WEBHOOK_TOKEN  # only when Newo phone intake is enabled
 npx wrangler secret put JOBNIMBUS_API_KEY
 npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
 npx wrangler secret put QB_WEBHOOK_TOKEN   # when the QuickBooks webhook is connected
@@ -131,6 +132,7 @@ npx wrangler deploy
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | POST | `/ingest/:source` | `Bearer INGEST_TOKEN` | ingest a lead (`source` ∈ website,phone,gbp,ad,referral,manual) |
+| POST | `/webhook/newo` | `Bearer NEWO_WEBHOOK_TOKEN` | receive an authenticated Newo Custom Tool handoff as canonical `phone` intake; raw provider body is retained first and duplicate retries do not repeat acknowledgement/queue work. See [`docs/NEWO-INTEGRATION.md`](../docs/NEWO-INTEGRATION.md). |
 | POST | `/ingest/estimate` | `Bearer INGEST_TOKEN` | ingest public estimator/configurator payloads into owned R2/D1 and ERPNext without a JobNimbus/GHL queue dependency; accepts stable project ids or `Idempotency-Key`/`X-Idempotency-Key` for retry-safe replay |
 | POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos, file them to Google Drive, and optionally sync ERPNext Evidence Items |
 | POST | `/ingest/measurement` | `Bearer INGEST_TOKEN` | ingest RoofRuler/AppliCad measurement metadata/report files; provider attachment identity takes precedence over a retry header, raw is stored before downstream work, and completed receipts replay safely |

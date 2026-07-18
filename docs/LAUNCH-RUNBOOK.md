@@ -29,7 +29,7 @@ Never mark launch complete from repository checks alone.
 | Cloudflare account for the configured Worker, D1, R2, Queues, DNS, and Tunnel | Owns intake, storage, recovery, and ingress |
 | Frappe hostname and DNS authority | Serves the operating core over HTTPS |
 | Offline `age` recipient and dedicated R2 backup credentials | Encrypts and stores recoverable backups |
-| Website/Make/Jotform/QuickBooks admin access | Proves real-source cutover |
+| Website/Make/Jotform/QuickBooks/Newo admin access | Proves each enabled real-source cutover |
 | Dedicated Frappe, bus, Hermes-approval, ingest, and backup credentials | Keeps privileges separated by purpose |
 
 The host floor is locked at Ubuntu 22.04+, 2 CPU cores, 8 GiB RAM, 80 GiB free disk,
@@ -180,6 +180,12 @@ npx wrangler secret put ERPNEXT_API_SECRET
 npm run db:migrate
 npm run deploy
 ```
+
+If Newo phone intake is enabled for this release, set its dedicated
+`NEWO_WEBHOOK_TOKEN` only after the target Worker origin is verified, then follow
+[`NEWO-INTEGRATION.md`](./NEWO-INTEGRATION.md). Do not substitute `INGEST_TOKEN`
+or add a Newo API key to the Worker: the current integration is authenticated
+ingress only.
 
 Set the reviewed non-secret Worker vars `ERPNEXT_ENABLED="true"` and
 `ERPNEXT_BASE_URL="https://<frappe-host>"` in the production configuration before deployment.
@@ -374,6 +380,7 @@ Gate State rows. Remove or clearly label fixture records after proof.
 | Jotform field intake | Device submission reaches `/ingest/photo`, Drive/R2, evidence, and check-in with photos plus one voice note |
 | RoofRuler/AppliCad | `/ingest/measurement` records one hashed receipt per provider/idempotency identity, stores raw source first, routes no-job or unresolved-job reports and retryable failures to `/admin/measurements/exceptions`, sequentially re-drives verified raw sources with bounded backoff, and keeps uncertain values review-gated |
 | QuickBooks | Valid signed webhook receipt is visible in `/admin/status`; invalid signature is rejected |
+| Newo phone intake (if enabled) | Approved real call produces canonical `phone` intake with `provider:newo`, raw R2, D1/audit, first-ack receipt, and bridge proof; a deliberate duplicate retains raw evidence but does not repeat acknowledgement or queueing |
 
 JobNimbus and GHL remain bridges until each replacement slice has live evidence. SMS remains
 record-only until A2P/carrier approval. QuickBooks remains accounting truth.
@@ -493,7 +500,7 @@ artifact checksums. A successful upload without this restore drill is not backup
 | Read-only Hermes | Role/manifest and MCP tests | Owner query uses live truth with zero writes |
 | Approved write | Dry-run/request contracts and idempotency tests | One human-approved mutation and complete `Hermes Run` audit |
 | Recovery | Readiness/status/replay plus encrypted Frappe/D1 backup tests | Targeted replay, alerts, exact-prefix local verification, isolated Frappe and D1 restores, table row-count, trigger-inventory, and receipt-semantics parity, and live R2 denied-delete proof |
-| Real sources | Intake contracts | Website, estimator, field, measurement, and QB admin proofs |
+| Real sources | Intake contracts | Website, estimator, field, measurement, QB, and every enabled voice/provider-source admin proof |
 
 Record commit, image digest, Worker deployment version, migration state, Frappe site/app versions,
 Hermes version, proof outputs, approver, and any failed/skipped checks. Launch is blocked while a

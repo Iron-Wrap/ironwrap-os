@@ -2,6 +2,7 @@
 
 import { isOn, isVoiceNoteUri, type EnvelopeRecord } from "./core.ts";
 import type { JnResult } from "./jobnimbus.ts";
+import type { RoofGraphV1 } from "./roof-graph.ts";
 
 type ErpEnv = Env & {
   ERPNEXT_ENABLED?: string;
@@ -58,6 +59,8 @@ export interface ErpNextMeasurementInput {
   needsReview?: boolean;
   /** metric -> in-file source ref from the geometry engine (evidence graph). */
   sourceRefs?: Record<string, string>;
+  /** Canonical evidence-first geometry; omitted for non-geometry report paths. */
+  roofGraph?: RoofGraphV1;
 }
 
 export interface ErpNextPhotoEvidenceInput {
@@ -526,6 +529,8 @@ export async function pushMeasurementToErpNext(
     report_url: input.reportUrl ?? undefined,
     raw_key: input.rawKey,
     parsed_at: input.parsedAt,
+    roof_graph_json: input.roofGraph ? JSON.stringify(input.roofGraph) : undefined,
+    roof_graph_revision: input.roofGraph?.revision,
     review_status: input.needsReview || !roofJob || !Object.keys(input.measurements).length
       ? "Needs Review"
       : "Parsed",

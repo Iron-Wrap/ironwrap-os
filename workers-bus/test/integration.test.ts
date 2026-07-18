@@ -17,6 +17,7 @@ function fakeEnv() {
   const env = {
     INGEST_TOKEN: "test-token",
     ADMIN_TOKEN: "admin-token",
+    NEWO_WEBHOOK_TOKEN: "newo-webhook-token",
     OWNER_ALERT_EMAIL: "owner@example.com",
     BACKUP_ALERT_EMAIL: "backup@example.com",
     FROM_EMAIL: "ops@example.com",
@@ -144,7 +145,12 @@ function fakeEnv() {
   return { env, r2, queue, db, envelopesById };
 }
 
-const fakeCtx = () => ({ waitUntil: (p: Promise<unknown>) => { void Promise.resolve(p).catch(() => {}); } });
+const fakeCtx = (waitUntilCalls: Promise<unknown>[] = []) => ({
+  waitUntil: (p: Promise<unknown>) => {
+    waitUntilCalls.push(p);
+    void Promise.resolve(p).catch(() => {});
+  },
+});
 
 test("POST /ingest/website: raw→R2, envelope→D1, enqueue JN, 200", async () => {
   const { env, r2, queue, db } = fakeEnv();
@@ -198,6 +204,94 @@ test("POST /ingest/website: repeated contact claims duplicate and skips second J
   assert.ok(duplicateInsert);
   assert.ok(duplicateInsert.args.includes("duplicate"));
   assert.ok(duplicateInsert.args.includes(firstBody.envelope_id));
+});
+
+test("POST /webhook/newo: missing dedicated secret fails closed", async () => {
+  const { env, r2, queue } = fakeEnv();
+  env.NEWO_WEBHOOK_TOKEN = "";
+  const req = new Request("https://bus.example/webhook/newo", {
+    method: "POST",
+    headers: { authorization: "Bearer newo-webhook-token", "content-type": "application/json" },
+    body: JSON.stringify({ name: "Newo Caller", phone: "5875557788" }),
+  });
+
+  const res = await worker.fetch(req, env as never, fakeCtx() as never);
+
+  assert.equal(res.status, 503);
+  assert.equal(r2.length, 0);
+  assert.equal(queue.length, 0);
+});
+
+test("POST /webhook/newo: invalid bearer is rejected", async () => {
+  const { env, r2, queue } = fakeEnv();
+  const req = new Request("https://bus.example/webhook/newo", {
+    method: "POST",
+    headers: { authorization: "Bearer wrong-token", "content-type": "application/json" },
+    body: JSON.stringify({ name: "Newo Caller", phone: "5875557788" }),
+  });
+
+  const res = await worker.fetch(req, env as never, fakeCtx() as never);
+
+  assert.equal(res.status, 401);
+  assert.equal(r2.length, 0);
+  assert.equal(queue.length, 0);
+});
+
+test("POST /webhook/newo: generic lead payload stays on the phone path with provider evidence", async () => {
+  const { env, r2, queue, db } = fakeEnv();
+  const req = new Request("https://bus.example/webhook/newo", {
+    method: "POST",
+    headers: { authorization: "Bearer newo-webhook-token", "content-type": "application/json" },
+    body: JSON.stringify({
+      contact_name: "Newo Caller",
+      phone: "(587) 555-7788",
+      email: "newo.caller@example.com",
+      service_intent: "metal roof quote",
+    }),
+  });
+
+  const res = await worker.fetch(req, env as never, fakeCtx() as never);
+  const body = await res.json() as { envelope_id: string; queue: string };
+
+  assert.equal(res.status, 200);
+  assert.equal(body.queue, "residential_sales");
+  assert.equal(r2.length, 1);
+  assert.equal(queue.length, 1);
+  const insert = db.find((c) => c.sql.includes("INSERT INTO envelopes"));
+  assert.ok(insert);
+  assert.equal(insert.args[1], "phone");
+  assert.equal(JSON.parse(String(insert.args[6])).provider, "newo");
+  const audit = db.find((c) => c.sql.includes("INSERT INTO audit_log"));
+  assert.ok(audit);
+  assert.equal(audit.args[2], "phone");
+  assert.equal(audit.args[4], "provider:newo");
+});
+
+test("POST /webhook/newo: duplicate delivery skips repeat acknowledgement and queue", async () => {
+  const { env, r2, queue } = fakeEnv();
+  const waitUntilCalls: Promise<unknown>[] = [];
+  const ctx = fakeCtx(waitUntilCalls);
+  const makeReq = () => new Request("https://bus.example/webhook/newo", {
+    method: "POST",
+    headers: { authorization: "Bearer newo-webhook-token", "content-type": "application/json" },
+    body: JSON.stringify({
+      contact_name: "Newo Caller",
+      phone: "(587) 555-7788",
+      service_intent: "metal roof quote",
+    }),
+  });
+
+  const first = await worker.fetch(makeReq(), env as never, ctx as never);
+  const second = await worker.fetch(makeReq(), env as never, ctx as never);
+  const secondBody = await second.json() as { duplicate: boolean; status: string };
+
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(secondBody.duplicate, true);
+  assert.equal(secondBody.status, "duplicate");
+  assert.equal(r2.length, 2, "raw retries remain durably captured");
+  assert.equal(queue.length, 1);
+  assert.equal(waitUntilCalls.length, 1);
 });
 
 test("POST /ingest/estimate: configurator payload lands in owned store and ERPNext without JN/GHL queue", async (t) => {

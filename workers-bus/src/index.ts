@@ -236,6 +236,15 @@ async function routeRequest(
       return json({ error: "unauthorized" }, 401);
     return await handleIngest(req, env, ctx, ingest[1]);
   }
+  // Newo uses a static bearer header for webhook delivery. Keep its opaque payload on the
+  // generic phone intake path; no provider-specific event schema is assumed here.
+  if (req.method === "POST" && url.pathname === "/webhook/newo") {
+    if (!env.NEWO_WEBHOOK_TOKEN?.trim())
+      return json({ error: "webhook_not_configured" }, 503);
+    if (!constantTimeEqual(bearer(req), env.NEWO_WEBHOOK_TOKEN))
+      return json({ error: "unauthorized" }, 401);
+    return await handleIngest(req, env, ctx, "phone", "newo");
+  }
   if (url.pathname.startsWith("/admin/")) {
     if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN))
       return json({ error: "unauthorized" }, 401);
@@ -291,6 +300,7 @@ async function handleIngest(
   env: Env,
   ctx: ExecutionContext,
   source: string,
+  provider?: string,
 ): Promise<Response> {
   if (!(ALLOWED_SOURCES as readonly string[]).includes(source))
     return json({ error: "bad_source" }, 400);
@@ -301,7 +311,8 @@ async function handleIngest(
   if (rawText.length > MAX_BODY_BYTES)
     return json({ error: "payload_too_large" }, 413);
 
-  const raw = parseBody(rawText, req.headers.get("content-type"));
+  const parsed = parseBody(rawText, req.headers.get("content-type"));
+  const raw = provider ? { ...parsed, provider } : parsed;
   const envelopeId = newEnvelopeId();
   const now = new Date().toISOString();
   const rawKey = `raw/${now.slice(0, 10)}/${envelopeId}.json`;
@@ -351,18 +362,21 @@ async function handleIngest(
     automation: "ingest",
     trigger: source,
     envelope_id: envelopeId,
+    source_ids: provider ? `provider:${provider}` : undefined,
     action: dupOf ? "dedup" : "received",
     result: "ok",
     error: rec.last_error,
     recovery_owner: env.OWNER_ALERT_EMAIL,
   });
 
-  // 5) Instant-ack fires OFF the owned-store write (never off the JobNimbus push).
-  ctx.waitUntil(
-    sendInstantAck(env, rec).catch((e) =>
-      log({ at: "instant_ack", envelope_id: envelopeId, error: String(e) }),
-    ),
-  );
+  // 5) Instant-ack fires OFF the first owned-store write (never off a duplicate/retry).
+  if (!dupOf) {
+    ctx.waitUntil(
+      sendInstantAck(env, rec).catch((e) =>
+        log({ at: "instant_ack", envelope_id: envelopeId, error: String(e) }),
+      ),
+    );
+  }
 
   // 6) Enqueue the JobNimbus push (skip pure duplicates and unroutable-no-contact rows).
   if (!dupOf && valid.ok) await env.JN_QUEUE.send({ envelope_id: envelopeId });

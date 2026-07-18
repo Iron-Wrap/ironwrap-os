@@ -1965,7 +1965,7 @@ export function approvedWriteInputSchema(baseSchema) {
   };
   if (baseSchema instanceof z.ZodDiscriminatedUnion) {
     return z.discriminatedUnion(
-      baseSchema.discriminator,
+      baseSchema.def.discriminator,
       baseSchema.options.map((option) => option.extend(approvalShape).strict()),
     );
   }

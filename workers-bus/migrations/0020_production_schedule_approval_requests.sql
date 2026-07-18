@@ -285,30 +285,30 @@ END;
 CREATE TRIGGER IF NOT EXISTS enforce_production_schedule_approval_transition
 BEFORE UPDATE OF state ON production_schedule_approval_requests
 BEGIN
-  SELECT CASE WHEN NEW.version != OLD.version + 1
-    THEN RAISE(ABORT, 'production_schedule_approval_version_transition_required') END;
-  SELECT CASE WHEN OLD.state = 'pending' AND NEW.state NOT IN ('executing', 'denied', 'expired')
-    THEN RAISE(ABORT, 'production_schedule_approval_invalid_pending_transition') END;
-  SELECT CASE WHEN OLD.state = 'executing' AND NEW.state NOT IN ('executed', 'failed', 'audit_failed', 'execution_uncertain')
-    THEN RAISE(ABORT, 'production_schedule_approval_invalid_executing_transition') END;
-  SELECT CASE WHEN OLD.state NOT IN ('pending', 'executing')
-    THEN RAISE(ABORT, 'production_schedule_approval_terminal_transition') END;
-  SELECT CASE WHEN NEW.transition_actor_kind IS NULL
-    THEN RAISE(ABORT, 'production_schedule_approval_transition_actor_required') END;
+  SELECT RAISE(ABORT, 'production_schedule_approval_version_transition_required')
+    WHERE NEW.version != OLD.version + 1;
+  SELECT RAISE(ABORT, 'production_schedule_approval_invalid_pending_transition')
+    WHERE OLD.state = 'pending' AND NEW.state NOT IN ('executing', 'denied', 'expired');
+  SELECT RAISE(ABORT, 'production_schedule_approval_invalid_executing_transition')
+    WHERE OLD.state = 'executing' AND NEW.state NOT IN ('executed', 'failed', 'audit_failed', 'execution_uncertain');
+  SELECT RAISE(ABORT, 'production_schedule_approval_terminal_transition')
+    WHERE OLD.state NOT IN ('pending', 'executing');
+  SELECT RAISE(ABORT, 'production_schedule_approval_transition_actor_required')
+    WHERE NEW.transition_actor_kind IS NULL;
 END;
 
 CREATE TRIGGER IF NOT EXISTS enforce_production_schedule_approval_reconciliation
 BEFORE UPDATE OF reconciled_at ON production_schedule_approval_requests
 WHEN NEW.reconciled_at IS NOT NULL
 BEGIN
-  SELECT CASE WHEN OLD.state != 'execution_uncertain' OR NEW.state != 'execution_uncertain'
-    THEN RAISE(ABORT, 'production_schedule_approval_reconciliation_requires_uncertain') END;
-  SELECT CASE WHEN OLD.reconciled_at IS NOT NULL
-    THEN RAISE(ABORT, 'production_schedule_approval_reconciliation_immutable') END;
-  SELECT CASE WHEN NEW.version != OLD.version + 1
-    THEN RAISE(ABORT, 'production_schedule_approval_reconciliation_version_required') END;
-  SELECT CASE WHEN NEW.transition_actor_kind != 'app_user'
-    THEN RAISE(ABORT, 'production_schedule_approval_reconciliation_actor_required') END;
+  SELECT RAISE(ABORT, 'production_schedule_approval_reconciliation_requires_uncertain')
+    WHERE OLD.state != 'execution_uncertain' OR NEW.state != 'execution_uncertain';
+  SELECT RAISE(ABORT, 'production_schedule_approval_reconciliation_immutable')
+    WHERE OLD.reconciled_at IS NOT NULL;
+  SELECT RAISE(ABORT, 'production_schedule_approval_reconciliation_version_required')
+    WHERE NEW.version != OLD.version + 1;
+  SELECT RAISE(ABORT, 'production_schedule_approval_reconciliation_actor_required')
+    WHERE NEW.transition_actor_kind != 'app_user';
 END;
 
 CREATE TRIGGER IF NOT EXISTS append_production_schedule_approval_created_event
@@ -334,15 +334,7 @@ BEGIN
     NEW.production_schedule_approval_id,
     NEW.tenant_id,
     NEW.version,
-    CASE
-      WHEN OLD.state = 'pending' AND NEW.state = 'executing' THEN 'execution_claimed'
-      WHEN NEW.state = 'executed' THEN 'executed'
-      WHEN NEW.state = 'denied' THEN 'denied'
-      WHEN NEW.state = 'expired' THEN 'expired'
-      WHEN NEW.state = 'failed' THEN 'failed'
-      WHEN NEW.state = 'audit_failed' THEN 'audit_failed'
-      WHEN NEW.state = 'execution_uncertain' THEN 'execution_uncertain'
-    END,
+    COALESCE(NULLIF(NEW.state, 'executing'), 'execution_claimed'),
     OLD.state,
     NEW.state,
     NEW.transition_actor_kind,

@@ -8,6 +8,7 @@
 interface Env {
   INGEST_TOKEN: string;
   ADMIN_TOKEN: string;
+  NEWO_WEBHOOK_TOKEN: string;
   JOBNIMBUS_API_KEY: string;
   GOOGLE_SERVICE_ACCOUNT_JSON: string;
   QB_WEBHOOK_TOKEN: string;
@@ -23,6 +24,7 @@ declare namespace Cloudflare {
   interface Env {
     INGEST_TOKEN: string;
     ADMIN_TOKEN: string;
+    NEWO_WEBHOOK_TOKEN: string;
     JOBNIMBUS_API_KEY: string;
     GOOGLE_SERVICE_ACCOUNT_JSON: string;
     QB_WEBHOOK_TOKEN: string;

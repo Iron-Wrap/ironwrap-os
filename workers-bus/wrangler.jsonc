@@ -175,5 +175,97 @@
     "SHARED_DRIVE_ID_JOBS": "0AHqXhIQ3svySUk9PVA",
     "SHARED_DRIVE_ID_RESTRICTED": "0AMufCVvWaztwUk9PVA",
     "SHARED_DRIVE_ID_ARCHIVE": "0AFTfvKuo0_6uUk9PVA"
+  },
+
+  // Isolated owner-test environment. Every non-inheritable binding and variable
+  // is repeated here so `wrangler deploy --env staging` cannot reach production data.
+  "env": {
+    "staging": {
+      "workers_dev": true,
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ironwrap-bus-staging",
+          "database_id": "bd6ab4e9-4095-4df8-906a-bcb18356ddfc",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "RAW", "bucket_name": "ironwrap-bus-staging-raw" }
+      ],
+      "queues": {
+        "producers": [{ "binding": "JN_QUEUE", "queue": "ironwrap-staging-jn-push" }],
+        "consumers": [
+          {
+            "queue": "ironwrap-staging-jn-push",
+            "max_retries": 5,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "dead_letter_queue": "ironwrap-staging-jn-dlq"
+          },
+          { "queue": "ironwrap-staging-jn-dlq", "max_retries": 1 }
+        ]
+      },
+      "triggers": { "crons": ["*/5 * * * *", "0 14 * * *"] },
+      "vars": {
+        "OWNER_ALERT_EMAIL": "",
+        "BACKUP_ALERT_EMAIL": "",
+        "FROM_EMAIL": "",
+        "JOBNIMBUS_ENABLED": "false",
+        "JN_CONTACT_RECORD_TYPE": "Customer",
+        "JN_CONTACT_STATUS": "New",
+        "JN_JOB_RECORD_TYPE": "Retail",
+        "JN_JOB_STATUS": "Lead",
+        "ERPNEXT_ENABLED": "false",
+        "ERPNEXT_BASE_URL": "",
+        "ERPNEXT_LEAD_ENVELOPE_DOCTYPE": "Lead Envelope",
+        "ERPNEXT_INTEGRATION_USER": "",
+        "PUBLIC_ESTIMATE_ENABLED": "false",
+        "PUBLIC_ESTIMATE_ALLOWED_ORIGINS": "",
+        "PUBLIC_ESTIMATE_ALLOWED_BRANDS": "",
+        "PUBLIC_ESTIMATE_CONSENT_JURISDICTION": "",
+        "PUBLIC_ESTIMATE_ALLOW_INSECURE_LOCAL": "false",
+        "PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY": "",
+        "PUBLIC_ESTIMATE_RATE_LIMIT_WINDOW_SECONDS": "",
+        "PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX": "",
+        "PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX": "",
+        "PUBLIC_ESTIMATE_RANGE_RULES_JSON": "",
+        "APP_BFF_ENABLED": "false",
+        "APP_CUSTOMER_PORTAL_ENABLED": "false",
+        "APP_TENANT_ID": "ironwrap",
+        "APP_TENANT_NAME": "IronWrap OS — Owner Test",
+        "APP_TENANT_BRAND": "IronWrap",
+        "APP_LOCALE": "en-CA",
+        "APP_TIME_ZONE": "America/Edmonton",
+        "APP_CURRENCY": "CAD",
+        "APP_PUBLIC_ORIGIN": "https://ironwrap-bus-staging.yellow-rain-7498.workers.dev",
+        "APP_ALLOWED_ORIGINS": "https://ironwrap-bus-staging.yellow-rain-7498.workers.dev",
+        "APP_ALLOW_INSECURE_LOCAL": "false",
+        "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
+        "APP_INSURANCE_ESTIMATOR_FRAPPE_USERS": "",
+        "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
+        "APP_APPROVAL_BROKER_URL": "",
+        "APP_APPROVAL_BROKER_KEY_ID": "",
+        "APP_APPROVAL_APPROVER_ID": "",
+        "APP_APPROVAL_MAX_SESSION_AGE_SECONDS": "900",
+        "APP_APPROVAL_BROKER_TIMEOUT_MS": "15000",
+        "APP_APPROVAL_EXECUTION_LEASE_SECONDS": "45",
+        "APP_QUOTE_REVISION_BROKER_URL": "",
+        "APP_QUOTE_REVISION_BROKER_KEY_ID": "",
+        "APP_QUOTE_REVISION_BROKER_TIMEOUT_MS": "15000",
+        "APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS": "45",
+        "APP_PRODUCTION_SCHEDULE_BROKER_URL": "",
+        "APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID": "",
+        "APP_PRODUCTION_SCHEDULE_APPROVER_ID": "",
+        "APP_PRODUCTION_SCHEDULE_MAX_SESSION_AGE_SECONDS": "900",
+        "APP_PRODUCTION_SCHEDULE_BROKER_TIMEOUT_MS": "15000",
+        "APP_PRODUCTION_SCHEDULE_EXECUTION_LEASE_SECONDS": "45",
+        "DEDUP_WINDOW_HOURS": "72",
+        "STUCK_THRESHOLD_MIN": "15",
+        "SHARED_DRIVE_ID_JOBS": "",
+        "SHARED_DRIVE_ID_RESTRICTED": "",
+        "SHARED_DRIVE_ID_ARCHIVE": ""
+      }
+    }
   }
 }

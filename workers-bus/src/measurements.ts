@@ -10,6 +10,7 @@ import * as store from "./store.ts";
 import { googleConfigured, fileToJobFolder } from "./google.ts";
 import { pushMeasurementToErpNext } from "./erpnext.ts";
 import { isAppliCadXml, parseAppliCadGeometry, type GeometryModel } from "./geometry.ts";
+import { deriveRoofGraph, type RoofGraphV1 } from "./roof-graph.ts";
 import {
   claimMeasurementIntakeReceipt,
   completeMeasurementIntakeReceipt,
@@ -213,9 +214,18 @@ async function processClaimedMeasurementIntake(
   },
 ): Promise<Response> {
   const { receipt, identity, submission: sub, geometry, parsedAt } = input;
+  const roofGraph = geometry
+    ? deriveRoofGraph({
+      geometry,
+      rawKey: identity.rawKey,
+      rawSha256: identity.payloadHash,
+      provider: identity.provider,
+      ingestedAt: parsedAt,
+    })
+    : null;
   try {
     if (!sub.jobNumber) {
-      const erp = await syncMeasurementToErpNext(env, receipt, sub, identity.rawKey, parsedAt, null, geometry);
+      const erp = await syncMeasurementToErpNext(env, receipt, sub, identity.rawKey, parsedAt, null, geometry, roofGraph);
       await store.recordAudit(env, {
         automation: "measurement",
         trigger: identity.provider.toLowerCase(),
@@ -249,7 +259,7 @@ async function processClaimedMeasurementIntake(
       });
     }
 
-    const erp = await syncMeasurementToErpNext(env, receipt, sub, identity.rawKey, parsedAt, filing.report, geometry);
+    const erp = await syncMeasurementToErpNext(env, receipt, sub, identity.rawKey, parsedAt, filing.report, geometry, roofGraph);
     if (erp.error) throw new MeasurementIntakeFailure("frappe_measurement_sync_failed", erp.error);
     const unmatchedJob = erp.jobMatched === false;
     await store.recordAudit(env, {
@@ -624,6 +634,7 @@ async function syncMeasurementToErpNext(
   parsedAt: string,
   reportFileUrl: string | null,
   geometry: GeometryModel | null,
+  roofGraph: RoofGraphV1 | null,
 ): Promise<{ name: string | null; evidenceItemName: string | null; jobMatched: boolean | null; error: string | null }> {
   try {
     const erp = await pushMeasurementToErpNext(env, {
@@ -637,6 +648,7 @@ async function syncMeasurementToErpNext(
       provider: geometry ? "AppliCad" : undefined,
       needsReview: Boolean(geometry?.needsReview || !sub.jobNumber || !reportFileUrl),
       sourceRefs: geometry?.sourceRefs,
+      roofGraph: roofGraph ?? undefined,
     });
     if (erp) {
       await store.recordAudit(env, { automation: "erpnext_measurement", trigger: "roofruler",

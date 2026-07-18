@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -132,6 +132,7 @@ function workbenchModel(
             { metric: "roof_area", value: 100, source_ref: "POLYGON[type=Roof] sum(size)" },
           ],
         },
+        roof_graph: null,
       },
     },
     visual_model: {
@@ -430,6 +431,86 @@ describe("EstimatorWorkbenchPage", () => {
     expect(
       screen.queryByRole("button", { name: /approve|publish|open model|change visual/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders source roof facets as read-only selectable graph evidence", async () => {
+    const base = workbenchModel();
+    const roofGraph = {
+      state: "needs_review" as const,
+      revision: "roof-graph-r3",
+      source: "RoofRuler report",
+      provider: "RoofRuler",
+      confidence: 87,
+      review_status: "Needs Review" as const,
+      captured_at: "2026-07-11T12:00:00.000Z",
+      units: "ft",
+      points: [
+        { id: "P1", x: 0, y: 0 },
+        { id: "P2", x: 12, y: 0 },
+        { id: "P3", x: 12, y: 8 },
+        { id: "P4", x: 0, y: 8 },
+        { id: "P5", x: 18, y: 4 },
+      ],
+      edges: [
+        { id: "E1", start_point_id: "P1", end_point_id: "P2" },
+        { id: "E2", start_point_id: "P2", end_point_id: "P3" },
+        { id: "E3", start_point_id: "P3", end_point_id: "P4" },
+        { id: "E4", start_point_id: "P4", end_point_id: "P1" },
+        { id: "E5", start_point_id: "P2", end_point_id: "P5" },
+        { id: "E6", start_point_id: "P5", end_point_id: "P3" },
+      ],
+      facets: [
+        {
+          id: "F1",
+          label: "Front plane",
+          point_ids: ["P1", "P2", "P3", "P4"],
+          confidence: 92,
+          review_status: "Approved" as const,
+        },
+        {
+          id: "F2",
+          label: "Rear plane",
+          point_ids: ["P2", "P5", "P3"],
+          confidence: 74,
+          review_status: "Needs Review" as const,
+        },
+      ],
+      check_count: 6,
+      failed_check_count: 1,
+      raw_key: "private/roof-graph.json",
+    } as unknown as NonNullable<
+      NonNullable<EstimatorWorkbenchResponse["measurements"]["selected"]>["roof_graph"]
+    >;
+    vi.mocked(loadEstimatorWorkbench).mockResolvedValue({
+      ...base,
+      measurements: {
+        ...base.measurements,
+        selected: {
+          ...base.measurements.selected!,
+          roof_graph: roofGraph,
+        },
+      },
+    });
+    renderWorkbench();
+
+    await screen.findByRole("heading", { name: "Roof graph evidence" });
+    expect(screen.getByText("RoofRuler report")).toBeVisible();
+    expect(screen.getByText("roof-graph-r3")).toBeVisible();
+    expect(screen.getByText("87%")).toBeVisible();
+    expect(screen.getByText(/graph evidence is a transcription/i)).toBeVisible();
+    expect(screen.getByText(/not field verification/i)).toBeVisible();
+    expect(screen.queryByText("private/roof-graph.json")).not.toBeInTheDocument();
+
+    const graph = screen.getByRole("group", { name: "Roof graph evidence" });
+    const frontPlane = within(graph).getByRole("button", { name: /select facet front plane/i });
+    const rearPlane = within(graph).getByRole("button", { name: /select facet rear plane/i });
+    expect(rearPlane).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(frontPlane);
+    expect(frontPlane).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Selected facet: Front plane")).toBeVisible();
+    fireEvent.keyDown(rearPlane, { key: "Enter" });
+    expect(rearPlane).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Selected facet: Rear plane")).toBeVisible();
   });
 
   it("keeps blocked or unapproved visual evidence useful without rendering its URL", async () => {

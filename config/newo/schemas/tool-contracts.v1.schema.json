@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ironwrap.invalid/schemas/newo/tool-contracts.v1.schema.json",
+  "title": "IronWrap Newo receptionist tool configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "lookup_caller",
+    "capture_lead",
+    "request_handoff",
+    "check_availability",
+    "request_or_book_appointment"
+  ],
+  "properties": {
+    "schema_version": { "const": "newo.tool-contracts.v1" },
+    "lookup_caller": { "$ref": "#/$defs/lookupCaller" },
+    "capture_lead": { "$ref": "#/$defs/captureLead" },
+    "request_handoff": { "$ref": "#/$defs/requestHandoff" },
+    "check_availability": { "$ref": "#/$defs/checkAvailability" },
+    "request_or_book_appointment": { "$ref": "#/$defs/requestAppointment" }
+  },
+  "$defs": {
+    "base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "path",
+        "request_schema_version",
+        "response_schema_version",
+        "authorization_secret_env",
+        "strict_payload",
+        "outbound_customer_send"
+      ],
+      "properties": {
+        "method": { "const": "POST" },
+        "path": { "type": "string", "pattern": "^/" },
+        "request_schema_version": { "type": "string", "minLength": 3 },
+        "response_schema_version": { "type": "string", "minLength": 3 },
+        "authorization_secret_env": {
+          "enum": ["NEWO_WEBHOOK_TOKEN", "NEWO_BOOKING_TOKEN"]
+        },
+        "strict_payload": { "const": true },
+        "outbound_customer_send": { "const": false }
+      }
+    },
+    "lookupCaller": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "properties": {
+            "path": { "const": "/webhook/newo/lookup" },
+            "request_schema_version": { "const": "newo.caller-lookup.v1" },
+            "response_schema_version": { "const": "newo.caller-lookup-response.v1" },
+            "authorization_secret_env": { "const": "NEWO_WEBHOOK_TOKEN" }
+          }
+        }
+      ]
+    },
+    "captureLead": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "properties": {
+            "path": { "const": "/webhook/newo" },
+            "request_schema_version": { "const": "newo.event.v1" },
+            "response_schema_version": { "const": "newo.tool-receipt.v1" },
+            "authorization_secret_env": { "const": "NEWO_WEBHOOK_TOKEN" }
+          }
+        }
+      ]
+    },
+    "requestHandoff": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "properties": {
+            "path": { "const": "/webhook/newo/handoff" },
+            "request_schema_version": { "const": "newo.event.v1" },
+            "response_schema_version": { "const": "newo.tool-receipt.v1" },
+            "authorization_secret_env": { "const": "NEWO_WEBHOOK_TOKEN" }
+          }
+        }
+      ]
+    },
+    "checkAvailability": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "properties": {
+            "path": { "const": "/webhook/newo/availability" },
+            "request_schema_version": { "const": "newo.availability.v1" },
+            "response_schema_version": { "const": "newo.availability-response.v1" },
+            "authorization_secret_env": { "const": "NEWO_BOOKING_TOKEN" }
+          }
+        }
+      ]
+    },
+    "requestAppointment": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "properties": {
+            "path": { "const": "/webhook/newo/booking" },
+            "request_schema_version": { "const": "newo.event.v1" },
+            "response_schema_version": { "const": "newo.tool-receipt.v1" },
+            "authorization_secret_env": { "const": "NEWO_BOOKING_TOKEN" }
+          }
+        }
+      ]
+    }
+  }
+}

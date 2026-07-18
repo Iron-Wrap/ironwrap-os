@@ -181,11 +181,11 @@ npm run db:migrate
 npm run deploy
 ```
 
-If Newo phone intake is enabled for this release, set its dedicated
-`NEWO_WEBHOOK_TOKEN` only after the target Worker origin is verified, then follow
-[`NEWO-INTEGRATION.md`](./NEWO-INTEGRATION.md). Do not substitute `INGEST_TOKEN`
-or add a Newo API key to the Worker: the current integration is authenticated
-ingress only.
+Newo production uses the managed federation and full governed control plane. Store
+`NEWO_API_KEY`, `NEWO_WEBHOOK_TOKEN`, `NEWO_BOOKING_TOKEN`, and
+`NEWO_CONTROL_SIGNING_SECRET` only as Cloudflare secrets after the exact target is verified.
+Follow [`NEWO-PRODUCTION-RUNBOOK.md`](./NEWO-PRODUCTION-RUNBOOK.md); do not substitute
+`INGEST_TOKEN`, expose a provider key to an MCP process, or enable customer outbound at launch.
 
 Set the reviewed non-secret Worker vars `ERPNEXT_ENABLED="true"` and
 `ERPNEXT_BASE_URL="https://<frappe-host>"` in the production configuration before deployment.
@@ -427,7 +427,7 @@ Gate State rows. Remove or clearly label fixture records after proof.
 | Jotform field intake | Device submission reaches `/ingest/photo`, Drive/R2, evidence, and check-in with photos plus one voice note |
 | RoofRuler/AppliCad | `/ingest/measurement` records one hashed receipt per provider/idempotency identity, stores raw source first, routes no-job or unresolved-job reports and retryable failures to `/admin/measurements/exceptions`, sequentially re-drives verified raw sources with bounded backoff, and keeps uncertain values review-gated |
 | QuickBooks | Valid signed webhook receipt is visible in `/admin/status`; invalid signature is rejected |
-| Newo phone intake (if enabled) | Approved real call produces canonical `phone` intake with `provider:newo`, raw R2, D1/audit, first-ack receipt, and bridge proof; a deliberate duplicate retains raw evidence but does not repeat acknowledgement or queueing |
+| Newo receptionist | Approved real call produces `raw/newo/` R2, event receipt, distinct reception session, lead envelope when applicable, Frappe landing, downstream result, and operator status; same-caller second calls remain distinct sessions; report omission and failed transfer become owned exceptions |
 
 JobNimbus and GHL remain bridges until each replacement slice has live evidence. SMS remains
 record-only until A2P/carrier approval. QuickBooks remains accounting truth.

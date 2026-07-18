@@ -1,0 +1,86 @@
+{
+  "schema_version": "newo.expected-config.v1",
+  "config_version": "newo.production.v1",
+  "release_state": "staging",
+  "federation": {
+    "mode": "managed",
+    "newo_owns": ["live_voice", "convo_agent", "naf_reasoning", "tool_selection", "akb", "telephony"],
+    "ironwrap_owns": ["customer_truth", "business_truth", "policy", "approvals", "evidence", "reconciliation", "audit"]
+  },
+  "runtime": {
+    "production_required": true,
+    "enabled": false,
+    "control_write_enabled": false,
+    "booking_mode": "request_only",
+    "booking_horizon_days": 30,
+    "report_timeout_minutes": 30,
+    "sync_retry_minutes": 5,
+    "outbound_enabled": false,
+    "enabled_channels": ["voice"],
+    "api_base_url": "https://api.newo.ai"
+  },
+  "secret_env_names": [
+    "NEWO_API_KEY",
+    "NEWO_WEBHOOK_TOKEN",
+    "NEWO_BOOKING_TOKEN",
+    "NEWO_CONTROL_SIGNING_SECRET"
+  ],
+  "provider": {
+    "project_id": { "env": "NEWO_PROJECT_ID", "expected": null, "status": "pending_console_value" },
+    "production_agent_id": { "env": "NEWO_AGENT_ID", "expected": null, "status": "pending_console_value" },
+    "report_webhook_id": { "env": "NEWO_REPORT_WEBHOOK_ID", "expected": null, "status": "pending_console_value" },
+    "handoff_webhook_id": { "env": "NEWO_HANDOFF_WEBHOOK_ID", "expected": null, "status": "pending_console_value" },
+    "report_webhook_path": "/webhook/newo/report",
+    "handoff_webhook_path": "/webhook/newo/handoff"
+  },
+  "contracts": {
+    "tool_configuration_path": "config/newo/tools.v1.json",
+    "tool_configuration_sha256": "bbe5ec960d2e8688336f4938c6fee57b72941985d83a5348c8ba8e0e88bdc9fd",
+    "tool_schema_path": "config/newo/schemas/tool-contracts.v1.schema.json",
+    "tool_schema_sha256": "6d1028836d51f25a42cf0b38660ccf5d7f624f5396616ebd2c5168b16a1554fa",
+    "report_schema_path": "config/newo/schemas/session-report.v1.schema.json",
+    "report_schema_sha256": "5c587d4c53b872fbef4290a315ecc7e00477371168b1ac4a07735fff695602cb"
+  },
+  "akb": {
+    "version": "ironwrap-receptionist.v1",
+    "path": "config/newo/akb/ironwrap-receptionist.v1.md",
+    "sha256": "9549fdf4956053b84e261f4909e31a8b072599cd2dcae7aa85861d4592a9aa64",
+    "owner_approval": "pending",
+    "legal_wording_approval": "pending"
+  },
+  "booking": {
+    "mode": "request_only",
+    "request_only_spoken_receipt": "Appointment request received.",
+    "jobnimbus_appointment_contract_proven": false,
+    "confirmed_mode_gate": "controlled_create_read_collision_update_cancel_100_percent"
+  },
+  "transfer": {
+    "policy": "owner_then_voicemail",
+    "owner_line_env": "NEWO_OWNER_TRANSFER_NUMBER",
+    "voicemail_fallback_required": true,
+    "failed_transfer_callback_incident": true
+  },
+  "telephony": {
+    "newo_owned_number": null,
+    "number_status": "pending_console_value",
+    "forwarding_phase": "disabled",
+    "rollback_route": "existing_business_number_human_or_voicemail"
+  },
+  "usage": {
+    "limit_minutes": null,
+    "alert_percent": 80,
+    "documented_api_observation": "unavailable_from_documented_api",
+    "console_alert_proof_required": true
+  },
+  "storage": {
+    "raw_prefix": "raw/newo/",
+    "raw_lifecycle_days": 30,
+    "lifecycle_proof_status": "pending"
+  },
+  "release_evidence": {
+    "sandbox_fixture_index": "config/newo/sandbox-fixtures.json",
+    "console_proof_index": "config/newo/console-proof.json",
+    "evaluation_path": "config/newo/evaluation-cases.v1.json",
+    "evaluation_sha256": "3ad0b9d87783ccdcc54617631900e180c2b07a593c05d1f77a3f2a2ca84b921a"
+  }
+}

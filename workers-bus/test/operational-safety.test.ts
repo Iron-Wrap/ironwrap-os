@@ -364,6 +364,8 @@ test("Newo production readiness requires credentials, live actor/webhooks, Frapp
     NEWO_PHONE_NUMBER: "+14035550100",
     NEWO_ENABLED_CHANNELS: "voice",
     NEWO_TRANSFER_POLICY: "owner_then_voicemail",
+    NEWO_OWNER_TRANSFER_NUMBER: "+17805550101",
+    NEWO_R2_LIFECYCLE_PROVEN: "true",
     NEWO_USAGE_LIMIT_MINUTES: "1000",
     NEWO_USAGE_ALERT_PERCENT: "80",
     NEWO_BOOKING_MODE: "request_only",

@@ -7,6 +7,8 @@ import { productionScheduleApprovalDecisionConfig } from "./production-schedule-
 import { productionScheduleApprovalBrokerConfig } from "./production-schedule-approval-broker-client.ts";
 import { publicEstimateConfigured, type PublicEstimatorEnv } from "./public-estimator.ts";
 import type { AppEnv } from "./app-types.ts";
+import { NewoApiClient, newoClientConfigFromEnv, type NewoJson } from "./newo-client.ts";
+import { newoOperationalCounts } from "./newo-store.ts";
 
 export const BULK_REPLAY_CONFIRMATION = "REPLAY_ALL_OPEN_DEAD_LETTERS";
 const HEARTBEAT_FRESHNESS_HOURS = 36;
@@ -17,6 +19,34 @@ const MAX_CLOCK_SKEW_SECONDS = 5 * 60;
 
 interface ExtendedEnv {
   ERPNEXT_ENABLED?: string;
+  NEWO_PRODUCTION_REQUIRED?: string;
+  NEWO_ENABLED?: string;
+  NEWO_CONTROL_WRITE_ENABLED?: string;
+  NEWO_OUTBOUND_ENABLED?: string;
+  NEWO_WEBHOOK_TOKEN?: string;
+  NEWO_BOOKING_TOKEN?: string;
+  NEWO_CONTROL_SIGNING_SECRET?: string;
+  NEWO_API_BASE_URL?: string;
+  NEWO_API_KEY?: string;
+  NEWO_PROJECT_ID?: string;
+  NEWO_AGENT_ID?: string;
+  NEWO_REPORT_WEBHOOK_ID?: string;
+  NEWO_REPORT_WEBHOOK_URL?: string;
+  NEWO_HANDOFF_WEBHOOK_ID?: string;
+  NEWO_HANDOFF_WEBHOOK_URL?: string;
+  NEWO_EXPECTED_CONFIG_VERSION?: string;
+  NEWO_TOOL_SCHEMA_SHA256?: string;
+  NEWO_REPORT_SCHEMA_SHA256?: string;
+  NEWO_KB_VERSION?: string;
+  NEWO_KB_SHA256?: string;
+  NEWO_PHONE_NUMBER?: string;
+  NEWO_ENABLED_CHANNELS?: string;
+  NEWO_TRANSFER_POLICY?: string;
+  NEWO_USAGE_LIMIT_MINUTES?: string;
+  NEWO_USAGE_ALERT_PERCENT?: string;
+  NEWO_BOOKING_MODE?: string;
+  NEWO_JOBNIMBUS_BOOKING_PROVEN?: string;
+  NEWO_QUEUE?: Queue;
 }
 
 export interface ReplayApprovalContext {
@@ -45,7 +75,44 @@ export interface ReadinessReport {
     customer_portal_configuration: boolean;
     production_schedule_configuration: boolean;
     public_estimate_configuration: boolean;
+    newo_enabled: boolean;
+    newo_webhook_credentials: boolean;
+    newo_api_authentication: boolean;
+    newo_production_actor: boolean;
+    newo_report_webhook_match: boolean;
+    newo_configuration_drift: boolean;
+    newo_queue_binding: boolean;
+    newo_dlq_state: boolean;
+    newo_frappe_readiness: boolean;
+    newo_jobnimbus_bridge: boolean;
+    newo_booking_mode: boolean;
   };
+  newo: NewoReadinessDetail;
+}
+
+export interface NewoReadinessDetail {
+  required: boolean;
+  enabled: boolean;
+  booking_mode: string;
+  outbound_enabled: boolean;
+  control_write_enabled: boolean;
+  webhook_credentials_configured: boolean;
+  queue_binding_ready: boolean;
+  dlq_clear: boolean;
+  jobnimbus_bridge_ready: boolean;
+  booking_mode_ready: boolean;
+  api_authenticated: boolean;
+  production_actor_verified: boolean;
+  report_webhooks_verified: boolean;
+  frappe_reachable: boolean;
+  owned_failures: {
+    failed_events: number;
+    failed_sync: number;
+    pending_sync: number;
+  } | null;
+  drift_reasons: string[];
+  api_error: string | null;
+  frappe_error: string | null;
 }
 
 export interface OperationalStatus {
@@ -113,6 +180,17 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
     customer_portal_configuration: customerPortalConfigured(extended),
     production_schedule_configuration: productionScheduleConfigured(extended),
     public_estimate_configuration: publicEstimateConfigured(extended),
+    newo_enabled: true,
+    newo_webhook_credentials: true,
+    newo_api_authentication: true,
+    newo_production_actor: true,
+    newo_report_webhook_match: true,
+    newo_configuration_drift: true,
+    newo_queue_binding: true,
+    newo_dlq_state: true,
+    newo_frappe_readiness: true,
+    newo_jobnimbus_bridge: true,
+    newo_booking_mode: true,
   };
 
   if (typeof db?.prepare === "function") {
@@ -125,8 +203,204 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
     }
   }
 
+  const newo = await getNewoReadiness(env, checks.d1 && checks.schema);
+  checks.newo_enabled = !newo.required || newo.enabled;
+  checks.newo_webhook_credentials = !newo.required || newo.webhook_credentials_configured;
+  checks.newo_api_authentication = !newo.required || newo.api_authenticated;
+  checks.newo_production_actor = !newo.required || newo.production_actor_verified;
+  checks.newo_report_webhook_match = !newo.required || newo.report_webhooks_verified;
+  checks.newo_configuration_drift = !newo.required || newo.drift_reasons.length === 0;
+  checks.newo_queue_binding = !newo.required || newo.queue_binding_ready;
+  checks.newo_dlq_state = !newo.required || newo.dlq_clear;
+  checks.newo_frappe_readiness = !newo.required || newo.frappe_reachable;
+  checks.newo_jobnimbus_bridge = !newo.required || newo.jobnimbus_bridge_ready;
+  checks.newo_booking_mode = !newo.required || newo.booking_mode_ready;
+
   const ok = Object.values(checks).every(Boolean);
-  return { ok, status: ok ? "ready" : "not_ready", checks };
+  return { ok, status: ok ? "ready" : "not_ready", checks, newo };
+}
+
+async function getNewoReadiness(env: Env, databaseReady: boolean): Promise<NewoReadinessDetail> {
+  const runtime = env as AppEnv & ExtendedEnv;
+  const enabled = String(runtime.NEWO_ENABLED ?? "false") === "true";
+  const required = String(runtime.NEWO_PRODUCTION_REQUIRED ?? "false") === "true" || enabled;
+  const bookingMode = String(runtime.NEWO_BOOKING_MODE ?? "request_only");
+  const webhookCredentials = nonEmpty(runtime.NEWO_WEBHOOK_TOKEN) && nonEmpty(runtime.NEWO_BOOKING_TOKEN);
+  const queue = runtime.NEWO_QUEUE as unknown as { send?: unknown; sendBatch?: unknown } | undefined;
+  const queueBinding = typeof queue?.send === "function" && typeof queue?.sendBatch === "function";
+  const jobNimbusBridge = String(env.JOBNIMBUS_ENABLED ?? "false") !== "true" || nonEmpty(env.JOBNIMBUS_API_KEY);
+  const confirmed = bookingMode === "confirmed";
+  const bookingModeReady = bookingMode === "request_only" ||
+    (confirmed && String(runtime.NEWO_JOBNIMBUS_BOOKING_PROVEN ?? "false") === "true");
+  const driftReasons = required ? newoConfigurationDrift(runtime) : [];
+  let apiAuthenticated = false;
+  let productionActorVerified = false;
+  let reportWebhooksVerified = false;
+  let apiError: string | null = null;
+  let frappeReachable = false;
+  let frappeError: string | null = null;
+  let counts: Awaited<ReturnType<typeof newoOperationalCounts>> | null = null;
+
+  if (required && enabled && nonEmpty(runtime.NEWO_API_KEY) && nonEmpty(runtime.NEWO_API_BASE_URL)) {
+    try {
+      const client = new NewoApiClient(newoClientConfigFromEnv(env));
+      await client.authenticate();
+      apiAuthenticated = true;
+      if (nonEmpty(runtime.NEWO_AGENT_ID)) {
+        const actor = await client.getAgentActor(String(runtime.NEWO_AGENT_ID));
+        productionActorVerified = newoObject(actor)?.id === runtime.NEWO_AGENT_ID;
+      }
+      if (nonEmpty(runtime.NEWO_REPORT_WEBHOOK_ID) && nonEmpty(runtime.NEWO_HANDOFF_WEBHOOK_ID)) {
+        const webhooks = newoArray(await client.listOutgoingWebhooks());
+        reportWebhooksVerified = webhookMatches(
+          webhooks,
+          String(runtime.NEWO_REPORT_WEBHOOK_ID),
+          String(runtime.NEWO_REPORT_WEBHOOK_URL ?? ""),
+        ) && webhookMatches(
+          webhooks,
+          String(runtime.NEWO_HANDOFF_WEBHOOK_ID),
+          String(runtime.NEWO_HANDOFF_WEBHOOK_URL ?? ""),
+        );
+      }
+    } catch (error) {
+      apiError = safeNewoError(error);
+    }
+  }
+
+  if (required) {
+    const frappe = await checkFrappeReachability(runtime);
+    frappeReachable = frappe.ok;
+    frappeError = frappe.error;
+    if (databaseReady) {
+      try {
+        counts = await newoOperationalCounts(env);
+      } catch {
+        counts = null;
+      }
+    }
+  }
+  const dlqClear = counts !== null && counts.failed_events === 0 && counts.failed_sync === 0;
+
+  return {
+    required,
+    enabled,
+    booking_mode: bookingMode,
+    outbound_enabled: String(runtime.NEWO_OUTBOUND_ENABLED ?? "false") === "true",
+    control_write_enabled: String(runtime.NEWO_CONTROL_WRITE_ENABLED ?? "false") === "true",
+    webhook_credentials_configured: webhookCredentials,
+    queue_binding_ready: queueBinding,
+    dlq_clear: dlqClear,
+    jobnimbus_bridge_ready: jobNimbusBridge,
+    booking_mode_ready: bookingModeReady,
+    api_authenticated: apiAuthenticated,
+    production_actor_verified: productionActorVerified,
+    report_webhooks_verified: reportWebhooksVerified,
+    frappe_reachable: frappeReachable,
+    owned_failures: counts ? {
+      failed_events: counts.failed_events,
+      failed_sync: counts.failed_sync,
+      pending_sync: counts.pending_sync,
+    } : null,
+    drift_reasons: driftReasons,
+    api_error: apiError,
+    frappe_error: frappeError,
+  };
+}
+
+function newoConfigurationDrift(env: AppEnv & ExtendedEnv): string[] {
+  const reasons: string[] = [];
+  const requiredText: Array<[keyof ExtendedEnv, string]> = [
+    ["NEWO_EXPECTED_CONFIG_VERSION", "expected_config_version_missing"],
+    ["NEWO_PROJECT_ID", "project_id_missing"],
+    ["NEWO_AGENT_ID", "production_agent_id_missing"],
+    ["NEWO_REPORT_WEBHOOK_ID", "report_webhook_id_missing"],
+    ["NEWO_REPORT_WEBHOOK_URL", "report_webhook_url_missing"],
+    ["NEWO_HANDOFF_WEBHOOK_ID", "handoff_webhook_id_missing"],
+    ["NEWO_HANDOFF_WEBHOOK_URL", "handoff_webhook_url_missing"],
+    ["NEWO_KB_VERSION", "kb_version_missing"],
+    ["NEWO_PHONE_NUMBER", "phone_number_missing"],
+    ["NEWO_TRANSFER_POLICY", "transfer_policy_missing"],
+    ["NEWO_USAGE_LIMIT_MINUTES", "usage_limit_missing"],
+  ];
+  for (const [key, reason] of requiredText) if (!nonEmpty(env[key])) reasons.push(reason);
+  for (const [key, reason] of [
+    ["NEWO_TOOL_SCHEMA_SHA256", "tool_schema_hash_invalid"],
+    ["NEWO_REPORT_SCHEMA_SHA256", "report_schema_hash_invalid"],
+    ["NEWO_KB_SHA256", "kb_hash_invalid"],
+  ] as const) {
+    if (!/^[0-9a-f]{64}$/.test(String(env[key] ?? ""))) reasons.push(reason);
+  }
+  if (String(env.NEWO_EXPECTED_CONFIG_VERSION ?? "") !== "newo.production.v1") {
+    reasons.push("expected_config_version_mismatch");
+  }
+  if (String(env.NEWO_ENABLED_CHANNELS ?? "") !== "voice") reasons.push("enabled_channels_mismatch");
+  if (String(env.NEWO_TRANSFER_POLICY ?? "") !== "owner_then_voicemail") {
+    reasons.push("transfer_policy_mismatch");
+  }
+  if (String(env.NEWO_OUTBOUND_ENABLED ?? "false") !== "false") reasons.push("outbound_launch_state_mismatch");
+  const usageLimit = Number(env.NEWO_USAGE_LIMIT_MINUTES ?? "0");
+  const alertPercent = Number(env.NEWO_USAGE_ALERT_PERCENT ?? "0");
+  if (!Number.isFinite(usageLimit) || usageLimit <= 0) reasons.push("usage_limit_invalid");
+  if (!Number.isFinite(alertPercent) || alertPercent < 1 || alertPercent > 100) {
+    reasons.push("usage_alert_percent_invalid");
+  }
+  if (!nonEmpty(env.NEWO_CONTROL_SIGNING_SECRET)) reasons.push("control_signing_secret_missing");
+  return [...new Set(reasons)];
+}
+
+async function checkFrappeReachability(env: AppEnv & ExtendedEnv): Promise<{ ok: boolean; error: string | null }> {
+  if (String(env.ERPNEXT_ENABLED ?? "false") !== "true" || !nonEmpty(env.ERPNEXT_BASE_URL) ||
+    !nonEmpty(env.ERPNEXT_API_KEY) || !nonEmpty(env.ERPNEXT_API_SECRET)) {
+    return { ok: false, error: "frappe_disabled_or_unconfigured" };
+  }
+  let base: URL;
+  try {
+    base = new URL(String(env.ERPNEXT_BASE_URL));
+  } catch {
+    return { ok: false, error: "frappe_base_url_invalid" };
+  }
+  if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) {
+    return { ok: false, error: "frappe_base_url_invalid" };
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3_000);
+  try {
+    const response = await fetch(`${base.toString().replace(/\/+$/, "")}/api/method/ping`, {
+      method: "GET",
+      redirect: "error",
+      signal: controller.signal,
+      headers: {
+        accept: "application/json",
+        authorization: `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`,
+      },
+    });
+    return response.ok ? { ok: true, error: null } : { ok: false, error: `frappe_http_${response.status}` };
+  } catch {
+    return { ok: false, error: controller.signal.aborted ? "frappe_timeout" : "frappe_unreachable" };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function newoArray(value: NewoJson): Array<Record<string, NewoJson>> {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, NewoJson> => newoObject(item) !== null)
+    : [];
+}
+
+function newoObject(value: NewoJson): Record<string, NewoJson> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, NewoJson>
+    : null;
+}
+
+function webhookMatches(webhooks: Array<Record<string, NewoJson>>, id: string, url: string): boolean {
+  return webhooks.some((webhook) => webhook.id === id && webhook.url === url);
+}
+
+function safeNewoError(error: unknown): string {
+  const value = error instanceof Error ? error.message : "newo_api_error";
+  return /^newo_[a-z0-9_:.-]+$/.test(value) ? value : "newo_api_error";
 }
 
 function productionScheduleConfigured(env: AppEnv): boolean {

@@ -16,7 +16,7 @@ materials → completion → invoice → review, on a portable owned-data spine.
 |---|---|---|
 | `final-spec-pack/` | **The spec** — 19 numbered chapters (`README.md` is the index). The source of truth for the target system. | Authoritative |
 | `workers-bus/` | **The integration bus** — a Cloudflare Worker (fetch + queue + scheduled) that is the owned data layer + Make-bus replacement. Builds + tests green. | Buildable |
-| `frappe-apps/ironwrap_roofing/` | **Frappe-only operating core**: proprietary custom Frappe app (48 DocTypes: 40 top-level records plus 8 child tables), server policy/RBAC, atomic safety acknowledgement RPC, and a read-only exception-first Control Center. Zero GPL link targets (only Frappe core `User`); ERPNext removed 2026-07-09 for 100% IP. Contract-validated; erpnext-* tool/env naming retained for compatibility. | Buildable |
+| `frappe-apps/ironwrap_roofing/` | **Frappe-only operating core**: proprietary custom Frappe app (50 DocTypes: 42 top-level records plus 8 child tables), server policy/RBAC, atomic safety acknowledgement RPC, and a read-only exception-first Control Center. Zero GPL link targets (only Frappe core `User`); ERPNext removed 2026-07-09 for 100% IP. Contract-validated; erpnext-* tool/env naming retained for compatibility. | Buildable |
 | `mcp/` | **Hermes tool surface** — `ironwrap-bus-mcp` (7 bus tools) and `erpnext-roofing-mcp` (131 role-filtered Frappe tools: 75 reads, 28 dry-runs, 28 approved writes). Frappe writes require bound preview and human-approval receipts. | Buildable |
 | `hermes/` | **Agent runtime layer** — `agents/roles.json` (per-role MCP tool allowlists, source of truth), agent profiles, `mcp-servers.json`, and the `skills/` procedure packs. | Buildable |
 | `config/tenants/` | **White-label tenant configs** — one JSON per contractor (brands, geography, gates, agents), secrets by env-var name only. Validated. | Buildable |
@@ -99,7 +99,7 @@ npx wrangler deploy --dry-run    # validate config + bundle
 ## Working with `hermes/`, `mcp/`, and the validators
 
 ```bash
-node tools/validate-erpnext-doctypes.mjs   # DocType JSON contract (48 DocTypes)
+node tools/validate-erpnext-doctypes.mjs   # DocType JSON contract (50 DocTypes)
 node tools/validate-tenant-config.mjs      # white-label tenant configs, no secrets, isolation
 node tools/validate-hermes-config.mjs      # agent roles vs implemented MCP source inventory + safety contract
 (cd mcp/erpnext-roofing-mcp && npm test)   # pure-logic builders + policy checks

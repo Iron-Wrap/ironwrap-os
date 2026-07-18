@@ -174,9 +174,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     const migrations = (await readdir(new URL("../migrations/", import.meta.url)))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 21);
+    assert.equal(migrations.length, 22);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0021_public_estimate_rate_limits.sql");
+    assert.equal(migrations.at(-1), "0022_newo_reception.sql");
     for (const migration of migrations) {
       db.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -193,7 +193,23 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
          SUM(type = 'trigger') AS triggers
        FROM sqlite_master`,
     ).get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 29, indexes: 49, triggers: 31 });
+    assert.deepEqual({ ...counts }, { tables: 33, indexes: 57, triggers: 31 });
+
+    const newoTables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'newo_%' ORDER BY name",
+    ).all() as Array<{ name: string }>;
+    assert.deepEqual(newoTables.map(({ name }) => name), [
+      "newo_control_actions",
+      "newo_event_receipts",
+      "newo_sessions",
+      "newo_slot_reservations",
+    ]);
+    const receiptColumns = db.prepare("PRAGMA table_info(newo_event_receipts)").all() as Array<{
+      name: string;
+      pk: number;
+    }>;
+    assert.equal(receiptColumns.find(({ name }) => name === "event_id")?.pk, 1);
+    assert.equal(receiptColumns.some(({ name }) => /transcript|recording|payload_json/.test(name)), false);
 
     const scheduleTables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'production_schedule_approval_%' ORDER BY name",

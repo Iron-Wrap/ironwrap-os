@@ -55,6 +55,13 @@ import {
 import { markExpiredExecutionLeases } from "./approval-store.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 import { markExpiredProductionScheduleApprovalExecutionLeases } from "./production-schedule-approval-store.ts";
+import {
+  handleNewoQueueMessage,
+  handleNewoWebhook,
+  type NewoQueueMessage,
+} from "./newo.ts";
+
+type BusQueueMessage = { envelope_id: string } | NewoQueueMessage;
 
 const MAX_BODY_BYTES = 256 * 1024;
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
@@ -83,21 +90,25 @@ export default {
   },
 
   async queue(
-    batch: MessageBatch<{ envelope_id: string }>,
+    batch: MessageBatch<BusQueueMessage>,
     env: Env,
     _ctx: ExecutionContext,
   ): Promise<void> {
     const isDlq = batch.queue.endsWith("-dlq");
     for (const msg of batch.messages) {
       try {
-        if (isDlq) await handleDead(env, msg.body.envelope_id);
+        if ("newo_event_id" in msg.body) {
+          await handleNewoQueueMessage(env, msg.body.newo_event_id, isDlq);
+        } else if (isDlq) await handleDead(env, msg.body.envelope_id);
         else await handlePush(env, msg.body.envelope_id);
         msg.ack();
       } catch (err) {
         log({
           at: "queue",
           queue: batch.queue,
-          envelope_id: msg.body.envelope_id,
+          message_id: "newo_event_id" in msg.body
+            ? msg.body.newo_event_id
+            : msg.body.envelope_id,
           error: String(err),
         });
         msg.retry(); // exhausting retries on the main queue routes to the DLQ (wrangler.jsonc)
@@ -171,7 +182,7 @@ export default {
         ]).then(() => {}),
       ); // the frequent cron
   },
-} satisfies ExportedHandler<Env, { envelope_id: string }>;
+} satisfies ExportedHandler<Env, BusQueueMessage>;
 
 async function routeRequest(
   req: Request,
@@ -254,14 +265,8 @@ async function routeRequest(
       return json({ error: "unauthorized" }, 401);
     return await handleIngest(req, env, ctx, ingest[1]);
   }
-  // Newo uses a static bearer header for webhook delivery. Keep its opaque payload on the
-  // generic phone intake path; no provider-specific event schema is assumed here.
-  if (req.method === "POST" && url.pathname === "/webhook/newo") {
-    if (!env.NEWO_WEBHOOK_TOKEN?.trim())
-      return json({ error: "webhook_not_configured" }, 503);
-    if (!constantTimeEqual(bearer(req), env.NEWO_WEBHOOK_TOKEN))
-      return json({ error: "unauthorized" }, 401);
-    return await handleIngest(req, env, ctx, "phone", "newo");
+  if (url.pathname === "/webhook/newo" || url.pathname.startsWith("/webhook/newo/")) {
+    return await handleNewoWebhook(req, env, ctx, url);
   }
   if (url.pathname.startsWith("/admin/")) {
     if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN))

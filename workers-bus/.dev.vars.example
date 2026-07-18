@@ -5,6 +5,11 @@ INGEST_TOKEN="dev-ingest-token-change-me"
 ADMIN_TOKEN="dev-admin-token-change-me"
 APP_AUTH_PEPPER="replace-with-at-least-32-random-characters"
 
+# Newo credentials stay in Worker secrets. Use separate webhook and booking authorities.
+NEWO_WEBHOOK_TOKEN=""
+NEWO_BOOKING_TOKEN=""
+NEWO_API_KEY=""
+
 # JobNimbus (api1 Bearer key)
 JOBNIMBUS_API_KEY=""
 
@@ -26,6 +31,10 @@ PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER="replace-with-at-least-32-random-characters"
 
 # Local overrides of wrangler.jsonc vars (optional):
 # JOBNIMBUS_ENABLED="false"
+# NEWO_ENABLED="false"
+# NEWO_BOOKING_MODE="request_only"
+# NEWO_CONTROL_WRITE_ENABLED="false"
+# NEWO_OUTBOUND_ENABLED="false"
 # ERPNEXT_ENABLED="false"
 # ERPNEXT_BASE_URL="https://your-site.frappe.cloud"
 # APP_BFF_ENABLED="true"

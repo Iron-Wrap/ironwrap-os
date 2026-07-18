@@ -39,11 +39,16 @@
     { "binding": "RAW", "bucket_name": "ironwrap-bus-raw" }
   ],
 
-  // JobNimbus push pipeline. Create with:
+  // JobNimbus bridge plus the independently retried Newo-to-owned-core pipeline. Create with:
   //   wrangler queues create ironwrap-jn-push
   //   wrangler queues create ironwrap-jn-dlq
+  //   wrangler queues create ironwrap-newo-events
+  //   wrangler queues create ironwrap-newo-dlq
   "queues": {
-    "producers": [{ "binding": "JN_QUEUE", "queue": "ironwrap-jn-push" }],
+    "producers": [
+      { "binding": "JN_QUEUE", "queue": "ironwrap-jn-push" },
+      { "binding": "NEWO_QUEUE", "queue": "ironwrap-newo-events" }
+    ],
     "consumers": [
       {
         "queue": "ironwrap-jn-push",
@@ -52,7 +57,15 @@
         "max_batch_timeout": 5,
         "dead_letter_queue": "ironwrap-jn-dlq"
       },
-      { "queue": "ironwrap-jn-dlq", "max_retries": 1 }
+      { "queue": "ironwrap-jn-dlq", "max_retries": 1 },
+      {
+        "queue": "ironwrap-newo-events",
+        "max_retries": 5,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "dead_letter_queue": "ironwrap-newo-dlq"
+      },
+      { "queue": "ironwrap-newo-dlq", "max_retries": 1 }
     ]
   },
 
@@ -60,7 +73,8 @@
   "triggers": { "crons": ["*/5 * * * *", "0 14 * * *"] },
 
   // Non-secret config. Secrets go only via `wrangler secret put`:
-  //   INGEST_TOKEN, ADMIN_TOKEN, NEWO_WEBHOOK_TOKEN, JOBNIMBUS_API_KEY, GOOGLE_SERVICE_ACCOUNT_JSON,
+  //   INGEST_TOKEN, ADMIN_TOKEN, NEWO_WEBHOOK_TOKEN, NEWO_API_KEY, NEWO_BOOKING_TOKEN,
+  //   JOBNIMBUS_API_KEY, GOOGLE_SERVICE_ACCOUNT_JSON,
   //   QB_WEBHOOK_TOKEN, ERPNEXT_API_KEY, ERPNEXT_API_SECRET, APP_AUTH_PEPPER,
   //   PUBLIC_ESTIMATE_TURNSTILE_SECRET, PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER,
   //   APPROVAL_BROKER_SHARED_SECRET, QUOTE_REVISION_BROKER_SHARED_SECRET,
@@ -75,6 +89,14 @@
     "BACKUP_ALERT_EMAIL": "sales@ironwrapexteriors.com",
     "FROM_EMAIL": "sales@ironwrapexteriors.com",
     "JOBNIMBUS_ENABLED": "true",
+    "NEWO_ENABLED": "false",
+    "NEWO_CONTROL_WRITE_ENABLED": "false",
+    "NEWO_BOOKING_MODE": "request_only",
+    "NEWO_OUTBOUND_ENABLED": "false",
+    "NEWO_API_BASE_URL": "https://api.newo.ai",
+    "NEWO_PROJECT_ID": "",
+    "NEWO_AGENT_ID": "",
+    "NEWO_BOOKING_HORIZON_DAYS": "30",
     "JN_CONTACT_RECORD_TYPE": "Customer",
     "JN_CONTACT_STATUS": "New",
     "JN_JOB_RECORD_TYPE": "Retail",

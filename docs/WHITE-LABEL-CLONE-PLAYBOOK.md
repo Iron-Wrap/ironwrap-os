@@ -84,7 +84,7 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    (own database, own users). Never install the erpnext app; the site is Frappe-only.
 2. Install the custom app: `bench get-app frappe-apps/ironwrap_roofing` then
    `bench --site <tenant-site> install-app ironwrap_roofing`.
-3. Sanity: `node tools/validate-erpnext-doctypes.mjs` in the repo confirms the 48-DocType
+3. Sanity: `node tools/validate-erpnext-doctypes.mjs` in the repo confirms the 50-DocType
    pack shape; on the site, confirm the IronWrap Roofing DocTypes exist.
 4. Create a tenant-scoped API key/secret pair for the bus, plus a separate pair for every
    Hermes MCP actor. Each MCP pair must be issued to exactly that process's

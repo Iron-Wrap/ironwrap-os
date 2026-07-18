@@ -144,6 +144,26 @@ const specs = [
     requiredFields: ["estimate_session_id", "lead_envelope", "roof_job", "source", "service_type", "status", "range_low", "range_high", "estimate_total", "configurator_url", "confidence", "review_required", "assumptions", "exclusions", "selected_services_json", "material_choices_json", "payload_json"],
   },
   {
+    name: "Reception Session",
+    dir: "reception_session",
+    idField: "session_id",
+    requiredFields: ["session_id", "provider", "provider_project_id", "provider_agent_id", "provider_user_actor_id", "provider_conversation_id", "channel", "direction", "session_status", "outcome", "lead_envelope", "roofing_property", "roof_job", "contact_name", "contact_phone", "contact_email", "address_line1", "city", "province", "postal_code", "division", "service", "urgency", "handoff_status", "booking_status", "structured_summary", "transcript_pointer", "recording_pointer", "ai_disclosed", "recording_disclosed", "raw_key", "payload_hash", "structured_json", "started_at", "ended_at", "duration_seconds", "provider_updated_at"],
+    fieldContracts: {
+      structured_json: { fieldtype: "Code", options: "JSON", reqd: 1, read_only: 1 },
+      payload_hash: { fieldtype: "Data", reqd: 1, read_only: 1 },
+    },
+  },
+  {
+    name: "Appointment Request",
+    dir: "appointment_request",
+    idField: "appointment_request_id",
+    requiredFields: ["appointment_request_id", "reception_session", "lead_envelope", "roof_job", "request_status", "booking_mode", "provider", "provider_status", "contact_name", "contact_phone", "contact_email", "service", "division", "urgency", "preferred_windows_json", "timezone", "requested_at", "reviewed_by", "reviewed_at", "review_notes", "decision_by", "decision_at", "decision_notes", "confirmed_external_id", "confirmed_start", "confirmed_end", "cancelled_at", "raw_key", "payload_hash"],
+    fieldContracts: {
+      preferred_windows_json: { fieldtype: "Code", options: "JSON", reqd: 1 },
+      payload_hash: { fieldtype: "Data", reqd: 1, read_only: 1 },
+    },
+  },
+  {
     name: "Evidence Item",
     dir: "evidence_item",
     idField: "evidence_id",
@@ -649,12 +669,12 @@ const discoveredDirs = readdirSync(doctypePath, { withFileTypes: true })
   .filter((dir) => existsSync(join(doctypePath, dir, `${dir}.json`)))
   .sort();
 
-assert.equal(specs.length, 48, "the product contract must contain exactly 48 DocTypes");
+assert.equal(specs.length, 50, "the product contract must contain exactly 50 DocTypes");
 assert.equal(specs.filter((spec) => spec.child).length, 8, "expected eight child-table DocTypes");
-assert.equal(specs.filter((spec) => !spec.child).length, 40, "expected 40 top-level DocTypes");
+assert.equal(specs.filter((spec) => !spec.child).length, 42, "expected 42 top-level DocTypes");
 assert.equal(new Set(specs.map((spec) => spec.name)).size, specs.length, "duplicate DocType name in validator");
 assert.equal(new Set(expectedDirs).size, specs.length, "duplicate DocType directory in validator");
-assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 46-type product contract");
+assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 50-type product contract");
 
 const pythonContracts = readPythonContracts();
 assert.deepEqual(
@@ -907,4 +927,4 @@ function validateRuntimeWiring() {
   assert.match(adapter, /def\s+deny_business_document_delete\s*\(/, "append-only delete guard is missing");
 }
 
-console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (40 top-level + 8 child)`);
+console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (42 top-level + 8 child)`);

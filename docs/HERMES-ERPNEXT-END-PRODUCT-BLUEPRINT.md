@@ -74,11 +74,11 @@ mutates accounting.
 Frappe-only checkpoint (updated 2026-07-12): the ERPNext (GPL-3.0) dependency is removed for 100% IP
 ownership. `ironwrap_roofing` now deploys on a plain Frappe site (never install the erpnext app)
 and is proprietary IronWrap IP on the MIT Frappe framework. The app carries the complete
-48-DocType blueprint: 40 top-level business/audit objects plus eight child tables. The latest
+50-DocType blueprint: 42 top-level business/audit objects plus eight child tables. The latest
 operating objects are Crew Profile, Job Assignment, Change Order, Safety Plan, Job Compliance
 Record, Communication Consent, Customer Decision, Contract Acceptance, Integration Reconciliation,
 Tenant Export Run, Insurance Supplement, Crew Member, Change Order Item, Safety Acknowledgement,
-and Insurance Supplement Evidence. Every top-level DocType uses a shared
+Insurance Supplement Evidence, Reception Session, and Appointment Request. Every top-level DocType uses a shared
 server-side policy adapter; identities/evidence have immutable or write-once rules; approvals,
 production, proposal, supplier, and closeout transitions fail closed; and site-local roles are
 installed from a least-privilege matrix with delete disabled. Frappe core `User` remains the only
@@ -452,10 +452,12 @@ Custom DocTypes:
 | Contract Acceptance | Provider/customer acceptance evidence; strictly read-only to Hermes |
 | Integration Reconciliation | Evidence-backed mirror discrepancy and resolution record |
 | Tenant Export Run | Requested export audit record; archive/key creation is separate |
+| Reception Session | Provider-neutral call/chat state, structured outcome, disclosure facts, and media pointers |
+| Appointment Request | Request-only or proven confirmed appointment lifecycle owned by IronWrap |
 
 The eight child-table DocTypes are Measurement Value, Material Takeoff Item, Supplier Quote Item,
 Supplier Order Item, Crew Member, Change Order Item, Safety Acknowledgement, and Insurance
-Supplement Evidence. Repository validation requires exactly these 48 DocTypes, exact field
+Supplement Evidence. Repository validation requires exactly these 50 DocTypes, exact field
 contracts, shared controllers for every top-level object, owned/Frappe-core Link targets only, and
 the canonical role matrix.
 
@@ -716,7 +718,7 @@ Repository support means code/contracts/tests exist. It is not the same as a pas
 | --- | --- | --- | --- |
 | 0 | Source truth | Documented and contract-validated | Reconcile Cloudflare, Frappe, Hermes, QB, Drive, bridge, and admin inventory |
 | 1 | Intake spine | Worker route/storage/consumer/reconcile tests exist | One real source lands in R2, D1, Frappe, audit, ack, and bridge with zero gap |
-| 2 | Operating core | 48 DocTypes, shared policy/RBAC, atomic safety append, and packaging tests exist | Install/migrate on plain Frappe; role-specific fixture workflow passes |
+| 2 | Operating core | 50 DocTypes, shared policy/RBAC, atomic safety append, and packaging tests exist | Install/migrate on plain Frappe; role-specific fixture workflow passes |
 | 3 | Read-only Hermes | Eight roles and 139-tool inventory validate | Hermes answers owner questions from live bus/Frappe truth with zero writes |
 | 4 | Approved-write Hermes | Dry-run/receipt/approval, single-claim idempotency, verified evidence, actor scope, and audit-failure tests exist | One approved live mutation has complete Hermes Run, receipt, and replay-safe proof |
 | 5 | Instant estimate parity | Owned idempotent ingest/session contract exists | Public widget, range policy, consent, owner follow-up, and estimator review pass |
@@ -766,7 +768,7 @@ The artificial blockers below are collapsed in
 | Topic | Current Decision |
 | --- | --- |
 | ERPNext customization path | Frappe-only custom app; ERPNext removed entirely (2026-07-09) for 100% IP ownership. Never install the erpnext app. |
-| Roofing record model | Exactly 48 owned DocTypes: 40 top-level objects plus eight child tables; the only non-custom Link target is Frappe core User. |
+| Roofing record model | Exactly 50 owned DocTypes: 42 top-level objects plus eight child tables; the only non-custom Link target is Frappe core User. |
 | Bus-to-Frappe sync | Worker/D1/R2 remains front door and source spine; the Frappe site consumes idempotent mirrors (`erpnext-*` names retained for compatibility). |
 | Hermes boundary | Read-only first, draft second, narrow approved-write third; no raw SQL/API freestyle writes. |
 | Measurement proof | Use the existing `/ingest/measurement` route and sample files; add deterministic extraction before OCR. |

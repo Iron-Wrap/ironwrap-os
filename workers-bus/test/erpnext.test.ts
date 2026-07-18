@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pushToErpNext, syncLeadTransportToErpNext } from "../src/erpnext.ts";
+import {
+  pushNewoSessionToErpNext,
+  pushToErpNext,
+  syncLeadTransportToErpNext,
+} from "../src/erpnext.ts";
 import type { EnvelopeRecord } from "../src/core.ts";
+import type { NewoSessionRecord } from "../src/newo-store.ts";
 
 const rec: EnvelopeRecord = {
   envelope_id: "ow_11111111-1111-4111-8111-111111111111",
@@ -331,6 +336,101 @@ test("pushToErpNext: mirrors explicit public-estimator follow-up consent with ra
   assert.ok(consents.every((consent) => consent.consent_basis === "Express"));
   assert.ok(consents.every((consent) => consent.captured_by === "worker@ironwrapexteriors.com"));
   assert.ok(consents.every((consent) => consent.proof_evidence === "EVI-PUBLIC-CONSENT-1"));
+});
+
+test("pushNewoSessionToErpNext keeps appointment review state human-owned on retries", async (t) => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    if (url.includes("/api/resource/Reception%20Session?")) {
+      return json({ data: [{ name: "RS-session-001" }] });
+    }
+    if (url.endsWith("/api/resource/Reception%20Session/RS-session-001")) {
+      return json({ data: { name: "RS-session-001" } });
+    }
+    if (url.includes("/api/resource/Appointment%20Request?")) {
+      return json({ data: [{ name: "AR-request-001" }] });
+    }
+    if (url.endsWith("/api/resource/Appointment%20Request/AR-request-001")) {
+      return json({ data: { name: "AR-request-001" } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const session: NewoSessionRecord = {
+    session_id: "session-001",
+    project_id: "project-001",
+    agent_id: "agent-001",
+    user_actor_id: "actor-001",
+    conversation_id: "conversation-001",
+    channel: "phone",
+    direction: "inbound",
+    status: "appointment_requested",
+    outcome: "lead_captured",
+    contact_name: "Newo Caller",
+    contact_phone: "+15875557788",
+    contact_email: "caller@example.com",
+    address_line1: "123 Main Street",
+    city: "Edmonton",
+    province: "AB",
+    postal_code: "T5J 0N3",
+    division: "residential",
+    service: "Metal roof quote",
+    urgency: "routine",
+    lead_envelope_id: rec.envelope_id,
+    appointment_request_id: "request-001",
+    handoff_status: null,
+    booking_status: "requested",
+    summary: "Appointment request received.",
+    transcript_ref: "newo:transcript:session-001",
+    recording_ref: null,
+    ai_disclosed: 1,
+    recording_disclosed: 0,
+    structured_json: JSON.stringify({
+      appointment: {
+        preferred_windows: [{ start: "2026-07-21T16:00:00.000Z", end: null }],
+        timezone: "America/Edmonton",
+      },
+    }),
+    raw_key: "raw/newo/events/2026-07-18/event-001.json",
+    payload_hash: "a".repeat(64),
+    started_at: "2026-07-18T18:00:00.000Z",
+    ended_at: null,
+    duration_seconds: null,
+    sync_status: "pending",
+    sync_attempts: 0,
+    last_error: null,
+    created_at: "2026-07-18T18:00:00.000Z",
+    updated_at: "2026-07-18T18:01:00.000Z",
+  };
+
+  const result = await pushNewoSessionToErpNext({
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
+    NEWO_BOOKING_MODE: "request_only",
+  } as never, session, { leadEnvelopeName: "LE-0001", roofJobName: "RJ-0001" });
+
+  assert.deepEqual(result, {
+    receptionSessionName: "RS-session-001",
+    appointmentRequestName: "AR-request-001",
+  });
+  const appointmentUpdate = calls.find((call) =>
+    call.url.endsWith("/api/resource/Appointment%20Request/AR-request-001"),
+  );
+  assert.ok(appointmentUpdate);
+  const body = JSON.parse(String(appointmentUpdate.init.body));
+  assert.equal(body.provider_status, "requested");
+  assert.deepEqual(JSON.parse(body.preferred_windows_json), [
+    { start: "2026-07-21T16:00:00.000Z", end: null },
+  ]);
+  for (const humanOwned of [
+    "request_status", "booking_mode", "reviewed_by", "reviewed_at", "review_notes",
+    "decision_by", "decision_at", "decision_notes", "confirmed_external_id",
+  ]) {
+    assert.equal(Object.hasOwn(body, humanOwned), false, `${humanOwned} must remain human-owned`);
+  }
 });
 
 function json(body: unknown): Response {

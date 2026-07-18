@@ -14,7 +14,7 @@ capability only.
 
 | Layer | State |
 | --- | --- |
-| Frappe operating core | 48 DocTypes (40 top + 8 child), the blueprint's full record model, contract-validated |
+| Frappe operating core | 50 DocTypes (42 top + 8 child), the blueprint's full record model, contract-validated |
 | Worker bus | Intake/dedup/dead-letter/reconcile, geometry-verified measurements, `/health` `/ready` `/admin/status` |
 | Hermes agent layer | 8 runtime-filtered roles, 139 MCP tools, receipt-bound approved-write contract |
 | Deploy/ops | Contract-validated production configuration, pinned runtime lock, encrypted Frappe/D1 recovery, launch runbook |

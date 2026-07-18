@@ -1,7 +1,7 @@
 # Hermes/Frappe Proof Pack
 
 Status: repository proof packet; no live deployment claim.
-Date: 2026-07-08. Updated 2026-07-12: 48-DocType Frappe-only application, atomic safety acknowledgement,
+Date: 2026-07-08. Updated 2026-07-18: 50-DocType Frappe-only application, atomic safety acknowledgement,
 runtime-governed MCP writes, Field Companion PWA, and pinned deployment/recovery contract.
 
 This collapses the artificial blockers from the Hermes/ERPNext blocker audit.
@@ -37,7 +37,7 @@ is never installed. ERPNext was removed 2026-07-09 for 100% IP ownership; the ap
 IronWrap IP on the MIT Frappe framework, with fixtures committed as DocType JSON. The only
 non-custom Link target is Frappe core `User`.
 
-Exactly 48 DocTypes are committed: 40 top-level objects and eight child tables.
+Exactly 50 DocTypes are committed: 42 top-level objects and eight child tables.
 
 | DocType | Kind | Purpose / principal links |
 | --- | --- | --- |
@@ -155,7 +155,7 @@ Current implementation checkpoint:
 - Production gate bootstrap: Roof Job sync creates missing `Production Gate State`
   rows for Deposit, Materials, Safety, Access, Weather, Crew, and Completion.
   Existing rows are not overwritten on retry.
-- Domain spine (2026-07-12): all 48 DocTypes are exact-contract validated. Review Requests apply
+- Domain spine (2026-07-18): all 50 DocTypes are exact-contract validated. Review Requests apply
   deterministic completion/payment/consent stops; Communication Events apply CASL-style consent
   and quiet hours and remain record-only; field intake accepts voice notes/transcripts as Evidence
   Items; supplier, proposal, production, and closeout transitions validate upstream evidence.

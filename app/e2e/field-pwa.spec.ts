@@ -106,7 +106,9 @@ test.describe("Field Companion PWA acceptance", () => {
 
     await page.goto("/today");
 
-    await expect(page.getByRole("heading", { name: "Sign in to IronWrap OS" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Pair this Field Companion device" }),
+    ).toBeVisible();
     await expect(page.getByRole("heading", { name: "Run sheet" })).toHaveCount(0);
     expect(bootstrapRequests).toEqual([{ deviceProof: undefined }]);
   });
@@ -117,7 +119,9 @@ async function seedPairedFieldDevice(
   proof = "a".repeat(43),
 ) {
   await page.goto("/today");
-  await expect(page.getByRole("heading", { name: "Sign in to IronWrap OS" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Pair this Field Companion device" }),
+  ).toBeVisible();
   await page.evaluate(async (deviceProof) => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open("ironwrap-os");

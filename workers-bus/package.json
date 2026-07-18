@@ -16,7 +16,7 @@
     "db:migrate": "wrangler d1 migrations apply ironwrap-bus --remote"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
+    "typescript": "^7.0.2",
     "wrangler": "^4.112.0"
   }
 }

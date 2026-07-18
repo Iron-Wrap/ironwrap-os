@@ -287,7 +287,7 @@ const fixtureEstimatorWorkbench = {
       },
       roof_graph: {
         state: "needs_review",
-        revision: "roof-graph/v1",
+        revision: "roof_graph/v1",
         source: "Captured measurement drawing",
         provider: "AppliCad",
         confidence: 87,

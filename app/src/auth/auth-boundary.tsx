@@ -10,10 +10,11 @@ import { SessionProvider } from "./session-context";
 import { sessionQueryKey } from "./session-query";
 
 export function AuthBoundary({ children }: { children: ReactNode }) {
-  const fieldEntry = isPrimaryFieldEntry();
+  const primaryFieldEntry = isPrimaryFieldEntry();
+  const fieldCompanionPath = isFieldCompanionPath();
   const sessionQuery = useQuery({
     queryKey: sessionQueryKey,
-    queryFn: () => (fieldEntry ? takePrimedFieldBootstrap() : fetchSessionOnly()),
+    queryFn: () => (primaryFieldEntry ? takePrimedFieldBootstrap() : fetchSessionOnly()),
     staleTime: 60_000,
     retry(failureCount, error) {
       return error instanceof ApiError && error.status === 0 && failureCount < 1;
@@ -45,6 +46,11 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
             title="This field device needs a new pairing"
             message="Its trusted device session is no longer active. Ask the office to issue a fresh QR code before using Field Companion again."
           />
+        ) : fieldCompanionPath ? (
+          <ErrorState
+            title="Pair this Field Companion device"
+            message="Field work opens only after the office issues a one-time QR code. Ask an owner or operations teammate to open Settings, then Crew devices, and scan a fresh code on this device."
+          />
         ) : (
           <MagicLinkForm />
         )}
@@ -64,4 +70,15 @@ async function fetchSessionOnly(): Promise<FieldBootstrap> {
 
 function isPrimaryFieldEntry(): boolean {
   return typeof window !== "undefined" && window.location.pathname === "/today";
+}
+
+function isFieldCompanionPath(): boolean {
+  if (typeof window === "undefined") return false;
+  const { pathname } = window.location;
+  return (
+    pathname === "/" ||
+    pathname === "/today" ||
+    pathname.startsWith("/jobs/") ||
+    pathname.startsWith("/check-in")
+  );
 }

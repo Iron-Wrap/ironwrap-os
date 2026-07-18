@@ -262,12 +262,12 @@ Archive only redacted request ids and the release evidence.
 
 ## 8. Configure Hermes And MCP
 
-Install Hermes at the tag and commit in `deploy/runtime-lock.json`. Register only the two MCP
+Install Hermes at the tag and commit in `deploy/runtime-lock.json`. Register only the three MCP
 servers in `hermes/mcp-servers.json`; role tool filters come from
 `hermes/agents/roles.json`. MCP base URLs must be production HTTPS URLs. Plain HTTP is accepted
 only for explicit localhost development.
 
-Keep both write flags false for the first read-only smoke test:
+Keep the Frappe, bus, and Newo MCP/Worker write flags false for the first read-only smoke test:
 
 ```bash
 node tools/validate-hermes-config.mjs

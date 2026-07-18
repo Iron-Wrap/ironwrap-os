@@ -17,7 +17,7 @@ materials → completion → invoice → review, on a portable owned-data spine.
 | `final-spec-pack/` | **The spec** — 19 numbered chapters (`README.md` is the index). The source of truth for the target system. | Authoritative |
 | `workers-bus/` | **The integration bus** — a Cloudflare Worker (fetch + queue + scheduled) that is the owned data layer + Make-bus replacement. Builds + tests green. | Buildable |
 | `frappe-apps/ironwrap_roofing/` | **Frappe-only operating core**: proprietary custom Frappe app (50 DocTypes: 42 top-level records plus 8 child tables), server policy/RBAC, atomic safety acknowledgement RPC, and a read-only exception-first Control Center. Zero GPL link targets (only Frappe core `User`); ERPNext removed 2026-07-09 for 100% IP. Contract-validated; erpnext-* tool/env naming retained for compatibility. | Buildable |
-| `mcp/` | **Hermes tool surface** — `ironwrap-bus-mcp` (7 bus tools) and `erpnext-roofing-mcp` (131 role-filtered Frappe tools: 75 reads, 28 dry-runs, 28 approved writes). Frappe writes require bound preview and human-approval receipts. | Buildable |
+| `mcp/` | **Hermes tool surface** — `ironwrap-bus-mcp` (8 tools), `erpnext-roofing-mcp` (131 role-filtered Frappe tools: 75 reads, 28 dry-runs, 28 approved writes), and `newo-mcp` (20 bounded Worker-backed tools: 17 reads, 1 dry-run, 2 approved actions). Frappe and Newo writes require bound preview and human-approval receipts. | Buildable |
 | `hermes/` | **Agent runtime layer** — `agents/roles.json` (per-role MCP tool allowlists, source of truth), agent profiles, `mcp-servers.json`, and the `skills/` procedure packs. | Buildable |
 | `config/tenants/` | **White-label tenant configs** — one JSON per contractor (brands, geography, gates, agents), secrets by env-var name only. Validated. | Buildable |
 | `deploy/` | **Launch kit** (free-tier path): app-repo split script, frappe_docker apps.json template, Cloudflare Tunnel config, R2 backup cron script, env inventory. Runbook: `docs/LAUNCH-RUNBOOK.md`; live-spine proof: `tools/launch-proof.mjs`. | Buildable |
@@ -104,6 +104,7 @@ node tools/validate-tenant-config.mjs      # white-label tenant configs, no secr
 node tools/validate-hermes-config.mjs      # agent roles vs implemented MCP source inventory + safety contract
 (cd mcp/erpnext-roofing-mcp && npm test)   # pure-logic builders + policy checks
 (cd mcp/ironwrap-bus-mcp && npm test)      # bus read/replay wrappers
+(cd mcp/newo-mcp && npm test)              # role-filtered Newo Worker/control wrappers
 ```
 - **Hermes is the operating brain, not the database.** It reads broadly and writes only through
   narrow approved-command tools. `hermes/agents/roles.json` is the source of truth for which MCP
@@ -111,11 +112,14 @@ node tools/validate-hermes-config.mjs      # agent roles vs implemented MCP sour
   exists and that no approved-write tool is granted without its `dry_run` counterpart in the same
   role (the read → dry_run → approval → write → audit contract cannot be skipped).
 - **The mutation contract is universal:** `read → propose → dry_run → policy_check →
-  human_approval → write → audit_event`. No tool sends a customer message or mutates accounting;
-  comms and review requests are record-only, and every approved write records a `Hermes Run` row.
+  human_approval → write → audit_event`. No tool mutates accounting. Frappe comms and review
+  requests are record-only; Newo customer sends are owner-only and require exact receipts plus
+  `NEWO_OUTBOUND_ENABLED=true`. Frappe writes record `Hermes Run`; Newo writes record D1 control
+  evidence and bus audit rows.
 - Frappe approved writes are double-gated: `ERPNEXT_WRITE_ENABLED=true` **plus** a current
   server-issued `dry_run_receipt` and separately signed `approval_receipt` bound to role, actor,
   approver, site, and exact args. Bus replay retains its separate `HERMES_WRITE_TOKEN` gate.
+  Newo mutations require the exact dry-run and one-time approval receipts plus MCP/Worker write gates.
   Skill packs live in `hermes/skills/`.
 
 ## Conventions & guardrails

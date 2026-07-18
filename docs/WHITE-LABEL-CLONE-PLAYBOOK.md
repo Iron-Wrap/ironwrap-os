@@ -120,6 +120,9 @@ Run tenant-dedicated MCP server processes with tenant-only env:
   `HERMES_APPROVAL_PUBLIC_KEY_FILE`.
 - `mcp/ironwrap-bus-mcp`: `IRONWRAP_BUS_BASE_URL`, `IRONWRAP_ADMIN_TOKEN`,
   `IRONWRAP_BUS_WRITE_ENABLED`, `IRONWRAP_BUS_WRITE_TOKEN`.
+- `mcp/newo-mcp`: `IRONWRAP_BUS_BASE_URL`, `IRONWRAP_ADMIN_TOKEN`,
+  `NEWO_MCP_WRITE_ENABLED`, and no provider API key. The tenant Worker owns the Newo key,
+  signed receipt ledger, control gates, and provider calls.
 
 Defaults for a new tenant: write flags off (`ERPNEXT_WRITE_ENABLED` unset/false) until the
 tenant passes the approved-write proof. `HERMES_DRY_RUN_SIGNING_KEY` is unique per tenant and the
@@ -158,12 +161,12 @@ Gate 11 (blueprint): "A second demo company runs with separate brand/config/data
 
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
-- [ ] All 21 D1 migrations through `0021_public_estimate_rate_limits.sql` applied to the tenant database.
+- [ ] All 24 D1 migrations through `0024_newo_control_evidence.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
   and `ironwrap_field_evidence_issuer_user` bound to that dedicated Worker user.
 - [ ] Tenant Shared Drives + R2 bucket receive a test job's files.
 - [ ] Tenant QuickBooks webhook verified (signature accepted on `POST /webhook/quickbooks`).
-- [ ] Tenant Hermes profile answers a read-only question from tenant data via both MCP servers.
+- [ ] Tenant Hermes profile answers a read-only question from tenant data via all granted MCP servers.
 - [ ] A test lead flows source -> bus envelope -> tenant ERPNext record -> tenant-branded ack email.
 - [ ] All 8 tenant-leakage checks above pass.
 - [ ] No secret value appears in the repo, the tenant config, or this checklist's evidence.

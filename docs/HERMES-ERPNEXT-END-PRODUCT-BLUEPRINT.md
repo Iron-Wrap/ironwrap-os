@@ -68,8 +68,9 @@ with a human-readable profile per role, the launch/tool-filter manifest `hermes/
 and the eleven skill packs under `hermes/skills/`. `tools/validate-hermes-config.mjs` proves the
 roles and the manifest against the implemented MCP source inventory and enforces the safety contract at
 config level: every referenced tool exists, buckets are correctly typed, and no approved-write tool
-is granted without its `dry_run` counterpart in the same role. No tool sends a customer message or
-mutates accounting.
+is granted without its `dry_run` counterpart in the same role. No tool mutates accounting. Newo
+customer sends are owner-only and remain blocked unless exact receipts and the separate outbound
+gate are enabled.
 
 Frappe-only checkpoint (updated 2026-07-12): the ERPNext (GPL-3.0) dependency is removed for 100% IP
 ownership. `ironwrap_roofing` now deploys on a plain Frappe site (never install the erpnext app)
@@ -526,8 +527,9 @@ Build narrow MCP servers, not one giant god tool.
 
 | MCP server | Repository state | Capability boundary |
 | --- | --- | --- |
-| `ironwrap-bus-mcp` | Implemented: 7 tools | Read readiness/status/envelopes/dead letters; preview and request one targeted replay. No bulk Hermes replay |
+| `ironwrap-bus-mcp` | Implemented: 8 tools | Read readiness/status/envelopes/dead letters/measurement exceptions; preview and request one targeted replay. No bulk Hermes replay |
 | `erpnext-roofing-mcp` | Implemented under compatibility name: 131 tools | 75 bounded reads plus 28 dry-run/request pairs across job, proof, estimator, price-rule provenance, insurance supplement, production, safety, compliance, consent, customer-decision, lead triage, reconciliation, export, closeout, comms, and market truth; runtime role/actor filtering is enforced in-server |
+| `newo-mcp` | Implemented: 20 tools | 17 bounded Worker-backed reads plus exact-argument preview, human approval, and one-time signed-receipt execution. No provider API key or raw proxy; outbound remains separately gated |
 | `evidence-mcp` | Planned split | Evidence search, packet assembly, and approved attachment only |
 | `measurement-mcp` | Planned split | Deterministic parsing/comparison and review flags |
 | `instant-estimate-mcp` | Planned split | Range/qualification drafts and quote-review request |
@@ -538,7 +540,7 @@ Build narrow MCP servers, not one giant god tool.
 | `tenant-admin-mcp` | Planned split | Tenant readiness and clone dry-run; no cross-tenant data access |
 
 `tools/validate-hermes-config.mjs` currently validates all eight roles and the launch manifest
-against 139 implemented tools. It also rejects an approved-write grant that lacks the matching
+against 159 implemented tools. It also rejects an approved-write grant that lacks the matching
 dry-run grant in the same role and verifies the runtime receipt/role/evidence enforcement seams.
 
 Mutation pattern:
@@ -547,7 +549,8 @@ Mutation pattern:
 read -> propose -> dry_run -> policy_check -> human_approval -> write -> audit_event
 ```
 
-No direct free-form writes to Frappe, QuickBooks, Drive, or customer channels. Each approved
+No direct free-form writes to Frappe, QuickBooks, Drive, or customer channels. Newo customer sends
+exist only as enumerated owner actions behind exact receipts and the disabled-by-default outbound gate. Each approved
 Frappe request requires a stable `run_id`. Completed runs replay their stored result. A target
 mutation followed by audit-finalization failure becomes `Audit Failed`, not a false success, and
 must carry incident/correlation/result evidence for reconciliation.
@@ -719,7 +722,7 @@ Repository support means code/contracts/tests exist. It is not the same as a pas
 | 0 | Source truth | Documented and contract-validated | Reconcile Cloudflare, Frappe, Hermes, QB, Drive, bridge, and admin inventory |
 | 1 | Intake spine | Worker route/storage/consumer/reconcile tests exist | One real source lands in R2, D1, Frappe, audit, ack, and bridge with zero gap |
 | 2 | Operating core | 50 DocTypes, shared policy/RBAC, atomic safety append, and packaging tests exist | Install/migrate on plain Frappe; role-specific fixture workflow passes |
-| 3 | Read-only Hermes | Eight roles and 139-tool inventory validate | Hermes answers owner questions from live bus/Frappe truth with zero writes |
+| 3 | Read-only Hermes | Eight roles and 159-tool inventory validate | Hermes answers owner questions from live bus/Frappe/Newo truth with zero provider writes |
 | 4 | Approved-write Hermes | Dry-run/receipt/approval, single-claim idempotency, verified evidence, actor scope, and audit-failure tests exist | One approved live mutation has complete Hermes Run, receipt, and replay-safe proof |
 | 5 | Instant estimate parity | Owned idempotent ingest/session contract exists | Public widget, range policy, consent, owner follow-up, and estimator review pass |
 | 6 | Proposal proof | Evidence/takeoff/options/scope/quote/proposal records and tools exist | Customer-quality renderer plus selected e-sign path complete one signed packet |

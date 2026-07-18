@@ -142,8 +142,9 @@ Current implementation checkpoint:
   replay requires exact hard confirmation and is unavailable to Hermes. The replay-request ledger
   makes an exact completed `run_id` retry read-only, rejects changed intent/approver/reason, exposes
   concurrent in-progress requests, and permits safe retry of a failed rolled-back request.
-- MCP wrappers: `mcp/ironwrap-bus-mcp` exposes 8 tools and `mcp/erpnext-roofing-mcp` exposes 129;
-  the role/manifest validator currently proves 137 implemented tools across eight roles.
+- MCP wrappers: `mcp/ironwrap-bus-mcp` exposes 8 tools, `mcp/erpnext-roofing-mcp` exposes 131,
+  and `mcp/newo-mcp` exposes 20; the role/manifest validator proves 159 implemented tools across
+  eight roles with no provider key or raw Newo proxy in the MCP process.
 - Measurement bridge: `/ingest/measurement` now stores raw input first, then
   mirrors parsed report metadata and child measurement values into Frappe
   `Measurement Report` plus a linked `Evidence Item` when `ERPNEXT_ENABLED=true`.

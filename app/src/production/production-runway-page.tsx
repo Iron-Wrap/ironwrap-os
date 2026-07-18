@@ -415,9 +415,19 @@ function RunwayJobCard({
       </div>
 
       {job.material_attention.length > 0 ? (
-        <p className="mt-3 text-sm leading-6 text-danger">
-          Material attention: {job.material_attention.map((item) => item.status).join(", ")}.
-        </p>
+        <section className="mt-3 border-l-2 border-danger pl-3" aria-label="Material attention">
+          <p className="text-sm font-semibold text-danger">Material attention</p>
+          <ul className="mt-1 space-y-1 text-sm leading-6 text-danger">
+            {job.material_attention.map((item, index) => (
+              <li key={`${item.status}:${item.requested_delivery_date ?? "unknown"}:${index}`}>
+                <span className="font-semibold">
+                  {item.status} · Requested delivery:{" "}
+                  {formatDeliveryDate(item.requested_delivery_date, locale)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
       <p className="mt-3 text-sm leading-6 text-muted">{job.next_action}</p>
     </article>
@@ -482,6 +492,33 @@ function formatDateTime(value: string | null, locale: string, timeZone: string):
       hour: "numeric",
       minute: "2-digit",
     }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+function formatDeliveryDate(value: string | null, locale: string): string {
+  if (!value) return "Delivery date unavailable";
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return "Delivery date unavailable";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return "Delivery date unavailable";
+  }
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      timeZone: "UTC",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(date);
   } catch {
     return value;
   }

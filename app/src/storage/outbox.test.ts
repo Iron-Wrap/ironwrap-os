@@ -8,13 +8,17 @@ import {
   assertTransition,
   claimNextQueuedAction,
   getOutboxAction,
+  getOutboxActionsNeedingAttention,
   getOutboxActionWithBlobs,
+  isOutboxActionSafeToRetry,
+  markOutboxNeedsAttention,
   markOutboxVerified,
   OUTBOX_UPLOAD_LEASE_MS,
   queueOutboxAction,
   recoverResumableOutboxActions,
   renewOutboxUploadLease,
   requeueOutboxAction,
+  retryOutboxAction,
   saveOutboxAction,
   transitionOutboxAction,
 } from "./outbox";
@@ -217,6 +221,91 @@ describe("offline outbox", () => {
       conflict: { status: 409, code: "proof_slot_changed" },
     });
     expect(saved?.blobs[0]?.blob.size).toBe(blob.size);
+  });
+
+  it("surfaces only this user's attention items and permits retry only for transient non-conflicts", async () => {
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "safe-retry-action",
+      kind: "field_checkin",
+      endpoint: "/api/v1/jobs/JOB-SAFE/check-ins",
+      payload: {},
+    });
+    await queueOutboxAction("safe-retry-action", 1_000);
+    await markOutboxNeedsAttention(
+      "safe-retry-action",
+      {
+        error: {
+          code: "http_503",
+          message: "The server was temporarily unavailable.",
+          status: 503,
+          occurredAt: 2_000,
+        },
+      },
+      2_000,
+    );
+
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "conflict-recovery-action",
+      kind: "field_checkin",
+      endpoint: "/api/v1/jobs/JOB-CONFLICT/check-ins",
+      payload: {},
+    });
+    await queueOutboxAction("conflict-recovery-action", 1_000);
+    await markOutboxNeedsAttention(
+      "conflict-recovery-action",
+      {
+        error: {
+          code: "assignment_changed",
+          message: "The office assignment changed.",
+          status: 409,
+          occurredAt: 3_000,
+        },
+        conflict: {
+          status: 409,
+          code: "assignment_changed",
+          message: "The office assignment changed.",
+          detectedAt: 3_000,
+        },
+      },
+      3_000,
+    );
+
+    await saveOutboxAction({
+      tenantId: principal.tenantId,
+      userId: "another-field-user",
+      deviceActionId: "other-user-action",
+      kind: "field_checkin",
+      endpoint: "/api/v1/jobs/JOB-OTHER/check-ins",
+      payload: {},
+    });
+    await queueOutboxAction("other-user-action", 1_000);
+    await markOutboxNeedsAttention(
+      "other-user-action",
+      {
+        error: {
+          code: "http_503",
+          message: "The server was temporarily unavailable.",
+          status: 503,
+          occurredAt: 4_000,
+        },
+      },
+      4_000,
+    );
+
+    const attention = await getOutboxActionsNeedingAttention(principal);
+    expect(attention.map((action) => action.deviceActionId)).toEqual([
+      "conflict-recovery-action",
+      "safe-retry-action",
+    ]);
+    expect(isOutboxActionSafeToRetry(attention[0]!)).toBe(false);
+    expect(isOutboxActionSafeToRetry(attention[1]!)).toBe(true);
+    await expect(retryOutboxAction("conflict-recovery-action")).rejects.toThrow(
+      "cannot be retried safely",
+    );
+    await retryOutboxAction("safe-retry-action", 5_000);
+    expect((await getOutboxAction("safe-retry-action"))?.state).toBe("queued");
   });
 
   it("requeues transient failures with bounded backoff", async () => {

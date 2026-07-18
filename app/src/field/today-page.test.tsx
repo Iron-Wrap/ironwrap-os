@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SessionProvider } from "../auth/session-context";
 import type { AuthenticatedSession } from "../auth/session";
+import { useOutboxActionsNeedingAttention } from "../storage/use-outbox";
+import type { OutboxAction } from "../storage/outbox-types";
 import type { TodayResponse } from "./field-contracts";
 import { cacheToday, hasCachedJobPacket, loadToday, prefetchAssignedPackets } from "./field-cache";
 import { TodayPage } from "./field-pages";
@@ -14,6 +16,10 @@ vi.mock("./field-cache", () => ({
   hasCachedJobPacket: vi.fn(),
   loadToday: vi.fn(),
   prefetchAssignedPackets: vi.fn(),
+}));
+
+vi.mock("../storage/use-outbox", () => ({
+  useOutboxActionsNeedingAttention: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -138,6 +144,7 @@ describe("TodayPage", () => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
     vi.mocked(hasCachedJobPacket).mockResolvedValue(true);
     vi.mocked(prefetchAssignedPackets).mockResolvedValue({});
+    vi.mocked(useOutboxActionsNeedingAttention).mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -211,5 +218,45 @@ describe("TodayPage", () => {
     expect(screen.getByText(/Offline snapshot for .*Jul 10, 2026/i)).toBeVisible();
     expect(screen.queryByText("Current assignment read")).not.toBeInTheDocument();
     expect(prefetchAssignedPackets).not.toHaveBeenCalled();
+  });
+
+  it("makes named preserved field work recoverable from the run sheet", async () => {
+    vi.mocked(useOutboxActionsNeedingAttention).mockReturnValue([
+      {
+        deviceActionId: "needs-office-review",
+        tenantId: fieldSession.tenant.id,
+        userId: fieldSession.user.id,
+        kind: "field_checkin",
+        endpoint: "/api/v1/jobs/JOB-BLOCKED/check-ins",
+        method: "POST",
+        payload: {},
+        attachments: [],
+        state: "needs_attention",
+        attempts: 1,
+        nextAttemptAt: 0,
+        createdAt: 1_000,
+        updatedAt: 2_000,
+        lastError: {
+          code: "assignment_changed",
+          message: "The office assignment changed.",
+          status: 409,
+          occurredAt: 2_000,
+        },
+        conflict: {
+          status: 409,
+          code: "assignment_changed",
+          message: "The office assignment changed.",
+          detectedAt: 2_000,
+        },
+        version: 2,
+      } satisfies OutboxAction,
+    ]);
+    renderToday();
+
+    expect(
+      await screen.findByRole("heading", { name: "One saved item needs review" }),
+    ).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Field check-in · job JOB-BLOCKED" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Retry saved item" })).not.toBeInTheDocument();
   });
 });

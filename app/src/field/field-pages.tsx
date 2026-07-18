@@ -37,6 +37,7 @@ import {
 import type { JobResponse, ProofStreamItem, TodayResponse } from "./field-contracts";
 import { GateChip } from "./gate-chip";
 import { ProofStream } from "./proof-stream";
+import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
 
 const FIELD_MEDIA_TYPES = new Set([
   "image/jpeg",
@@ -193,6 +194,7 @@ export function TodayPage() {
         generatedAt={today.read_model_generated_at}
         dateOptions={dateOptions}
       />
+      {session.user.role === "field" ? <SavedWorkRecoveryPanel session={session} /> : null}
       {offline ? <OfflineScheduleNotice date={today.date} dateOptions={dateOptions} /> : null}
       {dataLimits.length > 0 ? <TodayDataLimits fields={dataLimits} /> : null}
       {today.jobs.length > 0 ? (

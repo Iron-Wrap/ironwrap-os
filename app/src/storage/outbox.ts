@@ -136,7 +136,46 @@ export async function retryOutboxAction(
   deviceActionId: string,
   now = Date.now(),
 ): Promise<OutboxAction> {
+  const action = await getOutboxAction(deviceActionId);
+  if (!action) throw new Error(`Outbox action ${deviceActionId} was not found.`);
+  if (!isOutboxActionSafeToRetry(action)) {
+    throw new Error("This saved item needs office review and cannot be retried safely.");
+  }
   return queueOutboxAction(deviceActionId, now);
+}
+
+/**
+ * Returns only the saved actions belonging to this signed-in device user that
+ * need a deliberate recovery decision. Newest items are shown first because
+ * they are the ones a field user is most likely to have just captured.
+ */
+export async function getOutboxActionsNeedingAttention(principal: {
+  tenantId: string;
+  userId: string;
+}): Promise<OutboxAction[]> {
+  const database = await getDatabase();
+  const transaction = database.transaction("outbox_actions", "readonly");
+  const actions = await transaction.store
+    .index("by_principal_state")
+    .getAll([principal.tenantId, principal.userId, "needs_attention"]);
+  await transaction.done;
+  return actions.sort(
+    (left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt,
+  );
+}
+
+/**
+ * A preserved conflict or a non-transient server refusal must not be retried
+ * blindly. This covers only transient HTTP states which may exist in an older
+ * durable item after a client upgrade or manual recovery.
+ */
+export function isOutboxActionSafeToRetry(action: OutboxAction): boolean {
+  const status = action.lastError?.status;
+  return (
+    action.state === "needs_attention" &&
+    !action.conflict &&
+    (status === 408 || status === 429 || (typeof status === "number" && status >= 500))
+  );
 }
 
 export async function transitionOutboxAction(

@@ -64,7 +64,7 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
    (applies `workers-bus/migrations/0001_init.sql` through
-   `0020_production_schedule_approval_requests.sql`).
+   `0021_public_estimate_rate_limits.sql`).
 7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store;
    never pass a generic Cloudflare token to a repository script. Required set:
    `INGEST_TOKEN`, `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY` (if bridging),
@@ -158,7 +158,7 @@ Gate 11 (blueprint): "A second demo company runs with separate brand/config/data
 
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
-- [ ] All 20 D1 migrations through `0020_production_schedule_approval_requests.sql` applied to the tenant database.
+- [ ] All 21 D1 migrations through `0021_public_estimate_rate_limits.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
   and `ironwrap_field_evidence_issuer_user` bound to that dedicated Worker user.
 - [ ] Tenant Shared Drives + R2 bucket receive a test job's files.

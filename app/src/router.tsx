@@ -19,6 +19,9 @@ const loadCustomerPortalPage = () => import("./portal/customer-portal-page");
 const CustomerPortalPage = lazy(async () => ({
   default: (await loadCustomerPortalPage()).CustomerPortalPage,
 }));
+const PublicEstimatePage = lazy(async () => ({
+  default: (await import("./public-estimate/public-estimate-page")).PublicEstimatePage,
+}));
 
 const OwnerNowPage = lazy(async () => ({
   default: (await import("./owner/owner-now-page")).OwnerNowPage,
@@ -129,6 +132,26 @@ const portalRootRoute = createRoute({
   path: "/portal",
   component: CustomerPortalRoute,
 });
+
+const publicEstimateRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/estimate",
+  component: PublicEstimateRoute,
+});
+
+function PublicEstimateRoute() {
+  return (
+    <Suspense
+      fallback={
+        <main className="grid min-h-dvh place-items-center p-4" aria-busy="true">
+          Opening the estimate form…
+        </main>
+      }
+    >
+      <PublicEstimatePage />
+    </Suspense>
+  );
+}
 
 function CustomerPortalRoute() {
   return (
@@ -391,6 +414,7 @@ const routeTree = rootRoute.addChildren([
   verifyRoute,
   pairRoute,
   portalRootRoute,
+  publicEstimateRoute,
   authenticatedRoute.addChildren([
     todayRoute,
     jobRoute,

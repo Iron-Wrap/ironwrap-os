@@ -25,6 +25,9 @@ export type AppEnv = Env & {
   APP_PUBLIC_ORIGIN?: string;
   APP_ALLOWED_ORIGINS?: string;
   APP_ALLOW_INSECURE_LOCAL?: string;
+  // Exact comma-separated HTTPS origins allowed to supply office-only visual-model previews.
+  // This is intentionally separate from browser CORS origins; unset means previews stay hidden.
+  APP_VISUAL_PREVIEW_ALLOWED_ORIGINS?: string;
   APP_AUTH_PEPPER?: string;
   APP_FRAPPE_REQUEST_TIMEOUT_MS?: string;
   // Exact Frappe identities authorized to see restricted insurance-proof state in the app BFF.

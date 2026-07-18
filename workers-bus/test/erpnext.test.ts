@@ -253,6 +253,86 @@ test("pushToErpNext: captures instant estimate sessions as review-gated ERPNext 
   assert.match(estimate.exclusions, /Not a final quote/);
 });
 
+test("pushToErpNext: mirrors explicit public-estimator follow-up consent with raw R2 evidence", async (t) => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const rawBody = JSON.stringify({ original: "public estimator submission" });
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    if ((init?.method ?? "GET") === "GET") return json({ data: [] });
+    if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-PUBLIC-1" } });
+    if (url.endsWith("/api/resource/Roofing%20Customer")) return json({ data: { name: "RC-PUBLIC-1" } });
+    if (url.endsWith("/api/resource/Roofing%20Property")) return json({ data: { name: "RP-PUBLIC-1" } });
+    if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-PUBLIC-1" } });
+    if (url.endsWith("/api/resource/Production%20Gate%20State")) {
+      const body = JSON.parse(String(init?.body));
+      return json({ data: { name: body.gate_id } });
+    }
+    if (url.endsWith("/api/resource/Instant%20Estimate%20Session")) return json({ data: { name: "IES-PUBLIC-1" } });
+    if (url.endsWith("/api/resource/Evidence%20Item")) return json({ data: { name: "EVI-PUBLIC-CONSENT-1" } });
+    if (url.endsWith("/api/resource/Communication%20Consent")) {
+      const body = JSON.parse(String(init?.body));
+      return json({ data: { name: `CC-${body.channel}` } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  const publicRec: EnvelopeRecord = {
+    ...rec,
+    envelope_id: "ow_33333333-3333-4333-8333-333333333333",
+    raw_key: "raw/estimates/2026-07-18/ow_33333333-3333-4333-8333-333333333333.json",
+    payload_json: JSON.stringify({
+      address: "1 Main St",
+      service: "metal roof",
+      instant_estimate: true,
+      estimate_low: 10000,
+      estimate_high: 20000,
+      source_detail: "ironwrap_public_estimator",
+      public_estimator: {
+        jurisdiction: "Alberta, Canada",
+        consent: {
+          contact: true,
+          privacy: true,
+          recorded_at: "2026-07-18T11:00:00.000Z",
+          origin: "https://ironwrapexteriors.com",
+        },
+      },
+    }),
+  };
+
+  await pushToErpNext({
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
+    ERPNEXT_INTEGRATION_USER: "worker@ironwrapexteriors.com",
+    RAW: {
+      get: async () => ({ arrayBuffer: async () => new TextEncoder().encode(rawBody).buffer }),
+    },
+  } as never, publicRec);
+
+  const evidence = JSON.parse(String(calls.find((call) => call.url.endsWith("/api/resource/Evidence%20Item"))?.init.body));
+  assert.equal(evidence.evidence_id, `evidence:public-estimate-consent:${publicRec.envelope_id}`);
+  assert.equal(evidence.roof_job, "RJ-PUBLIC-1");
+  assert.equal(evidence.lead_envelope, "LE-PUBLIC-1");
+  assert.equal(evidence.proof_slot, "Communication");
+  assert.equal(evidence.r2_key, publicRec.raw_key);
+  assert.equal(evidence.sync_state, "Uploaded", "raw storage is not falsely promoted to verified evidence");
+  assert.equal(evidence.content_length, new TextEncoder().encode(rawBody).byteLength);
+  assert.match(evidence.content_checksum, /^[0-9a-f]{64}$/);
+
+  const consents = calls
+    .filter((call) => call.url.endsWith("/api/resource/Communication%20Consent"))
+    .map((call) => JSON.parse(String(call.init.body)));
+  assert.equal(consents.length, 2);
+  assert.deepEqual(consents.map((consent) => consent.channel).sort(), ["Email", "Phone"]);
+  assert.ok(consents.every((consent) => consent.status === "Granted"));
+  assert.ok(consents.every((consent) => consent.purpose === "Estimate Follow-up"));
+  assert.ok(consents.every((consent) => consent.consent_basis === "Express"));
+  assert.ok(consents.every((consent) => consent.captured_by === "worker@ironwrapexteriors.com"));
+  assert.ok(consents.every((consent) => consent.proof_evidence === "EVI-PUBLIC-CONSENT-1"));
+});
+
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 }

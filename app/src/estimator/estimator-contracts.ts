@@ -2,6 +2,7 @@ import { z } from "zod";
 
 const nullableText = z.string().min(1).nullable();
 const nullableNumber = z.number().finite().nullable();
+const nullablePercentage = z.number().finite().min(0).max(100).nullable();
 
 const envelopeSchema = z
   .object({
@@ -61,6 +62,52 @@ const geometrySchema = z
   })
   .strict();
 
+const roofGraphReviewStatusSchema = z.enum(["Approved", "Needs Review", "Rejected", "Unavailable"]);
+
+const roofGraphSchema = z
+  .object({
+    state: z.enum(["available", "needs_review", "unavailable"]),
+    revision: nullableText,
+    source: nullableText,
+    provider: nullableText,
+    confidence: nullablePercentage,
+    review_status: roofGraphReviewStatusSchema,
+    captured_at: nullableText,
+    units: nullableText,
+    points: z.array(
+      z
+        .object({
+          id: z.string().min(1),
+          x: z.number().finite(),
+          y: z.number().finite(),
+        })
+        .strict(),
+    ),
+    edges: z.array(
+      z
+        .object({
+          id: z.string().min(1),
+          start_point_id: z.string().min(1),
+          end_point_id: z.string().min(1),
+        })
+        .strict(),
+    ),
+    facets: z.array(
+      z
+        .object({
+          id: z.string().min(1),
+          label: nullableText,
+          point_ids: z.array(z.string().min(1)).min(3),
+          confidence: nullablePercentage,
+          review_status: roofGraphReviewStatusSchema,
+        })
+        .strict(),
+    ),
+    check_count: z.number().int().nonnegative(),
+    failed_check_count: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const measurementReportSchema = z
   .object({
     id: z.string().min(1),
@@ -87,6 +134,7 @@ const selectedMeasurementSchema = measurementReportSchema
     ),
     metrics_truncated: z.boolean(),
     geometry: geometrySchema,
+    roof_graph: roofGraphSchema.nullable(),
   })
   .strict();
 

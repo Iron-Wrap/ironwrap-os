@@ -69,6 +69,18 @@ function newoEvent(overrides: Partial<NewoEventV1> = {}): NewoEventV1 {
   };
 }
 
+function callerLookup() {
+  return {
+    schema_version: "newo.caller-lookup.v1",
+    request_id: "lookup-001",
+    session_id: "session-001",
+    occurred_at: "2026-07-18T17:57:00.000Z",
+    caller_phone: "(587) 555-7788",
+    provider: { project_id: "project-production", agent_id: "agent-sofia" },
+    verification: { address_line1: "123 Main Street", postal_code: "T5J 0N3" },
+  };
+}
+
 function fakeNewoEnv() {
   const raw: Array<{ key: string; body: string }> = [];
   const jnQueue: Array<{ envelope_id: string }> = [];
@@ -152,7 +164,19 @@ function fakeNewoEnv() {
                     dedup_key: args[10], dup_of: args[11], intent_queue: args[17],
                   });
                 }
-                if (sql.includes("INSERT INTO newo_sessions")) {
+                if (sql.includes("INSERT INTO newo_sessions") && sql.includes("verification_status")) {
+                  const previous = sessions.get(String(args[0]));
+                  sessions.set(String(args[0]), {
+                    ...previous,
+                    session_id: args[0], project_id: args[1], agent_id: args[2], channel: "phone",
+                    direction: "inbound", status: previous?.status ?? "caller_lookup", contact_phone: args[3],
+                    address_line1: args[4], postal_code: args[5], matched_customer_id: args[6],
+                    matched_property_id: args[7], matched_roof_job_id: args[8], verification_status: args[9],
+                    structured_json: args[10], raw_key: args[11], payload_hash: args[12],
+                    sync_status: "pending", sync_attempts: previous?.sync_attempts ?? 0,
+                    created_at: previous?.created_at ?? args[13], updated_at: args[14], lead_envelope_id: null,
+                  });
+                } else if (sql.includes("INSERT INTO newo_sessions")) {
                   const row: Row = {
                     session_id: args[0], project_id: args[1], agent_id: args[2], user_actor_id: args[3],
                     conversation_id: args[4], channel: args[5], direction: args[6], status: args[7],
@@ -309,4 +333,97 @@ test("request-only booking returns request language and a durable appointment id
   assert.match(String(body.appointment_request_id), /^nar_[0-9a-f-]{36}$/);
   assert.equal(body.message, "Appointment request received.");
   assert.doesNotMatch(JSON.stringify(body), /\b(booked|confirmed)\b/i);
+});
+
+test("verified caller lookup returns only broad state and privately binds the later lead", async (t) => {
+  const state = fakeNewoEnv();
+  const frappeCalls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input);
+    frappeCalls.push(url);
+    if (url.includes("/api/resource/Roofing%20Customer?")) {
+      return new Response(JSON.stringify({ data: [{
+        name: "RC-PRIVATE-1",
+        customer_id: "customer:phone:15875557788",
+        phone: "+15875557788",
+      }] }));
+    }
+    if (url.includes("/api/resource/Roof%20Job?")) {
+      return new Response(JSON.stringify({ data: [{
+        name: "RJ-PRIVATE-1",
+        roof_job_id: "job:existing-1",
+        job_status: "Materials Ordered",
+        service_type: "Metal Roofing",
+        roofing_property: "RP-PRIVATE-1",
+        customer: "RC-PRIVATE-1",
+        modified: "2026-07-18 17:00:00",
+      }] }));
+    }
+    if (url.includes("/api/resource/Roofing%20Property?")) {
+      return new Response(JSON.stringify({ data: [{
+        name: "RP-PRIVATE-1",
+        property_key: "property:123-main-street-edmonton",
+        address_line1: "123 Main Street",
+        city: "Edmonton",
+        province: "AB",
+        postal_code: "T5J 0N3",
+      }] }));
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  Object.assign(state.env, {
+    ERPNEXT_BASE_URL: "https://frappe.example.com",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
+    APP_FRAPPE_REQUEST_TIMEOUT_MS: "8000",
+  });
+  const lookupResponse = await worker.fetch(new Request("https://bus.example/webhook/newo/lookup", {
+    method: "POST",
+    headers: { authorization: "Bearer newo-webhook-token", "content-type": "application/json" },
+    body: JSON.stringify(callerLookup()),
+  }), state.env as never, ctx as never);
+  const lookupBody = await lookupResponse.json() as Record<string, unknown>;
+
+  assert.equal(lookupResponse.status, 200);
+  assert.deepEqual(lookupBody, {
+    schema_version: "newo.caller-lookup-response.v1",
+    request_id: "lookup-001",
+    session_id: "session-001",
+    match_status: "verified",
+    verified: true,
+    job_state: "In progress",
+    safe_next_step: "continue_verified_service",
+  });
+  assert.doesNotMatch(JSON.stringify(lookupBody), /RC-PRIVATE|RJ-PRIVATE|customer:|property:/);
+  assert.equal(frappeCalls.length, 3);
+
+  const capture = await worker.fetch(
+    request("/webhook/newo", newoEvent()),
+    state.env as never,
+    ctx as never,
+  );
+  assert.equal(capture.status, 200);
+  const envelope = [...state.envelopes.values()][0];
+  const payload = JSON.parse(String(envelope.payload_json));
+  assert.deepEqual(payload.owned_association, {
+    customer_id: "customer:phone:15875557788",
+    property_key: "property:123-main-street-edmonton",
+    roof_job_id: "job:existing-1",
+    verification_status: "verified",
+  });
+});
+
+test("caller lookup requires address or postal verification before any durable write", async () => {
+  const state = fakeNewoEnv();
+  const payload = callerLookup();
+  payload.verification = { address_line1: null, postal_code: null };
+  const response = await worker.fetch(new Request("https://bus.example/webhook/newo/lookup", {
+    method: "POST",
+    headers: { authorization: "Bearer newo-webhook-token", "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  }), state.env as never, ctx as never);
+  assert.equal(response.status, 422);
+  assert.equal(state.raw.length, 0);
+  assert.equal(state.receipts.size, 0);
+  assert.equal(state.sessions.size, 0);
 });

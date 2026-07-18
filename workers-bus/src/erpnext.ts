@@ -113,7 +113,7 @@ export async function pushToErpNext(
   const p = safeJson(rec.payload_json);
   const lead = await upsertLeadEnvelope(cfg, base, doctype, rec, jn);
   const property = await upsertProperty(cfg, base, rec, p, lead.name);
-  const customer = await upsertRoofingCustomer(cfg, base, rec, lead.name);
+  const customer = await upsertRoofingCustomer(cfg, base, rec, p, lead.name);
   const roofJob = await upsertRoofJob(
     cfg,
     base,
@@ -509,7 +509,10 @@ async function upsertProperty(
   const postal = str(p.postal ?? p.postal_code ?? p.zip);
   if (!address && !city && !postal) return null;
 
-  const propertyKey = ["property", address, city, postal].filter(Boolean).join(":").toLowerCase() || `property:${rec.envelope_id}`;
+  const association = ownedAssociation(p);
+  const propertyKey = str(association?.property_key)
+    ?? (["property", address, city, postal].filter(Boolean).join(":").toLowerCase()
+      || `property:${rec.envelope_id}`);
   // A retry must complete a missing initial record, never overwrite field corrections made after
   // the first queue attempt. Source facts remain in the immutable envelope/R2 record.
   return await createIfMissingByField(env, base, "Roofing Property", "property_key", propertyKey, {
@@ -536,12 +539,13 @@ async function upsertRoofingCustomer(
   env: ErpEnv,
   base: string,
   rec: EnvelopeRecord,
+  payload: Record<string, unknown>,
   leadName: string,
 ): Promise<ErpNextResult> {
   const contactName = str(rec.contact_name);
   const nameParts = contactName?.split(/\s+/).filter(Boolean) ?? [];
   const [firstName, ...lastName] = nameParts;
-  const id = customerId(rec);
+  const id = str(ownedAssociation(payload)?.customer_id) ?? customerId(rec);
   const displayName = contactName
     ?? str(rec.contact_email)
     ?? str(rec.contact_phone)
@@ -568,7 +572,9 @@ async function upsertRoofJob(
   customerName: string,
   jn?: JnResult,
 ): Promise<ErpNextResult> {
-  const roofJobId = stableId("job", instantEstimateProjectRef(p), rec.envelope_id);
+  const associatedRoofJobId = str(ownedAssociation(p)?.roof_job_id);
+  const roofJobId = associatedRoofJobId
+    ?? stableId("job", instantEstimateProjectRef(p), rec.envelope_id);
   // `job_status` and `current_gate_state` are human-owned operational state. Queue retries may
   // create a missing initial job but must not reset an in-progress job to qualification.
   const roofJob = await createIfMissingByField(env, base, "Roof Job", "roof_job_id", roofJobId, {
@@ -954,6 +960,11 @@ function object(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function ownedAssociation(payload: Record<string, unknown>): Record<string, unknown> | null {
+  const association = object(payload.owned_association);
+  return association?.verification_status === "verified" ? association : null;
 }
 
 function titleCase(value: string): string {

@@ -33,6 +33,10 @@ export interface NewoSessionRecord {
   city: string | null;
   province: string | null;
   postal_code: string | null;
+  matched_customer_id?: string | null;
+  matched_property_id?: string | null;
+  matched_roof_job_id?: string | null;
+  verification_status?: string | null;
   division: string | null;
   service: string | null;
   urgency: string | null;
@@ -56,6 +60,71 @@ export interface NewoSessionRecord {
   last_error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface NewoCallerAssociation {
+  session_id: string;
+  project_id: string | null;
+  agent_id: string | null;
+  contact_phone: string;
+  address_line1: string | null;
+  postal_code: string | null;
+  matched_customer_id: string | null;
+  matched_property_id: string | null;
+  matched_roof_job_id: string | null;
+  verification_status: "verified" | "not_found" | "verification_failed" | "ambiguous";
+  structured_json: string;
+  raw_key: string;
+  payload_hash: string;
+  occurred_at: string;
+}
+
+export async function recordNewoCallerAssociation(
+  env: Env,
+  association: NewoCallerAssociation,
+): Promise<void> {
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO newo_sessions (
+       session_id, project_id, agent_id, channel, direction, status, contact_phone,
+       address_line1, postal_code, matched_customer_id, matched_property_id,
+       matched_roof_job_id, verification_status, structured_json, raw_key, payload_hash,
+       sync_status, created_at, updated_at
+     ) VALUES (?, ?, ?, 'phone', 'inbound', 'caller_lookup', ?, ?, ?, ?, ?, ?, ?, ?, ?,
+       'pending', ?, ?)
+     ON CONFLICT(session_id) DO UPDATE SET
+       project_id = COALESCE(excluded.project_id, newo_sessions.project_id),
+       agent_id = COALESCE(excluded.agent_id, newo_sessions.agent_id),
+       contact_phone = excluded.contact_phone,
+       address_line1 = excluded.address_line1,
+       postal_code = excluded.postal_code,
+       matched_customer_id = excluded.matched_customer_id,
+       matched_property_id = excluded.matched_property_id,
+       matched_roof_job_id = excluded.matched_roof_job_id,
+       verification_status = excluded.verification_status,
+       structured_json = excluded.structured_json,
+       raw_key = excluded.raw_key,
+       payload_hash = excluded.payload_hash,
+       sync_status = 'pending',
+       last_error = NULL,
+       updated_at = excluded.updated_at`,
+  ).bind(
+    association.session_id,
+    association.project_id,
+    association.agent_id,
+    association.contact_phone,
+    association.address_line1,
+    association.postal_code,
+    association.matched_customer_id,
+    association.matched_property_id,
+    association.matched_roof_job_id,
+    association.verification_status,
+    association.structured_json,
+    association.raw_key,
+    association.payload_hash,
+    now,
+    association.occurred_at,
+  ).run();
 }
 
 export async function getNewoReceipt(

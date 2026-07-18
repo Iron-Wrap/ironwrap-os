@@ -18,7 +18,7 @@ Legend: `[ ]` todo, `[x]` done/verified, `[~]` operating with a known temporary 
 
 ## 0. Current Operating Baseline
 
-- [x] Cloudflare Worker, D1, R2, queues, cron, and secrets exist.
+- [~] The Worker/D1/R2/queue/cron names and IDs are checked in, but their live state and secret metadata cannot currently be revalidated because local Wrangler auth points at Mindburn Labs rather than the configured IronWrap Cloudflare account.
 - [~] Local Wrangler auth currently points at Mindburn Labs, not the configured IronWrap Cloudflare account; live resource inventory/deploy needs the IronWrap account token/login.
 - [x] `JOBNIMBUS_ENABLED=true`; JobNimbus API write path was live-tested.
 - [x] Gmail send path and Google Drive filing use `GOOGLE_SERVICE_ACCOUNT_JSON`.
@@ -34,6 +34,7 @@ Today this is the keystone. Choose exactly one first feed:
 
 - [ ] Website forms -> server-side forward from `WEBSITE-INTEGRATION.md` to `POST /ingest/website`.
 - [ ] Or Make UI bridge -> append one HTTP module after the working lead sync and POST the same payload to `/ingest/website` with an Ignore error handler.
+- [ ] Or Newo Custom Tool -> `POST /webhook/newo` with its dedicated bearer token and a reviewed contact/handoff body; follow `NEWO-INTEGRATION.md`.
 
 Do Make edits in the UI, not via API.
 

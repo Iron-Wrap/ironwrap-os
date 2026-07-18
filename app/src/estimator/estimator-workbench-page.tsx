@@ -88,63 +88,256 @@ function EstimatorWorkbenchScreen({
     model.source_updated_at === null;
 
   return (
-    <section className="mx-auto max-w-7xl space-y-7 overflow-x-hidden pb-4">
-      <header className="border-b border-border pb-5 sm:pb-6">
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-          <div className="min-w-0">
-            <Button asChild variant="ghost" size="compact" className="-ml-2">
-              <Link to="/sales">
-                <ArrowLeft aria-hidden="true" />
-                Back to sales
-              </Link>
-            </Button>
-            <div className="mt-4 flex min-w-0 items-start gap-3">
-              <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
-                <Ruler className="size-5 text-accent" aria-hidden="true" />
-              </span>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-muted">
-                  {model.job.job_number ?? model.job.id}
-                  {model.job.service_type ? ` · ${model.job.service_type}` : ""}
-                </p>
-                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
-                  Measurement workbench
-                </h1>
-                <p className="mt-2 max-w-3xl text-sm leading-6 text-muted sm:text-base">
-                  Trace the measurement source into the takeoff and customer-facing record. This
-                  review does not change prices, assemble a proposal, or contact a customer.
-                </p>
-              </div>
-            </div>
-          </div>
-          <p className="text-sm text-muted">
-            Read generated {formatDate(model.read_model_generated_at, locale) ?? "time unavailable"}
-          </p>
-        </div>
-      </header>
+    <section className="mx-auto max-w-[90rem] space-y-8 overflow-x-hidden pb-8">
+      <WorkbenchHeader model={model} locale={locale} />
 
       {refreshFailed ? <RefreshWarning onRetry={onRetry} /> : null}
       {bounded ? <DataBoundary model={model} /> : null}
 
-      <EvidencePath
-        measurement={selectedMeasurement}
-        takeoff={model.takeoffs.selected}
-        quote={quote}
-        proposal={proposal}
-        lineage={model.lineage}
-      />
+      <div className="grid min-w-0 items-start gap-8 2xl:grid-cols-[minmax(0,1.45fr)_minmax(22rem,0.72fr)]">
+        <section className="min-w-0 space-y-8" aria-label="Estimator evidence review">
+          <CommercialDecisionRail model={model} locale={locale} />
+          <CommercialSnapshot model={model} locale={locale} tenantCurrency={tenantCurrency} />
 
-      <CommercialDecisionRail model={model} locale={locale} />
+          <EvidencePath
+            measurement={selectedMeasurement}
+            takeoff={model.takeoffs.selected}
+            quote={quote}
+            proposal={proposal}
+            lineage={model.lineage}
+          />
 
-      <InsuranceEvidenceRail supplements={model.insurance_supplements} />
-
-      <MeasurementSource model={model} locale={locale} />
-
-      <div className="grid min-w-0 items-start gap-7 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.85fr)]">
-        <TakeoffReview model={model} locale={locale} />
+          <MeasurementSource model={model} locale={locale} />
+          <TakeoffReview model={model} locale={locale} />
+          <InsuranceEvidenceRail supplements={model.insurance_supplements} />
+        </section>
         <CommercialRecord model={model} locale={locale} tenantCurrency={tenantCurrency} />
       </div>
     </section>
+  );
+}
+
+function WorkbenchHeader({ model, locale }: { model: EstimatorWorkbenchResponse; locale: string }) {
+  const decision = nextSafeStep(model);
+  const jobIdentity = model.job.job_number ?? model.job.id;
+  return (
+    <header className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+      <div className="grid min-w-0 lg:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
+        <div className="min-w-0 p-5 sm:p-7 lg:p-8">
+          <Button asChild variant="ghost" size="compact" className="-ml-2">
+            <Link to="/sales">
+              <ArrowLeft aria-hidden="true" />
+              Back to sales
+            </Link>
+          </Button>
+          <div className="mt-6 flex min-w-0 items-start gap-4">
+            <span className="grid size-12 shrink-0 place-items-center rounded-lg bg-foreground text-background shadow-sm">
+              <Ruler className="size-6 text-accent" aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-muted">{jobIdentity}</p>
+              <h1 className="mt-1 text-3xl font-black tracking-[-0.045em] text-balance sm:text-4xl">
+                Measurement workbench
+              </h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-muted sm:text-base">
+                Review the captured measurement, material takeoff, and commercial evidence without
+                changing price, scope, proposal, or customer communication.
+              </p>
+            </div>
+          </div>
+          <dl className="mt-7 grid border-t border-border sm:grid-cols-3">
+            <HeaderFact label="Service" value={model.job.service_type ?? "Not recorded"} />
+            <HeaderFact label="Workflow" value={model.job.workflow_profile ?? "Not recorded"} />
+            <HeaderFact
+              label="Read generated"
+              value={formatDate(model.read_model_generated_at, locale) ?? "Unavailable"}
+            />
+          </dl>
+        </div>
+        <section
+          className={cn(
+            "border-t border-border p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8",
+            decision.surface,
+          )}
+          aria-labelledby="next-safe-step-heading"
+        >
+          <h2
+            id="next-safe-step-heading"
+            className="text-xs font-bold uppercase tracking-[0.12em] text-muted"
+          >
+            Next safe step
+          </h2>
+          <p className={cn("mt-3 text-2xl font-black tracking-[-0.035em]", decision.titleTone)}>
+            {decision.title}
+          </p>
+          <p className="mt-3 text-sm leading-6 text-muted">{decision.detail}</p>
+          <div className="mt-6 flex flex-wrap gap-2">
+            <StatusChip label={decision.label} tone={decision.tone} />
+            <StatusChip label="Read-only evidence review" tone="bg-surface-muted text-muted" />
+          </div>
+          <p className="mt-6 border-t border-border/70 pt-4 text-xs leading-5 text-muted">
+            This page directs human review only. It does not execute the next commercial action.
+          </p>
+        </section>
+      </div>
+    </header>
+  );
+}
+
+function HeaderFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 py-4 first:pr-4 sm:px-4 sm:first:pl-0 sm:[&:not(:first-child)]:border-l sm:[&:not(:first-child)]:border-border">
+      <dt className="text-xs font-bold text-muted">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-semibold text-foreground">{value}</dd>
+    </div>
+  );
+}
+
+function nextSafeStep(model: EstimatorWorkbenchResponse): {
+  title: string;
+  detail: string;
+  label: string;
+  tone: string;
+  surface: string;
+  titleTone: string;
+} {
+  if (model.proposal_readiness.state === "blocked") {
+    return {
+      title: "Resolve blocking evidence",
+      detail:
+        "A blocking evidence condition must be resolved before human proposal review. The proposal review gate retains the selected reason.",
+      label: "Blocked by evidence",
+      tone: "bg-warning-soft text-warning",
+      surface: "bg-warning-soft/35",
+      titleTone: "text-warning",
+    };
+  }
+  if (model.proposal_readiness.state === "review_required") {
+    return {
+      title: "Complete human review",
+      detail:
+        "The selected evidence needs a reviewer decision before it can support a proposal. The decision rail retains the current review signals.",
+      label: "Review required",
+      tone: "bg-warning-soft text-warning",
+      surface: "bg-warning-soft/28",
+      titleTone: "text-foreground",
+    };
+  }
+  if (model.proposal_readiness.state === "ready") {
+    return {
+      title: "Review the evidence pack",
+      detail:
+        "The bounded read found no automatic stop condition. A human still decides whether the record is ready for the next commercial step.",
+      label: "Ready for review",
+      tone: "bg-ok-soft text-ok",
+      surface: "bg-ok-soft/28",
+      titleTone: "text-foreground",
+    };
+  }
+  return {
+    title: "Keep this review bounded",
+    detail:
+      "One or more source details are unavailable, so use the returned evidence without treating missing values as proof of absence.",
+    label: "Source incomplete",
+    tone: "bg-surface-muted text-muted",
+    surface: "bg-surface-muted/55",
+    titleTone: "text-foreground",
+  };
+}
+
+function CommercialSnapshot({
+  model,
+  locale,
+  tenantCurrency,
+}: {
+  model: EstimatorWorkbenchResponse;
+  locale: string;
+  tenantCurrency: string;
+}) {
+  const quote = model.quote;
+  const proposal = model.proposal;
+  if (!quote) {
+    return (
+      <section
+        className="rounded-xl border border-border bg-surface"
+        aria-labelledby="commercial-snapshot-heading"
+      >
+        <div className="px-5 py-5 sm:px-6">
+          <h2 id="commercial-snapshot-heading" className="text-lg font-black tracking-[-0.025em]">
+            Selected commercial record
+          </h2>
+          <EmptyInline message="No customer quote was returned. Do not infer a price, payment state, or customer-ready proposal." />
+        </div>
+      </section>
+    );
+  }
+  const currency = quote.currency ?? tenantCurrency;
+  return (
+    <section
+      className="rounded-xl border border-border bg-surface"
+      aria-labelledby="commercial-snapshot-heading"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-5 sm:px-6 sm:pt-6">
+        <div>
+          <h2 id="commercial-snapshot-heading" className="text-lg font-black tracking-[-0.025em]">
+            Selected commercial record
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            The quote facts that frame the next human decision.
+          </p>
+        </div>
+        <StatusChip
+          label={humanize(quote.status) ?? "Quote state unavailable"}
+          tone={quoteTone(quote.status)}
+        />
+      </div>
+      <dl className="mt-5 grid overflow-hidden border-y border-border sm:grid-cols-4">
+        <CommercialFact
+          label="Quote total"
+          value={formatMoney(quote.quote_total, locale, currency) ?? "Not recorded"}
+          prominent
+        />
+        <CommercialFact
+          label="Version"
+          value={quote.version === null ? "Not recorded" : `Version ${quote.version}`}
+        />
+        <CommercialFact label="Payment" value={quote.payment_status ?? "Not recorded"} />
+        <CommercialFact
+          label="Proposal"
+          value={
+            proposal ? (humanize(proposal.status) ?? "State unavailable") : "No proposal returned"
+          }
+        />
+      </dl>
+      <p className="px-5 py-4 text-xs leading-5 text-muted sm:px-6">
+        This is captured quote evidence for the selected version, not a live supplier-price or
+        payment check.
+      </p>
+    </section>
+  );
+}
+
+function CommercialFact({
+  label,
+  value,
+  prominent = false,
+}: {
+  label: string;
+  value: string;
+  prominent?: boolean;
+}) {
+  return (
+    <div className="min-w-0 px-5 py-4 first:bg-surface-raised sm:px-6 sm:[&:not(:first-child)]:border-l sm:[&:not(:first-child)]:border-border">
+      <dt className="text-xs font-bold text-muted">{label}</dt>
+      <dd
+        className={cn(
+          "mt-1 break-words font-semibold text-foreground",
+          prominent && "text-xl font-black tracking-[-0.03em] tabular-nums",
+        )}
+      >
+        {value}
+      </dd>
+    </div>
   );
 }
 
@@ -181,27 +374,43 @@ function EvidencePath({
     },
   ];
   return (
-    <ol className="grid border-y border-border sm:grid-cols-3" aria-label="Evidence path">
-      {steps.map((step, index) => (
-        <li
-          key={step.label}
-          className={cn(
-            "min-h-24 px-4 py-4 sm:px-5",
-            index > 0 && "border-t border-border sm:border-t-0 sm:border-l",
-          )}
+    <section
+      className="overflow-hidden rounded-xl border border-border bg-surface"
+      aria-labelledby="evidence-path-heading"
+    >
+      <div className="border-b border-border px-5 py-4 sm:px-6">
+        <h2
+          id="evidence-path-heading"
+          className="text-lg font-black tracking-[-0.025em] text-foreground"
         >
-          <p className="text-sm font-bold text-muted">{step.label}</p>
-          <span
+          Evidence path
+        </h2>
+        <p className="mt-1 text-sm leading-6 text-muted">
+          Each record stays attached to its actual upstream evidence relationship.
+        </p>
+      </div>
+      <ol className="grid sm:grid-cols-3" aria-label="Evidence path stages">
+        {steps.map((step, index) => (
+          <li
+            key={step.label}
             className={cn(
-              "mt-2 inline-flex min-h-7 items-center rounded-full px-2.5 text-xs font-bold",
-              step.tone,
+              "min-h-28 px-5 py-5 sm:px-6",
+              index > 0 && "border-t border-border sm:border-t-0 sm:border-l",
             )}
           >
-            {step.detail}
-          </span>
-        </li>
-      ))}
-    </ol>
+            <p className="text-sm font-bold text-muted">{step.label}</p>
+            <span
+              className={cn(
+                "mt-3 inline-flex min-h-7 items-center rounded-full px-2.5 text-xs font-bold",
+                step.tone,
+              )}
+            >
+              {step.detail}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -281,10 +490,10 @@ function CommercialDecisionRail({
   ];
   return (
     <section
-      className="border-y border-border py-5 sm:py-6"
+      className="rounded-xl border border-border bg-surface"
       aria-labelledby="decision-rail-heading"
     >
-      <div className="px-4 sm:px-6">
+      <div className="px-5 py-5 sm:px-6 sm:py-6">
         <SectionHeading
           id="decision-rail-heading"
           icon={ShieldAlert}
@@ -292,14 +501,14 @@ function CommercialDecisionRail({
           description="A review gate for the selected quote version. It never refreshes a price, changes scope, or prepares customer communication."
         />
         <ol
-          className="mt-5 grid border-y border-border sm:grid-cols-4"
+          className="mt-5 grid overflow-hidden rounded-lg border border-border sm:grid-cols-4"
           aria-label="Commercial decision gates"
         >
           {steps.map((step, index) => (
             <li
               key={step.label}
               className={cn(
-                "min-h-24 px-3 py-4 sm:px-4",
+                "min-h-28 bg-surface-raised px-4 py-4",
                 index > 0 && "border-t border-border sm:border-t-0 sm:border-l",
               )}
             >
@@ -308,7 +517,7 @@ function CommercialDecisionRail({
               </p>
               <span
                 className={cn(
-                  "mt-2 inline-flex min-h-7 items-center rounded-full px-2.5 text-xs font-bold",
+                  "mt-3 inline-flex min-h-7 items-center rounded-full px-2.5 text-xs font-bold",
                   step.tone,
                 )}
               >
@@ -317,7 +526,7 @@ function CommercialDecisionRail({
             </li>
           ))}
         </ol>
-        <p className="mt-3 text-xs leading-5 text-muted">
+        <p className="mt-4 text-xs leading-5 text-muted">
           Snapshot checked{" "}
           {formatDate(model.read_model_generated_at, locale) ?? "at an unavailable time"}. A
           recorded price book is evidence for this quote version, not a promise that supplier
@@ -337,7 +546,7 @@ function InsuranceEvidenceRail({
 
   return (
     <section
-      className="border-y border-border py-5 sm:py-6"
+      className="rounded-xl border border-border bg-surface py-5 sm:py-6"
       aria-labelledby="insurance-evidence-heading"
     >
       <div className="px-4 sm:px-6">
@@ -556,7 +765,10 @@ function MeasurementSource({
   const selected = model.measurements.selected;
   if (!selected) {
     return (
-      <section className="border-y border-border py-6" aria-labelledby="measurement-source-heading">
+      <section
+        className="rounded-xl border border-border bg-surface px-5 py-6 sm:px-6"
+        aria-labelledby="measurement-source-heading"
+      >
         <SectionHeading
           id="measurement-source-heading"
           icon={Ruler}
@@ -568,8 +780,11 @@ function MeasurementSource({
   }
   const geometry = selected.geometry;
   return (
-    <section className="border-y border-border" aria-labelledby="measurement-source-heading">
-      <div className="px-4 py-6 sm:px-6 sm:py-7">
+    <section
+      className="rounded-xl border border-border bg-surface"
+      aria-labelledby="measurement-source-heading"
+    >
+      <div className="px-5 py-6 sm:px-6 sm:py-7">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <SectionHeading
             id="measurement-source-heading"
@@ -589,24 +804,26 @@ function MeasurementSource({
           </div>
         </div>
 
-        <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_17rem]">
-          <GeometryStatus geometry={geometry} />
-          <dl className="grid grid-cols-3 border-y border-border lg:grid-cols-1 lg:border-y-0 lg:border-l">
-            <MeasurementFact label="Reports" value={String(model.measurements.reports.length)} />
-            <MeasurementFact label="Facets" value={String(geometry.facet_count)} bordered />
-            <MeasurementFact
-              label="Failed checks"
-              value={String(geometry.failed_check_count)}
-              bordered
-              danger={geometry.failed_check_count > 0}
-            />
-          </dl>
+        <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1fr)_19rem]">
+          <div className="space-y-5">
+            <GeometryStatus geometry={geometry} />
+            <dl className="grid overflow-hidden rounded-lg border border-border sm:grid-cols-3">
+              <MeasurementFact label="Reports" value={String(model.measurements.reports.length)} />
+              <MeasurementFact label="Facets" value={String(geometry.facet_count)} bordered />
+              <MeasurementFact
+                label="Failed checks"
+                value={String(geometry.failed_check_count)}
+                bordered
+                danger={geometry.failed_check_count > 0}
+              />
+            </dl>
+            <p className="border-l-2 border-warning bg-warning-soft/40 px-4 py-3 text-sm leading-6 text-foreground">
+              Geometry recomputation checks the captured file, not the site. It does not verify
+              concealed conditions, substrate condition, access, or field dimensions.
+            </p>
+          </div>
+          <SourceFacetPreview geometry={geometry} locale={locale} />
         </div>
-
-        <p className="mt-5 max-w-4xl border border-warning/40 bg-warning-soft/55 px-4 py-3 text-sm leading-6 text-foreground">
-          Geometry recomputation checks the captured file, not the site. It does not verify
-          concealed conditions, substrate condition, access, or field dimensions.
-        </p>
 
         <GeometryFacets geometry={geometry} locale={locale} />
         <GeometryChecks geometry={geometry} />
@@ -620,13 +837,65 @@ function GeometryStatus({ geometry }: { geometry: EstimatorGeometry }) {
   const copy = geometryStatusCopy(geometry);
   const Icon = copy.icon;
   return (
-    <div className={cn("flex gap-3 border p-4", copy.surface)} role="status">
+    <div className={cn("flex gap-3 rounded-lg border p-4", copy.surface)}>
       <Icon className={cn("mt-0.5 size-5 shrink-0", copy.iconTone)} aria-hidden="true" />
       <div>
         <p className="font-bold text-foreground">{copy.title}</p>
         <p className="mt-1 text-sm leading-6 text-muted">{copy.detail}</p>
       </div>
     </div>
+  );
+}
+
+function SourceFacetPreview({ geometry, locale }: { geometry: EstimatorGeometry; locale: string }) {
+  const facets = geometry.facets.slice(0, 4);
+  return (
+    <section
+      className="overflow-hidden rounded-lg border border-border bg-surface-raised"
+      aria-labelledby="source-facet-preview-heading"
+    >
+      <div className="border-b border-border px-4 py-4">
+        <h3 id="source-facet-preview-heading" className="text-sm font-black text-foreground">
+          Returned facet context
+        </h3>
+        <p className="mt-1 text-xs leading-5 text-muted">
+          A compact index of returned source facets, not a roof plan or field measurement.
+        </p>
+      </div>
+      {facets.length === 0 ? (
+        <p className="px-4 py-5 text-sm leading-6 text-muted">
+          No individual source facets were returned.
+        </p>
+      ) : (
+        <ul className="grid grid-cols-2 gap-px bg-border" aria-label="Returned source facets">
+          {facets.map((facet) => {
+            const flagged =
+              !facet.ring_closed || (facet.deviation !== null && facet.deviation > 0.03);
+            return (
+              <li key={facet.id} className="min-w-0 bg-surface p-3">
+                <p className="font-mono text-xs font-bold text-muted">{facet.id}</p>
+                <p className="mt-2 truncate text-sm font-bold text-foreground">
+                  {facet.material ?? facet.type ?? "Surface not recorded"}
+                </p>
+                <p className="mt-1 text-xs tabular-nums text-muted">
+                  {formatArea(facet.computed_area ?? facet.declared_area, locale)}
+                </p>
+                <p
+                  className={cn("mt-2 text-xs font-semibold", flagged ? "text-warning" : "text-ok")}
+                >
+                  {facet.ring_closed ? "Ring closed" : "Ring open"}
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {geometry.facet_count > facets.length ? (
+        <p className="border-t border-border px-4 py-3 text-xs leading-5 text-muted">
+          Facet comparison below retains the returned facet evidence.
+        </p>
+      ) : null}
+    </section>
   );
 }
 
@@ -641,81 +910,88 @@ function GeometryFacets({ geometry, locale }: { geometry: EstimatorGeometry; loc
   }
   return (
     <section className="mt-7" aria-labelledby="facet-comparison-heading">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h3 id="facet-comparison-heading" className="text-lg font-black tracking-[-0.02em]">
-            Facet comparison
-          </h3>
-          <p className="mt-1 text-sm leading-6 text-muted">
+      <h3 id="facet-comparison-heading" className="text-lg font-black tracking-[-0.02em]">
+        Facet comparison
+      </h3>
+      <details open={geometry.failed_check_count > 0 || geometry.facets_truncated} className="mt-3">
+        <summary className="flex cursor-pointer list-none flex-wrap items-end justify-between gap-3 rounded-lg border border-border bg-surface-raised px-4 py-4 [&::-webkit-details-marker]:hidden">
+          <span className="text-sm leading-6 text-muted">
             Declared and recomputed roof areas remain side by side.
-          </p>
+          </span>
+          <span className="text-sm font-semibold text-muted">
+            {geometry.facets_truncated ? "First returned facets shown" : "Facet audit detail"}
+          </span>
+        </summary>
+        <p className="mt-3 text-xs font-semibold text-muted sm:hidden">
+          Swipe the table to compare every source value.
+        </p>
+        <div
+          className="mt-2 overflow-x-auto rounded-lg border border-border"
+          aria-label="Facet comparison table"
+        >
+          <table className="min-w-[45rem] w-full border-collapse text-left text-sm">
+            <caption className="sr-only">
+              Captured source facets with declared and recomputed roof area, deviation, pitch, and
+              perimeter-ring evidence.
+            </caption>
+            <thead className="bg-surface-muted text-muted">
+              <tr>
+                <TableHeader>Facet</TableHeader>
+                <TableHeader>Surface</TableHeader>
+                <TableHeader>Declared</TableHeader>
+                <TableHeader>Recomputed</TableHeader>
+                <TableHeader>Deviation</TableHeader>
+                <TableHeader>Pitch</TableHeader>
+                <TableHeader>Ring</TableHeader>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {geometry.facets.map((facet) => {
+                const flagged =
+                  !facet.ring_closed || (facet.deviation !== null && facet.deviation > 0.03);
+                return (
+                  <tr key={facet.id} className={cn(flagged && "bg-warning-soft/30")}>
+                    <th
+                      scope="row"
+                      className="px-4 py-3 text-left font-mono text-xs font-semibold text-foreground"
+                    >
+                      {facet.id}
+                    </th>
+                    <td className="px-4 py-3 text-muted">
+                      {[facet.type, facet.material].filter(Boolean).join(" · ") || "Not recorded"}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums">
+                      {formatArea(facet.declared_area, locale)}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums">
+                      {formatArea(facet.computed_area, locale)}
+                    </td>
+                    <td
+                      className={cn(
+                        "px-4 py-3 tabular-nums font-semibold",
+                        flagged ? "text-warning" : "text-muted",
+                      )}
+                    >
+                      {formatPercent(facet.deviation, locale)}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums text-muted">
+                      {facet.pitch === null ? "Not recorded" : `${facet.pitch}/12`}
+                    </td>
+                    <td
+                      className={cn(
+                        "px-4 py-3 font-semibold",
+                        facet.ring_closed ? "text-ok" : "text-warning",
+                      )}
+                    >
+                      {facet.ring_closed ? "Closed" : "Open"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-        {geometry.facets_truncated ? (
-          <p className="text-sm font-semibold text-warning">First returned facets shown</p>
-        ) : null}
-      </div>
-      <p className="mt-3 text-xs font-semibold text-muted sm:hidden">
-        Swipe the table to compare every source value.
-      </p>
-      <div
-        className="mt-2 overflow-x-auto border-y border-border"
-        aria-label="Facet comparison table"
-      >
-        <table className="min-w-[45rem] w-full border-collapse text-left text-sm">
-          <thead className="bg-surface-muted text-muted">
-            <tr>
-              <TableHeader>Facet</TableHeader>
-              <TableHeader>Surface</TableHeader>
-              <TableHeader>Declared</TableHeader>
-              <TableHeader>Recomputed</TableHeader>
-              <TableHeader>Deviation</TableHeader>
-              <TableHeader>Pitch</TableHeader>
-              <TableHeader>Ring</TableHeader>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {geometry.facets.map((facet) => {
-              const flagged =
-                !facet.ring_closed || (facet.deviation !== null && facet.deviation > 0.03);
-              return (
-                <tr key={facet.id} className={cn(flagged && "bg-warning-soft/30")}>
-                  <td className="px-4 py-3 font-mono text-xs font-semibold text-foreground">
-                    {facet.id}
-                  </td>
-                  <td className="px-4 py-3 text-muted">
-                    {[facet.type, facet.material].filter(Boolean).join(" · ") || "Not recorded"}
-                  </td>
-                  <td className="px-4 py-3 tabular-nums">
-                    {formatArea(facet.declared_area, locale)}
-                  </td>
-                  <td className="px-4 py-3 tabular-nums">
-                    {formatArea(facet.computed_area, locale)}
-                  </td>
-                  <td
-                    className={cn(
-                      "px-4 py-3 tabular-nums font-semibold",
-                      flagged ? "text-warning" : "text-muted",
-                    )}
-                  >
-                    {formatPercent(facet.deviation, locale)}
-                  </td>
-                  <td className="px-4 py-3 tabular-nums text-muted">
-                    {facet.pitch === null ? "Not recorded" : `${facet.pitch}/12`}
-                  </td>
-                  <td
-                    className={cn(
-                      "px-4 py-3 font-semibold",
-                      facet.ring_closed ? "text-ok" : "text-warning",
-                    )}
-                  >
-                    {facet.ring_closed ? "Closed" : "Open"}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      </details>
     </section>
   );
 }
@@ -724,57 +1000,57 @@ function GeometryChecks({ geometry }: { geometry: EstimatorGeometry }) {
   if (geometry.state === "unavailable") return null;
   return (
     <section className="mt-7" aria-labelledby="geometry-checks-heading">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h3 id="geometry-checks-heading" className="text-lg font-black tracking-[-0.02em]">
-            Source checks
-          </h3>
-          <p className="mt-1 text-sm leading-6 text-muted">
+      <h3 id="geometry-checks-heading" className="text-lg font-black tracking-[-0.02em]">
+        Source checks
+      </h3>
+      <details open={geometry.failed_check_count > 0 || geometry.checks_truncated} className="mt-3">
+        <summary className="flex cursor-pointer list-none flex-wrap items-end justify-between gap-3 rounded-lg border border-border bg-surface-raised px-4 py-4 [&::-webkit-details-marker]:hidden">
+          <span className="text-sm leading-6 text-muted">
             File references, perimeter closure, and declared geometry are checked deterministically.
+          </span>
+          <span
+            className={cn(
+              "text-sm font-bold",
+              geometry.failed_check_count > 0 ? "text-warning" : "text-ok",
+            )}
+          >
+            {geometry.failed_check_count > 0
+              ? `${geometry.failed_check_count} need review`
+              : "No failed checks returned"}
+          </span>
+        </summary>
+        {geometry.checks.length === 0 ? (
+          <div className="mt-3 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-muted">
+            No source exceptions were returned. This is not field-verification evidence.
+          </div>
+        ) : (
+          <ul className="mt-3 divide-y divide-border overflow-hidden rounded-lg border border-border">
+            {geometry.checks.map((check) => (
+              <li
+                key={`${check.check}:${check.target}`}
+                className="flex gap-3 bg-surface-raised px-4 py-3 text-sm leading-6"
+              >
+                {check.ok ? (
+                  <Check className="mt-1 size-4 shrink-0 text-ok" aria-hidden="true" />
+                ) : (
+                  <TriangleAlert className="mt-1 size-4 shrink-0 text-warning" aria-hidden="true" />
+                )}
+                <div className="min-w-0">
+                  <p className="font-semibold text-foreground">
+                    {humanize(check.check) ?? check.check} · {check.target}
+                  </p>
+                  <p className="text-muted">{check.detail}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {geometry.checks_truncated ? (
+          <p className="mt-2 text-sm font-semibold text-warning">
+            Only the first returned checks are displayed.
           </p>
-        </div>
-        <p
-          className={cn(
-            "text-sm font-bold",
-            geometry.failed_check_count > 0 ? "text-warning" : "text-ok",
-          )}
-        >
-          {geometry.failed_check_count > 0
-            ? `${geometry.failed_check_count} need review`
-            : "No failed checks returned"}
-        </p>
-      </div>
-      {geometry.checks.length === 0 ? (
-        <div className="mt-3 border border-border px-4 py-3 text-sm leading-6 text-muted">
-          No source exceptions were returned. This is not field-verification evidence.
-        </div>
-      ) : (
-        <ul className="mt-3 divide-y divide-border border-y border-border">
-          {geometry.checks.map((check) => (
-            <li
-              key={`${check.check}:${check.target}`}
-              className="flex gap-3 px-4 py-3 text-sm leading-6"
-            >
-              {check.ok ? (
-                <Check className="mt-1 size-4 shrink-0 text-ok" aria-hidden="true" />
-              ) : (
-                <TriangleAlert className="mt-1 size-4 shrink-0 text-warning" aria-hidden="true" />
-              )}
-              <div className="min-w-0">
-                <p className="font-semibold text-foreground">
-                  {humanize(check.check) ?? check.check} · {check.target}
-                </p>
-                <p className="text-muted">{check.detail}</p>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      {geometry.checks_truncated ? (
-        <p className="mt-2 text-sm font-semibold text-warning">
-          Only the first returned checks are displayed.
-        </p>
-      ) : null}
+        ) : null}
+      </details>
     </section>
   );
 }
@@ -792,41 +1068,54 @@ function MeasurementMetrics({
       <h3 id="measurement-metrics-heading" className="text-lg font-black tracking-[-0.02em]">
         Measurement references
       </h3>
-      <p className="mt-1 text-sm leading-6 text-muted">
-        Values stay attached to their extraction or source-file reference.
-      </p>
-      {sourceMetrics.length > 0 ? (
-        <MetricList
-          title="Recorded metrics"
-          metrics={sourceMetrics.map((metric) => ({
-            id: metric.metric,
-            label: metric.metric,
-            value:
-              [formatNumber(metric.value), metric.unit].filter(Boolean).join(" ") || "Not recorded",
-            source: metric.source_ref,
-            warning: metric.needs_review,
-            detail: metric.confidence,
-          }))}
-        />
-      ) : null}
-      {geometryMetrics.length > 0 ? (
-        <MetricList
-          title="Recomputed source metrics"
-          metrics={geometryMetrics.map((metric) => ({
-            id: metric.metric,
-            label: metric.metric,
-            value: formatNumber(metric.value),
-            source: metric.source_ref,
-            warning: false,
-            detail: "Derived from captured source geometry",
-          }))}
-        />
-      ) : null}
-      {measurement.metrics_truncated || measurement.geometry.metrics_truncated ? (
-        <p className="mt-2 text-sm font-semibold text-warning">
-          Only the first returned metrics are displayed.
-        </p>
-      ) : null}
+      <details
+        open={
+          sourceMetrics.some((metric) => metric.needs_review) ||
+          measurement.metrics_truncated ||
+          measurement.geometry.metrics_truncated
+        }
+        className="mt-3"
+      >
+        <summary className="flex cursor-pointer list-none flex-wrap items-end justify-between gap-3 rounded-lg border border-border bg-surface-raised px-4 py-4 [&::-webkit-details-marker]:hidden">
+          <span className="text-sm leading-6 text-muted">
+            Values stay attached to their extraction or source-file reference.
+          </span>
+          <span className="text-sm font-semibold text-muted">Source audit detail</span>
+        </summary>
+        {sourceMetrics.length > 0 ? (
+          <MetricList
+            title="Recorded metrics"
+            metrics={sourceMetrics.map((metric) => ({
+              id: metric.metric,
+              label: metric.metric,
+              value:
+                [formatNumber(metric.value), metric.unit].filter(Boolean).join(" ") ||
+                "Not recorded",
+              source: metric.source_ref,
+              warning: metric.needs_review,
+              detail: metric.confidence,
+            }))}
+          />
+        ) : null}
+        {geometryMetrics.length > 0 ? (
+          <MetricList
+            title="Recomputed source metrics"
+            metrics={geometryMetrics.map((metric) => ({
+              id: metric.metric,
+              label: metric.metric,
+              value: formatNumber(metric.value),
+              source: metric.source_ref,
+              warning: false,
+              detail: "Derived from captured source geometry",
+            }))}
+          />
+        ) : null}
+        {measurement.metrics_truncated || measurement.geometry.metrics_truncated ? (
+          <p className="mt-2 text-sm font-semibold text-warning">
+            Only the first returned metrics are displayed.
+          </p>
+        ) : null}
+      </details>
     </section>
   );
 }
@@ -847,7 +1136,7 @@ function MetricList({
 }) {
   return (
     <div className="mt-4 border-y border-border">
-      <p className="px-4 py-3 text-sm font-bold text-muted">{title}</p>
+      <h4 className="px-4 py-3 text-sm font-bold text-muted">{title}</h4>
       <ul className="divide-y divide-border">
         {metrics.map((metric) => (
           <li
@@ -877,12 +1166,13 @@ function MetricList({
 function TakeoffReview({ model, locale }: { model: EstimatorWorkbenchResponse; locale: string }) {
   const selected = model.takeoffs.selected;
   const lineage = model.lineage.measurement_to_takeoff;
+  const flaggedItems = selected?.items.filter((item) => item.needs_review).length ?? 0;
   return (
     <section
-      className="min-w-0 border-y border-border py-6 sm:py-7"
+      className="min-w-0 rounded-xl border border-border bg-surface"
       aria-labelledby="takeoff-heading"
     >
-      <div className="px-4 sm:px-6">
+      <div className="px-5 py-6 sm:px-6 sm:py-7">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <SectionHeading
             id="takeoff-heading"
@@ -902,71 +1192,101 @@ function TakeoffReview({ model, locale }: { model: EstimatorWorkbenchResponse; l
           <EmptyInline message={takeoffEmptyMessage(model, lineage)} />
         ) : (
           <>
-            <p className="mt-6 text-xs font-semibold text-muted sm:hidden">
-              Swipe the table to review each source reference.
-            </p>
-            <div
-              className="mt-2 overflow-x-auto border-y border-border"
-              aria-label="Material takeoff table"
-            >
-              <table className="min-w-[48rem] w-full border-collapse text-left text-sm">
-                <thead className="bg-surface-muted text-muted">
-                  <tr>
-                    <TableHeader>Item</TableHeader>
-                    <TableHeader>Quantity</TableHeader>
-                    <TableHeader>Waste</TableHeader>
-                    <TableHeader>Source reference</TableHeader>
-                    <TableHeader>Review</TableHeader>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {selected.items.length > 0 ? (
-                    selected.items.map((item, index) => (
-                      <tr
-                        key={`${item.item_name ?? "item"}:${index}`}
-                        className={cn(item.needs_review && "bg-warning-soft/30")}
-                      >
-                        <td className="px-4 py-3">
-                          <p className="font-semibold text-foreground">
-                            {item.item_name ?? "Unnamed item"}
-                          </p>
-                          {item.category ? (
-                            <p className="mt-0.5 text-xs text-muted">{item.category}</p>
-                          ) : null}
-                        </td>
-                        <td className="px-4 py-3 tabular-nums">
-                          {[formatNumber(item.quantity), item.unit].filter(Boolean).join(" ") ||
-                            "Not recorded"}
-                        </td>
-                        <td className="px-4 py-3 tabular-nums text-muted">
-                          {formatPercent(
-                            item.waste_factor === null ? null : item.waste_factor / 100,
-                            locale,
-                          )}
-                        </td>
-                        <td className="max-w-xs break-words px-4 py-3 text-muted">
-                          {item.source_ref ?? "Source reference unavailable"}
-                        </td>
-                        <td
-                          className={cn(
-                            "px-4 py-3 font-semibold",
-                            item.needs_review ? "text-warning" : "text-ok",
-                          )}
+            <dl className="mt-6 grid overflow-hidden rounded-lg border border-border sm:grid-cols-3">
+              <MeasurementFact label="Returned items" value={String(selected.items.length)} />
+              <MeasurementFact
+                label="Needs review"
+                value={String(flaggedItems)}
+                bordered
+                danger={flaggedItems > 0}
+              />
+              <MeasurementFact
+                label="Measurement link"
+                value={lineage === "linked" ? "Linked" : "Needs review"}
+                bordered
+                danger={lineage !== "linked"}
+              />
+            </dl>
+            <h3 className="mt-6 text-lg font-black tracking-[-0.02em]">Material evidence</h3>
+            <details open={flaggedItems > 0 || selected.items_truncated} className="mt-3">
+              <summary className="flex cursor-pointer list-none flex-wrap items-end justify-between gap-3 rounded-lg border border-border bg-surface-raised px-4 py-4 [&::-webkit-details-marker]:hidden">
+                <span className="text-sm leading-6 text-muted">
+                  Quantities remain attached to each selected source reference.
+                </span>
+                <span className="text-sm font-semibold text-muted">Takeoff audit detail</span>
+              </summary>
+              <p className="mt-3 text-xs font-semibold text-muted sm:hidden">
+                Swipe the table to review each source reference.
+              </p>
+              <div
+                className="mt-2 overflow-x-auto rounded-lg border border-border"
+                aria-label="Material takeoff table"
+              >
+                <table className="min-w-[48rem] w-full border-collapse text-left text-sm">
+                  <caption className="sr-only">
+                    Material takeoff items with quantities, waste factors, source references, and
+                    review state.
+                  </caption>
+                  <thead className="bg-surface-muted text-muted">
+                    <tr>
+                      <TableHeader>Item</TableHeader>
+                      <TableHeader>Quantity</TableHeader>
+                      <TableHeader>Waste</TableHeader>
+                      <TableHeader>Source reference</TableHeader>
+                      <TableHeader>Review</TableHeader>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {selected.items.length > 0 ? (
+                      selected.items.map((item, index) => (
+                        <tr
+                          key={`${item.item_name ?? "item"}:${index}`}
+                          className={cn(item.needs_review && "bg-warning-soft/30")}
                         >
-                          {item.needs_review ? "Needs review" : (item.confidence ?? "Recorded")}
+                          <th scope="row" className="px-4 py-3 text-left">
+                            <p className="font-semibold text-foreground">
+                              {item.item_name ?? "Unnamed item"}
+                            </p>
+                            {item.category ? (
+                              <p className="mt-0.5 text-xs font-normal text-muted">
+                                {item.category}
+                              </p>
+                            ) : null}
+                          </th>
+                          <td className="px-4 py-3 tabular-nums">
+                            {[formatNumber(item.quantity), item.unit].filter(Boolean).join(" ") ||
+                              "Not recorded"}
+                          </td>
+                          <td className="px-4 py-3 tabular-nums text-muted">
+                            {formatPercent(
+                              item.waste_factor === null ? null : item.waste_factor / 100,
+                              locale,
+                            )}
+                          </td>
+                          <td className="max-w-xs break-words px-4 py-3 text-muted">
+                            {item.source_ref ?? "Source reference unavailable"}
+                          </td>
+                          <td
+                            className={cn(
+                              "px-4 py-3 font-semibold",
+                              item.needs_review ? "text-warning" : "text-ok",
+                            )}
+                          >
+                            {item.needs_review ? "Needs review" : (item.confidence ?? "Recorded")}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-5 text-muted">
+                          No takeoff items were returned.
                         </td>
                       </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={5} className="px-4 py-5 text-muted">
-                        No takeoff items were returned.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </details>
             {selected.items_truncated ? (
               <p className="mt-2 text-sm font-semibold text-warning">
                 Only the first returned takeoff items are displayed.
@@ -993,8 +1313,11 @@ function CommercialRecord({
   const proposal = model.proposal;
   const proposalLineage = model.lineage.quote_to_proposal;
   return (
-    <aside className="min-w-0 space-y-7 xl:sticky xl:top-28" aria-label="Commercial record">
-      <section className="border-y border-border py-6" aria-labelledby="quote-heading">
+    <aside className="min-w-0 space-y-5 2xl:sticky 2xl:top-8" aria-label="Commercial record">
+      <section
+        className="rounded-xl border border-border bg-surface py-6"
+        aria-labelledby="quote-heading"
+      >
         <div className="px-4 sm:px-5">
           <div className="flex items-start justify-between gap-3">
             <SectionHeading
@@ -1028,7 +1351,10 @@ function CommercialRecord({
         </div>
       </section>
 
-      <section className="border-y border-border py-6" aria-labelledby="proposal-heading">
+      <section
+        className="rounded-xl border border-border bg-surface py-6"
+        aria-labelledby="proposal-heading"
+      >
         <div className="px-4 sm:px-5">
           <div className="flex items-start justify-between gap-3">
             <SectionHeading
@@ -1073,7 +1399,10 @@ function CommercialRecord({
 
       <CustomerPortalOfficeAccess roofJobId={model.job.id} locale={locale} />
 
-      <section className="border-y border-border py-6" aria-labelledby="scope-heading">
+      <section
+        className="rounded-xl border border-border bg-surface py-6"
+        aria-labelledby="scope-heading"
+      >
         <div className="px-4 sm:px-5">
           <SectionHeading
             id="scope-heading"
@@ -1209,9 +1538,9 @@ function QuoteRevisionEntry({
     >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="max-w-xl">
-          <p id="revision-request-heading" className="text-sm font-bold text-foreground">
+          <h3 id="revision-request-heading" className="text-sm font-bold text-foreground">
             Correct this version without carrying terms forward
-          </p>
+          </h3>
           <p className="mt-1 text-sm leading-6 text-muted">
             The next step creates a human-reviewed request for a blank Draft shell. It does not copy
             price, tax, scope, payment, approval, acceptance, or customer terms.
@@ -1262,9 +1591,9 @@ function PricingSnapshot({
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p id="pricing-snapshot-heading" className="text-sm font-bold text-foreground">
+          <h3 id="pricing-snapshot-heading" className="text-sm font-bold text-foreground">
             Price snapshot
-          </p>
+          </h3>
           <p className="mt-1 text-xs leading-5 text-muted">
             Captured with this quote version. It is not a live supplier-price check.
           </p>
@@ -1311,9 +1640,9 @@ function QuoteRevisionLedger({
   if (revision.state !== "compared" || !prior || !delta) {
     return (
       <section className="mt-6 border-y border-border py-4" aria-labelledby="revision-heading">
-        <p id="revision-heading" className="text-sm font-bold text-foreground">
+        <h3 id="revision-heading" className="text-sm font-bold text-foreground">
           Version comparison
-        </p>
+        </h3>
         <p className="mt-2 text-sm leading-6 text-muted">
           {quoteRevisionEmptyMessage(revision.state)}
         </p>
@@ -1333,9 +1662,9 @@ function QuoteRevisionLedger({
     <section className="mt-6 border-y border-border py-4" aria-labelledby="revision-heading">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p id="revision-heading" className="text-sm font-bold text-foreground">
+          <h3 id="revision-heading" className="text-sm font-bold text-foreground">
             Version comparison
-          </p>
+          </h3>
           <p className="mt-1 text-xs leading-5 text-muted">
             Explicitly linked {prior.version === null ? "prior version" : `V${prior.version}`} →{" "}
             {quote.version === null ? "selected version" : `V${quote.version}`}. No amount is
@@ -1393,9 +1722,15 @@ function QuoteRevisionLedger({
         </p>
       )}
       {quote.correction_reason ? (
-        <p className="mt-4 border-l-2 border-warning pl-3 text-sm leading-6 text-foreground">
-          {quote.correction_reason}
-        </p>
+        <section
+          className="mt-4 border-l-2 border-warning pl-3"
+          aria-labelledby="correction-reason-heading"
+        >
+          <h3 id="correction-reason-heading" className="text-sm font-bold text-foreground">
+            Correction rationale
+          </h3>
+          <p className="mt-1 text-sm leading-6 text-foreground">{quote.correction_reason}</p>
+        </section>
       ) : null}
       {delta.scope_summary_changed ? (
         <div className="mt-4 space-y-3 border-t border-border pt-4 text-sm leading-6">
@@ -1457,6 +1792,7 @@ function ScopeChangeLedger({
         icon={CircleAlert}
         title="Scope change ledger"
         description="Each change-order record declares its quote relationship and customer-decision state."
+        level="h3"
       />
       {changes.length === 0 ? (
         <EmptyInline message="No change-order records were returned for this roof job." />
@@ -1535,9 +1871,9 @@ function ProposalReadiness({
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p id="proposal-readiness-heading" className="text-sm font-bold text-foreground">
+          <h3 id="proposal-readiness-heading" className="text-sm font-bold text-foreground">
             Proposal review gate
-          </p>
+          </h3>
           <p className="mt-1 text-xs leading-5 text-muted">
             This gate does not create, approve, send, sign, or collect against a proposal.
           </p>
@@ -1630,21 +1966,24 @@ function SectionHeading({
   icon: Icon,
   title,
   description,
+  level = "h2",
 }: {
   id: string;
   icon: LucideIcon;
   title: string;
   description: string;
+  level?: "h2" | "h3";
 }) {
+  const Heading = level;
   return (
     <div className="min-w-0">
-      <h2
+      <Heading
         id={id}
         className="flex items-center gap-2 text-xl font-black tracking-[-0.025em] text-balance sm:text-2xl"
       >
         <Icon className="size-5 text-accent" aria-hidden="true" />
         {title}
-      </h2>
+      </Heading>
       <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">{description}</p>
     </div>
   );
@@ -1736,10 +2075,7 @@ function DataBoundary({ model }: { model: EstimatorWorkbenchResponse }) {
     .map(humanize)
     .filter((source): source is string => Boolean(source));
   return (
-    <div
-      className="flex gap-3 border border-warning/40 bg-warning-soft/55 p-4 text-sm leading-6"
-      role="status"
-    >
+    <div className="flex gap-3 rounded-lg border border-warning/40 bg-warning-soft/55 p-4 text-sm leading-6">
       <CircleAlert className="mt-0.5 size-5 shrink-0 text-warning" aria-hidden="true" />
       <div>
         <p className="font-bold text-foreground">This is a bounded source review.</p>

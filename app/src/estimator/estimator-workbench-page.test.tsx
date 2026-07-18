@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -285,6 +285,72 @@ describe("EstimatorWorkbenchPage", () => {
     expect(
       screen.queryByRole("heading", { name: "Insurance supplement evidence" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("puts the next safe step and selected commercial record ahead of dense evidence", async () => {
+    renderWorkbench();
+
+    const nextStep = await screen.findByRole("heading", { name: "Next safe step" });
+    const commercial = screen.getByRole("heading", { name: "Selected commercial record" });
+    const measurement = screen.getByRole("heading", { name: "Measurement source" });
+
+    expect(screen.getByText("Complete human review")).toBeVisible();
+    expect(screen.getByText("Quote total")).toBeVisible();
+    expect(nextStep.compareDocumentPosition(commercial) & 4).toBeTruthy();
+    expect(commercial.compareDocumentPosition(measurement) & 4).toBeTruthy();
+  });
+
+  it("keeps source tables semantic and leaves static geometry notices out of the live region", async () => {
+    renderWorkbench();
+
+    await screen.findByRole("heading", { name: "Measurement workbench" });
+    const facetTable = screen.getByRole("table", { name: /captured source facets/i });
+    const takeoffTable = screen.getByRole("table", { name: /material takeoff items/i });
+
+    expect(within(facetTable).getByRole("rowheader", { name: "F1" })).toBeVisible();
+    expect(
+      within(takeoffTable).getByRole("rowheader", { name: /architectural shingles/i }),
+    ).toBeVisible();
+    expect(screen.getByText("Geometry needs review").closest("[role=status]")).toBeNull();
+  });
+
+  it("collapses secondary audit detail when the returned evidence has no review signal", async () => {
+    const base = workbenchModel();
+    vi.mocked(loadEstimatorWorkbench).mockResolvedValue({
+      ...base,
+      measurements: {
+        ...base.measurements,
+        selected: {
+          ...base.measurements.selected!,
+          metrics: base.measurements.selected!.metrics.map((metric) => ({
+            ...metric,
+            needs_review: false,
+          })),
+          geometry: {
+            ...base.measurements.selected!.geometry,
+            state: "recomputed",
+            failed_check_count: 0,
+            checks: base.measurements.selected!.geometry.checks.map((check) => ({
+              ...check,
+              ok: true,
+            })),
+          },
+        },
+      },
+      takeoffs: {
+        ...base.takeoffs,
+        selected: {
+          ...base.takeoffs.selected!,
+          items: base.takeoffs.selected!.items.map((item) => ({ ...item, needs_review: false })),
+        },
+      },
+    });
+    renderWorkbench();
+
+    await screen.findByRole("heading", { name: "Measurement workbench" });
+    expect(screen.getByText("Facet audit detail").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("Source audit detail").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("Takeoff audit detail").closest("details")).not.toHaveAttribute("open");
   });
 
   it("shows a source-read failure as unavailable instead of relabeling it as field verified", async () => {

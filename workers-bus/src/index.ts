@@ -181,11 +181,16 @@ async function routeRequest(
   const url = new URL(req.url);
   // Preserve the original cheap liveness contract for platform health checks. Readiness is
   // intentionally separate because it can fail while the isolate itself is healthy.
-  if (req.method === "GET" && url.pathname === "/health")
-    return json({ ok: true });
-  if (req.method === "GET" && url.pathname === "/ready") {
+  if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/health")
+    return methodAwareJson(req, { ok: true });
+  if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/ready") {
     const readiness = await getReadiness(env);
-    return json(readiness, readiness.ok ? 200 : 503);
+    // Keep public monitoring useful without advertising the state of every
+    // downstream rail to an unauthenticated caller. Operators can use the
+    // existing admin bearer token for the diagnostic check map.
+    if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN))
+      return methodAwareJson(req, { ok: readiness.ok }, readiness.ok ? 200 : 503);
+    return methodAwareJson(req, readiness, readiness.ok ? 200 : 503);
   }
   // Public estimator traffic is browser-origin constrained and has independent
   // Turnstile/rate controls. It never accepts the private ingest bearer token.
@@ -904,6 +909,13 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+}
+
+function methodAwareJson(req: Request, body: unknown, status = 200): Response {
+  const response = json(body, status);
+  return req.method === "HEAD"
+    ? new Response(null, { status: response.status, headers: response.headers })
+    : response;
 }
 
 function requestIdFor(req: Request): string {

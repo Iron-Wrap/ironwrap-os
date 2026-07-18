@@ -44,7 +44,7 @@ export function createLaunchProofPlan({ stamp = Date.now() } = {}) {
       name: "ready",
       method: "GET",
       path: "/ready",
-      auth: null,
+      auth: "admin",
       requestId: requestId("ready"),
     },
     {

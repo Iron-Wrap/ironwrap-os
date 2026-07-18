@@ -95,6 +95,7 @@ import {
   listMeasurementIntakeExceptions,
   projectMeasurementIntakeOwnerException,
 } from "./measurement-intake-store.ts";
+import { buildNewoOperationsReadModel } from "./newo-operations-read-model.ts";
 
 const MAX_ADMIN_BODY_BYTES = 8 * 1024;
 
@@ -591,6 +592,18 @@ export async function handleAuthenticatedRoute(
         { error: "measurement_intake_exception_store_unavailable" },
         502,
       );
+    }
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/newo/operations") {
+    if (!officeRole(auth))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    try {
+      // The app session is already bound to this deployment's configured tenant. This
+      // projection deliberately excludes caller identity, content, raw pointers, hashes,
+      // provider responses, and control arguments.
+      return privateAppJson(await buildNewoOperationsReadModel(env));
+    } catch {
+      return privateAppJson({ error: "newo_operations_unavailable" }, 502);
     }
   }
   if (req.method === "GET" && url.pathname === "/api/v1/production") {

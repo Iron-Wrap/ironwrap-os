@@ -481,6 +481,13 @@ export async function getLatestNewoReconciliationRun(
   ).first<NewoReconciliationRun>();
 }
 
+export async function countOpenNewoDeadLetters(env: Env): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM dead_letter WHERE recovered = 0 AND stage GLOB 'newo_*'",
+  ).first<{ count: number }>();
+  return Number(row?.count ?? 0);
+}
+
 export async function newoOperationalCounts(env: Env): Promise<{
   sessions: number;
   pending_sync: number;
@@ -501,7 +508,7 @@ export async function newoOperationalCounts(env: Env): Promise<{
        (SELECT COUNT(*) FROM newo_event_receipts WHERE status IN ('failed','dead')) AS failed_events,
        (SELECT COUNT(*) FROM newo_sessions WHERE missing_report_detected_at IS NOT NULL
           AND report_received_at IS NULL) AS missing_reports,
-       (SELECT COUNT(*) FROM newo_sessions WHERE status = 'failed' OR handoff_status = 'failed') AS failed_handoffs,
+       (SELECT COUNT(*) FROM newo_sessions WHERE handoff_status = 'failed') AS failed_handoffs,
        (SELECT COUNT(*) FROM newo_sessions WHERE booking_status = 'requested') AS pending_bookings,
        (SELECT COUNT(*) FROM newo_control_actions WHERE status = 'failed') AS control_failures,
        (SELECT MAX(last_seen_at) FROM newo_event_receipts) AS last_event_at,

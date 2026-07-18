@@ -12,6 +12,7 @@ setup(
     ),
     package_data={"": ["*.css", "*.js", "*.json", "*.txt"]},
     include_package_data=True,
+    install_requires=["cryptography>=41"],
     python_requires=">=3.10",
     zip_safe=False,
 )

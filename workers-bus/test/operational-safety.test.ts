@@ -361,6 +361,29 @@ test("health and readiness support HEAD without emitting a response body", async
   assert.ok(sqlCalls.some((call) => call.sql.includes("sqlite_master")), "HEAD readiness still verifies the schema");
 });
 
+test("inactive private-app routes do not disclose their release state", async () => {
+  const disabled = fakeEnv();
+  const disabledResponse = await worker.fetch(
+    new Request("https://bus.example/api/v1/session"),
+    disabled.env as never,
+    ctx,
+  );
+  assert.equal(disabledResponse.status, 404);
+  assert.deepEqual(await disabledResponse.json(), { error: "not_found" });
+  assert.equal(disabledResponse.headers.get("cache-control"), "no-store");
+
+  const incomplete = fakeEnv();
+  (incomplete.env as Record<string, unknown>).APP_BFF_ENABLED = "true";
+  const incompleteResponse = await worker.fetch(
+    new Request("https://bus.example/api/v1/session"),
+    incomplete.env as never,
+    ctx,
+  );
+  assert.equal(incompleteResponse.status, 404);
+  assert.deepEqual(await incompleteResponse.json(), { error: "not_found" });
+  assert.equal(incompleteResponse.headers.get("cache-control"), "no-store");
+});
+
 test("a failed public readiness probe stays generic", async () => {
   const { env } = fakeEnv({ d1Throws: true });
   const response = await worker.fetch(new Request("https://bus.example/ready"), env as never, ctx);

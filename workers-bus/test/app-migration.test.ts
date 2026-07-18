@@ -174,9 +174,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     const migrations = (await readdir(new URL("../migrations/", import.meta.url)))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 22);
+    assert.equal(migrations.length, 24);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0022_newo_reception.sql");
+    assert.equal(migrations.at(-1), "0024_newo_control_evidence.sql");
     for (const migration of migrations) {
       db.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -193,7 +193,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
          SUM(type = 'trigger') AS triggers
        FROM sqlite_master`,
     ).get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 33, indexes: 57, triggers: 31 });
+    assert.deepEqual({ ...counts }, { tables: 33, indexes: 58, triggers: 31 });
 
     const newoTables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'newo_%' ORDER BY name",
@@ -210,6 +210,14 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     }>;
     assert.equal(receiptColumns.find(({ name }) => name === "event_id")?.pk, 1);
     assert.equal(receiptColumns.some(({ name }) => /transcript|recording|payload_json/.test(name)), false);
+    const controlColumns = db.prepare("PRAGMA table_info(newo_control_actions)").all() as Array<{
+      name: string;
+    }>;
+    for (const name of [
+      "approval_reason", "dry_run_expires_at", "approval_expires_at", "result_json", "consumed_at",
+    ]) {
+      assert.equal(controlColumns.some((column) => column.name === name), true, `missing ${name}`);
+    }
 
     const scheduleTables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'production_schedule_approval_%' ORDER BY name",

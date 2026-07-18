@@ -60,6 +60,7 @@ import {
   handleNewoWebhook,
   type NewoQueueMessage,
 } from "./newo.ts";
+import { handleNewoAdmin } from "./newo-admin.ts";
 
 type BusQueueMessage = { envelope_id: string } | NewoQueueMessage;
 
@@ -271,6 +272,8 @@ async function routeRequest(
   if (url.pathname.startsWith("/admin/")) {
     if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN))
       return json({ error: "unauthorized" }, 401);
+    if (url.pathname === "/admin/newo" || url.pathname.startsWith("/admin/newo/"))
+      return await handleNewoAdmin(req, env, url);
     if (req.method === "GET" && url.pathname === "/admin/envelopes")
       return json(await handleListEnvelopes(env, url));
     if (req.method === "GET" && url.pathname.startsWith("/admin/envelope/"))

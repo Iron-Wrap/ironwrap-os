@@ -19,7 +19,11 @@ import {
   type NewoSessionRecord,
 } from "./newo-store.ts";
 import { pushNewoSessionToErpNext, pushToErpNext } from "./erpnext.ts";
+import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { handleNewoCallerLookup } from "./newo-caller.ts";
 import * as store from "./store.ts";
+
+export { canonicalJson, sha256Hex } from "./newo-hash.ts";
 
 export const NEWO_EVENT_SCHEMA_VERSION = "newo.event.v1" as const;
 export const NEWO_AVAILABILITY_SCHEMA_VERSION = "newo.availability.v1" as const;
@@ -161,6 +165,12 @@ export async function handleNewoWebhook(
     const denied = authenticate(req, runtime.NEWO_BOOKING_TOKEN, "booking_not_configured");
     if (denied) return denied;
     return await handleAvailability(req, runtime);
+  }
+
+  if (url.pathname === "/webhook/newo/lookup") {
+    const denied = authenticate(req, runtime.NEWO_WEBHOOK_TOKEN, "webhook_not_configured");
+    if (denied) return denied;
+    return await handleNewoCallerLookup(req, env);
   }
 
   const bookingPath = url.pathname === "/webhook/newo/booking" ||
@@ -369,19 +379,6 @@ export function parseNewoAvailabilityRequest(
   };
 }
 
-export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().map((key) =>
-    `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
-}
-
-export async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 async function handleAvailability(req: Request, env: NewoRuntimeEnv): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
   const rawText = await readBounded(req);
@@ -521,6 +518,14 @@ async function ensureSessionEnvelope(
     appointment: event.appointment,
     outcome: event.outcome,
     handoff_summary: event.handoff_summary,
+    ...(existing?.verification_status === "verified" ? {
+      owned_association: {
+        customer_id: existing.matched_customer_id,
+        property_key: existing.matched_property_id,
+        roof_job_id: existing.matched_roof_job_id,
+        verification_status: "verified",
+      },
+    } : {}),
   };
   const rec: EnvelopeRecord = {
     envelope_id: envelopeId,

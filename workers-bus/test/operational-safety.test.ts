@@ -61,7 +61,7 @@ function fakeEnv(options: FakeOptions = {}) {
     sqlCalls.push({ sql, args });
     if (options.d1Throws && sql.includes("sqlite_master")) throw new Error("d1_unavailable");
     if (sql.includes("sqlite_master")) {
-      return { table_count: 33, index_count: options.missingSchemaArtifact ? 47 : 48, trigger_count: 31 };
+      return { table_count: 34, index_count: options.missingSchemaArtifact ? 49 : 50, trigger_count: 31 };
     }
     if (sql.includes("COUNT(*) AS n FROM dead_letter")) {
       return { n: deadLetters.filter((row) => row.recovered === 0).length };

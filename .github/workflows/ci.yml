@@ -57,6 +57,8 @@ jobs:
 
       - name: Install pinned Python validation tools
         run: python -m pip install --disable-pip-version-check ruff==0.13.0 build==1.4.0 ./frappe-apps/ironwrap_roofing
+      - name: Install erpnext-roofing-mcp dependencies
+        run: npm ci --prefix mcp/erpnext-roofing-mcp
       - name: Test Frappe application contracts without a site
         working-directory: frappe-apps/ironwrap_roofing
         run: python -m unittest discover -s tests -t .
@@ -70,7 +72,7 @@ jobs:
         run: python -m build --wheel
 
       - name: Test erpnext-roofing-mcp
-        run: npm ci --prefix mcp/erpnext-roofing-mcp && npm test --prefix mcp/erpnext-roofing-mcp
+        run: npm test --prefix mcp/erpnext-roofing-mcp
       - name: Test ironwrap-bus-mcp
         run: npm ci --prefix mcp/ironwrap-bus-mcp && npm test --prefix mcp/ironwrap-bus-mcp
 

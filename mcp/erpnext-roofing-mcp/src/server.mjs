@@ -886,6 +886,18 @@ export async function erpGet(config, path) {
   return await erpRequest(config, "GET", path);
 }
 
+export async function attestFrappeServicePrincipal(config) {
+  const response = await erpGet(config, "/api/method/frappe.auth.get_logged_user");
+  const principal = response?.message;
+  if (typeof principal !== "string" || !principal) {
+    throw new Error("frappe_service_principal_invalid");
+  }
+  if (principal !== config.actorUser) {
+    throw new Error("frappe_service_principal_mismatch");
+  }
+  return principal;
+}
+
 export async function erpPost(config, path, body) {
   return await erpRequest(config, "POST", path, body);
 }
@@ -7688,7 +7700,9 @@ function text(data) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const server = buildServer(configFromEnv());
+  const config = configFromEnv();
+  await attestFrappeServicePrincipal(config);
+  const server = buildServer(config);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

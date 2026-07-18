@@ -36,6 +36,11 @@ import {
 } from "./measurements.ts";
 import { handleEstimateIngest, retryEstimateErpNextSyncs } from "./estimates.ts";
 import { handleQuickbooksWebhook } from "./quickbooks.ts";
+import {
+  handlePublicInstantEstimate,
+  prunePublicEstimateRateLimits,
+  type PublicEstimatorEnv,
+} from "./public-estimator.ts";
 import { ensureJobFolder, googleConfigured } from "./google.ts";
 import { handleAdminAppUserProvision, handleAppApi } from "./app-api.ts";
 import { pruneAuthRecords } from "./app-auth-store.ts";
@@ -118,6 +123,9 @@ export default {
           pruneMeasurementIntakeReceipts(env).catch((error) =>
             log({ at: "measurement_receipt_prune", error: String(error) }),
           ),
+          prunePublicEstimateRateLimits(env as PublicEstimatorEnv).catch((error) =>
+            log({ at: "public_estimate_rate_limit_prune", error: String(error) }),
+          ),
         ]).then(() => {}),
       );
     } else
@@ -178,6 +186,11 @@ async function routeRequest(
   if (req.method === "GET" && url.pathname === "/ready") {
     const readiness = await getReadiness(env);
     return json(readiness, readiness.ok ? 200 : 503);
+  }
+  // Public estimator traffic is browser-origin constrained and has independent
+  // Turnstile/rate controls. It never accepts the private ingest bearer token.
+  if (url.pathname.startsWith("/public/")) {
+    return await handlePublicInstantEstimate(req, env as PublicEstimatorEnv);
   }
   // Customer capability resolution bypasses office cookies but requires healthy BFF configuration
   // so the office revocation control plane cannot disappear while customer links remain live. It

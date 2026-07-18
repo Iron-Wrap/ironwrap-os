@@ -19,6 +19,11 @@ QB_WEBHOOK_TOKEN=""
 ERPNEXT_API_KEY=""
 ERPNEXT_API_SECRET=""
 
+# Public instant estimate (disabled until the non-secret vars in wrangler.jsonc
+# are configured with exact origins, rate limits, and a validated JSON rule set).
+PUBLIC_ESTIMATE_TURNSTILE_SECRET=""
+PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER="replace-with-at-least-32-random-characters"
+
 # Local overrides of wrangler.jsonc vars (optional):
 # JOBNIMBUS_ENABLED="false"
 # ERPNEXT_ENABLED="false"
@@ -28,3 +33,13 @@ ERPNEXT_API_SECRET=""
 # APP_ALLOWED_ORIGINS="http://localhost:5173"
 # APP_ALLOW_INSECURE_LOCAL="true"
 # APP_INSURANCE_ESTIMATOR_FRAPPE_USERS="estimator@your-site.example"
+# PUBLIC_ESTIMATE_ENABLED="true"
+# PUBLIC_ESTIMATE_ALLOWED_ORIGINS="http://localhost:5173"
+# PUBLIC_ESTIMATE_ALLOWED_BRANDS="ironwrap,iroof"
+# PUBLIC_ESTIMATE_CONSENT_JURISDICTION="Alberta, Canada"
+# PUBLIC_ESTIMATE_ALLOW_INSECURE_LOCAL="true"
+# PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY="1x00000000000000000000AA"
+# PUBLIC_ESTIMATE_RATE_LIMIT_WINDOW_SECONDS="900"
+# PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX="12"
+# PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX="3"
+# PUBLIC_ESTIMATE_RANGE_RULES_JSON='[]' # Use allowed tenant brand/service ids only; owner-approved/versioned.

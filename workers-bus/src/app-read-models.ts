@@ -32,6 +32,9 @@ const MAX_ESTIMATOR_METRICS = 120;
 const MAX_ESTIMATOR_TAKEOFF_ITEMS = 250;
 const MAX_ESTIMATOR_GEOMETRY_LABEL = 240;
 const MAX_ESTIMATOR_GEOMETRY_DETAIL = 600;
+const MAX_VISUAL_SCREENSHOT_JSON_LENGTH = 32 * 1024;
+const MAX_VISUAL_PREVIEW_URL_LENGTH = 2048;
+const MAX_VISUAL_SCREENSHOT_CANDIDATES = 12;
 const MCTB_SLA_MS = 60_000;
 // Completion is created with the other lifecycle gates, but it is closeout-only.
 // Keep the read model aligned with the authoritative scheduling policy instead of
@@ -455,6 +458,20 @@ export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
       geometry: EstimatorGeometryProjection;
     } | null;
   };
+  visual_model: {
+    provider: string | null;
+    model_state: "draft" | "needs_review" | "approved" | "rejected" | "unavailable";
+    confidence: number | null;
+    review_required: boolean;
+    approval_recorded: boolean;
+    captured_at: string | null;
+    approved_at: string | null;
+    measurement_link: "selected_measurement" | "other_measurement" | "unlinked" | "unavailable";
+    preview: {
+      state: "available" | "not_recorded" | "not_configured" | "blocked" | "invalid" | "unavailable";
+      url: string | null;
+    };
+  } | null;
   takeoffs: {
     records: Array<{
       id: string;
@@ -1415,6 +1432,8 @@ export async function buildEstimatorWorkbenchReadModel(
 
   const [
     measurementRows,
+    visualModelRows,
+    roofAreaRows,
     takeoffRows,
     quoteRows,
     proposalRows,
@@ -1426,6 +1445,18 @@ export async function buildEstimatorWorkbenchReadModel(
       env,
       "Measurement Report",
       [["Measurement Report", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Visual Property Model",
+      [["Visual Property Model", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Roof Area",
+      [["Roof Area", "roof_job", "=", jobId]],
       ESTIMATOR_SOURCE_LIMIT,
     ),
     listOfficeEstimatorFrappeResource(
@@ -1470,6 +1501,9 @@ export async function buildEstimatorWorkbenchReadModel(
 
   const selectedMeasurementRow = latestRecord(measurementRows);
   const selectedMeasurementName = selectedMeasurementRow ? text(selectedMeasurementRow.name) : null;
+  const selectedVisualModelRow = latestRecord(visualModelRows);
+  const selectedVisualModelName = selectedVisualModelRow ? text(selectedVisualModelRow.name) : null;
+  const visualModelSourceComplete = visualModelRows.length < ESTIMATOR_SOURCE_LIMIT;
   const selectedTakeoffRow = selectedMeasurementName
     ? latestRecord(takeoffRows.filter((row) => text(row.measurement_report) === selectedMeasurementName))
     : null;
@@ -1485,9 +1519,12 @@ export async function buildEstimatorWorkbenchReadModel(
   const scopeChanges = newestFirst(changeOrderRows).flatMap((row) =>
     estimatorScopeChange(row, selectedQuoteName, quoteRows),
   );
-  const [measurementRead, takeoffRead, insuranceSupplementReads] = await Promise.all([
+  const [measurementRead, visualModelRead, takeoffRead, insuranceSupplementReads] = await Promise.all([
     selectedMeasurementName
       ? safeEstimatorDetailRead(env, "Measurement Report", selectedMeasurementName)
+      : Promise.resolve({ row: null, unavailable_reason: null }),
+    selectedVisualModelName && visualModelSourceComplete
+      ? safeEstimatorDetailRead(env, "Visual Property Model", selectedVisualModelName)
       : Promise.resolve({ row: null, unavailable_reason: null }),
     selectedTakeoffName
       ? safeEstimatorDetailRead(env, "Material Takeoff", selectedTakeoffName)
@@ -1504,6 +1541,10 @@ export async function buildEstimatorWorkbenchReadModel(
   ]);
   const measurementDetail = matchesMeasurementDetail(measurementRead.row, selectedMeasurementName, jobId)
     ? measurementRead.row
+    : null;
+  const visualModelDetail = visualModelSourceComplete
+    && matchesVisualModelDetail(visualModelRead.row, selectedVisualModelName, jobId)
+    ? visualModelRead.row
     : null;
   const takeoffDetail = matchesTakeoffDetail(takeoffRead.row, selectedTakeoffName, jobId, selectedMeasurementName)
     ? takeoffRead.row
@@ -1546,6 +1587,8 @@ export async function buildEstimatorWorkbenchReadModel(
     [
       job,
       ...measurementRows,
+      ...visualModelRows,
+      ...roofAreaRows,
       ...takeoffRows,
       ...quoteRows,
       ...proposalRows,
@@ -1589,6 +1632,13 @@ export async function buildEstimatorWorkbenchReadModel(
       reports: newestFirst(measurementRows).flatMap(estimatorMeasurementSummary),
       selected: estimatorMeasurementSelection(selectedMeasurementRow, measurementDetail, geometry),
     },
+    visual_model: estimatorVisualModel(
+      env,
+      selectedVisualModelRow,
+      visualModelDetail,
+      roofAreaRows,
+      selectedMeasurementRow,
+    ),
     takeoffs: {
       records: newestFirst(takeoffRows).flatMap(estimatorTakeoffSummary),
       selected: estimatorTakeoffSelection(selectedTakeoffRow, takeoffDetail),
@@ -2072,7 +2122,7 @@ function estimatorMeasurementSummary(
 
 async function safeEstimatorDetailRead(
   env: AppEnv,
-  doctype: "Measurement Report" | "Material Takeoff" | "Insurance Supplement",
+  doctype: "Measurement Report" | "Visual Property Model" | "Material Takeoff" | "Insurance Supplement",
   name: string,
 ): Promise<{ row: FrappeRow | null; unavailable_reason: string | null }> {
   try {
@@ -2083,6 +2133,8 @@ async function safeEstimatorDetailRead(
         row: null,
         unavailable_reason: doctype === "Measurement Report"
           ? "measurement_detail_too_large"
+          : doctype === "Visual Property Model"
+            ? "visual_model_detail_too_large"
           : doctype === "Material Takeoff"
             ? "takeoff_detail_too_large"
             : "insurance_supplement_detail_too_large",
@@ -2093,6 +2145,14 @@ async function safeEstimatorDetailRead(
 }
 
 function matchesMeasurementDetail(
+  row: FrappeRow | null,
+  expectedName: string | null,
+  jobName: string,
+): boolean {
+  return Boolean(row && expectedName && text(row.name) === expectedName && text(row.roof_job) === jobName);
+}
+
+function matchesVisualModelDetail(
   row: FrappeRow | null,
   expectedName: string | null,
   jobName: string,
@@ -2149,6 +2209,162 @@ function quoteToProposalLineage(
   if (proposal) return "linked";
   if (proposals.length === ESTIMATOR_SOURCE_LIMIT) return "unknown";
   return proposals.length > 0 ? "mismatch" : "no_proposal";
+}
+
+function estimatorVisualModel(
+  env: AppEnv,
+  row: FrappeRow | null,
+  detail: FrappeRow | null,
+  roofAreas: FrappeRow[],
+  selectedMeasurement: FrappeRow | null,
+): EstimatorWorkbenchReadModel["visual_model"] {
+  if (!row || !detail) return row ? unavailableVisualModel() : null;
+  const modelName = text(row.name);
+  const provider = visualText(detail.provider, 160);
+  const status = visualText(detail.status, 80);
+  const needsReview = booleanValue(detail.needs_review);
+  const confidence = visualConfidence(detail.confidence);
+  if (!modelName || !provider || !status || needsReview === null || confidence === undefined) {
+    return unavailableVisualModel();
+  }
+
+  const capturedAt = visualTimestamp(detail.captured_at);
+  const approvedAt = visualTimestamp(detail.approved_at);
+  const approvalRecorded = status === "Approved" && needsReview === false && approvedAt !== null;
+  const modelState = status === "Draft"
+    ? "draft"
+    : status === "Needs Review"
+      ? "needs_review"
+      : status === "Approved"
+        ? approvalRecorded ? "approved" : "needs_review"
+        : status === "Rejected"
+          ? "rejected"
+          : "unavailable";
+  if (modelState === "unavailable") return unavailableVisualModel();
+
+  return {
+    provider,
+    model_state: modelState,
+    confidence,
+    review_required: needsReview || modelState === "needs_review",
+    approval_recorded: approvalRecorded,
+    captured_at: capturedAt,
+    approved_at: approvedAt,
+    measurement_link: visualMeasurementLink(modelName, roofAreas, selectedMeasurement),
+    preview: visualPreview(detail.screenshots_json, env.APP_VISUAL_PREVIEW_ALLOWED_ORIGINS),
+  };
+}
+
+function unavailableVisualModel(): NonNullable<EstimatorWorkbenchReadModel["visual_model"]> {
+  return {
+    provider: null,
+    model_state: "unavailable",
+    confidence: null,
+    review_required: true,
+    approval_recorded: false,
+    captured_at: null,
+    approved_at: null,
+    measurement_link: "unavailable",
+    preview: { state: "unavailable", url: null },
+  };
+}
+
+function visualMeasurementLink(
+  visualModelName: string,
+  roofAreas: FrappeRow[],
+  selectedMeasurement: FrappeRow | null,
+): NonNullable<EstimatorWorkbenchReadModel["visual_model"]>["measurement_link"] {
+  const areasForModel = roofAreas.filter((area) => text(area.visual_model) === visualModelName);
+  if (areasForModel.length === 0) {
+    return roofAreas.length === ESTIMATOR_SOURCE_LIMIT ? "unavailable" : "unlinked";
+  }
+  const linkedMeasurements = areasForModel.map((area) => text(area.measurement_report)).filter(notNull);
+  if (linkedMeasurements.length === 0) return "unlinked";
+  const selectedNames = selectedMeasurement
+    ? [text(selectedMeasurement.name), text(selectedMeasurement.measurement_id)].filter(notNull)
+    : [];
+  return selectedNames.some((name) => linkedMeasurements.includes(name))
+    ? "selected_measurement"
+    : "other_measurement";
+}
+
+function visualPreview(
+  screenshots: unknown,
+  configuredOrigins: string | undefined,
+): NonNullable<EstimatorWorkbenchReadModel["visual_model"]>["preview"] {
+  if (screenshots === null || screenshots === undefined || (typeof screenshots === "string" && !screenshots.trim())) {
+    return { state: "not_recorded", url: null };
+  }
+  if (typeof screenshots !== "string") return { state: "invalid", url: null };
+  const raw = screenshots.trim();
+  if (raw.length > MAX_VISUAL_SCREENSHOT_JSON_LENGTH) return { state: "invalid", url: null };
+
+  let candidates: unknown;
+  try {
+    candidates = JSON.parse(raw);
+  } catch {
+    return { state: "invalid", url: null };
+  }
+  if (!Array.isArray(candidates) || candidates.some((candidate) => typeof candidate !== "string")) {
+    return { state: "invalid", url: null };
+  }
+  if (candidates.length === 0) return { state: "not_recorded", url: null };
+
+  const allowedOrigins = visualPreviewAllowedOrigins(configuredOrigins);
+  if (allowedOrigins.size === 0) return { state: "not_configured", url: null };
+
+  let blocked = false;
+  let invalid = false;
+  for (const candidate of candidates.slice(0, MAX_VISUAL_SCREENSHOT_CANDIDATES)) {
+    if (candidate.length > MAX_VISUAL_PREVIEW_URL_LENGTH) {
+      invalid = true;
+      continue;
+    }
+    try {
+      const url = new URL(candidate);
+      if (url.protocol !== "https:" || url.username || url.password) {
+        invalid = true;
+        continue;
+      }
+      if (allowedOrigins.has(url.origin)) return { state: "available", url: url.href };
+      blocked = true;
+    } catch {
+      invalid = true;
+    }
+  }
+  return { state: blocked ? "blocked" : invalid ? "invalid" : "unavailable", url: null };
+}
+
+function visualPreviewAllowedOrigins(value: string | undefined): Set<string> {
+  const origins = new Set<string>();
+  for (const candidate of (value ?? "").split(",").slice(0, 32)) {
+    const origin = candidate.trim();
+    if (!origin || origin.length > 512) continue;
+    try {
+      const url = new URL(origin);
+      if (url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) continue;
+      origins.add(url.origin);
+    } catch {
+      // A malformed configuration entry cannot widen the browser preview boundary.
+    }
+  }
+  return origins;
+}
+
+function visualText(value: unknown, maximum: number): string | null {
+  const result = text(value);
+  return result && result.length <= maximum ? result : null;
+}
+
+function visualTimestamp(value: unknown): string | null {
+  const result = visualText(value, 80);
+  return result && Number.isFinite(Date.parse(result)) ? result : null;
+}
+
+function visualConfidence(value: unknown): number | null | undefined {
+  if (value === null || value === undefined || (typeof value === "string" && !value.trim())) return null;
+  const result = optionalNumber(value);
+  return result !== null && result >= 0 && result <= 100 ? result : undefined;
 }
 
 function estimatorMeasurementSelection(

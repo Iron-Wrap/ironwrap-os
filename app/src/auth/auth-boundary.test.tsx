@@ -12,6 +12,7 @@ vi.mock("./field-bootstrap", () => ({ takePrimedFieldBootstrap: vi.fn() }));
 import { AuthBoundary } from "./auth-boundary";
 import { takePrimedFieldBootstrap } from "./field-bootstrap";
 import { fetchSession, type SessionResponse } from "./session";
+import { ApiError } from "../lib/api";
 
 const pairingRequiredSession: SessionResponse = {
   version: 1,
@@ -91,6 +92,29 @@ describe("AuthBoundary", () => {
     expect(await screen.findByText("Pair this Field Companion device")).toBeVisible();
     expect(screen.queryByText("Authenticated work")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Work email/i)).not.toBeInTheDocument();
+  });
+
+  it("does not label an unavailable API as an offline device", async () => {
+    window.history.replaceState({}, "", "/today");
+    vi.mocked(takePrimedFieldBootstrap).mockRejectedValue(
+      new ApiError({ status: 404, code: "not_found", message: "Not Found" }),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <AuthBoundary>
+          <div>Authenticated work</div>
+        </AuthBoundary>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "IronWrap OS is unavailable" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "This device is not ready offline" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Not Found")).not.toBeInTheDocument();
   });
 
   it("retains email sign-in for an unpaired office route", async () => {

@@ -227,7 +227,7 @@ deploy/backup-to-r2.sh
 `workers-bus/node_modules/.bin/wrangler` 4.x version and an exact generated config for account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It performs `d1 export --remote`, imports the SQL into an
-isolated SQLite file, runs integrity checks, and requires all 28 production tables and 31 named
+isolated SQLite file, runs integrity checks, and requires all 29 production tables and 31 named
 trigger-to-table bindings before packaging, encrypting, uploading immutably, and remotely
 checking the generation. It prints the
 exact committed `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Do not list-and-select latest in
@@ -251,7 +251,8 @@ The D1 required-table allowlist is release state, not a static assumption: `enve
 `approval_requests`, `approval_request_events`, `quote_revision_approval_requests`,
 `quote_revision_approval_request_events`, `production_schedule_approval_requests`,
 `production_schedule_approval_request_events`, `customer_portal_links`,
-`customer_portal_access_throttles`, and `measurement_intake_receipts`. Every migration that adds a persistent table must
+`customer_portal_access_throttles`, `measurement_intake_receipts`, and the privacy-safe
+`public_estimate_rate_limits` ledger (keyed hashes only; no raw IPs or contact data). Every migration that adds a persistent table must
 advance both scripts, manifest expectation, readiness contract, and executable tests before that
 migration can deploy.
 

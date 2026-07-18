@@ -42,6 +42,18 @@ const REQUIRED_ENV_NAMES = [
   "ERPNEXT_BASE_URL",
   "ERPNEXT_API_KEY",
   "ERPNEXT_API_SECRET",
+  "ERPNEXT_INTEGRATION_USER",
+  "PUBLIC_ESTIMATE_ENABLED",
+  "PUBLIC_ESTIMATE_ALLOWED_ORIGINS",
+  "PUBLIC_ESTIMATE_ALLOWED_BRANDS",
+  "PUBLIC_ESTIMATE_CONSENT_JURISDICTION",
+  "PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY",
+  "PUBLIC_ESTIMATE_TURNSTILE_SECRET",
+  "PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER",
+  "PUBLIC_ESTIMATE_RATE_LIMIT_WINDOW_SECONDS",
+  "PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX",
+  "PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX",
+  "PUBLIC_ESTIMATE_RANGE_RULES_JSON",
   "IRONWRAP_BUS_BASE_URL",
   "IRONWRAP_ADMIN_TOKEN",
   "IRONWRAP_BUS_WRITE_ENABLED",
@@ -91,13 +103,30 @@ const REQUIRED_ENV_NAMES = [
   "RESTORE_CONFIRMATION",
 ];
 
+const PUBLIC_ESTIMATE_ENABLE_TIME_ENV_NAMES = new Set([
+  "ERPNEXT_INTEGRATION_USER",
+  "PUBLIC_ESTIMATE_ALLOWED_ORIGINS",
+  "PUBLIC_ESTIMATE_ALLOWED_BRANDS",
+  "PUBLIC_ESTIMATE_CONSENT_JURISDICTION",
+  "PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY",
+  "PUBLIC_ESTIMATE_TURNSTILE_SECRET",
+  "PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER",
+  "PUBLIC_ESTIMATE_RATE_LIMIT_WINDOW_SECONDS",
+  "PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX",
+  "PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX",
+  "PUBLIC_ESTIMATE_RANGE_RULES_JSON",
+]);
+
 const LIVE_REQUIRED_ENV_NAMES = REQUIRED_ENV_NAMES.filter(
-  (name) => name !== "RESTORE_CONFIRMATION" && name !== "D1_RESTORE_CONFIRMATION" && name !== "D1_RESTORE_API_TOKEN",
+  (name) => name !== "RESTORE_CONFIRMATION" && name !== "D1_RESTORE_CONFIRMATION" &&
+    name !== "D1_RESTORE_API_TOKEN" && !PUBLIC_ESTIMATE_ENABLE_TIME_ENV_NAMES.has(name),
 );
 
 const SECRET_ENV_NAMES = [
   "ERPNEXT_API_KEY",
   "ERPNEXT_API_SECRET",
+  "PUBLIC_ESTIMATE_TURNSTILE_SECRET",
+  "PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER",
   "IRONWRAP_ADMIN_TOKEN",
   "HERMES_WRITE_TOKEN",
   "HERMES_DRY_RUN_SIGNING_KEY",
@@ -233,6 +262,60 @@ function isHttpsProductionUrl(value, { r2 = false } = {}) {
       if (parsed.port || (parsed.pathname !== "/" && parsed.pathname !== "") || parsed.search) return false;
     }
     return true;
+  } catch {
+    return false;
+  }
+}
+
+function exactHttpsOrigin(value) {
+  if (isPlaceholder(value)) return null;
+  try {
+    const parsed = new URL(value);
+    if (
+      parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port ||
+      parsed.pathname !== "/" || parsed.search || parsed.hash ||
+      parsed.hostname === "localhost" || parsed.hostname.endsWith(".local")
+    ) return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+function validPositiveInteger(value, minimum, maximum) {
+  return typeof value === "string" && /^(?:[1-9][0-9]*)$/.test(value) &&
+    Number(value) >= minimum && Number(value) <= maximum;
+}
+
+function validPublicEstimateRules(value, allowedBrands) {
+  try {
+    const rules = JSON.parse(value);
+    if (!Array.isArray(rules)) return false;
+    const services = new Set(["roofing", "metal_roofing", "siding", "gutters", "soffit_fascia"]);
+    const seen = new Set();
+    return rules.every((rule) => {
+      if (!rule || typeof rule !== "object" || Array.isArray(rule)) return false;
+      const keys = Object.keys(rule).sort();
+      const validKeys = ["brand", "max_cad", "min_cad", "province", "rule_id", "service"];
+      const validKeysWithoutProvince = ["brand", "max_cad", "min_cad", "rule_id", "service"];
+      if (
+        !(
+          keys.length === validKeys.length && keys.every((key, index) => key === validKeys[index]) ||
+          keys.length === validKeysWithoutProvince.length && keys.every((key, index) => key === validKeysWithoutProvince[index])
+        )
+      ) return false;
+      if (
+        typeof rule.rule_id !== "string" || !/^[a-z0-9][a-z0-9._:-]{2,80}$/.test(rule.rule_id) ||
+        !allowedBrands.has(rule.brand) || !services.has(rule.service) ||
+        !(rule.province === undefined || rule.province === null || /^[A-Z]{2,3}$/.test(rule.province)) ||
+        !Number.isSafeInteger(rule.min_cad) || !Number.isSafeInteger(rule.max_cad) ||
+        rule.min_cad <= 0 || rule.max_cad < rule.min_cad || rule.max_cad > 10_000_000
+      ) return false;
+      const key = `${rule.brand}|${rule.service}|${rule.province ?? "*"}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   } catch {
     return false;
   }
@@ -477,14 +560,14 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   checks.push(check("contract.d1_backup.safety", d1Backup.includes("set -euo pipefail") && d1Backup.includes("set +x") && d1Backup.includes("umask 077") && d1Backup.includes("this command accepts no arguments") && d1Backup.includes("mktemp -d") && d1Backup.includes("flock -n") && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Backup), "D1 backup uses strict no-argv, no-tracing, private-temp, locking, and signal controls", "D1 backup lacks strict no-argv, no-tracing, private-temp, locking, or signal controls"));
   checks.push(check("contract.d1_backup.source", d1Backup.includes('EXPECTED_ACCOUNT_ID="7ee5775bc1ba46f05c5a65235b60e939"') && d1Backup.includes('EXPECTED_DATABASE_NAME="ironwrap-bus"') && d1Backup.includes('EXPECTED_DATABASE_ID="f0674848-13df-4422-9896-8ba2719663b8"') && d1Backup.includes('"account_id": "$D1_PRODUCTION_ACCOUNT_ID"') && d1Backup.includes('"database_id": "$D1_PRODUCTION_DATABASE_ID"'), "D1 backup is bound to the exact production account, name, UUID, and generated config", "D1 backup must bind an exact generated config to the committed production D1 coordinates"));
   checks.push(check("contract.d1_backup.wrangler", d1Backup.includes('workers-bus/node_modules/.bin/wrangler') && d1Backup.includes('workers-bus/package-lock.json') && d1Backup.includes('CLOUDFLARE_API_TOKEN="$d1_backup_api_token" "$WRANGLER" d1 export') && d1Backup.includes("--remote --config") && d1Backup.includes("exact Wrangler 4 version") && d1Backup.includes("unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN"), "D1 backup uses the locked local Wrangler 4 remote export with command-scoped read authority", "D1 backup must use exact Wrangler 4 and command-scope only the dedicated D1 backup token"));
-  checks.push(check("contract.d1_backup.validation", d1Backup.includes("sqlite3 -bail") && d1Backup.includes("PRAGMA integrity_check") && d1Backup.includes("measurement_intake_receipts,production_schedule_approval_requests,production_schedule_approval_request_events") && d1Backup.includes("prevent_production_schedule_approval_binding_rewrite=production_schedule_approval_requests") && d1Backup.includes("REQUIRED_APPROVAL_TRIGGER_SEMANTICS=") && d1Backup.includes("production_schedule_approval_events_immutable") && d1Backup.includes("type='trigger'") && d1Backup.includes("IRONWRAP-D1-BACKUP-MANIFEST.txt") && d1Backup.includes("sql_sha256="), "D1 backup proves an isolated SQLite import, all required production tables, all approval-ledger invariants, and a hashed manifest", "D1 backup must validate all 28 production tables, all three immutable approval ledgers, and bind the exported SQL to a manifest before encryption"));
+  checks.push(check("contract.d1_backup.validation", d1Backup.includes("sqlite3 -bail") && d1Backup.includes("PRAGMA integrity_check") && d1Backup.includes("measurement_intake_receipts,production_schedule_approval_requests,production_schedule_approval_request_events,public_estimate_rate_limits") && d1Backup.includes("prevent_production_schedule_approval_binding_rewrite=production_schedule_approval_requests") && d1Backup.includes("REQUIRED_APPROVAL_TRIGGER_SEMANTICS=") && d1Backup.includes("production_schedule_approval_events_immutable") && d1Backup.includes("type='trigger'") && d1Backup.includes("IRONWRAP-D1-BACKUP-MANIFEST.txt") && d1Backup.includes("sql_sha256="), "D1 backup proves an isolated SQLite import, all 29 required production tables, all approval-ledger invariants, and a hashed manifest", "D1 backup must validate all 29 production tables, including the privacy-safe public-estimate rate-limit ledger, all three immutable approval ledgers, and bind the exported SQL to a manifest before encryption"));
   checks.push(check("contract.d1_backup.atomic", d1Backup.includes("age --encrypt") && d1Backup.includes("rclone copy") && d1Backup.includes("--immutable") && d1Backup.includes("rclone check") && d1Backup.includes("IRONWRAP-D1-BACKUP-COMPLETE") && d1Backup.indexOf("rclone check") < d1Backup.lastIndexOf("rclone copyto") && d1Backup.includes("remote_complete=1"), "D1 backup encrypts, uploads immutably, verifies, and commits its marker last", "D1 backup must encrypt and remotely verify immutable objects before publishing its completion marker"));
   checks.push(check("contract.d1_backup.retention", d1Backup.includes("MARKER_RETENTION_HOURS") && d1Backup.includes("DATA_RETENTION_HOURS=$((MARKER_RETENTION_HOURS + 1))") && d1Backup.indexOf("**/IRONWRAP-D1-BACKUP-COMPLETE") < d1Backup.indexOf("**/*.age") && d1Backup.includes("remote_started == 1 && remote_complete == 0") && d1Backup.includes("rclone purge"), "D1 retention hides markers before data and incomplete generations are purged", "D1 retention and incomplete-upload cleanup must preserve atomic visibility"));
 
   const d1Restore = contents.get("deploy/restore-d1-from-r2.sh") ?? "";
   checks.push(check("contract.d1_restore.safety", d1Restore.includes("set -euo pipefail") && d1Restore.includes("set +x") && d1Restore.includes("umask 077") && d1Restore.includes("this command accepts no arguments") && d1Restore.includes('mode="${D1_RESTORE_MODE:-verify}"') && d1Restore.includes("mktemp -d") && d1Restore.includes("flock -n") && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Restore), "D1 restore defaults to local verification with strict no-argv, private-temp, lock, and signal controls", "D1 restore must default to verification and fail closed around argv, plaintext, concurrency, and signals"));
   checks.push(check("contract.d1_restore.selection", d1Restore.includes("D1_RESTORE_R2_COMPLETED_PREFIX") && d1Restore.includes("IRONWRAP-D1-BACKUP-COMPLETE") && !/rclone\s+ls[fdj]?\b/.test(d1Restore), "D1 restore requires one exact marker-bearing prefix and never discovers latest", "D1 restore must never discover latest or accept an uncommitted generation"));
-  checks.push(check("contract.d1_restore.local", d1Restore.includes("sha256sum --check") && d1Restore.includes("age --decrypt") && d1Restore.indexOf("sha256sum --check") < d1Restore.indexOf("age --decrypt") && d1Restore.includes("sqlite3 -bail") && d1Restore.includes("PRAGMA integrity_check") && d1Restore.includes("measurement_intake_receipts,production_schedule_approval_requests,production_schedule_approval_request_events") && d1Restore.includes("local-trigger-inventory.txt") && d1Restore.includes("verify_receipt_trigger_semantics") && d1Restore.includes("verify_approval_trigger_semantics") && d1Restore.includes("no remote mutation performed"), "D1 restore cryptographically and structurally verifies tables, trigger identity, and immutable approval-ledger semantics locally before any remote mutation", "D1 restore must verify ciphertext, manifest, SQL import, integrity, required tables, trigger identity, and all approval-ledger semantics locally first"));
+  checks.push(check("contract.d1_restore.local", d1Restore.includes("sha256sum --check") && d1Restore.includes("age --decrypt") && d1Restore.indexOf("sha256sum --check") < d1Restore.indexOf("age --decrypt") && d1Restore.includes("sqlite3 -bail") && d1Restore.includes("PRAGMA integrity_check") && d1Restore.includes("measurement_intake_receipts,production_schedule_approval_requests,production_schedule_approval_request_events,public_estimate_rate_limits") && d1Restore.includes("local-trigger-inventory.txt") && d1Restore.includes("verify_receipt_trigger_semantics") && d1Restore.includes("verify_approval_trigger_semantics") && d1Restore.includes("no remote mutation performed"), "D1 restore cryptographically and structurally verifies all 29 required tables, trigger identity, and immutable approval-ledger semantics locally before any remote mutation", "D1 restore must verify ciphertext, manifest, SQL import, integrity, all 29 required tables including the privacy-safe public-estimate rate-limit ledger, trigger identity, and all approval-ledger semantics locally first"));
   checks.push(check("contract.d1_restore.remote", d1Restore.includes("ironwrap-restore-drill-") && d1Restore.includes("production D1 database can never be a restore target") && d1Restore.includes('RESTORE_D1:$D1_RESTORE_TARGET_DATABASE_NAME@$D1_RESTORE_TARGET_DATABASE_ID') && d1Restore.includes('"database_id": "$D1_RESTORE_TARGET_DATABASE_ID"') && d1Restore.includes("target must be an empty dedicated drill database") && d1Restore.includes("local-table-counts.txt") && d1Restore.includes("target-trigger-verify.sql") && d1Restore.includes("sql AS trigger_sql") && d1Restore.includes("immutableSemantics") && d1Restore.includes("production_schedule_approval_events_immutable") && d1Restore.includes("remote D1 restore table row counts differ") && d1Restore.includes("remote D1 restore trigger inventory or receipt semantics differ") && d1Restore.includes('CLOUDFLARE_API_TOKEN="$d1_restore_api_token" "$WRANGLER" d1 execute') && d1Restore.includes('"$d1_backup_api_token" == "$d1_restore_api_token"') && d1Restore.includes("unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN D1_RESTORE_API_TOKEN"), "remote D1 restore is exact-target-confirmed, empty-target-only, account-bound, production-denied, table-row-count and all approval-ledger trigger-semantics equivalent, and command-scoped to separate authority", "remote D1 restore must reject unsafe targets, match every row count plus invariant-trigger bindings and all immutable approval ledgers, and use a distinct ephemeral write token"));
   checks.push(check("contract.d1_restore.cleanup", d1Restore.includes('rm -rf -- "$WORK_DIR"') && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Restore), "D1 restore removes decrypted plaintext on success, failure, and signals", "D1 restore must clean decrypted plaintext in every exit path"));
 
@@ -575,6 +658,7 @@ export async function validateLiveEnv({
     "IRONWRAP_HERMES_SITE_BASE_URL must normalize to ERPNEXT_BASE_URL",
   ));
 
+  const publicEstimateEnabled = env.PUBLIC_ESTIMATE_ENABLED === "true";
   const secretMinimums = {
     ERPNEXT_API_KEY: 10,
     ERPNEXT_API_SECRET: 16,
@@ -587,6 +671,10 @@ export async function validateLiveEnv({
     D1_BACKUP_API_TOKEN: 24,
     RCLONE_CONFIG_R2_ACCESS_KEY_ID: 16,
     RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: 32,
+    ...(publicEstimateEnabled ? {
+      PUBLIC_ESTIMATE_TURNSTILE_SECRET: 20,
+      PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER: 32,
+    } : {}),
   };
   for (const [name, minimum] of Object.entries(secretMinimums)) {
     checks.push(check(`live.secret.${name}`, validSecret(env, name, minimum), `${name} is non-placeholder and meets the minimum length`, `${name} is missing, placeholder, malformed, or too short`));
@@ -603,6 +691,10 @@ export async function validateLiveEnv({
     env.D1_BACKUP_API_TOKEN,
     env.RCLONE_CONFIG_R2_ACCESS_KEY_ID,
     env.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+    ...(publicEstimateEnabled ? [
+      env.PUBLIC_ESTIMATE_TURNSTILE_SECRET,
+      env.PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER,
+    ] : []),
   ];
   checks.push(check("live.secret.separation", purposeSecrets.every((value) => typeof value === "string") && new Set(purposeSecrets).size === purposeSecrets.length, "privileged credentials are separated by purpose", "Frappe, bus, approval, D1 export, and R2 backup credentials must not be reused across purposes"));
   const restoreApiToken = env.D1_RESTORE_API_TOKEN;
@@ -616,6 +708,62 @@ export async function validateLiveEnv({
   checks.push(check("live.secret.d1_restore_ephemeral", restoreTokenStateSafe, restoreTokenUnset ? "D1 restore write token is not persisted in verification mode" : "remote drill token is valid and separated from backup authority", "D1_RESTORE_API_TOKEN must be unset for verify or a valid just-in-time token distinct from D1 backup and R2 credentials for remote"));
 
   checks.push(check("live.gate.integration", env.ERPNEXT_ENABLED === "true", "Frappe integration is explicitly enabled", "ERPNEXT_ENABLED must equal true for production readiness"));
+  checks.push(check(
+    "live.gate.public_estimate",
+    publicEstimateEnabled || env.PUBLIC_ESTIMATE_ENABLED === "false",
+    publicEstimateEnabled ? "public estimator is explicitly enabled" : "public estimator is explicitly disabled",
+    "PUBLIC_ESTIMATE_ENABLED must equal true or false",
+  ));
+  if (publicEstimateEnabled) {
+    const publicEstimateOrigin = exactHttpsOrigin(env.PUBLIC_ESTIMATE_ALLOWED_ORIGINS);
+    const publicEstimateBrands = new Set(String(env.PUBLIC_ESTIMATE_ALLOWED_BRANDS ?? "").split(",").filter(Boolean));
+    checks.push(check(
+      "live.public_estimate.origin",
+      publicEstimateOrigin !== null && publicEstimateOrigin === exactHttpsOrigin(env.IRONWRAP_BUS_BASE_URL),
+      "public estimator PWA origin exactly matches the deployed Worker origin",
+      "PUBLIC_ESTIMATE_ALLOWED_ORIGINS must be one exact HTTPS Worker/PWA origin matching IRONWRAP_BUS_BASE_URL",
+    ));
+    checks.push(check(
+      "live.public_estimate.brands",
+      publicEstimateBrands.size === 2 && publicEstimateBrands.has("ironwrap") && publicEstimateBrands.has("iroof") &&
+        [...publicEstimateBrands].every((brand) => /^[a-z0-9][a-z0-9 _/-]*$/.test(brand)),
+      "public estimator is bound to the two configured IronWrap tenant brands",
+      "PUBLIC_ESTIMATE_ALLOWED_BRANDS must contain exactly ironwrap,iroof for this tenant",
+    ));
+    checks.push(check(
+      "live.public_estimate.jurisdiction",
+      env.PUBLIC_ESTIMATE_CONSENT_JURISDICTION === "Alberta, Canada",
+      "public estimator consent has an explicit Alberta jurisdiction",
+      "PUBLIC_ESTIMATE_CONSENT_JURISDICTION must equal Alberta, Canada for this tenant",
+    ));
+    checks.push(check(
+      "live.public_estimate.site_key",
+      typeof env.PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY === "string" && !isPlaceholder(env.PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY) &&
+        env.PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY.length >= 10 && !/[\r\n]/.test(env.PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY),
+      "public estimator Turnstile site key is non-placeholder and bounded",
+      "PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY must be a non-placeholder site key",
+    ));
+    checks.push(check(
+      "live.public_estimate.rate_limits",
+      validPositiveInteger(env.PUBLIC_ESTIMATE_RATE_LIMIT_WINDOW_SECONDS, 60, 3_600) &&
+        validPositiveInteger(env.PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX, 1, 100) &&
+        validPositiveInteger(env.PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX, 1, 20),
+      "public estimator rate limits are explicit and within Worker bounds",
+      "public estimator rate limits must match the Worker bounds",
+    ));
+    checks.push(check(
+      "live.public_estimate.rules",
+      validPublicEstimateRules(env.PUBLIC_ESTIMATE_RANGE_RULES_JSON, publicEstimateBrands),
+      "public estimator rule catalogue is valid (including an explicit empty review-only array)",
+      "PUBLIC_ESTIMATE_RANGE_RULES_JSON must be a valid non-binding tenant rule array or []",
+    ));
+    checks.push(check(
+      "live.public_estimate.integration_user",
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(env.ERPNEXT_INTEGRATION_USER ?? ""),
+      "public estimator consent mirror has a concrete Frappe integration user",
+      "ERPNEXT_INTEGRATION_USER must be an email-like dedicated Worker principal",
+    ));
+  }
   checks.push(check(
     "live.hermes.role",
     ["owner-operator", "lead-concierge", "estimator-assistant", "production-controller", "field-companion", "finance-reconciler", "closeout-agent", "support-admin"].includes(env.HERMES_AGENT_ROLE),

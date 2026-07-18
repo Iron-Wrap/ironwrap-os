@@ -107,6 +107,7 @@ function EstimatorWorkbenchScreen({
             lineage={model.lineage}
           />
 
+          <VisualEvidence visual={model.visual_model} locale={locale} />
           <MeasurementSource model={model} locale={locale} />
           <TakeoffReview model={model} locale={locale} />
           <InsuranceEvidenceRail supplements={model.insurance_supplements} />
@@ -753,6 +754,192 @@ function proposalDecisionStep(readiness: EstimatorWorkbenchResponse["proposal_re
   if (readiness.state === "blocked")
     return { detail: "Blocked by evidence", tone: "bg-warning-soft text-warning" };
   return { detail: "Source window incomplete", tone: "bg-surface-muted text-muted" };
+}
+
+function VisualEvidence({
+  visual,
+  locale,
+}: {
+  visual: EstimatorWorkbenchResponse["visual_model"];
+  locale: string;
+}) {
+  if (!visual) {
+    return (
+      <section
+        className="rounded-xl border border-border bg-surface px-5 py-6 sm:px-6"
+        aria-labelledby="visual-evidence-heading"
+      >
+        <SectionHeading
+          id="visual-evidence-heading"
+          icon={Layers3}
+          title="Visual evidence"
+          description="No visual property model was returned for this roof job. Measurement and quote evidence remain separate."
+        />
+      </section>
+    );
+  }
+
+  const modelState = visualModelState(visual.model_state);
+  const preview = visualPreviewState(visual.preview.state);
+  return (
+    <section
+      className="rounded-xl border border-border bg-surface"
+      aria-labelledby="visual-evidence-heading"
+    >
+      <div className="px-5 py-6 sm:px-6 sm:py-7">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <SectionHeading
+            id="visual-evidence-heading"
+            icon={Layers3}
+            title="Visual evidence"
+            description="A provenance view of the returned property model. It does not confirm site dimensions, final scope, or a customer-ready design."
+          />
+          <div className="flex flex-wrap gap-2 lg:justify-end">
+            <StatusChip label={modelState.label} tone={modelState.tone} />
+            <StatusChip
+              label={visual.review_required ? "Review required" : "No review flag"}
+              tone={
+                visual.review_required
+                  ? "bg-warning-soft text-warning"
+                  : "bg-surface-muted text-muted"
+              }
+            />
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1fr)_19rem]">
+          <div className="overflow-hidden rounded-lg border border-border bg-surface-raised">
+            {visual.preview.state === "available" && visual.preview.url ? (
+              <figure>
+                <img
+                  src={visual.preview.url}
+                  alt="Visual property evidence preview"
+                  className="aspect-[16/10] w-full object-cover"
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                />
+                <figcaption className="border-t border-border px-4 py-3 text-xs leading-5 text-muted">
+                  Preview origin passed the office allowlist. It is retained evidence, not a
+                  field-verified roof plan.
+                </figcaption>
+              </figure>
+            ) : (
+              <div className="flex min-h-48 flex-col justify-center px-5 py-6">
+                <p className="font-bold text-foreground">{preview.title}</p>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-muted">{preview.detail}</p>
+              </div>
+            )}
+          </div>
+
+          <dl className="grid overflow-hidden rounded-lg border border-border sm:grid-cols-2 xl:grid-cols-1">
+            <MeasurementFact label="Provider" value={visual.provider ?? "Unavailable"} />
+            <MeasurementFact
+              label="Confidence"
+              value={formatVisualConfidence(visual.confidence, locale)}
+              bordered
+            />
+            <MeasurementFact
+              label="Measurement link"
+              value={visualMeasurementLinkCopy(visual.measurement_link)}
+              bordered
+            />
+            <MeasurementFact
+              label="Approval"
+              value={visual.approval_recorded ? "Recorded" : "Not approved"}
+              bordered
+            />
+            <MeasurementFact
+              label="Captured"
+              value={formatDate(visual.captured_at, locale) ?? "Not recorded"}
+              bordered
+            />
+            <MeasurementFact
+              label="Approved at"
+              value={formatDate(visual.approved_at, locale) ?? "Not recorded"}
+              bordered
+            />
+          </dl>
+        </div>
+
+        <p className="mt-5 border-l-2 border-warning bg-warning-soft/40 px-4 py-3 text-sm leading-6 text-foreground">
+          Screenshot URLs are rendered only after an exact HTTPS-origin allowlist check. This panel
+          cannot open the model URI or raw storage evidence, and it does not change measurement,
+          price, scope, or proposal state.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function visualModelState(
+  state: NonNullable<EstimatorWorkbenchResponse["visual_model"]>["model_state"],
+): { label: string; tone: string } {
+  const copy = {
+    approved: { label: "Approved model", tone: "bg-ok-soft text-ok" },
+    needs_review: { label: "Model needs review", tone: "bg-warning-soft text-warning" },
+    draft: { label: "Draft model", tone: "bg-warning-soft text-warning" },
+    rejected: { label: "Rejected model", tone: "bg-warning-soft text-warning" },
+    unavailable: { label: "Model unavailable", tone: "bg-surface-muted text-muted" },
+  } satisfies Record<
+    NonNullable<EstimatorWorkbenchResponse["visual_model"]>["model_state"],
+    { label: string; tone: string }
+  >;
+  return copy[state];
+}
+
+function visualPreviewState(
+  state: NonNullable<EstimatorWorkbenchResponse["visual_model"]>["preview"]["state"],
+): { title: string; detail: string } {
+  const copy = {
+    available: {
+      title: "Preview available",
+      detail: "A safe preview URL was returned.",
+    },
+    not_recorded: {
+      title: "No screenshot recorded",
+      detail: "The visual model has no screenshot evidence to display.",
+    },
+    not_configured: {
+      title: "Preview origin is not configured",
+      detail:
+        "Screenshot evidence exists, but no approved preview origin is configured for this office surface.",
+    },
+    blocked: {
+      title: "Preview blocked",
+      detail: "Returned screenshot URLs did not pass the office HTTPS-origin allowlist.",
+    },
+    invalid: {
+      title: "Preview evidence is invalid",
+      detail: "The returned screenshot payload could not be read safely.",
+    },
+    unavailable: {
+      title: "Preview unavailable",
+      detail: "The visual model detail could not be read safely.",
+    },
+  } satisfies Record<
+    NonNullable<EstimatorWorkbenchResponse["visual_model"]>["preview"]["state"],
+    { title: string; detail: string }
+  >;
+  return copy[state];
+}
+
+function visualMeasurementLinkCopy(
+  link: NonNullable<EstimatorWorkbenchResponse["visual_model"]>["measurement_link"],
+): string {
+  const copy = {
+    selected_measurement: "Linked to selected measurement",
+    other_measurement: "Linked to another measurement",
+    unlinked: "No linked measurement",
+    unavailable: "Link unavailable",
+  } satisfies Record<
+    NonNullable<EstimatorWorkbenchResponse["visual_model"]>["measurement_link"],
+    string
+  >;
+  return copy[link];
+}
+
+function formatVisualConfidence(value: number | null, locale: string): string {
+  return value === null ? "Not recorded" : formatPercent(value / 100, locale);
 }
 
 function MeasurementSource({

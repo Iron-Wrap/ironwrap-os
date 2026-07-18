@@ -42,6 +42,8 @@ interface ExtendedEnv {
   NEWO_PHONE_NUMBER?: string;
   NEWO_ENABLED_CHANNELS?: string;
   NEWO_TRANSFER_POLICY?: string;
+  NEWO_OWNER_TRANSFER_NUMBER?: string;
+  NEWO_R2_LIFECYCLE_PROVEN?: string;
   NEWO_USAGE_LIMIT_MINUTES?: string;
   NEWO_USAGE_ALERT_PERCENT?: string;
   NEWO_BOOKING_MODE?: string;
@@ -325,6 +327,7 @@ function newoConfigurationDrift(env: AppEnv & ExtendedEnv): string[] {
     ["NEWO_KB_VERSION", "kb_version_missing"],
     ["NEWO_PHONE_NUMBER", "phone_number_missing"],
     ["NEWO_TRANSFER_POLICY", "transfer_policy_missing"],
+    ["NEWO_OWNER_TRANSFER_NUMBER", "owner_transfer_number_missing"],
     ["NEWO_USAGE_LIMIT_MINUTES", "usage_limit_missing"],
   ];
   for (const [key, reason] of requiredText) if (!nonEmpty(env[key])) reasons.push(reason);
@@ -343,6 +346,9 @@ function newoConfigurationDrift(env: AppEnv & ExtendedEnv): string[] {
     reasons.push("transfer_policy_mismatch");
   }
   if (String(env.NEWO_OUTBOUND_ENABLED ?? "false") !== "false") reasons.push("outbound_launch_state_mismatch");
+  if (String(env.NEWO_R2_LIFECYCLE_PROVEN ?? "false") !== "true") {
+    reasons.push("r2_newo_lifecycle_unproven");
+  }
   const usageLimit = Number(env.NEWO_USAGE_LIMIT_MINUTES ?? "0");
   const alertPercent = Number(env.NEWO_USAGE_ALERT_PERCENT ?? "0");
   if (!Number.isFinite(usageLimit) || usageLimit <= 0) reasons.push("usage_limit_invalid");

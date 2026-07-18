@@ -27,16 +27,21 @@ jobs:
             workers-bus/package-lock.json
             mcp/erpnext-roofing-mcp/package-lock.json
             mcp/ironwrap-bus-mcp/package-lock.json
+            mcp/newo-mcp/package-lock.json
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - name: Validate DocType contract (48 DocTypes, Frappe-only link targets)
+      - name: Validate DocType contract (50 DocTypes, Frappe-only link targets)
         run: node tools/validate-erpnext-doctypes.mjs
       - name: Validate Hermes roles and manifest against the MCP tool inventory
         run: node tools/validate-hermes-config.mjs
       - name: Validate tenant configs (no secrets, isolated namespaces)
         run: node tools/validate-tenant-config.mjs
+      - name: Validate staged Newo contracts, hashes, evidence inventory, and safe defaults
+        run: node tools/validate-newo-config.mjs
+      - name: Test Newo production gate refusal while provider evidence is pending
+        run: node --test tools/validate-newo-config.test.mjs
       - name: Test tenant runtime preflight
         run: node --test tools/validate-tenant-runtime.test.mjs
       - name: Validate IronWrap runtime tenant identity
@@ -75,6 +80,8 @@ jobs:
         run: npm test --prefix mcp/erpnext-roofing-mcp
       - name: Test ironwrap-bus-mcp
         run: npm ci --prefix mcp/ironwrap-bus-mcp && npm test --prefix mcp/ironwrap-bus-mcp
+      - name: Test role-filtered newo-mcp
+        run: npm ci --prefix mcp/newo-mcp && npm test --prefix mcp/newo-mcp
 
       - name: Install PWA dependencies
         run: npm ci --prefix app

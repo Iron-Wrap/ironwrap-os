@@ -20,6 +20,7 @@ materials → completion → invoice → review, on a portable owned-data spine.
 | `mcp/` | **Hermes tool surface** — `ironwrap-bus-mcp` (8 tools), `erpnext-roofing-mcp` (131 role-filtered Frappe tools: 75 reads, 28 dry-runs, 28 approved writes), and `newo-mcp` (20 bounded Worker-backed tools: 17 reads, 1 dry-run, 2 approved actions). Frappe and Newo writes require bound preview and human-approval receipts. | Buildable |
 | `hermes/` | **Agent runtime layer** — `agents/roles.json` (per-role MCP tool allowlists, source of truth), agent profiles, `mcp-servers.json`, and the `skills/` procedure packs. | Buildable |
 | `config/tenants/` | **White-label tenant configs** — one JSON per contractor (brands, geography, gates, agents), secrets by env-var name only. Validated. | Buildable |
+| `config/newo/` | **Newo release contract** - expected production state, five tool contracts, report schema, versioned AKB, sandbox/evaluation inventory, and time-bounded console proof. Secret-free and production-gated. | Buildable |
 | `deploy/` | **Launch kit** (free-tier path): app-repo split script, frappe_docker apps.json template, Cloudflare Tunnel config, R2 backup cron script, env inventory. Runbook: `docs/LAUNCH-RUNBOOK.md`; live-spine proof: `tools/launch-proof.mjs`. | Buildable |
 | `samples/` | Real RoofRuler measurement-report PDFs + one AppliCad XML (the extraction inputs the spec references). | Inputs |
 | `docs/` | Current runbooks, Frappe/Hermes blueprint/proof, scoped references, and archived planning records. | Reference |
@@ -49,8 +50,9 @@ materials → completion → invoice → review, on a portable owned-data spine.
   aliases) plus the separate iRoof Google account. Microsoft 365 is only a mirror during
   migration; see `docs/EMAIL-DUAL-DELIVERY.md`. JobNimbus native email stays unused.
 - **SMS** = JobNimbus Engage (needs fresh A2P 10DLC + Canadian carrier registration first).
-- **Phone AI** = JobNimbus AssistAI (behind a written eval gate) → managed Retell → managed-OSS
-  (LiveKit/Pipecat) → voicemail floor. The 4-vendor DIY voice stack stays killed.
+- **Phone AI** = managed Newo federation: Newo owns live voice/NAF/AKB/telephony; IronWrap owns
+  business truth, tools, approvals, evidence, reconciliation, and audit. Phased forwarding keeps
+  the existing human/voicemail route as rollback. Customer outbound stays disabled at launch.
 - **Field photos/geo** = owned Field Companion PWA (offline-first photo, voice, blocker, and GPS check-ins with server-verified replay). Jotform "Jobsite Photo" remains a temporary bridge. Local implementation is green; real-device proof remains open.
 - **e-sign** = owned proposal evidence pack first as it matures; JobNimbus native can bridge while
   the owned proposal flow is incomplete (and dies with the JobNimbus retirement). DocuSeal is
@@ -93,6 +95,7 @@ npx wrangler deploy --dry-run    # validate config + bundle
   (`Customer`) / `JN_JOB_RECORD_TYPE` (`Retail`) / `*_STATUS`.
 - Secrets go in `.dev.vars` (local, gitignored) or `wrangler secret put` (prod): `INGEST_TOKEN`,
   `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `QB_WEBHOOK_TOKEN`, and
+  `NEWO_API_KEY`, `NEWO_WEBHOOK_TOKEN`, `NEWO_BOOKING_TOKEN`, `NEWO_CONTROL_SIGNING_SECRET`, plus
   the separate private-broker secrets `APPROVAL_BROKER_SHARED_SECRET` /
   `QUOTE_REVISION_BROKER_SHARED_SECRET` when those governed rails are enabled.
 
@@ -102,6 +105,7 @@ npx wrangler deploy --dry-run    # validate config + bundle
 node tools/validate-erpnext-doctypes.mjs   # DocType JSON contract (50 DocTypes)
 node tools/validate-tenant-config.mjs      # white-label tenant configs, no secrets, isolation
 node tools/validate-hermes-config.mjs      # agent roles vs implemented MCP source inventory + safety contract
+node tools/validate-newo-config.mjs        # staged Newo hashes, tools, evidence inventory, safe defaults
 (cd mcp/erpnext-roofing-mcp && npm test)   # pure-logic builders + policy checks
 (cd mcp/ironwrap-bus-mcp && npm test)      # bus read/replay wrappers
 (cd mcp/newo-mcp && npm test)              # role-filtered Newo Worker/control wrappers

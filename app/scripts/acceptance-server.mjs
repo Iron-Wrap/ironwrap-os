@@ -7,7 +7,12 @@ import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 const DIST_DIR = resolve(fileURLToPath(new URL("../dist/", import.meta.url)));
 const HOST = process.env.HOST ?? "127.0.0.1";
 const PORT = Number(process.env.PORT ?? "4173");
+const ACCEPTANCE_MODE = process.env.ACCEPTANCE_MODE ?? "field";
 const FIXTURE_FIELD_DEVICE_PROOF = "a".repeat(43);
+
+if (!new Set(["field", "estimator"]).has(ACCEPTANCE_MODE)) {
+  throw new Error(`Unsupported ACCEPTANCE_MODE: ${ACCEPTANCE_MODE}`);
+}
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -166,6 +171,279 @@ const fixtureJob = {
   ],
 };
 
+// Test-only: mirrors the browser-safe estimator read contract, never source storage identifiers.
+const fixtureEstimatorEnvelope = {
+  version: 1,
+  source_updated_at: "2026-07-18T12:00:00.000Z",
+  read_model_generated_at: "2026-07-18T12:00:01.000Z",
+  stale_fields: [],
+  permissions: ["sales:read", "estimator:read"],
+  allowed_actions: ["sales.read", "estimator.read"],
+};
+
+const fixtureEstimatorSession = {
+  ...fixtureEstimatorEnvelope,
+  authenticated: true,
+  user: {
+    id: "appu_acceptance_owner",
+    email: "owner.acceptance@example.test",
+    display_name: "Acceptance Owner",
+    role: "owner",
+    frappe_user_id: "owner.acceptance@example.test",
+  },
+  tenant: fixtureSession.tenant,
+  csrf_token: "estimator-acceptance-csrf",
+  session_expires_at: "2030-07-18T12:00:00.000Z",
+};
+
+const fixtureEstimatorWorkbench = {
+  ...fixtureEstimatorEnvelope,
+  partial_sources: [],
+  job: {
+    id: "JOB-ESTIMATOR-ACCEPTANCE",
+    roof_job_id: "roof-job-estimator-acceptance",
+    job_number: "IW-EST-1001",
+    brand: "IronWrap Exteriors",
+    service_type: "Roof replacement",
+    status: "Proposal",
+    workflow_profile: "Residential Retail",
+  },
+  lineage: { measurement_to_takeoff: "linked", quote_to_proposal: "linked" },
+  measurements: {
+    reports: [
+      {
+        id: "MEASUREMENT-ESTIMATOR-ACCEPTANCE",
+        provider: "AppliCad",
+        review_status: "Needs Review",
+        parsed_at: "2026-07-18T12:00:00.000Z",
+        approved_at: null,
+      },
+    ],
+    selected: {
+      id: "MEASUREMENT-ESTIMATOR-ACCEPTANCE",
+      provider: "AppliCad",
+      review_status: "Needs Review",
+      parsed_at: "2026-07-18T12:00:00.000Z",
+      approved_at: null,
+      metrics: [
+        {
+          metric: "roof_area",
+          value: 2145,
+          unit: "sq ft",
+          confidence: "deterministic",
+          source_ref: "roof facets",
+          needs_review: true,
+        },
+      ],
+      metrics_truncated: false,
+      geometry: {
+        state: "needs_review",
+        reason: null,
+        check_count: 2,
+        failed_check_count: 1,
+        checks_truncated: false,
+        facet_count: 2,
+        facets_truncated: false,
+        metrics_truncated: false,
+        checks: [
+          {
+            check: "facet_reconciliation",
+            target: "South plane",
+            ok: false,
+            detail: "Source area requires human review.",
+          },
+          {
+            check: "ring_closed",
+            target: "North plane",
+            ok: true,
+            detail: "Facet boundary is closed.",
+          },
+        ],
+        facets: [
+          {
+            id: "south-plane",
+            type: "Roof",
+            material: "Asphalt",
+            pitch: 6,
+            orientation: 180,
+            declared_area: 1120,
+            computed_area: 1115,
+            deviation: 0.4,
+            ring_closed: true,
+          },
+          {
+            id: "north-plane",
+            type: "Roof",
+            material: "Asphalt",
+            pitch: 6,
+            orientation: 0,
+            declared_area: 1025,
+            computed_area: 1025,
+            deviation: 0,
+            ring_closed: true,
+          },
+        ],
+        metrics: [{ metric: "roof_area", value: 2145, source_ref: "roof facets" }],
+      },
+      roof_graph: {
+        state: "needs_review",
+        revision: "roof-graph/v1",
+        source: "Captured measurement drawing",
+        provider: "AppliCad",
+        confidence: 87,
+        review_status: "Needs Review",
+        captured_at: "2026-07-18T12:00:00.000Z",
+        units: "ft",
+        points: [
+          { id: "p1", x: 0, y: 60 },
+          { id: "p2", x: 100, y: 0 },
+          { id: "p3", x: 200, y: 60 },
+          { id: "p4", x: 100, y: 120 },
+          { id: "p5", x: 300, y: 120 },
+          { id: "p6", x: 200, y: 180 },
+        ],
+        edges: [
+          { id: "e1", start_point_id: "p1", end_point_id: "p2" },
+          { id: "e2", start_point_id: "p2", end_point_id: "p3" },
+          { id: "e3", start_point_id: "p3", end_point_id: "p4" },
+          { id: "e4", start_point_id: "p4", end_point_id: "p1" },
+          { id: "e5", start_point_id: "p3", end_point_id: "p5" },
+          { id: "e6", start_point_id: "p5", end_point_id: "p6" },
+          { id: "e7", start_point_id: "p6", end_point_id: "p4" },
+        ],
+        facets: [
+          {
+            id: "south-plane",
+            label: "South plane",
+            point_ids: ["p1", "p2", "p3", "p4"],
+            confidence: 82,
+            review_status: "Needs Review",
+          },
+          {
+            id: "north-plane",
+            label: "North plane",
+            point_ids: ["p4", "p3", "p5", "p6"],
+            confidence: 92,
+            review_status: "Approved",
+          },
+        ],
+        check_count: 2,
+        failed_check_count: 1,
+      },
+    },
+  },
+  visual_model: {
+    provider: "Captured measurement drawing",
+    model_state: "needs_review",
+    confidence: 87,
+    review_required: true,
+    approval_recorded: false,
+    captured_at: "2026-07-18T12:00:00.000Z",
+    approved_at: null,
+    measurement_link: "selected_measurement",
+    preview: { state: "not_recorded", url: null },
+  },
+  takeoffs: {
+    records: [
+      {
+        id: "TAKEOFF-ESTIMATOR-ACCEPTANCE",
+        measurement_report_id: "MEASUREMENT-ESTIMATOR-ACCEPTANCE",
+        status: "Needs Review",
+        prepared_at: "2026-07-18T12:00:00.000Z",
+        approved_at: null,
+      },
+    ],
+    selected: {
+      id: "TAKEOFF-ESTIMATOR-ACCEPTANCE",
+      measurement_report_id: "MEASUREMENT-ESTIMATOR-ACCEPTANCE",
+      status: "Needs Review",
+      prepared_at: "2026-07-18T12:00:00.000Z",
+      approved_at: null,
+      assumptions: "One existing layer.",
+      exclusions: "Deck repairs require review.",
+      items: [
+        {
+          category: "Shingle",
+          item_name: "Architectural shingles",
+          quantity: 24,
+          unit: "squares",
+          waste_factor: 12,
+          source_ref: "roof_area",
+          confidence: "deterministic",
+          needs_review: true,
+        },
+      ],
+      items_truncated: false,
+    },
+  },
+  quote: {
+    id: "QUOTE-ESTIMATOR-ACCEPTANCE",
+    version: 1,
+    status: "Needs Review",
+    price_book_version: "2026-07-18",
+    pricing_effective_at: "2026-07-18T12:00:00.000Z",
+    subtotal: 17450,
+    tax_amount: 872.5,
+    tax_code: "GST",
+    tax_rate: 5,
+    quote_total: 18322.5,
+    currency: "CAD",
+    deposit_amount: 3500,
+    amount_due: 3500,
+    amount_paid: 0,
+    balance_due: 18322.5,
+    payment_status: "Not Due",
+    payment_due_date: null,
+    valid_until: "2026-08-01",
+    prepared_at: "2026-07-18T12:00:00.000Z",
+    approved_at: null,
+    accepted_at: null,
+    scope_summary: "Replace roof system and flashings.",
+    assumptions: "One existing layer.",
+    exclusions: "Deck repairs excluded.",
+    supersedes: null,
+    correction_reason: null,
+  },
+  pricing_snapshot: {
+    state: "review_required",
+    quote_id: "QUOTE-ESTIMATOR-ACCEPTANCE",
+    quote_version: 1,
+    price_book_version: "2026-07-18",
+    pricing_effective_at: "2026-07-18T12:00:00.000Z",
+    valid_until: "2026-08-01",
+  },
+  quote_revision: { state: "not_revised", prior_quote: null, delta: null },
+  proposal: {
+    id: "PROPOSAL-ESTIMATOR-ACCEPTANCE",
+    quote_id: "QUOTE-ESTIMATOR-ACCEPTANCE",
+    status: "Draft",
+    prepared_at: "2026-07-18T12:00:00.000Z",
+    approved_at: null,
+    signed_at: null,
+    assumptions: "One existing layer.",
+    exclusions: "Deck repairs excluded.",
+  },
+  scope_changes: [],
+  insurance_supplements: [],
+  proposal_readiness: {
+    state: "review_required",
+    reasons: ["measurement_source_review_required", "takeoff_not_approved", "quote_not_approved"],
+  },
+  scope_clauses: [
+    {
+      id: "CLAUSE-ESTIMATOR-ACCEPTANCE",
+      type: "Risk",
+      title: "Deck condition",
+      text: "Hidden deck conditions require evidence and written approval.",
+      version: "v1",
+      status: "Approved",
+      source_ref: "Acceptance fixture",
+      customer_visible: true,
+      approved_at: "2026-07-18T12:00:00.000Z",
+    },
+  ],
+};
+
 const server = createServer(async (request, response) => {
   const method = request.method ?? "GET";
   const requestUrl = new URL(request.url ?? "/", `http://${HOST}:${PORT}`);
@@ -177,7 +455,12 @@ const server = createServer(async (request, response) => {
     return sendJson(response, method, 405, { error: "method_not_allowed" });
   }
   if (requestUrl.pathname === "/api/v1/session") {
-    return sendJson(response, method, 200, fixtureSession);
+    return sendJson(
+      response,
+      method,
+      200,
+      ACCEPTANCE_MODE === "estimator" ? fixtureEstimatorSession : fixtureSession,
+    );
   }
   if (requestUrl.pathname === "/api/v1/field/bootstrap") {
     if (request.headers["x-ironwrap-device-proof"] !== FIXTURE_FIELD_DEVICE_PROOF) {
@@ -197,6 +480,12 @@ const server = createServer(async (request, response) => {
   }
   if (requestUrl.pathname === "/api/v1/jobs/JOB-ACCEPTANCE") {
     return sendJson(response, method, 200, fixtureJob);
+  }
+  if (
+    ACCEPTANCE_MODE === "estimator" &&
+    requestUrl.pathname === "/api/v1/estimator/jobs/JOB-ESTIMATOR-ACCEPTANCE"
+  ) {
+    return sendJson(response, method, 200, fixtureEstimatorWorkbench);
   }
   if (requestUrl.pathname.startsWith("/api/")) {
     return sendJson(response, method, 404, { error: "fixture_route_not_found" });
@@ -223,7 +512,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`IronWrap acceptance server listening at http://${HOST}:${PORT}`);
+  console.log(`IronWrap ${ACCEPTANCE_MODE} acceptance server listening at http://${HOST}:${PORT}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

@@ -658,7 +658,7 @@ function EstimateResult({
           <p className="mt-3 max-w-lg text-sm leading-6 text-muted">
             {hasRange
               ? "This range is an early planning guide, not a quote or a promise of final price."
-              : `We received your request. A ${brandCopy.shortName} estimator will review the property and confirm the next step.`}
+              : `We received your request. An ${brandCopy.shortName} estimator will review the property and confirm the next step.`}
           </p>
         </div>
         <CardContent className="p-5 sm:p-8">

@@ -112,6 +112,7 @@ test("launch proof dry-run never performs a network request", async () => {
   assert.match(output.join("\n"), /admin_reconcile/);
   assert.match(output.join("\n"), /admin_status/);
   assert.match(output.join("\n"), /\$BUS_BASE_URL/);
+  assert.equal(result.plan.steps.find((step) => step.name === "ready")?.auth, "admin");
 });
 
 test("failed readiness stops launch proof before any intake mutation", async () => {

@@ -139,6 +139,11 @@ describe("PublicEstimatePage", () => {
     await user.click(screen.getByRole("button", { name: "Request my non-binding range" }));
 
     await screen.findByRole("heading", { name: "An estimator will review your project" });
+    expect(
+      screen.getByText(
+        "We received your request. An iRoof estimator will review the property and confirm the next step.",
+      ),
+    ).toBeInTheDocument();
     const [, request] = fetcher.mock.calls[1]!;
     expect(JSON.parse(String(request?.body)).brand).toBe("iroof");
   });

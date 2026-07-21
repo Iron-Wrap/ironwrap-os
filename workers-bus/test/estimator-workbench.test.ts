@@ -8,6 +8,7 @@ import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 
 const MODIFIED = "2026-07-11T10:00:00.000Z";
 const RAW_KEY = "raw/measurements/2026-07-11/ow_01234567-89ab-cdef-0123-456789abcdef.json";
+const RAW_SHA256 = "a".repeat(64);
 const GEOMETRY_XML = [
   "<APPLICAD_EXPORT>",
   '<POINT id="P1" data="0,0,0"/>',
@@ -21,6 +22,41 @@ const GEOMETRY_XML = [
   '<POLYGON id="F1" path="L1,L2,L3,L4" type="Roof" size="100" pitch="6" mat="Asphalt"/>',
   "</APPLICAD_EXPORT>",
 ].join("");
+
+const ROOF_GRAPH = {
+  schema_version: "roof_graph/v1",
+  revision: RAW_SHA256,
+  source: {
+    raw_key: RAW_KEY,
+    raw_sha256: RAW_SHA256,
+    provider: "AppliCad",
+    ingested_at: MODIFIED,
+    capture: { captured_at: null, provenance: "not_supplied" },
+  },
+  coordinate_system: {
+    kind: "local_3d",
+    crs: null,
+    transform: null,
+    provenance: "not_declared_by_source",
+  },
+  points: [
+    { id: "P1", x: 0, y: 0, z: 0 },
+    { id: "P2", x: 10, y: 0, z: 0 },
+    { id: "P3", x: 10, y: 10, z: 0 },
+    { id: "P4", x: 0, y: 10, z: 0 },
+  ],
+  edges: [
+    { id: "L1", from: "P1", to: "P2" },
+    { id: "L2", from: "P2", to: "P3" },
+    { id: "L3", from: "P3", to: "P4" },
+    { id: "L4", from: "P4", to: "P1" },
+  ],
+  facets: [{ id: "F1", lineIds: ["L1", "L2", "L3", "L4"], type: "Roof", ringClosed: true }],
+  checks: [{ check: "line_length", target: "L4", ok: false, detail: "source mismatch" }],
+  needs_review: true,
+  measurements: { roof_area: 100 },
+  source_refs: { roof_area: "POLYGON[type=Roof]" },
+};
 
 const rows: Record<string, Array<Record<string, unknown>>> = {
   "Roof Job": [
@@ -47,6 +83,8 @@ const rows: Record<string, Array<Record<string, unknown>>> = {
       parsed_at: MODIFIED,
       approved_at: null,
       raw_key: RAW_KEY,
+      roof_graph_revision: RAW_SHA256,
+      roof_graph_json: JSON.stringify(ROOF_GRAPH),
       report_url: "https://private.example/report",
       modified: MODIFIED,
       measurements: [
@@ -282,6 +320,37 @@ test("estimator workbench derives safe measurement geometry and commercial trace
     assert.equal(model.measurements.selected?.geometry.facets[0]?.declared_area, 100);
     assert.equal(model.measurements.selected?.geometry.facets[0]?.computed_area, 100);
     assert.equal(model.measurements.selected?.metrics[0]?.source_ref, "POLYGON[type=Roof]");
+    assert.deepEqual(model.measurements.selected?.roof_graph, {
+      state: "needs_review",
+      revision: "roof_graph/v1",
+      source: "not_supplied",
+      provider: "AppliCad",
+      confidence: null,
+      review_status: "Needs Review",
+      captured_at: null,
+      units: null,
+      points: [
+        { id: "P1", x: 0, y: 0 },
+        { id: "P2", x: 10, y: 0 },
+        { id: "P3", x: 10, y: 10 },
+        { id: "P4", x: 0, y: 10 },
+      ],
+      edges: [
+        { id: "L1", start_point_id: "P1", end_point_id: "P2" },
+        { id: "L2", start_point_id: "P2", end_point_id: "P3" },
+        { id: "L3", start_point_id: "P3", end_point_id: "P4" },
+        { id: "L4", start_point_id: "P4", end_point_id: "P1" },
+      ],
+      facets: [{
+        id: "F1",
+        label: "Roof",
+        point_ids: ["P1", "P2", "P3", "P4"],
+        confidence: null,
+        review_status: "Needs Review",
+      }],
+      check_count: 1,
+      failed_check_count: 1,
+    });
     assert.equal(model.takeoffs.selected?.items[0]?.source_ref, "roof_area");
     assert.deepEqual(model.lineage, {
       measurement_to_takeoff: "linked",
@@ -294,6 +363,7 @@ test("estimator workbench derives safe measurement geometry and commercial trace
     const serialized = JSON.stringify(model);
     for (const secret of [
       RAW_KEY,
+      RAW_SHA256,
       GEOMETRY_XML,
       "private-job-note",
       "private-json",
@@ -319,6 +389,44 @@ test("estimator workbench derives safe measurement geometry and commercial trace
       reportDetail,
       "selected report should be read only through the fixed direct-detail contract",
     );
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator workbench fails closed when persisted roof graph provenance disagrees with its report", async () => {
+  const dataset = {
+    ...rows,
+    "Measurement Report": rows["Measurement Report"].map((row) => ({
+      ...row,
+      roof_graph_json: JSON.stringify({
+        ...ROOF_GRAPH,
+        source: { ...ROOF_GRAPH.source, provider: "Other Provider" },
+      }),
+    })),
+  };
+  const mock = installFrappeMock(dataset);
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
+    assert.deepEqual(model?.measurements.selected?.roof_graph, {
+      state: "unavailable",
+      revision: null,
+      source: null,
+      provider: null,
+      confidence: null,
+      review_status: "Unavailable",
+      captured_at: null,
+      units: null,
+      points: [],
+      edges: [],
+      facets: [],
+      check_count: 0,
+      failed_check_count: 0,
+    });
+    const serialized = JSON.stringify(model);
+    assert.equal(serialized.includes(RAW_KEY), false);
+    assert.equal(serialized.includes(RAW_SHA256), false);
+    assert.equal(serialized.includes("Other Provider"), false);
   } finally {
     mock.restore();
   }

@@ -197,6 +197,11 @@ async function routeRequest(
   if (url.pathname.startsWith("/public/")) {
     return await handlePublicInstantEstimate(req, env as PublicEstimatorEnv);
   }
+  // Public estimator traffic is browser-origin constrained and has independent
+  // Turnstile/rate controls. It never accepts the private ingest bearer token.
+  if (url.pathname.startsWith("/public/")) {
+    return await handlePublicInstantEstimate(req, env as PublicEstimatorEnv);
+  }
   // Customer capability resolution bypasses office cookies but requires healthy BFF configuration
   // so the office revocation control plane cannot disappear while customer links remain live. It
   // accepts one opaque token in a POST body after the app has scrubbed the fragment from its

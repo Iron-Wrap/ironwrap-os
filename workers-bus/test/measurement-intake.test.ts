@@ -490,7 +490,19 @@ test("measurement intake: an unresolved supplied job is queued rather than treat
 
   const submitted = await worker.fetch(
     intakeRequest(
-      { job_number: "26-0006", squares: 24 },
+      {
+        job_number: "26-0006",
+        squares: 24,
+        xml: `<APPLICAD_EXPORT>
+          <POINT id="P1" data="0,0,0"/><POINT id="P2" data="10,0,0"/>
+          <POINT id="P3" data="10,10,0"/><POINT id="P4" data="0,10,0"/>
+          <LINE id="L1" path="P1,P2" type="EAVE" length="10"/>
+          <LINE id="L2" path="P2,P3" type="EAVE" length="10"/>
+          <LINE id="L3" path="P3,P4" type="EAVE" length="10"/>
+          <LINE id="L4" path="P4,P1" type="EAVE" length="10"/>
+          <POLYGON id="F1" path="L1,L2,L3,L4" size="100" type="Roof"/>
+        </APPLICAD_EXPORT>`,
+      },
       "measurement-unresolved-job-0001",
     ),
     env as never,
@@ -521,6 +533,22 @@ test("measurement intake: an unresolved supplied job is queued rather than treat
   assert.equal(submitted.status, 202);
   assert.equal(submittedBody.status, "unmatched_review");
   assert.equal(report.review_status, "Needs Review");
+  assert.equal(report.provider, "AppliCad");
+  const roofGraph = JSON.parse(report.roof_graph_json) as {
+    schema_version: string;
+    revision: string;
+    source: { raw_sha256: string; provider: string };
+    points: unknown[];
+    edges: unknown[];
+    facets: unknown[];
+  };
+  assert.equal(roofGraph.schema_version, "roof_graph/v1");
+  assert.equal(report.roof_graph_revision, roofGraph.revision);
+  assert.equal(roofGraph.source.raw_sha256, roofGraph.revision);
+  assert.equal(roofGraph.source.provider, report.provider);
+  assert.equal(roofGraph.points.length, 4);
+  assert.equal(roofGraph.edges.length, 4);
+  assert.equal(roofGraph.facets.length, 1);
   assert.equal("roof_job" in report, false);
   assert.equal(
     listedBody.measurements[0].measurement_id,

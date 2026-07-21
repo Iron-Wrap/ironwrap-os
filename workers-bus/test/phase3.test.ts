@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { deriveMeasurementIntakeIdentity, parseMeasurementSubmission, reportExt } from "../src/measurements.ts";
 import { pushMeasurementToErpNext } from "../src/erpnext.ts";
+import { ROOF_GRAPH_SCHEMA_VERSION, type RoofGraphV1 } from "../src/roof-graph.ts";
 import { handleQuickbooksWebhook, parseQbEvents, verifyIntuitSignature } from "../src/quickbooks.ts";
 
 test("parseMeasurementSubmission: job + report + numeric measurements", () => {
@@ -80,6 +81,26 @@ test("pushMeasurementToErpNext: an unmatched report is unlinked and explicitly n
     throw new Error(`unexpected fetch ${url}`);
   });
 
+  const rawSha256 = "b".repeat(64);
+  const roofGraph: RoofGraphV1 = {
+    schema_version: ROOF_GRAPH_SCHEMA_VERSION,
+    revision: rawSha256,
+    source: {
+      raw_key: `raw/measurements/${rawSha256}.json`,
+      raw_sha256: rawSha256,
+      provider: "AppliCad",
+      ingested_at: "2026-07-16T10:00:00.000Z",
+      capture: { captured_at: null, provenance: "not_supplied" },
+    },
+    coordinate_system: { kind: "local_3d", crs: null, transform: null, provenance: "not_declared_by_source" },
+    points: [{ id: "P1", x: 0, y: 0, z: 0 }],
+    edges: [],
+    facets: [],
+    checks: [],
+    needs_review: false,
+    measurements: { squares: 24 },
+    source_refs: { squares: "raw" },
+  };
   const result = await pushMeasurementToErpNext({
     ERPNEXT_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://erp.example.com",
@@ -89,9 +110,10 @@ test("pushMeasurementToErpNext: an unmatched report is unlinked and explicitly n
     measurementId: `measurement:${"a".repeat(64)}`,
     jobNumber: null,
     reportUrl: null,
-    rawKey: `raw/measurements/${"b".repeat(64)}.json`,
+    rawKey: `raw/measurements/${rawSha256}.json`,
     parsedAt: "2026-07-16T10:00:00.000Z",
     measurements: { squares: 24 },
+    roofGraph,
   });
 
   assert.equal(result?.name, "MR-UNMATCHED");
@@ -99,6 +121,8 @@ test("pushMeasurementToErpNext: an unmatched report is unlinked and explicitly n
   assert.equal(result?.roofJobMatched, false);
   const report = JSON.parse(String(fetches.find((f) => f.url.endsWith("/api/resource/Measurement%20Report"))?.init.body));
   assert.equal(report.review_status, "Needs Review");
+  assert.equal(report.roof_graph_revision, rawSha256);
+  assert.deepEqual(JSON.parse(report.roof_graph_json), roofGraph);
   assert.equal("roof_job" in report, false);
   const evidence = JSON.parse(String(fetches.find((f) => f.url.endsWith("/api/resource/Evidence%20Item"))?.init.body));
   assert.equal("roof_job" in evidence, false);

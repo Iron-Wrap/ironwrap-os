@@ -417,6 +417,53 @@ class DomainPolicyTests(unittest.TestCase):
             context={"measurement_status": "Needs Review"},
         )
 
+    def test_roof_graph_is_bound_to_measurement_evidence(self) -> None:
+        revision = "a" * 64
+        roof_graph = {
+            "schema_version": "roof_graph/v1",
+            "revision": revision,
+            "source": {
+                "raw_key": "measurements/job-1/source.xml",
+                "raw_sha256": revision,
+                "provider": "AppliCad",
+                "ingested_at": "2026-07-18T12:00:00.000Z",
+                "capture": {"captured_at": None, "provenance": "not_supplied"},
+            },
+            "coordinate_system": {
+                "kind": "local_3d",
+                "crs": None,
+                "transform": None,
+                "provenance": "not_declared_by_source",
+            },
+            "points": [],
+            "edges": [],
+            "facets": [],
+            "checks": [],
+            "needs_review": True,
+            "measurements": {},
+            "source_refs": {},
+        }
+        record = {
+            "measurement_id": "m-graph-1",
+            "review_status": "Parsed",
+            "provider": "AppliCad",
+            "raw_key": "measurements/job-1/source.xml",
+            "roof_graph_revision": revision,
+            "roof_graph_json": json.dumps(roof_graph),
+        }
+        validate_record("measurement_report", record)
+        self.assert_policy(
+            "roof_graph_source_mismatch",
+            validate_record,
+            "measurement_report",
+            {
+                **record,
+                "roof_graph_json": json.dumps(
+                    {**roof_graph, "source": {**roof_graph["source"], "provider": "Other"}}
+                ),
+            },
+        )
+
     def test_supplier_quote_and_order_require_approved_upstream_records(self) -> None:
         quote = {
             "supplier_quote_id": "sq-1",

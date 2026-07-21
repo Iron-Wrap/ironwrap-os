@@ -24,6 +24,7 @@ import { cn } from "../lib/cn";
 import { CustomerPortalOfficeAccess } from "../portal/customer-portal-office-access";
 import { loadEstimatorWorkbench } from "./estimator-api";
 import type { EstimatorGeometry, EstimatorWorkbenchResponse } from "./estimator-contracts";
+import { RoofGraphEvidence } from "./roof-graph-evidence";
 
 export function EstimatorWorkbenchPage() {
   return (
@@ -108,6 +109,7 @@ function EstimatorWorkbenchScreen({
           />
 
           <VisualEvidence visual={model.visual_model} locale={locale} />
+          <RoofGraphEvidence roofGraph={selectedMeasurement?.roof_graph ?? null} locale={locale} />
           <MeasurementSource model={model} locale={locale} />
           <TakeoffReview model={model} locale={locale} />
           <InsuranceEvidenceRail supplements={model.insurance_supplements} />

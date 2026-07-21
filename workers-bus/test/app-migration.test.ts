@@ -146,6 +146,27 @@ test("0015 lead-ack receipts preserve provider-acceptance evidence without recip
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
+test("approval migrations avoid nested CASE statements in remote D1 trigger commands", async () => {
+  const sql = await readFile(new URL("../migrations/0016_approval_requests.sql", import.meta.url), "utf8");
+  for (const migration of [
+    "0016_approval_requests.sql",
+    "0017_quote_revision_approval_requests.sql",
+    "0020_production_schedule_approval_requests.sql",
+  ]) {
+    const migrationSql = await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8");
+    assert.doesNotMatch(migrationSql, /\bCASE\b/i);
+    assert.match(migrationSql, /COALESCE\(NULLIF\(NEW\.state, 'executing'\), 'execution_claimed'\)/);
+  }
+  for (const code of [
+    "approval_request_version_transition_required",
+    "approval_request_transition_actor_required",
+    "approval_request_reconciliation_requires_uncertain",
+    "approval_request_reconciliation_actor_required",
+  ]) {
+    assert.match(sql, new RegExp(`SELECT RAISE\\(ABORT, '${code}'\\)\\s+WHERE`));
+  }
+});
+
 test("the complete D1 migration chain applies cleanly and carries every schedule-ledger invariant", async () => {
   const db = new DatabaseSync(":memory:");
   try {

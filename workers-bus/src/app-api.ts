@@ -105,9 +105,9 @@ export async function handleAppApi(
 ): Promise<Response> {
   const appEnv = env as AppEnv;
   if (String(appEnv.APP_BFF_ENABLED) !== "true")
-    return appJson({ error: "app_bff_disabled" }, 503);
+    return unavailableAppRoute();
   if (!appBffConfigured(appEnv))
-    return appJson({ error: "app_bff_not_configured" }, 503);
+    return unavailableAppRoute();
 
   const url = new URL(req.url);
   const mutation = req.method === "POST";
@@ -2527,6 +2527,16 @@ function appJson(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+}
+
+/**
+ * An inactive private-app rail must not advertise its existence or configuration to an
+ * unauthenticated public host. Operators retain the detailed, authenticated readiness map.
+ */
+function unavailableAppRoute(): Response {
+  const response = appJson({ error: "not_found" }, 404);
+  response.headers.set("cache-control", "no-store");
+  return response;
 }
 
 function privateAppJson(body: unknown, status = 200): Response {

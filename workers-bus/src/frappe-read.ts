@@ -251,7 +251,7 @@ export const CUSTOMER_PORTAL_READ_FIELDS = {
 const OFFICE_ESTIMATOR_DETAIL_READ = {
   "Measurement Report": {
     fields: [
-      "name", "measurement_id", "roof_job", "provider", "raw_key", "review_status", "parsed_at", "approved_at", "modified",
+      "name", "measurement_id", "roof_job", "provider", "raw_key", "roof_graph_revision", "roof_graph_json", "review_status", "parsed_at", "approved_at", "modified",
     ],
     children: {
       measurements: ["metric", "value", "unit", "confidence", "source_ref", "needs_review"],
@@ -259,7 +259,7 @@ const OFFICE_ESTIMATOR_DETAIL_READ = {
   },
   "Visual Property Model": {
     fields: [
-      "name", "roof_job", "provider", "status", "confidence", "needs_review", "screenshots_json", "captured_at", "approved_at", "modified",
+      "name", "roof_job", "provider", "status", "confidence", "needs_review", "roof_graph_measurement", "roof_graph_revision", "screenshots_json", "captured_at", "approved_at", "modified",
     ],
     children: {},
   },

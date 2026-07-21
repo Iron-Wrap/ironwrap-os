@@ -32,6 +32,12 @@ const MAX_ESTIMATOR_METRICS = 120;
 const MAX_ESTIMATOR_TAKEOFF_ITEMS = 250;
 const MAX_ESTIMATOR_GEOMETRY_LABEL = 240;
 const MAX_ESTIMATOR_GEOMETRY_DETAIL = 600;
+const MAX_ESTIMATOR_ROOF_GRAPH_JSON_LENGTH = 768 * 1024;
+const MAX_ESTIMATOR_ROOF_GRAPH_POINTS = 1_000;
+const MAX_ESTIMATOR_ROOF_GRAPH_EDGES = 2_000;
+const MAX_ESTIMATOR_ROOF_GRAPH_FACETS = 500;
+const MAX_ESTIMATOR_ROOF_GRAPH_FACET_EDGES = 200;
+const MAX_ESTIMATOR_ROOF_GRAPH_IDENTIFIER = 240;
 const MAX_VISUAL_SCREENSHOT_JSON_LENGTH = 32 * 1024;
 const MAX_VISUAL_PREVIEW_URL_LENGTH = 2048;
 const MAX_VISUAL_SCREENSHOT_CANDIDATES = 12;
@@ -456,6 +462,7 @@ export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
       }>;
       metrics_truncated: boolean;
       geometry: EstimatorGeometryProjection;
+      roof_graph: EstimatorRoofGraphProjection | null;
     } | null;
   };
   visual_model: {
@@ -632,6 +639,35 @@ export interface EstimatorGeometryProjection {
     ring_closed: boolean;
   }>;
   metrics: Array<{ metric: string; value: number; source_ref: string | null }>;
+}
+
+/** Safe browser projection of persisted roof_graph/v1 evidence; raw artifact identity stays server-side. */
+export interface EstimatorRoofGraphProjection {
+  state: "available" | "needs_review" | "unavailable";
+  revision: string | null;
+  source: string | null;
+  provider: string | null;
+  confidence: number | null;
+  review_status: "Approved" | "Needs Review" | "Rejected" | "Unavailable";
+  captured_at: string | null;
+  units: string | null;
+  points: Array<{ id: string; x: number; y: number }>;
+  edges: Array<{ id: string; start_point_id: string; end_point_id: string }>;
+  facets: Array<{
+    id: string;
+    label: string | null;
+    point_ids: string[];
+    confidence: number | null;
+    review_status: "Approved" | "Needs Review" | "Rejected" | "Unavailable";
+  }>;
+  check_count: number;
+  failed_check_count: number;
+}
+
+interface StoredRoofGraphEdge {
+  id: string;
+  from: string;
+  to: string;
 }
 
 export interface MctbStatus {
@@ -1559,6 +1595,7 @@ export async function buildEstimatorWorkbenchReadModel(
     : unavailableEstimatorGeometry(
       selectedMeasurementRow ? measurementDetailIssue ?? "measurement_detail_unavailable" : "no_measurement_report",
     );
+  const roofGraph = estimatorRoofGraphProjection(measurementDetail);
   const staleFields: string[] = [];
   if (selectedMeasurementRow && !measurementDetail) staleFields.push("measurements.selected_detail");
   if (selectedTakeoffRow && !takeoffDetail) staleFields.push("takeoffs.selected_detail");
@@ -1630,7 +1667,7 @@ export async function buildEstimatorWorkbenchReadModel(
     },
     measurements: {
       reports: newestFirst(measurementRows).flatMap(estimatorMeasurementSummary),
-      selected: estimatorMeasurementSelection(selectedMeasurementRow, measurementDetail, geometry),
+      selected: estimatorMeasurementSelection(selectedMeasurementRow, measurementDetail, geometry, roofGraph),
     },
     visual_model: estimatorVisualModel(
       env,
@@ -2371,6 +2408,7 @@ function estimatorMeasurementSelection(
   row: FrappeRow | null,
   detail: FrappeRow | null,
   geometry: EstimatorGeometryProjection,
+  roofGraph: EstimatorRoofGraphProjection | null,
 ): EstimatorWorkbenchReadModel["measurements"]["selected"] {
   if (!row) return null;
   const [summary] = estimatorMeasurementSummary(row);
@@ -2392,6 +2430,7 @@ function estimatorMeasurementSelection(
     metrics_truncated: metricRows.length > MAX_ESTIMATOR_METRICS
       || booleanValue(detail?.__ironwrap_truncated_measurements) === true,
     geometry,
+    roof_graph: roofGraph,
   };
 }
 
@@ -2774,6 +2813,223 @@ function estimatorScopeClause(
     customer_visible: booleanValue(row.customer_visible) === true,
     approved_at: text(row.approved_at),
   }] : [];
+}
+
+/**
+ * Project a persisted canonical graph into a deliberately smaller browser contract. The graph's
+ * raw key and SHA-256 revision stay in Frappe/R2; the UI only gets safe geometry and review facts.
+ */
+function estimatorRoofGraphProjection(
+  detail: FrappeRow | null,
+): EstimatorRoofGraphProjection | null {
+  const serialized = detail?.roof_graph_json;
+  if (serialized === null || serialized === undefined || serialized === "") return null;
+  if (typeof serialized !== "string" || serialized.length > MAX_ESTIMATOR_ROOF_GRAPH_JSON_LENGTH) {
+    return unavailableEstimatorRoofGraph();
+  }
+
+  let candidate: unknown;
+  try {
+    candidate = JSON.parse(serialized);
+  } catch {
+    return unavailableEstimatorRoofGraph();
+  }
+  const graph = roofGraphObject(candidate);
+  if (!graph || graph.schema_version !== "roof_graph/v1") return unavailableEstimatorRoofGraph();
+
+  const rawRevision = roofGraphIdentifier(graph.revision);
+  const persistedRevision = roofGraphIdentifier(detail?.roof_graph_revision);
+  const source = roofGraphObject(graph.source);
+  const coordinateSystem = roofGraphObject(graph.coordinate_system);
+  if (!rawRevision || !roofGraphSha256(rawRevision) || !persistedRevision || rawRevision !== persistedRevision
+    || !source || !coordinateSystem || typeof graph.needs_review !== "boolean"
+    || !Array.isArray(graph.points) || !Array.isArray(graph.edges) || !Array.isArray(graph.facets)
+    || !Array.isArray(graph.checks) || !roofGraphObject(graph.measurements) || !roofGraphObject(graph.source_refs)) {
+    return unavailableEstimatorRoofGraph();
+  }
+
+  const rawKey = roofGraphIdentifier(source.raw_key);
+  const rawSha256 = roofGraphIdentifier(source.raw_sha256);
+  const provider = roofGraphIdentifier(source.provider);
+  const capture = roofGraphObject(source.capture);
+  const sourceProvenance = capture ? roofGraphIdentifier(capture.provenance) : null;
+  if (!rawKey || !rawSha256 || !roofGraphSha256(rawSha256) || rawSha256 !== rawRevision
+    || !provider || !capture || !sourceProvenance || !roofGraphIdentifier(source.ingested_at)
+    || !roofGraphIdentifier(coordinateSystem.kind) || !roofGraphIdentifier(coordinateSystem.provenance)) {
+    return unavailableEstimatorRoofGraph();
+  }
+  const recordRawKey = text(detail?.raw_key);
+  const recordProvider = text(detail?.provider);
+  if ((recordRawKey && rawKey !== recordRawKey) || (recordProvider && provider !== recordProvider)) {
+    return unavailableEstimatorRoofGraph();
+  }
+  if (graph.points.length > MAX_ESTIMATOR_ROOF_GRAPH_POINTS
+    || graph.edges.length > MAX_ESTIMATOR_ROOF_GRAPH_EDGES
+    || graph.facets.length > MAX_ESTIMATOR_ROOF_GRAPH_FACETS) {
+    return unavailableEstimatorRoofGraph();
+  }
+
+  const points = graph.points.flatMap((entry) => {
+    const point = roofGraphObject(entry);
+    const id = point ? roofGraphIdentifier(point.id) : null;
+    const x = point ? roofGraphNumber(point.x) : null;
+    const y = point ? roofGraphNumber(point.y) : null;
+    return id && x !== null && y !== null ? [{ id, x, y }] : [];
+  });
+  if (points.length !== graph.points.length || new Set(points.map((point) => point.id)).size !== points.length) {
+    return unavailableEstimatorRoofGraph();
+  }
+  const pointIds = new Set(points.map((point) => point.id));
+  const storedEdges = graph.edges.flatMap((entry) => {
+    const edge = roofGraphObject(entry);
+    const id = edge ? roofGraphIdentifier(edge.id) : null;
+    const from = edge ? roofGraphIdentifier(edge.from) : null;
+    const to = edge ? roofGraphIdentifier(edge.to) : null;
+    return id && from && to && from !== to && pointIds.has(from) && pointIds.has(to)
+      ? [{ id, from, to } satisfies StoredRoofGraphEdge]
+      : [];
+  });
+  if (storedEdges.length !== graph.edges.length
+    || new Set(storedEdges.map((edge) => edge.id)).size !== storedEdges.length) {
+    return unavailableEstimatorRoofGraph();
+  }
+  const edgesById = new Map(storedEdges.map((edge) => [edge.id, edge]));
+  const facetCandidates: Array<{
+    id: string;
+    label: string | null;
+    point_ids: string[];
+    ring_closed: boolean;
+  }> = [];
+  for (const entry of graph.facets) {
+    const facet = roofGraphObject(entry);
+    const id = facet ? roofGraphIdentifier(facet.id) : null;
+    const lineIds = facet ? roofGraphLineIds(facet.lineIds) : null;
+    if (!facet || !id || !lineIds || typeof facet.ringClosed !== "boolean") {
+      return unavailableEstimatorRoofGraph();
+    }
+    const facetPointIds = roofGraphFacetPointIds(lineIds, edgesById);
+    if (!facetPointIds || facetPointIds.some((pointId) => !pointIds.has(pointId))) {
+      return unavailableEstimatorRoofGraph();
+    }
+    facetCandidates.push({
+      id,
+      label: roofGraphIdentifier(facet.type),
+      point_ids: facetPointIds,
+      ring_closed: facet.ringClosed,
+    });
+  }
+  if (facetCandidates.length !== graph.facets.length
+    || new Set(facetCandidates.map((facet) => facet.id)).size !== facetCandidates.length) {
+    return unavailableEstimatorRoofGraph();
+  }
+
+  let failedChecks = 0;
+  for (const entry of graph.checks) {
+    const check = roofGraphObject(entry);
+    if (!check || typeof check.ok !== "boolean") return unavailableEstimatorRoofGraph();
+    if (!check.ok) failedChecks += 1;
+  }
+  const reportStatus = text(detail?.review_status);
+  const requiresReview = graph.needs_review || failedChecks > 0
+    || facetCandidates.some((facet) => !facet.ring_closed) || reportStatus !== "Approved";
+  const reviewStatus: EstimatorRoofGraphProjection["review_status"] = reportStatus === "Rejected"
+    ? "Rejected"
+    : requiresReview ? "Needs Review" : "Approved";
+
+  return {
+    state: requiresReview ? "needs_review" : "available",
+    // The canonical persisted revision is a raw SHA-256. Expose only the graph schema revision.
+    revision: "roof_graph/v1",
+    source: sourceProvenance,
+    provider,
+    confidence: null,
+    review_status: reviewStatus,
+    captured_at: visualTimestamp(capture.captured_at),
+    units: null,
+    points,
+    edges: storedEdges.map((edge) => ({
+      id: edge.id,
+      start_point_id: edge.from,
+      end_point_id: edge.to,
+    })),
+    facets: facetCandidates.map((facet) => ({
+      id: facet.id,
+      label: facet.label,
+      point_ids: facet.point_ids,
+      confidence: null,
+      review_status: reviewStatus === "Rejected"
+        ? "Rejected"
+        : requiresReview || !facet.ring_closed ? "Needs Review" : "Approved",
+    })),
+    check_count: graph.checks.length,
+    failed_check_count: failedChecks,
+  };
+}
+
+function unavailableEstimatorRoofGraph(): EstimatorRoofGraphProjection {
+  return {
+    state: "unavailable",
+    revision: null,
+    source: null,
+    provider: null,
+    confidence: null,
+    review_status: "Unavailable",
+    captured_at: null,
+    units: null,
+    points: [],
+    edges: [],
+    facets: [],
+    check_count: 0,
+    failed_check_count: 0,
+  };
+}
+
+function roofGraphObject(value: unknown): FrappeRow | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as FrappeRow : null;
+}
+
+function roofGraphIdentifier(value: unknown): string | null {
+  const result = text(value);
+  return result && result.length <= MAX_ESTIMATOR_ROOF_GRAPH_IDENTIFIER ? result : null;
+}
+
+function roofGraphNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function roofGraphSha256(value: string): boolean {
+  return value.length === 64 && [...value].every((character) => "0123456789abcdef".includes(character));
+}
+
+function roofGraphLineIds(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length < 3 || value.length > MAX_ESTIMATOR_ROOF_GRAPH_FACET_EDGES) return null;
+  const lineIds = value.map(roofGraphIdentifier);
+  return lineIds.every((lineId): lineId is string => !!lineId)
+    && new Set(lineIds).size === lineIds.length
+    ? lineIds
+    : null;
+}
+
+function roofGraphFacetPointIds(
+  lineIds: string[],
+  edgesById: ReadonlyMap<string, StoredRoofGraphEdge>,
+): string[] | null {
+  const sourceEdges = lineIds.map((lineId) => edgesById.get(lineId));
+  if (sourceEdges.some((edge): edge is undefined => !edge)) return null;
+  const walk = (first: StoredRoofGraphEdge, reversed: boolean): string[] | null => {
+    const remaining = sourceEdges.filter((edge) => edge !== first) as StoredRoofGraphEdge[];
+    const ring = reversed ? [first.to, first.from] : [first.from, first.to];
+    while (remaining.length > 0) {
+      const current = ring[ring.length - 1];
+      const nextIndex = remaining.findIndex((edge) => edge.from === current || edge.to === current);
+      if (nextIndex < 0) return null;
+      const [next] = remaining.splice(nextIndex, 1);
+      ring.push(next.from === current ? next.to : next.from);
+    }
+    return ring[0] === ring[ring.length - 1] ? ring.slice(0, -1) : null;
+  };
+  const first = sourceEdges[0] as StoredRoofGraphEdge;
+  return walk(first, false) ?? walk(first, true);
 }
 
 async function estimatorGeometryFromRaw(

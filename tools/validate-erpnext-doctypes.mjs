@@ -111,7 +111,11 @@ const specs = [
     name: "Measurement Report",
     dir: "measurement_report",
     idField: "measurement_id",
-    requiredFields: ["measurement_id", "roof_job", "roofing_property", "provider", "source_file", "raw_key", "review_status", "measurements"],
+    requiredFields: ["measurement_id", "roof_job", "roofing_property", "provider", "source_file", "raw_key", "roof_graph_revision", "roof_graph_json", "review_status", "measurements"],
+    fieldContracts: {
+      roof_graph_revision: { fieldtype: "Data", read_only: 1 },
+      roof_graph_json: { fieldtype: "Code", options: "JSON", read_only: 1 },
+    },
   },
   {
     name: "Material Takeoff Item",
@@ -398,6 +402,8 @@ const specs = [
       "confidence",
       "needs_review",
       "source_evidence",
+      "roof_graph_measurement",
+      "roof_graph_revision",
       "screenshots_json",
       "measurements_json",
       "captured_at",
@@ -406,6 +412,10 @@ const specs = [
       "approval_note",
       "notes",
     ],
+    fieldContracts: {
+      roof_graph_measurement: { fieldtype: "Link", options: "Measurement Report", read_only: 1 },
+      roof_graph_revision: { fieldtype: "Data", read_only: 1 },
+    },
   },
   {
     name: "Roof Area",

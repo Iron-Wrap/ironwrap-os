@@ -504,6 +504,7 @@ JSON_FIELDS: dict[str, tuple[str, ...]] = {
     "integration_reconciliation": ("diff_json",),
     "insurance_supplement": ("evidence_manifest_json",),
     "material_takeoff": ("source_measurements_json",),
+    "measurement_report": ("roof_graph_json",),
     "option_package": ("options_json", "scope_clause_ids_json"),
     "payment_milestone": ("tax_policy_snapshot_json",),
     "price_book_rule": ("rule_json",),
@@ -1459,7 +1460,98 @@ def _validate_instant_estimate(record: Any, _context: Mapping[str, Any]) -> None
         require_approval(record)
 
 
+def _validate_roof_graph(record: Any) -> None:
+    """Keep a persisted roof graph bound to its immutable raw evidence."""
+
+    roof_graph = parse_json_field(record, "roof_graph_json")
+    if roof_graph is None:
+        return
+    if not isinstance(roof_graph, dict):
+        raise PolicyViolation(
+            "invalid_roof_graph", "roof graph must be an object", "roof_graph_json"
+        )
+    if roof_graph.get("schema_version") != "roof_graph/v1":
+        raise PolicyViolation(
+            "unsupported_roof_graph",
+            "expected schema_version roof_graph/v1",
+            "roof_graph_json",
+        )
+
+    revision = roof_graph.get("revision")
+    if not isinstance(revision, str) or _blank(revision):
+        raise PolicyViolation(
+            "invalid_roof_graph", "roof graph needs a revision", "roof_graph_json"
+        )
+    require_sha256(roof_graph, "revision")
+    require_fields(record, "roof_graph_revision")
+    if revision != _get(record, "roof_graph_revision"):
+        raise PolicyViolation(
+            "roof_graph_revision_mismatch",
+            "roof graph revision must match roof_graph_revision",
+            "roof_graph_json",
+        )
+
+    source = roof_graph.get("source")
+    if not isinstance(source, dict):
+        raise PolicyViolation(
+            "invalid_roof_graph", "roof graph needs source provenance", "roof_graph_json"
+        )
+    for field in ("raw_key", "raw_sha256", "provider", "ingested_at", "capture"):
+        if _blank(source.get(field)):
+            raise PolicyViolation(
+                "invalid_roof_graph", f"roof graph source lacks {field}", "roof_graph_json"
+            )
+    require_sha256(source, "raw_sha256")
+    if source["raw_sha256"] != revision:
+        raise PolicyViolation(
+            "roof_graph_revision_mismatch",
+            "roof graph revision must be its raw evidence hash",
+            "roof_graph_json",
+        )
+    capture = source.get("capture")
+    if not isinstance(capture, dict) or _blank(capture.get("provenance")):
+        raise PolicyViolation(
+            "invalid_roof_graph", "roof graph capture provenance is required", "roof_graph_json"
+        )
+    raw_key = _get(record, "raw_key")
+    if not _blank(raw_key) and source["raw_key"] != raw_key:
+        raise PolicyViolation(
+            "roof_graph_source_mismatch",
+            "roof graph raw key must match Measurement Report raw_key",
+            "roof_graph_json",
+        )
+    provider = _get(record, "provider")
+    if not _blank(provider) and source["provider"] != provider:
+        raise PolicyViolation(
+            "roof_graph_source_mismatch",
+            "roof graph provider must match Measurement Report provider",
+            "roof_graph_json",
+        )
+
+    coordinate_system = roof_graph.get("coordinate_system")
+    if not isinstance(coordinate_system, dict) or _blank(
+        coordinate_system.get("kind")
+    ):
+        raise PolicyViolation(
+            "invalid_roof_graph", "roof graph coordinate system is required", "roof_graph_json"
+        )
+    for field in ("points", "edges", "facets", "checks"):
+        if not isinstance(roof_graph.get(field), list):
+            raise PolicyViolation(
+                "invalid_roof_graph", f"roof graph {field} must be a list", "roof_graph_json"
+            )
+    if not isinstance(roof_graph.get("measurements"), dict) or not isinstance(
+        roof_graph.get("source_refs"), dict
+    ):
+        raise PolicyViolation(
+            "invalid_roof_graph",
+            "roof graph measurements and source_refs must be maps",
+            "roof_graph_json",
+        )
+
+
 def _validate_measurement(record: Any, _context: Mapping[str, Any]) -> None:
+    _validate_roof_graph(record)
     if _get(record, "review_status") != "Approved":
         return
     require_fields(record, "roof_job", "approved_by", "approved_at", "approval_note")

@@ -1,5 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const acceptanceMode = process.env.ACCEPTANCE_MODE ?? "field";
+const acceptancePort = Number(process.env.ACCEPTANCE_PORT ?? process.env.PORT ?? "4173");
+const acceptanceBaseUrl = `http://127.0.0.1:${acceptancePort}`;
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
@@ -12,7 +16,7 @@ export default defineConfig({
     ? [["github"], ["html", { open: "never" }]]
     : [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL: acceptanceBaseUrl,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
@@ -26,8 +30,13 @@ export default defineConfig({
   ],
   webServer: {
     command: "node scripts/acceptance-server.mjs",
-    url: "http://127.0.0.1:4173/healthz",
+    env: {
+      ...process.env,
+      ACCEPTANCE_MODE: acceptanceMode,
+      PORT: String(acceptancePort),
+    },
+    url: `${acceptanceBaseUrl}/healthz`,
     timeout: 30_000,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: !process.env.CI && acceptanceMode === "field",
   },
 });

@@ -58,6 +58,16 @@ test("configFromEnv requires ERPNext credentials, runtime role binding, and rece
   assert.equal(readOnly.actorUser, "owner@example.com");
   assert.ok(readOnly.allowedTools.includes("request_update_gate"));
 
+  const localReadOnly = configFromEnv({
+    ERPNEXT_BASE_URL: "http://127.0.0.1:19090",
+    ERPNEXT_ALLOW_INSECURE_LOCAL: "true",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
+    ...ROLE_ENV,
+  });
+  assert.equal(localReadOnly.baseUrl, "http://127.0.0.1:19090");
+  assert.equal(localReadOnly.allowInsecureLocal, true);
+
   assert.throws(() => configFromEnv({
     ERPNEXT_BASE_URL: "https://erp.example/",
     ERPNEXT_API_KEY: "key",
@@ -353,6 +363,11 @@ test("executeAuditedWrite records the complete Frappe policy and mutation audit 
   assert.equal(draft.request_correlation_id, "hr_policy_123");
   assert.equal(draft.mutation_applied, 0);
   assert.equal(draft.tool_args_json.includes("must-never-be-audited"), false);
+  // MariaDB DATETIME columns reject ISO-8601 "T…Z" text: audit rows use Frappe format.
+  assert.match(draft.run_ts, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  // An omitted Select defaults to its first option in Frappe; the draft pins the
+  // explicit empty result_status so the pre-execution state stays honest.
+  assert.equal(draft.result_status, "");
 
   const completed = writes[1].body;
   assert.equal(writes[1].method, "PUT");
@@ -361,7 +376,7 @@ test("executeAuditedWrite records the complete Frappe policy and mutation audit 
   assert.equal(completed.mutation_applied, 1);
   assert.equal(completed.audit_event_id, "audit:hr_policy_123");
   assert.equal(completed.request_correlation_id, "hr_policy_123");
-  assert.match(completed.completed_at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.match(completed.completed_at, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
   assert.deepEqual(JSON.parse(completed.after_target_ids), { state: "Ready" });
 });
 

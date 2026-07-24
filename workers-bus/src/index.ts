@@ -197,11 +197,6 @@ async function routeRequest(
   if (url.pathname.startsWith("/public/")) {
     return await handlePublicInstantEstimate(req, env as PublicEstimatorEnv);
   }
-  // Public estimator traffic is browser-origin constrained and has independent
-  // Turnstile/rate controls. It never accepts the private ingest bearer token.
-  if (url.pathname.startsWith("/public/")) {
-    return await handlePublicInstantEstimate(req, env as PublicEstimatorEnv);
-  }
   // Customer capability resolution bypasses office cookies but requires healthy BFF configuration
   // so the office revocation control plane cannot disappear while customer links remain live. It
   // accepts one opaque token in a POST body after the app has scrubbed the fragment from its
@@ -299,6 +294,16 @@ async function routeRequest(
       return await handleReplay(req, env);
     if (req.method === "POST" && url.pathname === "/admin/app-users") {
       return await handleAdminAppUserProvision(req, env);
+    }
+    // Local-only development capture reader. 404 unless the Worker runs in explicit
+    // localhost-only mode (APP_ALLOW_INSECURE_LOCAL="true"); never enabled in production.
+    if (req.method === "GET" && url.pathname === "/admin/dev-outbox") {
+      if (String(env.APP_ALLOW_INSECURE_LOCAL) !== "true") return json({ error: "not_found" }, 404);
+      const limit = clampLimit(url.searchParams.get("limit"), 20, 100);
+      const rows = await env.DB.prepare(
+        "SELECT capture_id, kind, recipient, href, created_at FROM dev_outbox ORDER BY created_at DESC LIMIT ?",
+      ).bind(limit).all();
+      return json({ captures: rows.results ?? [] });
     }
   }
   // No proposal mutation route: owned click-to-accept is the keeper path; a commercial e-sign

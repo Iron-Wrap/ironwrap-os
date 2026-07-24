@@ -78,7 +78,10 @@ if ! jq -e '
   echo "error: runtime lock host policy is invalid or not Frappe-only" >&2
   exit 1
 fi
-readarray -t HOST_LOCK < <(jq -r '
+HOST_LOCK=()
+while IFS= read -r host_lock_line || [[ -n "$host_lock_line" ]]; do
+  HOST_LOCK+=("$host_lock_line")
+done < <(jq -r '
   .host_requirements.cpu_cores_minimum,
   .host_requirements.memory_gib_minimum,
   .host_requirements.disk_gib_minimum,

@@ -120,7 +120,9 @@ export function frappeFieldWriter(env: AppEnv): FieldFrappeWriter {
           photo_count: input.photoCount,
           evidence_ids_json: JSON.stringify(input.evidenceIds),
           blocker_flag: input.blocker ? 1 : 0,
-          blocker_category: input.blockerCategory,
+          // Frappe Select fields default to their first option when omitted; an
+          // implicit blocker_category trips the policy's stale_blocker rule.
+          blocker_category: input.blockerCategory ?? "",
           blocker_summary: input.blockerSummary,
           voice_evidence: input.voiceEvidenceId,
           correction_of: input.correctionOf,
@@ -236,7 +238,7 @@ async function postFrappeJson(
   try {
     const response = await fetch(`${frappeBaseUrl(env)}${path}`, {
       method: "POST",
-      redirect: "error",
+      redirect: "manual",
       signal: controller.signal,
       headers: {
         accept: "application/json",

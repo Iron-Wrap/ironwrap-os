@@ -407,7 +407,9 @@ export async function claimProductionScheduleApprovalExecution(
     input.expectedVersion,
     input.now,
   ).run();
-  if (d1Changes(result) === 1) {
+  // SQLite counts trigger-inserted event rows in meta.changes: the guarded
+  // single-row UPDATE reports >= 2 on success, not exactly 1.
+  if (d1Changes(result) >= 1) {
     const claimed = await getProductionScheduleApprovalRequest(env, input.tenantId, input.requestId);
     if (!claimed) throw new Error("production_schedule_approval_claim_missing");
     return { kind: "claimed", request: claimed };
@@ -462,7 +464,8 @@ export async function denyProductionScheduleApprovalRequest(
     input.expectedVersion,
     input.now,
   ).run();
-  if (d1Changes(result) === 1) {
+  // Trigger-augmented meta.changes means >= 1 (see claim above).
+  if (d1Changes(result) >= 1) {
     const denied = await getProductionScheduleApprovalRequest(env, input.tenantId, input.requestId);
     if (!denied) throw new Error("production_schedule_approval_deny_missing");
     return { kind: "denied", request: denied };
@@ -510,7 +513,8 @@ export async function finalizeProductionScheduleApprovalExecution(
     input.decisionIdempotencyKey,
   ).run();
   const request = await getProductionScheduleApprovalRequest(env, input.tenantId, input.requestId);
-  return d1Changes(result) === 1
+  // Trigger-augmented meta.changes means >= 1 (see claim above).
+  return d1Changes(result) >= 1
     ? { kind: "finalized", request: request ?? failMissing("production_schedule_approval_finalize_missing") }
     : { kind: "lost_claim", request };
 }
@@ -595,7 +599,8 @@ export async function reconcileProductionScheduleApprovalUncertainty(
     input.requestId,
     input.expectedVersion,
   ).run();
-  if (d1Changes(result) === 1) {
+  // Trigger-augmented meta.changes means >= 1 (see claim above).
+  if (d1Changes(result) >= 1) {
     const reconciled = await getProductionScheduleApprovalRequest(env, input.tenantId, input.requestId);
     if (!reconciled) throw new Error("production_schedule_approval_reconciliation_missing");
     return { kind: "reconciled", request: reconciled };

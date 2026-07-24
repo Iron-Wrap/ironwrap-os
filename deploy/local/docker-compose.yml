@@ -1,0 +1,107 @@
+# Local end-to-end Frappe stack for IronWrap OS (development/proof only).
+# Production remains the digest-pinned x86_64 image in ../Containerfile.frappe +
+# ../frappe-compose.override.yml. This stack runs the SAME Frappe v15 line and the
+# SAME ironwrap_roofing app (mounted read-only from the repo) on any architecture.
+#
+# Usage (or just `npm run dev` in workers-bus, which ensures this stack is up):
+#   docker compose -f deploy/local/docker-compose.yml up -d
+#   docker compose -f deploy/local/docker-compose.yml logs -f frappe-init
+#
+# Services:
+#   mariadb / redis-cache / redis-queue : infra
+#   frappe-init                          : one-shot provisioner (bench init, site, app, users)
+#   frappe                               : bench start (HTTP on host 8000) once init succeeds
+
+name: ironwrap-local
+
+x-frappe-env: &frappe-env
+  # bench init/start reads common_site_config.json written by the init container;
+  # these are only fallbacks for ad-hoc exec sessions.
+  FRAPPE_VERSION: v15.114.0
+  SITE_NAME: ironwrap.localhost
+  ADMIN_PASSWORD: ironwrap-local-admin
+  DB_ROOT_PASSWORD: ironwrap-local-dbroot
+  # Hermes approved-write boundary (approval_receipt.py): the Frappe app holds
+  # only the ed25519 PUBLIC key; broker-held private key + dry-run HMAC stay out.
+  # deploy/local/predev.mjs generates the throwaway keypair into deploy/local/keys/.
+  IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE: /opt/ironwrap-keys/hermes-approval-public.pem
+  IRONWRAP_HERMES_SITE_BASE_URL: http://localhost:8000
+  IRONWRAP_HERMES_ALLOW_INSECURE_LOCAL: "true"
+
+services:
+  mariadb:
+    image: mariadb:10.6
+    platform: linux/arm64
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+      - --skip-innodb-read-only-compressed
+      - --bind-address=0.0.0.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ironwrap-local-dbroot
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "127.0.0.1", "-pironwrap-local-dbroot"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis-cache:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-cache-data:/data
+
+  redis-queue:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-queue-data:/data
+
+  frappe-init:
+    image: frappe/bench:latest
+    platform: linux/arm64
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis-cache:
+        condition: service_started
+      redis-queue:
+        condition: service_started
+    environment:
+      <<: *frappe-env
+    volumes:
+      - bench-home:/home/frappe/frappe-bench
+      # The proprietary app source, mounted read-only straight from this repo.
+      - ../../frappe-apps/ironwrap_roofing:/opt/ironwrap_roofing:ro
+      - ./frappe-init.sh:/usr/local/bin/ironwrap-frappe-init:ro
+    user: "0"
+    entrypoint: ["/bin/bash", "/usr/local/bin/ironwrap-frappe-init"]
+
+  frappe:
+    image: frappe/bench:latest
+    platform: linux/arm64
+    depends_on:
+      frappe-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *frappe-env
+    volumes:
+      - bench-home:/home/frappe/frappe-bench
+      - ../../frappe-apps/ironwrap_roofing:/opt/ironwrap_roofing:ro
+      - ./keys:/opt/ironwrap-keys:ro
+    working_dir: /home/frappe/frappe-bench
+    command: ["bench", "start"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+
+volumes:
+  mariadb-data:
+  redis-cache-data:
+  redis-queue-data:
+  bench-home:
+

@@ -85,6 +85,11 @@ jobs:
           npm test --prefix app
           npm run format:check --prefix app
           npm run build --prefix app
+      - name: Install Playwright Chromium for app e2e
+        working-directory: app
+        run: npx playwright install --with-deps chromium
+      - name: Run app Playwright e2e (PWA suite)
+        run: npm run test:pwa --prefix app
 
       - name: Install Worker dependencies
         run: npm ci --ignore-scripts --prefix workers-bus

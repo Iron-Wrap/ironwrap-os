@@ -55,6 +55,7 @@ export function createApprovalBroker({ config, invokeMcp, now = () => Date.now()
         try {
           return respond(200, await previewLeadTriage(inbound.body, config, invokeMcp, now));
         } catch (error) {
+          console.error("[approval-broker] preview rejected:", error?.message ?? error);
           return respond(422, { error: safeBrokerError(error, "broker_preview_rejected") });
         }
       }
@@ -62,6 +63,7 @@ export function createApprovalBroker({ config, invokeMcp, now = () => Date.now()
       try {
         return respond(200, await executeLeadTriage(inbound.body, config, invokeMcp, now));
       } catch (error) {
+        console.error("[approval-broker] execute failed:", error?.message ?? error);
         return respond(200, {
           outcome: { state: "failed", error_code: safeBrokerError(error, "broker_contract_invalid") },
         });
@@ -338,6 +340,7 @@ async function executeLeadTriage(body, config, invokeMcp, now) {
       dry_run_receipt: record.dryRunReceipt,
       approval_receipt: approvalReceipt,
     });
+    if (result?.isError) console.error("[approval-broker] write tool error result:", JSON.stringify(result?.content).slice(0, 600));
     const payload = parseToolPayload(result);
     const safeResult = safeExecutedResult(payload, record);
     return {
@@ -349,6 +352,7 @@ async function executeLeadTriage(body, config, invokeMcp, now) {
       },
     };
   } catch (error) {
+    console.error("[approval-broker] write tool call failed:", error?.message ?? error);
     const message = String(error).toLowerCase();
     if (message.includes("audit_failed") || message.includes("audit_finalization")) {
       return { outcome: { state: "audit_failed", hermes_run_id: record.runId, result_json: null, error_code: "audit_finalization_failed" } };
@@ -489,6 +493,7 @@ function json(body, status) {
 function mcpChildEnvironment(env, runtime) {
   const allow = [
     "ERPNEXT_BASE_URL", "ERPNEXT_API_KEY", "ERPNEXT_API_SECRET", "ERPNEXT_REQUEST_TIMEOUT_MS",
+    "ERPNEXT_ALLOW_INSECURE_LOCAL",
     "HERMES_ROLE_POLICY_PATH", "HERMES_DRY_RUN_SIGNING_KEY", "HERMES_APPROVAL_PUBLIC_KEY_FILE",
     "HERMES_APPROVAL_PUBLIC_KEY",
   ];
@@ -605,14 +610,21 @@ async function runHttpBroker() {
       }
       chunks.push(chunk);
     }
+    // undici rejects a body on GET/HEAD; a stray probe must never crash the broker.
+    const method = request.method ?? "GET";
     const inbound = new Request(`http://${host}:${port}${request.url ?? "/"}`, {
-      method: request.method,
+      method,
       headers: request.headers,
-      body: Buffer.concat(chunks).toString("utf8"),
+      body: method === "GET" || method === "HEAD" ? undefined : Buffer.concat(chunks).toString("utf8"),
     });
-    const outbound = await broker.handle(inbound);
-    response.writeHead(outbound.status, Object.fromEntries(outbound.headers));
-    response.end(await outbound.text());
+    try {
+      const outbound = await broker.handle(inbound);
+      response.writeHead(outbound.status, Object.fromEntries(outbound.headers));
+      response.end(await outbound.text());
+    } catch {
+      response.writeHead(500, { "content-type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify({ error: "broker_internal_error" }));
+    }
   });
   await new Promise((resolve, reject) => {
     server.once("error", reject);

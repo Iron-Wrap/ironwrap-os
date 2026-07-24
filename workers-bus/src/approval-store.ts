@@ -352,7 +352,11 @@ export async function claimApprovalExecution(
     input.expectedVersion,
     input.now,
   ).run();
-  if (d1Changes(result) === 1) {
+  // SQLite counts trigger-inserted event rows in meta.changes: the append-only
+  // transition trigger makes a successful single-row guarded UPDATE report 2.
+  // The guard (tenant + id + state + version) can only ever match this one row,
+  // so >= 1 is the correct success test.
+  if (d1Changes(result) >= 1) {
     const claimed = await getApprovalRequest(env, input.tenantId, input.requestId);
     if (!claimed) throw new Error("approval_request_claim_missing");
     return { kind: "claimed", request: claimed };
@@ -407,7 +411,8 @@ export async function denyApprovalRequest(
     input.expectedVersion,
     input.now,
   ).run();
-  if (d1Changes(result) === 1) {
+  // See claimApprovalExecution: trigger-augmented meta.changes means >= 1.
+  if (d1Changes(result) >= 1) {
     const denied = await getApprovalRequest(env, input.tenantId, input.requestId);
     if (!denied) throw new Error("approval_request_deny_missing");
     return { kind: "denied", request: denied };
@@ -455,7 +460,8 @@ export async function finalizeApprovalExecution(
     input.decisionIdempotencyKey,
   ).run();
   const request = await getApprovalRequest(env, input.tenantId, input.requestId);
-  return d1Changes(result) === 1
+  // See claimApprovalExecution: trigger-augmented meta.changes means >= 1.
+  return d1Changes(result) >= 1
     ? { kind: "finalized", request: request ?? failMissing("approval_request_finalize_missing") }
     : { kind: "lost_claim", request };
 }
@@ -543,7 +549,8 @@ export async function reconcileApprovalUncertainty(
     input.requestId,
     input.expectedVersion,
   ).run();
-  if (d1Changes(result) === 1) {
+  // See claimApprovalExecution: trigger-augmented meta.changes means >= 1.
+  if (d1Changes(result) >= 1) {
     const reconciled = await getApprovalRequest(env, input.tenantId, input.requestId);
     if (!reconciled) throw new Error("approval_request_reconciliation_missing");
     return { kind: "reconciled", request: reconciled };

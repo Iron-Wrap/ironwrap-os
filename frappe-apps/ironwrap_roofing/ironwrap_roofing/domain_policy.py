@@ -185,7 +185,10 @@ def enforce_write_once(record: Any, previous: Any, *fields: str) -> None:
     for field in fields:
         before = _get(previous, field)
         after = _get(record, field)
-        if not _blank(before) and before != after:
+        # Compare normalized text: MariaDB returns datetimes as datetime objects
+        # while writers re-send the same fact as a string. Representation must
+        # not matter; only a real value change or clear is a violation.
+        if not _blank(before) and str(before) != str(after):
             raise PolicyViolation(
                 "write_once_field", "cannot change or clear once set", field
             )

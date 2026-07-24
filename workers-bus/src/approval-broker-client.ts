@@ -203,7 +203,7 @@ async function callBroker(
   try {
     response = await (dependencies.fetch ?? fetch)(`${config.baseUrl}${path}`, {
       method: "POST",
-      redirect: "error",
+      redirect: "manual",
       signal: controller.signal,
       headers: {
         "content-type": "application/json",

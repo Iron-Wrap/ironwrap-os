@@ -10,7 +10,7 @@ For the exhaustive first phase, use `final-spec-pack/18-phase-1-source-truth-and
 > JobNimbus, GHL, Make, and Jotform are temporary bridges. Legacy `erpnext-*` identifiers remain
 > for compatibility only. The launch runbook and Phase 1 contract prevail over this historical plan.
 
-## Current status vs spec — snapshot (2026-07-08)
+## Current status vs spec — snapshot (2026-07-24)
 
 Honest two-layer view: **Built** = code/config present + unit-verified · **Operating** = running on live
 traffic/data in production. The Worker bus is real and current in code/config: D1/R2/queues/cron, Gmail instant-ack,
@@ -34,6 +34,12 @@ IronWrap account, so live Cloudflare inventory/deploy work requires the IronWrap
 > The bus, the Phase-3 endpoints, and the email/SMS code are all real — but a roofing lead has **not yet
 > traveled the owned path end-to-end in production.** Closing that gap is credentials + careful (UI, not
 > API) integration, not more code. The credential-by-credential unlock order is in `docs/ACTIVATION-CHECKLIST.md`.
+>
+> **Built since 2026-07-08:** staging environment live with the owner staging-acceptance gate defined
+> (`docs/STAGING-OWNER-TEST.md`); public estimator hardened flow (Turnstile + privacy-safe rate limits +
+> consent capture); production-schedule approvals (broker + append-only D1 ledger) and the customer
+> portal shipped across bus + `app/`; full local E2E stack (`deploy/local/`: docker-compose Frappe v15 +
+> MariaDB + Redis, provisioner + synthetic seed) wired into workers-bus `npm run dev`.
 
 ## From → To
 

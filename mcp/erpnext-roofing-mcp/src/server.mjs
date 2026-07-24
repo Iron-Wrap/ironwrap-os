@@ -758,6 +758,7 @@ const TENANT_EXPORT_RUN_FIELDS = [
 
 export function configFromEnv(env = process.env) {
   const baseUrl = normalizeFrappeBaseUrl(env.ERPNEXT_BASE_URL, env.ERPNEXT_ALLOW_INSECURE_LOCAL === "true");
+  const allowInsecureLocal = env.ERPNEXT_ALLOW_INSECURE_LOCAL === "true";
   const apiKey = env.ERPNEXT_API_KEY;
   const apiSecret = env.ERPNEXT_API_SECRET;
   const writeEnabled = env.ERPNEXT_WRITE_ENABLED === "true";
@@ -785,6 +786,7 @@ export function configFromEnv(env = process.env) {
   const requestTimeoutMs = parseRequestTimeout(env.ERPNEXT_REQUEST_TIMEOUT_MS);
   return {
     baseUrl,
+    allowInsecureLocal,
     apiKey,
     apiSecret,
     writeEnabled,
@@ -6883,6 +6885,13 @@ async function finalizeHermesRun(config, runId, patch) {
 // mark the run failed on error. A caller-supplied run_id is a single-use mutation claim:
 // only the request which successfully creates its Hermes Run may execute. Later retries
 // either receive the completed result or fail closed, never resume an uncertain mutation.
+/** MariaDB DATETIME columns reject ISO-8601 "T…Z" text; convert to Frappe's "YYYY-MM-DD HH:MM:SS". */
+function frappeDatetimeIso(value) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toISOString().replace("T", " ").slice(0, 19);
+}
+
 export async function executeAuditedWrite(config, {
   runId,
   now,
@@ -6922,7 +6931,7 @@ export async function executeAuditedWrite(config, {
 
   const auditDraft = {
     run_id: runId,
-    run_ts: now,
+    run_ts: frappeDatetimeIso(now),
     agent_role: agentRole,
     requested_by: args.__hermes_actor_user ?? args.approved_by,
     request_text: args.request_text,
@@ -6945,11 +6954,15 @@ export async function executeAuditedWrite(config, {
       checks: ["tool_input_schema", "deterministic_builder", "signed_dry_run_receipt", "signed_human_approval_receipt", "doctype_validate_hook"],
       target,
     }),
-    policy_checked_at: now,
+    policy_checked_at: frappeDatetimeIso(now),
     policy_checked_by: args.__hermes_actor_user ?? args.approved_by,
     approval_status: "Approved",
     approved_by: args.approved_by,
-    approved_at: now,
+    approved_at: frappeDatetimeIso(now),
+    // Frappe Select fields default to their first option when omitted; an
+    // implicit result_status="OK" trips the domain policy's result_json rule
+    // for a run that has not executed yet. Send the explicit empty value.
+    result_status: "",
     before_target_ids: JSON.stringify(beforeSummary),
     request_correlation_id: runId,
     mutation_applied: 0,
@@ -6990,7 +7003,7 @@ export async function executeAuditedWrite(config, {
     const resolvedAfterSummary = typeof afterSummary === "function"
       ? afterSummary(result)
       : afterSummary;
-    const completedAt = new Date().toISOString();
+    const completedAt = frappeDatetimeIso(new Date().toISOString());
     const auditError = await finalizeHermesRun(config, runId, {
       approval_status: "Executed",
       result_status: "OK",
@@ -7039,7 +7052,7 @@ export async function executeAuditedWrite(config, {
         approval_status: "Failed",
         result_status: "Error",
         error: String(err).slice(0, 500),
-        completed_at: new Date().toISOString(),
+        completed_at: frappeDatetimeIso(new Date().toISOString()),
         mutation_applied: 0,
       }).catch(() => {});
     }
@@ -7108,7 +7121,7 @@ export function buildAuditFinalizationIncidentDraft({
     ...(roofJob ? { roof_job: roofJob } : {}),
     record_ref: `Hermes Run:${runId}`,
     correlation_id: runId,
-    detected_at: now,
+    detected_at: frappeDatetimeIso(now),
   };
 }
 

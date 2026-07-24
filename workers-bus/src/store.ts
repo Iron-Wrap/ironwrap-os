@@ -429,7 +429,9 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'quote_revision_approval_requests','quote_revision_approval_request_events',
           'production_schedule_approval_requests','production_schedule_approval_request_events',
           'customer_portal_links','customer_portal_access_throttles',
-          'measurement_intake_receipts','public_estimate_rate_limits') THEN 1 ELSE 0 END), 0) AS table_count,
+          'measurement_intake_receipts','public_estimate_rate_limits',
+          'newo_event_receipts','newo_sessions','newo_control_actions','newo_slot_reservations',
+          'newo_reconciliation_runs') THEN 1 ELSE 0 END), 0) AS table_count,
        COALESCE(SUM(CASE WHEN type = 'index' AND name IN
          ('idx_dead_letter_open_envelope','idx_audit_result_ts','idx_envelopes_operational',
           'idx_envelopes_erpnext_error_open','idx_heartbeat_ran_at','idx_qb_receipts_last_seen',
@@ -455,7 +457,12 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'idx_customer_portal_links_tenant_job_active',
           'idx_customer_portal_access_throttles_expiry',
           'idx_measurement_intake_receipts_exception_updated',
-          'idx_public_estimate_rate_limits_expiry')
+          'idx_public_estimate_rate_limits_expiry',
+          'idx_newo_receipts_session','idx_newo_receipts_status',
+          'idx_newo_sessions_status','idx_newo_sessions_sync','idx_newo_sessions_phone',
+          'idx_newo_sessions_appointment','idx_newo_sessions_verified_job',
+          'idx_newo_control_status','idx_newo_slots_expiry',
+          'idx_newo_sessions_missing_report','idx_newo_reconciliation_runs_at')
          THEN 1 ELSE 0 END), 0) AS index_count,
        COALESCE(SUM(CASE WHEN type = 'trigger' AND name IN
          ('validate_source_count_insert','validate_source_count_update',
@@ -529,7 +536,19 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             mir.status AS measurement_receipt_status,
             mir.measurement_id AS measurement_receipt_measurement_id,
             perl.scope AS public_estimate_rate_limit_scope,
-            perl.attempts AS public_estimate_rate_limit_attempts
+            perl.attempts AS public_estimate_rate_limit_attempts,
+            ner.event_id AS newo_event_id, ner.payload_hash AS newo_event_payload_hash,
+            ns.session_id AS newo_session_id, ns.verification_status AS newo_verification_status,
+            ns.report_expected_at AS newo_report_expected_at,
+            ns.report_received_at AS newo_report_received_at,
+            ns.report_event_id AS newo_report_event_id,
+            ns.missing_report_detected_at AS newo_missing_report_detected_at,
+            ns.sync_updated_at AS newo_sync_updated_at,
+            nca.action_id AS newo_control_action_id, nca.approval_reason AS newo_approval_reason,
+            nca.consumed_at AS newo_control_consumed_at,
+            nsr.reservation_id AS newo_slot_reservation_id,
+            nrr.run_id AS newo_reconciliation_run_id,
+            nrr.usage_status AS newo_usage_status
      FROM envelopes e
      LEFT JOIN audit_log a ON 1 = 0
      LEFT JOIN dead_letter d ON 1 = 0
@@ -559,10 +578,15 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN customer_portal_access_throttles cpat ON 1 = 0
      LEFT JOIN measurement_intake_receipts mir ON 1 = 0
      LEFT JOIN public_estimate_rate_limits perl ON 1 = 0
+     LEFT JOIN newo_event_receipts ner ON 1 = 0
+     LEFT JOIN newo_sessions ns ON 1 = 0
+     LEFT JOIN newo_control_actions nca ON 1 = 0
+     LEFT JOIN newo_slot_reservations nsr ON 1 = 0
+     LEFT JOIN newo_reconciliation_runs nrr ON 1 = 0
      LIMIT 0`,
   ).all();
-  return Number(artifacts?.table_count ?? 0) === 29 &&
-    Number(artifacts?.index_count ?? 0) === 39 &&
+  return Number(artifacts?.table_count ?? 0) === 34 &&
+    Number(artifacts?.index_count ?? 0) === 50 &&
     Number(artifacts?.trigger_count ?? 0) === 31;
 }
 

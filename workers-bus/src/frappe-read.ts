@@ -6,6 +6,7 @@ export type OfficeSalesDocType = keyof typeof OFFICE_SALES_READ_FIELDS;
 export type OfficeEstimatorDocType = keyof typeof OFFICE_ESTIMATOR_READ_FIELDS;
 export type OfficeEstimatorDetailDocType = keyof typeof OFFICE_ESTIMATOR_DETAIL_READ;
 export type CustomerPortalDocType = keyof typeof CUSTOMER_PORTAL_READ_FIELDS;
+export type ReceptionLookupDocType = keyof typeof RECEPTION_LOOKUP_READ_FIELDS;
 export type FrappeFilter = readonly [
   doctype: FrappeDocType,
   field: string,
@@ -32,6 +33,12 @@ export type OfficeEstimatorFrappeFilter = readonly [
 ];
 export type CustomerPortalFrappeFilter = readonly [
   doctype: CustomerPortalDocType,
+  field: string,
+  operator: string,
+  value: unknown,
+];
+export type ReceptionLookupFrappeFilter = readonly [
+  doctype: ReceptionLookupDocType,
   field: string,
   operator: string,
   value: unknown,
@@ -243,6 +250,17 @@ export const CUSTOMER_PORTAL_READ_FIELDS = {
   ],
 } as const;
 
+/** Fixed receptionist verification contract. Financials, notes, disputes, and evidence are absent. */
+export const RECEPTION_LOOKUP_READ_FIELDS = {
+  "Roofing Customer": ["name", "customer_id", "display_name", "phone", "modified"],
+  "Roof Job": [
+    "name", "roof_job_id", "job_status", "service_type", "roofing_property", "customer", "modified",
+  ],
+  "Roofing Property": [
+    "name", "property_key", "address_line1", "city", "province", "postal_code", "modified",
+  ],
+} as const;
+
 /**
  * Frappe's direct-document endpoint returns complete records, including child tables. Only these
  * fixed records need detail reads, and every parent/child field is projected before the
@@ -351,6 +369,12 @@ const CUSTOMER_PORTAL_FILTER_FIELDS: Readonly<Record<CustomerPortalDocType, Read
   "Evidence Item": new Set(["roof_job", "customer_safe", "sync_state"]),
   "Completion Packet": new Set(["roof_job", "status"]),
   "Warranty Packet": new Set(["roof_job", "status"]),
+};
+
+const RECEPTION_LOOKUP_FILTER_FIELDS: Readonly<Record<ReceptionLookupDocType, ReadonlySet<string>>> = {
+  "Roofing Customer": new Set(["phone"]),
+  "Roof Job": new Set(["customer"]),
+  "Roofing Property": new Set(["name"]),
 };
 
 const FILTER_OPERATORS = new Set(["=", "in", "like"]);
@@ -468,6 +492,23 @@ export async function listCustomerPortalFrappeResource(
     0,
     CUSTOMER_PORTAL_READ_FIELDS,
     CUSTOMER_PORTAL_FILTER_FIELDS,
+  );
+}
+
+export async function listReceptionLookupFrappeResource(
+  env: AppEnv,
+  doctype: ReceptionLookupDocType,
+  filters: readonly ReceptionLookupFrappeFilter[],
+  limit = 10,
+): Promise<FrappeRow[]> {
+  return await listFrappeResourcePageForContract(
+    env,
+    doctype,
+    filters,
+    limit,
+    0,
+    RECEPTION_LOOKUP_READ_FIELDS,
+    RECEPTION_LOOKUP_FILTER_FIELDS,
   );
 }
 

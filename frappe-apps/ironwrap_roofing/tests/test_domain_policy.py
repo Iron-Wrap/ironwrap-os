@@ -2107,6 +2107,100 @@ class DomainPolicyTests(unittest.TestCase):
             previous=price_rule,
         )
 
+    def test_reception_session_and_request_only_appointment_contracts(self) -> None:
+        event = {
+            "schema_version": "newo.event.v1",
+            "event_id": "event-1",
+            "session_id": "session-1",
+            "event_type": "booking_requested",
+            "occurred_at": "2026-07-18T18:00:00.000Z",
+            "provider": {},
+            "channel": "phone",
+            "direction": "inbound",
+            "contact": {},
+            "intent": {},
+            "consent": {},
+            "appointment": {},
+            "outcome": {"transcript_ref": "newo:transcript:session-1"},
+            "handoff_summary": None,
+        }
+        session = {
+            "session_id": "session-1",
+            "provider": "Newo",
+            "channel": "Phone",
+            "direction": "Inbound",
+            "session_status": "appointment_requested",
+            "urgency": "routine",
+            "ai_disclosed": 1,
+            "recording_disclosed": 1,
+            "transcript_pointer": "newo:transcript:session-1",
+            "recording_pointer": "newo:recording:session-1",
+            "raw_key": "raw/newo/events/2026-07-18/event-1.json",
+            "payload_hash": "a" * 64,
+            "structured_json": json.dumps(event),
+            "provider_updated_at": "2026-07-18 18:00:00",
+        }
+        validate_record("reception_session", session)
+        copied_content = {
+            **session,
+            "structured_json": json.dumps(
+                {**event, "outcome": {"transcript": "verbatim caller text"}}
+            ),
+        }
+        self.assert_policy(
+            "provider_content_not_allowed",
+            validate_record,
+            "reception_session",
+            copied_content,
+        )
+        self.assert_policy(
+            "recording_without_disclosure",
+            validate_record,
+            "reception_session",
+            {**session, "recording_disclosed": 0},
+        )
+
+        appointment = {
+            "appointment_request_id": "appointment-1",
+            "reception_session": "session-1",
+            "request_status": "Pending",
+            "booking_mode": "Request Only",
+            "provider": "Newo",
+            "preferred_windows_json": json.dumps(
+                [{"start": "2026-07-21T16:00:00.000Z", "end": None}]
+            ),
+            "timezone": "America/Edmonton",
+            "requested_at": "2026-07-18 18:00:00",
+            "raw_key": "raw/newo/events/2026-07-18/event-1.json",
+            "payload_hash": "a" * 64,
+        }
+        validate_record("appointment_request", appointment)
+        self.assert_policy(
+            "request_only_confirmation",
+            validate_record,
+            "appointment_request",
+            {
+                **appointment,
+                "request_status": "Confirmed",
+                "confirmed_external_id": "jn-appointment-1",
+                "confirmed_start": "2026-07-21 16:00:00",
+                "confirmed_end": "2026-07-21 17:00:00",
+                "decision_by": "owner@example.com",
+                "decision_at": "2026-07-18 18:05:00",
+                "decision_notes": "Controlled test only.",
+            },
+            previous=appointment,
+        )
+        validate_record(
+            "appointment_request",
+            {
+                **appointment,
+                "request_status": "Cancelled",
+                "cancelled_at": "2026-07-18 18:10:00",
+            },
+            previous=appointment,
+        )
+
     def test_incident_and_tenant_lifecycle_gates(self) -> None:
         incident = {
             "incident_id": "incident-1",

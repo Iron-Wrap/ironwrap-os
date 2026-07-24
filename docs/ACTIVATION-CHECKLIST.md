@@ -34,7 +34,7 @@ Today this is the keystone. Choose exactly one first feed:
 
 - [ ] Website forms -> server-side forward from `WEBSITE-INTEGRATION.md` to `POST /ingest/website`.
 - [ ] Or Make UI bridge -> append one HTTP module after the working lead sync and POST the same payload to `/ingest/website` with an Ignore error handler.
-- [ ] Or Newo Custom Tool -> `POST /webhook/newo` with its dedicated bearer token and a reviewed contact/handoff body; follow `NEWO-INTEGRATION.md`.
+- [ ] Newo five-tool receptionist contract and structured report are published from `config/newo/`; follow `NEWO-PRODUCTION-RUNBOOK.md`.
 
 Do Make edits in the UI, not via API.
 
@@ -98,12 +98,15 @@ Verify: signed webhook returns `{ ok: true }`; wrong `intuit-signature` returns 
 - [ ] Confirm Cloudflare token rotation and old-token invalidation.
 - [ ] Publish lawyer-approved privacy and consent notices on both brand sites.
 - [ ] CASL unsubscribe/STOP tested before any automated SMS.
-- [ ] AI/call-recording notice approved before AssistAI.
+- [ ] AI/call-recording notice approved before Newo production forwarding.
 - [ ] Vendor register, DPAs/ZDR, retention schedule, breach playbook, and access hardening complete.
 
 ## 8. Phone AI
 
-- [ ] Configure AssistAI only after lead capture and SMS/compliance basics are under control.
+- [ ] Publish the dedicated Newo production actor only after the staging/evidence gate passes.
+- [ ] Keep booking request-only and customer-facing outbound disabled.
+- [ ] Prove owner transfer, voicemail fallback, usage alerts, and forwarding rollback.
+- [ ] Start after-hours/missed-call forwarding before selected or all inbound traffic.
 - [ ] Run `docs/ASSISTAI-EVAL.md`; pass threshold is >=85% and zero catastrophic failures.
 
 ## Fastest Path To First Real Value

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Validates hermes/agents/roles.json against the implemented MCP source inventory parsed from the
-// two server sources, and enforces the Hermes safety contract at config level:
+// three server sources, and enforces the Hermes safety contract at config level:
 //   - every referenced tool actually exists in a server
 //   - reads are read-only, dry_run are previews, approved_write are request_* mutations
 //   - every approved_write tool carries its dry_run counterpart in the same role
@@ -17,6 +17,7 @@ const manifestPath = join(root, "hermes/mcp-servers.json");
 const servers = {
   "ironwrap-bus-mcp": "mcp/ironwrap-bus-mcp/src/server.mjs",
   "erpnext-roofing-mcp": "mcp/erpnext-roofing-mcp/src/server.mjs",
+  "newo-mcp": "mcp/newo-mcp/src/server.mjs",
 };
 
 // Implemented-source inventory: tool names from every registration path in the servers, i.e.
@@ -69,6 +70,7 @@ assert.deepEqual(new Set(requestDefinitions.keys()), requests,
   "every request_* tool must be a directly inspectable registerTool definition");
 const frappeSource = serverSources.get("erpnext-roofing-mcp");
 const busSource = serverSources.get("ironwrap-bus-mcp");
+const newoSource = serverSources.get("newo-mcp");
 const approvedHelper = frappeSource.match(
   /export function approvedWriteInputSchema\(baseSchema\)[\s\S]*?return baseSchema\.extend\(approvalShape\)\.strict\(\);\n\}/,
 )?.[0];
@@ -88,8 +90,13 @@ for (const [tool, { definition, block, server }] of requestDefinitions) {
     if (server === "erpnext-roofing-mcp") {
       assert.match(definition, /\bdry_run_receipt\s*:/, `${tool} must require dry_run_receipt`);
       assert.match(definition, /\bapproval_receipt\s*:/, `${tool} must require approval_receipt`);
-    } else {
+    } else if (server === "ironwrap-bus-mcp") {
       assert.match(definition, /\bapproval_token\s*:/, `${tool} must retain the bus replay approval token`);
+    } else {
+      assert.match(definition, /\bdry_run_receipt\s*:/, `${tool} must require the exact Newo dry-run receipt`);
+      if (tool === "request_newo_control_action") {
+        assert.match(definition, /\bapproval_receipt\s*:/, `${tool} must require the signed approval receipt`);
+      }
     }
     assert.doesNotMatch(definition, /run_id\s*:[^\n]*optional\s*\(/,
       `${tool}.run_id must not be optional`);
@@ -125,6 +132,20 @@ assert.match(busSource, /if \(!allowedTools\.has\(name\)\) return;/,
   "Bus MCP must omit tools not granted to the configured role");
 assert.match(busSource, /HERMES_AGENT_ROLE must name a role in roles\.json/,
   "Bus MCP runtime must require a named role from canonical roles.json");
+assert.match(newoSource, /function createAuthorizedRegistrar\(/,
+  "Newo MCP must register tools through runtime role authorization");
+assert.match(newoSource, /if \(!allowedTools\.has\(name\)\) return;/,
+  "Newo MCP must omit tools not granted to the configured role");
+assert.match(newoSource, /HERMES_AGENT_ROLE must name a role in roles\.json/,
+  "Newo MCP runtime must require a named role from canonical roles.json");
+assert.match(newoSource, /assertNewoWriteEnabled\(config\)/,
+  "Newo MCP must retain an MCP-host write-enable gate in addition to Worker gates");
+assert.match(newoSource, /assertBoundResult\(result, run_id, approved_by\)/,
+  "Newo approval and execution results must be bound to the reviewed action and approver");
+assert.doesNotMatch(newoSource, /NEWO_API_KEY|api\.newo\.ai/,
+  "Newo MCP must never receive the provider key or call the provider directly");
+assert.doesNotMatch(newoSource, /path\s*:\s*z\.|method\s*:\s*z\./,
+  "Newo MCP must not expose a caller-controlled provider path or HTTP method");
 
 // Canonical approved-write -> dry_run pairing. Names are not purely mechanical
 // (request_create_material_takeoff pairs with dry_run_material_takeoff), so the map is
@@ -159,6 +180,8 @@ const WRITE_PAIRS = {
   request_record_communication_consent: "dry_run_communication_consent",
   request_resolve_reconciliation: "dry_run_reconciliation_resolution",
   request_tenant_export: "dry_run_tenant_export",
+  request_newo_control_approval: "dry_run_newo_control_action",
+  request_newo_control_action: "dry_run_newo_control_action",
 };
 assert.deepEqual(
   new Set(Object.keys(WRITE_PAIRS)), requests,
@@ -195,7 +218,15 @@ assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 28,
   "Frappe MCP must expose 28 dry-run tools");
 assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 28,
   "Frappe MCP must expose 28 approved-write tools");
-assert.equal(inventory.size, 139, "two-server Hermes inventory must stay at 139 tools");
+const newoTools = new Set([...inventory].filter((tool) => toolServer.get(tool) === "newo-mcp"));
+assert.equal(newoTools.size, 20, "Newo MCP inventory must stay at the reviewed 20-tool contract");
+assert.equal([...newoTools].filter((tool) => reads.has(tool)).length, 17,
+  "Newo MCP must expose 17 bounded read tools");
+assert.equal([...newoTools].filter((tool) => dryRuns.has(tool)).length, 1,
+  "Newo MCP must expose one exact-argument dry-run tool");
+assert.equal([...newoTools].filter((tool) => requests.has(tool)).length, 2,
+  "Newo MCP must expose separate approval and receipt-consuming execution tools");
+assert.equal(inventory.size, 159, "three-server Hermes inventory must stay at 159 tools");
 
 // Contract Acceptance is evidence produced by the customer/provider, never an agent mutation.
 assert.ok(reads.has("get_contract_acceptance") && reads.has("list_contract_acceptances_for_job"),
@@ -379,7 +410,7 @@ for (const forbiddenTool of [
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 assert.ok(manifest.mcpServers, "mcp-servers.json missing mcpServers");
 assert.deepEqual(new Set(Object.keys(manifest.mcpServers)), new Set(Object.keys(servers)),
-  "mcp-servers.json must declare exactly the two known servers");
+  "mcp-servers.json must declare exactly the three known servers");
 
 // Union of role grants per server, derived from roles.json + which server owns each tool.
 const roleUnion = {};

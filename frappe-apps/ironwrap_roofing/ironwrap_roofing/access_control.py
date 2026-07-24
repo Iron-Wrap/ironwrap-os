@@ -21,6 +21,10 @@ CREATE_OWN = "create_own"
 
 # Each Frappe site is one tenant.  These roles never grant cross-site access.
 DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
+    "Appointment Request": {
+        "IronWrap Sales": WRITE,
+        "IronWrap Support": READ,
+    },
     "Automation Incident": {"IronWrap Support": WRITE},
     "Change Order": {
         "IronWrap Sales": WRITE,
@@ -152,6 +156,10 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
     "Review Request": {
         "IronWrap Closeout": WRITE,
         "IronWrap Sales": READ,
+        "IronWrap Support": READ,
+    },
+    "Reception Session": {
+        "IronWrap Sales": WRITE,
         "IronWrap Support": READ,
     },
     "Roof Area": {

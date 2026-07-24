@@ -181,11 +181,11 @@ npm run db:migrate
 npm run deploy
 ```
 
-If Newo phone intake is enabled for this release, set its dedicated
-`NEWO_WEBHOOK_TOKEN` only after the target Worker origin is verified, then follow
-[`NEWO-INTEGRATION.md`](./NEWO-INTEGRATION.md). Do not substitute `INGEST_TOKEN`
-or add a Newo API key to the Worker: the current integration is authenticated
-ingress only.
+Newo production uses the managed federation and full governed control plane. Store
+`NEWO_API_KEY`, `NEWO_WEBHOOK_TOKEN`, `NEWO_BOOKING_TOKEN`, and
+`NEWO_CONTROL_SIGNING_SECRET` only as Cloudflare secrets after the exact target is verified.
+Follow [`NEWO-PRODUCTION-RUNBOOK.md`](./NEWO-PRODUCTION-RUNBOOK.md); do not substitute
+`INGEST_TOKEN`, expose a provider key to an MCP process, or enable customer outbound at launch.
 
 Set the reviewed non-secret Worker vars `ERPNEXT_ENABLED="true"` and
 `ERPNEXT_BASE_URL="https://<frappe-host>"` in the production configuration before deployment.
@@ -262,12 +262,12 @@ Archive only redacted request ids and the release evidence.
 
 ## 8. Configure Hermes And MCP
 
-Install Hermes at the tag and commit in `deploy/runtime-lock.json`. Register only the two MCP
+Install Hermes at the tag and commit in `deploy/runtime-lock.json`. Register only the three MCP
 servers in `hermes/mcp-servers.json`; role tool filters come from
 `hermes/agents/roles.json`. MCP base URLs must be production HTTPS URLs. Plain HTTP is accepted
 only for explicit localhost development.
 
-Keep both write flags false for the first read-only smoke test:
+Keep the Frappe, bus, and Newo MCP/Worker write flags false for the first read-only smoke test:
 
 ```bash
 node tools/validate-hermes-config.mjs
@@ -427,7 +427,7 @@ Gate State rows. Remove or clearly label fixture records after proof.
 | Jotform field intake | Device submission reaches `/ingest/photo`, Drive/R2, evidence, and check-in with photos plus one voice note |
 | RoofRuler/AppliCad | `/ingest/measurement` records one hashed receipt per provider/idempotency identity, stores raw source first, routes no-job or unresolved-job reports and retryable failures to `/admin/measurements/exceptions`, sequentially re-drives verified raw sources with bounded backoff, and keeps uncertain values review-gated |
 | QuickBooks | Valid signed webhook receipt is visible in `/admin/status`; invalid signature is rejected |
-| Newo phone intake (if enabled) | Approved real call produces canonical `phone` intake with `provider:newo`, raw R2, D1/audit, first-ack receipt, and bridge proof; a deliberate duplicate retains raw evidence but does not repeat acknowledgement or queueing |
+| Newo receptionist | Approved real call produces `raw/newo/` R2, event receipt, distinct reception session, lead envelope when applicable, Frappe landing, downstream result, and operator status; same-caller second calls remain distinct sessions; report omission and failed transfer become owned exceptions |
 
 JobNimbus and GHL remain bridges until each replacement slice has live evidence. SMS remains
 record-only until A2P/carrier approval. QuickBooks remains accounting truth.
@@ -543,7 +543,7 @@ artifact checksums. A successful upload without this restore drill is not backup
 | Gate | Repository evidence | Required live evidence |
 | --- | --- | --- |
 | Intake spine | Worker tests, typecheck, dry-run bundle | Real source reaches R2, D1, Frappe, ack, bridge, reconcile |
-| Operating core | 48 DocTypes (40 top-level + 8 child), policy/RBAC tests, Workspace/Control Center package proof | App installed on plain Frappe; fixture, per-role cockpit, empty/error/readiness, and source-navigation checks pass |
+| Operating core | 50 DocTypes (42 top-level + 8 child), policy/RBAC tests, Workspace/Control Center package proof | App installed on plain Frappe; fixture, per-role cockpit, empty/error/readiness, and source-navigation checks pass |
 | Read-only Hermes | Role/manifest and MCP tests | Owner query uses live truth with zero writes |
 | Approved write | Dry-run/request contracts and idempotency tests | One human-approved mutation and complete `Hermes Run` audit |
 | Recovery | Readiness/status/replay plus encrypted Frappe/D1 backup tests | Targeted replay, alerts, exact-prefix local verification, isolated Frappe and D1 restores, table row-count, trigger-inventory, and receipt-semantics parity, and live R2 denied-delete proof |

@@ -6,6 +6,12 @@ Handles new leads, first-response records, and evidence-backed consent history. 
 
 - list_recent_envelopes
 - get_envelope
+- list_newo_sessions
+- get_newo_user_messages
+- get_newo_agent_messages
+- get_newo_chat_history
+- list_newo_conversation_acts
+- get_newo_conversation_act
 - get_lead_envelope
 - list_untriaged_lead_envelopes
 - get_roof_job
@@ -40,6 +46,8 @@ Handles new leads, first-response records, and evidence-backed consent history. 
 
 - First-touch role: read the lead envelope and any instant-estimate session, then draft a
   first response as a communication-event record only. It is never a send.
+- Newo access is read-only and limited to owned session snapshots and bounded conversation reads.
+  This role has no Newo actor, webhook, analytics, approval, or send tools.
 - Complete qualification with `dry_run_mark_lead_triaged` then the matching approved write.
   That update sets only the Lead Envelope's local triage fields; it cannot alter bus transport
   status or any Communication Event.

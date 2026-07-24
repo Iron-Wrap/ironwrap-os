@@ -29,6 +29,7 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 DOCTYPE_ROOT = APP_ROOT / "ironwrap_roofing" / "ironwrap_roofing" / "doctype"
 
 TOP_LEVEL_DOCTYPES = {
+    "Appointment Request",
     "Automation Incident",
     "Change Order",
     "Communication Consent",
@@ -55,6 +56,7 @@ TOP_LEVEL_DOCTYPES = {
     "Price Book Rule",
     "Production Gate State",
     "Proposal Evidence Pack",
+    "Reception Session",
     "Review Request",
     "Roof Area",
     "Roof Job",
@@ -199,6 +201,7 @@ NEW_BLUEPRINT_FIELDS = {
 
 NEW_BLUEPRINT_FIELDS.update(
     {
+        "Appointment Request": {"appointment_request_id", "reception_session", "request_status", "booking_mode", "preferred_windows_json", "timezone", "requested_at", "raw_key", "payload_hash"},
         "Crew Profile": {"crew_profile_id", "crew_name", "status", "primary_lead", "members", "home_region", "timezone"},
         "Job Assignment": {"assignment_id", "roof_job", "status", "crew_profile", "assigned_user", "scheduled_start", "scheduled_end", "supersedes", "correction_reason"},
         "Change Order": {"change_order_id", "roof_job", "version", "status", "subtotal", "tax_amount", "total_amount", "tax_policy_snapshot_json", "items", "contract_acceptance", "supersedes", "correction_reason"},
@@ -216,6 +219,7 @@ NEW_BLUEPRINT_FIELDS.update(
         "Roof Job": {"roof_job_id", "workflow_profile", "locale_policy_version", "locale_policy_snapshot_json"},
         "Customer Quote": {"customer_quote_id", "quote_version", "price_book_version", "price_rule_snapshot_json", "subtotal", "tax_amount", "tax_policy_snapshot_json", "amount_due", "amount_paid", "balance_due", "payment_truth_source", "supersedes"},
         "Payment Milestone": {"payment_milestone_id", "milestone_version", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due", "tax_policy_snapshot_json", "truth_source", "supersedes"},
+        "Reception Session": {"session_id", "provider", "channel", "direction", "session_status", "lead_envelope", "contact_phone", "structured_summary", "transcript_pointer", "recording_pointer", "ai_disclosed", "recording_disclosed", "raw_key", "payload_hash", "structured_json"},
     }
 )
 
@@ -233,9 +237,9 @@ class DocTypeContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.doctypes = load_doctypes()
 
-    def test_complete_48_doctype_blueprint(self) -> None:
+    def test_complete_50_doctype_blueprint(self) -> None:
         self.assertEqual(set(self.doctypes), TOP_LEVEL_DOCTYPES | CHILD_DOCTYPES)
-        self.assertEqual(len(self.doctypes), 48)
+        self.assertEqual(len(self.doctypes), 50)
 
         for name, (_, document) in self.doctypes.items():
             with self.subTest(doctype=name):

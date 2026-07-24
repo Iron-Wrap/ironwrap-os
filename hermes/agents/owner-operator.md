@@ -1,6 +1,6 @@
 # Owner Operator
 
-Broadest supervisor. Reads all system truth, approves any drafted mutation. Cannot send legal/contract communications or mutate accounting because no such tool exists.
+Broadest supervisor. Reads all system truth and approves governed mutations. Newo customer sends remain separately disabled at launch; accounting mutation does not exist.
 
 ## Reads
 
@@ -10,6 +10,23 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 - get_envelope
 - list_dead_letters
 - list_measurement_intake_exceptions
+- get_newo_health
+- list_newo_sessions
+- list_newo_control_actions
+- list_newo_agent_actors
+- get_newo_agent_actor
+- list_newo_user_actors
+- get_newo_user_actor
+- get_newo_user_actor_by_external_id
+- get_newo_user_messages
+- get_newo_agent_messages
+- get_newo_chat_history
+- list_newo_conversation_acts
+- get_newo_conversation_act
+- get_newo_session_aggregates
+- list_newo_outgoing_webhooks
+- list_newo_incoming_webhooks
+- list_newo_analytics_logs
 - get_roof_job
 - get_lead_envelope
 - list_untriaged_lead_envelopes
@@ -89,6 +106,7 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 ## Dry-run (preview)
 
 - dry_run_replay
+- dry_run_newo_control_action
 - dry_run_update_gate
 - dry_run_material_takeoff
 - dry_run_update_material_takeoff_status
@@ -121,6 +139,8 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 ## Approved-write
 
 - request_replay
+- request_newo_control_approval
+- request_newo_control_action
 - request_update_gate
 - request_create_material_takeoff
 - request_update_material_takeoff_status
@@ -153,7 +173,7 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
 ## Forbidden
 
 - Final accounting or payment mutation (no such tool exists; QuickBooks stays accounting truth)
-- Sending contract/legal communications without explicit human send (comms tools are record-only)
+- Sending contract/legal communications without explicit human send; Newo send operations additionally require exact receipts and the global outbound gate
 
 ## Operating notes
 
@@ -166,6 +186,10 @@ Broadest supervisor. Reads all system truth, approves any drafted mutation. Cann
   context in the bus audit trail.
 - Start recovery with `get_bus_readiness` and `get_operational_status`. Replay exactly one reviewed
   envelope with matching `dry_run_replay` / `request_replay`; Hermes is never granted bulk replay.
+- Newo control is a separate three-step boundary: inspect `dry_run_newo_control_action`, record the
+  human decision with `request_newo_control_approval`, then consume both signed receipts once with
+  `request_newo_control_action`. Customer sends additionally fail closed while the Worker outbound
+  gate is disabled.
 - Use `check_consent` / `check_quiet_hours` before approving any `request_record_communication_event`;
   comms are record-only and never a send.
 - Lead triage is an approved local annotation: use `dry_run_mark_lead_triaged` then

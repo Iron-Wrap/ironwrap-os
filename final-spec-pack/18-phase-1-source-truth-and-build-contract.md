@@ -26,7 +26,7 @@ last-known evidence until the named admin revalidates them:
 - Generated/provenance folders: `task1-spec/assets/` has 27 source artifacts;
   `output/` has 24 generated/audit artifacts.
 - AppliCad proof: `node tools/applicad-xml-proof.mjs --check` passes.
-- Frappe contract: exactly 48 DocTypes (40 top-level plus eight child tables),
+- Frappe contract: exactly 50 DocTypes (42 top-level plus eight child tables),
   shared business validation, installed role matrix, packaging, and pure Python tests.
 - Worker operations: separate `/health` and `/ready`, authenticated
   `/admin/status`, and approved/audited targeted replay.
@@ -65,7 +65,7 @@ last-known evidence until the named admin revalidates them:
 | Field capture / Jotform | Owned Field Companion PWA/BFF is locally implemented for offline photo, voice, blocker, and GPS check-ins with verified replay; connected Jotform account remains a bridge. | Complete real-device, weak-signal, background-kill, storage, accessibility, and live-backend proof; Jotform may bridge `POST /ingest/photo` meanwhile. |
 | QuickBooks | QBO account exists under `info@ironwrapexteriors.com`; Worker signed webhook receiver exists. | Connect `QB_WEBHOOK_TOKEN` and Intuit webhook; defer OAuth read/status mirror until needed. |
 | SMS/phone | Worker does not send SMS. JobNimbus Engage is the SMS path after A2P approval. Twilio secrets exist as names only, but Worker must not use Twilio SMS. | Configure Engage/A2P; own portable DID only if AssistAI/voice routing needs it. |
-| Frappe/Hermes | Proprietary Frappe-only app, 48 DocTypes, server policy/RBAC, atomic safety acknowledgement RPC, a standard Workspace plus read-only exception-first Control Center, two hardened MCP servers, eight runtime-filtered Hermes roles, and pinned deploy/recovery source are present. | Keep Worker/D1/R2 as front door; install on plain Frappe, role-test the cockpit and signed approval broker, and prove live reads plus one approved audited write. |
+| Frappe/Hermes | Proprietary Frappe-only app, 50 DocTypes, server policy/RBAC, atomic safety acknowledgement RPC, a standard Workspace plus read-only exception-first Control Center, three hardened MCP servers, eight runtime-filtered Hermes roles, and pinned deploy/recovery source are present. | Keep Worker/D1/R2 as front door; install on plain Frappe, role-test the cockpit and signed approval brokers, and prove live reads plus one approved audited write per enabled control plane. |
 
 ## Worker Surface That Already Exists
 
@@ -137,7 +137,7 @@ of it or treat Frappe/Hermes availability as a prerequisite for raw capture.
 | P1.10 | Validate owned Field Companion PWA plus Jotform bridge. | PWA/BFF local implementation green; device/live backend open | Job number, photos, voice note, Drive/R2, Evidence Item, Field Check-in, offline recovery, and real-device verification are proven. |
 | P1.11 | Connect signed QuickBooks webhook. | Signature/receipt tests implemented; admin open | Valid receipt accepted/idempotent, invalid signature rejected, status visible. |
 | P1.12 | Implement D1-to-Frappe consumer contract. | Repository implemented | Idempotent Lead Envelope/Customer/Property/Job/session/measurement/evidence/gate mirrors pass fixture and live proof. |
-| P1.13 | Implement proprietary Frappe-only operating core. | Repository implemented; site proof open | Exactly 48 DocTypes, policy/RBAC and atomic safety tests, plain-Frappe install/migrate, no `erpnext`. |
+| P1.13 | Implement proprietary Frappe-only operating core. | Repository implemented; site proof open | Exactly 50 DocTypes, policy/RBAC and atomic safety tests, plain-Frappe install/migrate, no `erpnext`. |
 | P1.14 | Implement Hermes tool boundary. | Repository implemented; runtime proof open | Eight roles and 137 tools validate; runtime role/actor scope, verified proof, preview receipt, signed approval, single-claim write, and audit cannot be skipped. |
 | P1.15 | Expose owner exception truth. | Frappe Control Center and React Owner Now built locally; live proof open | `/admin/status`, MCP, Control Center, and Owner Now show readiness, exception/MCTB/triage and redacted measurement-intake exception truth; live role testing, browser/device, and provider-receipt proof remain open. |
 | P1.16 | Update recovery/launch SOPs and train operators. | Repository/local verification implemented; acceptance open | Operator completes status diagnosis, targeted replay, incident record, exact Frappe/D1 restore, and GHL no-touch drill on isolated/live-shaped infrastructure. |
@@ -148,10 +148,11 @@ of it or treat Frappe/Hermes availability as a prerequisite for raw capture.
 plain Frappe. It must never become the raw intake front door and must never install
 the ERPNext application.
 
-The exact implemented contract is 40 top-level DocTypes:
+The exact implemented contract is 42 top-level DocTypes:
 
 - `Automation Incident`, `Communication Event`, `Completion Packet`, `Customer Quote`
 - `Evidence Item`, `Field Check-in`, `Hermes Run`, `Instant Estimate Session`
+- `Reception Session`, `Appointment Request`
 - `Lead Envelope`, `Market Watch Item`, `Material Takeoff`, `Measurement Report`
 - `Option Package`, `Payment Milestone`, `Price Book Rule`, `Production Gate State`
 - `Insurance Supplement`
@@ -260,7 +261,7 @@ Phase 1 is done when:
 - One QuickBooks signed webhook event is captured and audited.
 - GHL has no new front-door responsibility.
 - Make scenarios are tagged keep/bridge/retire with owner confirmation.
-- Plain-Frappe app installs with all 48 DocTypes and role/policy/atomic-safety negative tests.
+- Plain-Frappe app installs with all 50 DocTypes and role/policy/atomic-safety negative tests.
 - `/ready` passes and `/admin/status` shows fresh heartbeat with no unexplained
   dead/stuck/Frappe/audit failure.
 - Read-only Hermes answers from live truth with zero writes; one approved Frappe

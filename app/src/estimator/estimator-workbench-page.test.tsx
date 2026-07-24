@@ -149,20 +149,6 @@ function workbenchModel(
         url: null,
       },
     },
-    visual_model: {
-      provider: "Roof capture provider",
-      model_state: "needs_review",
-      confidence: 82,
-      review_required: true,
-      approval_recorded: false,
-      captured_at: "2026-07-11T12:00:00.000Z",
-      approved_at: null,
-      measurement_link: "selected_measurement",
-      preview: {
-        state: "not_recorded",
-        url: null,
-      },
-    },
     takeoffs: {
       records: [
         {

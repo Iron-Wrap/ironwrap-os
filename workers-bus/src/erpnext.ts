@@ -291,7 +291,7 @@ function leadTransportDoc(rec: EnvelopeRecord, jn?: JnResult): Record<string, un
     contact_email: rec.contact_email ?? undefined,
     job_ref: rec.job_ref ?? undefined,
     raw_key: rec.raw_key ?? undefined,
-    event_ts: rec.ts,
+    event_ts: frappeDatetime(rec.ts),
     status: rec.status,
     intent_queue: rec.intent_queue ?? undefined,
     payload_json: rec.payload_json,
@@ -439,12 +439,22 @@ async function linkRoofJobCustomerIfMissing(
 }
 
 async function ensureInitialProductionGates(env: ErpEnv, base: string, roofJobName: string): Promise<number> {
+  // App policy (domain_policy._validate_gate) requires accountability fields on every gate:
+  // an owner, an assignment time, and for Blocked gates a blocker reason and due time.
+  // Transport-created gates start Blocked under the integration identity so no job enters
+  // production without a named accountable assignee; a human re-assigns during triage.
+  const owner = str(env.ERPNEXT_INTEGRATION_USER) ?? "Administrator";
+  const assignedAt = new Date();
+  const dueAt = new Date(assignedAt.getTime() + 72 * 60 * 60 * 1000);
   for (const gate of PRODUCTION_GATES) {
     await createIfMissingByField(env, base, "Production Gate State", "gate_id", gateId(roofJobName, gate), {
       gate_id: gateId(roofJobName, gate),
       roof_job: roofJobName,
       gate,
       state: "Blocked",
+      owner_user: owner,
+      assigned_at: toFrappeDatetime(assignedAt.toISOString()),
+      due_at: toFrappeDatetime(dueAt.toISOString()),
       blocker_reason: `Awaiting ${gate.toLowerCase()} readiness proof.`,
     });
   }
@@ -528,7 +538,7 @@ export async function pushMeasurementToErpNext(
     source_file: input.reportFileUrl ?? input.reportUrl ?? undefined,
     report_url: input.reportUrl ?? undefined,
     raw_key: input.rawKey,
-    parsed_at: input.parsedAt,
+    parsed_at: toFrappeDatetime(input.parsedAt),
     roof_graph_json: input.roofGraph ? JSON.stringify(input.roofGraph) : undefined,
     roof_graph_revision: input.roofGraph?.revision,
     review_status: input.needsReview || !roofJob || !Object.keys(input.measurements).length
@@ -550,7 +560,7 @@ export async function pushMeasurementToErpNext(
     source_system: provider,
     source_uri: input.reportFileUrl ?? input.reportUrl ?? undefined,
     r2_key: input.rawKey,
-    captured_at: input.parsedAt,
+    captured_at: toFrappeDatetime(input.parsedAt),
     customer_safe: 1,
     summary: `Measurement report ${report.name}`,
   });
@@ -579,7 +589,7 @@ export async function pushPhotoEvidenceToErpNext(
       source_uri: photo.driveFileUrl ?? photo.sourceUri,
       r2_key: input.rawKey,
       drive_file_id: photo.driveFileId ?? undefined,
-      captured_at: input.capturedAt,
+      captured_at: toFrappeDatetime(input.capturedAt),
       customer_safe: 0,
       summary: photoSummary(photo.index, photo.fileName, input.caption, photo.error, isVoice),
     });
@@ -590,10 +600,21 @@ export async function pushPhotoEvidenceToErpNext(
     checkin_id: fieldCheckInId(input.submissionId),
     roof_job: roofJob ?? undefined,
     job_number: input.jobNumber,
+    // Policy requires device_action_id + capture_actor on any non-Draft check-in.
+    // The Jotform bridge has no device; the envelope id is the stable action id
+    // and the integration identity is the recording actor.
+    device_action_id: `jotform:${input.submissionId}`,
+    capture_actor: str(cfg.ERPNEXT_INTEGRATION_USER) ?? "Administrator",
     source_system: "Jotform",
-    submitted_at: input.capturedAt,
-    status: input.photos.some((photo) => photo.error) ? "Needs Review" : "Received",
+    submitted_at: toFrappeDatetime(input.capturedAt),
+    status: roofJob
+      ? (input.photos.some((photo) => photo.error) ? "Needs Review" : "Received")
+      : "Draft",
     photo_count: input.photos.length,
+    // Explicit empty blocker fields: Frappe would otherwise default the Select
+    // blocker_category to its first option and trip the stale_blocker rule.
+    blocker_flag: 0,
+    blocker_category: "",
     evidence_ids_json: JSON.stringify(names),
     notes: input.caption ?? undefined,
     drive_folder_url: input.driveFolderUrl ?? undefined,
@@ -624,7 +645,7 @@ export async function pushQuickBooksEventToErpNext(
     qb_entity_id: input.id,
     qb_operation: input.operation,
     realm_id: input.realmId,
-    event_ts: input.eventTs,
+    event_ts: frappeDatetime(input.eventTs),
     raw_key: input.rawKey,
     notes: "QuickBooks webhook event captured. Amount/status detail requires QuickBooks OAuth read.",
   });
@@ -791,6 +812,18 @@ function str(v: unknown): string | undefined {
 function frappeDatetime(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) throw new Error("erpnext_public_estimate_consent_timestamp_invalid");
+  return parsed.toISOString().replace("T", " ").slice(0, 19);
+}
+
+/**
+ * Tolerant variant for provider-supplied timestamps (measurement/photo payloads): MariaDB
+ * DATETIME columns reject ISO-8601 "T…Z" text, so convert when parseable and omit the field
+ * otherwise. Never substitutes a fabricated time for a provider fact.
+ */
+function toFrappeDatetime(value: string | undefined | null): string | undefined {
+  if (!value) return undefined;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return undefined;
   return parsed.toISOString().replace("T", " ").slice(0, 19);
 }
 

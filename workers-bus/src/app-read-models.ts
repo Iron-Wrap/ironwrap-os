@@ -1743,6 +1743,7 @@ async function authorizedAssignments(
         ["Crew Member", "active", "=", 1],
       ],
       100,
+      "Crew Profile",
     ),
   ]);
   const crewProfiles = new Set(memberRows.flatMap((row) => {

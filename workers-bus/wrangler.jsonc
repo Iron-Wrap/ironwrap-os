@@ -20,7 +20,8 @@
       "/admin/*",
       "/ingest/*",
       "/public/*",
-      "/webhook/*"
+      "/webhook/*",
+      "/__scheduled"
     ]
   },
 
@@ -132,7 +133,100 @@
 
   // Isolated owner-test environment. Every non-inheritable binding and variable
   // is repeated here so `wrangler deploy --env staging` cannot reach production data.
+  // Local end-to-end development environment (`wrangler dev --env local`, wired by
+  // `npm run dev` + deploy/local/predev.mjs). Bindings are inherited shape-only; wrangler
+  // dev serves D1/R2/queues from local Miniflare state. Wrangler envs REPLACE top-level
+  // vars wholesale, so every production var is repeated here with local-safe values:
+  // bridge rails (JobNimbus/Drive) are OFF, the BFF + public estimator are ON against the
+  // throwaway deploy/local Frappe stack, and Turnstile uses Cloudflare's published
+  // always-pass test keys. Never points at production data.
   "env": {
+    "local": {
+      "workers_dev": true,
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ironwrap-bus",
+          "database_id": "f0674848-13df-4422-9896-8ba2719663b8",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "RAW", "bucket_name": "ironwrap-bus-raw" }
+      ],
+      "queues": {
+        "producers": [{ "binding": "JN_QUEUE", "queue": "ironwrap-jn-push" }],
+        "consumers": [
+          {
+            "queue": "ironwrap-jn-push",
+            "max_retries": 5,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "dead_letter_queue": "ironwrap-jn-dlq"
+          },
+          { "queue": "ironwrap-jn-dlq", "max_retries": 1 }
+        ]
+      },
+      "vars": {
+        "OWNER_ALERT_EMAIL": "info@ironwrapexteriors.com",
+        "BACKUP_ALERT_EMAIL": "sales@ironwrapexteriors.com",
+        "FROM_EMAIL": "sales@ironwrapexteriors.com",
+        "JOBNIMBUS_ENABLED": "false",
+        "JN_CONTACT_RECORD_TYPE": "Customer",
+        "JN_CONTACT_STATUS": "New",
+        "JN_JOB_RECORD_TYPE": "Retail",
+        "JN_JOB_STATUS": "Lead",
+        "ERPNEXT_ENABLED": "true",
+        "ERPNEXT_BASE_URL": "http://localhost:8000",
+        "ERPNEXT_LEAD_ENVELOPE_DOCTYPE": "Lead Envelope",
+        "ERPNEXT_INTEGRATION_USER": "ironwrap-bus@ironwrap.local",
+        "PUBLIC_ESTIMATE_ENABLED": "true",
+        "PUBLIC_ESTIMATE_ALLOWED_ORIGINS": "http://localhost:7100",
+        "PUBLIC_ESTIMATE_ALLOWED_BRANDS": "IronWrap,iRoof Alberta",
+        "PUBLIC_ESTIMATE_CONSENT_JURISDICTION": "Alberta, Canada",
+        "PUBLIC_ESTIMATE_ALLOW_INSECURE_LOCAL": "true",
+        "PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+        "PUBLIC_ESTIMATE_RATE_LIMIT_WINDOW_SECONDS": "60",
+        "PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX": "30",
+        "PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX": "10",
+        "PUBLIC_ESTIMATE_RANGE_RULES_JSON": "[{\"rule_id\":\"iw-metal-ab\",\"brand\":\"IronWrap\",\"service\":\"metal_roofing\",\"province\":\"AB\",\"min_cad\":18000,\"max_cad\":95000},{\"rule_id\":\"iw-roof-ab\",\"brand\":\"IronWrap\",\"service\":\"roofing\",\"province\":\"AB\",\"min_cad\":9000,\"max_cad\":48000},{\"rule_id\":\"iw-gutters-ab\",\"brand\":\"IronWrap\",\"service\":\"gutters\",\"province\":\"AB\",\"min_cad\":1800,\"max_cad\":9500},{\"rule_id\":\"iw-siding-ab\",\"brand\":\"IronWrap\",\"service\":\"siding\",\"province\":\"AB\",\"min_cad\":12000,\"max_cad\":62000},{\"rule_id\":\"iw-soffit-ab\",\"brand\":\"IronWrap\",\"service\":\"soffit_fascia\",\"province\":\"AB\",\"min_cad\":2500,\"max_cad\":14000},{\"rule_id\":\"iroof-roof-ab\",\"brand\":\"iRoof Alberta\",\"service\":\"roofing\",\"province\":\"AB\",\"min_cad\":8500,\"max_cad\":45000},{\"rule_id\":\"iroof-metal-ab\",\"brand\":\"iRoof Alberta\",\"service\":\"metal_roofing\",\"province\":\"AB\",\"min_cad\":17000,\"max_cad\":92000}]",
+        "APP_BFF_ENABLED": "true",
+        "APP_CUSTOMER_PORTAL_ENABLED": "true",
+        "APP_TENANT_ID": "ironwrap",
+        "APP_TENANT_NAME": "IronWrap OS — Local",
+        "APP_TENANT_BRAND": "IronWrap",
+        "APP_LOCALE": "en-CA",
+        "APP_TIME_ZONE": "America/Edmonton",
+        "APP_CURRENCY": "CAD",
+        "APP_PUBLIC_ORIGIN": "http://localhost:7100",
+        "APP_ALLOWED_ORIGINS": "http://localhost:7100",
+        "APP_ALLOW_INSECURE_LOCAL": "true",
+        "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
+        "APP_INSURANCE_ESTIMATOR_FRAPPE_USERS": "",
+        "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
+        "APP_APPROVAL_BROKER_URL": "http://127.0.0.1:9101",
+        "APP_APPROVAL_BROKER_KEY_ID": "local-approval-broker",
+        "APP_APPROVAL_APPROVER_ID": "owner@ironwrap.local",
+        "APP_APPROVAL_MAX_SESSION_AGE_SECONDS": "900",
+        "APP_APPROVAL_BROKER_TIMEOUT_MS": "15000",
+        "APP_APPROVAL_EXECUTION_LEASE_SECONDS": "45",
+        "APP_QUOTE_REVISION_BROKER_URL": "http://127.0.0.1:9102",
+        "APP_QUOTE_REVISION_BROKER_KEY_ID": "local-quote-revision-broker",
+        "APP_QUOTE_REVISION_BROKER_TIMEOUT_MS": "15000",
+        "APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS": "45",
+        "APP_PRODUCTION_SCHEDULE_BROKER_URL": "http://127.0.0.1:9103",
+        "APP_PRODUCTION_SCHEDULE_BROKER_KEY_ID": "local-production-schedule-broker",
+        "APP_PRODUCTION_SCHEDULE_APPROVER_ID": "owner@ironwrap.local",
+        "APP_PRODUCTION_SCHEDULE_MAX_SESSION_AGE_SECONDS": "900",
+        "APP_PRODUCTION_SCHEDULE_BROKER_TIMEOUT_MS": "15000",
+        "APP_PRODUCTION_SCHEDULE_EXECUTION_LEASE_SECONDS": "45",
+        "DEDUP_WINDOW_HOURS": "72",
+        "STUCK_THRESHOLD_MIN": "15",
+        "SHARED_DRIVE_ID_JOBS": "",
+        "SHARED_DRIVE_ID_RESTRICTED": "",
+        "SHARED_DRIVE_ID_ARCHIVE": ""
+      }
+    },
     "staging": {
       "workers_dev": true,
       "d1_databases": [

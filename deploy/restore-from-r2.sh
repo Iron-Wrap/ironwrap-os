@@ -134,7 +134,10 @@ if [[ "$target_image" != "$IRONWRAP_OS_IMAGE" ]]; then
   exit 1
 fi
 target_network_json="$(docker inspect --format '{{json .NetworkSettings.Networks}}' "$RESTORE_TARGET_CONTAINER")"
-readarray -t target_networks < <(python3 -c \
+target_networks=()
+while IFS= read -r target_network || [[ -n "$target_network" ]]; do
+  target_networks+=("$target_network")
+done < <(python3 -c \
   'import json,sys; value=json.loads(sys.argv[1]); [print(name) for name in sorted(value) if isinstance(name,str)]' \
   "$target_network_json")
 if (( ${#target_networks[@]} == 0 )); then
@@ -263,10 +266,11 @@ verbose_entries="$WORK_DIR/archive-entries-verbose.txt"
 tar -tzf "$archive" > "$entries"
 tar -tvzf "$archive" > "$verbose_entries"
 entry_count=0
-declare -A seen_entries=()
+# Newline-sentinelled exact-membership set (bash 3.2 has no associative arrays).
+seen_entries=$'\n'
 while IFS= read -r entry || [[ -n "$entry" ]]; do
   if [[ -z "$entry" || "$entry" == */* || "$entry" == .* || "$entry" == -* || \
-        ! "$entry" =~ ^[A-Za-z0-9._-]+$ || -n "${seen_entries[$entry]:-}" ]]; then
+        ! "$entry" =~ ^[A-Za-z0-9._-]+$ || "$seen_entries" == *$'\n'"$entry"$'\n'* ]]; then
     echo "error: archive contains traversal, duplicate, or unsafe paths" >&2
     exit 1
   fi
@@ -274,7 +278,7 @@ while IFS= read -r entry || [[ -n "$entry" ]]; do
     IRONWRAP-BACKUP-MANIFEST.txt|*-database.sql.gz|*-site_config_backup.json|*-private-files.tar|*-files.tar) ;;
     *) echo "error: archive contains an unexpected file" >&2; exit 1 ;;
   esac
-  seen_entries[$entry]=1
+  seen_entries+="$entry"$'\n'
   entry_count=$((entry_count + 1))
 done < "$entries"
 if (( entry_count != 5 )); then
@@ -345,7 +349,7 @@ if (( manifest_count != 10 )) || [[ "$manifest_schema" != "1" || \
   exit 1
 fi
 for filename in "$database_file" "$site_config_file" "$public_files_file" "$private_files_file"; do
-  if [[ ! "$filename" =~ ^[A-Za-z0-9._-]+$ || -z "${seen_entries[$filename]:-}" || \
+  if [[ ! "$filename" =~ ^[A-Za-z0-9._-]+$ || "$seen_entries" != *$'\n'"$filename"$'\n'* || \
         ! -f "$package/$filename" || ! -s "$package/$filename" ]]; then
     echo "error: restore manifest references a missing, unsafe, or empty artifact" >&2
     exit 1

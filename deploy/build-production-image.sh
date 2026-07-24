@@ -75,7 +75,10 @@ NODE
   echo "error: deploy/runtime-lock.json is invalid or not Frappe-only" >&2
   exit 1
 fi
-readarray -t LOCK_VALUES <<< "$LOCK_OUTPUT"
+LOCK_VALUES=()
+while IFS= read -r lock_value || [[ -n "$lock_value" ]]; do
+  LOCK_VALUES+=("$lock_value")
+done <<< "$LOCK_OUTPUT"
 if (( ${#LOCK_VALUES[@]} != 5 )); then
   echo "error: deploy/runtime-lock.json did not yield the complete build lock" >&2
   exit 1

@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ironwrap.invalid/schemas/newo/session-report.v1.schema.json",
+  "title": "NewoSessionReportV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "session_id",
+    "event_type",
+    "occurred_at",
+    "provider",
+    "channel",
+    "direction",
+    "contact",
+    "intent",
+    "consent",
+    "appointment",
+    "outcome",
+    "handoff_summary"
+  ],
+  "properties": {
+    "schema_version": { "const": "newo.event.v1" },
+    "event_id": { "$ref": "#/$defs/identifier" },
+    "session_id": { "$ref": "#/$defs/identifier" },
+    "event_type": { "enum": ["session_ended", "session_failed", "missed_call"] },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "provider": { "$ref": "#/$defs/provider" },
+    "channel": { "enum": ["phone", "chat"] },
+    "direction": { "enum": ["inbound", "outbound"] },
+    "contact": { "$ref": "#/$defs/contact" },
+    "intent": { "$ref": "#/$defs/intent" },
+    "consent": { "$ref": "#/$defs/consent" },
+    "appointment": { "$ref": "#/$defs/appointment" },
+    "outcome": { "$ref": "#/$defs/outcome" },
+    "handoff_summary": { "type": ["string", "null"], "maxLength": 1000 }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "nullableIdentifier": {
+      "oneOf": [
+        { "$ref": "#/$defs/identifier" },
+        { "type": "null" }
+      ]
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id", "agent_id", "user_actor_id", "conversation_id"],
+      "properties": {
+        "project_id": { "$ref": "#/$defs/nullableIdentifier" },
+        "agent_id": { "$ref": "#/$defs/nullableIdentifier" },
+        "user_actor_id": { "$ref": "#/$defs/nullableIdentifier" },
+        "conversation_id": { "$ref": "#/$defs/nullableIdentifier" }
+      }
+    },
+    "address": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line1", "city", "province", "postal_code"],
+      "properties": {
+        "line1": { "type": ["string", "null"], "maxLength": 240 },
+        "city": { "type": ["string", "null"], "maxLength": 120 },
+        "province": { "type": ["string", "null"], "maxLength": 80 },
+        "postal_code": { "type": ["string", "null"], "maxLength": 24 }
+      }
+    },
+    "contact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "phone", "email", "address"],
+      "properties": {
+        "name": { "type": ["string", "null"], "maxLength": 160 },
+        "phone": { "type": ["string", "null"], "maxLength": 32 },
+        "email": { "type": ["string", "null"], "maxLength": 254 },
+        "address": { "$ref": "#/$defs/address" }
+      }
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "division", "urgency", "message"],
+      "properties": {
+        "service": { "type": ["string", "null"], "maxLength": 160 },
+        "division": {
+          "enum": ["residential", "commercial", "shop_supply", "steel_distribution", null]
+        },
+        "urgency": { "enum": ["routine", "urgent", "emergency"] },
+        "message": { "type": ["string", "null"], "maxLength": 2000 }
+      }
+    },
+    "consent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ai_disclosed", "recording_disclosed", "follow_up_email", "follow_up_phone"],
+      "properties": {
+        "ai_disclosed": { "type": "boolean" },
+        "recording_disclosed": { "type": "boolean" },
+        "follow_up_email": { "type": "boolean" },
+        "follow_up_phone": { "type": "boolean" }
+      }
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "appointment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "preferred_windows", "timezone"],
+      "properties": {
+        "request_id": { "$ref": "#/$defs/nullableIdentifier" },
+        "preferred_windows": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/window" }
+        },
+        "timezone": { "type": "string", "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "summary",
+        "handoff_status",
+        "booking_status",
+        "transcript_ref",
+        "recording_ref",
+        "started_at",
+        "ended_at",
+        "duration_seconds"
+      ],
+      "properties": {
+        "status": { "type": ["string", "null"], "maxLength": 80 },
+        "summary": { "type": ["string", "null"], "maxLength": 4000 },
+        "handoff_status": { "type": ["string", "null"], "maxLength": 80 },
+        "booking_status": { "type": ["string", "null"], "maxLength": 80 },
+        "transcript_ref": { "type": ["string", "null"], "maxLength": 1000 },
+        "recording_ref": { "type": ["string", "null"], "maxLength": 1000 },
+        "started_at": { "type": ["string", "null"], "format": "date-time" },
+        "ended_at": { "type": ["string", "null"], "format": "date-time" },
+        "duration_seconds": { "type": ["integer", "null"], "minimum": 0, "maximum": 86400 }
+      }
+    }
+  }
+}

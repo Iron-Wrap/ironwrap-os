@@ -218,6 +218,7 @@ def require_approval(
 
 
 IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
+    "appointment_request": ("appointment_request_id",),
     "automation_incident": ("incident_id",),
     "change_order": ("change_order_id",),
     "communication_event": ("communication_event_id",),
@@ -244,6 +245,7 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "price_book_rule": ("price_rule_id",),
     "production_gate_state": ("gate_id",),
     "proposal_evidence_pack": ("pack_id",),
+    "reception_session": ("session_id",),
     "review_request": ("review_request_id",),
     "roof_area": ("roof_area_id",),
     "roof_job": ("roof_job_id",),
@@ -261,6 +263,15 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
+    "appointment_request": (
+        "reception_session",
+        "lead_envelope",
+        "roof_job",
+        "booking_mode",
+        "provider",
+        "requested_at",
+        "confirmed_external_id",
+    ),
     "change_order": (
         "roof_job",
         "customer_quote",
@@ -459,6 +470,18 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
     # A gate's job/gate identity is fixed. Letting either move would bypass the
     # per-job scheduling lock and corrupt the gate lineage.
     "production_gate_state": ("roof_job", "gate"),
+    "reception_session": (
+        "provider",
+        "provider_project_id",
+        "provider_agent_id",
+        "provider_user_actor_id",
+        "provider_conversation_id",
+        "channel",
+        "direction",
+        "lead_envelope",
+        "roofing_property",
+        "roof_job",
+    ),
     "roof_job": (
         "workflow_profile",
         "locale_policy_version",
@@ -483,6 +506,7 @@ TRUTHY_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 JSON_FIELDS: dict[str, tuple[str, ...]] = {
+    "appointment_request": ("preferred_windows_json",),
     "change_order": ("tax_policy_snapshot_json",),
     "communication_event": ("policy_reasons_json",),
     "completion_packet": ("photo_evidence_json", "evidence_summary_json"),
@@ -512,6 +536,7 @@ JSON_FIELDS: dict[str, tuple[str, ...]] = {
     "payment_milestone": ("tax_policy_snapshot_json",),
     "price_book_rule": ("rule_json",),
     "proposal_evidence_pack": ("evidence_summary_json",),
+    "reception_session": ("structured_json",),
     "review_request": ("stop_conditions_json",),
     "roof_job": ("locale_policy_snapshot_json",),
     "supplier_order": ("order_summary_json", "receipt_evidence_json"),
@@ -2863,6 +2888,159 @@ def _validate_incident(record: Any, _context: Mapping[str, Any]) -> None:
         require_fields(record, "resolution_notes", "resolved_by", "resolved_at")
 
 
+def _validate_reception_session(record: Any, _context: Mapping[str, Any]) -> None:
+    require_fields(
+        record,
+        "provider",
+        "channel",
+        "direction",
+        "session_status",
+        "urgency",
+        "raw_key",
+        "payload_hash",
+        "structured_json",
+        "provider_updated_at",
+    )
+    require_sha256(record, "payload_hash")
+    require_between(record, "duration_seconds", 0, 86400)
+    raw_key = str(_get(record, "raw_key") or "")
+    if not raw_key.startswith("raw/newo/"):
+        raise PolicyViolation(
+            "invalid_newo_raw_key", "must point to the raw/newo/ R2 namespace", "raw_key"
+        )
+    if _get(record, "recording_pointer") and not bool(
+        _get(record, "recording_disclosed")
+    ):
+        raise PolicyViolation(
+            "recording_without_disclosure",
+            "a recording pointer requires recorded disclosure",
+            "recording_pointer",
+        )
+    if _get(record, "session_status") in {
+        "active",
+        "handoff_requested",
+        "ended",
+        "appointment_requested",
+        "appointment_cancelled",
+    } and not bool(_get(record, "ai_disclosed")):
+        raise PolicyViolation(
+            "ai_disclosure_required",
+            "answered receptionist sessions require AI disclosure",
+            "ai_disclosed",
+        )
+    event = parse_json_field(
+        record,
+        "structured_json",
+        required=True,
+        container_types=(dict,),
+        non_empty=True,
+    )
+    expected_keys = {
+        "schema_version",
+        "event_id",
+        "session_id",
+        "event_type",
+        "occurred_at",
+        "provider",
+        "channel",
+        "direction",
+        "contact",
+        "intent",
+        "consent",
+        "appointment",
+        "outcome",
+        "handoff_summary",
+    }
+    if set(event) != expected_keys:
+        raise PolicyViolation(
+            "invalid_reception_contract",
+            "structured event keys do not match the versioned receptionist contract",
+            "structured_json",
+        )
+    if event.get("session_id") != _get(record, "session_id"):
+        raise PolicyViolation(
+            "reception_session_mismatch",
+            "structured session_id must match the owned record",
+            "structured_json",
+        )
+    outcome = event.get("outcome")
+    if not isinstance(outcome, dict) or "transcript" in outcome or "recording" in outcome:
+        raise PolicyViolation(
+            "provider_content_not_allowed",
+            "transcript text and recording bodies cannot be copied into Frappe",
+            "structured_json",
+        )
+
+
+def _validate_appointment_request(record: Any, context: Mapping[str, Any]) -> None:
+    require_fields(
+        record,
+        "reception_session",
+        "request_status",
+        "booking_mode",
+        "provider",
+        "preferred_windows_json",
+        "timezone",
+        "requested_at",
+        "raw_key",
+        "payload_hash",
+    )
+    require_sha256(record, "payload_hash")
+    windows = parse_json_field(
+        record,
+        "preferred_windows_json",
+        required=True,
+        container_types=(list,),
+        non_empty=True,
+    )
+    if len(windows) > 10 or any(
+        not isinstance(window, dict)
+        or set(window) != {"start", "end"}
+        or _blank(window.get("start"))
+        for window in windows
+    ):
+        raise PolicyViolation(
+            "invalid_preferred_windows",
+            "requires 1 to 10 exact start/end window objects",
+            "preferred_windows_json",
+        )
+    status = _get(record, "request_status")
+    if status == "Confirmed":
+        if _get(record, "booking_mode") != "Confirmed":
+            raise PolicyViolation(
+                "request_only_confirmation",
+                "request-only appointments cannot be marked confirmed",
+                "request_status",
+            )
+        require_fields(
+            record,
+            "confirmed_external_id",
+            "confirmed_start",
+            "confirmed_end",
+            "decision_by",
+            "decision_at",
+            "decision_notes",
+        )
+    if status in {"Approved", "Declined", "Confirmed", "Failed"}:
+        require_fields(record, "decision_by", "decision_at", "decision_notes")
+    if status == "Cancelled":
+        require_fields(record, "cancelled_at")
+    _enforce_state_transition(
+        record,
+        context,
+        "request_status",
+        {
+            "Pending": {"Under Review", "Approved", "Declined", "Cancelled", "Failed"},
+            "Under Review": {"Approved", "Declined", "Cancelled", "Failed"},
+            "Approved": {"Confirmed", "Cancelled", "Failed"},
+            "Confirmed": {"Cancelled"},
+            "Declined": set(),
+            "Cancelled": set(),
+            "Failed": {"Under Review", "Cancelled"},
+        },
+    )
+
+
 def _validate_tenant(record: Any, context: Mapping[str, Any]) -> None:
     if _get(record, "isolation_model") != "Site per Tenant":
         raise PolicyViolation(
@@ -2909,6 +3087,7 @@ def _validate_tenant(record: Any, context: Mapping[str, Any]) -> None:
 
 
 VALIDATORS = {
+    "appointment_request": _validate_appointment_request,
     "change_order": _validate_change_order,
     "communication_consent": _validate_consent,
     "communication_event": _validate_communication,
@@ -2933,6 +3112,7 @@ VALIDATORS = {
     "price_book_rule": _validate_price_rule,
     "production_gate_state": _validate_gate,
     "proposal_evidence_pack": _validate_proposal,
+    "reception_session": _validate_reception_session,
     "review_request": _validate_review_request,
     "roof_area": _validate_roof_area,
     "roof_job": _validate_roof_job,

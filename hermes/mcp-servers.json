@@ -1,6 +1,6 @@
 {
   "version": "0.2.0",
-  "note": "Launch/config manifest for the two MCP servers Hermes connects to. tool_filter arrays are the UNION across roles only for host discovery; each server requires HERMES_AGENT_ROLE and registers only that canonical roles.json allowlist. The Frappe server also requires HERMES_ACTOR_USER, and its Frappe API pair must belong to exactly that actor rather than a shared service principal; it assignment-scopes Field Companion calls. Frappe approved writes require ERPNEXT_WRITE_ENABLED plus a short-lived server-issued dry_run_receipt and separately signed human approval_receipt; HERMES_DRY_RUN_SIGNING_KEY stays in the MCP host, HERMES_APPROVAL_PUBLIC_KEY_FILE verifies the approval broker's signature, and HERMES_APPROVER_ID binds that key to the approved human identity. The bus retains its separate IRONWRAP_BUS_WRITE_ENABLED + HERMES_WRITE_TOKEN replay gate. Frappe writes record Hermes Run rows; bus replay records envelope-scoped recovery in the bus audit log. env values are placeholders resolved from the Hermes host environment; never commit real secret values.",
+  "note": "Launch/config manifest for the three MCP servers Hermes connects to. tool_filter arrays are the UNION across roles only for host discovery; each server requires HERMES_AGENT_ROLE and registers only that canonical roles.json allowlist. The Frappe server also requires HERMES_ACTOR_USER, and its Frappe API pair must belong to exactly that actor rather than a shared service principal; it assignment-scopes Field Companion calls. Frappe approved writes require ERPNEXT_WRITE_ENABLED plus a short-lived server-issued dry_run_receipt and separately signed human approval_receipt; HERMES_DRY_RUN_SIGNING_KEY stays in the MCP host, HERMES_APPROVAL_PUBLIC_KEY_FILE verifies the approval broker's signature, and HERMES_APPROVER_ID binds that key to the approved human identity. The bus retains its separate IRONWRAP_BUS_WRITE_ENABLED + HERMES_WRITE_TOKEN replay gate. Newo MCP never receives the provider API key; NEWO_MCP_WRITE_ENABLED gates its approval tools while the Worker independently enforces signed one-time receipts, NEWO_CONTROL_WRITE_ENABLED, protected resources, and NEWO_OUTBOUND_ENABLED. env values are placeholders resolved from the Hermes host environment; never commit real secret values.",
   "mcpServers": {
     "ironwrap-bus-mcp": {
       "command": "node",
@@ -187,6 +187,47 @@
         "HERMES_ROLE_POLICY_PATH": "${HERMES_ROLE_POLICY_PATH}",
         "HERMES_DRY_RUN_SIGNING_KEY": "${HERMES_DRY_RUN_SIGNING_KEY}",
         "HERMES_APPROVAL_PUBLIC_KEY_FILE": "${HERMES_APPROVAL_PUBLIC_KEY_FILE}"
+      }
+    },
+    "newo-mcp": {
+      "command": "node",
+      "args": ["mcp/newo-mcp/src/server.mjs"],
+      "description": "Role-filtered Newo session, conversation, configuration, analytics, and exact-receipt control through bounded Worker routes.",
+      "tool_filter": {
+        "read": [
+          "get_newo_health",
+          "list_newo_sessions",
+          "list_newo_control_actions",
+          "list_newo_agent_actors",
+          "get_newo_agent_actor",
+          "list_newo_user_actors",
+          "get_newo_user_actor",
+          "get_newo_user_actor_by_external_id",
+          "get_newo_user_messages",
+          "get_newo_agent_messages",
+          "get_newo_chat_history",
+          "list_newo_conversation_acts",
+          "get_newo_conversation_act",
+          "get_newo_session_aggregates",
+          "list_newo_outgoing_webhooks",
+          "list_newo_incoming_webhooks",
+          "list_newo_analytics_logs"
+        ],
+        "dry_run": [
+          "dry_run_newo_control_action"
+        ],
+        "approved_write": [
+          "request_newo_control_approval",
+          "request_newo_control_action"
+        ]
+      },
+      "env": {
+        "IRONWRAP_BUS_BASE_URL": "${IRONWRAP_BUS_BASE_URL}",
+        "IRONWRAP_ADMIN_TOKEN": "${IRONWRAP_ADMIN_TOKEN}",
+        "NEWO_MCP_WRITE_ENABLED": "${NEWO_MCP_WRITE_ENABLED}",
+        "NEWO_MCP_REQUEST_TIMEOUT_MS": "${NEWO_MCP_REQUEST_TIMEOUT_MS}",
+        "HERMES_AGENT_ROLE": "${HERMES_AGENT_ROLE}",
+        "HERMES_ROLE_POLICY_PATH": "${HERMES_ROLE_POLICY_PATH}"
       }
     }
   }

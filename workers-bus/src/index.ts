@@ -23,6 +23,7 @@ import {
   BULK_REPLAY_CONFIRMATION,
   executeReplayRequest,
   getOperationalStatus,
+  getNewoOpenIncidentCount,
   getReadiness,
   validateReplayApprovalContext,
 } from "./operations.ts";
@@ -55,9 +56,28 @@ import {
 import { markExpiredExecutionLeases } from "./approval-store.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 import { markExpiredProductionScheduleApprovalExecutionLeases } from "./production-schedule-approval-store.ts";
+import {
+  handleNewoQueueMessage,
+  handleNewoWebhook,
+  reconcileNewoSessions,
+  type NewoQueueMessage,
+} from "./newo.ts";
+import { handleNewoAdmin } from "./newo-admin.ts";
+import {
+  newoOperationalCounts,
+  recordNewoReconciliationRun,
+} from "./newo-store.ts";
+
+type BusQueueMessage = { envelope_id: string } | NewoQueueMessage;
 
 const MAX_BODY_BYTES = 256 * 1024;
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
+const escapeHtml = (value: string): string => value
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;")
+  .replace(/'/g, "&#039;");
 const safeJson = (s: string): Record<string, unknown> => {
   try {
     return JSON.parse(s) as Record<string, unknown>;
@@ -83,21 +103,25 @@ export default {
   },
 
   async queue(
-    batch: MessageBatch<{ envelope_id: string }>,
+    batch: MessageBatch<BusQueueMessage>,
     env: Env,
     _ctx: ExecutionContext,
   ): Promise<void> {
     const isDlq = batch.queue.endsWith("-dlq");
     for (const msg of batch.messages) {
       try {
-        if (isDlq) await handleDead(env, msg.body.envelope_id);
+        if ("newo_event_id" in msg.body) {
+          await handleNewoQueueMessage(env, msg.body.newo_event_id, isDlq);
+        } else if (isDlq) await handleDead(env, msg.body.envelope_id);
         else await handlePush(env, msg.body.envelope_id);
         msg.ack();
       } catch (err) {
         log({
           at: "queue",
           queue: batch.queue,
-          envelope_id: msg.body.envelope_id,
+          message_id: "newo_event_id" in msg.body
+            ? msg.body.newo_event_id
+            : msg.body.envelope_id,
           error: String(err),
         });
         msg.retry(); // exhausting retries on the main queue routes to the DLQ (wrangler.jsonc)
@@ -114,6 +138,9 @@ export default {
       ctx.waitUntil(
         Promise.all([
           runReconcile(env),
+          runNewoDailyReconcile(env).catch((error) =>
+            log({ at: "newo_daily_reconcile", error: String(error) })
+          ),
           pruneAuthRecords(env).catch((error) =>
             log({ at: "auth_prune", error: String(error) }),
           ),
@@ -132,6 +159,9 @@ export default {
       ctx.waitUntil(
         Promise.all([
           retrySweep(env),
+          reconcileNewoSessions(env).catch((error) =>
+            log({ at: "newo_five_minute_reconcile", error: String(error) })
+          ),
           retryMeasurementIntakeReceipts(env).catch((error) =>
             log({ at: "measurement_intake_retry", error: String(error) }),
           ),
@@ -171,7 +201,7 @@ export default {
         ]).then(() => {}),
       ); // the frequent cron
   },
-} satisfies ExportedHandler<Env, { envelope_id: string }>;
+} satisfies ExportedHandler<Env, BusQueueMessage>;
 
 async function routeRequest(
   req: Request,
@@ -254,18 +284,14 @@ async function routeRequest(
       return json({ error: "unauthorized" }, 401);
     return await handleIngest(req, env, ctx, ingest[1]);
   }
-  // Newo uses a static bearer header for webhook delivery. Keep its opaque payload on the
-  // generic phone intake path; no provider-specific event schema is assumed here.
-  if (req.method === "POST" && url.pathname === "/webhook/newo") {
-    if (!env.NEWO_WEBHOOK_TOKEN?.trim())
-      return json({ error: "webhook_not_configured" }, 503);
-    if (!constantTimeEqual(bearer(req), env.NEWO_WEBHOOK_TOKEN))
-      return json({ error: "unauthorized" }, 401);
-    return await handleIngest(req, env, ctx, "phone", "newo");
+  if (url.pathname === "/webhook/newo" || url.pathname.startsWith("/webhook/newo/")) {
+    return await handleNewoWebhook(req, env, ctx, url);
   }
   if (url.pathname.startsWith("/admin/")) {
     if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN))
       return json({ error: "unauthorized" }, 401);
+    if (url.pathname === "/admin/newo" || url.pathname.startsWith("/admin/newo/"))
+      return await handleNewoAdmin(req, env, url);
     if (req.method === "GET" && url.pathname === "/admin/envelopes")
       return json(await handleListEnvelopes(env, url));
     if (req.method === "GET" && url.pathname.startsWith("/admin/envelope/"))
@@ -641,6 +667,71 @@ async function runReconcile(env: Env): Promise<{
   ).catch((e) => log({ at: "reconcile_digest_failed", day, error: String(e) }));
   log({ at: "reconcile", day, gaps: gaps.length, openDeadLetter: openDlq });
   return { day, rows, openDeadLetter: openDlq };
+}
+
+async function runNewoDailyReconcile(env: Env): Promise<void> {
+  const runtime = env as Env & {
+    NEWO_ENABLED?: string;
+    NEWO_PRODUCTION_REQUIRED?: string;
+    NEWO_USAGE_LIMIT_MINUTES?: string;
+  };
+  if (String(runtime.NEWO_ENABLED) !== "true" && String(runtime.NEWO_PRODUCTION_REQUIRED) !== "true") return;
+  const ranAt = new Date().toISOString();
+  const [readiness, counts, unresolvedIncidents] = await Promise.all([
+    getReadiness(env),
+    newoOperationalCounts(env),
+    getNewoOpenIncidentCount(env),
+  ]);
+  const driftReasons = [
+    ...readiness.newo.drift_reasons,
+    ...(readiness.newo.api_error ? [readiness.newo.api_error] : []),
+    ...(readiness.newo.frappe_error ? [readiness.newo.frappe_error] : []),
+  ];
+  const usageLimit = Number(runtime.NEWO_USAGE_LIMIT_MINUTES ?? "0");
+  const degraded = !readiness.ok || counts.failed_events > 0 || counts.failed_sync > 0 ||
+    counts.missing_reports > 0 || counts.control_failures > 0 ||
+    unresolvedIncidents === null || unresolvedIncidents > 0;
+  await recordNewoReconciliationRun(env, {
+    run_id: `newo:daily:${crypto.randomUUID()}`,
+    run_type: "daily",
+    status: degraded ? "degraded" : "ok",
+    ran_at: ranAt,
+    retryable_syncs_requeued: 0,
+    missing_reports: counts.missing_reports,
+    failed_handoffs: counts.failed_handoffs,
+    pending_bookings: counts.pending_bookings,
+    unresolved_incidents: unresolvedIncidents,
+    drift_reasons_json: JSON.stringify([...new Set(driftReasons)]),
+    usage_status: "unavailable_from_documented_api",
+    usage_minutes: null,
+    usage_limit_minutes: Number.isFinite(usageLimit) && usageLimit > 0 ? usageLimit : null,
+    detail_json: JSON.stringify({
+      readiness_status: readiness.status,
+      last_event_at: counts.last_event_at,
+      last_report_at: counts.last_report_at,
+      control_failures: counts.control_failures,
+      usage_evidence: "Newo documented session aggregates do not expose call minutes; verify provider-console alerts.",
+    }),
+  });
+  if (degraded) {
+    await sendOwnerAlert(
+      env,
+      "Newo daily reconciliation requires review",
+      `<p>Newo readiness or owned landing checks are degraded.</p>
+       <p>Missing reports: ${counts.missing_reports}; failed syncs: ${counts.failed_sync};
+       unresolved callback incidents: ${unresolvedIncidents ?? "unavailable"}.</p>
+       <p>Configuration/API reasons: ${driftReasons.map(escapeHtml).join(", ") || "none"}.</p>`,
+    ).catch(() => {});
+  }
+  log({
+    at: "newo_daily_reconcile",
+    status: degraded ? "degraded" : "ok",
+    missing_reports: counts.missing_reports,
+    failed_syncs: counts.failed_sync,
+    unresolved_incidents: unresolvedIncidents,
+    drift_count: driftReasons.length,
+    usage_status: "unavailable_from_documented_api",
+  });
 }
 
 async function handleReplay(req: Request, env: Env): Promise<Response> {

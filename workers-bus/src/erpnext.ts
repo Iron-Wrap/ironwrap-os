@@ -3,6 +3,7 @@
 import { isOn, isVoiceNoteUri, type EnvelopeRecord } from "./core.ts";
 import type { JnResult } from "./jobnimbus.ts";
 import type { RoofGraphV1 } from "./roof-graph.ts";
+import type { NewoSessionRecord } from "./newo-store.ts";
 
 type ErpEnv = Env & {
   ERPNEXT_ENABLED?: string;
@@ -16,6 +17,8 @@ type ErpEnv = Env & {
    * inferred from untrusted browser input.
    */
   ERPNEXT_INTEGRATION_USER?: string;
+  NEWO_BOOKING_MODE?: string;
+  NEWO_CALLBACK_OWNER_USER?: string;
 };
 
 export interface ErpNextResult {
@@ -30,6 +33,18 @@ export interface ErpNextResult {
 
 export interface ErpNextTransportSyncResult {
   name: string;
+  roofJobName?: string;
+}
+
+export interface ErpNextNewoSyncResult {
+  receptionSessionName: string;
+  appointmentRequestName?: string;
+  automationIncidentName?: string;
+}
+
+export interface ErpNextNewoLinks {
+  leadEnvelopeName?: string;
+  roofingPropertyName?: string;
   roofJobName?: string;
 }
 
@@ -103,7 +118,7 @@ export async function pushToErpNext(
   const p = safeJson(rec.payload_json);
   const lead = await upsertLeadEnvelope(cfg, base, doctype, rec, jn);
   const property = await upsertProperty(cfg, base, rec, p, lead.name);
-  const customer = await upsertRoofingCustomer(cfg, base, rec, lead.name);
+  const customer = await upsertRoofingCustomer(cfg, base, rec, p, lead.name);
   const roofJob = await upsertRoofJob(
     cfg,
     base,
@@ -282,6 +297,209 @@ export async function syncLeadTransportToErpNext(
   return { name: existing, ...(roofJobName ? { roofJobName } : {}) };
 }
 
+/**
+ * Mirror the provider-neutral receptionist snapshot after its owned D1/R2 write. Transcript and
+ * recording bodies are intentionally absent: the DocTypes receive only reviewed structure and
+ * opaque provider/R2 pointers.
+ */
+export async function pushNewoSessionToErpNext(
+  env: Env,
+  session: NewoSessionRecord,
+  links: ErpNextNewoLinks = {},
+): Promise<ErpNextNewoSyncResult | null> {
+  const cfg = env as ErpEnv;
+  if (!isOn(cfg.ERPNEXT_ENABLED)) return null;
+  if (!cfg.ERPNEXT_API_KEY || !cfg.ERPNEXT_API_SECRET) throw new Error("erpnext_no_token");
+  const base = normalizeBaseUrl(cfg.ERPNEXT_BASE_URL);
+  const reception = await upsertByField(
+    cfg,
+    base,
+    "Reception Session",
+    "session_id",
+    session.session_id,
+    receptionSessionDoc(session, links),
+  );
+  const incident = await ensureNewoCallbackIncident(cfg, base, session, reception.name, links);
+  if (!session.appointment_request_id) {
+    return {
+      receptionSessionName: reception.name,
+      ...(incident ? { automationIncidentName: incident.name } : {}),
+    };
+  }
+  const appointmentDoc = appointmentRequestDoc(cfg, session, reception.name, links);
+  const existingAppointment = await findByTerm(
+    cfg,
+    base,
+    "Appointment Request",
+    "appointment_request_id",
+    session.appointment_request_id,
+  );
+  const appointment = existingAppointment
+    ? await updateExistingAppointment(cfg, base, existingAppointment, appointmentDoc, session)
+    : await createIfMissingByField(
+      cfg,
+      base,
+      "Appointment Request",
+      "appointment_request_id",
+      session.appointment_request_id,
+      appointmentDoc,
+    );
+  return {
+    receptionSessionName: reception.name,
+    appointmentRequestName: appointment.name,
+    ...(incident ? { automationIncidentName: incident.name } : {}),
+  };
+}
+
+async function ensureNewoCallbackIncident(
+  env: ErpEnv,
+  base: string,
+  session: NewoSessionRecord,
+  receptionSessionName: string,
+  links: ErpNextNewoLinks,
+): Promise<ErpNextResult | null> {
+  if (session.status !== "session_failed" && session.handoff_status !== "failed") return null;
+  const incidentId = `incident:newo-callback:${session.session_id}`;
+  return await createIfMissingByField(
+    env,
+    base,
+    "Automation Incident",
+    "incident_id",
+    incidentId,
+    {
+      incident_id: incidentId,
+      status: "Open",
+      severity: session.urgency === "emergency" ? "Critical" : "High",
+      source_system: "Newo",
+      category: "Integration",
+      summary: "Urgent callback required after failed receptionist transfer",
+      details: "Newo could not complete the requested handoff. Contact the caller using the verified reception session details.",
+      roof_job: links.roofJobName ?? undefined,
+      lead_envelope: links.leadEnvelopeName ?? undefined,
+      record_ref: `Reception Session:${receptionSessionName}`,
+      correlation_id: session.session_id,
+      detected_at: frappeDatetime(session.updated_at),
+      retry_count: session.sync_attempts,
+      assigned_to: str(env.NEWO_CALLBACK_OWNER_USER) || undefined,
+    },
+  );
+}
+
+function receptionSessionDoc(
+  session: NewoSessionRecord,
+  links: ErpNextNewoLinks,
+): Record<string, unknown> {
+  return {
+    session_id: session.session_id,
+    provider: "Newo",
+    provider_project_id: session.project_id ?? undefined,
+    provider_agent_id: session.agent_id ?? undefined,
+    provider_user_actor_id: session.user_actor_id ?? undefined,
+    provider_conversation_id: session.conversation_id ?? undefined,
+    channel: titleCase(session.channel),
+    direction: titleCase(session.direction),
+    session_status: session.status,
+    outcome: session.outcome ?? undefined,
+    lead_envelope: links.leadEnvelopeName ?? undefined,
+    roofing_property: links.roofingPropertyName ?? undefined,
+    roof_job: links.roofJobName ?? undefined,
+    contact_name: session.contact_name ?? undefined,
+    contact_phone: session.contact_phone ?? undefined,
+    contact_email: session.contact_email ?? undefined,
+    address_line1: session.address_line1 ?? undefined,
+    city: session.city ?? undefined,
+    province: session.province ?? undefined,
+    postal_code: session.postal_code ?? undefined,
+    division: session.division ?? undefined,
+    service: session.service ?? undefined,
+    urgency: session.urgency ?? undefined,
+    handoff_status: session.handoff_status ?? undefined,
+    booking_status: session.booking_status ?? undefined,
+    structured_summary: session.summary ?? undefined,
+    transcript_pointer: session.transcript_ref ?? undefined,
+    recording_pointer: session.recording_ref ?? undefined,
+    ai_disclosed: session.ai_disclosed,
+    recording_disclosed: session.recording_disclosed,
+    raw_key: session.raw_key,
+    payload_hash: session.payload_hash,
+    structured_json: session.structured_json,
+    started_at: session.started_at ? frappeDatetime(session.started_at) : undefined,
+    ended_at: session.ended_at ? frappeDatetime(session.ended_at) : undefined,
+    duration_seconds: session.duration_seconds ?? undefined,
+    provider_updated_at: frappeDatetime(session.updated_at),
+  };
+}
+
+function appointmentRequestDoc(
+  env: ErpEnv,
+  session: NewoSessionRecord,
+  receptionSessionName: string,
+  links: ErpNextNewoLinks,
+): Record<string, unknown> {
+  const event = safeJson(session.structured_json);
+  const appointment = object(event.appointment);
+  const requestStatus = session.booking_status === "cancelled" ? "Cancelled" : "Pending";
+  return {
+    appointment_request_id: session.appointment_request_id,
+    reception_session: receptionSessionName,
+    lead_envelope: links.leadEnvelopeName ?? undefined,
+    roof_job: links.roofJobName ?? undefined,
+    request_status: requestStatus,
+    booking_mode: String(env.NEWO_BOOKING_MODE) === "confirmed" ? "Confirmed" : "Request Only",
+    provider: "Newo",
+    provider_status: session.booking_status ?? undefined,
+    contact_name: session.contact_name ?? undefined,
+    contact_phone: session.contact_phone ?? undefined,
+    contact_email: session.contact_email ?? undefined,
+    service: session.service ?? undefined,
+    division: session.division ?? undefined,
+    urgency: session.urgency ?? undefined,
+    preferred_windows_json: appointment ? jsonMaybe(appointment.preferred_windows) : undefined,
+    timezone: appointment ? str(appointment.timezone) : undefined,
+    raw_key: session.raw_key,
+    payload_hash: session.payload_hash,
+    requested_at: frappeDatetime(session.updated_at),
+    cancelled_at: session.booking_status === "cancelled"
+      ? frappeDatetime(session.updated_at)
+      : undefined,
+  };
+}
+
+async function updateExistingAppointment(
+  env: ErpEnv,
+  base: string,
+  name: string,
+  doc: Record<string, unknown>,
+  session: NewoSessionRecord,
+): Promise<ErpNextResult> {
+  // Provider retries can refresh source facts, but cannot reset an operator's review/decision.
+  const update: Record<string, unknown> = {
+    provider_status: doc.provider_status,
+    contact_name: doc.contact_name,
+    contact_phone: doc.contact_phone,
+    contact_email: doc.contact_email,
+    service: doc.service,
+    division: doc.division,
+    urgency: doc.urgency,
+    preferred_windows_json: doc.preferred_windows_json,
+    timezone: doc.timezone,
+    raw_key: doc.raw_key,
+    payload_hash: doc.payload_hash,
+  };
+  if (session.booking_status === "cancelled") {
+    update.request_status = "Cancelled";
+    update.cancelled_at = doc.cancelled_at;
+  }
+  await erpFetch(
+    env,
+    base,
+    "PUT",
+    `/api/resource/${enc("Appointment Request")}/${enc(name)}`,
+    update,
+  );
+  return { name, reused: true };
+}
+
 function leadTransportDoc(rec: EnvelopeRecord, jn?: JnResult): Record<string, unknown> {
   return {
     envelope_id: rec.envelope_id,
@@ -335,7 +553,10 @@ async function upsertProperty(
   const postal = str(p.postal ?? p.postal_code ?? p.zip);
   if (!address && !city && !postal) return null;
 
-  const propertyKey = ["property", address, city, postal].filter(Boolean).join(":").toLowerCase() || `property:${rec.envelope_id}`;
+  const association = ownedAssociation(p);
+  const propertyKey = str(association?.property_key)
+    ?? (["property", address, city, postal].filter(Boolean).join(":").toLowerCase()
+      || `property:${rec.envelope_id}`);
   // A retry must complete a missing initial record, never overwrite field corrections made after
   // the first queue attempt. Source facts remain in the immutable envelope/R2 record.
   return await createIfMissingByField(env, base, "Roofing Property", "property_key", propertyKey, {
@@ -362,12 +583,13 @@ async function upsertRoofingCustomer(
   env: ErpEnv,
   base: string,
   rec: EnvelopeRecord,
+  payload: Record<string, unknown>,
   leadName: string,
 ): Promise<ErpNextResult> {
   const contactName = str(rec.contact_name);
   const nameParts = contactName?.split(/\s+/).filter(Boolean) ?? [];
   const [firstName, ...lastName] = nameParts;
-  const id = customerId(rec);
+  const id = str(ownedAssociation(payload)?.customer_id) ?? customerId(rec);
   const displayName = contactName
     ?? str(rec.contact_email)
     ?? str(rec.contact_phone)
@@ -394,7 +616,9 @@ async function upsertRoofJob(
   customerName: string,
   jn?: JnResult,
 ): Promise<ErpNextResult> {
-  const roofJobId = stableId("job", instantEstimateProjectRef(p), rec.envelope_id);
+  const associatedRoofJobId = str(ownedAssociation(p)?.roof_job_id);
+  const roofJobId = associatedRoofJobId
+    ?? stableId("job", instantEstimateProjectRef(p), rec.envelope_id);
   // `job_status` and `current_gate_state` are human-owned operational state. Queue retries may
   // create a missing initial job but must not reset an in-progress job to qualification.
   const roofJob = await createIfMissingByField(env, base, "Roof Job", "roof_job_id", roofJobId, {
@@ -803,6 +1027,15 @@ function object(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function ownedAssociation(payload: Record<string, unknown>): Record<string, unknown> | null {
+  const association = object(payload.owned_association);
+  return association?.verification_status === "verified" ? association : null;
+}
+
+function titleCase(value: string): string {
+  return value.length === 0 ? value : value[0].toUpperCase() + value.slice(1);
 }
 
 function str(v: unknown): string | undefined {

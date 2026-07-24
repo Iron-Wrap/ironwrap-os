@@ -1,0 +1,14 @@
+{
+  "schema_version": "newo.console-proof.v1",
+  "proofs": [
+    { "control": "production_actor_published", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
+    { "control": "phone_connector_and_number", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
+    { "control": "akb_version_published", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
+    { "control": "scenario_and_tool_lifecycle", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
+    { "control": "ai_recording_disclosure", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
+    { "control": "owner_transfer_and_voicemail_fallback", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
+    { "control": "usage_limit_and_threshold_alert", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
+    { "control": "after_hours_forwarding_and_rollback", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null },
+    { "control": "r2_raw_newo_30_day_lifecycle", "status": "pending", "evidence_ref": null, "observed_at": null, "expires_at": null }
+  ]
+}

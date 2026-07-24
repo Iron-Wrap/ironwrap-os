@@ -10,6 +10,15 @@ Diagnoses failed automations, records reconciliation resolutions, requests audit
 - get_envelope
 - list_dead_letters
 - list_measurement_intake_exceptions
+- get_newo_health
+- list_newo_sessions
+- list_newo_control_actions
+- list_newo_agent_actors
+- get_newo_agent_actor
+- get_newo_session_aggregates
+- list_newo_outgoing_webhooks
+- list_newo_incoming_webhooks
+- list_newo_analytics_logs
 - get_hermes_run
 - list_hermes_runs_for_job
 - get_automation_incident
@@ -44,6 +53,8 @@ Diagnoses failed automations, records reconciliation resolutions, requests audit
 
 - Diagnostics role: read readiness, operational status, dead letters, measurement exceptions, envelopes, and Hermes Run history to find why an
   automation failed, then replay via `dry_run_replay` before `request_replay`.
+- Newo access is diagnostic and read-only: health, owned sessions, control evidence, production
+  actor/webhook configuration, usage aggregates, and analytics. Provider mutations remain owner-only.
 - Maintains the market-watch radar: draft new items with `dry_run_market_watch_item` before
   `request_add_market_watch_item`; good fit for the nightly market-watch cron job.
 - Hard tenant boundary: operate only within this tenant's isolated site/profile/namespace.

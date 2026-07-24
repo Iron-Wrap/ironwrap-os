@@ -40,11 +40,16 @@
     { "binding": "RAW", "bucket_name": "ironwrap-bus-raw" }
   ],
 
-  // JobNimbus push pipeline. Create with:
+  // JobNimbus bridge plus the independently retried Newo-to-owned-core pipeline. Create with:
   //   wrangler queues create ironwrap-jn-push
   //   wrangler queues create ironwrap-jn-dlq
+  //   wrangler queues create ironwrap-newo-events
+  //   wrangler queues create ironwrap-newo-dlq
   "queues": {
-    "producers": [{ "binding": "JN_QUEUE", "queue": "ironwrap-jn-push" }],
+    "producers": [
+      { "binding": "JN_QUEUE", "queue": "ironwrap-jn-push" },
+      { "binding": "NEWO_QUEUE", "queue": "ironwrap-newo-events" }
+    ],
     "consumers": [
       {
         "queue": "ironwrap-jn-push",
@@ -53,7 +58,15 @@
         "max_batch_timeout": 5,
         "dead_letter_queue": "ironwrap-jn-dlq"
       },
-      { "queue": "ironwrap-jn-dlq", "max_retries": 1 }
+      { "queue": "ironwrap-jn-dlq", "max_retries": 1 },
+      {
+        "queue": "ironwrap-newo-events",
+        "max_retries": 5,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "dead_letter_queue": "ironwrap-newo-dlq"
+      },
+      { "queue": "ironwrap-newo-dlq", "max_retries": 1 }
     ]
   },
 
@@ -61,7 +74,9 @@
   "triggers": { "crons": ["*/5 * * * *", "0 14 * * *"] },
 
   // Non-secret config. Secrets go only via `wrangler secret put`:
-  //   INGEST_TOKEN, ADMIN_TOKEN, NEWO_WEBHOOK_TOKEN, JOBNIMBUS_API_KEY, GOOGLE_SERVICE_ACCOUNT_JSON,
+  //   INGEST_TOKEN, ADMIN_TOKEN, NEWO_WEBHOOK_TOKEN, NEWO_API_KEY, NEWO_BOOKING_TOKEN,
+  //   NEWO_CONTROL_SIGNING_SECRET,
+  //   JOBNIMBUS_API_KEY, GOOGLE_SERVICE_ACCOUNT_JSON,
   //   QB_WEBHOOK_TOKEN, ERPNEXT_API_KEY, ERPNEXT_API_SECRET, APP_AUTH_PEPPER,
   //   PUBLIC_ESTIMATE_TURNSTILE_SECRET, PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER,
   //   APPROVAL_BROKER_SHARED_SECRET, QUOTE_REVISION_BROKER_SHARED_SECRET,
@@ -76,6 +91,38 @@
     "BACKUP_ALERT_EMAIL": "sales@ironwrapexteriors.com",
     "FROM_EMAIL": "sales@ironwrapexteriors.com",
     "JOBNIMBUS_ENABLED": "true",
+    "NEWO_PRODUCTION_REQUIRED": "true",
+    "NEWO_ENABLED": "false",
+    "NEWO_CONTROL_WRITE_ENABLED": "false",
+    "NEWO_BOOKING_MODE": "request_only",
+    "NEWO_OUTBOUND_ENABLED": "false",
+    "NEWO_API_BASE_URL": "https://api.newo.ai",
+    "NEWO_PROJECT_ID": "",
+    "NEWO_AGENT_ID": "",
+    "NEWO_REPORT_WEBHOOK_ID": "",
+    "NEWO_REPORT_WEBHOOK_URL": "",
+    "NEWO_HANDOFF_WEBHOOK_ID": "",
+    "NEWO_HANDOFF_WEBHOOK_URL": "",
+    "NEWO_PROTECTED_WEBHOOK_IDS": "",
+    "NEWO_EXPECTED_CONFIG_VERSION": "newo.production.v1",
+    "NEWO_TOOL_SCHEMA_SHA256": "6d1028836d51f25a42cf0b38660ccf5d7f624f5396616ebd2c5168b16a1554fa",
+    "NEWO_REPORT_SCHEMA_SHA256": "5c587d4c53b872fbef4290a315ecc7e00477371168b1ac4a07735fff695602cb",
+    "NEWO_KB_VERSION": "ironwrap-receptionist.v1",
+    "NEWO_KB_SHA256": "9549fdf4956053b84e261f4909e31a8b072599cd2dcae7aa85861d4592a9aa64",
+    "NEWO_PHONE_NUMBER": "",
+    "NEWO_ENABLED_CHANNELS": "voice",
+    "NEWO_TRANSFER_POLICY": "owner_then_voicemail",
+    "NEWO_OWNER_TRANSFER_NUMBER": "",
+    "NEWO_R2_LIFECYCLE_PROVEN": "false",
+    "NEWO_USAGE_LIMIT_MINUTES": "",
+    "NEWO_USAGE_ALERT_PERCENT": "80",
+    "NEWO_JOBNIMBUS_BOOKING_PROVEN": "false",
+    "NEWO_CALLBACK_OWNER_USER": "",
+    "NEWO_BOOKING_HORIZON_DAYS": "30",
+    "NEWO_REPORT_TIMEOUT_MINUTES": "30",
+    "NEWO_SYNC_RETRY_MINUTES": "5",
+    "NEWO_API_TIMEOUT_MS": "10000",
+    "NEWO_CONTROL_RECEIPT_TTL_SECONDS": "600",
     "JN_CONTACT_RECORD_TYPE": "Customer",
     "JN_CONTACT_STATUS": "New",
     "JN_JOB_RECORD_TYPE": "Retail",

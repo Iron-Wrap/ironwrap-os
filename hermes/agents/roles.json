@@ -1,16 +1,23 @@
 {
   "version": "0.2.0",
-  "description": "Machine-readable Hermes agent role tool allowlists. Source of truth for MCP tool filtering. Validated against the implemented MCP source inventory by tools/validate-hermes-config.mjs. Every approved_write tool must carry its dry_run counterpart in the same role (read -> dry_run -> approval -> write -> audit). No tool in this repo can send a customer message or mutate accounting; Frappe writes record Hermes Run rows and bus replay records its envelope-scoped audit trail.",
+  "description": "Machine-readable Hermes agent role tool allowlists. Source of truth for MCP tool filtering. Validated against the implemented MCP source inventory by tools/validate-hermes-config.mjs. Every approved_write tool must carry its dry_run counterpart in the same role (read -> dry_run -> approval -> write -> audit). Frappe writes record Hermes Run rows, bus replay records its envelope-scoped audit trail, and Newo mutations require exact signed receipts. Newo customer-send operations are owner-only and remain blocked unless the separate outbound gate is enabled. No tool mutates accounting.",
   "servers": {
     "ironwrap-bus-mcp": "Bus readiness and operating truth plus envelope-scoped, approved dead-letter recovery.",
-    "erpnext-roofing-mcp": "IronWrap OS Frappe operating core: read, deterministic policy checks, and review-gated approved writes (legacy server name retained for compatibility)."
+    "erpnext-roofing-mcp": "IronWrap OS Frappe operating core: read, deterministic policy checks, and review-gated approved writes (legacy server name retained for compatibility).",
+    "newo-mcp": "Role-filtered Newo session, conversation, configuration, analytics, and exact-receipt control access through the IronWrap Worker."
   },
   "roles": {
     "owner-operator": {
       "title": "Owner Operator",
-      "summary": "Broadest supervisor. Reads all system truth, approves any drafted mutation. Cannot send legal/contract communications or mutate accounting because no such tool exists.",
+      "summary": "Broadest supervisor. Reads all system truth and approves governed mutations. Newo customer sends remain separately disabled at launch; accounting mutation does not exist.",
       "reads": [
         "get_bus_readiness", "get_operational_status", "list_recent_envelopes", "get_envelope", "list_dead_letters", "list_measurement_intake_exceptions",
+        "get_newo_health", "list_newo_sessions", "list_newo_control_actions",
+        "list_newo_agent_actors", "get_newo_agent_actor",
+        "list_newo_user_actors", "get_newo_user_actor", "get_newo_user_actor_by_external_id",
+        "get_newo_user_messages", "get_newo_agent_messages", "get_newo_chat_history",
+        "list_newo_conversation_acts", "get_newo_conversation_act", "get_newo_session_aggregates",
+        "list_newo_outgoing_webhooks", "list_newo_incoming_webhooks", "list_newo_analytics_logs",
         "get_roof_job", "get_lead_envelope", "list_untriaged_lead_envelopes", "list_job_gates", "list_blocked_jobs",
         "get_measurement_report", "list_measurement_reports_for_job",
         "get_material_takeoff", "list_material_takeoffs_for_job",
@@ -48,7 +55,7 @@
         "get_hermes_run", "list_hermes_runs_for_job"
       ],
       "dry_run": [
-        "dry_run_replay",
+        "dry_run_replay", "dry_run_newo_control_action",
         "dry_run_update_gate", "dry_run_material_takeoff", "dry_run_update_material_takeoff_status",
         "dry_run_supplier_order", "dry_run_supplier_quote", "dry_run_quote_revision", "dry_run_bind_quote_price_rules", "dry_run_proposal_evidence_pack", "dry_run_publish_proposal_evidence_pack",
         "dry_run_job_assignment", "dry_run_change_order", "dry_run_change_order_transition",
@@ -60,7 +67,7 @@
         "dry_run_communication_event", "dry_run_mark_lead_triaged", "dry_run_market_watch_item"
       ],
       "approved_write": [
-        "request_replay",
+        "request_replay", "request_newo_control_approval", "request_newo_control_action",
         "request_update_gate", "request_create_material_takeoff", "request_update_material_takeoff_status",
         "request_create_supplier_order", "request_create_supplier_quote", "request_create_quote_revision", "request_bind_quote_price_rules", "request_create_proposal_evidence_pack", "request_publish_proposal_evidence_pack",
         "request_create_job_assignment", "request_create_change_order", "request_transition_change_order",
@@ -73,7 +80,7 @@
       ],
       "forbidden": [
         "Final accounting or payment mutation (no such tool exists; QuickBooks stays accounting truth)",
-        "Sending contract/legal communications without explicit human send (comms tools are record-only)"
+        "Sending contract/legal communications without explicit human send; Newo send operations additionally require exact receipts and the global outbound gate"
       ]
     },
     "lead-concierge": {
@@ -81,6 +88,8 @@
       "summary": "Handles new leads, first-response records, and evidence-backed consent history. Never sends a message, promises price, or makes legal claims.",
       "reads": [
         "list_recent_envelopes", "get_envelope",
+        "list_newo_sessions", "get_newo_user_messages", "get_newo_agent_messages",
+        "get_newo_chat_history", "list_newo_conversation_acts", "get_newo_conversation_act",
         "get_lead_envelope", "list_untriaged_lead_envelopes", "get_roof_job",
         "get_instant_estimate_session", "list_instant_estimate_sessions_for_job",
         "get_communication_event", "list_communication_events_for_job", "list_communication_events_for_lead",
@@ -229,6 +238,9 @@
       "summary": "Diagnoses failed automations, records reconciliation resolutions, requests audited tenant exports, and maintains the market-watch radar. Single-site isolation prevents cross-tenant access.",
       "reads": [
         "get_bus_readiness", "get_operational_status", "list_recent_envelopes", "get_envelope", "list_dead_letters", "list_measurement_intake_exceptions",
+        "get_newo_health", "list_newo_sessions", "list_newo_control_actions",
+        "list_newo_agent_actors", "get_newo_agent_actor", "get_newo_session_aggregates",
+        "list_newo_outgoing_webhooks", "list_newo_incoming_webhooks", "list_newo_analytics_logs",
         "get_hermes_run", "list_hermes_runs_for_job",
         "get_automation_incident", "list_automation_incidents",
         "get_white_label_tenant", "list_white_label_tenants",

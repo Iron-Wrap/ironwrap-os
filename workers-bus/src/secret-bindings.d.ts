@@ -9,6 +9,9 @@ interface Env {
   INGEST_TOKEN: string;
   ADMIN_TOKEN: string;
   NEWO_WEBHOOK_TOKEN: string;
+  NEWO_API_KEY: string;
+  NEWO_BOOKING_TOKEN: string;
+  NEWO_CONTROL_SIGNING_SECRET: string;
   JOBNIMBUS_API_KEY: string;
   GOOGLE_SERVICE_ACCOUNT_JSON: string;
   QB_WEBHOOK_TOKEN: string;
@@ -27,6 +30,9 @@ declare namespace Cloudflare {
     INGEST_TOKEN: string;
     ADMIN_TOKEN: string;
     NEWO_WEBHOOK_TOKEN: string;
+    NEWO_API_KEY: string;
+    NEWO_BOOKING_TOKEN: string;
+    NEWO_CONTROL_SIGNING_SECRET: string;
     JOBNIMBUS_API_KEY: string;
     GOOGLE_SERVICE_ACCOUNT_JSON: string;
     QB_WEBHOOK_TOKEN: string;

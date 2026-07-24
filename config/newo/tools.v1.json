@@ -1,0 +1,48 @@
+{
+  "schema_version": "newo.tool-contracts.v1",
+  "lookup_caller": {
+    "method": "POST",
+    "path": "/webhook/newo/lookup",
+    "request_schema_version": "newo.caller-lookup.v1",
+    "response_schema_version": "newo.caller-lookup-response.v1",
+    "authorization_secret_env": "NEWO_WEBHOOK_TOKEN",
+    "strict_payload": true,
+    "outbound_customer_send": false
+  },
+  "capture_lead": {
+    "method": "POST",
+    "path": "/webhook/newo",
+    "request_schema_version": "newo.event.v1",
+    "response_schema_version": "newo.tool-receipt.v1",
+    "authorization_secret_env": "NEWO_WEBHOOK_TOKEN",
+    "strict_payload": true,
+    "outbound_customer_send": false
+  },
+  "request_handoff": {
+    "method": "POST",
+    "path": "/webhook/newo/handoff",
+    "request_schema_version": "newo.event.v1",
+    "response_schema_version": "newo.tool-receipt.v1",
+    "authorization_secret_env": "NEWO_WEBHOOK_TOKEN",
+    "strict_payload": true,
+    "outbound_customer_send": false
+  },
+  "check_availability": {
+    "method": "POST",
+    "path": "/webhook/newo/availability",
+    "request_schema_version": "newo.availability.v1",
+    "response_schema_version": "newo.availability-response.v1",
+    "authorization_secret_env": "NEWO_BOOKING_TOKEN",
+    "strict_payload": true,
+    "outbound_customer_send": false
+  },
+  "request_or_book_appointment": {
+    "method": "POST",
+    "path": "/webhook/newo/booking",
+    "request_schema_version": "newo.event.v1",
+    "response_schema_version": "newo.tool-receipt.v1",
+    "authorization_secret_env": "NEWO_BOOKING_TOKEN",
+    "strict_payload": true,
+    "outbound_customer_send": false
+  }
+}

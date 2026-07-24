@@ -40,10 +40,14 @@ export function appBffConfigured(env: AppEnv): boolean {
   if (String(env.APP_BFF_ENABLED) !== "true") return true;
   const tenantId = configuredTenantId(env);
   const origin = appPublicOrigin(env);
+  // Email delivery is required in production. In explicit localhost-only mode the
+  // dev_outbox capture (migration 0022) substitutes for Gmail so the full product runs
+  // against throwaway local state with no external side effects.
+  const emailReady = gmailConfigured(env) || String(env.APP_ALLOW_INSECURE_LOCAL) === "true";
   return !!tenantId && !!publicTenant(env) && !!origin &&
     nonEmpty(env.APP_AUTH_PEPPER) && env.APP_AUTH_PEPPER.trim().length >= 32 &&
     frappeReadConfigured(env) &&
-    gmailConfigured(env);
+    emailReady;
 }
 
 export function publicTenant(env: AppEnv): AppTenantPublic | null {
@@ -638,9 +642,31 @@ function sessionCookie(rawToken: string, expiresAt: string): string {
   return `${APP_SESSION_COOKIE}=${rawToken}; Max-Age=${SESSION_TTL_SECONDS}; Expires=${new Date(expiresAt).toUTCString()}; Path=/; Secure; HttpOnly; SameSite=Strict; Priority=High`;
 }
 
+/**
+ * Local-only development capture (APP_ALLOW_INSECURE_LOCAL="true"; always false in
+ * production). Records a sign-in href in dev_outbox so local end-to-end runs can complete
+ * the real consume flow without intercepting email. Returns false when the flag is off.
+ */
+export async function devOutboxCapture(
+  env: AppEnv,
+  kind: "magic_link",
+  recipient: string,
+  href: string,
+): Promise<boolean> {
+  if (String(env.APP_ALLOW_INSECURE_LOCAL) !== "true") return false;
+  await env.DB.prepare(
+    "INSERT INTO dev_outbox (capture_id, kind, recipient, href, created_at) VALUES (?, ?, ?, ?, ?)",
+  ).bind(`devcap_${crypto.randomUUID()}`, kind, recipient, href, new Date().toISOString()).run();
+  return true;
+}
+
 async function sendMagicLinkEmail(env: AppEnv, user: AppUserRecord, rawToken: string): Promise<void> {
-  if (!gmailConfigured(env)) throw new Error("magic_link_email_not_configured");
   const message = buildMagicLinkEmail(env, user, rawToken);
+  const captured = await devOutboxCapture(env, "magic_link", user.email_normalized, message.href);
+  if (!gmailConfigured(env)) {
+    if (captured) return;
+    throw new Error("magic_link_email_not_configured");
+  }
   await sendGmail(env, user.email_normalized, message.subject, message.html);
 }
 

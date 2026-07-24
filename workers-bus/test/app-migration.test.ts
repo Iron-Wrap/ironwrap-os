@@ -174,9 +174,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     const migrations = (await readdir(new URL("../migrations/", import.meta.url)))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 21);
+    assert.equal(migrations.length, 22);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0021_public_estimate_rate_limits.sql");
+    assert.equal(migrations.at(-1), "0022_dev_outbox.sql");
     for (const migration of migrations) {
       db.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -193,7 +193,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
          SUM(type = 'trigger') AS triggers
        FROM sqlite_master`,
     ).get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 29, indexes: 49, triggers: 31 });
+    assert.deepEqual({ ...counts }, { tables: 30, indexes: 50, triggers: 31 });
 
     const scheduleTables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'production_schedule_approval_%' ORDER BY name",

@@ -796,6 +796,7 @@ function assertQuoteRevisionBrokerRuntime(config) {
 function quoteRevisionMcpChildEnvironment(env, runtime) {
   const allow = [
     "ERPNEXT_BASE_URL", "ERPNEXT_API_KEY", "ERPNEXT_API_SECRET", "ERPNEXT_REQUEST_TIMEOUT_MS",
+    "ERPNEXT_ALLOW_INSECURE_LOCAL",
     "HERMES_ROLE_POLICY_PATH", "HERMES_DRY_RUN_SIGNING_KEY", "HERMES_APPROVAL_PUBLIC_KEY_FILE",
     "HERMES_APPROVAL_PUBLIC_KEY",
   ];
@@ -923,14 +924,21 @@ async function runHttpQuoteRevisionBroker() {
       }
       chunks.push(chunk);
     }
+    // undici rejects a body on GET/HEAD; a stray probe must never crash the broker.
+    const method = request.method ?? "GET";
     const inbound = new Request(`http://${host}:${port}${request.url ?? "/"}`, {
-      method: request.method,
+      method,
       headers: request.headers,
-      body: Buffer.concat(chunks).toString("utf8"),
+      body: method === "GET" || method === "HEAD" ? undefined : Buffer.concat(chunks).toString("utf8"),
     });
-    const outbound = await broker.handle(inbound);
-    response.writeHead(outbound.status, Object.fromEntries(outbound.headers));
-    response.end(await outbound.text());
+    try {
+      const outbound = await broker.handle(inbound);
+      response.writeHead(outbound.status, Object.fromEntries(outbound.headers));
+      response.end(await outbound.text());
+    } catch {
+      response.writeHead(500, { "content-type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify({ error: "broker_internal_error" }));
+    }
   });
   await new Promise((resolve, reject) => {
     server.once("error", reject);

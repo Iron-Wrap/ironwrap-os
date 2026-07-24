@@ -23,6 +23,8 @@ identifiers only; ERPNext is forbidden in the runtime.
 |---|---|
 | [`final-spec-pack/`](./final-spec-pack/) | **The spec** (19 chapters; start at its `README.md`). The target system. |
 | [`workers-bus/`](./workers-bus/) | **The integration bus** — Cloudflare Worker (owned D1/R2 store + lead/photo/measurement/estimate bus). `npm test` / `wrangler deploy`. |
+| [`app/`](./app/) | **The production PWA** — owned app surface (Vite 8 / React 19 / TS 7): Field Companion, public estimator, customer portal, production schedule. Vitest + Playwright e2e + Lighthouse. |
+| [`deploy/local/`](./deploy/local/) | **Local E2E stack** — docker-compose Frappe v15 + MariaDB + Redis with provisioner and seed data; wired into workers-bus `npm run dev`. Dev-only, never production. |
 | `samples/` | Real RoofRuler measurement reports + AppliCad XML (extraction inputs). |
 | `docs/` | Current runbooks, proof material, scoped references, and archived planning records. |
 | `output/` | Generated deliverables (Russian `.docx`, overview PDF, website audit). |
@@ -39,6 +41,9 @@ identifiers only; ERPNext is forbidden in the runtime.
   temporary bridges.
 - **Bus:** buildable; tests green; website/photo/measurement/estimate/QuickBooks intake paths are
   in code. `/ingest/estimate` is the owned estimator handoff and does not depend on JobNimbus/GHL.
+- **App:** the production PWA in `app/` is buildable with unit + Playwright e2e coverage.
+- **Local E2E:** `deploy/local/` runs the full stack locally (docker-compose Frappe v15 + MariaDB +
+  Redis, seeded synthetic data) behind workers-bus `npm run dev`; dev-only, never production.
 
 ## Provenance
 

@@ -362,8 +362,9 @@ export async function listFrappeResource(
   doctype: FrappeDocType,
   filters: readonly FrappeFilter[] = [],
   limit = 50,
+  parentDoctype?: string,
 ): Promise<FrappeRow[]> {
-  return await listFrappeResourcePage(env, doctype, filters, limit, 0);
+  return await listFrappeResourcePage(env, doctype, filters, limit, 0, parentDoctype);
 }
 
 export async function listFrappeResourcePage(
@@ -372,6 +373,7 @@ export async function listFrappeResourcePage(
   filters: readonly FrappeFilter[] = [],
   limit = 50,
   offset = 0,
+  parentDoctype?: string,
 ): Promise<FrappeRow[]> {
   return await listFrappeResourcePageForContract(
     env,
@@ -381,6 +383,7 @@ export async function listFrappeResourcePage(
     offset,
     FRAPPE_READ_FIELDS,
     FILTER_FIELDS,
+    parentDoctype,
   );
 }
 
@@ -491,6 +494,7 @@ async function listFrappeResourcePageForContract(
   offset: number,
   fieldsByDocType: Readonly<Record<string, readonly string[]>>,
   filterFieldsByDocType: Readonly<Record<string, ReadonlySet<string>>>,
+  parentDoctype?: string,
 ): Promise<FrappeRow[]> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("frappe_read_invalid_limit");
   if (!Number.isInteger(offset) || offset < 0 || offset > 100_000) throw new Error("frappe_read_invalid_offset");
@@ -512,6 +516,9 @@ async function listFrappeResourcePageForContract(
     limit_page_length: String(limit),
     limit_start: String(offset),
   });
+  // Frappe refuses child-table reads without the parent doctype as permission
+  // context (check_parent_permission); only Crew Member currently needs it.
+  if (parentDoctype) params.set("parent", parentDoctype);
   const url = `${base}/api/resource/${encodeURIComponent(doctype)}?${params.toString()}`;
   const timeout = frappeRequestTimeout(env.APP_FRAPPE_REQUEST_TIMEOUT_MS);
   const controller = new AbortController();
@@ -519,7 +526,7 @@ async function listFrappeResourcePageForContract(
   try {
     const response = await fetch(url, {
       method: "GET",
-      redirect: "error",
+      redirect: "manual",
       signal: controller.signal,
       headers: {
         accept: "application/json",
@@ -559,7 +566,7 @@ async function readFrappeDocumentForContract(
   try {
     const response = await fetch(url, {
       method: "GET",
-      redirect: "error",
+      redirect: "manual",
       signal: controller.signal,
       headers: {
         accept: "application/json",

@@ -1,5 +1,8 @@
 # OS / editor cruft
 .DS_Store
+.codegraph/
+.cursor/
+.impeccable/
 
 # Node / build
 node_modules/
@@ -21,11 +24,16 @@ worker-configuration.d.ts
 *.local
 ACCESS.env
 *.env
+deploy/local/keys/
 
 # Scratch / logs / generated render artifacts
 tmp/
 *.log
 .gstack/
+.runtime-logs/
+
+# Nested product repo — own remote + branch discipline (see AGENTS.md repo map)
+Facet/
 
 # Deletable duplicate inputs (see AGENTS.md housekeeping)
 samples/_duplicates/

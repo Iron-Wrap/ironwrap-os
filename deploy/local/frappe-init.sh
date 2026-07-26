@@ -24,7 +24,7 @@ log() { printf '\n\033[1;34m[ironwrap-init]\033[0m %s\n' "$*"; }
 cd "$BENCH_DIR" 2>/dev/null || { mkdir -p "$BENCH_DIR"; cd "$BENCH_DIR"; }
 
 if [ -f "$STAMP" ]; then
-  log "already provisioned ($STAMP present) — nothing to do"
+  log "already provisioned ($STAMP present) - nothing to do"
   exit 0
 fi
 
@@ -89,7 +89,7 @@ fi
 # 6. build assets (desk UI) ---------------------------------------------------
 if [ ! -f sites/.assets-built ]; then
   log "bench build (first build is slow)"
-  bench build || log "WARN: bench build failed — REST API still works; desk assets degraded"
+  bench build || log "WARN: bench build failed - REST API still works; desk assets degraded"
   touch sites/.assets-built
 fi
 
@@ -126,5 +126,5 @@ log "pinning field-evidence issuer site config"
 bench --site "$SITE" set-config ironwrap_field_evidence_issuer_user ironwrap-bus@ironwrap.local
 
 touch "$STAMP"
-log "DONE — site '$SITE' ready (admin: Administrator / $ADMIN_PW)"
+log "DONE - site '$SITE' ready (admin: Administrator / $ADMIN_PW)"
 cat "sites/$SITE/.integration_credentials" 2>/dev/null || true

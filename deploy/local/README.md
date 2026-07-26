@@ -1,4 +1,4 @@
-# Local E2E stack — IronWrap OS (dev only, never production)
+# Local E2E stack - IronWrap OS (dev only, never production)
 
 One command brings up the whole owned path locally:
 
@@ -36,7 +36,7 @@ test keys, and captures magic-link email into the `dev_outbox` table instead of 
 ## Approval brokers (Hermes approved writes)
 
 The three private brokers run against the local Frappe stack on `127.0.0.1:9101-9103`.
-Each needs its own Frappe identity (the API token's user must equal the actor user —
+Each needs its own Frappe identity (the API token's user must equal the actor user -
 `frappe_service_principal_mismatch` otherwise) and the shared key material in
 `deploy/local/keys/`. Provision once per fresh site:
 
@@ -61,7 +61,7 @@ PYEOF
 ```
 
 Broker env (one file per broker, secrets sourced from `workers-bus/.dev.vars`; keep
-them out of git — `*.env` is ignored):
+them out of git - `*.env` is ignored):
 
 - common: `ERPNEXT_BASE_URL=http://localhost:8000`, `ERPNEXT_ALLOW_INSECURE_LOCAL=true`,
   `ERPNEXT_WRITE_ENABLED=true`, `HERMES_ROLE_POLICY_PATH=<repo>/hermes/agents/roles.json`,

@@ -38,7 +38,7 @@ function run(cmd, args, opts = {}) {
 
 // 1. PWA assets ---------------------------------------------------------------
 if (!existsSync(path.join(repoRoot, "app/dist/manifest.webmanifest"))) {
-  log("app/dist missing — building the PWA (one time per source change)");
+  log("app/dist missing - building the PWA (one time per source change)");
   execSync("npm run build", { cwd: path.join(repoRoot, "app"), stdio: "inherit" });
 }
 
@@ -62,7 +62,7 @@ log("ensuring local Frappe stack is up (docker compose)");
 try {
   execSync(`docker compose -f "${composeFile}" up -d`, { stdio: "inherit" });
 } catch {
-  fail("docker compose up failed — is Docker running?");
+  fail("docker compose up failed - is Docker running?");
 }
 
 log("waiting for Frappe API (http://localhost:8000/api/method/ping)");
@@ -132,4 +132,4 @@ try {
   fail("local D1 migration apply failed");
 }
 
-log("OK — local stack ready. Starting wrangler dev on http://localhost:7100");
+log("OK - local stack ready. Starting wrangler dev on http://localhost:7100");

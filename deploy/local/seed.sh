@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# IronWrap OS local seed — provisions app users and drives synthetic intake through the
+# IronWrap OS local seed - provisions app users and drives synthetic intake through the
 # running local stack (wrangler dev --env local on :7100 + deploy/local Frappe on :8000).
 # Synthetic data only; bridges (JobNimbus/Drive) are disabled in the local env, so every
 # write stays inside local D1/R2 and the throwaway Frappe site.
@@ -88,4 +88,4 @@ step "Frappe Instant Estimate Session rows"
 curl -sf -H "Authorization: token $FKEY:$FSECRET" \
   "$FRAPPE/api/resource/Instant%20Estimate%20Session?limit_page_length=5" | j
 
-step "done — local seed complete"
+step "done - local seed complete"

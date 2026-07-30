@@ -51,9 +51,19 @@ function materialLotFixture(overrides = {}) {
   };
 }
 
-function approvalArgs({ privateKey, dryRun, runId, args, agentRole, actorUser, approvedBy = "owner@example.com" }) {
+function approvalArgs({
+  privateKey,
+  dryRun,
+  runId,
+  args,
+  agentRole,
+  actorUser,
+  approvedBy = "owner@example.com",
+  expectedSnapshotSha256 = dryRun.expected_snapshot_sha256,
+}) {
   const writeArgs = {
     ...args,
+    expected_snapshot_sha256: expectedSnapshotSha256,
     request_text: "Approved governed shop command.",
     approved_by: approvedBy,
     run_id: runId,
@@ -130,6 +140,7 @@ test("reserve-shop-order request stores the exact approved args in Hermes Run an
   const lot = materialLotFixture();
   const requests = [];
   let hermesRunInsert = null;
+  let hermesRunCreates = 0;
   const server = buildServer({
     baseUrl: "https://erp.example",
     apiKey: "key",
@@ -155,6 +166,7 @@ test("reserve-shop-order request stores the exact approved args in Hermes Run an
       return new Response("missing", { status: 404 });
     }
     if (method === "POST" && target.endsWith("/api/resource/Hermes%20Run")) {
+      hermesRunCreates += 1;
       hermesRunInsert = JSON.parse(init.body);
       return Response.json({ data: { name: "run-shop-reserve-0001" } });
     }
@@ -196,6 +208,10 @@ test("reserve-shop-order request stores the exact approved args in Hermes Run an
   assert.equal(result.result.message.shop_order.status, "Reserved");
   assert.equal(hermesRunInsert.tool_name, "request_reserve_shop_order_materials");
   assert.equal(JSON.parse(hermesRunInsert.tool_args_json).allocations_json, allocationsJson);
+  assert.equal(
+    JSON.parse(hermesRunInsert.tool_args_json).expected_snapshot_sha256,
+    dryRun.expected_snapshot_sha256,
+  );
   assert.equal(JSON.parse(hermesRunInsert.dry_run_json).expected_snapshot_sha256, dryRun.expected_snapshot_sha256);
   assert.ok(
     requests.some(({ method, target }) =>
@@ -206,6 +222,20 @@ test("reserve-shop-order request stores the exact approved args in Hermes Run an
       method === "PUT" && target.includes("/api/resource/Shop%20Order/")),
     false,
   );
+
+  const staleArgs = approvalArgs({
+    privateKey,
+    dryRun,
+    runId: "run-shop-reserve-stale-0001",
+    args: { shop_order_id: "shop-1", allocations_json: allocationsJson },
+    agentRole: "production-controller",
+    actorUser,
+    expectedSnapshotSha256: "0".repeat(64),
+  });
+  await assert.rejects(
+    async () => await server._registeredTools.request_reserve_shop_order_materials.handler(staleArgs),
+  );
+  assert.equal(hermesRunCreates, 1, "a stale signed snapshot must fail before creating another Hermes Run");
 });
 
 test("release-shop-order request fails on supplier-order drift before creating a Hermes Run", async (t) => {

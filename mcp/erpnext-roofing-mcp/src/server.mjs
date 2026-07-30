@@ -34,6 +34,7 @@ const REQUEST_TO_DRY_RUN = Object.freeze({
   request_reserve_shop_order_materials: "dry_run_reserve_shop_order_materials",
   request_advance_shop_order_setup: "dry_run_advance_shop_order_setup",
   request_record_first_piece_outcome: "dry_run_record_first_piece_outcome",
+  request_record_final_shop_quality: "dry_run_record_final_shop_quality",
   request_create_job_assignment: "dry_run_job_assignment",
   request_create_change_order: "dry_run_change_order",
   request_transition_change_order: "dry_run_change_order_transition",
@@ -2067,6 +2068,79 @@ const ShopOrderFirstPieceWriteInputSchema = ShopOrderFirstPieceInputSchema.exten
   expected_snapshot_sha256: ShopSnapshotHashSchema,
 }).strict();
 
+const ShopFinalQualityIdentifierSchema = z.string()
+  .trim()
+  .min(1)
+  .max(140)
+  .regex(/^[^\x00\r\n]+$/);
+const ShopFinalQualityTextSchema = z.string()
+  .trim()
+  .min(1)
+  .max(4_000)
+  .regex(/^[^\x00\r\n]+$/);
+const ShopFinalQualityOptionalIdentifierSchema = z.string()
+  .trim()
+  .max(140)
+  .regex(/^[^\x00\r\n]*$/);
+const ShopFinalQualityOptionalTextSchema = z.string()
+  .trim()
+  .max(4_000)
+  .regex(/^[^\x00\r\n]*$/);
+
+const ShopFinalQualityInspectionSchema = z.object({
+  line_no: z.number().int().min(1).max(10_000),
+  allocation_id: ShopFinalQualityIdentifierSchema,
+  operation_sequence: z.number().int().min(1).max(50),
+  measured_value: ShopCanonicalDecimalSchema,
+  measurement_unit: ShopFirstPieceMeasurementUnitSchema,
+  evidence_item: ShopFinalQualityIdentifierSchema,
+}).strict();
+
+const ShopFinalQualityYieldSchema = z.object({
+  allocation_id: ShopFinalQualityIdentifierSchema,
+  operation_sequence: z.number().int().min(1).max(50),
+  input_quantity: ShopCanonicalDecimalSchema,
+  finished_quantity: ShopCanonicalDecimalSchema,
+  remnant_quantity: ShopCanonicalDecimalSchema,
+  scrap_quantity: ShopCanonicalDecimalSchema,
+  scrap_disposition: ShopFinalQualityOptionalTextSchema,
+  evidence_item: ShopFinalQualityOptionalIdentifierSchema,
+}).strict();
+
+const ShopFinalQualityBundleSchema = z.object({
+  bundle_id: ShopFinalQualityIdentifierSchema,
+  line_no: z.number().int().min(1).max(10_000),
+  material_lot: ShopFinalQualityIdentifierSchema,
+  piece_identity: ShopFinalQualityIdentifierSchema,
+  accepted_quantity: ShopCanonicalDecimalSchema,
+  unit: ShopFinalQualityIdentifierSchema,
+  label_text: ShopFinalQualityTextSchema,
+  condition: ShopFinalQualityTextSchema,
+}).strict();
+
+const ShopOrderFinalQualityPayloadSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("pass_to_ready"),
+    inspections: z.array(ShopFinalQualityInspectionSchema).min(1).max(200),
+    yields: z.array(ShopFinalQualityYieldSchema).min(1).max(200),
+    bundles: z.array(ShopFinalQualityBundleSchema).min(1).max(200),
+  }).strict(),
+  z.object({
+    action: z.literal("fail_to_quality_hold"),
+    inspection: ShopFinalQualityInspectionSchema,
+    reason: ShopFinalQualityTextSchema,
+  }).strict(),
+]);
+
+const ShopOrderFinalQualityInputSchema = z.object({
+  shop_order_id: IdSchema,
+  final_quality_payload_json: z.string().trim().min(2).max(1_000_000),
+}).strict();
+
+const ShopOrderFinalQualityWriteInputSchema = ShopOrderFinalQualityInputSchema.extend({
+  expected_snapshot_sha256: ShopSnapshotHashSchema,
+}).strict();
+
 export function approvedWriteInputSchema(baseSchema) {
   const approvalShape = {
     request_text: z.string().trim().min(1).max(4000),
@@ -4011,6 +4085,71 @@ export function buildServer(config) {
           first_piece_recorded: true,
           shop_order_id: args.shop_order_id,
           first_piece_action: dryRun.first_piece.action,
+        },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_record_final_shop_quality",
+    {
+      title: "Dry Run Record Final Shop Quality",
+      description: "Preview one signed final shop-quality outcome without writing.",
+      inputSchema: ShopOrderFinalQualityInputSchema,
+    },
+    async ({ shop_order_id, final_quality_payload_json }) => text(
+      await buildRecordFinalShopQualityPreview(config, shop_order_id, final_quality_payload_json),
+    ),
+  );
+
+  server.registerTool(
+    "request_record_final_shop_quality",
+    {
+      title: "Request Record Final Shop Quality",
+      description: "Approved-write: record signed final QC, reconcile yield and bundles, and transition the Shop Order to Ready or Quality Hold.",
+      inputSchema: approvedWriteInputSchema(ShopOrderFinalQualityWriteInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const order = await readResource(config, "Shop Order", args.shop_order_id);
+      const dryRun = await buildRecordFinalShopQualityPreview(
+        config,
+        args.shop_order_id,
+        args.final_quality_payload_json,
+      );
+      assertSignedShopSnapshot(args, dryRun);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_record_final_shop_quality",
+        target: { doctype: "Shop Order", name: args.shop_order_id },
+        roofJob: order.roof_job,
+        dryRun,
+        beforeSummary: summarizeShopOrder(order),
+        afterSummary: (result) => {
+          const outcome = result?.message ?? result ?? {};
+          return {
+            shop_order: outcome.shop_order ?? {},
+            ...(Array.isArray(outcome.remnant_lots) ? { remnant_lots: outcome.remnant_lots } : {}),
+            ...(outcome.material_lot ? { material_lot: outcome.material_lot } : {}),
+            ...(outcome.nonconformance ? { nonconformance: outcome.nonconformance } : {}),
+          };
+        },
+        execute: () => erpPost(
+          config,
+          "/api/method/ironwrap_roofing.shop_fabrication_api.record_final_shop_quality",
+          {
+            shop_order_id: args.shop_order_id,
+            hermes_run_id: args.run_id,
+          },
+        ),
+        responseExtra: {
+          final_quality_recorded: true,
+          shop_order_id: args.shop_order_id,
+          final_quality_action: dryRun.final_quality.action,
         },
       }));
     },
@@ -7746,6 +7885,80 @@ function parseShopFirstPiecePayloadJson(raw) {
   return result.data;
 }
 
+function parseShopFinalQualityPayloadJson(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("shop_final_quality_payload_invalid");
+  }
+  const result = ShopOrderFinalQualityPayloadSchema.safeParse(parsed);
+  if (!result.success) throw new Error("shop_final_quality_payload_invalid");
+
+  const inspection = (row) => ({
+    ...row,
+    measured_value: parseFirstPieceDecimal(row.measured_value, {
+      allowZero: true,
+      errorCode: "shop_final_quality_payload_invalid",
+    }).text,
+  });
+  const yieldRow = (row) => {
+    const input = parseFirstPieceDecimal(row.input_quantity, {
+      allowZero: false,
+      errorCode: "shop_final_quality_payload_invalid",
+    });
+    const finished = parseFirstPieceDecimal(row.finished_quantity, {
+      allowZero: true,
+      errorCode: "shop_final_quality_payload_invalid",
+    });
+    const remnant = parseFirstPieceDecimal(row.remnant_quantity, {
+      allowZero: true,
+      errorCode: "shop_final_quality_payload_invalid",
+    });
+    const scrap = parseFirstPieceDecimal(row.scrap_quantity, {
+      allowZero: true,
+      errorCode: "shop_final_quality_payload_invalid",
+    });
+    if (scrap.significand === 0n) {
+      if (row.scrap_disposition || row.evidence_item) {
+        throw new Error("shop_final_quality_payload_invalid");
+      }
+    } else if (!row.scrap_disposition || !row.evidence_item) {
+      throw new Error("shop_final_quality_payload_invalid");
+    }
+    return {
+      ...row,
+      input_quantity: input.text,
+      finished_quantity: finished.text,
+      remnant_quantity: remnant.text,
+      scrap_quantity: scrap.text,
+    };
+  };
+  const bundle = (row) => ({
+    ...row,
+    accepted_quantity: parseFirstPieceDecimal(row.accepted_quantity, {
+      allowZero: false,
+      errorCode: "shop_final_quality_payload_invalid",
+    }).text,
+  });
+
+  if (result.data.action === "fail_to_quality_hold") {
+    return { ...result.data, inspection: inspection(result.data.inspection) };
+  }
+  const inspections = result.data.inspections.map(inspection);
+  const yields = result.data.yields.map(yieldRow);
+  const bundles = result.data.bundles.map(bundle);
+  if (
+    new Set(inspections.map((row) => row.line_no)).size !== inspections.length
+    || new Set(inspections.map((row) => row.allocation_id)).size !== inspections.length
+    || new Set(yields.map((row) => row.allocation_id)).size !== yields.length
+    || new Set(bundles.map((row) => row.bundle_id)).size !== bundles.length
+  ) {
+    throw new Error("shop_final_quality_payload_invalid");
+  }
+  return { ...result.data, inspections, yields, bundles };
+}
+
 function controlledItemSnapshot(item) {
   return {
     controlled_item: snapshotValues(item, ["name", "controlled_item_id", "status", "modified"]),
@@ -7955,6 +8168,45 @@ function shopOrderFirstPieceSnapshot(order, lots = [], evidence = [], sources = 
   return snapshot;
 }
 
+function shopOrderFinalQualitySnapshot(order, lots = [], evidence = [], sources = {}, inspectorAuthority = {}) {
+  const snapshot = shopOrderFirstPieceSnapshot(order, lots, evidence, sources, inspectorAuthority);
+  Object.assign(snapshot.shop_order, snapshotValues(order, [
+    "ready_at",
+    "handed_over_to",
+    "handed_over_at",
+    "handoff_evidence",
+    "invoice_payment_milestone",
+    "invoice_ready_at",
+  ]));
+  snapshot.yields = (Array.isArray(order.yields) ? order.yields : []).map((row) => snapshotValues(row, [
+    "allocation_id",
+    "operation_sequence",
+    "input_quantity",
+    "finished_quantity",
+    "remnant_quantity",
+    "remnant_lot",
+    "scrap_quantity",
+    "scrap_disposition",
+    "evidence_item",
+  ]));
+  snapshot.bundles = (Array.isArray(order.bundles) ? order.bundles : []).map((row) => snapshotValues(row, [
+    "bundle_id",
+    "line_no",
+    "material_lot",
+    "piece_identity",
+    "accepted_quantity",
+    "unit",
+    "label_text",
+    "handoff_status",
+    "handed_over_to",
+    "handed_over_at",
+    "handoff_evidence",
+    "condition",
+    "needs_review",
+  ]));
+  return snapshot;
+}
+
 function summarizeControlledItem(item) {
   return {
     controlled_item_id: item.controlled_item_id ?? item.name,
@@ -8049,6 +8301,15 @@ function assertShopOrderReadyForFirstPieceOutcome(order, shopOrderId) {
   }
   if (order.status !== "Setup / First Piece") {
     throw new Error("shop_order_not_ready_for_first_piece");
+  }
+}
+
+function assertShopOrderReadyForFinalQuality(order, shopOrderId) {
+  if (!order || order.name !== shopOrderId || order.shop_order_id !== shopOrderId) {
+    throw new Error("shop_order_identity_mismatch");
+  }
+  if (order.status !== "In Fabrication") {
+    throw new Error("shop_order_not_ready_for_final_quality");
   }
 }
 
@@ -8259,6 +8520,222 @@ function assertFirstPieceMaterialLots(order, linesByNumber, allocations, inspect
       throw new Error("shop_first_piece_issue_exceeds_lot_reservation");
     }
   }
+}
+
+function assertFinalQualityInspectionRows(order, payload, actorUser) {
+  const lines = Array.isArray(order.lines) ? order.lines : [];
+  const allocations = Array.isArray(order.material_allocations) ? order.material_allocations : [];
+  const operations = Array.isArray(order.operations) ? order.operations : [];
+  if (!lines.length || !allocations.length || !operations.length) {
+    throw new Error("shop_final_quality_context_missing");
+  }
+  if ((Array.isArray(order.yields) && order.yields.length) || (Array.isArray(order.bundles) && order.bundles.length)) {
+    throw new Error("shop_final_quality_already_recorded");
+  }
+  const linesByNumber = new Map(lines.map((line) => [Number(line.line_no), line]));
+  const allocationsById = new Map(allocations.map((allocation) => [String(allocation.allocation_id), allocation]));
+  const operationsBySequence = new Map(operations.map((operation) => [Number(operation.sequence), operation]));
+  const firstPiecePasses = new Set((Array.isArray(order.inspections) ? order.inspections : [])
+    .filter((row) => row.inspection_type === "First Piece" && row.result === "Pass")
+    .map((row) => Number(row.line_no)));
+  if ([...linesByNumber.keys()].some((lineNo) => !firstPiecePasses.has(lineNo))) {
+    throw new Error("shop_final_quality_missing_first_piece_pass");
+  }
+  for (const allocation of allocations) {
+    const issued = parseFirstPieceStoredDecimal(allocation.issued_quantity, {
+      allowZero: true,
+      errorCode: "shop_final_quality_allocation_quantity_invalid",
+    });
+    const reserved = parseFirstPieceStoredDecimal(allocation.reserved_quantity, {
+      allowZero: false,
+      errorCode: "shop_final_quality_allocation_quantity_invalid",
+    });
+    if (allocation.status !== "Issued" || issued.significand <= 0n || firstPieceDecimalCompare(issued, reserved) > 0n) {
+      throw new Error("shop_final_quality_allocation_not_issued");
+    }
+  }
+  const requestedInspections = payload.action === "pass_to_ready"
+    ? payload.inspections
+    : [payload.inspection];
+  const inspections = [];
+  for (const row of requestedInspections) {
+    const line = linesByNumber.get(row.line_no);
+    const allocation = allocationsById.get(row.allocation_id);
+    const operation = operationsBySequence.get(row.operation_sequence);
+    if (!line || !allocation || !operation || Number(allocation.line_no) !== row.line_no) {
+      throw new Error("shop_final_quality_reference_invalid");
+    }
+    if (operation.status !== "Complete" || !operation.completed_at) {
+      throw new Error("shop_final_quality_operation_incomplete");
+    }
+    if (operation.operator === actorUser) {
+      throw new Error("shop_final_quality_inspector_not_independent");
+    }
+    const measurement = parseFirstPieceMeasurementSpec(line);
+    if (row.measurement_unit.toLowerCase() !== measurement.measurementUnit) {
+      throw new Error("shop_final_quality_measurement_unit_mismatch");
+    }
+    const measured = parseFirstPieceDecimal(row.measured_value, {
+      allowZero: true,
+      errorCode: "shop_final_quality_measured_value_invalid",
+    });
+    if (firstPieceWithinTolerance(measured, measurement.nominalValue, measurement.toleranceValue)
+      !== (payload.action === "pass_to_ready")) {
+      throw new Error("shop_final_quality_tolerance_result_mismatch");
+    }
+    inspections.push({
+      ...row,
+      nominal_value: measurement.nominalValue.text,
+      measured_value: measured.text,
+      tolerance_value: measurement.toleranceValue.text,
+      measurement_unit: measurement.measurementUnit,
+      measured_result: `${measured.text} ${measurement.measurementUnit}; nominal ${measurement.nominalValue.text} +/- ${measurement.toleranceValue.text} ${measurement.measurementUnit}`,
+    });
+  }
+  if (payload.action === "pass_to_ready" && (
+    inspections.length !== linesByNumber.size
+    || [...linesByNumber.keys()].some((lineNo) => !inspections.some((row) => row.line_no === lineNo))
+  )) {
+    throw new Error("shop_final_quality_passes_incomplete");
+  }
+  return { linesByNumber, allocations, allocationsById, operations, operationsBySequence, inspections };
+}
+
+function assertFinalQualityMaterialLots(order, linesByNumber, allocations, lots) {
+  const lotsById = new Map();
+  for (const lot of lots) {
+    lotsById.set(String(lot.name ?? ""), lot);
+    lotsById.set(String(lot.material_lot_id ?? ""), lot);
+  }
+  const allocationLotsByLine = new Map();
+  for (const allocation of allocations) {
+    const materialLotId = String(allocation.material_lot ?? "");
+    const lot = lotsById.get(materialLotId);
+    const lineNo = Number(allocation.line_no);
+    const line = linesByNumber.get(lineNo);
+    if (!lot || !line || (lot.material_lot_id && lot.material_lot_id !== materialLotId)
+      || !["Reserved", "Available", "Consumed"].includes(lot.status)
+      || lot.roof_job !== order.roof_job
+      || lot.controlled_item !== line.controlled_item
+      || allocation.unit !== line.unit
+      || lot.unit !== line.unit) {
+      throw new Error("shop_final_quality_lot_mismatch");
+    }
+    const lineLots = allocationLotsByLine.get(lineNo) ?? new Set();
+    lineLots.add(materialLotId);
+    allocationLotsByLine.set(lineNo, lineLots);
+  }
+  return { lotsById, allocationLotsByLine };
+}
+
+function finalQualityDifferenceWithin(left, right, tolerance) {
+  const scale = Math.max(left.scale, right.scale, tolerance.scale);
+  const difference = firstPieceDecimalAtScale(left, scale) - firstPieceDecimalAtScale(right, scale);
+  const absoluteDifference = difference < 0n ? -difference : difference;
+  return absoluteDifference <= firstPieceDecimalAtScale(tolerance, scale);
+}
+
+function validateFinalQualityOutput(payload, state) {
+  if (payload.action !== "pass_to_ready") return { yields: [], bundles: [] };
+  const allocationIds = new Set(state.allocations.map((allocation) => String(allocation.allocation_id)));
+  if (payload.yields.length !== allocationIds.size
+    || payload.yields.some((row) => !allocationIds.has(row.allocation_id))) {
+    throw new Error("shop_final_quality_yields_incomplete");
+  }
+  const issueDeltaByLot = new Map();
+  const finishedByLine = new Map();
+  const conservationTolerance = parseFirstPieceDecimal("0.01", {
+    allowZero: true,
+    errorCode: "shop_final_quality_yield_mismatch",
+  });
+  for (const row of payload.yields) {
+    const allocation = state.allocationsById.get(row.allocation_id);
+    const operation = state.operationsBySequence.get(row.operation_sequence);
+    if (!allocation || !operation || operation.status !== "Complete" || !operation.completed_at) {
+      throw new Error("shop_final_quality_reference_invalid");
+    }
+    const input = parseFirstPieceDecimal(row.input_quantity, {
+      allowZero: false,
+      errorCode: "shop_final_quality_yield_mismatch",
+    });
+    const finished = parseFirstPieceDecimal(row.finished_quantity, {
+      allowZero: true,
+      errorCode: "shop_final_quality_yield_mismatch",
+    });
+    const remnant = parseFirstPieceDecimal(row.remnant_quantity, {
+      allowZero: true,
+      errorCode: "shop_final_quality_yield_mismatch",
+    });
+    const scrap = parseFirstPieceDecimal(row.scrap_quantity, {
+      allowZero: true,
+      errorCode: "shop_final_quality_yield_mismatch",
+    });
+    if (!finalQualityDifferenceWithin(input, firstPieceDecimalAdd(firstPieceDecimalAdd(finished, remnant), scrap), conservationTolerance)) {
+      throw new Error("shop_final_quality_yield_mismatch");
+    }
+    const reserved = parseFirstPieceStoredDecimal(allocation.reserved_quantity, {
+      allowZero: false,
+      errorCode: "shop_final_quality_yield_mismatch",
+    });
+    const issued = parseFirstPieceStoredDecimal(allocation.issued_quantity, {
+      allowZero: true,
+      errorCode: "shop_final_quality_yield_mismatch",
+    });
+    if (firstPieceDecimalCompare(input, reserved) !== 0n || firstPieceDecimalCompare(issued, input) > 0n) {
+      throw new Error("shop_final_quality_yield_mismatch");
+    }
+    const lotId = String(allocation.material_lot ?? "");
+    const nextDelta = firstPieceDecimalAdd(
+      issueDeltaByLot.get(lotId) ?? firstPieceDecimalValue(0n, 0),
+      firstPieceDecimalSubtract(input, issued),
+    );
+    issueDeltaByLot.set(lotId, nextDelta);
+    const lineNo = Number(allocation.line_no);
+    finishedByLine.set(
+      lineNo,
+      firstPieceDecimalAdd(finishedByLine.get(lineNo) ?? firstPieceDecimalValue(0n, 0), finished),
+    );
+  }
+  for (const [lotId, issueDelta] of issueDeltaByLot) {
+    const lot = state.lotsById.get(lotId);
+    const reserved = parseFirstPieceStoredDecimal(lot?.reserved_quantity, {
+      allowZero: true,
+      errorCode: "shop_final_quality_lot_reservation_invalid",
+    });
+    if (firstPieceDecimalCompare(issueDelta, reserved) > 0n) {
+      throw new Error("shop_final_quality_issue_exceeds_reservation");
+    }
+  }
+  const bundledByLine = new Map();
+  for (const bundle of payload.bundles) {
+    const line = state.linesByNumber.get(bundle.line_no);
+    if (!line || !state.allocationLotsByLine.get(bundle.line_no)?.has(bundle.material_lot) || bundle.unit !== line.unit) {
+      throw new Error("shop_final_quality_bundle_invalid");
+    }
+    const accepted = parseFirstPieceDecimal(bundle.accepted_quantity, {
+      allowZero: false,
+      errorCode: "shop_final_quality_bundle_invalid",
+    });
+    bundledByLine.set(
+      bundle.line_no,
+      firstPieceDecimalAdd(bundledByLine.get(bundle.line_no) ?? firstPieceDecimalValue(0n, 0), accepted),
+    );
+  }
+  for (const [lineNo, line] of state.linesByNumber) {
+    const accepted = parseFirstPieceStoredDecimal(line.accepted_quantity, {
+      allowZero: false,
+      errorCode: "shop_final_quality_finished_mismatch",
+    });
+    const finished = finishedByLine.get(lineNo) ?? firstPieceDecimalValue(0n, 0);
+    const bundled = bundledByLine.get(lineNo) ?? firstPieceDecimalValue(0n, 0);
+    if (firstPieceDecimalCompare(finished, accepted) !== 0n) {
+      throw new Error("shop_final_quality_finished_mismatch");
+    }
+    if (firstPieceDecimalCompare(bundled, accepted) !== 0n) {
+      throw new Error("shop_final_quality_bundle_mismatch");
+    }
+  }
+  return { yields: payload.yields, bundles: payload.bundles };
 }
 
 function firstPieceDecimalValue(significand, scale) {
@@ -8739,6 +9216,137 @@ async function buildRecordFirstPieceOutcomePreview(config, shopOrderId, firstPie
           containment: `Material Lot ${failedLot?.material_lot_id ?? inventoryEffects.failedLotId} quarantined; Shop Order placed on Quality Hold.`,
         },
       } : {}),
+    },
+  };
+}
+
+async function buildRecordFinalShopQualityPreview(config, shopOrderId, finalQualityPayloadJson) {
+  const payload = parseShopFinalQualityPayloadJson(finalQualityPayloadJson);
+  const order = await readResource(config, "Shop Order", shopOrderId);
+  assertShopOrderReadyForFinalQuality(order, shopOrderId);
+  const state = assertFinalQualityInspectionRows(order, payload, config.actorUser);
+  const materialLotIds = [...new Set(state.allocations.map((allocation) => String(allocation.material_lot ?? "")))].sort();
+  if (materialLotIds.some((materialLotId) => !materialLotId)) {
+    throw new Error("shop_final_quality_lot_mismatch");
+  }
+  const evidenceIds = [...new Set([
+    ...state.inspections.map((inspection) => inspection.evidence_item),
+    ...(payload.action === "pass_to_ready"
+      ? payload.yields.filter((row) => row.scrap_quantity !== "0").map((row) => row.evidence_item)
+      : []),
+  ])].sort();
+  const [materialTakeoff, supplierOrder, lots, evidence] = await Promise.all([
+    readResource(config, "Material Takeoff", order.material_takeoff),
+    readResource(config, "Supplier Order", order.supplier_order),
+    Promise.all(materialLotIds.map((materialLotId) => readResource(config, "Material Lot", materialLotId))),
+    Promise.all(evidenceIds.map((evidenceId) => readResource(config, "Evidence Item", evidenceId))),
+  ]);
+  assertShopSourceRecord(materialTakeoff, {
+    doctype: "Material Takeoff",
+    name: order.material_takeoff,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Approved"]),
+  });
+  assertShopSourceRecord(supplierOrder, {
+    doctype: "Supplier Order",
+    name: order.supplier_order,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Partially Received", "Received"]),
+  });
+  const inspectorAuthority = await readFirstPieceInspectorAuthority(config, shopOrderId);
+  const workPackage = inspectorAuthority.workPackage;
+  assertShopSourceRecord(workPackage, {
+    doctype: "Work Package",
+    name: order.work_package,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Released", "Acknowledged", "In Progress"]),
+  });
+  const materialState = assertFinalQualityMaterialLots(order, state.linesByNumber, state.allocations, lots);
+  assertFirstPieceEvidence(order, evidence, evidenceIds, config.actorUser);
+  if (payload.action === "pass_to_ready" && state.operations.some(
+    (operation) => operation.status !== "Complete" || !operation.completed_at,
+  )) {
+    throw new Error("shop_final_quality_operation_incomplete");
+  }
+  const output = validateFinalQualityOutput(payload, { ...state, ...materialState });
+  const toStatus = payload.action === "pass_to_ready" ? "Ready" : "Quality Hold";
+  const result = payload.action === "pass_to_ready" ? "Pass" : "Fail";
+  const finalInspections = state.inspections.map((inspection) => ({
+    inspection_type: "Final",
+    line_no: inspection.line_no,
+    allocation_id: inspection.allocation_id,
+    operation_sequence: inspection.operation_sequence,
+    result,
+    nominal_value: inspection.nominal_value,
+    measured_value: inspection.measured_value,
+    tolerance_value: inspection.tolerance_value,
+    measurement_unit: inspection.measurement_unit,
+    measured_result: inspection.measured_result,
+    inspected_by: config.actorUser,
+    inspected_at: "Frappe server time at execution",
+    evidence_item: inspection.evidence_item,
+    needs_review: result === "Pass" ? 0 : 1,
+  }));
+  const finalYields = output.yields.map((row) => ({
+    allocation_id: row.allocation_id,
+    operation_sequence: row.operation_sequence,
+    input_quantity: row.input_quantity,
+    finished_quantity: row.finished_quantity,
+    remnant_quantity: row.remnant_quantity,
+    remnant_lot: row.remnant_quantity === "0"
+      ? ""
+      : "derived from the approved Hermes Run ID at execution",
+    scrap_quantity: row.scrap_quantity,
+    scrap_disposition: row.scrap_disposition,
+    evidence_item: row.evidence_item,
+  }));
+  const finalBundles = output.bundles.map((bundle) => ({
+    bundle_id: bundle.bundle_id,
+    line_no: bundle.line_no,
+    material_lot: bundle.material_lot,
+    piece_identity: bundle.piece_identity,
+    accepted_quantity: bundle.accepted_quantity,
+    unit: bundle.unit,
+    label_text: bundle.label_text,
+    handoff_status: "Prepared",
+    handed_over_to: "",
+    handed_over_at: "",
+    handoff_evidence: "",
+    condition: bundle.condition,
+    needs_review: 0,
+  }));
+  const expectedSnapshotSha256 = digest(shopOrderFinalQualitySnapshot(order, lots, evidence, {
+    materialTakeoff,
+    supplierOrder,
+    workPackage,
+  }, inspectorAuthority));
+  return {
+    would_write: false,
+    required_tool: "request_record_final_shop_quality",
+    target: { doctype: "Shop Order", name: shopOrderId },
+    before: summarizeShopOrder(order),
+    source_statuses: {
+      material_takeoff: materialTakeoff.status ?? "",
+      supplier_order: supplierOrder.status ?? "",
+      work_package: workPackage.status ?? "",
+    },
+    expected_snapshot_sha256: expectedSnapshotSha256,
+    next_status: toStatus,
+    approval_request: {
+      write_tool: "request_record_final_shop_quality",
+      target: { doctype: "Shop Order", name: shopOrderId },
+      expected_snapshot_sha256: expectedSnapshotSha256,
+    },
+    final_quality: {
+      action: payload.action,
+      from_status: order.status,
+      to_status: toStatus,
+      final_inspections: finalInspections,
+      yields: finalYields,
+      bundles: finalBundles,
+      ...(payload.action === "fail_to_quality_hold"
+        ? { reason: payload.reason, quality_hold_reason: payload.reason }
+        : { ready_at: "Frappe server time at execution" }),
     },
   };
 }

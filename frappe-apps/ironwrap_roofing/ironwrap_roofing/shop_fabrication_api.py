@@ -56,6 +56,7 @@ RELEASE_SHOP_ORDER_TOOL = "request_release_shop_order"
 RESERVE_SHOP_ORDER_TOOL = "request_reserve_shop_order_materials"
 ADVANCE_SHOP_ORDER_SETUP_TOOL = "request_advance_shop_order_setup"
 RECORD_FIRST_PIECE_OUTCOME_TOOL = "request_record_first_piece_outcome"
+RECORD_FINAL_SHOP_QUALITY_TOOL = "request_record_final_shop_quality"
 
 OWNER_ROLES = frozenset({"System Manager", "IronWrap Owner"})
 SHOP_ROLES = OWNER_ROLES | {"IronWrap Production"}
@@ -67,8 +68,13 @@ SHOP_TOOL_AGENT_ROLES = {
     RECEIVE_MATERIAL_LOT_TOOL: frozenset({"Owner Operator", "Production Controller"}),
     RELEASE_SHOP_ORDER_TOOL: frozenset({"Owner Operator", "Production Controller"}),
     RESERVE_SHOP_ORDER_TOOL: frozenset({"Owner Operator", "Production Controller"}),
-    ADVANCE_SHOP_ORDER_SETUP_TOOL: frozenset({"Owner Operator", "Production Controller"}),
+    ADVANCE_SHOP_ORDER_SETUP_TOOL: frozenset(
+        {"Owner Operator", "Production Controller"}
+    ),
     RECORD_FIRST_PIECE_OUTCOME_TOOL: frozenset(
+        {"Owner Operator", "Production Controller"}
+    ),
+    RECORD_FINAL_SHOP_QUALITY_TOOL: frozenset(
         {"Owner Operator", "Production Controller"}
     ),
 }
@@ -103,7 +109,9 @@ def _clean_request_text(value: Any, *, field: str = "request_text") -> str:
             f"{field} must be 1-{MAX_REQUEST_TEXT_LENGTH} characters",
         )
     if any(character in cleaned for character in ("\x00", "\r", "\n")):
-        _fail("shop_command_invalid_approval_args", f"{field} contains control characters")
+        _fail(
+            "shop_command_invalid_approval_args", f"{field} contains control characters"
+        )
     return cleaned
 
 
@@ -168,6 +176,7 @@ def _parse_approved_arguments(
             "allocations_json",
             "setup_payload_json",
             "first_piece_payload_json",
+            "final_quality_payload_json",
         }:
             value = parsed.get(field)
             if not isinstance(value, str) or not value:
@@ -185,13 +194,15 @@ def _parse_approved_arguments(
     return result
 
 
-def _assert_post_and_permissions(
-    *, doctype: str, allowed_roles: frozenset[str]
-) -> str:
+def _assert_post_and_permissions(*, doctype: str, allowed_roles: frozenset[str]) -> str:
     request = getattr(frappe, "request", None)
     method = getattr(request, "method", None)
     if method is not None and str(method).upper() != "POST":
-        _fail("shop_command_post_required", "this mutation accepts POST only", permission=True)
+        _fail(
+            "shop_command_post_required",
+            "this mutation accepts POST only",
+            permission=True,
+        )
     authenticated_user = _clean_identifier(
         getattr(frappe.session, "user", None), "session_user"
     )
@@ -301,7 +312,9 @@ def _assert_approved_run(
     extra_fields: frozenset[str] = frozenset(),
 ) -> dict[str, str]:
     if run.get("name") != hermes_run_id or run.get("run_id") != hermes_run_id:
-        _fail("shop_command_hermes_run_identity_mismatch", "locked run identity differs")
+        _fail(
+            "shop_command_hermes_run_identity_mismatch", "locked run identity differs"
+        )
     if run.get("capability_level") != "Approved-write":
         _fail("shop_command_approval_required", "Hermes Run must be Approved-write")
     if run.get("requested_by") != authenticated_user:
@@ -313,7 +326,9 @@ def _assert_approved_run(
     if run.get("approval_status") != "Approved" or not run.get("approved_at"):
         _fail("shop_command_approval_required", "Hermes Run must be Approved")
     if run.get("tool_name") != tool_name:
-        _fail("shop_command_tool_mismatch", "Hermes Run does not authorize this command")
+        _fail(
+            "shop_command_tool_mismatch", "Hermes Run does not authorize this command"
+        )
     allowed_agent_roles = SHOP_TOOL_AGENT_ROLES.get(tool_name)
     if not allowed_agent_roles or run.get("agent_role") not in allowed_agent_roles:
         _fail(
@@ -325,9 +340,13 @@ def _assert_approved_run(
         run.get("target_doctype") != target_doctype
         or run.get("target_name") != target_name
     ):
-        _fail("shop_command_target_mismatch", "Hermes Run target does not match command")
+        _fail(
+            "shop_command_target_mismatch", "Hermes Run target does not match command"
+        )
     if run.get("mutation_applied") in {1, "1", True}:
-        _fail("shop_command_run_already_consumed", "Hermes Run already applied a mutation")
+        _fail(
+            "shop_command_run_already_consumed", "Hermes Run already applied a mutation"
+        )
     approved_by = _clean_identifier(run.get("approved_by"), "approved_by")
     args = _parse_approved_arguments(
         run.get("tool_args_json"),
@@ -398,7 +417,9 @@ def _assert_current_snapshot(expected: str, snapshot: Mapping[str, Any]) -> None
         )
 
 
-def _assert_record_identity(document: Any, *, id_field: str, record_id: str, label: str) -> None:
+def _assert_record_identity(
+    document: Any, *, id_field: str, record_id: str, label: str
+) -> None:
     if document.get("name") != record_id or document.get(id_field) != record_id:
         _fail(
             "shop_command_record_identity_mismatch",
@@ -423,7 +444,9 @@ def _positive_decimal(value: Any, field: str) -> Decimal:
         _fail("shop_command_invalid_approval_args", f"{field} must be numeric")
         raise AssertionError("frappe.throw must raise") from exc  # pragma: no cover
     if not result.is_finite() or result <= 0:
-        _fail("shop_command_invalid_approval_args", f"{field} must be greater than zero")
+        _fail(
+            "shop_command_invalid_approval_args", f"{field} must be greater than zero"
+        )
     return result
 
 
@@ -540,16 +563,23 @@ def _parse_setup_route_rows(raw: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def _parse_setup_payload(order: Any, raw: str) -> tuple[str, list[dict[str, Any]] | None, str | None]:
+def _parse_setup_payload(
+    order: Any, raw: str
+) -> tuple[str, list[dict[str, Any]] | None, str | None]:
     payload = _parse_json(raw, field="setup_payload_json")
     if not isinstance(payload, Mapping):
-        _fail("shop_command_invalid_approval_args", "setup_payload_json must be an object")
+        _fail(
+            "shop_command_invalid_approval_args", "setup_payload_json must be an object"
+        )
     action = payload.get("action")
     status = order.get("status")
     has_operations = bool(order.get("operations") or [])
     if action == "begin_setup":
         if status != "Reserved":
-            _fail("shop_command_order_not_setup_advanceable", "Shop Order must be Reserved")
+            _fail(
+                "shop_command_order_not_setup_advanceable",
+                "Shop Order must be Reserved",
+            )
         if has_operations:
             _fail(
                 "shop_command_invalid_approval_args",
@@ -586,7 +616,9 @@ def _parse_setup_payload(order: Any, raw: str) -> tuple[str, list[dict[str, Any]
                 "resume_setup must preserve an existing route or provide a new one",
             )
         operations = (
-            None if has_operations else _parse_setup_route_rows(payload.get("operations"))
+            None
+            if has_operations
+            else _parse_setup_route_rows(payload.get("operations"))
         )
         return action, operations, None
     _fail("shop_command_invalid_approval_args", "unsupported setup action")
@@ -690,6 +722,217 @@ def _parse_first_piece_payload(
     raise AssertionError("frappe.throw must raise")  # pragma: no cover
 
 
+def _parse_final_quality_inspection(raw: Any) -> dict[str, Any]:
+    expected_fields = {
+        "line_no",
+        "allocation_id",
+        "operation_sequence",
+        "measured_value",
+        "measurement_unit",
+        "evidence_item",
+    }
+    if not isinstance(raw, Mapping) or set(raw) != expected_fields:
+        _fail(
+            "shop_command_invalid_approval_args",
+            "final-quality inspection has an unsupported shape",
+        )
+    line_no = _positive_decimal(raw.get("line_no"), "line_no")
+    operation_sequence = _positive_decimal(
+        raw.get("operation_sequence"), "operation_sequence"
+    )
+    if line_no != line_no.to_integral_value():
+        _fail("shop_command_invalid_approval_args", "line_no must be an integer")
+    if operation_sequence != operation_sequence.to_integral_value():
+        _fail(
+            "shop_command_invalid_approval_args",
+            "operation_sequence must be an integer",
+        )
+    return {
+        "line_no": int(line_no),
+        "allocation_id": _clean_identifier(raw.get("allocation_id"), "allocation_id"),
+        "operation_sequence": int(operation_sequence),
+        "measured_value": _canonical_decimal(
+            raw.get("measured_value"), "measured_value", allow_zero=True
+        ),
+        "measurement_unit": _clean_identifier(
+            raw.get("measurement_unit"), "measurement_unit"
+        ),
+        "evidence_item": _clean_identifier(raw.get("evidence_item"), "evidence_item"),
+    }
+
+
+def _parse_final_quality_yield(raw: Any) -> dict[str, Any]:
+    expected_fields = {
+        "allocation_id",
+        "operation_sequence",
+        "input_quantity",
+        "finished_quantity",
+        "remnant_quantity",
+        "scrap_quantity",
+        "scrap_disposition",
+        "evidence_item",
+    }
+    if not isinstance(raw, Mapping) or set(raw) != expected_fields:
+        _fail(
+            "shop_command_invalid_approval_args", "shop yield has an unsupported shape"
+        )
+    operation_sequence = _positive_decimal(
+        raw.get("operation_sequence"), "operation_sequence"
+    )
+    if operation_sequence != operation_sequence.to_integral_value():
+        _fail(
+            "shop_command_invalid_approval_args",
+            "operation_sequence must be an integer",
+        )
+    result = {
+        "allocation_id": _clean_identifier(raw.get("allocation_id"), "allocation_id"),
+        "operation_sequence": int(operation_sequence),
+        "input_quantity": _canonical_decimal(
+            raw.get("input_quantity"), "input_quantity", allow_zero=False
+        ),
+        "finished_quantity": _canonical_decimal(
+            raw.get("finished_quantity"), "finished_quantity", allow_zero=True
+        ),
+        "remnant_quantity": _canonical_decimal(
+            raw.get("remnant_quantity"), "remnant_quantity", allow_zero=True
+        ),
+        "scrap_quantity": _canonical_decimal(
+            raw.get("scrap_quantity"), "scrap_quantity", allow_zero=True
+        ),
+    }
+    if result["scrap_quantity"] > 0:
+        result["scrap_disposition"] = _clean_request_text(
+            raw.get("scrap_disposition"), field="scrap_disposition"
+        )
+        result["evidence_item"] = _clean_identifier(
+            raw.get("evidence_item"), "evidence_item"
+        )
+    elif raw.get("scrap_disposition") == "" and raw.get("evidence_item") == "":
+        result["scrap_disposition"] = ""
+        result["evidence_item"] = ""
+    else:
+        _fail(
+            "shop_command_invalid_approval_args",
+            "zero scrap requires blank scrap disposition and evidence",
+        )
+    return result
+
+
+def _parse_final_quality_bundle(raw: Any) -> dict[str, Any]:
+    expected_fields = {
+        "bundle_id",
+        "line_no",
+        "material_lot",
+        "piece_identity",
+        "accepted_quantity",
+        "unit",
+        "label_text",
+        "condition",
+    }
+    if not isinstance(raw, Mapping) or set(raw) != expected_fields:
+        _fail(
+            "shop_command_invalid_approval_args", "shop bundle has an unsupported shape"
+        )
+    line_no = _positive_decimal(raw.get("line_no"), "line_no")
+    if line_no != line_no.to_integral_value():
+        _fail("shop_command_invalid_approval_args", "line_no must be an integer")
+    return {
+        "bundle_id": _clean_identifier(raw.get("bundle_id"), "bundle_id"),
+        "line_no": int(line_no),
+        "material_lot": _clean_identifier(raw.get("material_lot"), "material_lot"),
+        "piece_identity": _clean_identifier(
+            raw.get("piece_identity"), "piece_identity"
+        ),
+        "accepted_quantity": _canonical_decimal(
+            raw.get("accepted_quantity"), "accepted_quantity", allow_zero=False
+        ),
+        "unit": _clean_identifier(raw.get("unit"), "unit"),
+        "label_text": _clean_request_text(raw.get("label_text"), field="label_text"),
+        "condition": _clean_request_text(raw.get("condition"), field="condition"),
+    }
+
+
+def _parse_final_quality_payload(
+    order: Any, raw: str
+) -> tuple[
+    str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], str | None
+]:
+    payload = _parse_json(raw, field="final_quality_payload_json")
+    if not isinstance(payload, Mapping):
+        _fail(
+            "shop_command_invalid_approval_args",
+            "final_quality_payload_json must be an object",
+        )
+    if order.get("status") != "In Fabrication":
+        _fail(
+            "shop_command_order_not_final_quality_ready",
+            "Shop Order must be in In Fabrication",
+        )
+    action = payload.get("action")
+    if action == "pass_to_ready":
+        if set(payload) != {"action", "inspections", "yields", "bundles"}:
+            _fail(
+                "shop_command_invalid_approval_args",
+                "pass_to_ready requires only action, inspections, yields, and bundles",
+            )
+        raw_inspections = payload.get("inspections")
+        raw_yields = payload.get("yields")
+        raw_bundles = payload.get("bundles")
+        if not isinstance(raw_inspections, list) or not raw_inspections:
+            _fail(
+                "shop_command_invalid_approval_args",
+                "pass_to_ready requires final inspections",
+            )
+        if not isinstance(raw_yields, list) or not raw_yields:
+            _fail(
+                "shop_command_invalid_approval_args",
+                "pass_to_ready requires shop yields",
+            )
+        if not isinstance(raw_bundles, list) or not raw_bundles:
+            _fail(
+                "shop_command_invalid_approval_args", "pass_to_ready requires bundles"
+            )
+        inspections = [_parse_final_quality_inspection(row) for row in raw_inspections]
+        yields = [_parse_final_quality_yield(row) for row in raw_yields]
+        bundles = [_parse_final_quality_bundle(row) for row in raw_bundles]
+        if len({row["line_no"] for row in inspections}) != len(inspections):
+            _fail(
+                "shop_command_invalid_approval_args",
+                "final inspections must have unique lines",
+            )
+        if len({row["allocation_id"] for row in inspections}) != len(inspections):
+            _fail(
+                "shop_command_invalid_approval_args",
+                "final inspections must have unique allocations",
+            )
+        if len({row["allocation_id"] for row in yields}) != len(yields):
+            _fail(
+                "shop_command_invalid_approval_args",
+                "shop yields must have unique allocations",
+            )
+        if len({row["bundle_id"] for row in bundles}) != len(bundles):
+            _fail(
+                "shop_command_invalid_approval_args",
+                "shop bundles must have unique IDs",
+            )
+        return action, inspections, yields, bundles, None
+    if action == "fail_to_quality_hold":
+        if set(payload) != {"action", "inspection", "reason"}:
+            _fail(
+                "shop_command_invalid_approval_args",
+                "fail_to_quality_hold requires only action, inspection, and reason",
+            )
+        return (
+            action,
+            [_parse_final_quality_inspection(payload.get("inspection"))],
+            [],
+            [],
+            _clean_request_text(payload.get("reason"), field="reason"),
+        )
+    _fail("shop_command_invalid_approval_args", "unsupported final-quality action")
+    raise AssertionError("frappe.throw must raise")  # pragma: no cover
+
+
 def _lock_evidence(evidence_id: str, *, roof_job: str) -> dict[str, Any]:
     evidence = _lock_row(
         "Evidence Item",
@@ -727,9 +970,10 @@ def _lock_first_piece_evidence(
             "shop_command_evidence_job_mismatch",
             "first-piece evidence must belong to the same Roof Job",
         )
-    if evidence.get("proof_slot") != "Production" or evidence.get(
-        "evidence_type"
-    ) not in FIRST_PIECE_EVIDENCE_TYPES:
+    if (
+        evidence.get("proof_slot") != "Production"
+        or evidence.get("evidence_type") not in FIRST_PIECE_EVIDENCE_TYPES
+    ):
         _fail(
             "shop_command_first_piece_evidence_semantic_invalid",
             "first-piece evidence must be a Production Photo or Measurement Report",
@@ -945,9 +1189,7 @@ def _first_piece_inspector_authority_snapshot(
     inspector_authority: Mapping[str, Any],
 ) -> dict[str, Any]:
     return {
-        "authenticated_user": _snapshot_text(
-            inspector_authority["authenticated_user"]
-        ),
+        "authenticated_user": _snapshot_text(inspector_authority["authenticated_user"]),
         "job_assignment": _snapshot_values(
             inspector_authority["job_assignment"],
             (
@@ -1267,9 +1509,87 @@ def _shop_order_first_piece_snapshot(
     return snapshot
 
 
+def _shop_order_final_quality_snapshot(
+    order: Any,
+    lots: list[Any],
+    evidence: list[Mapping[str, Any]],
+    sources: Mapping[str, Mapping[str, Any]],
+    inspector_authority: Mapping[str, Any],
+) -> dict[str, Any]:
+    snapshot = _shop_order_first_piece_snapshot(
+        order, lots, evidence, sources, inspector_authority
+    )
+    snapshot["shop_order"].update(
+        _snapshot_values(
+            order,
+            (
+                "ready_at",
+                "handed_over_to",
+                "handed_over_at",
+                "handoff_evidence",
+                "invoice_payment_milestone",
+                "invoice_ready_at",
+            ),
+        )
+    )
+    snapshot["yields"] = [
+        _snapshot_values(
+            row,
+            (
+                "allocation_id",
+                "operation_sequence",
+                "input_quantity",
+                "finished_quantity",
+                "remnant_quantity",
+                "remnant_lot",
+                "scrap_quantity",
+                "scrap_disposition",
+                "evidence_item",
+            ),
+        )
+        for row in order.get("yields") or []
+    ]
+    snapshot["bundles"] = [
+        _snapshot_values(
+            row,
+            (
+                "bundle_id",
+                "line_no",
+                "material_lot",
+                "piece_identity",
+                "accepted_quantity",
+                "unit",
+                "label_text",
+                "handoff_status",
+                "handed_over_to",
+                "handed_over_at",
+                "handoff_evidence",
+                "condition",
+                "needs_review",
+            ),
+        )
+        for row in order.get("bundles") or []
+    ]
+    return snapshot
+
+
 def _first_piece_ncr_id(hermes_run_id: str) -> str:
     digest = hashlib.sha256(f"first-piece:{hermes_run_id}".encode("utf-8")).hexdigest()
     return f"ncr:first-piece:{digest[:32]}"
+
+
+def _final_quality_ncr_id(hermes_run_id: str) -> str:
+    digest = hashlib.sha256(
+        f"final-quality:{hermes_run_id}".encode("utf-8")
+    ).hexdigest()
+    return f"ncr:final-quality:{digest[:32]}"
+
+
+def _shop_remnant_lot_id(hermes_run_id: str, allocation_id: str) -> str:
+    digest = hashlib.sha256(
+        f"shop-remnant:{hermes_run_id}:{allocation_id}".encode("utf-8")
+    ).hexdigest()
+    return f"lot:remnant:{digest[:32]}"
 
 
 @frappe.whitelist()
@@ -1396,7 +1716,9 @@ def receive_material_lot(
         _clean_identifier(lot.get("controlled_item"), "controlled_item")
     )
     if item.get("status") != "Approved":
-        _fail("shop_command_item_not_approved", "Material Lot requires an Approved item")
+        _fail(
+            "shop_command_item_not_approved", "Material Lot requires an Approved item"
+        )
     _lock_evidence(
         _clean_identifier(lot.get("source_evidence"), "source_evidence"),
         roof_job=lot.get("roof_job"),
@@ -1408,10 +1730,9 @@ def receive_material_lot(
             fields="name, roof_job, status",
             not_found_code="shop_command_source_not_found",
         )
-        if (
-            source.get("roof_job") != lot.get("roof_job")
-            or source.get("status") not in {"Partially Received", "Received"}
-        ):
+        if source.get("roof_job") != lot.get("roof_job") or source.get(
+            "status"
+        ) not in {"Partially Received", "Received"}:
             _fail(
                 "shop_command_source_not_ready",
                 "supplier receipt must be linked to a received Supplier Order on this Roof Job",
@@ -1423,16 +1744,16 @@ def receive_material_lot(
             fields="name, roof_job, status",
             not_found_code="shop_command_source_not_found",
         )
-        if (
-            source.get("roof_job") != lot.get("roof_job")
-            or source.get("status")
-            not in {"Ready", "Handed Over", "Invoice Ready", "Closed"}
-        ):
+        if source.get("roof_job") != lot.get("roof_job") or source.get(
+            "status"
+        ) not in {"Ready", "Handed Over", "Invoice Ready", "Closed"}:
             _fail(
                 "shop_command_source_not_ready",
                 "shop remnant must be linked to a final source Shop Order on this Roof Job",
             )
-    received_quantity = _positive_decimal(lot.get("received_quantity"), "received_quantity")
+    received_quantity = _positive_decimal(
+        lot.get("received_quantity"), "received_quantity"
+    )
     received_at = str(frappe.utils.now_datetime())
     lot.received_at = received_at
     lot.reserved_quantity = "0"
@@ -1563,7 +1884,9 @@ def reserve_shop_order_materials(
                 "shop_command_lot_not_available",
                 "Material Lot must be Available before reservation",
             )
-        available = _positive_decimal(lot.get("available_quantity"), "available_quantity")
+        available = _positive_decimal(
+            lot.get("available_quantity"), "available_quantity"
+        )
         if requested > available:
             _fail(
                 "shop_command_insufficient_lot_quantity",
@@ -1585,7 +1908,9 @@ def reserve_shop_order_materials(
     reserved_at = str(frappe.utils.now_datetime())
     for lot_id, requested in requested_by_lot.items():
         lot = lots_by_id[lot_id]
-        available = _positive_decimal(lot.get("available_quantity"), "available_quantity")
+        available = _positive_decimal(
+            lot.get("available_quantity"), "available_quantity"
+        )
         current_reserved = Decimal(str(lot.get("reserved_quantity") or "0"))
         lot.available_quantity = _decimal_text(available - requested)
         lot.reserved_quantity = _decimal_text(current_reserved + requested)
@@ -1711,9 +2036,7 @@ def record_first_piece_outcome(
         order,
         args["first_piece_payload_json"],
     )
-    lines = {
-        int(line.get("line_no")): line for line in order.get("lines") or []
-    }
+    lines = {int(line.get("line_no")): line for line in order.get("lines") or []}
     allocations = {
         str(allocation.get("allocation_id")): allocation
         for allocation in order.get("material_allocations") or []
@@ -1770,9 +2093,10 @@ def record_first_piece_outcome(
                 "shop_command_invalid_first_piece_allocation",
                 "first-piece inspection requires current reserved material lineage",
             )
-        if _nonnegative_decimal(
-            allocation.get("issued_quantity"), "issued_quantity"
-        ) != 0:
+        if (
+            _nonnegative_decimal(allocation.get("issued_quantity"), "issued_quantity")
+            != 0
+        ):
             _fail(
                 "shop_command_first_piece_allocation_already_issued",
                 "first-piece inspection requires an unissued material allocation",
@@ -1797,9 +2121,10 @@ def record_first_piece_outcome(
                 "shop_command_invalid_first_piece_reference",
                 "inspection must reference the current line, allocation, and operation",
             )
-        if operation.get("status") not in {"In Progress", "Complete"} or not operation.get(
-            "started_at"
-        ):
+        if operation.get("status") not in {
+            "In Progress",
+            "Complete",
+        } or not operation.get("started_at"):
             _fail(
                 "shop_command_first_piece_operation_not_started",
                 "first-piece inspection requires a started in-progress or completed operation",
@@ -1860,9 +2185,13 @@ def record_first_piece_outcome(
         allocation["status"] = "Issued"
     for material_lot_id, issued_quantity in issue_by_lot.items():
         lot = lots_by_id[material_lot_id]
-        available = _nonnegative_decimal(lot.get("available_quantity"), "available_quantity")
+        available = _nonnegative_decimal(
+            lot.get("available_quantity"), "available_quantity"
+        )
         reserved = _positive_decimal(lot.get("reserved_quantity"), "reserved_quantity")
-        consumed = _nonnegative_decimal(lot.get("consumed_quantity"), "consumed_quantity")
+        consumed = _nonnegative_decimal(
+            lot.get("consumed_quantity"), "consumed_quantity"
+        )
         received = _positive_decimal(lot.get("received_quantity"), "received_quantity")
         next_reserved = reserved - issued_quantity
         next_consumed = consumed + issued_quantity
@@ -1920,7 +2249,9 @@ def record_first_piece_outcome(
     failed_lot = None
     if action == "fail_to_quality_hold":
         failed = inspections[0]
-        failed_lot = lots_by_id[str(allocations[failed["allocation_id"]].get("material_lot"))]
+        failed_lot = lots_by_id[
+            str(allocations[failed["allocation_id"]].get("material_lot"))
+        ]
         failed_lot.status = "Quarantined"
         nonconformance = frappe.get_doc(
             {
@@ -1969,6 +2300,514 @@ def record_first_piece_outcome(
         },
         "hermes_run_id": hermes_run_id,
     }
+    if failed_lot is not None and nonconformance is not None:
+        response["material_lot"] = {
+            "name": failed_lot.get("name"),
+            "material_lot_id": failed_lot.get("material_lot_id"),
+            "status": failed_lot.get("status"),
+        }
+        response["nonconformance"] = {
+            "name": nonconformance.get("name"),
+            "nonconformance_id": nonconformance.get("nonconformance_id"),
+            "status": nonconformance.get("status"),
+            "shop_order": nonconformance.get("shop_order"),
+            "material_lot": nonconformance.get("material_lot"),
+            "evidence_item": nonconformance.get("evidence_item"),
+        }
+    return response
+
+
+@frappe.whitelist()
+def record_final_shop_quality(
+    shop_order_id: str,
+    hermes_run_id: str,
+) -> dict[str, Any]:
+    """Record signed final QC and reconcile the finished shop output to Ready."""
+
+    authenticated_user = _assert_post_and_permissions(
+        doctype="Shop Order", allowed_roles=SHOP_ROLES
+    )
+    shop_order_id = _clean_identifier(shop_order_id, "shop_order_id")
+    hermes_run_id = _clean_identifier(hermes_run_id, "hermes_run_id")
+    run = _lock_hermes_run(hermes_run_id)
+    args = _assert_approved_run(
+        run,
+        hermes_run_id=hermes_run_id,
+        authenticated_user=authenticated_user,
+        tool_name=RECORD_FINAL_SHOP_QUALITY_TOOL,
+        target_doctype="Shop Order",
+        target_name=shop_order_id,
+        target_field="shop_order_id",
+        extra_fields=frozenset({"final_quality_payload_json"}),
+    )
+    order = _lock_shop_order(shop_order_id)
+    _assert_run_roof_job(run, order)
+    sources = _lock_shop_sources(order)
+    action, inspections, yields, bundles, hold_reason = _parse_final_quality_payload(
+        order, args["final_quality_payload_json"]
+    )
+    lines = {int(line.get("line_no")): line for line in order.get("lines") or []}
+    allocations = {
+        str(allocation.get("allocation_id")): allocation
+        for allocation in order.get("material_allocations") or []
+    }
+    operations = {
+        int(operation.get("sequence")): operation
+        for operation in order.get("operations") or []
+    }
+    if not lines or not allocations or not operations:
+        _fail(
+            "shop_command_final_quality_context_missing",
+            "Shop Order requires lines, material allocations, and a shop route",
+        )
+    if order.get("yields") or order.get("bundles"):
+        _fail(
+            "shop_command_final_quality_already_recorded",
+            "Shop Order already has final yield or bundle output",
+        )
+    lot_ids = sorted(
+        {
+            _clean_identifier(allocation.get("material_lot"), "material_lot")
+            for allocation in allocations.values()
+        }
+    )
+    lots = [_lock_material_lot(material_lot_id) for material_lot_id in lot_ids]
+    evidence_ids = sorted(
+        {inspection["evidence_item"] for inspection in inspections}
+        | {row["evidence_item"] for row in yields if row["scrap_quantity"] > 0}
+    )
+    evidence = [
+        _lock_first_piece_evidence(
+            evidence_id,
+            roof_job=order.get("roof_job"),
+            inspector=authenticated_user,
+        )
+        for evidence_id in evidence_ids
+    ]
+    inspector_authority = _lock_first_piece_inspector_authority(
+        order, authenticated_user=authenticated_user
+    )
+    _assert_current_snapshot(
+        args["expected_snapshot_sha256"],
+        _shop_order_final_quality_snapshot(
+            order, lots, evidence, sources, inspector_authority
+        ),
+    )
+    lots_by_id = {str(lot.get("material_lot_id")): lot for lot in lots}
+    allocation_lots_by_line: defaultdict[int, set[str]] = defaultdict(set)
+    for allocation in allocations.values():
+        line_no = int(allocation.get("line_no"))
+        line = lines.get(line_no)
+        lot = lots_by_id.get(str(allocation.get("material_lot")))
+        issued_quantity = _nonnegative_decimal(
+            allocation.get("issued_quantity"), "issued_quantity"
+        )
+        reserved_quantity = _positive_decimal(
+            allocation.get("reserved_quantity"), "reserved_quantity"
+        )
+        if (
+            line is None
+            or lot is None
+            or allocation.get("status") != "Issued"
+            or issued_quantity <= 0
+            or issued_quantity > reserved_quantity
+            or lot.get("status") not in {"Reserved", "Available", "Consumed"}
+            or lot.get("roof_job") != order.get("roof_job")
+            or lot.get("controlled_item") != line.get("controlled_item")
+            or allocation.get("unit") != line.get("unit")
+            or lot.get("unit") != line.get("unit")
+        ):
+            _fail(
+                "shop_command_invalid_final_quality_allocation",
+                "final quality requires current issued material lineage",
+            )
+        allocation_lots_by_line[line_no].add(str(allocation.get("material_lot")))
+    first_piece_passes = {
+        int(inspection.get("line_no"))
+        for inspection in order.get("inspections") or []
+        if inspection.get("inspection_type") == "First Piece"
+        and inspection.get("result") == "Pass"
+    }
+    if set(lines) - first_piece_passes:
+        _fail(
+            "shop_command_missing_first_piece_pass",
+            "every Shop Order line needs a passed First Piece inspection",
+        )
+    inspections_by_line: dict[int, dict[str, Any]] = {}
+    for inspection in inspections:
+        allocation = allocations.get(inspection["allocation_id"])
+        operation = operations.get(inspection["operation_sequence"])
+        if (
+            allocation is None
+            or operation is None
+            or inspection["line_no"] not in lines
+            or int(allocation.get("line_no")) != inspection["line_no"]
+        ):
+            _fail(
+                "shop_command_invalid_final_quality_reference",
+                "inspection must reference the current line, allocation, and operation",
+            )
+        if operation.get("status") != "Complete" or not operation.get("completed_at"):
+            _fail(
+                "shop_command_final_quality_operation_incomplete",
+                "final quality requires a completed inspection operation",
+            )
+        if operation.get("operator") == authenticated_user:
+            _fail(
+                "shop_command_non_independent_inspection",
+                "the operation fabricator cannot inspect its own final work",
+                permission=True,
+            )
+        measurement = _first_piece_measurement_spec(lines[inspection["line_no"]])
+        if inspection["measurement_unit"].lower() != measurement["measurement_unit"]:
+            _fail(
+                "shop_command_final_quality_measurement_unit_mismatch",
+                "final measurement unit must match the controlled line",
+            )
+        within_tolerance = (
+            abs(inspection["measured_value"] - measurement["nominal_value"])
+            <= measurement["tolerance_value"]
+        )
+        if (action == "pass_to_ready") != within_tolerance:
+            _fail(
+                "shop_command_final_quality_tolerance_result_mismatch",
+                "final-quality action must match the measured tolerance result",
+            )
+        inspection["nominal_value"] = measurement["nominal_value"]
+        inspection["tolerance_value"] = measurement["tolerance_value"]
+        inspection["measurement_unit"] = measurement["measurement_unit"]
+        inspection["measured_result"] = (
+            f"{_decimal_text(inspection['measured_value'])} {measurement['measurement_unit']}; "
+            f"nominal {_decimal_text(measurement['nominal_value'])} +/- "
+            f"{_decimal_text(measurement['tolerance_value'])} {measurement['measurement_unit']}"
+        )
+        inspections_by_line[inspection["line_no"]] = inspection
+    if action == "pass_to_ready" and set(inspections_by_line) != set(lines):
+        _fail(
+            "shop_command_missing_final_quality_pass",
+            "every Shop Order line needs one passed Final inspection",
+        )
+    issue_delta_by_lot: defaultdict[str, Decimal] = defaultdict(Decimal)
+    yields_by_allocation: dict[str, dict[str, Any]] = {}
+    finished_by_line: defaultdict[int, Decimal] = defaultdict(Decimal)
+    remnant_specs: list[tuple[dict[str, Any], Any]] = []
+    if action == "pass_to_ready":
+        if any(
+            operation.get("status") != "Complete" or not operation.get("completed_at")
+            for operation in operations.values()
+        ):
+            _fail(
+                "shop_command_final_quality_operation_incomplete",
+                "every shop route operation must be completed before Ready",
+            )
+        if {row["allocation_id"] for row in yields} != set(allocations):
+            _fail(
+                "shop_command_final_quality_yields_incomplete",
+                "every material allocation needs one final yield",
+            )
+        for row in yields:
+            allocation = allocations.get(row["allocation_id"])
+            operation = operations.get(row["operation_sequence"])
+            if allocation is None or operation is None:
+                _fail(
+                    "shop_command_invalid_final_quality_reference",
+                    "yield must reference the current allocation and operation",
+                )
+            if operation.get("status") != "Complete" or not operation.get(
+                "completed_at"
+            ):
+                _fail(
+                    "shop_command_final_quality_operation_incomplete",
+                    "final yield requires a completed shop operation",
+                )
+            if abs(
+                row["input_quantity"]
+                - (
+                    row["finished_quantity"]
+                    + row["remnant_quantity"]
+                    + row["scrap_quantity"]
+                )
+            ) > Decimal("0.01"):
+                _fail(
+                    "shop_command_final_quality_yield_mismatch",
+                    "input quantity must equal finished plus remnant plus scrap",
+                )
+            reserved_quantity = _positive_decimal(
+                allocation.get("reserved_quantity"), "reserved_quantity"
+            )
+            issued_quantity = _nonnegative_decimal(
+                allocation.get("issued_quantity"), "issued_quantity"
+            )
+            if (
+                row["input_quantity"] != reserved_quantity
+                or issued_quantity > row["input_quantity"]
+            ):
+                _fail(
+                    "shop_command_final_quality_yield_mismatch",
+                    "final yield must reconcile the full approved allocation",
+                )
+            line_no = int(allocation.get("line_no"))
+            finished_by_line[line_no] += row["finished_quantity"]
+            issue_delta_by_lot[str(allocation.get("material_lot"))] += (
+                row["input_quantity"] - issued_quantity
+            )
+            row["remnant_lot"] = (
+                _shop_remnant_lot_id(hermes_run_id, row["allocation_id"])
+                if row["remnant_quantity"] > 0
+                else ""
+            )
+            yields_by_allocation[row["allocation_id"]] = row
+            if row["remnant_quantity"] > 0:
+                remnant_specs.append((row, allocation))
+        for material_lot_id, issue_delta in issue_delta_by_lot.items():
+            lot = lots_by_id[material_lot_id]
+            if issue_delta > _nonnegative_decimal(
+                lot.get("reserved_quantity"), "reserved_quantity"
+            ):
+                _fail(
+                    "shop_command_final_quality_issue_exceeds_reservation",
+                    "final yield exceeds the locked Material Lot reservation",
+                )
+        bundled_by_line: defaultdict[int, Decimal] = defaultdict(Decimal)
+        for bundle in bundles:
+            line = lines.get(bundle["line_no"])
+            if (
+                line is None
+                or bundle["material_lot"]
+                not in allocation_lots_by_line[bundle["line_no"]]
+                or bundle["unit"] != line.get("unit")
+            ):
+                _fail(
+                    "shop_command_invalid_final_quality_bundle",
+                    "bundle must use its line's allocated lot and unit",
+                )
+            bundled_by_line[bundle["line_no"]] += bundle["accepted_quantity"]
+        for line_no, line in lines.items():
+            accepted_quantity = _positive_decimal(
+                line.get("accepted_quantity"), "accepted_quantity"
+            )
+            if finished_by_line[line_no] != accepted_quantity:
+                _fail(
+                    "shop_command_final_quality_finished_mismatch",
+                    "finished yield must equal the accepted line quantity",
+                )
+            if bundled_by_line[line_no] != accepted_quantity:
+                _fail(
+                    "shop_command_final_quality_bundle_mismatch",
+                    "prepared bundles must equal the accepted line quantity",
+                )
+    inspected_at = str(frappe.utils.now_datetime())
+    existing_inspections = list(order.get("inspections") or [])
+    result = "Pass" if action == "pass_to_ready" else "Fail"
+    existing_inspections.extend(
+        {
+            "inspection_type": "Final",
+            "line_no": inspection["line_no"],
+            "allocation_id": inspection["allocation_id"],
+            "operation_sequence": inspection["operation_sequence"],
+            "result": result,
+            "nominal_value": _decimal_text(inspection["nominal_value"]),
+            "measured_value": _decimal_text(inspection["measured_value"]),
+            "tolerance_value": _decimal_text(inspection["tolerance_value"]),
+            "measurement_unit": inspection["measurement_unit"],
+            "measured_result": inspection["measured_result"],
+            "inspected_by": authenticated_user,
+            "inspected_at": inspected_at,
+            "evidence_item": inspection["evidence_item"],
+            "needs_review": 0 if result == "Pass" else 1,
+        }
+        for inspection in inspections
+    )
+    _set(order, "inspections", existing_inspections)
+    nonconformance = None
+    failed_lot = None
+    remnant_lots: list[Any] = []
+    if action == "pass_to_ready":
+        for allocation_id, row in yields_by_allocation.items():
+            allocation = allocations[allocation_id]
+            allocation["issued_quantity"] = _decimal_text(row["input_quantity"])
+            allocation["status"] = "Issued"
+        for material_lot_id, issue_delta in issue_delta_by_lot.items():
+            lot = lots_by_id[material_lot_id]
+            available = _nonnegative_decimal(
+                lot.get("available_quantity"), "available_quantity"
+            )
+            reserved = _nonnegative_decimal(
+                lot.get("reserved_quantity"), "reserved_quantity"
+            )
+            consumed = _nonnegative_decimal(
+                lot.get("consumed_quantity"), "consumed_quantity"
+            )
+            received = _positive_decimal(
+                lot.get("received_quantity"), "received_quantity"
+            )
+            next_reserved = reserved - issue_delta
+            next_consumed = consumed + issue_delta
+            lot.reserved_quantity = _decimal_text(next_reserved)
+            lot.consumed_quantity = _decimal_text(next_consumed)
+            if next_reserved > 0:
+                lot.status = "Reserved"
+            elif available > 0:
+                lot.status = "Available"
+            elif next_consumed == received:
+                lot.status = "Consumed"
+            else:
+                _fail(
+                    "shop_command_final_quality_lot_balance_invalid",
+                    "Material Lot balances cannot classify the final issue state",
+                )
+        _set(
+            order,
+            "yields",
+            [
+                {
+                    "allocation_id": row["allocation_id"],
+                    "operation_sequence": row["operation_sequence"],
+                    "input_quantity": _decimal_text(row["input_quantity"]),
+                    "finished_quantity": _decimal_text(row["finished_quantity"]),
+                    "remnant_quantity": _decimal_text(row["remnant_quantity"]),
+                    "remnant_lot": row["remnant_lot"],
+                    "scrap_quantity": _decimal_text(row["scrap_quantity"]),
+                    "scrap_disposition": row["scrap_disposition"],
+                    "evidence_item": row["evidence_item"],
+                }
+                for row in yields
+            ],
+        )
+        _set(
+            order,
+            "bundles",
+            [
+                {
+                    "bundle_id": bundle["bundle_id"],
+                    "line_no": bundle["line_no"],
+                    "material_lot": bundle["material_lot"],
+                    "piece_identity": bundle["piece_identity"],
+                    "accepted_quantity": _decimal_text(bundle["accepted_quantity"]),
+                    "unit": bundle["unit"],
+                    "label_text": bundle["label_text"],
+                    "handoff_status": "Prepared",
+                    "handed_over_to": "",
+                    "handed_over_at": "",
+                    "handoff_evidence": "",
+                    "condition": bundle["condition"],
+                    "needs_review": 0,
+                }
+                for bundle in bundles
+            ],
+        )
+        for row, allocation in remnant_specs:
+            line_no = int(allocation.get("line_no"))
+            remnant_lot_id = row["remnant_lot"]
+            remnant_lots.append(
+                frappe.get_doc(
+                    {
+                        "doctype": "Material Lot",
+                        "name": remnant_lot_id,
+                        "material_lot_id": remnant_lot_id,
+                        "roof_job": order.get("roof_job"),
+                        "controlled_item": lines[line_no].get("controlled_item"),
+                        "source_kind": "Shop Remnant",
+                        "supplier_order": "",
+                        "source_shop_order": order.get("name"),
+                        "source_evidence": inspections_by_line[line_no][
+                            "evidence_item"
+                        ],
+                        "lot_number": remnant_lot_id,
+                        "certificate_reference": "",
+                        "condition_status": "Accepted",
+                        "received_quantity": _decimal_text(row["remnant_quantity"]),
+                        "available_quantity": _decimal_text(row["remnant_quantity"]),
+                        "reserved_quantity": "0",
+                        "consumed_quantity": "0",
+                        "unit": lines[line_no].get("unit"),
+                        "received_at": inspected_at,
+                        "status": "Available",
+                    }
+                )
+            )
+        order.status = "Ready"
+        order.ready_at = inspected_at
+        order.quality_hold_reason = ""
+    else:
+        if not frappe.has_permission(
+            "Nonconformance", ptype="create", user=authenticated_user
+        ):
+            _fail(
+                "shop_command_nonconformance_permission_denied",
+                "the authenticated principal cannot create the required Nonconformance",
+                permission=True,
+            )
+        failed = inspections[0]
+        failed_lot = lots_by_id[
+            str(allocations[failed["allocation_id"]].get("material_lot"))
+        ]
+        failed_lot.status = "Quarantined"
+        order.status = "Quality Hold"
+        order.quality_hold_reason = hold_reason
+        nonconformance = frappe.get_doc(
+            {
+                "doctype": "Nonconformance",
+                "name": _final_quality_ncr_id(hermes_run_id),
+                "nonconformance_id": _final_quality_ncr_id(hermes_run_id),
+                "shop_order": order.get("name"),
+                "material_lot": failed_lot.get("name"),
+                "status": "Contained",
+                "detected_at": inspected_at,
+                "reported_by": authenticated_user,
+                "description": hold_reason,
+                "evidence_item": failed["evidence_item"],
+                "containment": (
+                    f"Material Lot {failed_lot.get('material_lot_id')} quarantined; "
+                    "Shop Order placed on Quality Hold."
+                ),
+            }
+        )
+    with ExitStack() as stack:
+        for lot in lots:
+            stack.enter_context(material_lot_transition_context(lot))
+        if nonconformance is not None:
+            stack.enter_context(nonconformance_transition_context(nonconformance))
+        stack.enter_context(shop_order_transition_context(order))
+        if nonconformance is not None:
+            nonconformance.insert()
+        for lot in lots:
+            lot.save()
+        order.save()
+    for remnant_lot in remnant_lots:
+        with material_lot_transition_context(remnant_lot):
+            remnant_lot.insert()
+    response = {
+        "shop_order": {
+            "name": order.get("name"),
+            "shop_order_id": order.get("shop_order_id"),
+            "roof_job": order.get("roof_job"),
+            "status": order.get("status"),
+            "ready_at": str(order.get("ready_at") or ""),
+            "quality_hold_reason": order.get("quality_hold_reason") or "",
+            "final_inspection_count": len(
+                [
+                    inspection
+                    for inspection in order.get("inspections") or []
+                    if inspection.get("inspection_type") == "Final"
+                ]
+            ),
+            "yield_count": len(order.get("yields") or []),
+            "bundle_count": len(order.get("bundles") or []),
+        },
+        "hermes_run_id": hermes_run_id,
+    }
+    if remnant_lots:
+        response["remnant_lots"] = [
+            {
+                "name": lot.get("name"),
+                "material_lot_id": lot.get("material_lot_id"),
+                "available_quantity": lot.get("available_quantity"),
+                "unit": lot.get("unit"),
+                "status": lot.get("status"),
+            }
+            for lot in remnant_lots
+        ]
     if failed_lot is not None and nonconformance is not None:
         response["material_lot"] = {
             "name": failed_lot.get("name"),

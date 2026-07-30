@@ -96,6 +96,58 @@ function firstPieceOrderFixture(overrides = {}) {
   });
 }
 
+function finalQualityOrderFixture(overrides = {}) {
+  return firstPieceOrderFixture({
+    status: "In Fabrication",
+    fabrication_started_at: "2026-07-30 10:16:00",
+    lines: [{
+      ...firstPieceOrderFixture().lines[0],
+      accepted_quantity: 8,
+    }],
+    material_allocations: [{
+      ...firstPieceOrderFixture().material_allocations[0],
+      reserved_quantity: 9,
+      issued_quantity: 1,
+      status: "Issued",
+    }],
+    operations: [{
+      ...firstPieceOrderFixture().operations[0],
+      status: "Complete",
+      completed_at: "2026-07-30 10:16:00",
+    }],
+    inspections: [{
+      inspection_type: "First Piece",
+      line_no: 1,
+      allocation_id: "alloc-1",
+      operation_sequence: 1,
+      result: "Pass",
+      nominal_value: 2400,
+      measured_value: 2400,
+      tolerance_value: 3,
+      measurement_unit: "mm",
+      measured_result: "2400 mm; nominal 2400 +/- 3 mm",
+      inspected_by: "production@example.com",
+      inspected_at: "2026-07-30 10:15:00",
+      evidence_item: "evidence-1",
+      needs_review: 0,
+    }],
+    yields: [],
+    bundles: [],
+    ...overrides,
+  });
+}
+
+function finalQualityLotFixture(overrides = {}) {
+  return materialLotFixture({
+    status: "Reserved",
+    received_quantity: 9,
+    available_quantity: 0,
+    reserved_quantity: 8,
+    consumed_quantity: 1,
+    ...overrides,
+  });
+}
+
 function verifiedEvidenceFixture(overrides = {}) {
   return {
     name: "evidence-1",
@@ -713,6 +765,271 @@ test("first-piece pass stores one signed outcome and calls only the bounded Frap
     async () => await server._registeredTools.request_record_first_piece_outcome.handler(staleArgs),
   );
   assert.equal(hermesRunCreates, 1, "a stale signed snapshot must fail before another Hermes Run");
+});
+
+test("final shop quality pass signs its snapshot and calls only the bounded Frappe method", async (t) => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const actorUser = "production@example.com";
+  const finalQualityPayloadJson = JSON.stringify({
+    action: "pass_to_ready",
+    inspections: [{
+      line_no: 1,
+      allocation_id: "alloc-1",
+      operation_sequence: 1,
+      measured_value: "2400",
+      measurement_unit: "mm",
+      evidence_item: "evidence-1",
+    }],
+    yields: [{
+      allocation_id: "alloc-1",
+      operation_sequence: 1,
+      input_quantity: "9",
+      finished_quantity: "8",
+      remnant_quantity: "0",
+      scrap_quantity: "1",
+      scrap_disposition: "Recycled metal",
+      evidence_item: "evidence-scrap-1",
+    }],
+    bundles: [{
+      bundle_id: "bundle-1",
+      line_no: 1,
+      material_lot: "lot-a",
+      piece_identity: "JOB-1:panel-1..8",
+      accepted_quantity: "8",
+      unit: "each",
+      label_text: "JOB-1 / panel 1-8",
+      condition: "No visible damage",
+    }],
+  });
+  const order = finalQualityOrderFixture();
+  const takeoff = { name: "takeoff-1", roof_job: "JOB-1", status: "Approved" };
+  const supplierOrder = { name: "supplier-1", roof_job: "JOB-1", status: "Received" };
+  const workPackage = firstPieceWorkPackageFixture();
+  const jobAssignment = firstPieceJobAssignmentFixture();
+  const crewProfile = firstPieceCrewProfileFixture();
+  const lot = finalQualityLotFixture();
+  const evidence = verifiedEvidenceFixture();
+  const scrapEvidence = verifiedEvidenceFixture({
+    name: "evidence-scrap-1",
+    evidence_id: "evidence-scrap-1",
+    evidence_type: "Photo",
+    r2_key: "evidence/JOB-1/evidence-scrap-1.jpg",
+    content_type: "image/jpeg",
+    device_action_id: "device-action-scrap-1",
+  });
+  const requests = [];
+  const finalQualityMethodBodies = [];
+  let hermesRunInsert = null;
+  let hermesRunCreates = 0;
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: true,
+    agentRole: "production-controller",
+    actorUser,
+    approverId: "owner@example.com",
+    dryRunSigningKey: "p".repeat(32),
+    approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_record_final_shop_quality", "request_record_final_shop_quality"],
+  });
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const target = String(url);
+    const method = init.method ?? "GET";
+    requests.push({ method, target, body: init.body });
+    if (method === "GET" && target.includes("Shop%20Order/shop-1")) return Response.json({ data: order });
+    if (method === "GET" && target.includes("Material%20Takeoff/takeoff-1")) return Response.json({ data: takeoff });
+    if (method === "GET" && target.includes("Supplier%20Order/supplier-1")) return Response.json({ data: supplierOrder });
+    if (method === "GET" && target.includes("Work%20Package/package-1")) return Response.json({ data: workPackage });
+    if (method === "GET" && target.includes("Job%20Assignment/assignment-1")) return Response.json({ data: jobAssignment });
+    if (method === "GET" && target.includes("Crew%20Profile/crew-1")) return Response.json({ data: crewProfile });
+    if (method === "GET" && target.includes("Material%20Lot/lot-a")) return Response.json({ data: lot });
+    if (method === "GET" && target.includes("Evidence%20Item/evidence-1")) return Response.json({ data: evidence });
+    if (method === "GET" && target.includes("Evidence%20Item/evidence-scrap-1")) return Response.json({ data: scrapEvidence });
+    if (method === "POST" && target.endsWith("/api/method/ironwrap_roofing.shop_fabrication_api.preview_first_piece_authority")) {
+      return Response.json({ message: firstPieceAuthorityResponse({ actorUser, workPackage, jobAssignment, crewProfile }) });
+    }
+    if (method === "GET" && target.includes("Hermes%20Run/run-final-quality-0001")) {
+      return new Response("missing", { status: 404 });
+    }
+    if (method === "POST" && target.endsWith("/api/resource/Hermes%20Run")) {
+      hermesRunCreates += 1;
+      hermesRunInsert = JSON.parse(init.body);
+      return Response.json({ data: { name: "run-final-quality-0001" } });
+    }
+    if (method === "POST" && target.endsWith("/api/method/ironwrap_roofing.shop_fabrication_api.record_final_shop_quality")) {
+      finalQualityMethodBodies.push(JSON.parse(init.body));
+      return Response.json({
+        message: {
+          shop_order: { shop_order_id: "shop-1", status: "Ready" },
+          hermes_run_id: "run-final-quality-0001",
+        },
+      });
+    }
+    if (method === "PUT" && target.includes("Hermes%20Run/run-final-quality-0001")) {
+      return Response.json({ data: { ok: true } });
+    }
+    throw new Error(`unexpected request ${method} ${target}`);
+  });
+
+  const dryRun = parseToolPayload(
+    await server._registeredTools.dry_run_record_final_shop_quality.handler({
+      shop_order_id: "shop-1",
+      final_quality_payload_json: finalQualityPayloadJson,
+    }),
+  );
+  const finalInspection = dryRun.final_quality.final_inspections[0];
+  const yieldRow = dryRun.final_quality.yields[0];
+  const bundle = dryRun.final_quality.bundles[0];
+  assert.equal(dryRun.required_tool, "request_record_final_shop_quality");
+  assert.equal(dryRun.next_status, "Ready");
+  assert.equal(dryRun.approval_request.write_tool, "request_record_final_shop_quality");
+  assert.equal(finalInspection.inspection_type, "Final");
+  assert.equal(finalInspection.result, "Pass");
+  assert.equal(finalInspection.measured_value, "2400");
+  assert.equal(yieldRow.input_quantity, "9");
+  assert.equal(yieldRow.finished_quantity, "8");
+  assert.equal(yieldRow.remnant_quantity, "0");
+  assert.equal(yieldRow.scrap_quantity, "1");
+  assert.equal(yieldRow.scrap_disposition, "Recycled metal");
+  assert.equal(
+    Number(yieldRow.input_quantity),
+    Number(yieldRow.finished_quantity) + Number(yieldRow.remnant_quantity) + Number(yieldRow.scrap_quantity),
+  );
+  assert.equal(bundle.bundle_id, "bundle-1");
+  assert.equal(bundle.accepted_quantity, "8");
+
+  const args = approvalArgs({
+    privateKey,
+    dryRun,
+    runId: "run-final-quality-0001",
+    args: { shop_order_id: "shop-1", final_quality_payload_json: finalQualityPayloadJson },
+    agentRole: "production-controller",
+    actorUser,
+  });
+  const result = parseToolPayload(
+    await server._registeredTools.request_record_final_shop_quality.handler(args),
+  );
+  assert.equal(result.result.message.shop_order.status, "Ready");
+  assert.equal(hermesRunInsert.tool_name, "request_record_final_shop_quality");
+  assert.equal(JSON.parse(hermesRunInsert.tool_args_json).final_quality_payload_json, finalQualityPayloadJson);
+  assert.equal(
+    JSON.parse(hermesRunInsert.tool_args_json).expected_snapshot_sha256,
+    dryRun.expected_snapshot_sha256,
+  );
+  assert.deepEqual(finalQualityMethodBodies, [{
+    shop_order_id: "shop-1",
+    hermes_run_id: "run-final-quality-0001",
+  }]);
+  assert.equal(
+    requests.some(({ method, target }) => method === "PUT" && target.includes("/api/resource/Shop%20Order/")),
+    false,
+  );
+
+  const staleArgs = approvalArgs({
+    privateKey,
+    dryRun,
+    runId: "run-final-quality-stale-0001",
+    args: { shop_order_id: "shop-1", final_quality_payload_json: finalQualityPayloadJson },
+    agentRole: "production-controller",
+    actorUser,
+    expectedSnapshotSha256: "0".repeat(64),
+  });
+  await assert.rejects(
+    async () => await server._registeredTools.request_record_final_shop_quality.handler(staleArgs),
+    /shop_command_stale_snapshot/,
+  );
+  assert.equal(hermesRunCreates, 1, "a stale signed snapshot must fail before another Hermes Run");
+});
+
+test("final shop quality rejects malformed payloads before reading Frappe", async (t) => {
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: false,
+    agentRole: "production-controller",
+    actorUser: "production@example.com",
+    dryRunSigningKey: "p".repeat(32),
+    allowedTools: ["dry_run_record_final_shop_quality"],
+  });
+  let reads = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    reads += 1;
+    throw new Error("malformed final-quality payload must fail before reading Frappe");
+  });
+
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_final_shop_quality.handler({
+      shop_order_id: "shop-1",
+      final_quality_payload_json: "{",
+    }),
+    /shop_final_quality_payload_invalid/,
+  );
+  assert.equal(reads, 0);
+});
+
+test("final shop quality hold previews a failed final inspection without producing bundles", async (t) => {
+  const actorUser = "production@example.com";
+  const order = finalQualityOrderFixture();
+  const lot = finalQualityLotFixture();
+  const evidence = verifiedEvidenceFixture();
+  const workPackage = firstPieceWorkPackageFixture();
+  const jobAssignment = firstPieceJobAssignmentFixture();
+  const crewProfile = firstPieceCrewProfileFixture();
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: false,
+    agentRole: "production-controller",
+    actorUser,
+    dryRunSigningKey: "p".repeat(32),
+    allowedTools: ["dry_run_record_final_shop_quality"],
+  });
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const target = String(url);
+    const method = init.method ?? "GET";
+    if (method === "GET" && target.includes("Shop%20Order/shop-1")) return Response.json({ data: order });
+    if (method === "GET" && target.includes("Material%20Takeoff/takeoff-1")) {
+      return Response.json({ data: { name: "takeoff-1", roof_job: "JOB-1", status: "Approved" } });
+    }
+    if (method === "GET" && target.includes("Supplier%20Order/supplier-1")) {
+      return Response.json({ data: { name: "supplier-1", roof_job: "JOB-1", status: "Received" } });
+    }
+    if (method === "GET" && target.includes("Work%20Package/package-1")) return Response.json({ data: workPackage });
+    if (method === "GET" && target.includes("Job%20Assignment/assignment-1")) return Response.json({ data: jobAssignment });
+    if (method === "GET" && target.includes("Crew%20Profile/crew-1")) return Response.json({ data: crewProfile });
+    if (method === "GET" && target.includes("Material%20Lot/lot-a")) return Response.json({ data: lot });
+    if (method === "GET" && target.includes("Evidence%20Item/evidence-1")) return Response.json({ data: evidence });
+    if (method === "POST" && target.endsWith("/api/method/ironwrap_roofing.shop_fabrication_api.preview_first_piece_authority")) {
+      return Response.json({ message: firstPieceAuthorityResponse({ actorUser, workPackage, jobAssignment, crewProfile }) });
+    }
+    throw new Error(`unexpected request ${method} ${target}`);
+  });
+
+  const dryRun = parseToolPayload(
+    await server._registeredTools.dry_run_record_final_shop_quality.handler({
+      shop_order_id: "shop-1",
+      final_quality_payload_json: JSON.stringify({
+        action: "fail_to_quality_hold",
+        inspection: {
+          line_no: 1,
+          allocation_id: "alloc-1",
+          operation_sequence: 1,
+          measured_value: "2404",
+          measurement_unit: "mm",
+          evidence_item: "evidence-1",
+        },
+        reason: "Final panel measurement exceeds tolerance.",
+      }),
+    }),
+  );
+  assert.equal(dryRun.next_status, "Quality Hold");
+  assert.equal(dryRun.final_quality.final_inspections[0].inspection_type, "Final");
+  assert.equal(dryRun.final_quality.final_inspections[0].result, "Fail");
+  assert.equal(dryRun.final_quality.final_inspections[0].needs_review, 1);
+  assert.equal(dryRun.final_quality.bundles.length, 0);
 });
 
 test("first-piece failure is a signed Quality Hold with a derived failed inspection", async (t) => {

@@ -575,6 +575,51 @@ class ShopFabricationApiTests(unittest.TestCase):
         ]
         self.assertEqual(lot_lock_ids, ["lot-a", "lot-b"])
 
+    def test_reserve_shop_order_rejects_authoritative_lot_balance_drift(self) -> None:
+        fixtures = self.fixture_data()
+        fixtures["items"]["item-1"]["status"] = "Approved"
+        order = fixtures["orders"]["shop-1"]
+        order["status"] = "Released"
+        lot = fixtures["lots"]["lot-1"]
+        lot.update(
+            {
+                "status": "Available",
+                "available_quantity": 5,
+                "reserved_quantity": 0,
+                "consumed_quantity": 5,
+            }
+        )
+        allocations_json = json.dumps(
+            [
+                {
+                    "allocation_id": "alloc-1",
+                    "line_no": 1,
+                    "material_lot": "lot-1",
+                    "reserved_quantity": 2,
+                    "unit": "each",
+                }
+            ],
+            separators=(",", ":"),
+        )
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RESERVE_SHOP_ORDER_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=api._shop_order_snapshot(order, [lot]),
+            extra={"allocations_json": allocations_json},
+        )
+        lot["available_quantity"] = 4
+
+        with self.assertRaisesRegex(FakeValidationError, "stale_snapshot"):
+            api.reserve_shop_order_materials("shop-1", "run-shop-0001")
+
+        self.assertEqual(order.save_count, 0)
+        self.assertEqual(lot.save_count, 0)
+
     def test_commands_reject_untrusted_or_stale_writes_without_saving(self) -> None:
         api, fixtures, _, _ = self.load_api(request_method="GET", roles=["IronWrap Owner"])
         item = fixtures["items"]["item-1"]

@@ -1978,6 +1978,24 @@ const ShopOrderReservationInputSchema = z.object({
   allocations_json: z.string().trim().min(2).max(20_000),
 }).strict();
 
+const ShopSnapshotHashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+
+const ControlledItemApprovalInputSchema = ControlledItemCommandInputSchema.extend({
+  expected_snapshot_sha256: ShopSnapshotHashSchema,
+}).strict();
+
+const MaterialLotReceiptInputSchema = MaterialLotCommandInputSchema.extend({
+  expected_snapshot_sha256: ShopSnapshotHashSchema,
+}).strict();
+
+const ShopOrderReleaseInputSchema = ShopOrderCommandInputSchema.extend({
+  expected_snapshot_sha256: ShopSnapshotHashSchema,
+}).strict();
+
+const ShopOrderReservationWriteInputSchema = ShopOrderReservationInputSchema.extend({
+  expected_snapshot_sha256: ShopSnapshotHashSchema,
+}).strict();
+
 export function approvedWriteInputSchema(baseSchema) {
   const approvalShape = {
     request_text: z.string().trim().min(1).max(4000),
@@ -2870,6 +2888,7 @@ function dryRunArgs(args = {}) {
   delete previewArgs.request_text;
   delete previewArgs.approved_by;
   delete previewArgs.run_id;
+  delete previewArgs.expected_snapshot_sha256;
   return previewArgs;
 }
 
@@ -3615,7 +3634,7 @@ export function buildServer(config) {
     {
       title: "Request Approve Controlled Item",
       description: "Approved-write: approve one Draft Controlled Item and record a Hermes Run audit row.",
-      inputSchema: approvedWriteInputSchema(ControlledItemCommandInputSchema),
+      inputSchema: approvedWriteInputSchema(ControlledItemApprovalInputSchema),
     },
     async (args) => {
       assertWriteApproved(config, args);
@@ -3632,6 +3651,7 @@ export function buildServer(config) {
           approved_at: "Frappe server time at execution",
         },
       };
+      assertSignedShopSnapshot(args, dryRun);
       return text(await executeAuditedWrite(config, {
         runId: args.run_id,
         now,
@@ -3673,13 +3693,14 @@ export function buildServer(config) {
     {
       title: "Request Receive Material Lot",
       description: "Approved-write: receive one Draft Material Lot and record a Hermes Run audit row.",
-      inputSchema: approvedWriteInputSchema(MaterialLotCommandInputSchema),
+      inputSchema: approvedWriteInputSchema(MaterialLotReceiptInputSchema),
     },
     async (args) => {
       assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const lot = await readResource(config, "Material Lot", args.material_lot_id);
       const dryRun = await buildReceiveMaterialLotPreview(config, args.material_lot_id);
+      assertSignedShopSnapshot(args, dryRun);
       return text(await executeAuditedWrite(config, {
         runId: args.run_id,
         now,
@@ -3719,13 +3740,14 @@ export function buildServer(config) {
     {
       title: "Request Release Shop Order",
       description: "Approved-write: release one Draft Shop Order and record a Hermes Run audit row.",
-      inputSchema: approvedWriteInputSchema(ShopOrderCommandInputSchema),
+      inputSchema: approvedWriteInputSchema(ShopOrderReleaseInputSchema),
     },
     async (args) => {
       assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const order = await readResource(config, "Shop Order", args.shop_order_id);
       const dryRun = await buildReleaseShopOrderPreview(config, args.shop_order_id);
+      assertSignedShopSnapshot(args, dryRun);
       return text(await executeAuditedWrite(config, {
         runId: args.run_id,
         now,
@@ -3767,13 +3789,14 @@ export function buildServer(config) {
     {
       title: "Request Reserve Shop Order Materials",
       description: "Approved-write: reserve exact Material Lot quantities for one released Shop Order and record a Hermes Run audit row.",
-      inputSchema: approvedWriteInputSchema(ShopOrderReservationInputSchema),
+      inputSchema: approvedWriteInputSchema(ShopOrderReservationWriteInputSchema),
     },
     async (args) => {
       assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const order = await readResource(config, "Shop Order", args.shop_order_id);
       const dryRun = await buildReserveShopOrderPreview(config, args.shop_order_id, args.allocations_json);
+      assertSignedShopSnapshot(args, dryRun);
       return text(await executeAuditedWrite(config, {
         runId: args.run_id,
         now,
@@ -7512,6 +7535,13 @@ function materialLotSnapshot(lot) {
       "material_lot_id",
       "roof_job",
       "controlled_item",
+      "source_kind",
+      "supplier_order",
+      "source_shop_order",
+      "source_evidence",
+      "condition_status",
+      "received_quantity",
+      "unit",
       "status",
       "available_quantity",
       "reserved_quantity",
@@ -7616,6 +7646,12 @@ function assertShopOrderReadyForReservation(order, shopOrderId) {
     throw new Error("shop_order_identity_mismatch");
   }
   if (order.status !== "Released") throw new Error("shop_order_not_released");
+}
+
+function assertSignedShopSnapshot(args, preview) {
+  if (args.expected_snapshot_sha256 !== preview.expected_snapshot_sha256) {
+    throw new Error("shop_command_stale_snapshot");
+  }
 }
 
 function assertShopSourceRecord(source, { doctype, name, roofJob, allowedStatuses }) {

@@ -63,7 +63,7 @@ bench --site <site> install-app ironwrap_roofing
 Validate the committed DocType contract without a bench. The app contains 50
 DocType JSON contracts (42 top-level records and eight child tables). The root
 validator keeps its historical `erpnext` filename; the app-local unittest suite
-enforces the complete 50-record model:
+enforces the current 50-DocType contract:
 
 ```bash
 node tools/validate-erpnext-doctypes.mjs

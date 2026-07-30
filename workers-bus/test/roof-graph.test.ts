@@ -7,7 +7,7 @@ import { parseAppliCadGeometry } from "../src/geometry.ts";
 import { deriveRoofGraph, ROOF_GRAPH_SCHEMA_VERSION } from "../src/roof-graph.ts";
 
 const SAMPLE = readFileSync(
-  fileURLToPath(new URL("../../samples/1013 Moville St.xml", import.meta.url)),
+  fileURLToPath(new URL("../../tools/fixtures/synthetic-applicad-roof.xml", import.meta.url)),
   "utf8",
 );
 

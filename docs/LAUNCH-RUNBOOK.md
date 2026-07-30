@@ -15,7 +15,7 @@ currently live. Keep these evidence classes separate:
 | Repository | CI, `production-readiness.mjs contract`, source tests, pinned runtime lock |
 | Deployment | Image digest, site/app install output, Worker migration/deploy output |
 | Runtime | `/ready`, `/admin/status`, Frappe login, Hermes read/write smoke tests |
-| Admin/source | Account ownership, rotated secrets, website/Make/Jotform/QB cutover |
+| Admin/source | Account ownership, rotated secrets, and each enabled source/provider cutover |
 
 Never mark launch complete from repository checks alone.
 
@@ -29,7 +29,7 @@ Never mark launch complete from repository checks alone.
 | Cloudflare account for the configured Worker, D1, R2, Queues, DNS, and Tunnel | Owns intake, storage, recovery, and ingress |
 | Frappe hostname and DNS authority | Serves the operating core over HTTPS |
 | Offline `age` recipient and dedicated R2 backup credentials | Encrypts and stores recoverable backups |
-| Website/Make/Jotform/QuickBooks/Newo admin access | Proves each enabled real-source cutover |
+| Enabled website/provider/QuickBooks/Newo admin access | Proves each enabled real-source cutover |
 | Dedicated Frappe, bus, Hermes-approval, ingest, and backup credentials | Keeps privileges separated by purpose |
 
 The host floor is locked at Ubuntu 22.04+, 2 CPU cores, 8 GiB RAM, 80 GiB free disk,
@@ -42,6 +42,7 @@ multi-architecture build and compose proof is recorded. Capacity is a floor, not
 From a clean checkout of the release commit:
 
 ```bash
+node tools/validate-documentation.mjs
 node tools/production-readiness.mjs contract
 node --test tools/production-readiness.test.mjs
 ```
@@ -174,11 +175,11 @@ npm ci --ignore-scripts
 npm run typegen
 npm test
 npm run typecheck
-npm run deploy -- --dry-run
-npx wrangler secret put ERPNEXT_API_KEY
-npx wrangler secret put ERPNEXT_API_SECRET
-npm run db:migrate
-npm run deploy
+npm run deploy -- --dry-run --env=""
+npx wrangler secret put ERPNEXT_API_KEY --env=""
+npx wrangler secret put ERPNEXT_API_SECRET --env=""
+npm run db:migrate -- --env=""
+npm run deploy -- --env=""
 ```
 
 Newo production uses the managed federation and full governed control plane. Store

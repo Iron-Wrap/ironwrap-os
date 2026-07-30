@@ -52,7 +52,7 @@ test("validateInbound requires a contact handle (phone or email)", () => {
   assert.equal(validateInbound(normalizeEnvelope("website", { email: "a@b.com" }, "t")).ok, true);
 });
 
-test("classifyIntent routes per spec 16, most-specific-first", () => {
+test("classifyIntent routes most-specific-first", () => {
   assert.equal(classifyIntent("active leak emergency"), "human_escalation");
   assert.equal(classifyIntent("hail damage, insurance claim"), "insurance_sales");
   assert.equal(classifyIntent("commercial flat roof"), "commercial_queue");

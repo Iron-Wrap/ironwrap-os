@@ -1,4 +1,4 @@
-// First-principles geometry engine tests against the REAL AppliCad sample
+// First-principles geometry engine tests against a sanitized AppliCad fixture
 // (node --test, type-stripped — no install). The engine must reproduce the
 // known proof values AND independently re-derive them from raw coordinates.
 import { test } from "node:test";
@@ -9,9 +9,11 @@ import { isAppliCadXml, parseAppliCadGeometry } from "../src/geometry.ts";
 import { extractGeometry } from "../src/measurements.ts";
 
 const SAMPLE = readFileSync(
-  fileURLToPath(new URL("../../samples/1013 Moville St.xml", import.meta.url)), "utf8");
+  fileURLToPath(new URL("../../tools/fixtures/synthetic-applicad-roof.xml", import.meta.url)),
+  "utf8",
+);
 
-test("parseAppliCadGeometry: parses the real sample completely", () => {
+test("parseAppliCadGeometry: parses the synthetic fixture completely", () => {
   const g = parseAppliCadGeometry(SAMPLE)!;
   assert.equal(g.points.length, 29);
   assert.equal(g.lines.length, 35);

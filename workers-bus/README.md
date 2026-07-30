@@ -1,15 +1,14 @@
 # ironwrap-bus
 
-The IronWrap integration bus on Cloudflare Workers — the build that collapses the
-spec's **Make bus + owned D1/R2 store** into one serverless app (~CAD $7/mo vs Make's
-tier-bump). One deployment serves the built PWA, its authenticated `/api/v1/*` BFF,
+The IronWrap integration bus on Cloudflare Workers. It implements the owned D1/R2 first-write
+intake and evidence spine described by `docs/AUTONOMOUS-OPERATING-SYSTEM.md`. One deployment
+serves the built PWA, its authenticated `/api/v1/*` BFF,
 ingest/admin routes, queue consumers, and scheduled recovery. Static app navigation falls back
 to `app/dist/index.html`; dynamic routes are explicitly Worker-first in `wrangler.jsonc`.
 
-> Implements `final-spec-pack/01,03,04,06`. The dual-write becomes a **single write**
-> (the owned store *is* the bus), which is what dissolves the spec's partial-write
-> problem: instant-ack fires off the owned-store write, and bridge pushes are separate
-> retried jobs — JobNimbus/GHL being down can never lose or delay owned intake.
+The owned store is the initial durable write. Instant acknowledgement follows owned-store
+acceptance; bridge pushes are separate retried jobs. An unavailable bridge must not lose or delay
+owned intake, and intake success must not be reported as bridge-delivery proof.
 
 ## Flow
 
@@ -48,13 +47,13 @@ IronWrap PWA
 [4] field users are filtered and rechecked against Frappe _assign before a job is returned
 ```
 
-## How it maps to the spec's hard requirements
+## Implemented mappings to canonical intake requirements
 
-| Spec requirement | Where |
+| Requirement | Where |
 |---|---|
 | Canonical lead envelope `{source,contact,job_ref,payload,ts}` | `core.ts:normalizeEnvelope` |
 | Raw submission stored FIRST | `index.ts:handleIngest` step 1 → `store.putRaw` (R2) |
-| Owned store is system of record (single write) | `store.insertEnvelope` (D1) before any JN push |
+| Owned intake record precedes side effects | `store.insertEnvelope` (D1) before any JN push |
 | Dedup/idempotency on phone/email, all paths | `core.ts:dedupKey` + `store.claimDedup` backed by D1 `dedup_claims` |
 | Instant-ack/MCTB off the owned-store write (interim email pre-A2P) | `index.ts` step 5 → `notify.sendInstantAck` |
 | Partial-write repair (pending_jn_push→pushed, retry sweep) | `queue` handler + `scheduled` retry sweep |
@@ -63,9 +62,9 @@ IronWrap PWA
 | Fail-closed readiness + operator status | `/ready` probes D1/schema/bindings/config; `/admin/status` reports heartbeat, queue/dead-letter/Frappe/audit/QB signals |
 | Safe dead-letter recovery | targeted replay by `envelope_id`; confirmed bulk replay; recovery is marked only after that envelope completes |
 | Idempotent record handoff, kill switch, logging | `external_id`=envelope_id; `JOBNIMBUS_ENABLED` flag; `audit_log` |
-| Intent → owner queue routing (spec 16) | `core.ts:classifyIntent` |
-| ERPNext bridge proof | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
-| Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: retry-safe project/idempotency key + raw R2 + D1 envelope + ERPNext Instant Estimate Session without JobNimbus/GHL dependency |
+| Intent → owner queue routing | `core.ts:classifyIntent` |
+| Frappe consumer | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
+| Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: retry-safe project/idempotency key + raw R2 + D1 envelope + Frappe Instant Estimate Session without JobNimbus/GHL dependency |
 | Passwordless app auth | `app-auth.ts` + D1 migration `0011`; one-time hashed links, hashed fixed-TTL sessions, exact-origin CORS, CSRF, throttles, and audit |
 | Permission-shaped PWA reads | `app-read-models.ts` + `frappe-read.ts`; hard-coded DocType/field/filter allowlists and fail-closed field assignment |
 
@@ -74,12 +73,12 @@ IronWrap PWA
 ```
 src/core.ts        pure logic (envelope, dedup, routing, reconcile) — node-testable, no I/O
 src/store.ts       D1 + R2 adapters (the owned store)
-src/jobnimbus.ts   JobNimbus push adapter (live-tested; enabled by config)
+src/jobnimbus.ts   Config-gated JobNimbus push adapter
 src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, estimate, measurement, evidence, field check-in, and payment milestone rows
 src/estimates.ts   Owned estimator/configurator intake; idempotent by project/key; no JobNimbus/GHL queue
 src/measurement-intake-store.ts Durable, hashed measurement receipt/lease ledger and exception query
 src/google.ts      Gmail send + Google Drive Shared Drive filing
-src/notify.ts      Gmail instant-ack/alerts/digest; SMS is JobNimbus Engage's job
+src/notify.ts      Gmail instant-ack/alerts/digest; no prospect-SMS implementation
 src/operations.ts  readiness, operational status, and dead-letter replay safety orchestration
 src/app-auth.ts    one-time magic-link/session/CSRF/origin contract; no raw token persistence
 src/app-auth-store.ts D1 app-user/auth/throttle/audit adapter and retention cleanup
@@ -110,23 +109,23 @@ npm run db:migrate           # apply schema to D1 (remote); db:migrate:local for
 npm run typegen              # generate worker-configuration.d.ts (Env types)
 
 # secrets (never commit): see .dev.vars.example
-npx wrangler secret put INGEST_TOKEN
-npx wrangler secret put ADMIN_TOKEN
-npx wrangler secret put NEWO_WEBHOOK_TOKEN  # only when Newo phone intake is enabled
-npx wrangler secret put JOBNIMBUS_API_KEY
-npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
-npx wrangler secret put QB_WEBHOOK_TOKEN   # when the QuickBooks webhook is connected
-npx wrangler secret put ERPNEXT_API_KEY    # when ERPNext bridge is enabled
-npx wrangler secret put ERPNEXT_API_SECRET
-npx wrangler secret put PUBLIC_ESTIMATE_TURNSTILE_SECRET
-npx wrangler secret put PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER  # 32+ random characters
-npx wrangler secret put APP_AUTH_PEPPER    # 32+ random characters; required before APP_BFF_ENABLED=true
-npx wrangler secret put APPROVAL_BROKER_SHARED_SECRET  # only when the governed approval broker is enabled
+npx wrangler secret put INGEST_TOKEN --env=""
+npx wrangler secret put ADMIN_TOKEN --env=""
+npx wrangler secret put NEWO_WEBHOOK_TOKEN --env=""  # only when Newo phone intake is enabled
+npx wrangler secret put JOBNIMBUS_API_KEY --env=""
+npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON --env=""
+npx wrangler secret put QB_WEBHOOK_TOKEN --env=""  # when the QuickBooks webhook is connected
+npx wrangler secret put ERPNEXT_API_KEY --env=""  # when the Frappe bridge is enabled
+npx wrangler secret put ERPNEXT_API_SECRET --env=""
+npx wrangler secret put PUBLIC_ESTIMATE_TURNSTILE_SECRET --env=""
+npx wrangler secret put PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER --env=""  # 32+ random characters
+npx wrangler secret put APP_AUTH_PEPPER --env=""  # 32+ random characters; required before APP_BFF_ENABLED=true
+npx wrangler secret put APPROVAL_BROKER_SHARED_SECRET --env=""  # only when the governed approval broker is enabled
 
 npm test                     # pure-logic self-test
 npm run typecheck            # tsc --noEmit
 (cd ../app && npm ci && npm run build)  # creates the static-assets directory
-npx wrangler deploy
+npx wrangler deploy --env=""
 ```
 
 ## Endpoints
@@ -456,8 +455,8 @@ hard-coded DocType, field, filter, and row allowlists in `frappe-read.ts`. Field
 `frappe_user_id` and may see only jobs whose standard Frappe `_assign` JSON contains that exact id;
 the Worker rechecks the returned row instead of trusting only the upstream filter.
 
-Point the website forms, GBP, and AssistAI call-completed webhook at `/ingest/:source`
-(website → `/ingest/website`, AssistAI/voicemail → `/ingest/phone`, etc.). Feed the daily
+Point website forms, GBP, and approved voice/voicemail handoffs at `/ingest/:source`
+(website → `/ingest/website`, voice/voicemail → `/ingest/phone`, etc.). Feed the daily
 independent counts (Twilio call logs, form-provider/Cloudflare logs, GBP) via
 `/admin/source-count` so reconciliation can detect a lead that never reached the bus.
 Every Worker-generated API/admin/ingest/webhook response carries no-store (the session endpoint is
@@ -481,23 +480,21 @@ returns `409 replay_run_id_conflict`; a concurrent exact request returns
 `409 replay_run_in_progress`. A queue-publication failure rolls the envelope claim back and marks
 the ledger attempt failed, so the same exact request can CAS the ledger into a new safe attempt.
 
-## ⚠️ Confirm before production (the honest seams)
+## External prerequisites and evidence seams
 
-1. **JobNimbus API** (`src/jobnimbus.ts`) — **verified live (2026-06-28)**: auth, the
-   `{count,results}` envelope, `jnid`, the `filter` search, and the field mapping are
-   confirmed against the real account. Valid record types are `Customer` (contact) /
-   `Retail` (job), set via the `JN_*` vars — `"Lead"` is rejected by this account (it's the
-   exact 400 that broke the experimental Make import). Idempotency is by the `bus:<id>` tag.
-   `JOBNIMBUS_ENABLED` is now `"true"` in `wrangler.jsonc`.
+1. **JobNimbus API** (`src/jobnimbus.ts`) — record types and statuses come from the `JN_*`
+   configuration. Before enabling the bridge, prove authentication, response shape, configured
+   record types, search behavior, field mapping, create/read/archive, and retry idempotency against
+   the exact account. Store dated evidence outside this README. Idempotency uses the `bus:<id>` tag.
 2. **Google Workspace/Drive** — Gmail send and Shared Drive filing use
-   `GOOGLE_SERVICE_ACCOUNT_JSON` with domain-wide delegation. `FROM_EMAIL` is currently
-   `sales@ironwrapexteriors.com`; switch it only after the mailbox/sender alias decision changes.
-3. **SMS / A2P** — the Worker does not send SMS. Prospect SMS belongs in JobNimbus Engage after
-   A2P/carrier registration. Pre-A2P instant-ack is Gmail email + owner alert.
-4. **QuickBooks webhook** — the receiver captures signed events now, records a
+   `GOOGLE_SERVICE_ACCOUNT_JSON` with domain-wide delegation. Validate the configured sender,
+   mailbox authority, folder permissions, and retention against the target tenant.
+3. **SMS / carrier registration** — the Worker does not send prospect SMS. Any external SMS
+   bridge requires current carrier/consent evidence and separate delivery reconciliation.
+4. **QuickBooks webhook** — the receiver captures signed events, records a
    payload-hash receipt to block replay side effects, and can mirror Invoice/Payment
-   webhook events into ERPNext Payment Milestone rows. Detailed amount/status sync
-   back to JobNimbus still needs a later QB OAuth read path.
+   webhook events into Frappe Payment Milestone rows. This is not full accounting authority;
+   posted values require authenticated read-back and reconciliation.
 5. **ERPNext bridge** — disabled by default. Before setting `ERPNEXT_ENABLED=true`, apply
    migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,
    Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Measurement Value,
@@ -520,11 +517,10 @@ the ledger attempt failed, so the same exact request can CAS the ledger into a n
    Roof Job sync also creates missing initial production gate rows without resetting
    existing gate state. ERPNext is still a consumer, not the raw intake source.
 
-## Operating owner
+## Operating authority
 
-This is owned product code that IronWrap builds, operates, and resells, so keeping it running is
-core to the business, not an outsourced burden. The owner plus Claude Code is the engineering/ops
-capacity; the operations runbook (`docs/OPERATIONS-RUNBOOK.md`) covers monitoring, incident
-playbooks, and rotation. Optionally keep a ~$9/mo Make Core seat for its native connectors and
-visual observability until the owned replacements are proven. The bus discipline (envelope, dedup,
-dead-letter, reconcile) is the same as the spec; this only changes where the infra runs.
+This is owned product code. Monitoring, incident response, recovery, and rotation follow
+[`docs/OPERATIONS-RUNBOOK.md`](../docs/OPERATIONS-RUNBOOK.md). A bridge may remain only until its
+owned replacement is implemented, reconciled, accepted, and proven with rollback evidence. The
+binding intake, evidence, and side-effect rules are in
+[`docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md`](../docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md).

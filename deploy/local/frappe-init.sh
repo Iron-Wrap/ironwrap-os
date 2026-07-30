@@ -82,7 +82,7 @@ fi
 
 # 5. install the app on the site (runs install.py hooks + DocType sync) -------
 if ! bench --site "$SITE" list-apps 2>/dev/null | grep -q ironwrap_roofing; then
-  log "installing ironwrap_roofing on $SITE (48 DocTypes, policy hooks)"
+  log "installing ironwrap_roofing on $SITE (committed DocTypes and policy hooks)"
   bench --site "$SITE" install-app ironwrap_roofing
 fi
 

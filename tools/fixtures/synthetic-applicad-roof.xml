@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <APPLICAD_EXPORT xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="file:///c:/temp/applicad-export.xsd">
-<LOCATION ADDRESS=" " CITY="" STATE="2 June 2026" POSTAL="2 June 2026" LAT="" LONG="" />
+<LOCATION ADDRESS="" CITY="" STATE="" POSTAL="" LAT="" LONG="" />
 <REFERENCE FILE=""/>
-<DATABASE FILE="1013 Moville St.dab" MODEL="ROOF"/>
+<DATABASE FILE="synthetic-roof.dab" MODEL="ROOF"/>
 <NOTES>
 </NOTES>
 <STRUCTURES NORTHORIENTATION="0.0">

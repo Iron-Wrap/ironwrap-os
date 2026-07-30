@@ -51,6 +51,11 @@ inventory (see below).
 
 ## Mutation contract
 
+This section describes the current implemented control. It remains binding until a routine digital
+action is replaced by the machine-authority contract defined in
+`docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md`; legal, customer-consent, physical, relationship, and
+safety human gates remain human.
+
 Every write follows the same sequence, with no step skippable:
 
 ```text
@@ -131,6 +136,6 @@ node tools/validate-hermes-config.mjs
 It parses the implemented tool inventory from all three server sources, checks that every tool referenced
 in `roles.json` exists, that reads are read-only, dry-runs are previews, approved-writes are
 `request_*` mutations each paired with its dry-run counterpart in the same role, and that all
-eight blueprint roles are present with no duplicate grants.
+all configured roles are present with no duplicate grants.
 It also freezes the 159-tool inventory, enforces Contract Acceptance as read-only, checks
 least-privilege boundaries for field/finance roles, and validates manifest union exactness.

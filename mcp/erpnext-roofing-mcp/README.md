@@ -8,6 +8,10 @@ Frappe token auth. The implemented source contract is **131 tools: 75 reads, 28 
 approved writes**. The manifest in `hermes/mcp-servers.json` is the exact source-registration
 inventory; deployed runtime proof remains a launch gate.
 
+These approved writes implement the current human-receipt control. They remain binding until a
+routine digital action is deliberately migrated to the canonical machine-authority contract with
+equivalent policy, evidence, idempotency, reconciliation, rollback, and audit tests.
+
 Baseline reads and command pairs:
 
 - `get_roof_job`
@@ -81,7 +85,7 @@ Baseline reads and command pairs:
 - `dry_run_market_watch_item`
 - `request_add_market_watch_item`
 
-Committed 48-DocType operating-model additions:
+Current operating-model additions:
 
 - `get_crew_profile` / `list_crew_profiles` (strictly read-only)
 - `get_job_assignment` / `list_job_assignments_for_job`

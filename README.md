@@ -1,52 +1,76 @@
 # IronWrap OS
 
-**IronWrap OS** for **IronWrap Exteriors** (Alberta roofing & metal exteriors; two
-brands — IronWrap Exteriors + iRoof Alberta). Goal: capture every lead, never lose one, and run
-jobs lead → estimate → proposal → deposit → materials → completion → invoice → review on a
-portable owned-data spine. JobNimbus and GoHighLevel are temporary bridge systems until the owned
-IronWrap OS path covers the same work with proof.
+IronWrap OS is the owned operating system for IronWrap Exteriors and iRoof Alberta. Its target is
+an agent-operated Alberta roofing, metal-exteriors, and metal-fabrication company in which reliable
+agents run digital work and people retain physical, legal, and relationship-sensitive work.
 
-New here? Start with the [spec index](./final-spec-pack/README.md) and its
-[Phase 1 source-truth and build contract](./final-spec-pack/18-phase-1-source-truth-and-build-contract.md).
-Read [AGENTS.md](./AGENTS.md) for the repository map and contributor conventions.
+The repository contains both the target contract and the implementation. Those are intentionally
+different truth classes: a documented target is not evidence that a capability is deployed or
+production-proven.
 
-Shipping it? The deployment authority is [docs/LAUNCH-RUNBOOK.md](./docs/LAUNCH-RUNBOOK.md);
-[docs/OPERATIONS-RUNBOOK.md](./docs/OPERATIONS-RUNBOOK.md) covers recovery and day-two operation.
-The Frappe-only/Hermes target and repository proof are
-[the end-product blueprint](./docs/HERMES-ERPNEXT-END-PRODUCT-BLUEPRINT.md) and
-[the proof pack](./docs/HERMES-ERPNEXT-PROOF-PACK.md). Legacy `erpnext-*` names are compatibility
-identifiers only; ERPNext is forbidden in the runtime.
+## Start here
 
-## Layout
-
-| Path | What |
+| Authority | Purpose |
 |---|---|
-| [`final-spec-pack/`](./final-spec-pack/) | **The spec** (19 chapters; start at its `README.md`). The target system. |
-| [`workers-bus/`](./workers-bus/) | **The integration bus** — Cloudflare Worker (owned D1/R2 store + lead/photo/measurement/estimate bus). `npm test` / `wrangler deploy`. |
-| [`app/`](./app/) | **The production PWA** — owned app surface (Vite 8 / React 19 / TS 7): Field Companion, public estimator, customer portal, production schedule. Vitest + Playwright e2e + Lighthouse. |
-| [`deploy/local/`](./deploy/local/) | **Local E2E stack** — docker-compose Frappe v15 + MariaDB + Redis with provisioner and seed data; wired into workers-bus `npm run dev`. Dev-only, never production. |
-| `samples/` | Real RoofRuler measurement reports + AppliCad XML (extraction inputs). |
-| `docs/` | Current runbooks, proof material, scoped references, and archived planning records. |
-| `output/` | Generated deliverables (Russian `.docx`, overview PDF, website audit). |
-| `task1-spec/` | Original source material (v9.1 docs, pricing, early PDFs). |
-| `tools/` | Build/proof scripts, including AppliCad XML and Frappe DocType contract checks. |
-| `frappe-apps/ironwrap_roofing/` | Proprietary Frappe-only operating core. |
-| `mcp/ironwrap-bus-mcp/` | Read-only MCP wrapper for Hermes/operator diagnostics over the bus admin endpoints. |
-| `mcp/erpnext-roofing-mcp/` | MCP wrapper for Hermes/operator diagnostics plus narrow approved Frappe writes. |
+| [`docs/AUTONOMOUS-OPERATING-SYSTEM.md`](./docs/AUTONOMOUS-OPERATING-SYSTEM.md) | Complete company model, workflows, agent responsibilities, human work, exceptions, and target state machine |
+| [`docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md`](./docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md) | Decision authority, work-package, evidence, safety, side-effect, and reconciliation contracts |
+| [`docs/CAPABILITY-MATRIX.md`](./docs/CAPABILITY-MATRIX.md) | Target-to-code gap register and implementation order |
+| [`docs/COMPLIANCE-REGISTER.md`](./docs/COMPLIANCE-REGISTER.md) | Alberta/Canada obligations, official sources, owners, evidence, and review dates |
+| [`docs/DOCUMENTATION-CONTRACT.md`](./docs/DOCUMENTATION-CONTRACT.md) | Documentation authority, allowed document classes, freshness, privacy, and retirement rules |
+| [`AGENTS.md`](./AGENTS.md) | Contributor workflow, repository map, and implementation guardrails |
 
-## Status
+Deployment and operational procedures are subordinate to those contracts:
+[`docs/LAUNCH-RUNBOOK.md`](./docs/LAUNCH-RUNBOOK.md),
+[`docs/OPERATIONS-RUNBOOK.md`](./docs/OPERATIONS-RUNBOOK.md), and the scoped integration
+runbooks under `docs/`.
 
-- **Spec:** the current direction is locked in `final-spec-pack/18`: owned Worker/D1/R2 first-write
-  spine, Frappe-only/Hermes core, Field Companion PWA primary, and JobNimbus/GHL/Make/Jotform as
-  temporary bridges.
-- **Bus:** buildable; tests green; website/photo/measurement/estimate/QuickBooks intake paths are
-  in code. `/ingest/estimate` is the owned estimator handoff and does not depend on JobNimbus/GHL.
-- **App:** the production PWA in `app/` is buildable with unit + Playwright e2e coverage.
-- **Local E2E:** `deploy/local/` runs the full stack locally (docker-compose Frappe v15 + MariaDB +
-  Redis, seeded synthetic data) behind workers-bus `npm run dev`; dev-only, never production.
+## Human and agent boundary
 
-## Provenance
+Reliable agents may perform sales administration, estimating, planning, purchasing, scheduling,
+compliance checks, communications, job documentation, billing preparation, reconciliation, and
+warranty triage when the corresponding capability and authority are implemented.
 
-`task1-spec/`, `samples/`, and `output/` retain source inputs and generated deliverables. Historical
-planning records live under `docs/archive/`; they are not operating authority. Secrets live in
-`workers-bus/.dev.vars` (gitignored); the JobNimbus key shared during setup should be rotated.
+People perform access-sensitive inspection, fabrication exceptions, material handling,
+installation, emergency stabilization, relationship-sensitive conversations, and legally required
+signoffs. Every physical assignment is an exact work package with prerequisites, hazards, stop
+conditions, hold points, instructions, acceptance criteria, and required evidence. No schedule,
+margin, or customer promise can override a safety stop.
+
+## Repository map
+
+| Path | Responsibility |
+|---|---|
+| `workers-bus/` | Cloudflare Worker integration bus and owned D1/R2 intake spine |
+| `app/` | React PWA for field, estimating, customer, sales, production, and owner surfaces |
+| `frappe-apps/ironwrap_roofing/` | Proprietary Frappe operating records and server policy |
+| `mcp/` | Bounded tools connecting agents to the bus, Frappe, and Newo |
+| `hermes/` | Agent roles, runtime configuration, and operational procedures |
+| `config/` | Tenant and integration release contracts; secret names only |
+| `deploy/` | Local and production deployment assets |
+| `docs/` | Canonical contracts and current runbooks only |
+| `tools/` | Validators, readiness checks, and synthetic fixtures |
+| `Facet/` | Ignored nested product repository with its own authority and Git lifecycle |
+
+Generated reports belong outside Git under `output/`. Customer files and production exports belong
+in approved operational storage, never in this repository. Committed fixtures must be synthetic.
+
+## Validation
+
+Run the cheapest relevant check first, then broaden:
+
+```bash
+node tools/validate-documentation.mjs
+node tools/validate-erpnext-doctypes.mjs
+node tools/validate-tenant-config.mjs
+node tools/validate-hermes-config.mjs
+node tools/validate-newo-config.mjs
+node tools/applicad-xml-proof.mjs --check
+node tools/production-readiness.mjs contract
+(cd workers-bus && npm test && npm run typecheck)
+(cd mcp/erpnext-roofing-mcp && npm test)
+(cd mcp/ironwrap-bus-mcp && npm test)
+(cd mcp/newo-mcp && npm test)
+```
+
+Never infer deployment, runtime health, business acceptance, or production proof from repository
+validation alone. Record each status with the evidence required by the authority contract.

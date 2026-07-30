@@ -3,6 +3,13 @@
 The approval rail turns one bounded Hermes preview into one human-approved,
 audited mutation. It is deliberately not a generic remote-control API.
 
+This is the current implemented transitional control, not the final human boundary. Under the
+reliable-agent target, a routine digital action may move to machine-issued policy authority only
+after the canonical side-effect, idempotency, reconciliation, rollback, and audit contracts are
+implemented and tested. Existing approval gates remain binding until that replacement lands.
+Legal, customer-consent, physical-acceptance, relationship-sensitive, and safety-critical human
+authority is never removed by this transition.
+
 ## Bounded verticals
 
 | Authority | Fixed dry run → write | Role | D1 ledger | Private routes |

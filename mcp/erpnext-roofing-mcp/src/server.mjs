@@ -28,6 +28,10 @@ const REQUEST_TO_DRY_RUN = Object.freeze({
   request_bind_quote_price_rules: "dry_run_bind_quote_price_rules",
   request_create_proposal_evidence_pack: "dry_run_proposal_evidence_pack",
   request_publish_proposal_evidence_pack: "dry_run_publish_proposal_evidence_pack",
+  request_approve_controlled_item: "dry_run_approve_controlled_item",
+  request_receive_material_lot: "dry_run_receive_material_lot",
+  request_release_shop_order: "dry_run_release_shop_order",
+  request_reserve_shop_order_materials: "dry_run_reserve_shop_order_materials",
   request_create_job_assignment: "dry_run_job_assignment",
   request_create_change_order: "dry_run_change_order",
   request_transition_change_order: "dry_run_change_order_transition",
@@ -1957,6 +1961,23 @@ export const TenantExportInputSchema = z.object({
   notes: z.string().max(2000).optional(),
 }).strict();
 
+const ControlledItemCommandInputSchema = z.object({
+  controlled_item_id: IdSchema,
+}).strict();
+
+const MaterialLotCommandInputSchema = z.object({
+  material_lot_id: IdSchema,
+}).strict();
+
+const ShopOrderCommandInputSchema = z.object({
+  shop_order_id: IdSchema,
+}).strict();
+
+const ShopOrderReservationInputSchema = z.object({
+  shop_order_id: IdSchema,
+  allocations_json: z.string().trim().min(2).max(20_000),
+}).strict();
+
 export function approvedWriteInputSchema(baseSchema) {
   const approvalShape = {
     request_text: z.string().trim().min(1).max(4000),
@@ -3561,6 +3582,221 @@ export function buildServer(config) {
         afterSummary: summarizeSupplierOrder({ ...(before ?? {}), ...draft, name: draft.supplier_order_id }),
         execute: upsertDraftExecutor(config, "Supplier Order", draft.supplier_order_id, draft, before),
         responseExtra: { upserted: true, operation, supplier_order_id: draft.supplier_order_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_approve_controlled_item",
+    {
+      title: "Dry Run Approve Controlled Item",
+      description: "Preview approval of one Draft Controlled Item without writing.",
+      inputSchema: ControlledItemCommandInputSchema,
+    },
+    async ({ controlled_item_id }) => {
+      const item = await readResource(config, "Controlled Item", controlled_item_id);
+      assertControlledItemReadyForApproval(item, controlled_item_id);
+      return text({
+        would_write: false,
+        required_tool: "request_approve_controlled_item",
+        target: { doctype: "Controlled Item", name: controlled_item_id },
+        before: summarizeControlledItem(item),
+        expected_snapshot_sha256: digest(controlledItemSnapshot(item)),
+        approval: {
+          status: "Approved",
+          approved_at: "Frappe server time at execution",
+        },
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_approve_controlled_item",
+    {
+      title: "Request Approve Controlled Item",
+      description: "Approved-write: approve one Draft Controlled Item and record a Hermes Run audit row.",
+      inputSchema: approvedWriteInputSchema(ControlledItemCommandInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const item = await readResource(config, "Controlled Item", args.controlled_item_id);
+      assertControlledItemReadyForApproval(item, args.controlled_item_id);
+      const dryRun = {
+        target: { doctype: "Controlled Item", name: args.controlled_item_id },
+        before: summarizeControlledItem(item),
+        expected_snapshot_sha256: digest(controlledItemSnapshot(item)),
+        approval: {
+          status: "Approved",
+          approved_by: args.approved_by,
+          approved_at: "Frappe server time at execution",
+        },
+      };
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_approve_controlled_item",
+        target: { doctype: "Controlled Item", name: args.controlled_item_id },
+        dryRun,
+        beforeSummary: summarizeControlledItem(item),
+        afterSummary: {
+          ...summarizeControlledItem(item),
+          status: "Approved",
+        },
+        execute: () => erpPost(
+          config,
+          "/api/method/ironwrap_roofing.shop_fabrication_api.approve_controlled_item",
+          {
+            controlled_item_id: args.controlled_item_id,
+            hermes_run_id: args.run_id,
+          },
+        ),
+        responseExtra: { approved: true, controlled_item_id: args.controlled_item_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_receive_material_lot",
+    {
+      title: "Dry Run Receive Material Lot",
+      description: "Preview receipt of one Draft Material Lot without writing.",
+      inputSchema: MaterialLotCommandInputSchema,
+    },
+    async ({ material_lot_id }) => text(await buildReceiveMaterialLotPreview(config, material_lot_id)),
+  );
+
+  server.registerTool(
+    "request_receive_material_lot",
+    {
+      title: "Request Receive Material Lot",
+      description: "Approved-write: receive one Draft Material Lot and record a Hermes Run audit row.",
+      inputSchema: approvedWriteInputSchema(MaterialLotCommandInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const lot = await readResource(config, "Material Lot", args.material_lot_id);
+      const dryRun = await buildReceiveMaterialLotPreview(config, args.material_lot_id);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_receive_material_lot",
+        target: { doctype: "Material Lot", name: args.material_lot_id },
+        roofJob: lot.roof_job,
+        dryRun,
+        beforeSummary: summarizeMaterialLot(lot),
+        afterSummary: (result) => result?.material_lot ?? {},
+        execute: () => erpPost(
+          config,
+          "/api/method/ironwrap_roofing.shop_fabrication_api.receive_material_lot",
+          {
+            material_lot_id: args.material_lot_id,
+            hermes_run_id: args.run_id,
+          },
+        ),
+        responseExtra: { received: true, material_lot_id: args.material_lot_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_release_shop_order",
+    {
+      title: "Dry Run Release Shop Order",
+      description: "Preview release of one Draft Shop Order without writing.",
+      inputSchema: ShopOrderCommandInputSchema,
+    },
+    async ({ shop_order_id }) => text(await buildReleaseShopOrderPreview(config, shop_order_id)),
+  );
+
+  server.registerTool(
+    "request_release_shop_order",
+    {
+      title: "Request Release Shop Order",
+      description: "Approved-write: release one Draft Shop Order and record a Hermes Run audit row.",
+      inputSchema: approvedWriteInputSchema(ShopOrderCommandInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const order = await readResource(config, "Shop Order", args.shop_order_id);
+      const dryRun = await buildReleaseShopOrderPreview(config, args.shop_order_id);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_release_shop_order",
+        target: { doctype: "Shop Order", name: args.shop_order_id },
+        roofJob: order.roof_job,
+        dryRun,
+        beforeSummary: summarizeShopOrder(order),
+        afterSummary: (result) => result?.shop_order ?? {},
+        execute: () => erpPost(
+          config,
+          "/api/method/ironwrap_roofing.shop_fabrication_api.release_shop_order",
+          {
+            shop_order_id: args.shop_order_id,
+            hermes_run_id: args.run_id,
+          },
+        ),
+        responseExtra: { released: true, shop_order_id: args.shop_order_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_reserve_shop_order_materials",
+    {
+      title: "Dry Run Reserve Shop Order Materials",
+      description: "Preview exact material reservations for one released Shop Order without writing.",
+      inputSchema: ShopOrderReservationInputSchema,
+    },
+    async ({ shop_order_id, allocations_json }) => text(
+      await buildReserveShopOrderPreview(config, shop_order_id, allocations_json),
+    ),
+  );
+
+  server.registerTool(
+    "request_reserve_shop_order_materials",
+    {
+      title: "Request Reserve Shop Order Materials",
+      description: "Approved-write: reserve exact Material Lot quantities for one released Shop Order and record a Hermes Run audit row.",
+      inputSchema: approvedWriteInputSchema(ShopOrderReservationInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const order = await readResource(config, "Shop Order", args.shop_order_id);
+      const dryRun = await buildReserveShopOrderPreview(config, args.shop_order_id, args.allocations_json);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_reserve_shop_order_materials",
+        target: { doctype: "Shop Order", name: args.shop_order_id },
+        roofJob: order.roof_job,
+        dryRun,
+        beforeSummary: summarizeShopOrder(order),
+        afterSummary: (result) => ({
+          shop_order: result?.shop_order ?? {},
+          material_lots: Array.isArray(result?.material_lots) ? result.material_lots : [],
+        }),
+        execute: () => erpPost(
+          config,
+          "/api/method/ironwrap_roofing.shop_fabrication_api.reserve_shop_order_materials",
+          {
+            shop_order_id: args.shop_order_id,
+            hermes_run_id: args.run_id,
+          },
+        ),
+        responseExtra: { reserved: true, shop_order_id: args.shop_order_id },
       }));
     },
   );
@@ -7205,6 +7441,327 @@ export function assertProposalPackPublishable(pack, proposalEvidencePackId) {
   if (!str(pack.roof_job) || !str(pack.quotation)) {
     throw new Error("proposal_evidence_pack_anchor_missing");
   }
+}
+
+function snapshotText(value) {
+  return value == null ? "" : String(value);
+}
+
+function snapshotValues(record, fields) {
+  return Object.fromEntries(fields.map((field) => [field, snapshotText(record?.[field])]));
+}
+
+function parseShopAllocationsJson(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("shop_allocations_json_invalid");
+  }
+  if (!Array.isArray(parsed) || parsed.length < 1) {
+    throw new Error("shop_allocations_json_invalid");
+  }
+  const expectedKeys = ["allocation_id", "line_no", "material_lot", "reserved_quantity", "unit"];
+  const seen = new Set();
+  return parsed.map((row, index) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      throw new Error(`shop_allocation_invalid:${index + 1}`);
+    }
+    const keys = Object.keys(row).sort();
+    if (JSON.stringify(keys) !== JSON.stringify(expectedKeys)) {
+      throw new Error(`shop_allocation_invalid:${index + 1}`);
+    }
+    const allocationId = str(row.allocation_id);
+    const materialLot = str(row.material_lot);
+    const unit = str(row.unit);
+    const lineNo = Number(row.line_no);
+    const reservedQuantity = Number(row.reserved_quantity);
+    if (!allocationId || !materialLot || !unit) {
+      throw new Error(`shop_allocation_invalid:${index + 1}`);
+    }
+    if (!Number.isInteger(lineNo) || lineNo < 1) {
+      throw new Error(`shop_allocation_line_invalid:${index + 1}`);
+    }
+    if (!Number.isFinite(reservedQuantity) || reservedQuantity <= 0) {
+      throw new Error(`shop_allocation_quantity_invalid:${index + 1}`);
+    }
+    if (seen.has(allocationId)) {
+      throw new Error("shop_allocation_duplicate_id");
+    }
+    seen.add(allocationId);
+    return {
+      allocation_id: allocationId,
+      line_no: lineNo,
+      material_lot: materialLot,
+      reserved_quantity: snapshotText(row.reserved_quantity),
+      unit,
+    };
+  });
+}
+
+function controlledItemSnapshot(item) {
+  return {
+    controlled_item: snapshotValues(item, ["name", "controlled_item_id", "status", "modified"]),
+  };
+}
+
+function materialLotSnapshot(lot) {
+  return {
+    material_lot: snapshotValues(lot, [
+      "name",
+      "material_lot_id",
+      "roof_job",
+      "controlled_item",
+      "status",
+      "available_quantity",
+      "reserved_quantity",
+      "consumed_quantity",
+      "modified",
+    ]),
+  };
+}
+
+function shopOrderSnapshot(order, lots = []) {
+  const snapshot = {
+    shop_order: snapshotValues(order, [
+      "name",
+      "shop_order_id",
+      "roof_job",
+      "material_takeoff",
+      "supplier_order",
+      "work_package",
+      "status",
+      "modified",
+    ]),
+  };
+  if (lots.length) {
+    snapshot.material_lots = lots.map((lot) => snapshotValues(lot, [
+      "name",
+      "material_lot_id",
+      "roof_job",
+      "controlled_item",
+      "unit",
+      "status",
+      "available_quantity",
+      "reserved_quantity",
+      "consumed_quantity",
+      "modified",
+    ]));
+  }
+  return snapshot;
+}
+
+function summarizeControlledItem(item) {
+  return {
+    controlled_item_id: item.controlled_item_id ?? item.name,
+    status: item.status ?? "",
+    source_ref: item.source_ref ?? "",
+    modified: item.modified ?? "",
+  };
+}
+
+function summarizeMaterialLot(lot) {
+  return {
+    material_lot_id: lot.material_lot_id ?? lot.name,
+    roof_job: lot.roof_job ?? "",
+    controlled_item: lot.controlled_item ?? "",
+    source_kind: lot.source_kind ?? "",
+    supplier_order: lot.supplier_order ?? "",
+    source_shop_order: lot.source_shop_order ?? "",
+    status: lot.status ?? "",
+    available_quantity: snapshotText(lot.available_quantity),
+    reserved_quantity: snapshotText(lot.reserved_quantity),
+    consumed_quantity: snapshotText(lot.consumed_quantity),
+    modified: lot.modified ?? "",
+  };
+}
+
+function summarizeShopOrder(order) {
+  return {
+    shop_order_id: order.shop_order_id ?? order.name,
+    roof_job: order.roof_job ?? "",
+    material_takeoff: order.material_takeoff ?? "",
+    supplier_order: order.supplier_order ?? "",
+    work_package: order.work_package ?? "",
+    status: order.status ?? "",
+    line_count: Array.isArray(order.lines) ? order.lines.length : 0,
+    allocation_count: Array.isArray(order.material_allocations) ? order.material_allocations.length : 0,
+    modified: order.modified ?? "",
+  };
+}
+
+function assertControlledItemReadyForApproval(item, controlledItemId) {
+  if (!item || item.name !== controlledItemId || item.controlled_item_id !== controlledItemId) {
+    throw new Error("controlled_item_identity_mismatch");
+  }
+  if (item.status !== "Draft") throw new Error("controlled_item_not_draft");
+}
+
+function assertMaterialLotReadyForReceipt(lot, materialLotId) {
+  if (!lot || lot.name !== materialLotId || lot.material_lot_id !== materialLotId) {
+    throw new Error("material_lot_identity_mismatch");
+  }
+  if (lot.status !== "Draft") throw new Error("material_lot_not_draft");
+}
+
+function assertShopOrderReadyForRelease(order, shopOrderId) {
+  if (!order || order.name !== shopOrderId || order.shop_order_id !== shopOrderId) {
+    throw new Error("shop_order_identity_mismatch");
+  }
+  if (order.status !== "Draft") throw new Error("shop_order_not_draft");
+}
+
+function assertShopOrderReadyForReservation(order, shopOrderId) {
+  if (!order || order.name !== shopOrderId || order.shop_order_id !== shopOrderId) {
+    throw new Error("shop_order_identity_mismatch");
+  }
+  if (order.status !== "Released") throw new Error("shop_order_not_released");
+}
+
+function assertShopSourceRecord(source, { doctype, name, roofJob, allowedStatuses }) {
+  if (!source || source.name !== name) throw new Error(`shop_source_not_found:${doctype}`);
+  if (source.roof_job !== roofJob || !allowedStatuses.has(source.status)) {
+    throw new Error(`shop_source_not_ready:${doctype}`);
+  }
+}
+
+async function buildReceiveMaterialLotPreview(config, materialLotId) {
+  const lot = await readResource(config, "Material Lot", materialLotId);
+  assertMaterialLotReadyForReceipt(lot, materialLotId);
+  const controlledItem = await readResource(config, "Controlled Item", lot.controlled_item);
+  if (controlledItem.status !== "Approved") throw new Error("material_lot_item_not_approved");
+  let source = null;
+  if (lot.source_kind === "Supplier Receipt") {
+    source = await readResource(config, "Supplier Order", lot.supplier_order);
+    assertShopSourceRecord(source, {
+      doctype: "Supplier Order",
+      name: lot.supplier_order,
+      roofJob: lot.roof_job,
+      allowedStatuses: new Set(["Partially Received", "Received"]),
+    });
+  } else if (lot.source_kind === "Shop Remnant") {
+    source = await readResource(config, "Shop Order", lot.source_shop_order);
+    assertShopSourceRecord(source, {
+      doctype: "Shop Order",
+      name: lot.source_shop_order,
+      roofJob: lot.roof_job,
+      allowedStatuses: new Set(["Ready", "Handed Over", "Invoice Ready", "Closed"]),
+    });
+  }
+  const preview = {
+    would_write: false,
+    required_tool: "request_receive_material_lot",
+    target: { doctype: "Material Lot", name: materialLotId },
+    before: summarizeMaterialLot(lot),
+    controlled_item: summarizeControlledItem(controlledItem),
+    expected_snapshot_sha256: digest(materialLotSnapshot(lot)),
+    receiving: {
+      status: lot.condition_status === "Quarantined" ? "Quarantined" : "Available",
+      received_at: "Frappe server time at execution",
+    },
+  };
+  if (source) {
+    preview.source = {
+      doctype: lot.source_kind === "Supplier Receipt" ? "Supplier Order" : "Shop Order",
+      name: source.name,
+      roof_job: source.roof_job ?? "",
+      status: source.status ?? "",
+    };
+  }
+  return preview;
+}
+
+async function buildReleaseShopOrderPreview(config, shopOrderId) {
+  const order = await readResource(config, "Shop Order", shopOrderId);
+  assertShopOrderReadyForRelease(order, shopOrderId);
+  const [materialTakeoff, supplierOrder, workPackage] = await Promise.all([
+    readResource(config, "Material Takeoff", order.material_takeoff),
+    readResource(config, "Supplier Order", order.supplier_order),
+    readResource(config, "Work Package", order.work_package),
+  ]);
+  assertShopSourceRecord(materialTakeoff, {
+    doctype: "Material Takeoff",
+    name: order.material_takeoff,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Approved"]),
+  });
+  assertShopSourceRecord(supplierOrder, {
+    doctype: "Supplier Order",
+    name: order.supplier_order,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Partially Received", "Received"]),
+  });
+  assertShopSourceRecord(workPackage, {
+    doctype: "Work Package",
+    name: order.work_package,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Released", "Acknowledged", "In Progress"]),
+  });
+  return {
+    would_write: false,
+    required_tool: "request_release_shop_order",
+    target: { doctype: "Shop Order", name: shopOrderId },
+    before: summarizeShopOrder(order),
+    sources: {
+      material_takeoff: { name: materialTakeoff.name, roof_job: materialTakeoff.roof_job ?? "", status: materialTakeoff.status ?? "" },
+      supplier_order: { name: supplierOrder.name, roof_job: supplierOrder.roof_job ?? "", status: supplierOrder.status ?? "" },
+      work_package: { name: workPackage.name, roof_job: workPackage.roof_job ?? "", status: workPackage.status ?? "" },
+    },
+    expected_snapshot_sha256: digest(shopOrderSnapshot(order)),
+    release: {
+      status: "Released",
+      released_at: "Frappe server time at execution",
+    },
+  };
+}
+
+async function buildReserveShopOrderPreview(config, shopOrderId, allocationsJson) {
+  const allocations = parseShopAllocationsJson(allocationsJson);
+  const order = await readResource(config, "Shop Order", shopOrderId);
+  assertShopOrderReadyForReservation(order, shopOrderId);
+  const [materialTakeoff, supplierOrder, workPackage] = await Promise.all([
+    readResource(config, "Material Takeoff", order.material_takeoff),
+    readResource(config, "Supplier Order", order.supplier_order),
+    readResource(config, "Work Package", order.work_package),
+  ]);
+  assertShopSourceRecord(materialTakeoff, {
+    doctype: "Material Takeoff",
+    name: order.material_takeoff,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Approved"]),
+  });
+  assertShopSourceRecord(supplierOrder, {
+    doctype: "Supplier Order",
+    name: order.supplier_order,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Partially Received", "Received"]),
+  });
+  assertShopSourceRecord(workPackage, {
+    doctype: "Work Package",
+    name: order.work_package,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Released", "Acknowledged", "In Progress"]),
+  });
+  const materialLotIds = [...new Set(allocations.map((row) => row.material_lot))].sort();
+  const lots = await Promise.all(materialLotIds.map((materialLotId) => readResource(config, "Material Lot", materialLotId)));
+  return {
+    would_write: false,
+    required_tool: "request_reserve_shop_order_materials",
+    target: { doctype: "Shop Order", name: shopOrderId },
+    before: summarizeShopOrder(order),
+    allocations,
+    source_statuses: {
+      material_takeoff: materialTakeoff.status ?? "",
+      supplier_order: supplierOrder.status ?? "",
+      work_package: workPackage.status ?? "",
+    },
+    material_lots: lots.map((lot) => summarizeMaterialLot(lot)),
+    expected_snapshot_sha256: digest(shopOrderSnapshot(order, lots)),
+    reservation: {
+      status: "Reserved",
+      reserved_at: "Frappe server time at execution",
+    },
+  };
 }
 
 function proposalPublicationPreview(pack, approvedBy) {

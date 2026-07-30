@@ -66,6 +66,10 @@ class FakeValidationError(Exception):
     pass
 
 
+class FakePermissionError(Exception):
+    pass
+
+
 class FakeDocument(dict):
     def __init__(self, values: dict, previous: dict | None = None) -> None:
         super().__init__(values)
@@ -95,8 +99,53 @@ def gate_evidence_rows(gates: list[dict]) -> list[dict]:
     ]
 
 
+def current_crew_authority(crew_profile_id: str) -> dict:
+    return {
+        "name": crew_profile_id,
+        "crew_profile_id": crew_profile_id,
+        "status": "Active",
+        "crew_type": "Internal",
+        "competency_status": "Current",
+        "competency_checked_at": "2026-07-01 08:00:00",
+        "competency_expiry": "2026-12-31",
+        "equipment_status": "Safe",
+        "equipment_checked_at": "2026-07-01 08:00:00",
+        "equipment_expiry": "2026-12-31",
+        "wcb_status": "Not Required",
+        "wcb_checked_at": "2026-07-01 08:00:00",
+        "wcb_expiry": "",
+        "active_stop": 0,
+        "active_stop_at": "",
+        "active_stop_reason": "",
+    }
+
+
+def current_compliance_authorities(roof_job: str) -> list[dict]:
+    return [
+        {
+            "name": f"compliance:{gate.lower()}",
+            "compliance_record_id": f"compliance:{gate.lower()}",
+            "roof_job": roof_job,
+            "required_before_gate": gate,
+            "status": "Passed",
+            "effective_date": "2026-01-01",
+            "expiry_date": "2026-12-31",
+            "supersedes": "",
+        }
+        for gate in ("Crew", "Safety", "Access")
+    ]
+
+
 class DocumentValidationAdapterTests(unittest.TestCase):
-    def load_adapter(self, *, values=None, counts=None, rows=None):
+    def load_adapter(
+        self,
+        *,
+        values=None,
+        counts=None,
+        rows=None,
+        session_user="owner@example.com",
+        roles=None,
+    ):
         values = values or {}
         counts = counts or {}
         rows = rows or {}
@@ -104,6 +153,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         lock_calls = []
         frappe_module = types.ModuleType("frappe")
         frappe_module.ValidationError = FakeValidationError
+        frappe_module.PermissionError = FakePermissionError
 
         def sql(query, values, *, as_dict):
             normalized = " ".join(query.split())
@@ -128,6 +178,19 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 return [
                     dict(row)
                     for row in rows.get("Job Assignment", [])
+                    if row.get("roof_job") == values[0]
+                ]
+            if "`tabCrew Profile`" in normalized:
+                requested_names = set(values)
+                return [
+                    dict(row)
+                    for row in rows.get("Crew Profile", [])
+                    if row.get("name") in requested_names
+                ]
+            if "`tabJob Compliance Record`" in normalized:
+                return [
+                    dict(row)
+                    for row in rows.get("Job Compliance Record", [])
                     if row.get("roof_job") == values[0]
                 ]
             if "`tabSafety Plan`" in normalized:
@@ -158,6 +221,10 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         frappe_module.utils = types.SimpleNamespace(
             now_datetime=lambda: "2026-07-10 10:00:00"
         )
+        frappe_module.session = types.SimpleNamespace(user=session_user)
+        frappe_module.get_roles = lambda _user: (
+            roles if roles is not None else ["IronWrap Owner"]
+        )
 
         def get_all(doctype, *, filters, fields):
             calls.append((doctype, filters, fields))
@@ -180,6 +247,55 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         adapter, _ = self.load_adapter()
         with self.assertRaisesRegex(FakeValidationError, "required_fields"):
             adapter.validate_business_document(FakeDocument({}), "lead_envelope")
+
+    def test_waivers_require_the_current_owner_actor(self) -> None:
+        compliance = FakeDocument(
+            {
+                "compliance_record_id": "compliance:safety:1",
+                "roof_job": "job-1",
+                "jurisdiction": "Calgary, AB",
+                "record_type": "Inspection",
+                "authority_name": "IronWrap Safety",
+                "status": "Waived",
+                "required_before_gate": "Safety",
+                "effective_date": "2026-07-01",
+                "expiry_date": "2026-12-31",
+                "owner_user": "owner@example.com",
+                "waived_by": "owner@example.com",
+                "waived_at": "2026-07-10 08:00:00",
+                "waiver_reason": "Owner accepted the documented exception.",
+            }
+        )
+        gate = FakeDocument(
+            {
+                "gate_id": "gate-safety-1",
+                "roof_job": "job-1",
+                "gate": "Safety",
+                "state": "Waived",
+                "owner_user": "owner@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+                "waived_by": "owner@example.com",
+                "waived_at": "2026-07-10 08:00:00",
+                "waiver_reason": "Owner accepted the documented exception.",
+            }
+        )
+        adapter, _ = self.load_adapter()
+        adapter.validate_business_document(compliance, "job_compliance_record")
+        adapter.validate_business_document(gate, "production_gate_state")
+
+        production_adapter, _ = self.load_adapter(
+            session_user="production@example.com", roles=["IronWrap Production"]
+        )
+        with self.assertRaisesRegex(FakePermissionError, "Owner or System Manager"):
+            production_adapter.validate_business_document(
+                FakeDocument({**compliance, "waived_by": "production@example.com"}),
+                "job_compliance_record",
+            )
+        with self.assertRaisesRegex(FakePermissionError, "current owner-level actor"):
+            adapter.validate_business_document(
+                FakeDocument({**gate, "waived_by": "other@example.com"}),
+                "production_gate_state",
+            )
 
     def test_previous_document_is_passed_to_immutable_policy(self) -> None:
         adapter, _ = self.load_adapter()
@@ -669,16 +785,23 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             }
         )
         adapter, calls = self.load_adapter(
-            rows={"Production Gate State": gates, "Evidence Item": gate_evidence_rows(gates)}
+            rows={
+                "Production Gate State": gates,
+                "Evidence Item": gate_evidence_rows(gates),
+                "Crew Profile": [current_crew_authority("crew-1")],
+                "Job Compliance Record": current_compliance_authorities("job-1"),
+            }
         )
         adapter.validate_business_document(document, "job_assignment")
         self.assertEqual(calls, [])
-        self.assertEqual(len(adapter._test_lock_calls), 5)
+        self.assertEqual(len(adapter._test_lock_calls), 7)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
         self.assertIn("`tabEvidence Item`", adapter._test_lock_calls[2][0])
         self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[3][0])
         self.assertIn("`tabSupplier Order`", adapter._test_lock_calls[4][0])
+        self.assertIn("`tabCrew Profile`", adapter._test_lock_calls[5][0])
+        self.assertIn("`tabJob Compliance Record`", adapter._test_lock_calls[6][0])
         self.assertIn("FOR UPDATE", adapter._test_lock_calls[2][0])
         self.assertTrue(
             all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
@@ -793,6 +916,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             "roof_job": "job-1",
             "assignment_type": "Production",
             "status": "Assigned",
+            "crew_profile": "crew-1",
             "scheduled_start": "2026-07-10 12:00:00",
         }
         safety_plan = {
@@ -845,18 +969,22 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 "Production Gate State": gates,
                 "Evidence Item": gate_evidence_rows(gates),
                 "Job Assignment": [assignment],
+                "Crew Profile": [current_crew_authority("crew-1")],
+                "Job Compliance Record": current_compliance_authorities("job-1"),
                 "Safety Plan": [safety_plan],
             }
         )
         adapter.validate_business_document(document, "work_package")
         self.assertEqual(calls, [])
-        self.assertEqual(len(adapter._test_lock_calls), 6)
+        self.assertEqual(len(adapter._test_lock_calls), 8)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
         self.assertIn("`tabEvidence Item`", adapter._test_lock_calls[2][0])
         self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[3][0])
         self.assertIn("`tabSafety Plan`", adapter._test_lock_calls[4][0])
         self.assertIn("`tabWork Package`", adapter._test_lock_calls[5][0])
+        self.assertIn("`tabCrew Profile`", adapter._test_lock_calls[6][0])
+        self.assertIn("`tabJob Compliance Record`", adapter._test_lock_calls[7][0])
         self.assertTrue(
             all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
         )
@@ -866,6 +994,8 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 "Production Gate State": gates,
                 "Evidence Item": gate_evidence_rows(gates),
                 "Job Assignment": [assignment],
+                "Crew Profile": [current_crew_authority("crew-1")],
+                "Job Compliance Record": current_compliance_authorities("job-1"),
                 "Safety Plan": [
                     safety_plan,
                     {
@@ -927,13 +1057,17 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 "Production Gate State": gates,
                 "Evidence Item": gate_evidence_rows(gates),
                 "Job Assignment": [source],
+                "Crew Profile": [current_crew_authority("crew-2")],
+                "Job Compliance Record": current_compliance_authorities("job-1"),
             },
         )
         adapter.validate_business_document(correction, "job_assignment")
-        self.assertEqual(len(adapter._test_lock_calls), 5)
+        self.assertEqual(len(adapter._test_lock_calls), 7)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[3][0])
         self.assertIn("`tabSupplier Order`", adapter._test_lock_calls[4][0])
+        self.assertIn("`tabCrew Profile`", adapter._test_lock_calls[5][0])
+        self.assertIn("`tabJob Compliance Record`", adapter._test_lock_calls[6][0])
         self.assertTrue(
             all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
         )
@@ -944,6 +1078,8 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 "Production Gate State": gates,
                 "Evidence Item": gate_evidence_rows(gates),
                 "Job Assignment": [source, {**correction, "name": "assignment:correction"}],
+                "Crew Profile": [current_crew_authority("crew-2")],
+                "Job Compliance Record": current_compliance_authorities("job-1"),
             },
         )
         with self.assertRaisesRegex(
@@ -958,6 +1094,8 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             rows={
                 "Production Gate State": gates,
                 "Evidence Item": gate_evidence_rows(gates),
+                "Crew Profile": [current_crew_authority("crew-2")],
+                "Job Compliance Record": current_compliance_authorities("job-1"),
                 "Supplier Order": [
                     {
                         "name": "supplier-order-1",

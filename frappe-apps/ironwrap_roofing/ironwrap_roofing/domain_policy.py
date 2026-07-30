@@ -25,6 +25,9 @@ RELEASABLE_WORK_PACKAGE_ASSIGNMENT_STATUSES = frozenset(
     ("Assigned", "Accepted", "In Progress")
 )
 ACTIVE_SUPPLIER_ORDER_EXCEPTION_STATUSES = frozenset(("Needs Review", "Shortage"))
+CREW_AUTHORITY_COMPLIANCE_GATES = frozenset(("Crew", "Safety", "Access"))
+CURRENT_AUTHORITY_STATUSES = frozenset(("Approved", "Passed", "Waived"))
+CURRENT_COMPLIANCE_GATE_STATES = frozenset(("Ready", "Done", "Waived"))
 WORK_PACKAGE_RELEASE_STATUSES = frozenset(("Released", "Acknowledged", "In Progress"))
 WORK_PACKAGE_FROZEN_FIELDS = (
     "roof_job",
@@ -830,6 +833,177 @@ def _validate_crew_profile(record: Any, _context: Mapping[str, Any]) -> None:
             raise PolicyViolation("duplicate_crew_member", "active crew users must be unique")
         if _get(record, "primary_lead") not in active_users:
             raise PolicyViolation("invalid_crew_lead", "primary lead must be an active member")
+        require_fields(
+            record,
+            "competency_status",
+            "competency_checked_at",
+            "competency_expiry",
+            "equipment_status",
+            "equipment_checked_at",
+            "equipment_expiry",
+        )
+        if _get(record, "crew_type") in {"Subcontractor", "Mixed"}:
+            require_fields(record, "wcb_status", "wcb_checked_at", "wcb_expiry")
+        if bool(_get(record, "active_stop")):
+            require_fields(record, "active_stop_at", "active_stop_reason")
+        elif any(
+            not _blank(_get(record, field))
+            for field in ("active_stop_at", "active_stop_reason")
+        ):
+            raise PolicyViolation(
+                "stale_active_stop",
+                "active stop details are valid only while the stop is active",
+                "active_stop_reason",
+            )
+
+
+def _current_rows(rows: Sequence[Any], *, identity_field: str) -> list[Any]:
+    superseded = {
+        str(_get(row, "supersedes"))
+        for row in rows
+        if not _blank(_get(row, "supersedes"))
+    }
+    return [
+        row
+        for row in rows
+        if _record_references(row, identity_field).isdisjoint(superseded)
+    ]
+
+
+def _reference_date(value: Any) -> str | None:
+    if _blank(value):
+        return None
+    return str(value).strip()[:10]
+
+
+def _require_future_or_present(
+    record: Any, field: str, reference_date: str, code: str, message: str
+) -> None:
+    value = _reference_date(_get(record, field))
+    if not value or value < reference_date:
+        raise PolicyViolation(code, message, field)
+
+
+def _require_effective_on_or_before(
+    record: Any, field: str, reference_date: str, code: str, message: str
+) -> None:
+    value = _reference_date(_get(record, field))
+    if not value or value > reference_date:
+        raise PolicyViolation(code, message, field)
+
+
+def _require_crew_authority_ready(
+    crew: Any | None, reference_date: str, *, field: str = "crew_profile"
+) -> None:
+    if crew is None:
+        raise PolicyViolation(
+            "unverified_assignment_crew_profile",
+            "the linked Crew Profile could not be verified",
+            field,
+        )
+    if _get(crew, "status") != "Active":
+        raise PolicyViolation(
+            "inactive_assignment_crew_profile",
+            "the linked Crew Profile must be Active",
+            field,
+        )
+    if _get(crew, "competency_status") != "Current":
+        raise PolicyViolation(
+            "crew_competency_not_current",
+            "the linked Crew Profile does not have current competency authority",
+            field,
+        )
+    if _get(crew, "equipment_status") != "Safe":
+        raise PolicyViolation(
+            "unsafe_crew_equipment",
+            "the linked Crew Profile does not have safe inspected equipment authority",
+            field,
+        )
+    if bool(_get(crew, "active_stop")):
+        raise PolicyViolation(
+            "active_crew_stop",
+            "the linked Crew Profile has an active stop and cannot be scheduled or released",
+            field,
+        )
+    if _get(crew, "crew_type") in {"Subcontractor", "Mixed"}:
+        if _get(crew, "wcb_status") != "Current":
+            raise PolicyViolation(
+                "crew_wcb_not_current",
+                "the linked Crew Profile does not have current WCB authority",
+                field,
+            )
+        _require_future_or_present(
+            crew,
+            "wcb_expiry",
+            reference_date,
+            "crew_wcb_expired",
+            "the linked Crew Profile WCB authority expires before the scheduled or released work",
+        )
+    _require_future_or_present(
+        crew,
+        "competency_expiry",
+        reference_date,
+        "crew_competency_expired",
+        "the linked Crew Profile competency expires before the scheduled or released work",
+    )
+    _require_future_or_present(
+        crew,
+        "equipment_expiry",
+        reference_date,
+        "crew_equipment_inspection_expired",
+        "the linked Crew Profile equipment inspection expires before the scheduled or released work",
+    )
+
+
+def _require_current_compliance_authority(
+    rows: Sequence[Any], reference_date: str, gates: Sequence[Any]
+) -> None:
+    required_gates = {
+        str(_get(gate, "gate"))
+        for gate in gates
+        if _get(gate, "gate") in CREW_AUTHORITY_COMPLIANCE_GATES
+        and _get(gate, "state") in CURRENT_COMPLIANCE_GATE_STATES
+    }
+    current_rows = _current_rows(rows, identity_field="compliance_record_id")
+    for gate in sorted(required_gates):
+        matching_rows = [
+            row
+            for row in current_rows
+            if _get(row, "required_before_gate") == gate
+        ]
+        if not matching_rows:
+            raise PolicyViolation(
+                "missing_compliance_authority",
+                f"a current {gate} compliance authority is required before scheduling or release",
+                "required_before_gate",
+            )
+        if len(matching_rows) != 1:
+            raise PolicyViolation(
+                "ambiguous_compliance_authority",
+                f"exactly one current {gate} compliance authority is required before scheduling or release",
+                "required_before_gate",
+            )
+        row = matching_rows[0]
+        if _get(row, "status") not in CURRENT_AUTHORITY_STATUSES:
+            raise PolicyViolation(
+                "compliance_gate_block",
+                "current Crew/Safety/Access compliance authority is required before scheduling or release",
+                "required_before_gate",
+            )
+        _require_effective_on_or_before(
+            row,
+            "effective_date",
+            reference_date,
+            "compliance_authority_not_effective",
+            "a current Crew/Safety/Access compliance authority is not effective for the scheduled or released work",
+        )
+        _require_future_or_present(
+            row,
+            "expiry_date",
+            reference_date,
+            "expired_compliance_authority",
+            "a current Crew/Safety/Access compliance authority expires before the scheduled or released work",
+        )
 
 
 def _assignment_references(record: Any) -> set[str]:
@@ -934,6 +1108,12 @@ def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
     has_user = not _blank(_get(record, "assigned_user"))
     if has_crew == has_user:
         raise PolicyViolation("assignment_target", "assign exactly one crew or user")
+    if _get(record, "assignment_type") == "Production" and has_user:
+        raise PolicyViolation(
+            "production_assignment_requires_crew_profile",
+            "a Production assignment must target a Crew Profile with current authority",
+            "crew_profile",
+        )
     start = _get(record, "scheduled_start")
     end = _get(record, "scheduled_end")
     if not _blank(end) and _blank(start):
@@ -951,6 +1131,18 @@ def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
             "production_schedule_gate_block",
             context,
         )
+        if has_crew:
+            reference_date = _reference_date(start)
+            if reference_date:
+                _require_crew_authority_ready(
+                    context.get("scheduled_assignment_crew_profile"),
+                    reference_date,
+                )
+                _require_current_compliance_authority(
+                    context.get("job_compliance_rows", ()),
+                    reference_date,
+                    context.get("gates", ()),
+                )
     status = _get(record, "status")
     _enforce_state_transition(
         record,
@@ -1075,6 +1267,26 @@ def _validate_work_package_release_context(
             "stale_work_package_assignment",
             "the linked Job Assignment has been superseded",
             "job_assignment",
+        )
+    if _blank(_get(assignment, "crew_profile")):
+        raise PolicyViolation(
+            "work_package_crew_authority_required",
+            "a released Work Package requires a Crew Profile with current authority",
+            "job_assignment",
+        )
+    reference_date = _reference_date(
+        context.get("now") or _get(record, "released_at") or _get(record, "issued_at")
+    )
+    if reference_date:
+        _require_crew_authority_ready(
+            context.get("work_package_crew_profile"),
+            reference_date,
+            field="job_assignment",
+        )
+        _require_current_compliance_authority(
+            context.get("job_compliance_rows", ()),
+            reference_date,
+            context.get("gates", ()),
         )
 
     safety_plan = context.get("work_package_safety_plan")
@@ -1732,6 +1944,8 @@ def _validate_compliance(record: Any, context: Mapping[str, Any]) -> None:
         require_fields(record, "external_reference", "evidence_item")
     if status in {"Passed", "Failed"}:
         require_fields(record, "inspected_at")
+    if status in CURRENT_AUTHORITY_STATUSES:
+        require_fields(record, "effective_date", "expiry_date")
     if status == "Waived":
         require_fields(record, "waived_by", "waived_at", "waiver_reason")
     elif any(not _blank(_get(record, field)) for field in ("waived_by", "waived_at", "waiver_reason")):

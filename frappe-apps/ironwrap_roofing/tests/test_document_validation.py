@@ -513,6 +513,106 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         ):
             self.assertIn(call, path.read_text(encoding="utf-8"))
 
+    def test_shop_context_resolves_lot_ncr_and_remnant_lineage(self) -> None:
+        adapter, _ = self.load_adapter(
+            values={
+                ("Material Takeoff", "takeoff-1", "status"): "Approved",
+                ("Supplier Order", "supplier-1", "status"): "Received",
+                ("Work Package", "package-1", "status"): "Released",
+                ("Payment Milestone", None, "status"): None,
+                (
+                    "Material Lot",
+                    "lot-1",
+                    (
+                        "name",
+                        "material_lot_id",
+                        "roof_job",
+                        "controlled_item",
+                    "unit",
+                    "received_quantity",
+                    "available_quantity",
+                    "reserved_quantity",
+                    "consumed_quantity",
+                    "status",
+                    ),
+                ): {
+                    "name": "lot-1",
+                    "material_lot_id": "lot-1",
+                    "roof_job": "job-1",
+                    "controlled_item": "item-1",
+                    "unit": "each",
+                    "received_quantity": 10,
+                    "available_quantity": 10,
+                    "reserved_quantity": 0,
+                    "consumed_quantity": 0,
+                    "status": "Available",
+                },
+                (
+                    "Shop Order",
+                    "shop-1",
+                    ("name", "shop_order_id", "roof_job", "status"),
+                ): {
+                    "name": "shop-1",
+                    "shop_order_id": "shop-1",
+                    "roof_job": "job-1",
+                    "status": "In Fabrication",
+                },
+                (
+                    "Material Lot",
+                    "lot-1",
+                    ("name", "material_lot_id", "roof_job", "controlled_item", "unit", "status"),
+                ): {
+                    "name": "lot-1",
+                    "material_lot_id": "lot-1",
+                    "roof_job": "job-1",
+                    "controlled_item": "item-1",
+                    "unit": "each",
+                    "status": "Reserved",
+                },
+                ("Shop Order", "shop-1", ("name", "roof_job", "status")): {
+                    "name": "shop-1",
+                    "roof_job": "job-1",
+                    "status": "Ready",
+                },
+            },
+            rows={"Shop Material Allocation": [{"parent": "shop-1", "material_lot": "lot-1"}]},
+        )
+        shop_context = adapter._context(
+            FakeDocument(
+                {
+                    "roof_job": "job-1",
+                    "material_takeoff": "takeoff-1",
+                    "supplier_order": "supplier-1",
+                    "work_package": "package-1",
+                    "status": "Reserved",
+                    "invoice_payment_milestone": None,
+                    "material_allocations": [{"material_lot": "lot-1"}],
+                }
+            ),
+            "shop_order",
+        )
+        self.assertEqual(shop_context["material_lots"]["lot-1"]["roof_job"], "job-1")
+
+        ncr_context = adapter._context(
+            FakeDocument({"shop_order": "shop-1", "material_lot": "lot-1"}),
+            "nonconformance",
+        )
+        self.assertEqual(ncr_context["shop_order"]["roof_job"], "job-1")
+        self.assertEqual(ncr_context["material_lot"]["status"], "Reserved")
+        self.assertEqual(ncr_context["shop_order_allocation_lot_ids"], {"lot-1"})
+
+        remnant_context = adapter._context(
+            FakeDocument(
+                {
+                    "supplier_order": None,
+                    "source_kind": "Shop Remnant",
+                    "source_shop_order": "shop-1",
+                }
+            ),
+            "material_lot",
+        )
+        self.assertEqual(remnant_context["source_shop_order"]["status"], "Ready")
+
     def test_customer_quote_correction_loads_contract_lineage_context(self) -> None:
         fields = (
             "roof_job",

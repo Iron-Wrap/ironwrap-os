@@ -690,7 +690,7 @@ specs.push(
   },
   {
     name: "Material Lot", dir: "material_lot", idField: "material_lot_id",
-    requiredFields: ["material_lot_id", "roof_job", "controlled_item", "source_kind", "supplier_order", "source_shop_order", "source_evidence", "lot_number", "certificate_reference", "condition_status", "received_quantity", "unit", "received_at", "status"],
+    requiredFields: ["material_lot_id", "roof_job", "controlled_item", "source_kind", "supplier_order", "source_shop_order", "source_evidence", "lot_number", "certificate_reference", "condition_status", "received_quantity", "available_quantity", "reserved_quantity", "consumed_quantity", "unit", "received_at", "status"],
   },
   {
     name: "Nonconformance", dir: "nonconformance", idField: "nonconformance_id",

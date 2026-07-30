@@ -291,7 +291,12 @@ WORK_PACKAGE_EVENT_ISSUANCE_FIELDS = (
     "evidence_item",
     "blocker_reason",
 )
-MATERIAL_LOT_RUNTIME_FIELDS = ("status",)
+MATERIAL_LOT_RUNTIME_FIELDS = (
+    "status",
+    "available_quantity",
+    "reserved_quantity",
+    "consumed_quantity",
+)
 NONCONFORMANCE_RUNTIME_FIELDS = (
     "status",
     "containment",
@@ -1281,6 +1286,37 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
         context["supplier_order_status"] = _value(
             "Supplier Order", document.get("supplier_order"), "status"
         )
+        if document.get("source_kind") == "Shop Remnant":
+            context["source_shop_order"] = frappe.db.get_value(
+                "Shop Order",
+                document.get("source_shop_order"),
+                ("name", "roof_job", "status"),
+                as_dict=True,
+            )
+    elif kind == "nonconformance":
+        context["shop_order"] = frappe.db.get_value(
+            "Shop Order",
+            document.get("shop_order"),
+            ("name", "shop_order_id", "roof_job", "status"),
+            as_dict=True,
+        )
+        context["material_lot"] = frappe.db.get_value(
+            "Material Lot",
+            document.get("material_lot"),
+            ("name", "material_lot_id", "roof_job", "controlled_item", "unit", "status"),
+            as_dict=True,
+        )
+        shop_order = context["shop_order"]
+        if isinstance(shop_order, dict) and shop_order.get("name"):
+            context["shop_order_allocation_lot_ids"] = {
+                str(row["material_lot"])
+                for row in frappe.get_all(
+                    "Shop Material Allocation",
+                    filters={"parent": shop_order["name"]},
+                    fields=("material_lot",),
+                )
+                if row.get("material_lot")
+            }
     elif kind == "shop_order":
         context["takeoff_status"] = _value(
             "Material Takeoff", document.get("material_takeoff"), "status"
@@ -1295,6 +1331,33 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
         context["invoice_payment_milestone_status"] = _value(
             "Payment Milestone", payment_milestone, "status"
         )
+        material_lot_ids = sorted(
+            {
+                str(row.get("material_lot"))
+                for row in (document.get("material_allocations") or [])
+                if row.get("material_lot")
+            }
+        )
+        context["material_lots"] = {
+            material_lot_id: frappe.db.get_value(
+                "Material Lot",
+                material_lot_id,
+                (
+                    "name",
+                    "material_lot_id",
+                    "roof_job",
+                    "controlled_item",
+                    "unit",
+                    "received_quantity",
+                    "available_quantity",
+                    "reserved_quantity",
+                    "consumed_quantity",
+                    "status",
+                ),
+                as_dict=True,
+            )
+            for material_lot_id in material_lot_ids
+        }
         if document.get("status") in SHOP_ORDER_FINAL_STATUSES:
             context["open_nonconformance_count"] = frappe.db.count(
                 "Nonconformance",

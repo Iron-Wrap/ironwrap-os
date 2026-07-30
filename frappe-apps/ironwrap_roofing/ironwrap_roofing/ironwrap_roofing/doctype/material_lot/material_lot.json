@@ -6,7 +6,7 @@
   "custom": 0,
   "doctype": "DocType",
   "engine": "InnoDB",
-  "field_order": ["material_lot_id", "roof_job", "controlled_item", "source_kind", "supplier_order", "source_shop_order", "source_evidence", "lot_number", "certificate_reference", "condition_status", "received_quantity", "unit", "received_at", "status"],
+  "field_order": ["material_lot_id", "roof_job", "controlled_item", "source_kind", "supplier_order", "source_shop_order", "source_evidence", "lot_number", "certificate_reference", "condition_status", "received_quantity", "available_quantity", "reserved_quantity", "consumed_quantity", "unit", "received_at", "status"],
   "fields": [
     {"fieldname": "material_lot_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Material Lot ID", "reqd": 1, "unique": 1},
     {"fieldname": "roof_job", "fieldtype": "Link", "in_standard_filter": 1, "label": "Roof Job", "options": "Roof Job", "reqd": 1},
@@ -19,6 +19,9 @@
     {"fieldname": "certificate_reference", "fieldtype": "Data", "label": "Certificate Reference"},
     {"default": "Accepted", "fieldname": "condition_status", "fieldtype": "Select", "label": "Receiving Condition", "options": "Accepted\nDamaged\nQuarantined", "reqd": 1},
     {"fieldname": "received_quantity", "fieldtype": "Float", "label": "Received Quantity", "reqd": 1},
+    {"fieldname": "available_quantity", "fieldtype": "Float", "label": "Available Quantity"},
+    {"fieldname": "reserved_quantity", "fieldtype": "Float", "label": "Reserved Quantity"},
+    {"fieldname": "consumed_quantity", "fieldtype": "Float", "label": "Consumed Quantity"},
     {"fieldname": "unit", "fieldtype": "Data", "label": "Unit", "reqd": 1},
     {"fieldname": "received_at", "fieldtype": "Datetime", "label": "Received At"},
     {"default": "Draft", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Status", "options": "Draft\nAvailable\nReserved\nQuarantined\nConsumed\nExhausted", "reqd": 1}

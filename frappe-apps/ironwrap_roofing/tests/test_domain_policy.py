@@ -2792,6 +2792,554 @@ class DomainPolicyTests(unittest.TestCase):
             context={"other_active_tenants": 1},
         )
 
+    def test_supply_only_shop_order_requires_traceable_material_quality_and_yield(self) -> None:
+        item = {
+            "controlled_item_id": "item:panel:24ga:v1",
+            "status": "Approved",
+            "revision": 1,
+            "item_kind": "Finished Product",
+            "unit": "each",
+            "profile": "Standing seam panel",
+            "gauge": "24 ga",
+            "coating": "PVDF",
+            "colour": "Charcoal",
+            "dimension_spec": "16 in cover width",
+            "tolerance": "± 3 mm",
+            "lot_required": 1,
+            "certificate_required": 1,
+            "source_ref": "supplier-spec:2026-07",
+            "approved_by": "owner@example.com",
+            "approved_at": "2026-07-30 08:00:00",
+            "approval_note": "Approved metal system specification.",
+        }
+        validate_record("controlled_item", item)
+        self.assert_policy(
+            "immutable_field",
+            validate_record,
+            "controlled_item",
+            {**item, "source_ref": "supplier-spec:forged"},
+            previous=item,
+        )
+
+        lot_draft = {
+            "material_lot_id": "lot:coil:001",
+            "roof_job": "job-1",
+            "controlled_item": item["controlled_item_id"],
+            "source_kind": "Supplier Receipt",
+            "supplier_order": "so-1",
+            "source_evidence": "evidence:receipt-1",
+            "lot_number": "SUP-COIL-001",
+            "condition_status": "Accepted",
+            "received_quantity": 10,
+            "unit": "each",
+            "status": "Draft",
+        }
+        lot_context = {
+            "controlled_item": {
+                "name": item["controlled_item_id"],
+                "status": "Approved",
+            },
+            "supplier_order": {
+                "name": "so-1",
+                "roof_job": "job-1",
+                "status": "Received",
+            },
+        }
+        validate_record("material_lot", lot_draft, context=lot_context)
+        lot_available = {
+            **lot_draft,
+            "status": "Available",
+            "received_at": "2026-07-30 08:30:00",
+            "available_quantity": 10,
+            "reserved_quantity": 0,
+            "consumed_quantity": 0,
+        }
+        validate_record(
+            "material_lot", lot_available, previous=lot_draft, context=lot_context
+        )
+        self.assert_policy(
+            "unreceived_supplier_order",
+            validate_record,
+            "material_lot",
+            lot_available,
+            previous=lot_draft,
+            context={
+                **lot_context,
+                "supplier_order": {
+                    **lot_context["supplier_order"],
+                    "status": "Approved",
+                },
+            },
+        )
+        self.assert_policy(
+            "unapproved_material_lot_item",
+            validate_record,
+            "material_lot",
+            lot_available,
+            previous=lot_draft,
+            context={
+                **lot_context,
+                "controlled_item": {
+                    **lot_context["controlled_item"],
+                    "status": "Draft",
+                },
+            },
+        )
+        self.assert_policy(
+            "cross_job_material_lot_supplier_order",
+            validate_record,
+            "material_lot",
+            lot_available,
+            previous=lot_draft,
+            context={
+                **lot_context,
+                "supplier_order": {
+                    **lot_context["supplier_order"],
+                    "roof_job": "job-other",
+                },
+            },
+        )
+        self.assert_policy(
+            "material_lot_balance_mismatch",
+            validate_record,
+            "material_lot",
+            {**lot_available, "available_quantity": 9},
+            previous=lot_draft,
+            context=lot_context,
+        )
+        lot_reserved = {
+            **lot_available,
+            "status": "Reserved",
+            "available_quantity": 2,
+            "reserved_quantity": 8,
+            "consumed_quantity": 0,
+        }
+        validate_record(
+            "material_lot", lot_reserved, previous=lot_available, context=lot_context
+        )
+        lot_quarantined = {**lot_reserved, "status": "Quarantined"}
+        validate_record(
+            "material_lot", lot_quarantined, previous=lot_reserved, context=lot_context
+        )
+        self.assertEqual(
+            {
+                field: lot_quarantined[field]
+                for field in ("available_quantity", "reserved_quantity", "consumed_quantity")
+            },
+            {
+                field: lot_reserved[field]
+                for field in ("available_quantity", "reserved_quantity", "consumed_quantity")
+            },
+        )
+
+        line = {
+            "line_no": 1,
+            "controlled_item": item["controlled_item_id"],
+            "requested_quantity": 8,
+            "accepted_quantity": 8,
+            "billable_quantity": 8,
+            "unit": "each",
+            "dimensions": "2400 mm panel length",
+            "tolerance": "± 3 mm",
+            "orientation": "Eave to ridge",
+            "invoice_basis": "Each",
+            "needs_review": 0,
+        }
+        draft = {
+            "shop_order_id": "shop:job-1:001",
+            "roof_job": "job-1",
+            "material_takeoff": "takeoff-1",
+            "supplier_order": "so-1",
+            "work_package": "wp:shop-1",
+            "status": "Draft",
+            "lines": [line],
+        }
+        source_context = {
+            "material_takeoff": {
+                "name": "takeoff-1",
+                "roof_job": "job-1",
+                "status": "Approved",
+            },
+            "supplier_order": {
+                "name": "so-1",
+                "roof_job": "job-1",
+                "status": "Received",
+            },
+            "work_package": {
+                "name": "wp:shop-1",
+                "roof_job": "job-1",
+                "status": "Released",
+            },
+        }
+        validate_record("shop_order", draft, context=source_context)
+        released = {
+            **draft,
+            "status": "Released",
+            "released_by": "production@example.com",
+            "released_at": "2026-07-30 09:00:00",
+        }
+        validate_record("shop_order", released, previous=draft, context=source_context)
+        self.assert_policy(
+            "cross_job_shop_supplier_order",
+            validate_record,
+            "shop_order",
+            released,
+            previous=draft,
+            context={
+                **source_context,
+                "supplier_order": {
+                    **source_context["supplier_order"],
+                    "roof_job": "job-other",
+                },
+            },
+        )
+
+        allocation = {
+            "allocation_id": "alloc:1",
+            "line_no": 1,
+            "material_lot": lot_available["material_lot_id"],
+            "reserved_quantity": 10,
+            "issued_quantity": 10,
+            "unit": "each",
+            "status": "Issued",
+            "needs_review": 0,
+        }
+        shop_context = {
+            **source_context,
+            "material_lots": {lot_available["material_lot_id"]: lot_available},
+        }
+        reserved = {
+            **released,
+            "status": "Reserved",
+            "reserved_at": "2026-07-30 09:05:00",
+            "material_allocations": [allocation],
+        }
+        validate_record("shop_order", reserved, previous=released, context=shop_context)
+        quality_hold = {
+            **reserved,
+            "status": "Quality Hold",
+            "quality_hold_reason": "Incoming material inspection requires containment.",
+        }
+        validate_record(
+            "shop_order", quality_hold, previous=reserved, context=shop_context
+        )
+        quarantined_lot_context = {
+            **shop_context,
+            "material_lots": {
+                lot_available["material_lot_id"]: {
+                    **lot_available,
+                    "status": "Quarantined",
+                }
+            },
+        }
+        validate_record(
+            "shop_order",
+            quality_hold,
+            previous=reserved,
+            context=quarantined_lot_context,
+        )
+        self.assert_policy(
+            "shop_allocation_lot_unavailable",
+            validate_record,
+            "shop_order",
+            reserved,
+            previous=released,
+            context=quarantined_lot_context,
+        )
+        self.assert_policy(
+            "shop_allocation_roof_job_mismatch",
+            validate_record,
+            "shop_order",
+            reserved,
+            previous=released,
+            context={
+                **shop_context,
+                "material_lots": {
+                    lot_available["material_lot_id"]: {**lot_available, "roof_job": "job-other"}
+                },
+            },
+        )
+        self.assert_policy(
+            "shop_allocation_item_mismatch",
+            validate_record,
+            "shop_order",
+            reserved,
+            previous=released,
+            context={
+                **shop_context,
+                "material_lots": {
+                    lot_available["material_lot_id"]: {
+                        **lot_available,
+                        "controlled_item": "item:other",
+                    }
+                },
+            },
+        )
+        self.assert_policy(
+            "shop_allocation_unit_mismatch",
+            validate_record,
+            "shop_order",
+            reserved,
+            previous=released,
+            context={
+                **shop_context,
+                "material_lots": {
+                    lot_available["material_lot_id"]: {**lot_available, "unit": "kg"}
+                },
+            },
+        )
+        self.assert_policy(
+            "shop_allocation_quantity_exceeds_lot",
+            validate_record,
+            "shop_order",
+            reserved,
+            previous=released,
+            context={
+                **shop_context,
+                "material_lots": {
+                    lot_available["material_lot_id"]: {**lot_available, "received_quantity": 9}
+                },
+            },
+        )
+        operation = {
+            "sequence": 1,
+            "operation": "Form standing seam panel",
+            "machine_tooling": "Roll former / approved die set",
+            "operator": "fabricator@example.com",
+            "status": "Complete",
+            "started_at": "2026-07-30 09:12:00",
+        }
+        setup = {
+            **reserved,
+            "status": "Setup / First Piece",
+            "setup_started_at": "2026-07-30 09:10:00",
+            "operations": [operation],
+        }
+        validate_record("shop_order", setup, previous=reserved, context=shop_context)
+        first_piece = {
+            "inspection_type": "First Piece",
+            "line_no": 1,
+            "allocation_id": "alloc:1",
+            "operation_sequence": 1,
+            "result": "Pass",
+            "nominal_value": 2400,
+            "measured_value": 2400,
+            "tolerance_value": 3,
+            "measurement_unit": "mm",
+            "measured_result": "Profile and length within tolerance.",
+            "inspected_by": "quality@example.com",
+            "inspected_at": "2026-07-30 09:15:00",
+            "evidence_item": "evidence:first-piece-1",
+            "needs_review": 0,
+        }
+        fabricating = {
+            **setup,
+            "status": "In Fabrication",
+            "fabrication_started_at": "2026-07-30 09:20:00",
+            "inspections": [first_piece],
+        }
+        validate_record("shop_order", fabricating, previous=setup, context=shop_context)
+        self.assert_policy(
+            "first_piece_tolerance_result_mismatch",
+            validate_record,
+            "shop_order",
+            {
+                **fabricating,
+                "inspections": [{**first_piece, "measured_value": 2404}],
+            },
+            previous=setup,
+            context=shop_context,
+        )
+        self.assert_policy(
+            "missing_first_piece_pass",
+            validate_record,
+            "shop_order",
+            {**fabricating, "inspections": []},
+            previous=setup,
+            context=shop_context,
+        )
+        self.assert_policy(
+            "non_independent_shop_inspection",
+            validate_record,
+            "shop_order",
+            {
+                **fabricating,
+                "inspections": [{**first_piece, "inspected_by": operation["operator"]}],
+            },
+            previous=setup,
+            context=shop_context,
+        )
+
+        final = {
+            **first_piece,
+            "inspection_type": "Final",
+            "evidence_item": "evidence:final-1",
+        }
+        ready = {
+            **fabricating,
+            "status": "Ready",
+            "ready_at": "2026-07-30 10:00:00",
+            "inspections": [first_piece, final],
+            "yields": [
+                {
+                    "allocation_id": "alloc:1",
+                    "operation_sequence": 1,
+                    "input_quantity": 10,
+                    "finished_quantity": 8,
+                    "remnant_quantity": 1,
+                    "remnant_lot": "lot:remnant:001",
+                    "scrap_quantity": 1,
+                    "scrap_disposition": "recycle-bin:metal",
+                    "evidence_item": "evidence:scrap-1",
+                }
+            ],
+            "bundles": [
+                {
+                    "bundle_id": "bundle:1",
+                    "line_no": 1,
+                    "material_lot": lot_available["material_lot_id"],
+                    "piece_identity": "panel:1-8",
+                    "accepted_quantity": 8,
+                    "unit": "each",
+                    "label_text": "job-1 / panel 1-8 / lot SUP-COIL-001",
+                    "handoff_status": "Prepared",
+                    "condition": "Finish protected; no visible damage.",
+                    "needs_review": 0,
+                }
+            ],
+        }
+        ready_context = {**shop_context, "open_nonconformance_count": 0}
+        validate_record("shop_order", ready, previous=fabricating, context=ready_context)
+        self.assert_policy(
+            "open_shop_nonconformance",
+            validate_record,
+            "shop_order",
+            ready,
+            previous=fabricating,
+            context={**ready_context, "open_nonconformance_count": 1},
+        )
+        self.assert_policy(
+            "shop_yield_conservation_mismatch",
+            validate_record,
+            "shop_order",
+            {
+                **ready,
+                "yields": [
+                    {**ready["yields"][0], "finished_quantity": 7}
+                ],
+            },
+            previous=fabricating,
+            context=ready_context,
+        )
+
+        ncr = {
+            "nonconformance_id": "ncr:shop-1:1",
+            "shop_order": draft["shop_order_id"],
+            "material_lot": lot_available["material_lot_id"],
+            "status": "Draft",
+        }
+        ncr_context = {
+            "shop_order": {"name": draft["shop_order_id"], "roof_job": "job-1"},
+            "material_lot": lot_available,
+            "shop_order_allocation_lot_ids": {lot_available["material_lot_id"]},
+        }
+        validate_record("nonconformance", ncr, context=ncr_context)
+        contained_ncr = {
+            **ncr,
+            "status": "Contained",
+            "detected_at": "2026-07-30 09:15:00",
+            "reported_by": "quality@example.com",
+            "description": "First-piece measurement exceeded tolerance.",
+            "evidence_item": "evidence:first-piece-1",
+            "containment": "Material lot quarantined; Shop Order on Quality Hold.",
+        }
+        validate_record("nonconformance", contained_ncr, context=ncr_context)
+        self.assert_policy(
+            "nonconformance_roof_job_mismatch",
+            validate_record,
+            "nonconformance",
+            ncr,
+            context={
+                **ncr_context,
+                "material_lot": {**lot_available, "roof_job": "job-other"},
+            },
+        )
+        self.assert_policy(
+            "nonconformance_unallocated_lot",
+            validate_record,
+            "nonconformance",
+            ncr,
+            context={**ncr_context, "shop_order_allocation_lot_ids": {"lot:other"}},
+        )
+
+        remnant_draft = {
+            "material_lot_id": "lot:remnant:001",
+            "roof_job": "job-1",
+            "controlled_item": item["controlled_item_id"],
+            "source_kind": "Shop Remnant",
+            "source_shop_order": draft["shop_order_id"],
+            "source_evidence": "evidence:remnant-1",
+            "lot_number": "REM-001",
+            "condition_status": "Accepted",
+            "received_quantity": 1,
+            "unit": "each",
+            "status": "Draft",
+        }
+        validate_record("material_lot", remnant_draft)
+        remnant_available = {
+            **remnant_draft,
+            "status": "Available",
+            "received_at": "2026-07-30 10:00:00",
+            "available_quantity": 1,
+            "reserved_quantity": 0,
+            "consumed_quantity": 0,
+        }
+        remnant_context = {
+            "controlled_item": {
+                "name": item["controlled_item_id"],
+                "status": "Approved",
+            },
+            "source_shop_order": {
+                "name": draft["shop_order_id"],
+                "roof_job": "job-1",
+                "status": "Ready",
+            },
+        }
+        validate_record(
+            "material_lot",
+            remnant_available,
+            previous=remnant_draft,
+            context=remnant_context,
+        )
+        self.assert_policy(
+            "unfinalized_shop_remnant",
+            validate_record,
+            "material_lot",
+            remnant_available,
+            previous=remnant_draft,
+            context={
+                **remnant_context,
+                "source_shop_order": {
+                    **remnant_context["source_shop_order"],
+                    "status": "In Fabrication",
+                },
+            },
+        )
+        self.assert_policy(
+            "cross_job_shop_remnant",
+            validate_record,
+            "material_lot",
+            remnant_available,
+            previous=remnant_draft,
+            context={
+                **remnant_context,
+                "source_shop_order": {
+                    **remnant_context["source_shop_order"],
+                    "roof_job": "job-other",
+                },
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

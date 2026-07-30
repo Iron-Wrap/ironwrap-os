@@ -14,6 +14,10 @@ import { join } from "node:path";
 const root = new URL("..", import.meta.url).pathname;
 const rolesPath = join(root, "hermes/agents/roles.json");
 const manifestPath = join(root, "hermes/mcp-servers.json");
+const shopFabricationSource = readFileSync(
+  join(root, "frappe-apps/ironwrap_roofing/ironwrap_roofing/shop_fabrication_api.py"),
+  "utf8",
+);
 const servers = {
   "ironwrap-bus-mcp": "mcp/ironwrap-bus-mcp/src/server.mjs",
   "erpnext-roofing-mcp": "mcp/erpnext-roofing-mcp/src/server.mjs",
@@ -156,6 +160,12 @@ const WRITE_PAIRS = {
   request_create_material_takeoff: "dry_run_material_takeoff",
   request_update_material_takeoff_status: "dry_run_update_material_takeoff_status",
   request_create_supplier_order: "dry_run_supplier_order",
+  request_approve_controlled_item: "dry_run_approve_controlled_item",
+  request_receive_material_lot: "dry_run_receive_material_lot",
+  request_release_shop_order: "dry_run_release_shop_order",
+  request_reserve_shop_order_materials: "dry_run_reserve_shop_order_materials",
+  request_advance_shop_order_setup: "dry_run_advance_shop_order_setup",
+  request_record_first_piece_outcome: "dry_run_record_first_piece_outcome",
   request_create_supplier_quote: "dry_run_supplier_quote",
   request_create_quote_revision: "dry_run_quote_revision",
   request_bind_quote_price_rules: "dry_run_bind_quote_price_rules",
@@ -211,13 +221,13 @@ for (const tool of NEW_STRICT_READS) {
 }
 
 const frappeTools = new Set([...inventory].filter((tool) => toolServer.get(tool) === "erpnext-roofing-mcp"));
-assert.equal(frappeTools.size, 131, "Frappe MCP inventory must stay at the reviewed 131-tool contract");
+assert.equal(frappeTools.size, 143, "Frappe MCP inventory must stay at the reviewed 143-tool contract");
 assert.equal([...frappeTools].filter((tool) => reads.has(tool)).length, 75,
   "Frappe MCP must expose 75 read tools");
-assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 28,
-  "Frappe MCP must expose 28 dry-run tools");
-assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 28,
-  "Frappe MCP must expose 28 approved-write tools");
+assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 34,
+  "Frappe MCP must expose 34 dry-run tools");
+assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 34,
+  "Frappe MCP must expose 34 approved-write tools");
 const newoTools = new Set([...inventory].filter((tool) => toolServer.get(tool) === "newo-mcp"));
 assert.equal(newoTools.size, 20, "Newo MCP inventory must stay at the reviewed 20-tool contract");
 assert.equal([...newoTools].filter((tool) => reads.has(tool)).length, 17,
@@ -226,7 +236,7 @@ assert.equal([...newoTools].filter((tool) => dryRuns.has(tool)).length, 1,
   "Newo MCP must expose one exact-argument dry-run tool");
 assert.equal([...newoTools].filter((tool) => requests.has(tool)).length, 2,
   "Newo MCP must expose separate approval and receipt-consuming execution tools");
-assert.equal(inventory.size, 159, "three-server Hermes inventory must stay at 159 tools");
+assert.equal(inventory.size, 171, "three-server Hermes inventory must stay at 171 tools");
 
 // Contract Acceptance is evidence produced by the customer/provider, never an agent mutation.
 assert.ok(reads.has("get_contract_acceptance") && reads.has("list_contract_acceptances_for_job"),
@@ -269,6 +279,37 @@ const config = JSON.parse(readFileSync(rolesPath, "utf8"));
 const roleNames = Object.keys(config.roles ?? {});
 for (const r of REQUIRED_ROLES) assert.ok(roleNames.includes(r), `missing agent role: ${r}`);
 assert.deepEqual(new Set(roleNames), new Set(REQUIRED_ROLES), "unexpected or missing agent roles");
+
+assert.match(shopFabricationSource, /SHOP_TOOL_AGENT_ROLES = \{/,
+  "Frappe shop commands must enforce a final-boundary tool-role allowlist");
+const shopToolConstants = new Map(
+  [...shopFabricationSource.matchAll(/^([A-Z_]+_TOOL) = "(request_[a-z0-9_]+)"$/gm)]
+    .map((match) => [match[1], match[2]]),
+);
+const shopToolRoles = new Map();
+for (const match of shopFabricationSource.matchAll(
+  /^\s{4}([A-Z_]+_TOOL): frozenset\(\s*\{([^}]*)\}\s*\),/gm,
+)) {
+  const tool = shopToolConstants.get(match[1]);
+  assert.ok(tool, `Frappe shop tool-role map references unknown constant ${match[1]}`);
+  shopToolRoles.set(
+    tool,
+    new Set([...match[2].matchAll(/"([^"]+)"/g)].map((role) => role[1])),
+  );
+}
+assert.equal(shopToolRoles.size, 6, "Frappe shop tool-role map must cover the six bounded shop commands");
+for (const [tool, allowedTitles] of shopToolRoles) {
+  const grantedTitles = new Set(
+    Object.values(config.roles)
+      .filter((role) => role.approved_write.includes(tool))
+      .map((role) => role.title),
+  );
+  assert.deepEqual(
+    allowedTitles,
+    grantedTitles,
+    `Frappe final-boundary roles for ${tool} must match hermes/agents/roles.json`,
+  );
+}
 
 for (const [roleName, role] of Object.entries(config.roles)) {
   const label = `role ${roleName}`;

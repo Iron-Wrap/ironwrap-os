@@ -1183,6 +1183,223 @@ class DomainPolicyTests(unittest.TestCase):
                 },
             )
 
+    def test_work_package_release_requires_current_controls_and_preserves_issued_content(
+        self,
+    ) -> None:
+        gates = [
+            {
+                "roof_job": "job-1",
+                "gate": gate_name,
+                "state": "Done",
+                "evidence_item": f"ev-{gate_name.lower()}",
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+            }
+            for gate_name in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
+        ]
+        assignment = {
+            "name": "assignment:production-1",
+            "assignment_id": "assignment:production-1",
+            "roof_job": "job-1",
+            "assignment_type": "Production",
+            "status": "Assigned",
+            "scheduled_start": "2026-07-10 12:00:00",
+        }
+        safety_plan = {
+            "name": "safety:job-1:v1",
+            "safety_plan_id": "safety:job-1:v1",
+            "roof_job": "job-1",
+            "version": 1,
+            "status": "Acknowledged",
+        }
+        released = {
+            "work_package_id": "work-package:job-1:v1",
+            "roof_job": "job-1",
+            "job_assignment": assignment["assignment_id"],
+            "safety_plan": safety_plan["safety_plan_id"],
+            "version": 1,
+            "status": "Released",
+            "title": "Install standing-seam panels",
+            "objective": "Install the approved main-roof panel sequence.",
+            "boundaries": "Main roof only; no hidden-condition repair.",
+            "prerequisites": "Access, materials, and safety gates are current.",
+            "expected_result": "Panels are installed to the released detail.",
+            "stop_conditions": "Stop for unsafe wind, deck damage, or a scope conflict.",
+            "make_safe_procedure": "Secure materials, protect openings, and notify production.",
+            "issued_at": "2026-07-10 08:00:00",
+            "expires_at": "2026-07-11 08:00:00",
+            "released_by": "production@example.com",
+            "released_at": "2026-07-10 09:00:00",
+            "steps": [
+                {
+                    "sequence": 1,
+                    "instruction": "Confirm protected access and staging.",
+                    "required_evidence": "Arrival photo and field check-in.",
+                    "acceptance_criteria": "Access is controlled and materials are secure.",
+                },
+                {
+                    "sequence": 2,
+                    "instruction": "Install panels to the approved layout.",
+                    "required_evidence": "Progress photo set.",
+                    "acceptance_criteria": "Panel alignment and fastening meet the released detail.",
+                },
+            ],
+            "hold_points": [
+                {
+                    "sequence": 1,
+                    "hold_point": "Deck condition before panel installation",
+                    "release_authority": "IronWrap Production",
+                    "required_evidence": "Deck-condition photo set.",
+                    "acceptance_criteria": "Substrate is dry, sound, and ready for installation.",
+                }
+            ],
+        }
+
+        def release_context(**overrides: object) -> dict[str, object]:
+            context: dict[str, object] = {
+                "now": "2026-07-10 10:00:00",
+                "gates": gates,
+                "gate_evidence": gate_evidence_context(gates),
+                "job_assignment_rows": [assignment],
+                "work_package_assignment": assignment,
+                "safety_plan_rows": [safety_plan],
+                "work_package_safety_plan": safety_plan,
+                "work_package_rows": [],
+            }
+            context.update(overrides)
+            return context
+
+        validate_record("work_package", released, context=release_context())
+        self.assert_policy(
+            "work_package_production_gate_block",
+            validate_record,
+            "work_package",
+            released,
+            context=release_context(gates=gates[:-1]),
+        )
+        self.assert_policy(
+            "stale_work_package_safety_plan",
+            validate_record,
+            "work_package",
+            released,
+            context=release_context(
+                safety_plan_rows=[
+                    safety_plan,
+                    {
+                        "safety_plan_id": "safety:job-1:v2",
+                        "supersedes": safety_plan["safety_plan_id"],
+                    },
+                ]
+            ),
+        )
+        self.assert_policy(
+            "stale_work_package",
+            validate_record,
+            "work_package",
+            released,
+            context=release_context(
+                work_package_rows=[
+                    {
+                        "work_package_id": "work-package:job-1:v2",
+                        "supersedes": released["work_package_id"],
+                    }
+                ]
+            ),
+        )
+        self.assert_policy(
+            "inactive_work_package_assignment",
+            validate_record,
+            "work_package",
+            released,
+            context=release_context(
+                work_package_assignment={**assignment, "status": "Blocked"}
+            ),
+        )
+        self.assert_policy(
+            "invalid_work_package_version",
+            validate_record,
+            "work_package",
+            {**released, "version": 0},
+            context=release_context(),
+        )
+        self.assert_policy(
+            "expired_work_package",
+            validate_record,
+            "work_package",
+            released,
+            context=release_context(now="2026-07-11 08:00:00"),
+        )
+        self.assert_policy(
+            "invalid_work_package_sequence",
+            validate_record,
+            "work_package",
+            {
+                **released,
+                "steps": [{**released["steps"][0], "sequence": 2}],
+            },
+            context=release_context(),
+        )
+
+        acknowledged = {
+            **released,
+            "status": "Acknowledged",
+            "acknowledged_by": "lead@example.com",
+            "acknowledged_at": "2026-07-10 10:15:00",
+        }
+        validate_record(
+            "work_package",
+            acknowledged,
+            previous=released,
+            context=release_context(),
+        )
+        blocked = {
+            **acknowledged,
+            "status": "Blocked",
+            "blocked_at": "2026-07-10 10:30:00",
+            "blocker_reason": "Wind exceeds the released limit.",
+        }
+        validate_record(
+            "work_package",
+            blocked,
+            previous=acknowledged,
+            context=release_context(),
+        )
+        self.assert_policy(
+            "invalid_state_transition",
+            validate_record,
+            "work_package",
+            {**blocked, "status": "In Progress", "started_at": "2026-07-10 10:45:00"},
+            previous=blocked,
+            context=release_context(),
+        )
+        self.assert_policy(
+            "immutable_field",
+            validate_record,
+            "work_package",
+            {**released, "objective": "Rewritten after release."},
+            previous=released,
+            context=release_context(),
+        )
+
+        revision = {
+            **released,
+            "work_package_id": "work-package:job-1:v2",
+            "version": 2,
+            "supersedes": released["work_package_id"],
+            "correction_reason": "Changed condition requires a new package.",
+        }
+        validate_record(
+            "work_package",
+            revision,
+            context=release_context(superseded_record=released),
+        )
+        validate_record(
+            "work_package",
+            {**released, "status": "Superseded"},
+            previous=released,
+            context={"superseding_work_package": revision},
+        )
+
     def test_ready_and_done_gates_require_verified_same_job_evidence(self) -> None:
         invalid_sources = (
             ("missing", None, "unverified_gate_evidence"),

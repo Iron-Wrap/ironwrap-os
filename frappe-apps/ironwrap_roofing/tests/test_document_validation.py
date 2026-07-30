@@ -44,6 +44,14 @@ PROPOSAL_EVIDENCE_PACK_CONTROLLER_PATH = (
     / "proposal_evidence_pack"
     / "proposal_evidence_pack.py"
 )
+WORK_PACKAGE_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "work_package"
+    / "work_package.py"
+)
 
 
 class FakeValidationError(Exception):
@@ -114,6 +122,18 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                     for row in rows.get("Job Assignment", [])
                     if row.get("roof_job") == values[0]
                 ]
+            if "`tabSafety Plan`" in normalized:
+                return [
+                    dict(row)
+                    for row in rows.get("Safety Plan", [])
+                    if row.get("roof_job") == values[0]
+                ]
+            if "`tabWork Package`" in normalized:
+                return [
+                    dict(row)
+                    for row in rows.get("Work Package", [])
+                    if row.get("roof_job") == values[0]
+                ]
             if "`tabSupplier Order`" in normalized:
                 return [
                     dict(row)
@@ -126,6 +146,9 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             get_value=lambda doctype, name, field, **_kwargs: values.get((doctype, name, field)),
             count=lambda doctype, filters=None: counts.get(doctype, 0),
             sql=sql,
+        )
+        frappe_module.utils = types.SimpleNamespace(
+            now_datetime=lambda: "2026-07-10 10:00:00"
         )
 
         def get_all(doctype, *, filters, fields):
@@ -675,6 +698,116 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 ),
                 "production_gate_state",
             )
+
+    def test_released_work_package_uses_locked_current_release_context(self) -> None:
+        gates = [
+            {
+                "roof_job": "job-1",
+                "gate": gate,
+                "state": "Done",
+                "evidence_item": f"ev-{gate.lower()}",
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+            }
+            for gate in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
+        ]
+        assignment = {
+            "name": "assignment:production-1",
+            "assignment_id": "assignment:production-1",
+            "roof_job": "job-1",
+            "assignment_type": "Production",
+            "status": "Assigned",
+            "scheduled_start": "2026-07-10 12:00:00",
+        }
+        safety_plan = {
+            "name": "safety:job-1:v1",
+            "safety_plan_id": "safety:job-1:v1",
+            "roof_job": "job-1",
+            "version": 1,
+            "status": "Acknowledged",
+        }
+        document = FakeDocument(
+            {
+                "work_package_id": "work-package:job-1:v1",
+                "roof_job": "job-1",
+                "job_assignment": assignment["assignment_id"],
+                "safety_plan": safety_plan["safety_plan_id"],
+                "version": 1,
+                "status": "Released",
+                "title": "Install standing-seam panels",
+                "objective": "Install the approved main-roof panel sequence.",
+                "boundaries": "Main roof only; no hidden-condition repair.",
+                "prerequisites": "Access, materials, and safety gates are current.",
+                "expected_result": "Panels are installed to the released detail.",
+                "stop_conditions": "Stop for unsafe wind, deck damage, or a scope conflict.",
+                "make_safe_procedure": "Secure materials, protect openings, and notify production.",
+                "issued_at": "2026-07-10 08:00:00",
+                "expires_at": "2026-07-11 08:00:00",
+                "released_by": "production@example.com",
+                "released_at": "2026-07-10 09:00:00",
+                "steps": [
+                    {
+                        "sequence": 1,
+                        "instruction": "Confirm protected access and staging.",
+                        "required_evidence": "Arrival photo and field check-in.",
+                        "acceptance_criteria": "Access is controlled and materials are secure.",
+                    }
+                ],
+                "hold_points": [
+                    {
+                        "sequence": 1,
+                        "hold_point": "Deck condition before panel installation",
+                        "release_authority": "IronWrap Production",
+                        "required_evidence": "Deck-condition photo set.",
+                        "acceptance_criteria": "Substrate is dry, sound, and ready for installation.",
+                    }
+                ],
+            }
+        )
+        adapter, calls = self.load_adapter(
+            rows={
+                "Production Gate State": gates,
+                "Evidence Item": gate_evidence_rows(gates),
+                "Job Assignment": [assignment],
+                "Safety Plan": [safety_plan],
+            }
+        )
+        adapter.validate_business_document(document, "work_package")
+        self.assertEqual(calls, [])
+        self.assertEqual(len(adapter._test_lock_calls), 6)
+        self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
+        self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
+        self.assertIn("`tabEvidence Item`", adapter._test_lock_calls[2][0])
+        self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[3][0])
+        self.assertIn("`tabSafety Plan`", adapter._test_lock_calls[4][0])
+        self.assertIn("`tabWork Package`", adapter._test_lock_calls[5][0])
+        self.assertTrue(
+            all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
+        )
+
+        stale_adapter, _ = self.load_adapter(
+            rows={
+                "Production Gate State": gates,
+                "Evidence Item": gate_evidence_rows(gates),
+                "Job Assignment": [assignment],
+                "Safety Plan": [
+                    safety_plan,
+                    {
+                        "name": "safety:job-1:v2",
+                        "safety_plan_id": "safety:job-1:v2",
+                        "roof_job": "job-1",
+                        "version": 2,
+                        "status": "Acknowledged",
+                        "supersedes": safety_plan["safety_plan_id"],
+                    },
+                ],
+            }
+        )
+        with self.assertRaisesRegex(FakeValidationError, "stale_work_package_safety_plan"):
+            stale_adapter.validate_business_document(document, "work_package")
+
+        controller = WORK_PACKAGE_CONTROLLER_PATH.read_text(encoding="utf-8")
+        self.assertIn('validate_business_document(self, "work_package")', controller)
 
     def test_scheduled_production_assignment_uses_locked_assignment_and_material_context(
         self,

@@ -47,6 +47,7 @@ CORRECTION_TARGETS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     ),
     "safety_plan": ("supersedes", "Safety Plan", ("roof_job", "version")),
     "tenant_export_run": ("supersedes", "Tenant Export Run", ("tenant",)),
+    "work_package": ("supersedes", "Work Package", ("roof_job", "version")),
 }
 
 SAFETY_ACKNOWLEDGEMENT_FIELDS = (
@@ -125,6 +126,24 @@ JOB_ASSIGNMENT_SCHEDULE_CONTEXT_FIELDS = (
 _JOB_ASSIGNMENT_SCHEDULE_CONTEXT_SELECT = ", ".join(
     JOB_ASSIGNMENT_SCHEDULE_CONTEXT_FIELDS
 )
+SAFETY_PLAN_CONTEXT_FIELDS = (
+    "name",
+    "safety_plan_id",
+    "roof_job",
+    "version",
+    "status",
+    "supersedes",
+)
+_SAFETY_PLAN_CONTEXT_SELECT = ", ".join(SAFETY_PLAN_CONTEXT_FIELDS)
+WORK_PACKAGE_CONTEXT_FIELDS = (
+    "name",
+    "work_package_id",
+    "roof_job",
+    "version",
+    "status",
+    "supersedes",
+)
+_WORK_PACKAGE_CONTEXT_SELECT = ", ".join(WORK_PACKAGE_CONTEXT_FIELDS)
 SUPPLIER_ORDER_EXCEPTION_CONTEXT_FIELDS = (
     "name",
     "supplier_order_id",
@@ -631,6 +650,60 @@ def _locked_scheduled_production_context(
     return gates, gate_evidence, assignments, supplier_order_exceptions
 
 
+def _locked_work_package_context(
+    roof_job: Any,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    """Lock the package's job-scoped release facts in one transaction."""
+
+    gates, gate_evidence = _locked_production_gates(roof_job)
+    assignments = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_JOB_ASSIGNMENT_SCHEDULE_CONTEXT_SELECT}
+            FROM `tabJob Assignment`
+            WHERE roof_job = %s
+            FOR UPDATE
+            """,
+            (roof_job,),
+            as_dict=True,
+        )
+    ]
+    safety_plans = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_SAFETY_PLAN_CONTEXT_SELECT}
+            FROM `tabSafety Plan`
+            WHERE roof_job = %s
+            FOR UPDATE
+            """,
+            (roof_job,),
+            as_dict=True,
+        )
+    ]
+    work_packages = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_WORK_PACKAGE_CONTEXT_SELECT}
+            FROM `tabWork Package`
+            WHERE roof_job = %s
+            FOR UPDATE
+            """,
+            (roof_job,),
+            as_dict=True,
+        )
+    ]
+    return gates, gate_evidence, assignments, safety_plans, work_packages
+
+
 def _assert_unique_production_gate(document: Any) -> None:
     """Keep one current gate record per Roof Job/gate pair under the parent lock."""
 
@@ -662,6 +735,9 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
         kind == "job_assignment"
         and document.get("assignment_type") == "Production"
         and document.get("scheduled_start")
+    )
+    work_package_requires_context = (
+        kind == "work_package" and document.get("status") != "Draft"
     )
     # Supplier Order status changes and scheduled Production assignments share
     # this parent lock. Without it, a Shortage could commit after scheduling
@@ -961,6 +1037,47 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
                 ),
                 None,
             )
+    elif work_package_requires_context:
+        (
+            context["gates"],
+            context["gate_evidence"],
+            context["job_assignment_rows"],
+            context["safety_plan_rows"],
+            context["work_package_rows"],
+        ) = _locked_work_package_context(document.get("roof_job"))
+        assignment = document.get("job_assignment")
+        context["work_package_assignment"] = next(
+            (
+                row
+                for row in context["job_assignment_rows"]
+                if assignment in {row.get("name"), row.get("assignment_id")}
+            ),
+            None,
+        )
+        safety_plan = document.get("safety_plan")
+        context["work_package_safety_plan"] = next(
+            (
+                row
+                for row in context["safety_plan_rows"]
+                if safety_plan in {row.get("name"), row.get("safety_plan_id")}
+            ),
+            None,
+        )
+        work_package_references = {
+            value
+            for value in (document.get("name"), document.get("work_package_id"))
+            if value
+        }
+        context["superseding_work_package"] = next(
+            (
+                row
+                for row in context["work_package_rows"]
+                if row.get("supersedes") in work_package_references
+            ),
+            None,
+        )
+        if document.get("status") in {"Released", "Acknowledged", "In Progress"}:
+            context["now"] = frappe.utils.now_datetime()
     elif kind == "production_gate_state":
         # Gate creates and updates take the same per-job lock as scheduling, so
         # a validation snapshot cannot race a gate transition into a commit.

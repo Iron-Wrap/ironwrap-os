@@ -71,6 +71,7 @@ TOP_LEVEL_DOCTYPES = {
     "Visual Property Model",
     "Warranty Packet",
     "White-Label Tenant",
+    "Work Package",
 }
 CHILD_DOCTYPES = {
     "Change Order Item",
@@ -81,6 +82,8 @@ CHILD_DOCTYPES = {
     "Supplier Order Item",
     "Supplier Quote Item",
     "Safety Acknowledgement",
+    "Work Package Hold Point",
+    "Work Package Step",
 }
 FRAPPE_CORE_LINK_TARGETS = {"User"}
 NEW_BLUEPRINT_FIELDS = {
@@ -220,6 +223,7 @@ NEW_BLUEPRINT_FIELDS.update(
         "Customer Quote": {"customer_quote_id", "quote_version", "price_book_version", "price_rule_snapshot_json", "subtotal", "tax_amount", "tax_policy_snapshot_json", "amount_due", "amount_paid", "balance_due", "payment_truth_source", "supersedes"},
         "Payment Milestone": {"payment_milestone_id", "milestone_version", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due", "tax_policy_snapshot_json", "truth_source", "supersedes"},
         "Reception Session": {"session_id", "provider", "channel", "direction", "session_status", "lead_envelope", "contact_phone", "structured_summary", "transcript_pointer", "recording_pointer", "ai_disclosed", "recording_disclosed", "raw_key", "payload_hash", "structured_json"},
+        "Work Package": {"work_package_id", "roof_job", "job_assignment", "safety_plan", "version", "status", "objective", "stop_conditions", "make_safe_procedure", "expires_at", "steps", "hold_points", "supersedes"},
     }
 )
 
@@ -237,9 +241,9 @@ class DocTypeContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.doctypes = load_doctypes()
 
-    def test_complete_50_doctype_blueprint(self) -> None:
+    def test_complete_53_doctype_blueprint(self) -> None:
         self.assertEqual(set(self.doctypes), TOP_LEVEL_DOCTYPES | CHILD_DOCTYPES)
-        self.assertEqual(len(self.doctypes), 50)
+        self.assertEqual(len(self.doctypes), 53)
 
         for name, (_, document) in self.doctypes.items():
             with self.subTest(doctype=name):

@@ -2360,10 +2360,17 @@ def record_final_shop_quality(
             "shop_command_final_quality_context_missing",
             "Shop Order requires lines, material allocations, and a shop route",
         )
-    if order.get("yields") or order.get("bundles"):
+    if (
+        order.get("yields")
+        or order.get("bundles")
+        or any(
+            inspection.get("inspection_type") == "Final"
+            for inspection in order.get("inspections") or []
+        )
+    ):
         _fail(
             "shop_command_final_quality_already_recorded",
-            "Shop Order already has final yield or bundle output",
+            "Shop Order already has final inspection, yield, or bundle output",
         )
     lot_ids = sorted(
         {

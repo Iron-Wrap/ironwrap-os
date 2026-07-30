@@ -8529,7 +8529,13 @@ function assertFinalQualityInspectionRows(order, payload, actorUser) {
   if (!lines.length || !allocations.length || !operations.length) {
     throw new Error("shop_final_quality_context_missing");
   }
-  if ((Array.isArray(order.yields) && order.yields.length) || (Array.isArray(order.bundles) && order.bundles.length)) {
+  if (
+    (Array.isArray(order.yields) && order.yields.length)
+    || (Array.isArray(order.bundles) && order.bundles.length)
+    || (Array.isArray(order.inspections) && order.inspections.some(
+      (row) => row.inspection_type === "Final",
+    ))
+  ) {
     throw new Error("shop_final_quality_already_recorded");
   }
   const linesByNumber = new Map(lines.map((line) => [Number(line.line_no), line]));

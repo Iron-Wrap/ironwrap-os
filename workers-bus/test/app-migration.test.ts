@@ -36,6 +36,37 @@ test("Wrangler asset routing keeps all dynamic/auth surfaces Worker-first", asyn
   }
 });
 
+test("Wrangler environments declare Newo explicitly and staging keeps its queue isolated", async () => {
+  const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  const newoVarNames = Object.keys(config.vars).filter((name) => name.startsWith("NEWO_")).sort();
+
+  for (const name of ["local", "staging"]) {
+    const environment = config.env[name];
+    assert.deepEqual(
+      Object.keys(environment.vars).filter((key) => key.startsWith("NEWO_")).sort(),
+      newoVarNames,
+      `${name} must not inherit Newo configuration`,
+    );
+    assert.equal(environment.vars.NEWO_ENABLED, "false");
+    assert.equal(environment.vars.NEWO_CONTROL_WRITE_ENABLED, "false");
+    assert.equal(environment.vars.NEWO_OUTBOUND_ENABLED, "false");
+  }
+
+  assert.equal(config.env.local.vars.NEWO_PRODUCTION_REQUIRED, "false");
+  assert.equal(config.env.staging.vars.NEWO_PRODUCTION_REQUIRED, "true");
+  assert.deepEqual(
+    config.env.staging.queues.producers.find((queue: { binding: string }) => queue.binding === "NEWO_QUEUE"),
+    { binding: "NEWO_QUEUE", queue: "ironwrap-staging-newo-events" },
+  );
+  assert.ok(
+    config.env.staging.queues.consumers.some(
+      (queue: { queue: string; dead_letter_queue?: string }) =>
+        queue.queue === "ironwrap-staging-newo-events" && queue.dead_letter_queue === "ironwrap-staging-newo-dlq",
+    ),
+  );
+});
+
 test("0018 customer portal migration stores only revocable capability hashes", async () => {
   const sql = await readFile(new URL("../migrations/0018_customer_portal_links.sql", import.meta.url), "utf8");
   for (const table of ["customer_portal_links", "customer_portal_access_throttles"]) {

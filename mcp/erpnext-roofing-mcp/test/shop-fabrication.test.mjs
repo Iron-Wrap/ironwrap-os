@@ -969,6 +969,87 @@ test("final shop quality rejects malformed payloads before reading Frappe", asyn
   assert.equal(reads, 0);
 });
 
+test("final shop quality rejects an already-recorded Final inspection before reading output inputs", async (t) => {
+  const order = finalQualityOrderFixture({
+    inspections: [
+      ...finalQualityOrderFixture().inspections,
+      {
+        inspection_type: "Final",
+        line_no: 1,
+        allocation_id: "alloc-1",
+        operation_sequence: 1,
+        result: "Pass",
+        nominal_value: 2400,
+        measured_value: 2400,
+        tolerance_value: 3,
+        measurement_unit: "mm",
+        measured_result: "2400 mm; nominal 2400 +/- 3 mm",
+        inspected_by: "production@example.com",
+        inspected_at: "2026-07-30 10:16:00",
+        evidence_item: "evidence-1",
+        needs_review: 0,
+      },
+    ],
+  });
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: false,
+    agentRole: "production-controller",
+    actorUser: "production@example.com",
+    dryRunSigningKey: "p".repeat(32),
+    allowedTools: ["dry_run_record_final_shop_quality"],
+  });
+  let reads = 0;
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    reads += 1;
+    if ((init.method ?? "GET") === "GET" && String(url).includes("Shop%20Order/shop-1")) {
+      return Response.json({ data: order });
+    }
+    throw new Error("existing Final QC must reject before reading output inputs");
+  });
+
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_final_shop_quality.handler({
+      shop_order_id: "shop-1",
+      final_quality_payload_json: JSON.stringify({
+        action: "pass_to_ready",
+        inspections: [{
+          line_no: 1,
+          allocation_id: "alloc-1",
+          operation_sequence: 1,
+          measured_value: "2400",
+          measurement_unit: "mm",
+          evidence_item: "evidence-1",
+        }],
+        yields: [{
+          allocation_id: "alloc-1",
+          operation_sequence: 1,
+          input_quantity: "9",
+          finished_quantity: "9",
+          remnant_quantity: "0",
+          scrap_quantity: "0",
+          scrap_disposition: "",
+          evidence_item: "",
+        }],
+        bundles: [{
+          bundle_id: "bundle-1",
+          line_no: 1,
+          material_lot: "lot-a",
+          piece_identity: "JOB-1:panel-1..8",
+          accepted_quantity: "8",
+          unit: "each",
+          label_text: "JOB-1 / panel 1-8",
+          condition: "No visible damage",
+        }],
+      }),
+    }),
+    /shop_final_quality_already_recorded/,
+  );
+  assert.equal(reads, 1);
+});
+
 test("final shop quality hold previews a failed final inspection without producing bundles", async (t) => {
   const actorUser = "production@example.com";
   const order = finalQualityOrderFixture();

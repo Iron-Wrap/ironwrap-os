@@ -1680,6 +1680,49 @@ class ShopFabricationApiTests(unittest.TestCase):
         self.assertEqual(order.get("yields", []), [])
         self.assertEqual(order.get("bundles", []), [])
 
+    def test_record_final_shop_quality_rejects_existing_final_without_save(self) -> None:
+        fixtures, order, lot, final_evidence, scrap_evidence = (
+            self.final_quality_ready_fixture()
+        )
+        order["inspections"].append(
+            {
+                **order["inspections"][0],
+                "inspection_type": "Final",
+                "evidence_item": final_evidence["name"],
+            }
+        )
+        final_quality_payload_json = json.dumps(
+            self.final_quality_pass_payload(final_evidence, scrap_evidence),
+            separators=(",", ":"),
+        )
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_FINAL_SHOP_QUALITY_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.final_quality_snapshot(
+                api,
+                fixtures,
+                order,
+                lot,
+                [final_evidence, scrap_evidence],
+            ),
+            extra={"final_quality_payload_json": final_quality_payload_json},
+        )
+
+        with self.assertRaisesRegex(FakeValidationError, "final_quality_already_recorded"):
+            api.record_final_shop_quality("shop-1", "run-shop-0001")
+
+        self.assertEqual(order.save_count, 0)
+        self.assertEqual(lot.save_count, 0)
+        self.assertEqual(order["status"], "In Fabrication")
+        self.assertEqual(len(order["inspections"]), 2)
+        self.assertEqual(order.get("yields", []), [])
+        self.assertEqual(order.get("bundles", []), [])
+
     def test_shop_command_needs_no_generic_hermes_run_permission(self) -> None:
         fixtures = self.fixture_data()
         fixtures["items"]["item-1"]["status"] = "Approved"

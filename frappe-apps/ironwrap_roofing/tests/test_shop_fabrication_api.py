@@ -132,6 +132,8 @@ class ShopFabricationApiTests(unittest.TestCase):
                         "released_by": "",
                         "released_at": "",
                         "reserved_at": "",
+                        "setup_started_at": "",
+                        "quality_hold_reason": "",
                         "lines": [
                             {
                                 "line_no": 1,
@@ -147,6 +149,7 @@ class ShopFabricationApiTests(unittest.TestCase):
                             }
                         ],
                         "material_allocations": [],
+                        "operations": [],
                     }
                 )
             },
@@ -215,6 +218,7 @@ class ShopFabricationApiTests(unittest.TestCase):
         request_method: str = "POST",
         can_write: bool = True,
         roles: list[str] | None = None,
+        permission_grants: dict[tuple[str, str], bool] | None = None,
     ):
         fixtures = fixtures or self.fixture_data()
         db = FakeDb(fixtures)
@@ -234,7 +238,10 @@ class ShopFabricationApiTests(unittest.TestCase):
 
         @contextmanager
         def shop_order_transition_context(document):
-            self.assertIn(document["status"], {"Released", "Reserved"})
+            self.assertIn(
+                document["status"],
+                {"Released", "Reserved", "Setup / First Piece", "Quality Hold"},
+            )
             context_calls.append(("shop_order", document["name"]))
             yield
 
@@ -271,7 +278,16 @@ class ShopFabricationApiTests(unittest.TestCase):
         frappe_module.get_roles = lambda _user: (
             roles if roles is not None else ["IronWrap Production"]
         )
-        frappe_module.has_permission = lambda *args, **kwargs: can_write
+        permission_checks: list[tuple[str, str, str]] = []
+
+        def has_permission(doctype: str, *, ptype: str, user: str) -> bool:
+            permission_checks.append((doctype, ptype, user))
+            if permission_grants is None:
+                return can_write
+            return permission_grants.get((doctype, ptype), False)
+
+        frappe_module.has_permission = has_permission
+        frappe_module.permission_checks = permission_checks
         frappe_module.whitelist = lambda: lambda function: function
 
         def get_doc(doctype: str, name: str):
@@ -316,6 +332,7 @@ class ShopFabricationApiTests(unittest.TestCase):
         target_field: str,
         snapshot: dict,
         extra: dict[str, str] | None = None,
+        agent_role: str | None = None,
     ) -> None:
         args = {
             target_field: target_name,
@@ -327,6 +344,12 @@ class ShopFabricationApiTests(unittest.TestCase):
         args.update(extra or {})
         fixtures["run"].update(
             {
+                "agent_role": agent_role
+                or (
+                    "Owner Operator"
+                    if tool_name == api.APPROVE_CONTROLLED_ITEM_TOOL
+                    else "Production Controller"
+                ),
                 "tool_name": tool_name,
                 "target_doctype": target_doctype,
                 "target_name": target_name,
@@ -619,6 +642,250 @@ class ShopFabricationApiTests(unittest.TestCase):
 
         self.assertEqual(order.save_count, 0)
         self.assertEqual(lot.save_count, 0)
+
+    def test_advance_shop_order_setup_derives_a_ready_signed_route(self) -> None:
+        fixtures = self.fixture_data()
+        fixtures["items"]["item-1"]["status"] = "Approved"
+        order = fixtures["orders"]["shop-1"]
+        order["status"] = "Reserved"
+        setup_payload_json = json.dumps(
+            {
+                "action": "begin_setup",
+                "operations": [
+                    {
+                        "sequence": 1,
+                        "operation": "Cut panels",
+                        "machine_tooling": "Shear A",
+                        "operator": "operator@example.com",
+                    },
+                    {
+                        "sequence": 2,
+                        "operation": "Form hems",
+                        "machine_tooling": "Brake B",
+                        "operator": "operator@example.com",
+                    },
+                ],
+            },
+            separators=(",", ":"),
+        )
+        api, fixtures, db, context_calls = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.ADVANCE_SHOP_ORDER_SETUP_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=api._shop_order_setup_snapshot(order),
+            extra={"setup_payload_json": setup_payload_json},
+        )
+
+        result = api.advance_shop_order_setup("shop-1", "run-shop-0001")
+
+        self.assertEqual(result["shop_order"]["status"], "Setup / First Piece")
+        self.assertEqual(order["setup_started_at"], "2026-07-30 10:05:00")
+        self.assertEqual(order["quality_hold_reason"], "")
+        self.assertEqual(
+            order["operations"],
+            [
+                {
+                    "sequence": 1,
+                    "operation": "Cut panels",
+                    "machine_tooling": "Shear A",
+                    "operator": "operator@example.com",
+                    "status": "Ready",
+                },
+                {
+                    "sequence": 2,
+                    "operation": "Form hems",
+                    "machine_tooling": "Brake B",
+                    "operator": "operator@example.com",
+                    "status": "Ready",
+                },
+            ],
+        )
+        self.assertEqual(order.save_count, 1)
+        self.assertEqual(context_calls, [("shop_order", "shop-1")])
+        for table in (
+            "`tabHermes Run`",
+            "`tabShop Order`",
+            "`tabMaterial Takeoff`",
+            "`tabSupplier Order`",
+            "`tabWork Package`",
+            "`tabControlled Item`",
+        ):
+            self.assertTrue(any(table in query for query, _ in db.lock_queries), table)
+
+    def test_advance_shop_order_setup_holds_and_resumes_an_existing_route(self) -> None:
+        fixtures = self.fixture_data()
+        fixtures["items"]["item-1"]["status"] = "Approved"
+        order = fixtures["orders"]["shop-1"]
+        order.update(
+            {
+                "status": "Setup / First Piece",
+                "setup_started_at": "2026-07-30 10:03:00",
+                "operations": [
+                    {
+                        "sequence": 1,
+                        "operation": "Cut panels",
+                        "machine_tooling": "Shear A",
+                        "operator": "operator@example.com",
+                        "status": "Ready",
+                    }
+                ],
+            }
+        )
+        api, fixtures, _, context_calls = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.ADVANCE_SHOP_ORDER_SETUP_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=api._shop_order_setup_snapshot(order),
+            extra={
+                "setup_payload_json": json.dumps(
+                    {"action": "place_quality_hold", "reason": "First piece awaits check."},
+                    separators=(",", ":"),
+                )
+            },
+        )
+
+        api.advance_shop_order_setup("shop-1", "run-shop-0001")
+
+        self.assertEqual(order["status"], "Quality Hold")
+        self.assertEqual(order["quality_hold_reason"], "First piece awaits check.")
+        self.assertEqual(order["setup_started_at"], "2026-07-30 10:03:00")
+        route_before_resume = list(order["operations"])
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.ADVANCE_SHOP_ORDER_SETUP_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=api._shop_order_setup_snapshot(order),
+            extra={"setup_payload_json": '{"action":"resume_setup"}'},
+        )
+
+        result = api.advance_shop_order_setup("shop-1", "run-shop-0001")
+
+        self.assertEqual(result["shop_order"]["status"], "Setup / First Piece")
+        self.assertEqual(order["quality_hold_reason"], "")
+        self.assertEqual(order["setup_started_at"], "2026-07-30 10:03:00")
+        self.assertEqual(order["operations"], route_before_resume)
+        self.assertEqual(order.save_count, 2)
+        self.assertEqual(
+            context_calls,
+            [("shop_order", "shop-1"), ("shop_order", "shop-1")],
+        )
+
+    def test_advance_shop_order_setup_rejects_injected_route_fields_without_save(self) -> None:
+        fixtures = self.fixture_data()
+        fixtures["items"]["item-1"]["status"] = "Approved"
+        order = fixtures["orders"]["shop-1"]
+        order["status"] = "Reserved"
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.ADVANCE_SHOP_ORDER_SETUP_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=api._shop_order_setup_snapshot(order),
+            extra={
+                "setup_payload_json": json.dumps(
+                    {
+                        "action": "begin_setup",
+                        "operations": [
+                            {
+                                "sequence": 1,
+                                "operation": "Cut panels",
+                                "machine_tooling": "Shear A",
+                                "operator": "operator@example.com",
+                                "status": "In Fabrication",
+                            }
+                        ],
+                    },
+                    separators=(",", ":"),
+                )
+            },
+        )
+
+        with self.assertRaisesRegex(FakeValidationError, "invalid_approval_args"):
+            api.advance_shop_order_setup("shop-1", "run-shop-0001")
+
+        self.assertEqual(order.save_count, 0)
+        self.assertEqual(order["status"], "Reserved")
+        self.assertEqual(order["operations"], [])
+
+    def test_shop_command_reads_but_does_not_write_hermes_run(self) -> None:
+        fixtures = self.fixture_data()
+        fixtures["items"]["item-1"]["status"] = "Approved"
+        order = fixtures["orders"]["shop-1"]
+        order["status"] = "Reserved"
+        api, fixtures, _, _ = self.load_api(
+            fixtures,
+            permission_grants={
+                ("Shop Order", "write"): True,
+                ("Hermes Run", "read"): True,
+                ("Hermes Run", "write"): False,
+            },
+        )
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.ADVANCE_SHOP_ORDER_SETUP_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=api._shop_order_setup_snapshot(order),
+            extra={
+                "setup_payload_json": (
+                    '{"action":"begin_setup","operations":[{"sequence":1,'
+                    '"operation":"Cut panels","machine_tooling":"Shear A",'
+                    '"operator":"operator@example.com"}]}'
+                )
+            },
+        )
+
+        result = api.advance_shop_order_setup("shop-1", "run-shop-0001")
+
+        self.assertEqual(result["shop_order"]["status"], "Setup / First Piece")
+        self.assertIn(
+            ("Hermes Run", "read", "production@example.com"),
+            api.frappe.permission_checks,
+        )
+        self.assertNotIn(
+            ("Hermes Run", "write", "production@example.com"),
+            api.frappe.permission_checks,
+        )
+
+    def test_shop_command_rejects_agent_without_granted_tool(self) -> None:
+        fixtures = self.fixture_data()
+        fixtures["items"]["item-1"]["status"] = "Approved"
+        order = fixtures["orders"]["shop-1"]
+        order["status"] = "Reserved"
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.ADVANCE_SHOP_ORDER_SETUP_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=api._shop_order_setup_snapshot(order),
+            extra={"setup_payload_json": '{"action":"place_quality_hold","reason":"Awaiting check."}'},
+            agent_role="Field Companion",
+        )
+
+        with self.assertRaisesRegex(FakePermissionError, "agent_role_denied"):
+            api.advance_shop_order_setup("shop-1", "run-shop-0001")
+
+        self.assertEqual(order.save_count, 0)
+        self.assertEqual(order["status"], "Reserved")
 
     def test_commands_reject_untrusted_or_stale_writes_without_saving(self) -> None:
         api, fixtures, _, _ = self.load_api(request_method="GET", roles=["IronWrap Owner"])

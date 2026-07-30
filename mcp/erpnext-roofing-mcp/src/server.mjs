@@ -32,6 +32,7 @@ const REQUEST_TO_DRY_RUN = Object.freeze({
   request_receive_material_lot: "dry_run_receive_material_lot",
   request_release_shop_order: "dry_run_release_shop_order",
   request_reserve_shop_order_materials: "dry_run_reserve_shop_order_materials",
+  request_advance_shop_order_setup: "dry_run_advance_shop_order_setup",
   request_create_job_assignment: "dry_run_job_assignment",
   request_create_change_order: "dry_run_change_order",
   request_transition_change_order: "dry_run_change_order_transition",
@@ -1978,6 +1979,33 @@ const ShopOrderReservationInputSchema = z.object({
   allocations_json: z.string().trim().min(2).max(20_000),
 }).strict();
 
+const ShopSetupOperationSchema = z.object({
+  sequence: z.number().int().min(1).max(50),
+  operation: z.string().trim().min(1).max(140).regex(/^[^\x00\r\n]+$/),
+  machine_tooling: z.string().trim().min(1).max(2000).regex(/^[^\x00\r\n]+$/),
+  operator: IdSchema.regex(/^[^\x00\r\n]+$/),
+}).strict();
+
+const ShopOrderSetupPayloadSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("begin_setup"),
+    operations: z.array(ShopSetupOperationSchema).min(1).max(50),
+  }).strict(),
+  z.object({
+    action: z.literal("place_quality_hold"),
+    reason: z.string().trim().min(1).max(2000).regex(/^[^\x00\r\n]+$/),
+  }).strict(),
+  z.object({
+    action: z.literal("resume_setup"),
+    operations: z.array(ShopSetupOperationSchema).min(1).max(50).optional(),
+  }).strict(),
+]);
+
+const ShopOrderSetupInputSchema = z.object({
+  shop_order_id: IdSchema,
+  setup_payload_json: z.string().trim().min(2).max(20_000),
+}).strict();
+
 const ShopSnapshotHashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 
 const ControlledItemApprovalInputSchema = ControlledItemCommandInputSchema.extend({
@@ -1993,6 +2021,10 @@ const ShopOrderReleaseInputSchema = ShopOrderCommandInputSchema.extend({
 }).strict();
 
 const ShopOrderReservationWriteInputSchema = ShopOrderReservationInputSchema.extend({
+  expected_snapshot_sha256: ShopSnapshotHashSchema,
+}).strict();
+
+const ShopOrderSetupWriteInputSchema = ShopOrderSetupInputSchema.extend({
   expected_snapshot_sha256: ShopSnapshotHashSchema,
 }).strict();
 
@@ -3820,6 +3852,63 @@ export function buildServer(config) {
           },
         ),
         responseExtra: { reserved: true, shop_order_id: args.shop_order_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_advance_shop_order_setup",
+    {
+      title: "Dry Run Advance Shop Order Setup",
+      description: "Preview one bounded shop setup or early-quality transition without writing.",
+      inputSchema: ShopOrderSetupInputSchema,
+    },
+    async ({ shop_order_id, setup_payload_json }) => text(
+      await buildAdvanceShopOrderSetupPreview(config, shop_order_id, setup_payload_json),
+    ),
+  );
+
+  server.registerTool(
+    "request_advance_shop_order_setup",
+    {
+      title: "Request Advance Shop Order Setup",
+      description: "Approved-write: perform one signed shop setup or early-quality transition and record a Hermes Run audit row.",
+      inputSchema: approvedWriteInputSchema(ShopOrderSetupWriteInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const order = await readResource(config, "Shop Order", args.shop_order_id);
+      const dryRun = await buildAdvanceShopOrderSetupPreview(
+        config,
+        args.shop_order_id,
+        args.setup_payload_json,
+      );
+      assertSignedShopSnapshot(args, dryRun);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_advance_shop_order_setup",
+        target: { doctype: "Shop Order", name: args.shop_order_id },
+        roofJob: order.roof_job,
+        dryRun,
+        beforeSummary: summarizeShopOrder(order),
+        afterSummary: (result) => result?.shop_order ?? {},
+        execute: () => erpPost(
+          config,
+          "/api/method/ironwrap_roofing.shop_fabrication_api.advance_shop_order_setup",
+          {
+            shop_order_id: args.shop_order_id,
+            hermes_run_id: args.run_id,
+          },
+        ),
+        responseExtra: {
+          advanced: true,
+          shop_order_id: args.shop_order_id,
+          setup_action: dryRun.setup.action,
+        },
       }));
     },
   );
@@ -7522,6 +7611,26 @@ function parseShopAllocationsJson(raw) {
   });
 }
 
+function parseShopSetupPayloadJson(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("shop_setup_payload_invalid");
+  }
+  const result = ShopOrderSetupPayloadSchema.safeParse(parsed);
+  if (!result.success) throw new Error("shop_setup_payload_invalid");
+  const payload = result.data;
+  if (payload.operations) {
+    for (const [index, operation] of payload.operations.entries()) {
+      if (operation.sequence !== index + 1) {
+        throw new Error("shop_setup_operation_sequence_invalid");
+      }
+    }
+  }
+  return payload;
+}
+
 function controlledItemSnapshot(item) {
   return {
     controlled_item: snapshotValues(item, ["name", "controlled_item_id", "status", "modified"]),
@@ -7578,6 +7687,25 @@ function shopOrderSnapshot(order, lots = []) {
       "modified",
     ]));
   }
+  return snapshot;
+}
+
+function shopOrderSetupSnapshot(order) {
+  const snapshot = shopOrderSnapshot(order);
+  Object.assign(snapshot.shop_order, snapshotValues(order, [
+    "setup_started_at",
+    "quality_hold_reason",
+  ]));
+  snapshot.operations = (Array.isArray(order.operations) ? order.operations : []).map((operation) => snapshotValues(operation, [
+    "sequence",
+    "operation",
+    "machine_tooling",
+    "operator",
+    "status",
+    "started_at",
+    "completed_at",
+    "notes",
+  ]));
   return snapshot;
 }
 
@@ -7646,6 +7774,27 @@ function assertShopOrderReadyForReservation(order, shopOrderId) {
     throw new Error("shop_order_identity_mismatch");
   }
   if (order.status !== "Released") throw new Error("shop_order_not_released");
+}
+
+function assertShopOrderReadyForSetupAction(order, shopOrderId, payload) {
+  if (!order || order.name !== shopOrderId || order.shop_order_id !== shopOrderId) {
+    throw new Error("shop_order_identity_mismatch");
+  }
+  const hasRoute = Array.isArray(order.operations) && order.operations.length > 0;
+  if (payload.action === "begin_setup") {
+    if (order.status !== "Reserved") throw new Error("shop_order_not_reservable_for_setup");
+    if (hasRoute) throw new Error("shop_setup_route_already_exists");
+    return;
+  }
+  if (payload.action === "place_quality_hold") {
+    if (!["Reserved", "Setup / First Piece"].includes(order.status)) {
+      throw new Error("shop_order_not_holdable_during_setup");
+    }
+    return;
+  }
+  if (order.status !== "Quality Hold") throw new Error("shop_order_not_resumable_to_setup");
+  if (hasRoute && payload.operations) throw new Error("shop_setup_route_already_exists");
+  if (!hasRoute && !payload.operations) throw new Error("shop_setup_route_required");
 }
 
 function assertSignedShopSnapshot(args, preview) {
@@ -7796,6 +7945,64 @@ async function buildReserveShopOrderPreview(config, shopOrderId, allocationsJson
     reservation: {
       status: "Reserved",
       reserved_at: "Frappe server time at execution",
+    },
+  };
+}
+
+async function buildAdvanceShopOrderSetupPreview(config, shopOrderId, setupPayloadJson) {
+  const payload = parseShopSetupPayloadJson(setupPayloadJson);
+  const order = await readResource(config, "Shop Order", shopOrderId);
+  assertShopOrderReadyForSetupAction(order, shopOrderId, payload);
+  const [materialTakeoff, supplierOrder, workPackage] = await Promise.all([
+    readResource(config, "Material Takeoff", order.material_takeoff),
+    readResource(config, "Supplier Order", order.supplier_order),
+    readResource(config, "Work Package", order.work_package),
+  ]);
+  assertShopSourceRecord(materialTakeoff, {
+    doctype: "Material Takeoff",
+    name: order.material_takeoff,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Approved"]),
+  });
+  assertShopSourceRecord(supplierOrder, {
+    doctype: "Supplier Order",
+    name: order.supplier_order,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Partially Received", "Received"]),
+  });
+  assertShopSourceRecord(workPackage, {
+    doctype: "Work Package",
+    name: order.work_package,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Released", "Acknowledged", "In Progress"]),
+  });
+  const operations = payload.operations ?? order.operations ?? [];
+  const toStatus = payload.action === "place_quality_hold" ? "Quality Hold" : "Setup / First Piece";
+  return {
+    would_write: false,
+    required_tool: "request_advance_shop_order_setup",
+    target: { doctype: "Shop Order", name: shopOrderId },
+    before: summarizeShopOrder(order),
+    source_statuses: {
+      material_takeoff: materialTakeoff.status ?? "",
+      supplier_order: supplierOrder.status ?? "",
+      work_package: workPackage.status ?? "",
+    },
+    expected_snapshot_sha256: digest(shopOrderSetupSnapshot(order)),
+    setup: {
+      action: payload.action,
+      from_status: order.status,
+      to_status: toStatus,
+      ...(payload.action === "place_quality_hold"
+        ? { reason: payload.reason }
+        : {
+            operations: operations.map(({ sequence, operation, machine_tooling, operator }) => ({
+              sequence,
+              operation,
+              machine_tooling,
+              operator,
+            })),
+          }),
     },
   };
 }

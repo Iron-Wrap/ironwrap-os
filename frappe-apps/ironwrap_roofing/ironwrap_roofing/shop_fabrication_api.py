@@ -38,12 +38,20 @@ APPROVE_CONTROLLED_ITEM_TOOL = "request_approve_controlled_item"
 RECEIVE_MATERIAL_LOT_TOOL = "request_receive_material_lot"
 RELEASE_SHOP_ORDER_TOOL = "request_release_shop_order"
 RESERVE_SHOP_ORDER_TOOL = "request_reserve_shop_order_materials"
+ADVANCE_SHOP_ORDER_SETUP_TOOL = "request_advance_shop_order_setup"
 
 OWNER_ROLES = frozenset({"System Manager", "IronWrap Owner"})
 SHOP_ROLES = OWNER_ROLES | {"IronWrap Production"}
 COMMON_APPROVAL_ARGUMENTS = frozenset(
     {"request_text", "approved_by", "run_id", "expected_snapshot_sha256"}
 )
+SHOP_TOOL_AGENT_ROLES = {
+    APPROVE_CONTROLLED_ITEM_TOOL: frozenset({"Owner Operator"}),
+    RECEIVE_MATERIAL_LOT_TOOL: frozenset({"Owner Operator", "Production Controller"}),
+    RELEASE_SHOP_ORDER_TOOL: frozenset({"Owner Operator", "Production Controller"}),
+    RESERVE_SHOP_ORDER_TOOL: frozenset({"Owner Operator", "Production Controller"}),
+    ADVANCE_SHOP_ORDER_SETUP_TOOL: frozenset({"Owner Operator", "Production Controller"}),
+}
 
 
 def _fail(code: str, message: str, *, permission: bool = False) -> None:
@@ -65,17 +73,17 @@ def _clean_identifier(value: Any, field: str) -> str:
     return cleaned
 
 
-def _clean_request_text(value: Any) -> str:
+def _clean_request_text(value: Any, *, field: str = "request_text") -> str:
     if not isinstance(value, str):
-        _fail("shop_command_invalid_approval_args", "request_text must be text")
+        _fail("shop_command_invalid_approval_args", f"{field} must be text")
     cleaned = value.strip()
     if not cleaned or len(cleaned) > MAX_REQUEST_TEXT_LENGTH:
         _fail(
             "shop_command_invalid_approval_args",
-            f"request_text must be 1-{MAX_REQUEST_TEXT_LENGTH} characters",
+            f"{field} must be 1-{MAX_REQUEST_TEXT_LENGTH} characters",
         )
     if any(character in cleaned for character in ("\x00", "\r", "\n")):
-        _fail("shop_command_invalid_approval_args", "request_text contains control characters")
+        _fail("shop_command_invalid_approval_args", f"{field} contains control characters")
     return cleaned
 
 
@@ -136,17 +144,17 @@ def _parse_approved_arguments(
         ),
     }
     for field in extra_fields:
-        if field == "allocations_json":
+        if field in {"allocations_json", "setup_payload_json"}:
             value = parsed.get(field)
             if not isinstance(value, str) or not value:
                 _fail(
                     "shop_command_invalid_approval_args",
-                    "allocations_json must be non-empty JSON text",
+                    f"{field} must be non-empty JSON text",
                 )
             # Parse now so malformed or duplicate-key payloads fail before any
-            # inventory row is locked or changed. Preserve the exact signed text
+            # protected row is locked or changed. Preserve the exact signed text
             # for receipt verification below.
-            _parse_json(value, field="allocations_json")
+            _parse_json(value, field=field)
             result[field] = value
         else:  # pragma: no cover - the command map currently has one payload kind
             _fail("shop_command_invalid_approval_args", f"unsupported field {field}")
@@ -176,15 +184,18 @@ def _assert_post_and_permissions(
             "the authenticated principal does not hold the required shop role",
             permission=True,
         )
-    for protected_doctype in (doctype, "Hermes Run"):
-        if not frappe.has_permission(
-            protected_doctype, ptype="write", user=authenticated_user
-        ):
-            _fail(
-                "shop_command_permission_denied",
-                f"the authenticated principal cannot write {protected_doctype}",
-                permission=True,
-            )
+    if not frappe.has_permission(doctype, ptype="write", user=authenticated_user):
+        _fail(
+            "shop_command_permission_denied",
+            f"the authenticated principal cannot write {doctype}",
+            permission=True,
+        )
+    if not frappe.has_permission("Hermes Run", ptype="read", user=authenticated_user):
+        _fail(
+            "shop_command_permission_denied",
+            "the authenticated principal cannot read Hermes Run",
+            permission=True,
+        )
     return authenticated_user
 
 
@@ -285,6 +296,13 @@ def _assert_approved_run(
         _fail("shop_command_approval_required", "Hermes Run must be Approved")
     if run.get("tool_name") != tool_name:
         _fail("shop_command_tool_mismatch", "Hermes Run does not authorize this command")
+    allowed_agent_roles = SHOP_TOOL_AGENT_ROLES.get(tool_name)
+    if not allowed_agent_roles or run.get("agent_role") not in allowed_agent_roles:
+        _fail(
+            "shop_command_agent_role_denied",
+            "the Hermes Run agent role cannot execute this shop command",
+            permission=True,
+        )
     if (
         run.get("target_doctype") != target_doctype
         or run.get("target_name") != target_name
@@ -444,6 +462,93 @@ def _parse_allocations(raw: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _parse_setup_route_rows(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list) or not raw:
+        _fail(
+            "shop_command_invalid_approval_args",
+            "operations must contain at least one route row",
+        )
+    expected_fields = {"sequence", "operation", "machine_tooling", "operator"}
+    rows: list[dict[str, Any]] = []
+    for expected_sequence, raw_row in enumerate(raw, start=1):
+        if not isinstance(raw_row, Mapping) or set(raw_row) != expected_fields:
+            _fail(
+                "shop_command_invalid_approval_args",
+                f"operation {expected_sequence} has an unsupported shape",
+            )
+        sequence = _positive_decimal(raw_row.get("sequence"), "sequence")
+        if sequence != expected_sequence:
+            _fail(
+                "shop_command_invalid_approval_args",
+                "operation sequences must be contiguous and start at one",
+            )
+        rows.append(
+            {
+                "sequence": expected_sequence,
+                "operation": _clean_identifier(raw_row.get("operation"), "operation"),
+                "machine_tooling": _clean_request_text(
+                    raw_row.get("machine_tooling"), field="machine_tooling"
+                ),
+                "operator": _clean_identifier(raw_row.get("operator"), "operator"),
+                "status": "Ready",
+            }
+        )
+    return rows
+
+
+def _parse_setup_payload(order: Any, raw: str) -> tuple[str, list[dict[str, Any]] | None, str | None]:
+    payload = _parse_json(raw, field="setup_payload_json")
+    if not isinstance(payload, Mapping):
+        _fail("shop_command_invalid_approval_args", "setup_payload_json must be an object")
+    action = payload.get("action")
+    status = order.get("status")
+    has_operations = bool(order.get("operations") or [])
+    if action == "begin_setup":
+        if status != "Reserved":
+            _fail("shop_command_order_not_setup_advanceable", "Shop Order must be Reserved")
+        if has_operations:
+            _fail(
+                "shop_command_invalid_approval_args",
+                "begin_setup cannot replace an existing shop route",
+            )
+        if set(payload) != {"action", "operations"}:
+            _fail(
+                "shop_command_invalid_approval_args",
+                "begin_setup requires only action and operations",
+            )
+        return action, _parse_setup_route_rows(payload.get("operations")), None
+    if action == "place_quality_hold":
+        if status not in {"Reserved", "Setup / First Piece"}:
+            _fail(
+                "shop_command_order_not_setup_advanceable",
+                "Shop Order must be Reserved or Setup / First Piece",
+            )
+        if set(payload) != {"action", "reason"}:
+            _fail(
+                "shop_command_invalid_approval_args",
+                "place_quality_hold requires only action and reason",
+            )
+        return action, None, _clean_request_text(payload.get("reason"), field="reason")
+    if action == "resume_setup":
+        if status != "Quality Hold":
+            _fail(
+                "shop_command_order_not_setup_advanceable",
+                "Shop Order must be on Quality Hold",
+            )
+        expected_fields = {"action"} if has_operations else {"action", "operations"}
+        if set(payload) != expected_fields:
+            _fail(
+                "shop_command_invalid_approval_args",
+                "resume_setup must preserve an existing route or provide a new one",
+            )
+        operations = (
+            None if has_operations else _parse_setup_route_rows(payload.get("operations"))
+        )
+        return action, operations, None
+    _fail("shop_command_invalid_approval_args", "unsupported setup action")
+    raise AssertionError("frappe.throw must raise")  # pragma: no cover
+
+
 def _lock_evidence(evidence_id: str, *, roof_job: str) -> None:
     evidence = _lock_row(
         "Evidence Item",
@@ -500,7 +605,7 @@ def _lock_shop_order(shop_order_id: str) -> Any:
         shop_order_id,
         fields=(
             "name, shop_order_id, roof_job, material_takeoff, supplier_order, work_package, "
-            "status, modified"
+            "status, setup_started_at, quality_hold_reason, modified"
         ),
         not_found_code="shop_command_shop_order_not_found",
     )
@@ -617,6 +722,30 @@ def _shop_order_snapshot(order: Any, lots: list[Any] | None = None) -> dict[str,
             )
             for lot in lots
         ]
+    return snapshot
+
+
+def _shop_order_setup_snapshot(order: Any) -> dict[str, Any]:
+    snapshot = _shop_order_snapshot(order)
+    snapshot["shop_order"].update(
+        _snapshot_values(order, ("setup_started_at", "quality_hold_reason"))
+    )
+    snapshot["operations"] = [
+        _snapshot_values(
+            operation,
+            (
+                "sequence",
+                "operation",
+                "machine_tooling",
+                "operator",
+                "status",
+                "started_at",
+                "completed_at",
+                "notes",
+            ),
+        )
+        for operation in order.get("operations") or []
+    ]
     return snapshot
 
 
@@ -932,5 +1061,64 @@ def reserve_shop_order_materials(
             }
             for lot in lots
         ],
+        "hermes_run_id": hermes_run_id,
+    }
+
+
+@frappe.whitelist()
+def advance_shop_order_setup(
+    shop_order_id: str,
+    hermes_run_id: str,
+) -> dict[str, Any]:
+    """Advance one Shop Order through setup using only a signed route payload."""
+
+    authenticated_user = _assert_post_and_permissions(
+        doctype="Shop Order", allowed_roles=SHOP_ROLES
+    )
+    shop_order_id = _clean_identifier(shop_order_id, "shop_order_id")
+    hermes_run_id = _clean_identifier(hermes_run_id, "hermes_run_id")
+    run = _lock_hermes_run(hermes_run_id)
+    args = _assert_approved_run(
+        run,
+        hermes_run_id=hermes_run_id,
+        authenticated_user=authenticated_user,
+        tool_name=ADVANCE_SHOP_ORDER_SETUP_TOOL,
+        target_doctype="Shop Order",
+        target_name=shop_order_id,
+        target_field="shop_order_id",
+        extra_fields=frozenset({"setup_payload_json"}),
+    )
+    order = _lock_shop_order(shop_order_id)
+    _assert_run_roof_job(run, order)
+    _lock_shop_sources(order)
+    _assert_current_snapshot(
+        args["expected_snapshot_sha256"],
+        _shop_order_setup_snapshot(order),
+    )
+    action, operations, hold_reason = _parse_setup_payload(
+        order,
+        args["setup_payload_json"],
+    )
+    if action == "place_quality_hold":
+        order.status = "Quality Hold"
+        order.quality_hold_reason = hold_reason
+    else:
+        if operations is not None:
+            _set(order, "operations", operations)
+            order.setup_started_at = str(frappe.utils.now_datetime())
+        order.status = "Setup / First Piece"
+        order.quality_hold_reason = ""
+    with shop_order_transition_context(order):
+        order.save()
+    return {
+        "shop_order": {
+            "name": order.get("name"),
+            "shop_order_id": order.get("shop_order_id"),
+            "roof_job": order.get("roof_job"),
+            "status": order.get("status"),
+            "setup_started_at": str(order.get("setup_started_at") or ""),
+            "quality_hold_reason": order.get("quality_hold_reason") or "",
+            "operation_count": len(order.get("operations") or []),
+        },
         "hermes_run_id": hermes_run_id,
     }

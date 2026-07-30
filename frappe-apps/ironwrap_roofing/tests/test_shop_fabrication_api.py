@@ -821,7 +821,7 @@ class ShopFabricationApiTests(unittest.TestCase):
         self.assertEqual(order["status"], "Reserved")
         self.assertEqual(order["operations"], [])
 
-    def test_shop_command_reads_but_does_not_write_hermes_run(self) -> None:
+    def test_shop_command_needs_no_generic_hermes_run_permission(self) -> None:
         fixtures = self.fixture_data()
         fixtures["items"]["item-1"]["status"] = "Approved"
         order = fixtures["orders"]["shop-1"]
@@ -830,8 +830,6 @@ class ShopFabricationApiTests(unittest.TestCase):
             fixtures,
             permission_grants={
                 ("Shop Order", "write"): True,
-                ("Hermes Run", "read"): True,
-                ("Hermes Run", "write"): False,
             },
         )
         self.bind_run(
@@ -854,7 +852,7 @@ class ShopFabricationApiTests(unittest.TestCase):
         result = api.advance_shop_order_setup("shop-1", "run-shop-0001")
 
         self.assertEqual(result["shop_order"]["status"], "Setup / First Piece")
-        self.assertIn(
+        self.assertNotIn(
             ("Hermes Run", "read", "production@example.com"),
             api.frappe.permission_checks,
         )

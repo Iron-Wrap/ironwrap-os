@@ -43,6 +43,10 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Closeout": READ,
         "IronWrap Support": READ,
     },
+    "Controlled Item": {
+        "IronWrap Estimator": WRITE,
+        "IronWrap Production": READ,
+    },
     "Completion Packet": {
         "IronWrap Production": WRITE,
         "IronWrap Field": CREATE_OWN,
@@ -120,6 +124,11 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Support": READ,
     },
     "Market Watch Item": {"IronWrap Support": WRITE, "IronWrap Estimator": READ},
+    "Material Lot": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": READ,
+        "IronWrap Finance": READ,
+    },
     "Material Takeoff": {
         "IronWrap Estimator": WRITE,
         "IronWrap Production": READ,
@@ -129,6 +138,12 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Estimator": WRITE,
         "IronWrap Production": READ,
         "IronWrap Field": READ,
+    },
+    "Nonconformance": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": CREATE_OWN,
+        "IronWrap Closeout": READ,
+        "IronWrap Support": READ,
     },
     "Option Package": {
         "IronWrap Estimator": WRITE,
@@ -196,6 +211,12 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Field": READ,
         "IronWrap Closeout": READ,
         "IronWrap Support": READ,
+    },
+    "Shop Order": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": READ,
+        "IronWrap Finance": READ,
+        "IronWrap Closeout": READ,
     },
     "Scope Clause": {
         "IronWrap Estimator": WRITE,

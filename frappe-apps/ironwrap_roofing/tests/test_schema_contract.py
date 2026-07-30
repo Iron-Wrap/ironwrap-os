@@ -36,6 +36,7 @@ TOP_LEVEL_DOCTYPES = {
     "Communication Event",
     "Completion Packet",
     "Contract Acceptance",
+    "Controlled Item",
     "Crew Profile",
     "Customer Decision",
     "Customer Quote",
@@ -48,9 +49,11 @@ TOP_LEVEL_DOCTYPES = {
     "Job Assignment",
     "Job Compliance Record",
     "Lead Envelope",
+    "Material Lot",
     "Market Watch Item",
     "Material Takeoff",
     "Measurement Report",
+    "Nonconformance",
     "Option Package",
     "Payment Milestone",
     "Price Book Rule",
@@ -63,6 +66,7 @@ TOP_LEVEL_DOCTYPES = {
     "Roofing Customer",
     "Roofing Property",
     "Safety Plan",
+    "Shop Order",
     "Scope Clause",
     "Supplier Order",
     "Supplier Profile",
@@ -83,6 +87,12 @@ CHILD_DOCTYPES = {
     "Supplier Order Item",
     "Supplier Quote Item",
     "Safety Acknowledgement",
+    "Shop Bundle",
+    "Shop Inspection",
+    "Shop Material Allocation",
+    "Shop Operation",
+    "Shop Order Line",
+    "Shop Yield",
     "Work Package Hold Point",
     "Work Package Step",
 }
@@ -222,7 +232,11 @@ NEW_BLUEPRINT_FIELDS.update(
         "Production Gate State": {"gate_id", "owner_user", "assigned_at", "due_at"},
         "Roof Job": {"roof_job_id", "workflow_profile", "locale_policy_version", "locale_policy_snapshot_json"},
         "Customer Quote": {"customer_quote_id", "quote_version", "price_book_version", "price_rule_snapshot_json", "subtotal", "tax_amount", "tax_policy_snapshot_json", "amount_due", "amount_paid", "balance_due", "payment_truth_source", "supersedes"},
-        "Payment Milestone": {"payment_milestone_id", "milestone_version", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due", "tax_policy_snapshot_json", "truth_source", "supersedes"},
+        "Controlled Item": {"controlled_item_id", "status", "revision", "item_kind", "unit", "profile", "gauge", "coating", "colour", "dimension_spec", "tolerance", "lot_required", "certificate_required", "source_ref", "approved_by", "approved_at", "approval_note"},
+        "Material Lot": {"material_lot_id", "roof_job", "controlled_item", "source_kind", "supplier_order", "source_shop_order", "source_evidence", "lot_number", "certificate_reference", "condition_status", "received_quantity", "available_quantity", "reserved_quantity", "consumed_quantity", "unit", "received_at", "status"},
+        "Nonconformance": {"nonconformance_id", "shop_order", "material_lot", "status", "detected_at", "reported_by", "description", "evidence_item", "containment", "disposition", "disposition_by", "disposition_at", "closed_by", "closed_at", "closure_evidence"},
+        "Payment Milestone": {"payment_milestone_id", "shop_order", "milestone_version", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due", "tax_policy_snapshot_json", "truth_source", "supersedes"},
+        "Shop Order": {"shop_order_id", "roof_job", "material_takeoff", "supplier_order", "work_package", "status", "released_by", "released_at", "reserved_at", "setup_started_at", "fabrication_started_at", "quality_hold_reason", "ready_at", "handed_over_to", "handed_over_at", "handoff_evidence", "invoice_payment_milestone", "invoice_ready_at", "closed_at", "lines", "material_allocations", "operations", "yields", "inspections", "bundles"},
         "Reception Session": {"session_id", "provider", "channel", "direction", "session_status", "lead_envelope", "contact_phone", "structured_summary", "transcript_pointer", "recording_pointer", "ai_disclosed", "recording_disclosed", "raw_key", "payload_hash", "structured_json"},
         "Work Package": {"work_package_id", "roof_job", "job_assignment", "safety_plan", "version", "status", "objective", "stop_conditions", "make_safe_procedure", "expires_at", "acknowledgement_device_action_id", "blocked_by", "blocked_device_action_id", "steps", "hold_points", "supersedes"},
         "Work Package Event": {"work_package_event_id", "event_type", "work_package", "roof_job", "job_assignment", "work_package_version", "actor_user", "actor_role", "device_action_id", "occurred_at", "payload_hash", "hold_point_sequence", "evidence_item", "blocker_reason"},
@@ -243,9 +257,9 @@ class DocTypeContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.doctypes = load_doctypes()
 
-    def test_complete_54_doctype_blueprint(self) -> None:
+    def test_complete_64_doctype_blueprint(self) -> None:
         self.assertEqual(set(self.doctypes), TOP_LEVEL_DOCTYPES | CHILD_DOCTYPES)
-        self.assertEqual(len(self.doctypes), 54)
+        self.assertEqual(len(self.doctypes), 64)
 
         for name, (_, document) in self.doctypes.items():
             with self.subTest(doctype=name):

@@ -179,6 +179,7 @@ test("0015 lead-ack receipts preserve provider-acceptance evidence without recip
 
 test("approval migrations avoid nested CASE statements in remote D1 trigger commands", async () => {
   const sql = await readFile(new URL("../migrations/0016_approval_requests.sql", import.meta.url), "utf8");
+  const transitionKernelSql = await readFile(new URL("../migrations/0027_transition_kernel.sql", import.meta.url), "utf8");
   for (const migration of [
     "0016_approval_requests.sql",
     "0017_quote_revision_approval_requests.sql",
@@ -196,6 +197,8 @@ test("approval migrations avoid nested CASE statements in remote D1 trigger comm
   ]) {
     assert.match(sql, new RegExp(`SELECT RAISE\\(ABORT, '${code}'\\)\\s+WHERE`));
   }
+  assert.doesNotMatch(transitionKernelSql, /\bCASE\b/i);
+  assert.match(transitionKernelSql, /renew_approval_execution_lease_from_governed_outbox_claim/);
 });
 
 test("the complete D1 migration chain applies cleanly and carries every schedule-ledger invariant", async () => {
@@ -205,9 +208,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     const migrations = (await readdir(new URL("../migrations/", import.meta.url)))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 26);
+    assert.equal(migrations.length, 27);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0026_newo_reconciliation.sql");
+    assert.equal(migrations.at(-1), "0027_transition_kernel.sql");
     for (const migration of migrations) {
       db.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -224,7 +227,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
          SUM(type = 'trigger') AS triggers
        FROM sqlite_master`,
     ).get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 35, indexes: 61, triggers: 31 });
+    assert.deepEqual({ ...counts }, { tables: 38, indexes: 64, triggers: 43 });
 
     const newoTables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'newo_%' ORDER BY name",

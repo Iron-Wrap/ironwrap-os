@@ -426,6 +426,7 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'app_magic_links','app_sessions','app_auth_throttles','app_auth_audit',
           'field_actions','field_action_media','app_action_throttles','app_device_pairings',
           'app_devices','lead_ack_receipts','approval_requests','approval_request_events',
+          'governed_transitions','governed_transition_outbox','governed_transition_outbox_events',
           'quote_revision_approval_requests','quote_revision_approval_request_events',
           'production_schedule_approval_requests','production_schedule_approval_request_events',
           'customer_portal_links','customer_portal_access_throttles',
@@ -445,6 +446,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'idx_lead_ack_receipts_envelope_observed','idx_approval_requests_tenant_state_updated',
           'idx_approval_requests_state_lease','idx_approval_requests_pending_expiry',
           'idx_approval_request_events_tenant_created',
+          'idx_governed_transitions_tenant_created','idx_governed_transition_outbox_pending',
+          'idx_governed_transition_outbox_events_tenant_created',
           'idx_quote_revision_approvals_tenant_state_updated',
           'idx_quote_revision_approvals_state_lease','idx_quote_revision_approvals_pending_expiry',
           'idx_quote_revision_approvals_active_target',
@@ -472,6 +475,16 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'append_approval_request_transition_event','append_approval_request_reconciliation_event',
           'prevent_approval_request_event_update','prevent_approval_request_event_delete',
           'prevent_approval_request_delete',
+          'prevent_governed_transition_update','prevent_governed_transition_delete',
+          'enforce_governed_transition_outbox_update','prevent_governed_transition_outbox_delete',
+          'append_governed_transition_outbox_intent_event',
+          'append_governed_transition_outbox_state_event',
+          'renew_approval_execution_lease_from_governed_outbox_claim',
+          'prevent_governed_transition_outbox_event_update',
+          'prevent_governed_transition_outbox_event_delete',
+          'enqueue_governed_transition_from_approval_claim',
+          'project_governed_transition_outbox_terminal',
+          'project_governed_transition_outbox_reconciliation',
           'prevent_quote_revision_approval_binding_rewrite',
           'enforce_quote_revision_approval_transition',
           'enforce_quote_revision_approval_reconciliation',
@@ -518,6 +531,10 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             aat.scope AS action_throttle_scope, aat.attempts AS action_throttle_attempts,
             ar.approval_request_id, ar.state AS approval_state, ar.run_id AS approval_run_id,
             are.event_type AS approval_event_type, are.request_version AS approval_event_version,
+            gt.transition_id AS governed_transition_id, gt.subject_ref AS governed_transition_subject_ref,
+            gto.outbox_id AS governed_outbox_id, gto.state AS governed_outbox_state,
+            gto.attempt_count AS governed_outbox_attempt_count,
+            gtoe.event_type AS governed_outbox_event_type,
             qrar.quote_revision_approval_id,
             qrar.state AS quote_revision_approval_state,
             qrar.run_id AS quote_revision_approval_run_id,
@@ -570,6 +587,9 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN app_action_throttles aat ON 1 = 0
      LEFT JOIN approval_requests ar ON 1 = 0
      LEFT JOIN approval_request_events are ON 1 = 0
+     LEFT JOIN governed_transitions gt ON 1 = 0
+     LEFT JOIN governed_transition_outbox gto ON 1 = 0
+     LEFT JOIN governed_transition_outbox_events gtoe ON 1 = 0
      LEFT JOIN quote_revision_approval_requests qrar ON 1 = 0
      LEFT JOIN quote_revision_approval_request_events qrare ON 1 = 0
      LEFT JOIN production_schedule_approval_requests psar ON 1 = 0
@@ -585,9 +605,9 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN newo_reconciliation_runs nrr ON 1 = 0
      LIMIT 0`,
   ).all();
-  return Number(artifacts?.table_count ?? 0) === 34 &&
-    Number(artifacts?.index_count ?? 0) === 50 &&
-    Number(artifacts?.trigger_count ?? 0) === 31;
+  return Number(artifacts?.table_count ?? 0) === 37 &&
+    Number(artifacts?.index_count ?? 0) === 53 &&
+    Number(artifacts?.trigger_count ?? 0) === 43;
 }
 
 /** Envelopes still pending past the threshold — the retry sweep re-drives these. */

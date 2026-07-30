@@ -31,7 +31,7 @@ Build `app/dist`, then validate the Worker bundle:
 ```bash
 npm ci --prefix app
 npm run build --prefix app
-npm run deploy --prefix workers-bus -- --dry-run --env=""
+npm run deploy --prefix workers-bus -- --dry-run
 ```
 
 Do not run the production gate successfully by weakening it. `node tools/validate-newo-config.mjs --production` must remain red until the evidence indexes are updated from real proof.

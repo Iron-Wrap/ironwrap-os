@@ -111,7 +111,7 @@ jobs:
       - name: Typecheck Worker bus
         run: npm run typecheck --prefix workers-bus
       - name: Bundle Worker without deploying
-        run: npm run deploy --prefix workers-bus -- --dry-run --env=""
+        run: npm run deploy --prefix workers-bus -- --dry-run
       - name: Audit shipped Node dependencies
         run: |
           npm audit --omit=dev --prefix app

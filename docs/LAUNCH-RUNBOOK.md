@@ -175,11 +175,11 @@ npm ci --ignore-scripts
 npm run typegen
 npm test
 npm run typecheck
-npm run deploy -- --dry-run --env=""
+npm run deploy -- --dry-run
 npx wrangler secret put ERPNEXT_API_KEY --env=""
 npx wrangler secret put ERPNEXT_API_SECRET --env=""
-npm run db:migrate -- --env=""
-npm run deploy -- --env=""
+npm run db:migrate
+npm run deploy
 ```
 
 Newo production uses the managed federation and full governed control plane. Store

@@ -175,6 +175,18 @@ _TRUSTED_FIELD_EVIDENCE_ISSUANCE: ContextVar[
     "ironwrap_trusted_field_evidence_issuance",
     default=None,
 )
+_TRUSTED_WORK_PACKAGE_TRANSITION: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar(
+    "ironwrap_trusted_work_package_transition",
+    default=None,
+)
+_TRUSTED_WORK_PACKAGE_EVENT_ISSUANCE: ContextVar[
+    tuple[tuple[str, str], ...] | None
+] = ContextVar(
+    "ironwrap_trusted_work_package_event_issuance",
+    default=None,
+)
 
 # A Field Companion verification is a service fact, not a value a Desk/REST
 # caller may write into an Evidence Item.  The narrow issuer command builds
@@ -208,6 +220,36 @@ FIELD_EVIDENCE_ISSUANCE_FIELDS = (
     "correction_reason",
     "customer_safe",
     "summary",
+)
+WORK_PACKAGE_RUNTIME_FIELDS = (
+    "status",
+    "released_by",
+    "released_at",
+    "acknowledged_by",
+    "acknowledged_at",
+    "acknowledgement_device_action_id",
+    "started_at",
+    "blocked_by",
+    "blocked_at",
+    "blocked_device_action_id",
+    "blocker_reason",
+    "completed_at",
+)
+WORK_PACKAGE_EVENT_ISSUANCE_FIELDS = (
+    "work_package_event_id",
+    "event_type",
+    "work_package",
+    "roof_job",
+    "job_assignment",
+    "work_package_version",
+    "actor_user",
+    "actor_role",
+    "device_action_id",
+    "occurred_at",
+    "payload_hash",
+    "hold_point_sequence",
+    "evidence_item",
+    "blocker_reason",
 )
 
 
@@ -272,6 +314,32 @@ def _field_evidence_issuance_snapshot(document: Any) -> tuple[tuple[str, str], .
             "" if document.get(field) is None else str(document.get(field)),
         )
         for field in FIELD_EVIDENCE_ISSUANCE_FIELDS
+    )
+
+
+def _work_package_runtime_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
+    """Canonicalize lifecycle facts that only narrow commands may mutate."""
+
+    return tuple(
+        (
+            field,
+            "" if document.get(field) is None else str(document.get(field)),
+        )
+        for field in WORK_PACKAGE_RUNTIME_FIELDS
+    )
+
+
+def _work_package_event_issuance_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    """Canonicalize one immutable Work Package event for context matching."""
+
+    return tuple(
+        (
+            field,
+            "" if document.get(field) is None else str(document.get(field)),
+        )
+        for field in WORK_PACKAGE_EVENT_ISSUANCE_FIELDS
     )
 
 
@@ -365,6 +433,38 @@ def field_evidence_issuance_context(document: Any):
         _TRUSTED_FIELD_EVIDENCE_ISSUANCE.reset(token)
 
 
+@contextmanager
+def work_package_transition_context(document: Any):
+    """Authorize one exact Work Package lifecycle save from a narrow command.
+
+    Work Package content stays editable while it is a Draft, but all released
+    lifecycle facts are operational evidence.  This private context is set only
+    after the API has locked the package, assignment, and actor relationship;
+    generic Desk/REST writes cannot manufacture it from request input.
+    """
+
+    token = _TRUSTED_WORK_PACKAGE_TRANSITION.set(
+        (str(document.get("name") or ""), _work_package_runtime_snapshot(document))
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_WORK_PACKAGE_TRANSITION.reset(token)
+
+
+@contextmanager
+def work_package_event_issuance_context(document: Any):
+    """Authorize one append-only Work Package event issued by the bounded API."""
+
+    token = _TRUSTED_WORK_PACKAGE_EVENT_ISSUANCE.set(
+        _work_package_event_issuance_snapshot(document)
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_WORK_PACKAGE_EVENT_ISSUANCE.reset(token)
+
+
 def validate_evidence_verification_mutation(document: Any) -> None:
     """Keep generic document writes from creating or promoting verified evidence."""
 
@@ -379,6 +479,55 @@ def validate_evidence_verification_mutation(document: Any) -> None:
         return
     frappe.throw(
         "Evidence Item verification can only be issued by the dedicated Worker command.",
+        exc=frappe.ValidationError,
+    )
+
+
+def validate_work_package_runtime_mutation(document: Any) -> None:
+    """Reject generic lifecycle writes while permitting ordinary Draft editing."""
+
+    current = _work_package_runtime_snapshot(document)
+    previous_document = _previous(document)
+    if previous_document is None:
+        # A newly created package is an authoring artifact.  Its first release
+        # must nevertheless use the same bounded command as a resume.
+        if document.get("status") != "Draft" or any(
+            value for field, value in current if field != "status"
+        ):
+            frappe.throw(
+                "Work Package lifecycle can only be changed through the bounded Work Package commands.",
+                exc=frappe.ValidationError,
+            )
+        return
+
+    previous = _work_package_runtime_snapshot(previous_document)
+    if current == previous:
+        return
+    if _TRUSTED_WORK_PACKAGE_TRANSITION.get() == (
+        str(document.get("name") or ""),
+        current,
+    ):
+        return
+    frappe.throw(
+        "Work Package lifecycle can only be changed through the bounded Work Package commands.",
+        exc=frappe.ValidationError,
+    )
+
+
+def validate_work_package_event_mutation(document: Any) -> None:
+    """Keep Work Package events immutable and API-issued only."""
+
+    if _previous(document) is not None:
+        frappe.throw(
+            "Work Package Events are append-only and cannot be changed.",
+            exc=frappe.ValidationError,
+        )
+    if _TRUSTED_WORK_PACKAGE_EVENT_ISSUANCE.get() == _work_package_event_issuance_snapshot(
+        document
+    ):
+        return
+    frappe.throw(
+        "Work Package Events can only be issued by the bounded Work Package commands.",
         exc=frappe.ValidationError,
     )
 

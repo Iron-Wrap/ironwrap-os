@@ -65,7 +65,7 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
    (applies all committed migrations, currently through
-   `0026_newo_reconciliation.sql`).
+   `0028_work_package_actions.sql`).
 7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store
    with the exact tenant `--env <tenant-environment>` or tenant `--config <path>` target;
    never pass a generic Cloudflare token to a repository script. Required set:
@@ -166,7 +166,7 @@ recovery boundaries.
 
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
-- [ ] All 26 D1 migrations through `0026_newo_reconciliation.sql` applied to the tenant database.
+- [ ] All 28 D1 migrations through `0028_work_package_actions.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
   and `ironwrap_field_evidence_issuer_user` bound to that dedicated Worker user.
 - [ ] Tenant Shared Drives + R2 bucket receive a test job's files.

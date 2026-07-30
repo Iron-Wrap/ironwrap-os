@@ -46,8 +46,8 @@ describe("offline outbox", () => {
     const action = await saveOutboxAction(
       {
         ...principal,
-        kind: "evidence_upload",
-        endpoint: "/api/v1/jobs/job-1/evidence",
+        kind: "field_checkin",
+        endpoint: "/api/v1/jobs/job-1/check-ins",
         payload: { proof_slot: "arrival" },
         attachments: [{ blob, fileName: "arrival.jpg" }],
       },
@@ -69,9 +69,9 @@ describe("offline outbox", () => {
     await saveOutboxAction({
       ...principal,
       deviceActionId: "stable-action",
-      kind: "check_in",
-      endpoint: "/api/v1/jobs/job-1/check-ins",
-      payload: { blocker: false },
+      kind: "work_package_acknowledgement",
+      endpoint: "/api/v1/jobs/job-1/work-package/acknowledgements",
+      payload: { work_package_id: "WP-1" },
     });
     await queueOutboxAction("stable-action", 2_000);
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
@@ -82,12 +82,12 @@ describe("offline outbox", () => {
       expect(headers.get("X-IronWrap-Device-Proof")).toBe("current-device-proof");
       expect(JSON.parse(String(init?.body))).toEqual({
         device_action_id: "stable-action",
-        payload: { blocker: false },
+        payload: { work_package_id: "WP-1" },
       });
       return Response.json({
         device_action_id: "stable-action",
         status: "verified",
-        server_ref: "checkin-42",
+        server_ref: "work-package-42",
       });
     });
 
@@ -103,7 +103,7 @@ describe("offline outbox", () => {
     const saved = await getOutboxAction("stable-action");
     expect(saved).toMatchObject({
       state: "verified",
-      verification: { serverRef: "checkin-42", verifiedAt: 3_000 },
+      verification: { serverRef: "work-package-42", verifiedAt: 3_000 },
     });
     expect(JSON.stringify(saved)).not.toContain("current-csrf-only");
     expect(JSON.stringify(saved)).not.toContain("current-device-proof");
@@ -113,9 +113,9 @@ describe("offline outbox", () => {
     await saveOutboxAction({
       ...principal,
       deviceActionId: "waiting-action",
-      kind: "field_note",
-      endpoint: "/api/v1/jobs/job-1/notes",
-      payload: { note: "Flashing missing" },
+      kind: "work_package_stop",
+      endpoint: "/api/v1/jobs/job-1/work-package/stop-work",
+      payload: { work_package_id: "WP-1", blocker_reason: "Flashing missing" },
     });
     await queueOutboxAction("waiting-action", 2_000);
     const fetcher = vi.fn<typeof fetch>();
@@ -135,9 +135,9 @@ describe("offline outbox", () => {
     await saveOutboxAction({
       ...principal,
       deviceActionId: "revoked-device-action",
-      kind: "field_note",
-      endpoint: "/api/v1/jobs/job-1/notes",
-      payload: { note: "Weather delay" },
+      kind: "work_package_stop",
+      endpoint: "/api/v1/jobs/job-1/work-package/stop-work",
+      payload: { work_package_id: "WP-1", blocker_reason: "Weather delay" },
     });
     await queueOutboxAction("revoked-device-action", 2_000);
     const fetcher = vi
@@ -192,8 +192,8 @@ describe("offline outbox", () => {
     await saveOutboxAction({
       ...principal,
       deviceActionId: "conflict-action",
-      kind: "evidence_upload",
-      endpoint: "/api/v1/jobs/job-1/evidence",
+      kind: "field_checkin",
+      endpoint: "/api/v1/jobs/job-1/check-ins",
       payload: { proof_slot: "deck" },
       attachments: [{ attachmentId: "photo-1", blob, fileName: "deck.jpg" }],
     });
@@ -312,9 +312,9 @@ describe("offline outbox", () => {
     await saveOutboxAction({
       ...principal,
       deviceActionId: "retry-action",
-      kind: "field_note",
-      endpoint: "/api/v1/jobs/job-1/notes",
-      payload: { note: "Weather delay" },
+      kind: "work_package_stop",
+      endpoint: "/api/v1/jobs/job-1/work-package/stop-work",
+      payload: { work_package_id: "WP-1", blocker_reason: "Weather delay" },
     });
     await queueOutboxAction("retry-action", 2_000);
     const fetcher = vi
@@ -437,9 +437,9 @@ describe("offline outbox", () => {
     await saveOutboxAction({
       ...principal,
       deviceActionId: "lease-renewal-action",
-      kind: "field_note",
-      endpoint: "/api/v1/jobs/JOB-A/notes",
-      payload: { note: "Wind delay" },
+      kind: "work_package_stop",
+      endpoint: "/api/v1/jobs/JOB-A/work-package/stop-work",
+      payload: { work_package_id: "WP-1", blocker_reason: "Wind delay" },
     });
     await queueOutboxAction("lease-renewal-action", 1_000);
     const claim = await claimNextQueuedAction(principal, 1_000);
@@ -462,8 +462,8 @@ describe("offline outbox", () => {
     await saveOutboxAction({
       ...principal,
       deviceActionId: "fenced-upload-action",
-      kind: "evidence_upload",
-      endpoint: "/api/v1/jobs/JOB-A/evidence",
+      kind: "field_checkin",
+      endpoint: "/api/v1/jobs/JOB-A/check-ins",
       payload: { proof_slot: "arrival" },
       attachments: [{ attachmentId: "fenced-photo", blob, fileName: "arrival.jpg" }],
     });
@@ -586,6 +586,42 @@ describe("offline outbox", () => {
     });
   });
 
+  it("accepts only field check-ins and immutable Work Package acknowledgement or Stop Work intents", async () => {
+    await expect(
+      saveOutboxAction({
+        ...principal,
+        kind: "work_package_start" as never,
+        endpoint: "/api/v1/jobs/JOB-A/work-package/start",
+        payload: { work_package_id: "WP-1" },
+      }),
+    ).rejects.toThrow("cannot be queued for offline replay");
+    await expect(
+      saveOutboxAction({
+        ...principal,
+        kind: "field_checkin",
+        endpoint: "/api/v1/jobs/JOB-A/work-package/start",
+        payload: {},
+      }),
+    ).rejects.toThrow("cannot be queued for offline replay");
+    await expect(
+      saveOutboxAction({
+        ...principal,
+        kind: "work_package_acknowledgement",
+        endpoint: "/api/v1/jobs/JOB-A/work-package/acknowledgements",
+        payload: { work_package_id: "WP-1", resume: true },
+      }),
+    ).rejects.toThrow("acknowledgement payload is invalid");
+    await expect(
+      saveOutboxAction({
+        ...principal,
+        kind: "work_package_stop",
+        endpoint: "/api/v1/jobs/JOB-A/work-package/stop-work",
+        payload: { work_package_id: "WP-1", blocker_reason: "Wind." },
+        attachments: [{ blob: new Blob(["not allowed"]), fileName: "extra.txt" }],
+      }),
+    ).rejects.toThrow("cannot include attachments");
+  });
+
   it("rejects invalid state jumps and payload secrets", async () => {
     expect(() => assertTransition("saved_locally", "verified")).toThrow(
       "Invalid outbox transition",
@@ -593,16 +629,16 @@ describe("offline outbox", () => {
     await expect(
       saveOutboxAction({
         ...principal,
-        kind: "unsafe",
-        endpoint: "/api/v1/jobs/job-1/notes",
+        kind: "field_checkin",
+        endpoint: "/api/v1/jobs/job-1/check-ins",
         payload: { nested: { csrf_token: "must-not-persist" } },
       }),
     ).rejects.toThrow("Session secrets cannot be saved");
     await expect(
       saveOutboxAction({
         ...principal,
-        kind: "unsafe-device-proof",
-        endpoint: "/api/v1/jobs/job-1/notes",
+        kind: "field_checkin",
+        endpoint: "/api/v1/jobs/job-1/check-ins",
         payload: { device_proof: "must-not-persist" },
       }),
     ).rejects.toThrow("Session secrets cannot be saved");
@@ -610,8 +646,8 @@ describe("offline outbox", () => {
     await saveOutboxAction({
       ...principal,
       deviceActionId: "state-action",
-      kind: "field_note",
-      endpoint: "/api/v1/jobs/job-1/notes",
+      kind: "field_checkin",
+      endpoint: "/api/v1/jobs/job-1/check-ins",
       payload: {},
     });
     await expect(transitionOutboxAction("state-action", "verified")).rejects.toThrow(

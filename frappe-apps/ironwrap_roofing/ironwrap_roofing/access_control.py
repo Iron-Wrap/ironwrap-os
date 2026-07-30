@@ -240,6 +240,11 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Field": READ,
         "IronWrap Closeout": READ,
     },
+    "Work Package Event": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": READ,
+        "IronWrap Closeout": READ,
+    },
 }
 
 

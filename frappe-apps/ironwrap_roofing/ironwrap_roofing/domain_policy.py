@@ -47,6 +47,16 @@ WORK_PACKAGE_FROZEN_FIELDS = (
     "steps",
     "hold_points",
 )
+WORK_PACKAGE_EVENT_TYPES = frozenset(
+    (
+        "Acknowledged",
+        "Started",
+        "Stop Work",
+        "Released",
+        "Hold Point Evidence",
+        "Hold Point Released",
+    )
+)
 
 
 class PolicyViolation(ValueError):
@@ -286,6 +296,7 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "warranty_packet": ("warranty_packet_id",),
     "white_label_tenant": ("tenant_id",),
     "work_package": ("work_package_id",),
+    "work_package_event": ("work_package_event_id",),
 }
 
 WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
@@ -525,6 +536,21 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
     "tenant_export_run": ("tenant", "requested_by", "requested_at", "scope_json", "supersedes"),
     "visual_property_model": ("provider", "provider_model_id", "model_uri", "raw_key"),
     "white_label_tenant": ("site_hostname",),
+    "work_package_event": (
+        "work_package",
+        "roof_job",
+        "job_assignment",
+        "work_package_version",
+        "event_type",
+        "actor_user",
+        "actor_role",
+        "device_action_id",
+        "occurred_at",
+        "payload_hash",
+        "hold_point_sequence",
+        "evidence_item",
+        "blocker_reason",
+    ),
 }
 
 TRUTHY_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
@@ -1182,13 +1208,37 @@ def _validate_work_package(record: Any, context: Mapping[str, Any]) -> None:
             )
         _validate_work_package_release_context(record, context)
     if status == "Acknowledged":
-        require_fields(record, "acknowledged_by", "acknowledged_at")
+        require_fields(
+            record,
+            "acknowledged_by",
+            "acknowledged_at",
+            "acknowledgement_device_action_id",
+        )
     if status == "In Progress":
-        require_fields(record, "acknowledged_by", "acknowledged_at", "started_at")
-    if status == "Completed":
-        require_fields(record, "acknowledged_by", "acknowledged_at", "started_at", "completed_at")
+        require_fields(
+            record,
+            "acknowledged_by",
+            "acknowledged_at",
+            "acknowledgement_device_action_id",
+            "started_at",
+        )
     if status == "Blocked":
-        require_fields(record, "blocker_reason", "blocked_at")
+        require_fields(
+            record,
+            "blocked_by",
+            "blocked_at",
+            "blocked_device_action_id",
+            "blocker_reason",
+        )
+    if status == "Completed":
+        require_fields(
+            record,
+            "acknowledged_by",
+            "acknowledged_at",
+            "acknowledgement_device_action_id",
+            "started_at",
+            "completed_at",
+        )
     if status == "Superseded" and context.get("superseding_work_package") is None:
         raise PolicyViolation(
             "unverified_work_package_supersession",
@@ -1201,6 +1251,65 @@ def _validate_work_package(record: Any, context: Mapping[str, Any]) -> None:
         *WORK_PACKAGE_FROZEN_FIELDS,
     )
     _validate_correction(record, context, version_field="version")
+
+
+def _validate_work_package_event(record: Any, _context: Mapping[str, Any]) -> None:
+    """Validate one immutable runtime fact about a Work Package.
+
+    The command layer owns relation, actor, and transition checks.  This pure
+    policy keeps the append-only event itself well-formed even when it is
+    inspected or restored without a live Frappe request.
+    """
+
+    require_fields(
+        record,
+        "work_package",
+        "roof_job",
+        "job_assignment",
+        "work_package_version",
+        "event_type",
+        "actor_user",
+        "actor_role",
+        "device_action_id",
+        "occurred_at",
+        "payload_hash",
+    )
+    event_type = _get(record, "event_type")
+    if event_type not in WORK_PACKAGE_EVENT_TYPES:
+        raise PolicyViolation(
+            "invalid_work_package_event_type",
+            "event_type must be a defined Work Package runtime event",
+            "event_type",
+        )
+    version = _decimal(record, "work_package_version", required=True)
+    if version is not None and version < 1:
+        raise PolicyViolation(
+            "invalid_work_package_event_version",
+            "work_package_version must be at least 1",
+            "work_package_version",
+        )
+    require_sha256(record, "payload_hash")
+    hold_point_sequence = _decimal(record, "hold_point_sequence")
+    if event_type in {"Hold Point Evidence", "Hold Point Released"}:
+        require_fields(record, "hold_point_sequence", "evidence_item")
+        if hold_point_sequence is not None and hold_point_sequence < 1:
+            raise PolicyViolation(
+                "invalid_hold_point_sequence",
+                "hold_point_sequence must be at least 1",
+                "hold_point_sequence",
+            )
+    elif hold_point_sequence is not None or not _blank(_get(record, "evidence_item")):
+        raise PolicyViolation(
+            "stale_hold_point_event_fields",
+            "hold-point fields are only valid for hold-point events",
+        )
+    if event_type == "Stop Work":
+        require_fields(record, "blocker_reason")
+    elif not _blank(_get(record, "blocker_reason")):
+        raise PolicyViolation(
+            "stale_work_package_blocker",
+            "blocker_reason is only valid for a Stop Work event",
+        )
 
 
 def _validate_lead_envelope(record: Any, context: Mapping[str, Any]) -> None:
@@ -3399,6 +3508,7 @@ VALIDATORS = {
     "warranty_packet": _validate_warranty,
     "white_label_tenant": _validate_tenant,
     "work_package": _validate_work_package,
+    "work_package_event": _validate_work_package_event,
     "automation_incident": _validate_incident,
 }
 

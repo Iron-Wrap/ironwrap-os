@@ -1345,6 +1345,7 @@ class DomainPolicyTests(unittest.TestCase):
             "status": "Acknowledged",
             "acknowledged_by": "lead@example.com",
             "acknowledged_at": "2026-07-10 10:15:00",
+            "acknowledgement_device_action_id": "fem_ack_0123456789",
         }
         validate_record(
             "work_package",
@@ -1355,7 +1356,9 @@ class DomainPolicyTests(unittest.TestCase):
         blocked = {
             **acknowledged,
             "status": "Blocked",
+            "blocked_by": "lead@example.com",
             "blocked_at": "2026-07-10 10:30:00",
+            "blocked_device_action_id": "fem_stop_0123456789",
             "blocker_reason": "Wind exceeds the released limit.",
         }
         validate_record(

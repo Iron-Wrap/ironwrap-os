@@ -72,6 +72,7 @@ TOP_LEVEL_DOCTYPES = {
     "Warranty Packet",
     "White-Label Tenant",
     "Work Package",
+    "Work Package Event",
 }
 CHILD_DOCTYPES = {
     "Change Order Item",
@@ -223,7 +224,8 @@ NEW_BLUEPRINT_FIELDS.update(
         "Customer Quote": {"customer_quote_id", "quote_version", "price_book_version", "price_rule_snapshot_json", "subtotal", "tax_amount", "tax_policy_snapshot_json", "amount_due", "amount_paid", "balance_due", "payment_truth_source", "supersedes"},
         "Payment Milestone": {"payment_milestone_id", "milestone_version", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due", "tax_policy_snapshot_json", "truth_source", "supersedes"},
         "Reception Session": {"session_id", "provider", "channel", "direction", "session_status", "lead_envelope", "contact_phone", "structured_summary", "transcript_pointer", "recording_pointer", "ai_disclosed", "recording_disclosed", "raw_key", "payload_hash", "structured_json"},
-        "Work Package": {"work_package_id", "roof_job", "job_assignment", "safety_plan", "version", "status", "objective", "stop_conditions", "make_safe_procedure", "expires_at", "steps", "hold_points", "supersedes"},
+        "Work Package": {"work_package_id", "roof_job", "job_assignment", "safety_plan", "version", "status", "objective", "stop_conditions", "make_safe_procedure", "expires_at", "acknowledgement_device_action_id", "blocked_by", "blocked_device_action_id", "steps", "hold_points", "supersedes"},
+        "Work Package Event": {"work_package_event_id", "event_type", "work_package", "roof_job", "job_assignment", "work_package_version", "actor_user", "actor_role", "device_action_id", "occurred_at", "payload_hash", "hold_point_sequence", "evidence_item", "blocker_reason"},
     }
 )
 
@@ -241,9 +243,9 @@ class DocTypeContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.doctypes = load_doctypes()
 
-    def test_complete_53_doctype_blueprint(self) -> None:
+    def test_complete_54_doctype_blueprint(self) -> None:
         self.assertEqual(set(self.doctypes), TOP_LEVEL_DOCTYPES | CHILD_DOCTYPES)
-        self.assertEqual(len(self.doctypes), 53)
+        self.assertEqual(len(self.doctypes), 54)
 
         for name, (_, document) in self.doctypes.items():
             with self.subTest(doctype=name):

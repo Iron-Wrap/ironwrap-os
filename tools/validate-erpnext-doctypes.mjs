@@ -647,7 +647,11 @@ specs.push(
   },
   {
     name: "Work Package", dir: "work_package", idField: "work_package_id",
-    requiredFields: ["work_package_id", "roof_job", "job_assignment", "safety_plan", "version", "status", "title", "objective", "boundaries", "prerequisites", "expected_result", "stop_conditions", "make_safe_procedure", "issued_at", "expires_at", "released_by", "released_at", "acknowledged_by", "acknowledged_at", "started_at", "blocked_at", "blocker_reason", "completed_at", "steps", "hold_points", "supersedes", "correction_reason"],
+    requiredFields: ["work_package_id", "roof_job", "job_assignment", "safety_plan", "version", "status", "title", "objective", "boundaries", "prerequisites", "expected_result", "stop_conditions", "make_safe_procedure", "issued_at", "expires_at", "released_by", "released_at", "acknowledged_by", "acknowledged_at", "acknowledgement_device_action_id", "started_at", "blocked_by", "blocked_at", "blocked_device_action_id", "blocker_reason", "completed_at", "steps", "hold_points", "supersedes", "correction_reason"],
+  },
+  {
+    name: "Work Package Event", dir: "work_package_event", idField: "work_package_event_id",
+    requiredFields: ["work_package_event_id", "event_type", "work_package", "roof_job", "job_assignment", "work_package_version", "actor_user", "actor_role", "device_action_id", "occurred_at", "payload_hash", "hold_point_sequence", "evidence_item", "blocker_reason"],
   },
   {
     name: "Job Compliance Record", dir: "job_compliance_record", idField: "compliance_record_id",
@@ -691,12 +695,12 @@ const discoveredDirs = readdirSync(doctypePath, { withFileTypes: true })
   .filter((dir) => existsSync(join(doctypePath, dir, `${dir}.json`)))
   .sort();
 
-assert.equal(specs.length, 53, "the product contract must contain exactly 53 DocTypes");
+assert.equal(specs.length, 54, "the product contract must contain exactly 54 DocTypes");
 assert.equal(specs.filter((spec) => spec.child).length, 10, "expected ten child-table DocTypes");
-assert.equal(specs.filter((spec) => !spec.child).length, 43, "expected 43 top-level DocTypes");
+assert.equal(specs.filter((spec) => !spec.child).length, 44, "expected 44 top-level DocTypes");
 assert.equal(new Set(specs.map((spec) => spec.name)).size, specs.length, "duplicate DocType name in validator");
 assert.equal(new Set(expectedDirs).size, specs.length, "duplicate DocType directory in validator");
-assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 53-type product contract");
+assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 54-type product contract");
 
 const pythonContracts = readPythonContracts();
 assert.deepEqual(
@@ -949,4 +953,4 @@ function validateRuntimeWiring() {
   assert.match(adapter, /def\s+deny_business_document_delete\s*\(/, "append-only delete guard is missing");
 }
 
-console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (43 top-level + 10 child)`);
+console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (44 top-level + 10 child)`);

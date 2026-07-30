@@ -96,6 +96,7 @@ import {
 import { handleCustomerPortalLinks } from "./customer-portal.ts";
 import { APP_API_VERSION, type AppEnv, type AuthContext } from "./app-types.ts";
 import { handleFieldAction } from "./field-actions.ts";
+import { handleWorkPackageAction, type WorkPackageActionKind } from "./work-package-actions.ts";
 import {
   listMeasurementIntakeExceptions,
   projectMeasurementIntakeOwnerException,
@@ -536,6 +537,33 @@ export async function handleAuthenticatedRoute(
       return appJson({ error: "upstream_unavailable" }, 502);
     }
   }
+  const workPackageAcknowledgementMatch = url.pathname.match(
+    /^\/api\/v1\/jobs\/([^/]+)\/work-package\/acknowledgements$/,
+  );
+  if (req.method === "POST" && workPackageAcknowledgementMatch) {
+    return await handleFieldWorkPackageRoute(
+      req,
+      env,
+      auth,
+      workPackageAcknowledgementMatch[1],
+      "acknowledge",
+    );
+  }
+  const workPackageStopMatch = url.pathname.match(
+    /^\/api\/v1\/jobs\/([^/]+)\/work-package\/stop-work$/,
+  );
+  if (req.method === "POST" && workPackageStopMatch) {
+    return await handleFieldWorkPackageRoute(req, env, auth, workPackageStopMatch[1], "stop_work");
+  }
+  const workPackageStartMatch = url.pathname.match(
+    /^\/api\/v1\/jobs\/([^/]+)\/work-package\/start$/,
+  );
+  if (req.method === "POST" && workPackageStartMatch) {
+    // Start is intentionally direct/online-only. The PWA does not add this
+    // route to its offline outbox, while the device action id still makes a
+    // lost response safe to retry over the active connection.
+    return await handleFieldWorkPackageRoute(req, env, auth, workPackageStartMatch[1], "start_work");
+  }
   const jobMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)$/);
   const estimatorJobMatch = url.pathname.match(
     /^\/api\/v1\/estimator\/jobs\/([^/]+)$/,
@@ -644,6 +672,30 @@ export async function handleAuthenticatedRoute(
     }
   }
   return appJson({ error: "not_found" }, 404);
+}
+
+async function handleFieldWorkPackageRoute(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  encodedJobName: string | undefined,
+  kind: WorkPackageActionKind,
+): Promise<Response> {
+  if (auth.session.role !== "field") return appJson({ error: "field_role_required" }, 403);
+  if (!validAppCsrf(req, auth)) return appJson({ error: "csrf_failed" }, 403);
+  const jobName = decodedPathSegment(encodedJobName ?? "");
+  if (!jobName) return appJson({ error: "not_found" }, 404);
+  try {
+    // Do not trust a job or assignment identifier from the browser. The BFF
+    // derives an active assignment for the authenticated, paired field user;
+    // the Frappe service command repeats that scope check under its own lock.
+    const assignment = await activeAssignmentForJob(env, auth, jobName);
+    const assignmentName = typeof assignment?.name === "string" ? assignment.name : null;
+    if (!assignmentName) return appJson({ error: "not_found" }, 404);
+    return await handleWorkPackageAction(req, env, auth, jobName, assignmentName, kind);
+  } catch {
+    return appJson({ error: "upstream_unavailable" }, 502);
+  }
 }
 
 async function prepareQuoteRevisionApproval(

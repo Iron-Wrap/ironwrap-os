@@ -424,7 +424,7 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
          ('envelopes','audit_log','dead_letter','source_counts','heartbeat',
           'quickbooks_webhook_receipts','dedup_claims','replay_requests','app_users',
           'app_magic_links','app_sessions','app_auth_throttles','app_auth_audit',
-          'field_actions','field_action_media','app_action_throttles','app_device_pairings',
+          'field_actions','field_action_media','field_work_package_actions','app_action_throttles','app_device_pairings',
           'app_devices','lead_ack_receipts','approval_requests','approval_request_events',
           'governed_transitions','governed_transition_outbox','governed_transition_outbox_events',
           'quote_revision_approval_requests','quote_revision_approval_request_events',
@@ -441,6 +441,7 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'idx_app_sessions_user_expiry','idx_app_auth_throttles_expiry',
           'idx_app_auth_audit_tenant_created','idx_field_actions_job_created',
           'idx_field_actions_recovery','idx_field_action_media_evidence',
+          'idx_field_work_package_actions_job_created','idx_field_work_package_actions_recovery',
           'idx_app_action_throttles_expiry','idx_app_sessions_device_active',
           'idx_app_device_pairings_user_expiry','idx_app_devices_tenant_user_active',
           'idx_lead_ack_receipts_envelope_observed','idx_approval_requests_tenant_state_updated',
@@ -528,6 +529,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             aa.event AS auth_audit_event, aa.outcome AS auth_audit_outcome,
             fa.device_action_id AS field_action_id, fa.payload_hash AS field_payload_hash,
             fam.attachment_id AS field_attachment_id, fam.checksum_sha256 AS field_media_checksum,
+            fwpa.device_action_id AS field_work_package_action_id,
+            fwpa.work_package_id AS field_work_package_id,
             aat.scope AS action_throttle_scope, aat.attempts AS action_throttle_attempts,
             ar.approval_request_id, ar.state AS approval_state, ar.run_id AS approval_run_id,
             are.event_type AS approval_event_type, are.request_version AS approval_event_version,
@@ -584,6 +587,7 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN app_auth_audit aa ON 1 = 0
      LEFT JOIN field_actions fa ON 1 = 0
      LEFT JOIN field_action_media fam ON 1 = 0
+     LEFT JOIN field_work_package_actions fwpa ON 1 = 0
      LEFT JOIN app_action_throttles aat ON 1 = 0
      LEFT JOIN approval_requests ar ON 1 = 0
      LEFT JOIN approval_request_events are ON 1 = 0
@@ -605,8 +609,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN newo_reconciliation_runs nrr ON 1 = 0
      LIMIT 0`,
   ).all();
-  return Number(artifacts?.table_count ?? 0) === 37 &&
-    Number(artifacts?.index_count ?? 0) === 53 &&
+  return Number(artifacts?.table_count ?? 0) === 38 &&
+    Number(artifacts?.index_count ?? 0) === 55 &&
     Number(artifacts?.trigger_count ?? 0) === 43;
 }
 

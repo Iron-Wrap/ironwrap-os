@@ -1,10 +1,12 @@
 import type { AppEnv } from "./app-types.ts";
 
 export type FrappeDocType = keyof typeof FRAPPE_READ_FIELDS;
-export type OfficeProductionDocType = keyof typeof OFFICE_PRODUCTION_READ_FIELDS;
+export type OfficeProductionDocType =
+  keyof typeof OFFICE_PRODUCTION_READ_FIELDS;
 export type OfficeSalesDocType = keyof typeof OFFICE_SALES_READ_FIELDS;
 export type OfficeEstimatorDocType = keyof typeof OFFICE_ESTIMATOR_READ_FIELDS;
-export type OfficeEstimatorDetailDocType = keyof typeof OFFICE_ESTIMATOR_DETAIL_READ;
+export type OfficeEstimatorDetailDocType =
+  keyof typeof OFFICE_ESTIMATOR_DETAIL_READ;
 export type CustomerPortalDocType = keyof typeof CUSTOMER_PORTAL_READ_FIELDS;
 export type ReceptionLookupDocType = keyof typeof RECEPTION_LOOKUP_READ_FIELDS;
 export type FrappeFilter = readonly [
@@ -52,67 +54,205 @@ export type FrappeRow = Record<string, unknown>;
  */
 export const FRAPPE_READ_FIELDS = {
   "Roof Job": [
-    "name", "roof_job_id", "job_number", "brand", "service_type", "job_status",
-    "roofing_property", "customer", "current_gate_state", "modified",
+    "name",
+    "roof_job_id",
+    "job_number",
+    "brand",
+    "service_type",
+    "job_status",
+    "roofing_property",
+    "customer",
+    "current_gate_state",
+    "modified",
   ],
   "Job Assignment": [
-    "name", "assignment_id", "roof_job", "assignment_type", "status", "crew_profile",
-    "assigned_user", "scheduled_start", "scheduled_end", "blocker_reason", "modified",
+    "name",
+    "assignment_id",
+    "roof_job",
+    "assignment_type",
+    "status",
+    "crew_profile",
+    "assigned_user",
+    "scheduled_start",
+    "scheduled_end",
+    "blocker_reason",
+    "modified",
   ],
   "Crew Member": [
-    "name", "parent", "parenttype", "parentfield", "crew_user", "crew_role", "active",
-    "joined_on", "left_on", "modified",
+    "name",
+    "parent",
+    "parenttype",
+    "parentfield",
+    "crew_user",
+    "crew_role",
+    "active",
+    "joined_on",
+    "left_on",
+    "modified",
   ],
   "Roofing Property": [
-    "name", "address_line1", "city", "province", "postal_code", "country", "modified",
+    "name",
+    "address_line1",
+    "city",
+    "province",
+    "postal_code",
+    "country",
+    "modified",
   ],
   "Roofing Customer": ["name", "display_name", "phone", "modified"],
   "Production Gate State": [
-    "name", "gate_id", "roof_job", "gate", "state", "owner_user", "assigned_at", "due_at",
-    "blocker_reason", "modified",
+    "name",
+    "gate_id",
+    "roof_job",
+    "gate",
+    "state",
+    "owner_user",
+    "assigned_at",
+    "due_at",
+    "blocker_reason",
+    "modified",
   ],
   "Evidence Item": [
-    "name", "evidence_id", "device_action_id", "roof_job", "evidence_type", "proof_slot",
-    "source_system", "r2_key", "content_checksum", "content_type", "content_length",
-    "capture_actor", "captured_at", "customer_safe", "correction_of", "summary", "sync_state", "modified",
+    "name",
+    "evidence_id",
+    "device_action_id",
+    "roof_job",
+    "evidence_type",
+    "proof_slot",
+    "source_system",
+    "r2_key",
+    "content_checksum",
+    "content_type",
+    "content_length",
+    "capture_actor",
+    "captured_at",
+    "customer_safe",
+    "correction_of",
+    "summary",
+    "sync_state",
+    "modified",
   ],
   "Field Check-in": [
-    "name", "checkin_id", "device_action_id", "roof_job", "job_assignment", "source_system",
-    "capture_actor", "submitted_at", "status", "sync_state", "photo_count", "blocker_flag", "blocker_category",
-    "blocker_summary", "evidence_ids_json", "correction_of", "notes", "raw_key", "modified",
+    "name",
+    "checkin_id",
+    "device_action_id",
+    "roof_job",
+    "job_assignment",
+    "source_system",
+    "capture_actor",
+    "submitted_at",
+    "status",
+    "sync_state",
+    "photo_count",
+    "blocker_flag",
+    "blocker_category",
+    "blocker_summary",
+    "evidence_ids_json",
+    "correction_of",
+    "notes",
+    "raw_key",
+    "modified",
   ],
   "Scope Clause": [
-    "name", "scope_clause_id", "roof_job", "clause_type", "title", "clause_text", "version",
-    "status", "customer_visible", "modified",
+    "name",
+    "scope_clause_id",
+    "roof_job",
+    "clause_type",
+    "title",
+    "clause_text",
+    "version",
+    "status",
+    "customer_visible",
+    "modified",
   ],
   "Measurement Report": [
-    "name", "measurement_id", "roof_job", "provider", "review_status", "parsed_at", "modified",
+    "name",
+    "measurement_id",
+    "roof_job",
+    "provider",
+    "review_status",
+    "parsed_at",
+    "modified",
   ],
   "Material Takeoff": [
-    "name", "takeoff_id", "roof_job", "measurement_report", "status", "prepared_at", "modified",
+    "name",
+    "takeoff_id",
+    "roof_job",
+    "measurement_report",
+    "status",
+    "prepared_at",
+    "modified",
   ],
   "Change Order": [
-    "name", "change_order_id", "roof_job", "change_number", "version", "status", "title",
-    "reason", "scope_delta", "accepted_at", "modified",
+    "name",
+    "change_order_id",
+    "roof_job",
+    "change_number",
+    "version",
+    "status",
+    "title",
+    "reason",
+    "scope_delta",
+    "accepted_at",
+    "modified",
   ],
   "Safety Plan": [
-    "name", "safety_plan_id", "roof_job", "version", "status", "effective_date",
-    "hazard_summary", "controls", "emergency_plan", "ppe_requirements", "weather_limits", "modified",
+    "name",
+    "safety_plan_id",
+    "roof_job",
+    "version",
+    "status",
+    "effective_date",
+    "hazard_summary",
+    "controls",
+    "emergency_plan",
+    "ppe_requirements",
+    "weather_limits",
+    "modified",
   ],
   "Automation Incident": [
-    "name", "incident_id", "status", "severity", "category", "summary", "roof_job", "detected_at", "modified",
+    "name",
+    "incident_id",
+    "status",
+    "severity",
+    "category",
+    "summary",
+    "roof_job",
+    "detected_at",
+    "modified",
   ],
   "Payment Milestone": [
-    "name", "payment_milestone_id", "roof_job", "milestone_type", "status", "due_date",
-    "event_ts", "notes", "modified",
+    "name",
+    "payment_milestone_id",
+    "roof_job",
+    "milestone_type",
+    "status",
+    "due_date",
+    "event_ts",
+    "notes",
+    "modified",
   ],
   "Lead Envelope": [
-    "name", "envelope_id", "source", "event_ts", "status", "intent_queue", "triage_status",
-    "contact_name", "job_ref", "modified",
+    "name",
+    "envelope_id",
+    "source",
+    "event_ts",
+    "status",
+    "intent_queue",
+    "triage_status",
+    "contact_name",
+    "job_ref",
+    "modified",
   ],
   "Supplier Order": [
-    "name", "supplier_order_id", "roof_job", "status", "prepared_at", "requested_delivery_date",
-    "delivery_notes", "modified",
+    "name",
+    "supplier_order_id",
+    "roof_job",
+    "status",
+    "prepared_at",
+    "requested_delivery_date",
+    "delivery_notes",
+    "modified",
   ],
 } as const;
 
@@ -123,16 +263,39 @@ export const FRAPPE_READ_FIELDS = {
  */
 export const OFFICE_PRODUCTION_READ_FIELDS = {
   "Roof Job": [
-    "name", "job_number", "brand", "service_type", "job_status", "modified",
+    "name",
+    "job_number",
+    "brand",
+    "service_type",
+    "job_status",
+    "modified",
   ],
   "Job Assignment": [
-    "name", "roof_job", "assignment_type", "status", "scheduled_start", "scheduled_end", "modified",
+    "name",
+    "roof_job",
+    "assignment_type",
+    "status",
+    "scheduled_start",
+    "scheduled_end",
+    "modified",
   ],
   "Production Gate State": ["name", "roof_job", "gate", "state", "modified"],
-  "Supplier Order": ["name", "roof_job", "status", "requested_delivery_date", "modified"],
+  "Supplier Order": [
+    "name",
+    "roof_job",
+    "status",
+    "requested_delivery_date",
+    "modified",
+  ],
   // A schedule request may select only an active crew profile. Individual
   // members, contacts, coverage, and notes stay out of this browser contract.
-  "Crew Profile": ["name", "crew_profile_id", "crew_name", "status", "modified"],
+  "Crew Profile": [
+    "name",
+    "crew_profile_id",
+    "crew_name",
+    "status",
+    "modified",
+  ],
 } as const;
 
 /**
@@ -142,28 +305,95 @@ export const OFFICE_PRODUCTION_READ_FIELDS = {
  */
 export const OFFICE_SALES_READ_FIELDS = {
   "Lead Envelope": [
-    "name", "envelope_id", "source", "event_ts", "status", "intent_queue", "triage_status", "triage_summary",
-    "contact_name", "contact_phone", "contact_email", "job_ref", "modified",
+    "name",
+    "envelope_id",
+    "source",
+    "event_ts",
+    "status",
+    "intent_queue",
+    "triage_status",
+    "triage_summary",
+    "contact_name",
+    "contact_phone",
+    "contact_email",
+    "job_ref",
+    "modified",
   ],
   "Roof Job": [
-    "name", "roof_job_id", "job_number", "brand", "service_type", "job_status", "workflow_profile",
-    "lead_envelope", "customer", "quotation", "modified",
+    "name",
+    "roof_job_id",
+    "job_number",
+    "brand",
+    "service_type",
+    "job_status",
+    "workflow_profile",
+    "lead_envelope",
+    "customer",
+    "quotation",
+    "modified",
   ],
   "Instant Estimate Session": [
-    "name", "estimate_session_id", "lead_envelope", "roof_job", "source", "service_type", "status",
-    "range_low", "range_high", "estimate_total", "confidence", "review_required", "reviewed_at", "approved_at",
-    "assumptions", "exclusions", "modified",
+    "name",
+    "estimate_session_id",
+    "lead_envelope",
+    "roof_job",
+    "source",
+    "service_type",
+    "status",
+    "range_low",
+    "range_high",
+    "estimate_total",
+    "confidence",
+    "review_required",
+    "reviewed_at",
+    "approved_at",
+    "assumptions",
+    "exclusions",
+    "modified",
   ],
   "Customer Quote": [
-    "name", "customer_quote_id", "roof_job", "quote_version", "status", "quote_total", "currency",
-    "valid_until", "payment_status", "prepared_at", "approved_at", "accepted_at", "scope_summary", "modified",
+    "name",
+    "customer_quote_id",
+    "roof_job",
+    "quote_version",
+    "status",
+    "quote_total",
+    "currency",
+    "valid_until",
+    "payment_status",
+    "prepared_at",
+    "approved_at",
+    "accepted_at",
+    "scope_summary",
+    "modified",
   ],
   "Proposal Evidence Pack": [
-    "name", "pack_id", "roof_job", "quotation", "status", "prepared_at", "approved_at", "signed_at", "modified",
+    "name",
+    "pack_id",
+    "roof_job",
+    "quotation",
+    "status",
+    "prepared_at",
+    "approved_at",
+    "signed_at",
+    "modified",
   ],
   "Communication Consent": [
-    "name", "consent_id", "customer", "lead_envelope", "roof_job", "channel", "purpose", "status",
-    "jurisdiction", "consent_basis", "captured_at", "effective_from", "expires_at", "revoked_at", "modified",
+    "name",
+    "consent_id",
+    "customer",
+    "lead_envelope",
+    "roof_job",
+    "channel",
+    "purpose",
+    "status",
+    "jurisdiction",
+    "consent_basis",
+    "captured_at",
+    "effective_from",
+    "expires_at",
+    "revoked_at",
+    "modified",
   ],
 } as const;
 
@@ -175,42 +405,146 @@ export const OFFICE_SALES_READ_FIELDS = {
  */
 export const OFFICE_ESTIMATOR_READ_FIELDS = {
   "Roof Job": [
-    "name", "roof_job_id", "job_number", "brand", "service_type", "job_status", "workflow_profile", "modified",
+    "name",
+    "roof_job_id",
+    "job_number",
+    "brand",
+    "service_type",
+    "job_status",
+    "workflow_profile",
+    "modified",
   ],
   "Measurement Report": [
-    "name", "measurement_id", "roof_job", "provider", "review_status", "parsed_at", "approved_at", "modified",
+    "name",
+    "measurement_id",
+    "roof_job",
+    "provider",
+    "review_status",
+    "parsed_at",
+    "approved_at",
+    "modified",
   ],
   "Visual Property Model": [
-    "name", "roof_job", "provider", "status", "confidence", "needs_review", "captured_at", "approved_at", "modified",
+    "name",
+    "roof_job",
+    "provider",
+    "status",
+    "confidence",
+    "needs_review",
+    "captured_at",
+    "approved_at",
+    "modified",
   ],
   "Roof Area": [
-    "name", "roof_job", "visual_model", "measurement_report", "modified",
+    "name",
+    "roof_job",
+    "visual_model",
+    "measurement_report",
+    "modified",
   ],
   "Material Takeoff": [
-    "name", "takeoff_id", "roof_job", "measurement_report", "status", "prepared_at", "approved_at", "modified",
+    "name",
+    "takeoff_id",
+    "roof_job",
+    "measurement_report",
+    "status",
+    "prepared_at",
+    "approved_at",
+    "modified",
   ],
   "Customer Quote": [
-    "name", "customer_quote_id", "roof_job", "quote_version", "status", "price_book_version", "pricing_effective_at",
-    "subtotal", "tax_amount", "tax_code", "tax_rate", "quote_total", "currency", "deposit_amount", "amount_due",
-    "amount_paid", "balance_due", "payment_status", "payment_due_date", "valid_until", "prepared_at", "approved_at",
-    "accepted_at", "scope_summary", "assumptions", "exclusions", "supersedes", "correction_reason", "modified",
+    "name",
+    "customer_quote_id",
+    "roof_job",
+    "quote_version",
+    "status",
+    "price_book_version",
+    "pricing_effective_at",
+    "subtotal",
+    "tax_amount",
+    "tax_code",
+    "tax_rate",
+    "quote_total",
+    "currency",
+    "deposit_amount",
+    "amount_due",
+    "amount_paid",
+    "balance_due",
+    "payment_status",
+    "payment_due_date",
+    "valid_until",
+    "prepared_at",
+    "approved_at",
+    "accepted_at",
+    "scope_summary",
+    "assumptions",
+    "exclusions",
+    "supersedes",
+    "correction_reason",
+    "modified",
   ],
   "Proposal Evidence Pack": [
-    "name", "pack_id", "roof_job", "quotation", "status", "prepared_at", "approved_at", "signed_at", "assumptions",
-    "exclusions", "modified",
+    "name",
+    "pack_id",
+    "roof_job",
+    "quotation",
+    "status",
+    "prepared_at",
+    "approved_at",
+    "signed_at",
+    "assumptions",
+    "exclusions",
+    "modified",
   ],
   "Change Order": [
-    "name", "change_order_id", "roof_job", "customer_quote", "change_number", "version", "status", "title", "reason",
-    "scope_delta", "currency", "subtotal", "tax_amount", "total_amount", "price_book_version", "requested_at", "approved_at",
-    "accepted_at", "supersedes", "correction_reason", "modified",
+    "name",
+    "change_order_id",
+    "roof_job",
+    "customer_quote",
+    "change_number",
+    "version",
+    "status",
+    "title",
+    "reason",
+    "scope_delta",
+    "currency",
+    "subtotal",
+    "tax_amount",
+    "total_amount",
+    "price_book_version",
+    "requested_at",
+    "approved_at",
+    "accepted_at",
+    "supersedes",
+    "correction_reason",
+    "modified",
   ],
   "Insurance Supplement": [
-    "name", "roof_job", "version", "status", "measurement_report", "invoice_required",
-    "approved_at", "submitted_at", "carrier_response_at", "closed_at", "modified",
+    "name",
+    "roof_job",
+    "version",
+    "status",
+    "measurement_report",
+    "invoice_required",
+    "approved_at",
+    "submitted_at",
+    "carrier_response_at",
+    "closed_at",
+    "modified",
   ],
   "Scope Clause": [
-    "name", "scope_clause_id", "roof_job", "clause_type", "title", "clause_text", "version", "status", "source_ref",
-    "customer_visible", "approved_at", "modified",
+    "name",
+    "scope_clause_id",
+    "roof_job",
+    "clause_type",
+    "title",
+    "clause_text",
+    "version",
+    "status",
+    "source_ref",
+    "customer_visible",
+    "approved_at",
+    "modified",
   ],
 } as const;
 
@@ -223,41 +557,125 @@ export const OFFICE_ESTIMATOR_READ_FIELDS = {
  */
 export const CUSTOMER_PORTAL_READ_FIELDS = {
   "Roof Job": [
-    "name", "roof_job_id", "job_number", "brand", "service_type", "job_status", "customer", "quotation", "modified",
+    "name",
+    "roof_job_id",
+    "job_number",
+    "brand",
+    "service_type",
+    "job_status",
+    "customer",
+    "quotation",
+    "modified",
   ],
   "Customer Quote": [
-    "name", "customer_quote_id", "roof_job", "customer", "quote_version", "status", "quote_total", "currency",
-    "deposit_amount", "amount_due", "amount_paid", "balance_due", "payment_status", "payment_due_date", "valid_until",
-    "approved_at", "accepted_at", "scope_summary", "assumptions", "exclusions", "modified",
+    "name",
+    "customer_quote_id",
+    "roof_job",
+    "customer",
+    "quote_version",
+    "status",
+    "quote_total",
+    "currency",
+    "deposit_amount",
+    "amount_due",
+    "amount_paid",
+    "balance_due",
+    "payment_status",
+    "payment_due_date",
+    "valid_until",
+    "approved_at",
+    "accepted_at",
+    "scope_summary",
+    "assumptions",
+    "exclusions",
+    "modified",
   ],
   "Proposal Evidence Pack": [
-    "name", "pack_id", "roof_job", "quotation", "status", "prepared_at", "approved_at", "signed_at", "modified",
+    "name",
+    "pack_id",
+    "roof_job",
+    "quotation",
+    "status",
+    "prepared_at",
+    "approved_at",
+    "signed_at",
+    "modified",
   ],
   "Scope Clause": [
-    "name", "scope_clause_id", "roof_job", "customer_quote", "clause_type", "title", "clause_text", "version", "status",
-    "customer_visible", "modified",
+    "name",
+    "scope_clause_id",
+    "roof_job",
+    "customer_quote",
+    "clause_type",
+    "title",
+    "clause_text",
+    "version",
+    "status",
+    "customer_visible",
+    "modified",
   ],
   "Evidence Item": [
-    "name", "evidence_id", "roof_job", "evidence_type", "proof_slot", "captured_at", "customer_safe", "summary",
-    "sync_state", "modified",
+    "name",
+    "evidence_id",
+    "roof_job",
+    "evidence_type",
+    "proof_slot",
+    "captured_at",
+    "customer_safe",
+    "summary",
+    "sync_state",
+    "modified",
   ],
   "Completion Packet": [
-    "name", "completion_packet_id", "roof_job", "status", "approved_at", "warranty_ready", "modified",
+    "name",
+    "completion_packet_id",
+    "roof_job",
+    "status",
+    "approved_at",
+    "warranty_ready",
+    "modified",
   ],
   "Warranty Packet": [
-    "name", "warranty_packet_id", "roof_job", "status", "material_system", "warranty_terms", "coverage_start",
-    "coverage_years", "exclusions", "issued_at", "modified",
+    "name",
+    "warranty_packet_id",
+    "roof_job",
+    "status",
+    "material_system",
+    "warranty_terms",
+    "coverage_start",
+    "coverage_years",
+    "exclusions",
+    "issued_at",
+    "modified",
   ],
 } as const;
 
 /** Fixed receptionist verification contract. Financials, notes, disputes, and evidence are absent. */
 export const RECEPTION_LOOKUP_READ_FIELDS = {
-  "Roofing Customer": ["name", "customer_id", "display_name", "phone", "modified"],
+  "Roofing Customer": [
+    "name",
+    "customer_id",
+    "display_name",
+    "phone",
+    "modified",
+  ],
   "Roof Job": [
-    "name", "roof_job_id", "job_status", "service_type", "roofing_property", "customer", "modified",
+    "name",
+    "roof_job_id",
+    "job_status",
+    "service_type",
+    "roofing_property",
+    "customer",
+    "modified",
   ],
   "Roofing Property": [
-    "name", "property_key", "address_line1", "city", "province", "postal_code", "modified",
+    "name",
+    "property_key",
+    "address_line1",
+    "city",
+    "province",
+    "postal_code",
+    "modified",
   ],
 } as const;
 
@@ -269,31 +687,85 @@ export const RECEPTION_LOOKUP_READ_FIELDS = {
 const OFFICE_ESTIMATOR_DETAIL_READ = {
   "Measurement Report": {
     fields: [
-      "name", "measurement_id", "roof_job", "provider", "raw_key", "roof_graph_revision", "roof_graph_json", "review_status", "parsed_at", "approved_at", "modified",
+      "name",
+      "measurement_id",
+      "roof_job",
+      "provider",
+      "raw_key",
+      "roof_graph_revision",
+      "roof_graph_json",
+      "review_status",
+      "parsed_at",
+      "approved_at",
+      "modified",
     ],
     children: {
-      measurements: ["metric", "value", "unit", "confidence", "source_ref", "needs_review"],
+      measurements: [
+        "metric",
+        "value",
+        "unit",
+        "confidence",
+        "source_ref",
+        "needs_review",
+      ],
     },
   },
   "Visual Property Model": {
     fields: [
-      "name", "roof_job", "provider", "status", "confidence", "needs_review", "roof_graph_measurement", "roof_graph_revision", "screenshots_json", "captured_at", "approved_at", "modified",
+      "name",
+      "roof_job",
+      "provider",
+      "status",
+      "confidence",
+      "needs_review",
+      "roof_graph_measurement",
+      "roof_graph_revision",
+      "screenshots_json",
+      "captured_at",
+      "approved_at",
+      "modified",
     ],
     children: {},
   },
   "Material Takeoff": {
     fields: [
-      "name", "takeoff_id", "roof_job", "measurement_report", "status", "prepared_at", "approved_at", "assumptions",
-      "exclusions", "modified",
+      "name",
+      "takeoff_id",
+      "roof_job",
+      "measurement_report",
+      "status",
+      "prepared_at",
+      "approved_at",
+      "assumptions",
+      "exclusions",
+      "modified",
     ],
     children: {
-      items: ["category", "item_name", "quantity", "unit", "waste_factor", "source_ref", "confidence", "needs_review"],
+      items: [
+        "category",
+        "item_name",
+        "quantity",
+        "unit",
+        "waste_factor",
+        "source_ref",
+        "confidence",
+        "needs_review",
+      ],
     },
   },
   "Insurance Supplement": {
     fields: [
-      "name", "roof_job", "version", "status", "measurement_report", "invoice_required",
-      "approved_at", "submitted_at", "carrier_response_at", "closed_at", "modified",
+      "name",
+      "roof_job",
+      "version",
+      "status",
+      "measurement_report",
+      "invoice_required",
+      "approved_at",
+      "submitted_at",
+      "carrier_response_at",
+      "closed_at",
+      "modified",
     ],
     children: {
       evidence: ["evidence_role"],
@@ -301,8 +773,90 @@ const OFFICE_ESTIMATOR_DETAIL_READ = {
   },
 } as const;
 
+/**
+ * The field packet can read one exact Work Package after assignment-scoped selection. This is
+ * deliberately a fixed projection: internal release decisions, notes, raw evidence pointers,
+ * and every mutable field absent from the worker contract stay server-side. A hold's displayed
+ * release-authority label is included only so field users know that the app cannot self-release it.
+ */
+export const FIELD_WORK_PACKAGE_CURRENT_STATUSES = [
+  "Released",
+  "Acknowledged",
+  "In Progress",
+] as const;
+
+const FIELD_WORK_PACKAGE_LIST_READ = {
+  "Work Package": [
+    "name",
+    "work_package_id",
+    "roof_job",
+    "job_assignment",
+    "status",
+    "modified",
+  ],
+} as const;
+
+/**
+ * The release ledger is read only to derive a boolean per declared hold point.
+ * Event identities, actors, timestamps, payload hashes, and raw evidence locations
+ * deliberately never leave this Worker-side verification contract.
+ */
+const FIELD_WORK_PACKAGE_HOLD_RELEASE_READ = {
+  "Work Package Event": [
+    "event_type",
+    "work_package",
+    "roof_job",
+    "job_assignment",
+    "work_package_version",
+    "hold_point_sequence",
+    "evidence_item",
+  ],
+} as const;
+
+const FIELD_WORK_PACKAGE_DETAIL_READ = {
+  "Work Package": {
+    fields: [
+      "name",
+      "work_package_id",
+      "roof_job",
+      "job_assignment",
+      "version",
+      "status",
+      "title",
+      "objective",
+      "boundaries",
+      "prerequisites",
+      "expected_result",
+      "stop_conditions",
+      "make_safe_procedure",
+      "issued_at",
+      "expires_at",
+      "released_at",
+      "acknowledged_by",
+      "acknowledged_at",
+      "modified",
+    ],
+    children: {
+      steps: [
+        "sequence",
+        "instruction",
+        "required_evidence",
+        "acceptance_criteria",
+      ],
+      hold_points: [
+        "sequence",
+        "hold_point",
+        "release_authority",
+        "required_evidence",
+        "acceptance_criteria",
+      ],
+    },
+  },
+} as const;
+
 export function frappeReadConfigured(env: AppEnv): boolean {
-  if (!env.ERPNEXT_API_KEY?.trim() || !env.ERPNEXT_API_SECRET?.trim()) return false;
+  if (!env.ERPNEXT_API_KEY?.trim() || !env.ERPNEXT_API_SECRET?.trim())
+    return false;
   try {
     frappeBaseUrl(env);
     return true;
@@ -313,13 +867,32 @@ export function frappeReadConfigured(env: AppEnv): boolean {
 
 const FILTER_FIELDS: Readonly<Record<FrappeDocType, ReadonlySet<string>>> = {
   "Roof Job": new Set(["name", "job_status"]),
-  "Job Assignment": new Set(["name", "roof_job", "status", "assigned_user", "crew_profile"]),
+  "Job Assignment": new Set([
+    "name",
+    "roof_job",
+    "status",
+    "assigned_user",
+    "crew_profile",
+  ]),
   "Crew Member": new Set(["parent", "crew_user", "active"]),
   "Roofing Property": new Set(["name"]),
   "Roofing Customer": new Set(["name"]),
   "Production Gate State": new Set(["roof_job", "state"]),
-  "Evidence Item": new Set(["name", "roof_job", "evidence_id", "device_action_id"]),
-  "Field Check-in": new Set(["name", "roof_job", "checkin_id", "device_action_id", "blocker_flag", "status", "sync_state"]),
+  "Evidence Item": new Set([
+    "name",
+    "roof_job",
+    "evidence_id",
+    "device_action_id",
+  ]),
+  "Field Check-in": new Set([
+    "name",
+    "roof_job",
+    "checkin_id",
+    "device_action_id",
+    "blocker_flag",
+    "status",
+    "sync_state",
+  ]),
   "Scope Clause": new Set(["roof_job", "status"]),
   "Measurement Report": new Set(["roof_job", "review_status"]),
   "Material Takeoff": new Set(["roof_job", "status"]),
@@ -331,7 +904,9 @@ const FILTER_FIELDS: Readonly<Record<FrappeDocType, ReadonlySet<string>>> = {
   "Supplier Order": new Set(["roof_job", "status"]),
 };
 
-const OFFICE_PRODUCTION_FILTER_FIELDS: Readonly<Record<OfficeProductionDocType, ReadonlySet<string>>> = {
+const OFFICE_PRODUCTION_FILTER_FIELDS: Readonly<
+  Record<OfficeProductionDocType, ReadonlySet<string>>
+> = {
   "Roof Job": new Set(["name", "job_status"]),
   "Job Assignment": new Set(["roof_job", "assignment_type", "status"]),
   "Production Gate State": new Set(["roof_job", "state"]),
@@ -339,20 +914,34 @@ const OFFICE_PRODUCTION_FILTER_FIELDS: Readonly<Record<OfficeProductionDocType, 
   "Crew Profile": new Set(["status"]),
 };
 
-const OFFICE_SALES_FILTER_FIELDS: Readonly<Record<OfficeSalesDocType, ReadonlySet<string>>> = {
+const OFFICE_SALES_FILTER_FIELDS: Readonly<
+  Record<OfficeSalesDocType, ReadonlySet<string>>
+> = {
   "Lead Envelope": new Set(["name", "triage_status", "status"]),
   "Roof Job": new Set(["name", "lead_envelope"]),
   "Instant Estimate Session": new Set(["lead_envelope", "roof_job", "status"]),
   "Customer Quote": new Set(["roof_job", "status"]),
   "Proposal Evidence Pack": new Set(["roof_job", "quotation", "status"]),
-  "Communication Consent": new Set(["lead_envelope", "roof_job", "customer", "status"]),
+  "Communication Consent": new Set([
+    "lead_envelope",
+    "roof_job",
+    "customer",
+    "status",
+  ]),
 };
 
-const OFFICE_ESTIMATOR_FILTER_FIELDS: Readonly<Record<OfficeEstimatorDocType, ReadonlySet<string>>> = {
+const OFFICE_ESTIMATOR_FILTER_FIELDS: Readonly<
+  Record<OfficeEstimatorDocType, ReadonlySet<string>>
+> = {
   "Roof Job": new Set(["name"]),
   "Measurement Report": new Set(["roof_job", "review_status"]),
   "Visual Property Model": new Set(["roof_job", "status"]),
-  "Roof Area": new Set(["roof_job", "visual_model", "measurement_report", "status"]),
+  "Roof Area": new Set([
+    "roof_job",
+    "visual_model",
+    "measurement_report",
+    "status",
+  ]),
   "Material Takeoff": new Set(["roof_job", "measurement_report", "status"]),
   "Customer Quote": new Set(["roof_job", "status"]),
   "Proposal Evidence Pack": new Set(["roof_job", "quotation", "status"]),
@@ -361,7 +950,9 @@ const OFFICE_ESTIMATOR_FILTER_FIELDS: Readonly<Record<OfficeEstimatorDocType, Re
   "Scope Clause": new Set(["roof_job", "status"]),
 };
 
-const CUSTOMER_PORTAL_FILTER_FIELDS: Readonly<Record<CustomerPortalDocType, ReadonlySet<string>>> = {
+const CUSTOMER_PORTAL_FILTER_FIELDS: Readonly<
+  Record<CustomerPortalDocType, ReadonlySet<string>>
+> = {
   "Roof Job": new Set(["name"]),
   "Customer Quote": new Set(["roof_job", "status"]),
   "Proposal Evidence Pack": new Set(["roof_job", "quotation", "status"]),
@@ -371,10 +962,30 @@ const CUSTOMER_PORTAL_FILTER_FIELDS: Readonly<Record<CustomerPortalDocType, Read
   "Warranty Packet": new Set(["roof_job", "status"]),
 };
 
-const RECEPTION_LOOKUP_FILTER_FIELDS: Readonly<Record<ReceptionLookupDocType, ReadonlySet<string>>> = {
+const RECEPTION_LOOKUP_FILTER_FIELDS: Readonly<
+  Record<ReceptionLookupDocType, ReadonlySet<string>>
+> = {
   "Roofing Customer": new Set(["phone"]),
   "Roof Job": new Set(["customer"]),
   "Roofing Property": new Set(["name"]),
+};
+
+const FIELD_WORK_PACKAGE_FILTER_FIELDS: Readonly<
+  Record<keyof typeof FIELD_WORK_PACKAGE_LIST_READ, ReadonlySet<string>>
+> = {
+  "Work Package": new Set(["roof_job", "job_assignment", "status"]),
+};
+
+const FIELD_WORK_PACKAGE_HOLD_RELEASE_FILTER_FIELDS: Readonly<
+  Record<keyof typeof FIELD_WORK_PACKAGE_HOLD_RELEASE_READ, ReadonlySet<string>>
+> = {
+  "Work Package Event": new Set([
+    "work_package",
+    "roof_job",
+    "job_assignment",
+    "work_package_version",
+    "event_type",
+  ]),
 };
 
 const FILTER_OPERATORS = new Set(["=", "in", "like"]);
@@ -388,7 +999,14 @@ export async function listFrappeResource(
   limit = 50,
   parentDoctype?: string,
 ): Promise<FrappeRow[]> {
-  return await listFrappeResourcePage(env, doctype, filters, limit, 0, parentDoctype);
+  return await listFrappeResourcePage(
+    env,
+    doctype,
+    filters,
+    limit,
+    0,
+    parentDoctype,
+  );
 }
 
 export async function listFrappeResourcePage(
@@ -522,9 +1140,103 @@ export async function readOfficeEstimatorFrappeResource(
   doctype: OfficeEstimatorDetailDocType,
   name: string,
 ): Promise<FrappeRow | null> {
-  if (!validFrappeDocumentName(name)) throw new Error("frappe_read_invalid_name");
+  if (!validFrappeDocumentName(name))
+    throw new Error("frappe_read_invalid_name");
   const contract = OFFICE_ESTIMATOR_DETAIL_READ[doctype];
-  return await readFrappeDocumentForContract(env, doctype, name, contract.fields, contract.children);
+  return await readFrappeDocumentForContract(
+    env,
+    doctype,
+    name,
+    contract.fields,
+    contract.children,
+  );
+}
+
+/** Read one assignment-selected Work Package through its fixed field packet contract. */
+export async function readFieldWorkPackageFrappeResource(
+  env: AppEnv,
+  name: string,
+): Promise<FrappeRow | null> {
+  if (!validFrappeDocumentName(name))
+    throw new Error("frappe_read_invalid_name");
+  const contract = FIELD_WORK_PACKAGE_DETAIL_READ["Work Package"];
+  return await readFrappeDocumentForContract(
+    env,
+    "Work Package",
+    name,
+    contract.fields,
+    contract.children,
+  );
+}
+
+/**
+ * The only list operation for Field Work Packages. It is bound to one
+ * assignment and the current status set before any direct detail read.
+ */
+export async function listFieldWorkPackagesForAssignment(
+  env: AppEnv,
+  jobId: string,
+  assignmentId: string,
+): Promise<FrappeRow[]> {
+  return await listFrappeResourcePageForContract(
+    env,
+    "Work Package",
+    [
+      ["Work Package", "roof_job", "=", jobId],
+      ["Work Package", "job_assignment", "=", assignmentId],
+      [
+        "Work Package",
+        "status",
+        "in",
+        [...FIELD_WORK_PACKAGE_CURRENT_STATUSES],
+      ],
+    ],
+    2,
+    0,
+    FIELD_WORK_PACKAGE_LIST_READ,
+    FIELD_WORK_PACKAGE_FILTER_FIELDS,
+  );
+}
+
+/**
+ * Read only the independently released hold ledger for one already-selected
+ * package. A second one-row read detects a response truncated at the maximum
+ * number of legal hold points, so an extra event cannot silently look valid.
+ */
+export async function listFieldWorkPackageHoldReleases(
+  env: AppEnv,
+  workPackageName: string,
+  jobId: string,
+  assignmentId: string,
+  version: number,
+): Promise<FrappeRow[]> {
+  const filters = [
+    ["Work Package Event", "work_package", "=", workPackageName],
+    ["Work Package Event", "roof_job", "=", jobId],
+    ["Work Package Event", "job_assignment", "=", assignmentId],
+    ["Work Package Event", "work_package_version", "=", version],
+    ["Work Package Event", "event_type", "=", "Hold Point Released"],
+  ] as const;
+  const releases = await listFrappeResourcePageForContract(
+    env,
+    "Work Package Event",
+    filters,
+    100,
+    0,
+    FIELD_WORK_PACKAGE_HOLD_RELEASE_READ,
+    FIELD_WORK_PACKAGE_HOLD_RELEASE_FILTER_FIELDS,
+  );
+  if (releases.length < 100) return releases;
+  const extra = await listFrappeResourcePageForContract(
+    env,
+    "Work Package Event",
+    filters,
+    1,
+    100,
+    FIELD_WORK_PACKAGE_HOLD_RELEASE_READ,
+    FIELD_WORK_PACKAGE_HOLD_RELEASE_FILTER_FIELDS,
+  );
+  return extra.length === 0 ? releases : [...releases, ...extra];
 }
 
 async function listFrappeResourcePageForContract(
@@ -537,19 +1249,27 @@ async function listFrappeResourcePageForContract(
   filterFieldsByDocType: Readonly<Record<string, ReadonlySet<string>>>,
   parentDoctype?: string,
 ): Promise<FrappeRow[]> {
-  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("frappe_read_invalid_limit");
-  if (!Number.isInteger(offset) || offset < 0 || offset > 100_000) throw new Error("frappe_read_invalid_offset");
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+    throw new Error("frappe_read_invalid_limit");
+  if (!Number.isInteger(offset) || offset < 0 || offset > 100_000)
+    throw new Error("frappe_read_invalid_offset");
   const fields = fieldsByDocType[doctype];
   const filterFields = filterFieldsByDocType[doctype];
-  if (!fields || !filterFields) throw new Error("frappe_read_doctype_not_allowed");
+  if (!fields || !filterFields)
+    throw new Error("frappe_read_doctype_not_allowed");
   for (const filter of filters) {
-    if (filter[0] !== doctype || !filterFields.has(filter[1]) || !FILTER_OPERATORS.has(filter[2])) {
+    if (
+      filter[0] !== doctype ||
+      !filterFields.has(filter[1]) ||
+      !FILTER_OPERATORS.has(filter[2])
+    ) {
       throw new Error("frappe_read_filter_not_allowed");
     }
   }
 
   const base = frappeBaseUrl(env);
-  if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET) throw new Error("frappe_read_not_configured");
+  if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET)
+    throw new Error("frappe_read_not_configured");
   const params = new URLSearchParams({
     fields: JSON.stringify(fields),
     filters: JSON.stringify(filters),
@@ -576,15 +1296,24 @@ async function listFrappeResourcePageForContract(
       },
     });
     if (!response.ok) throw new Error(`frappe_read_http_${response.status}`);
-    const decoded = await boundedFrappeJson(response, MAX_FRAPPE_READ_RESPONSE_BYTES);
-    const data = decoded && typeof decoded === "object" && !Array.isArray(decoded)
-      ? (decoded as { data?: unknown }).data
-      : null;
+    const decoded = await boundedFrappeJson(
+      response,
+      MAX_FRAPPE_READ_RESPONSE_BYTES,
+    );
+    const data =
+      decoded && typeof decoded === "object" && !Array.isArray(decoded)
+        ? (decoded as { data?: unknown }).data
+        : null;
     if (!Array.isArray(data)) throw new Error("frappe_read_invalid_shape");
-    return data.slice(0, limit).filter(isRecord).map((row) => projectRow(fields, row));
+    return data
+      .slice(0, limit)
+      .filter(isRecord)
+      .map((row) => projectRow(fields, row));
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw new Error("frappe_read_timeout");
-    if (error instanceof Error && error.message.startsWith("frappe_read_")) throw error;
+    if (error instanceof Error && error.name === "AbortError")
+      throw new Error("frappe_read_timeout");
+    if (error instanceof Error && error.message.startsWith("frappe_read_"))
+      throw error;
     throw new Error("frappe_read_network_error");
   } finally {
     clearTimeout(timer);
@@ -599,7 +1328,8 @@ async function readFrappeDocumentForContract(
   children: Readonly<Record<string, readonly string[]>>,
 ): Promise<FrappeRow | null> {
   const base = frappeBaseUrl(env);
-  if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET) throw new Error("frappe_read_not_configured");
+  if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET)
+    throw new Error("frappe_read_not_configured");
   const url = `${base}/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`;
   const timeout = frappeRequestTimeout(env.APP_FRAPPE_REQUEST_TIMEOUT_MS);
   const controller = new AbortController();
@@ -617,15 +1347,21 @@ async function readFrappeDocumentForContract(
     });
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`frappe_read_http_${response.status}`);
-    const decoded = await boundedFrappeJson(response, MAX_FRAPPE_READ_RESPONSE_BYTES);
-    const data = decoded && typeof decoded === "object" && !Array.isArray(decoded)
-      ? (decoded as { data?: unknown }).data
-      : null;
+    const decoded = await boundedFrappeJson(
+      response,
+      MAX_FRAPPE_READ_RESPONSE_BYTES,
+    );
+    const data =
+      decoded && typeof decoded === "object" && !Array.isArray(decoded)
+        ? (decoded as { data?: unknown }).data
+        : null;
     if (!isRecord(data)) throw new Error("frappe_read_invalid_shape");
     return projectDetailRow(fields, children, data);
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw new Error("frappe_read_timeout");
-    if (error instanceof Error && error.message.startsWith("frappe_read_")) throw error;
+    if (error instanceof Error && error.name === "AbortError")
+      throw new Error("frappe_read_timeout");
+    if (error instanceof Error && error.message.startsWith("frappe_read_"))
+      throw error;
     throw new Error("frappe_read_network_error");
   } finally {
     clearTimeout(timer);
@@ -639,7 +1375,8 @@ export function publicFrappeRow(row: FrappeRow): FrappeRow {
 function projectRow(fields: readonly string[], row: FrappeRow): FrappeRow {
   const allowed = new Set<string>(fields);
   const projected: FrappeRow = {};
-  for (const [key, value] of Object.entries(row)) if (allowed.has(key)) projected[key] = value;
+  for (const [key, value] of Object.entries(row))
+    if (allowed.has(key)) projected[key] = value;
   return projected;
 }
 
@@ -659,12 +1396,16 @@ function projectDetailRow(
       if (children.length === MAX_ESTIMATOR_DETAIL_CHILD_ROWS) break;
     }
     projected[field] = children;
-    if (value.length > children.length) projected[`__ironwrap_truncated_${field}`] = true;
+    if (value.length > children.length)
+      projected[`__ironwrap_truncated_${field}`] = true;
   }
   return projected;
 }
 
-async function boundedFrappeJson(response: Response, maximumBytes: number): Promise<unknown> {
+async function boundedFrappeJson(
+  response: Response,
+  maximumBytes: number,
+): Promise<unknown> {
   const declaredLength = Number(response.headers.get("content-length") ?? "");
   if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
     try {
@@ -694,7 +1435,8 @@ async function boundedFrappeJson(response: Response, maximumBytes: number): Prom
       chunks.push(part.value);
     }
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith("frappe_read_")) throw error;
+    if (error instanceof Error && error.message.startsWith("frappe_read_"))
+      throw error;
     throw new Error("frappe_read_network_error");
   }
   const bytes = new Uint8Array(total);
@@ -722,17 +1464,30 @@ export function frappeBaseUrl(env: AppEnv): string {
   } catch {
     throw new Error("frappe_read_bad_base_url");
   }
-  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
-  if (url.protocol !== "https:" && !(String(env.APP_ALLOW_INSECURE_LOCAL) === "true" && local && url.protocol === "http:")) {
+  const local =
+    url.hostname === "localhost" ||
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "[::1]";
+  if (
+    url.protocol !== "https:" &&
+    !(
+      String(env.APP_ALLOW_INSECURE_LOCAL) === "true" &&
+      local &&
+      url.protocol === "http:"
+    )
+  ) {
     throw new Error("frappe_read_bad_base_url");
   }
-  if (url.username || url.password || url.search || url.hash) throw new Error("frappe_read_bad_base_url");
+  if (url.username || url.password || url.search || url.hash)
+    throw new Error("frappe_read_bad_base_url");
   return url.origin + url.pathname.replace(/\/+$/, "");
 }
 
 export function frappeRequestTimeout(raw: string | undefined): number {
   const parsed = Number(raw ?? "8000");
-  return Number.isInteger(parsed) && parsed >= 1_000 && parsed <= 20_000 ? parsed : 8_000;
+  return Number.isInteger(parsed) && parsed >= 1_000 && parsed <= 20_000
+    ? parsed
+    : 8_000;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

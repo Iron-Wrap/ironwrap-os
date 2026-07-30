@@ -2834,7 +2834,17 @@ class DomainPolicyTests(unittest.TestCase):
             "unit": "each",
             "status": "Draft",
         }
-        lot_context = {"supplier_order_status": "Received"}
+        lot_context = {
+            "controlled_item": {
+                "name": item["controlled_item_id"],
+                "status": "Approved",
+            },
+            "supplier_order": {
+                "name": "so-1",
+                "roof_job": "job-1",
+                "status": "Received",
+            },
+        }
         validate_record("material_lot", lot_draft, context=lot_context)
         lot_available = {
             **lot_draft,
@@ -2853,7 +2863,41 @@ class DomainPolicyTests(unittest.TestCase):
             "material_lot",
             lot_available,
             previous=lot_draft,
-            context={"supplier_order_status": "Approved"},
+            context={
+                **lot_context,
+                "supplier_order": {
+                    **lot_context["supplier_order"],
+                    "status": "Approved",
+                },
+            },
+        )
+        self.assert_policy(
+            "unapproved_material_lot_item",
+            validate_record,
+            "material_lot",
+            lot_available,
+            previous=lot_draft,
+            context={
+                **lot_context,
+                "controlled_item": {
+                    **lot_context["controlled_item"],
+                    "status": "Draft",
+                },
+            },
+        )
+        self.assert_policy(
+            "cross_job_material_lot_supplier_order",
+            validate_record,
+            "material_lot",
+            lot_available,
+            previous=lot_draft,
+            context={
+                **lot_context,
+                "supplier_order": {
+                    **lot_context["supplier_order"],
+                    "roof_job": "job-other",
+                },
+            },
         )
         self.assert_policy(
             "material_lot_balance_mismatch",
@@ -2887,9 +2931,21 @@ class DomainPolicyTests(unittest.TestCase):
             "lines": [line],
         }
         source_context = {
-            "takeoff_status": "Approved",
-            "supplier_order_status": "Received",
-            "work_package_status": "Released",
+            "material_takeoff": {
+                "name": "takeoff-1",
+                "roof_job": "job-1",
+                "status": "Approved",
+            },
+            "supplier_order": {
+                "name": "so-1",
+                "roof_job": "job-1",
+                "status": "Received",
+            },
+            "work_package": {
+                "name": "wp:shop-1",
+                "roof_job": "job-1",
+                "status": "Released",
+            },
         }
         validate_record("shop_order", draft, context=source_context)
         released = {
@@ -2899,6 +2955,20 @@ class DomainPolicyTests(unittest.TestCase):
             "released_at": "2026-07-30 09:00:00",
         }
         validate_record("shop_order", released, previous=draft, context=source_context)
+        self.assert_policy(
+            "cross_job_shop_supplier_order",
+            validate_record,
+            "shop_order",
+            released,
+            previous=draft,
+            context={
+                **source_context,
+                "supplier_order": {
+                    **source_context["supplier_order"],
+                    "roof_job": "job-other",
+                },
+            },
+        )
 
         allocation = {
             "allocation_id": "alloc:1",
@@ -3151,17 +3221,22 @@ class DomainPolicyTests(unittest.TestCase):
             "reserved_quantity": 0,
             "consumed_quantity": 0,
         }
+        remnant_context = {
+            "controlled_item": {
+                "name": item["controlled_item_id"],
+                "status": "Approved",
+            },
+            "source_shop_order": {
+                "name": draft["shop_order_id"],
+                "roof_job": "job-1",
+                "status": "Ready",
+            },
+        }
         validate_record(
             "material_lot",
             remnant_available,
             previous=remnant_draft,
-            context={
-                "source_shop_order": {
-                    "name": draft["shop_order_id"],
-                    "roof_job": "job-1",
-                    "status": "Ready",
-                }
-            },
+            context=remnant_context,
         )
         self.assert_policy(
             "unfinalized_shop_remnant",
@@ -3170,11 +3245,25 @@ class DomainPolicyTests(unittest.TestCase):
             remnant_available,
             previous=remnant_draft,
             context={
+                **remnant_context,
                 "source_shop_order": {
-                    "name": draft["shop_order_id"],
-                    "roof_job": "job-1",
+                    **remnant_context["source_shop_order"],
                     "status": "In Fabrication",
-                }
+                },
+            },
+        )
+        self.assert_policy(
+            "cross_job_shop_remnant",
+            validate_record,
+            "material_lot",
+            remnant_available,
+            previous=remnant_draft,
+            context={
+                **remnant_context,
+                "source_shop_order": {
+                    **remnant_context["source_shop_order"],
+                    "roof_job": "job-other",
+                },
             },
         )
 

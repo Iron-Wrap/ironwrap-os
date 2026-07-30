@@ -2368,10 +2368,37 @@ def _validate_material_lot(record: Any, context: Mapping[str, Any]) -> None:
             "received quantity must be greater than zero",
             "received_quantity",
         )
+    if status != "Draft":
+        controlled_item = context.get("controlled_item")
+        if not isinstance(controlled_item, Mapping):
+            raise PolicyViolation(
+                "unverified_material_lot_item",
+                "a released Material Lot requires its Controlled Item",
+                "controlled_item",
+            )
+        if _get(controlled_item, "status") != "Approved":
+            raise PolicyViolation(
+                "unapproved_material_lot_item",
+                "a released Material Lot requires an Approved Controlled Item",
+                "controlled_item",
+            )
     source_kind = _get(record, "source_kind")
     if source_kind == "Supplier Receipt":
         require_fields(record, "supplier_order", "source_evidence")
-        if _context_status(context, "supplier_order_status") not in {
+        supplier_order = context.get("supplier_order")
+        if not isinstance(supplier_order, Mapping):
+            raise PolicyViolation(
+                "unverified_material_lot_supplier_order",
+                "a supplier Material Lot requires its source Supplier Order",
+                "supplier_order",
+            )
+        if _get(supplier_order, "roof_job") != _get(record, "roof_job"):
+            raise PolicyViolation(
+                "cross_job_material_lot_supplier_order",
+                "a supplier Material Lot must remain on its Supplier Order's Roof Job",
+                "supplier_order",
+            )
+        if _get(supplier_order, "status") not in {
             "Partially Received",
             "Received",
         }:
@@ -2999,13 +3026,39 @@ def _validate_shop_order(record: Any, context: Mapping[str, Any]) -> None:
     if status == "Draft":
         return
     lines = _shop_lines(record, require_output=status in SHOP_ORDER_FINAL_STATUSES)
-    if _context_status(context, "takeoff_status") != "Approved":
+    material_takeoff = context.get("material_takeoff")
+    if not isinstance(material_takeoff, Mapping):
+        raise PolicyViolation(
+            "unverified_shop_takeoff",
+            "Shop Order release requires its Material Takeoff",
+            "material_takeoff",
+        )
+    if _get(material_takeoff, "roof_job") != _get(record, "roof_job"):
+        raise PolicyViolation(
+            "cross_job_shop_takeoff",
+            "Shop Order Material Takeoff must share its Roof Job",
+            "material_takeoff",
+        )
+    if _get(material_takeoff, "status") != "Approved":
         raise PolicyViolation(
             "unapproved_shop_takeoff",
             "Shop Order release requires an Approved Material Takeoff",
             "material_takeoff",
         )
-    if _context_status(context, "supplier_order_status") not in {
+    supplier_order = context.get("supplier_order")
+    if not isinstance(supplier_order, Mapping):
+        raise PolicyViolation(
+            "unverified_shop_supplier_order",
+            "Shop Order release requires its Supplier Order",
+            "supplier_order",
+        )
+    if _get(supplier_order, "roof_job") != _get(record, "roof_job"):
+        raise PolicyViolation(
+            "cross_job_shop_supplier_order",
+            "Shop Order Supplier Order must share its Roof Job",
+            "supplier_order",
+        )
+    if _get(supplier_order, "status") not in {
         "Partially Received",
         "Received",
     }:
@@ -3014,7 +3067,20 @@ def _validate_shop_order(record: Any, context: Mapping[str, Any]) -> None:
             "Shop Order release requires a received Supplier Order",
             "supplier_order",
         )
-    if _context_status(context, "work_package_status") not in {
+    work_package = context.get("work_package")
+    if not isinstance(work_package, Mapping):
+        raise PolicyViolation(
+            "unverified_shop_work_package",
+            "Shop Order release requires its Work Package",
+            "work_package",
+        )
+    if _get(work_package, "roof_job") != _get(record, "roof_job"):
+        raise PolicyViolation(
+            "cross_job_shop_work_package",
+            "Shop Order Work Package must share its Roof Job",
+            "work_package",
+        )
+    if _get(work_package, "status") not in {
         "Released",
         "Acknowledged",
         "In Progress",
@@ -3087,7 +3153,28 @@ def _validate_shop_order(record: Any, context: Mapping[str, Any]) -> None:
         require_fields(record, "handed_over_to", "handed_over_at", "handoff_evidence")
     if status in {"Invoice Ready", "Closed"}:
         require_fields(record, "invoice_payment_milestone", "invoice_ready_at")
-        if _context_status(context, "invoice_payment_milestone_status") not in {
+        payment_milestone = context.get("invoice_payment_milestone")
+        if not isinstance(payment_milestone, Mapping):
+            raise PolicyViolation(
+                "unverified_shop_invoice_basis",
+                "Invoice Ready requires its Payment Milestone",
+                "invoice_payment_milestone",
+            )
+        if _get(payment_milestone, "roof_job") != _get(record, "roof_job"):
+            raise PolicyViolation(
+                "cross_job_shop_invoice_basis",
+                "Payment Milestone must share the Shop Order Roof Job",
+                "invoice_payment_milestone",
+            )
+        if str(_get(payment_milestone, "shop_order")) != str(
+            _get(record, "shop_order_id")
+        ):
+            raise PolicyViolation(
+                "shop_invoice_basis_mismatch",
+                "Payment Milestone must be linked to this Shop Order",
+                "invoice_payment_milestone",
+            )
+        if _get(payment_milestone, "status") not in {
             "Webhook Seen",
             "Needs Review",
             "Matched",
@@ -3099,7 +3186,7 @@ def _validate_shop_order(record: Any, context: Mapping[str, Any]) -> None:
             )
     if status == "Closed":
         require_fields(record, "closed_at")
-        if _context_status(context, "invoice_payment_milestone_status") != "Matched":
+        if _get(context["invoice_payment_milestone"], "status") != "Matched":
             raise PolicyViolation(
                 "unmatched_shop_payment",
                 "Shop Order close requires a Matched payment milestone",

@@ -21,7 +21,32 @@ CLOSEOUT_PRODUCTION_GATE_STATES = frozenset(("Done", "Waived"))
 ACTIVE_SCHEDULED_PRODUCTION_ASSIGNMENT_STATUSES = frozenset(
     ("Assigned", "Accepted", "In Progress", "Blocked")
 )
+RELEASABLE_WORK_PACKAGE_ASSIGNMENT_STATUSES = frozenset(
+    ("Assigned", "Accepted", "In Progress")
+)
 ACTIVE_SUPPLIER_ORDER_EXCEPTION_STATUSES = frozenset(("Needs Review", "Shortage"))
+WORK_PACKAGE_RELEASE_STATUSES = frozenset(("Released", "Acknowledged", "In Progress"))
+WORK_PACKAGE_FROZEN_FIELDS = (
+    "roof_job",
+    "job_assignment",
+    "safety_plan",
+    "version",
+    "title",
+    "objective",
+    "boundaries",
+    "prerequisites",
+    "expected_result",
+    "stop_conditions",
+    "make_safe_procedure",
+    "issued_at",
+    "expires_at",
+    "released_by",
+    "released_at",
+    "supersedes",
+    "correction_reason",
+    "steps",
+    "hold_points",
+)
 
 
 class PolicyViolation(ValueError):
@@ -260,6 +285,7 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "visual_property_model": ("visual_model_id",),
     "warranty_packet": ("warranty_packet_id",),
     "white_label_tenant": ("tenant_id",),
+    "work_package": ("work_package_id",),
 }
 
 WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
@@ -927,6 +953,254 @@ def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
         require_fields(record, "blocker_reason")
     _validate_correction(record, context)
     _validate_scheduled_production_execution_fences(record, context)
+
+
+def _record_references(record: Any, identity_field: str) -> set[str]:
+    return {
+        str(value)
+        for value in (_get(record, "name"), _get(record, identity_field))
+        if not _blank(value)
+    }
+
+
+def _is_current_record(
+    record: Any,
+    rows: Sequence[Any],
+    *,
+    identity_field: str,
+) -> bool:
+    references = _record_references(record, identity_field)
+    superseded = {
+        str(_get(row, "supersedes"))
+        for row in rows
+        if not _blank(_get(row, "supersedes"))
+    }
+    return references.isdisjoint(superseded)
+
+
+def _validate_ordered_work_package_rows(
+    record: Any,
+    field: str,
+    *,
+    row_label: str,
+    required_fields: tuple[str, ...],
+) -> None:
+    rows = _rows(record, field)
+    if not rows:
+        raise PolicyViolation(
+            "missing_work_package_rows",
+            f"a released Work Package requires at least one {row_label}",
+            field,
+        )
+    for expected_sequence, row in enumerate(rows, start=1):
+        sequence = _decimal(row, "sequence", required=True)
+        if sequence != expected_sequence:
+            raise PolicyViolation(
+                "invalid_work_package_sequence",
+                f"{row_label} sequence must be contiguous and start at 1",
+                field,
+            )
+        require_fields(row, *required_fields)
+
+
+def _validate_work_package_release_context(
+    record: Any, context: Mapping[str, Any]
+) -> None:
+    assignment = context.get("work_package_assignment")
+    if assignment is None:
+        raise PolicyViolation(
+            "unverified_work_package_assignment",
+            "the linked Job Assignment could not be verified",
+            "job_assignment",
+        )
+    if _get(assignment, "roof_job") != _get(record, "roof_job"):
+        raise PolicyViolation(
+            "cross_job_work_package_assignment",
+            "the linked Job Assignment must belong to the Work Package Roof Job",
+            "job_assignment",
+        )
+    if _get(assignment, "assignment_type") != "Production":
+        raise PolicyViolation(
+            "invalid_work_package_assignment",
+            "a Work Package release requires a Production Job Assignment",
+            "job_assignment",
+        )
+    if (
+        _get(assignment, "status")
+        not in RELEASABLE_WORK_PACKAGE_ASSIGNMENT_STATUSES
+    ):
+        raise PolicyViolation(
+            "inactive_work_package_assignment",
+            "the linked Job Assignment must be active before release",
+            "job_assignment",
+        )
+    if _blank(_get(assignment, "scheduled_start")):
+        raise PolicyViolation(
+            "unscheduled_work_package_assignment",
+            "the linked Production Job Assignment must be scheduled before release",
+            "job_assignment",
+        )
+    if not _is_current_record(
+        assignment,
+        context.get("job_assignment_rows", ()),
+        identity_field="assignment_id",
+    ):
+        raise PolicyViolation(
+            "stale_work_package_assignment",
+            "the linked Job Assignment has been superseded",
+            "job_assignment",
+        )
+
+    safety_plan = context.get("work_package_safety_plan")
+    if safety_plan is None:
+        raise PolicyViolation(
+            "unverified_work_package_safety_plan",
+            "the linked Safety Plan could not be verified",
+            "safety_plan",
+        )
+    if _get(safety_plan, "roof_job") != _get(record, "roof_job"):
+        raise PolicyViolation(
+            "cross_job_work_package_safety_plan",
+            "the linked Safety Plan must belong to the Work Package Roof Job",
+            "safety_plan",
+        )
+    if _get(safety_plan, "status") != "Acknowledged":
+        raise PolicyViolation(
+            "unacknowledged_work_package_safety_plan",
+            "the linked Safety Plan must be Acknowledged before release",
+            "safety_plan",
+        )
+    if not _is_current_record(
+        safety_plan,
+        context.get("safety_plan_rows", ()),
+        identity_field="safety_plan_id",
+    ):
+        raise PolicyViolation(
+            "stale_work_package_safety_plan",
+            "the linked Safety Plan has been superseded",
+            "safety_plan",
+        )
+
+    _require_production_gate_states(
+        context.get("gates", ()),
+        SCHEDULABLE_PRODUCTION_GATE_STATES,
+        "work_package_production_gate_block",
+        context,
+    )
+
+
+def _validate_work_package(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    require_fields(record, "roof_job", "job_assignment", "safety_plan", "version", "status")
+    version = _decimal(record, "version", required=True)
+    if version is not None and version < 1:
+        raise PolicyViolation(
+            "invalid_work_package_version",
+            "version must be at least 1",
+            "version",
+        )
+    if context.get("_previous") is None and status not in {"Draft", "Released"}:
+        raise PolicyViolation(
+            "invalid_work_package_initial_state",
+            "a Work Package must start as Draft or be released with current controls",
+            "status",
+        )
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Released", "Superseded"},
+            "Released": {"Acknowledged", "Blocked", "Superseded"},
+            "Acknowledged": {"In Progress", "Blocked", "Superseded"},
+            "In Progress": {"Blocked", "Completed", "Superseded"},
+            "Blocked": {"Released", "Superseded"},
+            "Completed": {"Superseded"},
+            "Superseded": set(),
+        },
+    )
+    if status in WORK_PACKAGE_RELEASE_STATUSES:
+        require_fields(
+            record,
+            "roof_job",
+            "job_assignment",
+            "safety_plan",
+            "version",
+            "title",
+            "objective",
+            "boundaries",
+            "prerequisites",
+            "expected_result",
+            "stop_conditions",
+            "make_safe_procedure",
+            "issued_at",
+            "expires_at",
+            "released_by",
+            "released_at",
+        )
+        issued_at = _get(record, "issued_at")
+        expires_at = _get(record, "expires_at")
+        released_at = _get(record, "released_at")
+        if str(issued_at) >= str(expires_at) or str(released_at) >= str(expires_at):
+            raise PolicyViolation(
+                "invalid_work_package_expiry",
+                "issue and release times must precede expiry",
+                "expires_at",
+            )
+        now = context.get("now")
+        if now is not None and str(now) >= str(expires_at):
+            raise PolicyViolation(
+                "expired_work_package",
+                "an expired Work Package cannot be released or resumed",
+                "expires_at",
+            )
+        _validate_ordered_work_package_rows(
+            record,
+            "steps",
+            row_label="step",
+            required_fields=("instruction", "required_evidence", "acceptance_criteria"),
+        )
+        _validate_ordered_work_package_rows(
+            record,
+            "hold_points",
+            row_label="hold point",
+            required_fields=(
+                "hold_point",
+                "release_authority",
+                "required_evidence",
+                "acceptance_criteria",
+            ),
+        )
+        if not _is_current_record(
+            record,
+            context.get("work_package_rows", ()),
+            identity_field="work_package_id",
+        ):
+            raise PolicyViolation(
+                "stale_work_package",
+                "a superseded Work Package cannot be released or resumed",
+            )
+        _validate_work_package_release_context(record, context)
+    if status == "Acknowledged":
+        require_fields(record, "acknowledged_by", "acknowledged_at")
+    if status == "In Progress":
+        require_fields(record, "acknowledged_by", "acknowledged_at", "started_at")
+    if status == "Completed":
+        require_fields(record, "acknowledged_by", "acknowledged_at", "started_at", "completed_at")
+    if status == "Blocked":
+        require_fields(record, "blocker_reason", "blocked_at")
+    if status == "Superseded" and context.get("superseding_work_package") is None:
+        raise PolicyViolation(
+            "unverified_work_package_supersession",
+            "a superseded Work Package must have a verified replacement",
+        )
+    _lock_after_status(
+        record,
+        context,
+        set(WORK_PACKAGE_RELEASE_STATUSES) | {"Blocked", "Completed", "Superseded"},
+        *WORK_PACKAGE_FROZEN_FIELDS,
+    )
+    _validate_correction(record, context, version_field="version")
 
 
 def _validate_lead_envelope(record: Any, context: Mapping[str, Any]) -> None:
@@ -3124,6 +3398,7 @@ VALIDATORS = {
     "visual_property_model": _validate_visual_model,
     "warranty_packet": _validate_warranty,
     "white_label_tenant": _validate_tenant,
+    "work_package": _validate_work_package,
     "automation_incident": _validate_incident,
 }
 

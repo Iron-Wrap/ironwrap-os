@@ -235,6 +235,11 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Sales": READ,
     },
     "White-Label Tenant": {"IronWrap Support": WRITE},
+    "Work Package": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": READ,
+        "IronWrap Closeout": READ,
+    },
 }
 
 

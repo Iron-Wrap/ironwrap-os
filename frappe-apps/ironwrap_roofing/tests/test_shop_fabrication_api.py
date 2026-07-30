@@ -344,6 +344,85 @@ class ShopFabricationApiTests(unittest.TestCase):
         fixtures["evidence"]["evidence-first-piece-1"] = evidence
         return fixtures, order, lot, evidence
 
+    def final_quality_ready_fixture(
+        self,
+    ) -> tuple[dict, FakeDoc, FakeDoc, FakeDoc, FakeDoc]:
+        fixtures, order, lot, first_piece_evidence = self.first_piece_ready_fixture()
+        allocation = order["material_allocations"][0]
+        allocation.update(
+            {
+                "reserved_quantity": 9,
+                "issued_quantity": 1,
+                "status": "Issued",
+            }
+        )
+        order.update(
+            {
+                "status": "In Fabrication",
+                "fabrication_started_at": "2026-07-30 10:05:00",
+                "ready_at": "",
+                "operations": [
+                    {
+                        **order["operations"][0],
+                        "status": "Complete",
+                        "completed_at": "2026-07-30 10:10:00",
+                    }
+                ],
+                "inspections": [
+                    {
+                        "inspection_type": "First Piece",
+                        "line_no": 1,
+                        "allocation_id": "allocation-1",
+                        "operation_sequence": 1,
+                        "result": "Pass",
+                        "nominal_value": "2400",
+                        "measured_value": "2400",
+                        "tolerance_value": "3",
+                        "measurement_unit": "mm",
+                        "measured_result": "2400 mm; nominal 2400 +/- 3 mm",
+                        "inspected_by": "production@example.com",
+                        "inspected_at": "2026-07-30 10:05:00",
+                        "evidence_item": first_piece_evidence["name"],
+                        "needs_review": 0,
+                    }
+                ],
+            }
+        )
+        lot.update(
+            {
+                "received_quantity": 9,
+                "available_quantity": 0,
+                "reserved_quantity": 8,
+                "consumed_quantity": 1,
+                "status": "Reserved",
+            }
+        )
+        final_evidence = FakeDoc(
+            {
+                **first_piece_evidence,
+                "name": "evidence-final-1",
+                "evidence_id": "evidence-final-1",
+                "r2_key": "field/v1/job-1/final-quality.json",
+                "device_action_id": "device-action-final-quality-1",
+                "modified": "2026-07-30 10:10:00",
+            }
+        )
+        scrap_evidence = FakeDoc(
+            {
+                **first_piece_evidence,
+                "name": "evidence-scrap-1",
+                "evidence_id": "evidence-scrap-1",
+                "evidence_type": "Photo",
+                "r2_key": "field/v1/job-1/scrap-1.jpg",
+                "content_type": "image/jpeg",
+                "device_action_id": "device-action-scrap-1",
+                "modified": "2026-07-30 10:10:10",
+            }
+        )
+        fixtures["evidence"][final_evidence["name"]] = final_evidence
+        fixtures["evidence"][scrap_evidence["name"]] = scrap_evidence
+        return fixtures, order, lot, final_evidence, scrap_evidence
+
     def first_piece_snapshot(
         self,
         api,
@@ -371,6 +450,80 @@ class ShopFabricationApiTests(unittest.TestCase):
                 "assignment_role": "Production direct assignment",
             },
         )
+
+    def final_quality_snapshot(
+        self,
+        api,
+        fixtures: dict,
+        order: FakeDoc,
+        lot: FakeDoc,
+        evidence: list[FakeDoc],
+        *,
+        authenticated_user: str = "production@example.com",
+    ) -> dict:
+        return api._shop_order_final_quality_snapshot(
+            order,
+            [lot],
+            evidence,
+            {
+                "material_takeoff": fixtures["takeoffs"]["takeoff-1"],
+                "supplier_order": fixtures["supplier_orders"]["supplier-1"],
+                "work_package": fixtures["work_packages"]["package-1"],
+            },
+            {
+                "work_package": fixtures["work_packages"]["package-1"],
+                "job_assignment": fixtures["job_assignments"]["assignment-1"],
+                "crew_profile": fixtures["crew_profiles"]["crew-1"],
+                "authenticated_user": authenticated_user,
+                "assignment_role": "Production direct assignment",
+            },
+        )
+
+    def final_quality_pass_payload(
+        self,
+        final_evidence: FakeDoc,
+        scrap_evidence: FakeDoc,
+        *,
+        input_quantity: str = "9",
+        remnant_quantity: str = "0",
+    ) -> dict:
+        return {
+            "action": "pass_to_ready",
+            "inspections": [
+                {
+                    "line_no": 1,
+                    "allocation_id": "allocation-1",
+                    "operation_sequence": 1,
+                    "measured_value": "2400",
+                    "measurement_unit": "mm",
+                    "evidence_item": final_evidence["name"],
+                }
+            ],
+            "yields": [
+                {
+                    "allocation_id": "allocation-1",
+                    "operation_sequence": 1,
+                    "input_quantity": input_quantity,
+                    "finished_quantity": "8",
+                    "remnant_quantity": remnant_quantity,
+                    "scrap_quantity": "1",
+                    "scrap_disposition": "Recycle aluminium",
+                    "evidence_item": scrap_evidence["name"],
+                }
+            ],
+            "bundles": [
+                {
+                    "bundle_id": "bundle-shop-1-1",
+                    "line_no": 1,
+                    "material_lot": "lot-1",
+                    "piece_identity": "panel:1-8",
+                    "accepted_quantity": "8",
+                    "unit": "each",
+                    "label_text": "job-1 / panel 1-8 / lot SUP-COIL-001",
+                    "condition": "Finish protected; no visible damage.",
+                }
+            ],
+        }
 
     def test_preview_first_piece_authority_reuses_current_package_validation(self) -> None:
         fixtures, order, _, _ = self.first_piece_ready_fixture()
@@ -442,6 +595,7 @@ class ShopFabricationApiTests(unittest.TestCase):
                     "Setup / First Piece",
                     "In Fabrication",
                     "Quality Hold",
+                    "Ready",
                 },
             )
             context_calls.append(("shop_order", document["name"]))
@@ -504,15 +658,24 @@ class ShopFabricationApiTests(unittest.TestCase):
 
         def get_doc(doctype: str | dict, name: str | None = None):
             if isinstance(doctype, dict):
-                if doctype.get("doctype") != "Nonconformance":
+                fixture_key = {
+                    "Material Lot": "lots",
+                    "Nonconformance": "nonconformances",
+                }.get(doctype.get("doctype"))
+                if fixture_key is None:
                     raise AssertionError(f"unexpected document payload: {doctype}")
 
-                def store_nonconformance(document) -> None:
-                    if document["name"] in fixtures["nonconformances"]:
-                        raise FakeValidationError("nonconformance_already_exists")
-                    fixtures["nonconformances"][document["name"]] = document
+                def store_created_document(document) -> None:
+                    if document["name"] in fixtures[fixture_key]:
+                        code = (
+                            "nonconformance_already_exists"
+                            if fixture_key == "nonconformances"
+                            else "material_lot_already_exists"
+                        )
+                        raise FakeValidationError(code)
+                    fixtures[fixture_key][document["name"]] = document
 
-                return FakeDoc(doctype, on_insert=store_nonconformance)
+                return FakeDoc(doctype, on_insert=store_created_document)
             fixture_key = {
                 "Controlled Item": "items",
                 "Material Lot": "lots",
@@ -1264,6 +1427,301 @@ class ShopFabricationApiTests(unittest.TestCase):
         with self.assertRaisesRegex(FakePermissionError, "non_independent_inspection"):
             api.record_first_piece_outcome("shop-1", "run-shop-0001")
         self.assertEqual(order.save_count, 0)
+
+    def test_record_final_shop_quality_derives_ready_yield_and_bundle(self) -> None:
+        fixtures, order, lot, final_evidence, scrap_evidence = (
+            self.final_quality_ready_fixture()
+        )
+        final_quality_payload_json = json.dumps(
+            self.final_quality_pass_payload(final_evidence, scrap_evidence),
+            separators=(",", ":"),
+        )
+        api, fixtures, db, context_calls = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_FINAL_SHOP_QUALITY_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.final_quality_snapshot(
+                api,
+                fixtures,
+                order,
+                lot,
+                [final_evidence, scrap_evidence],
+            ),
+            extra={"final_quality_payload_json": final_quality_payload_json},
+        )
+
+        result = api.record_final_shop_quality("shop-1", "run-shop-0001")
+
+        self.assertEqual(result["shop_order"]["status"], "Ready")
+        self.assertEqual(order["status"], "Ready")
+        self.assertEqual(order["ready_at"], "2026-07-30 10:05:00")
+        final_inspection = order["inspections"][-1]
+        self.assertEqual(final_inspection["inspection_type"], "Final")
+        self.assertEqual(final_inspection["result"], "Pass")
+        self.assertEqual(final_inspection["line_no"], 1)
+        self.assertEqual(final_inspection["allocation_id"], "allocation-1")
+        self.assertEqual(final_inspection["operation_sequence"], 1)
+        self.assertEqual(final_inspection["measured_value"], "2400")
+        self.assertEqual(final_inspection["measurement_unit"], "mm")
+        self.assertEqual(final_inspection["evidence_item"], final_evidence["name"])
+        self.assertEqual(final_inspection["needs_review"], 0)
+        self.assertEqual(
+            order["yields"],
+            [
+                {
+                    "allocation_id": "allocation-1",
+                    "operation_sequence": 1,
+                    "input_quantity": "9",
+                    "finished_quantity": "8",
+                    "remnant_quantity": "0",
+                    "remnant_lot": "",
+                    "scrap_quantity": "1",
+                    "scrap_disposition": "Recycle aluminium",
+                    "evidence_item": scrap_evidence["name"],
+                }
+            ],
+        )
+        self.assertEqual(
+            order["bundles"],
+            [
+                {
+                    "bundle_id": "bundle-shop-1-1",
+                    "line_no": 1,
+                    "material_lot": "lot-1",
+                    "piece_identity": "panel:1-8",
+                    "accepted_quantity": "8",
+                    "unit": "each",
+                    "label_text": "job-1 / panel 1-8 / lot SUP-COIL-001",
+                    "handoff_status": "Prepared",
+                    "handed_over_to": "",
+                    "handed_over_at": "",
+                    "handoff_evidence": "",
+                    "condition": "Finish protected; no visible damage.",
+                    "needs_review": 0,
+                }
+            ],
+        )
+        self.assertEqual(order["material_allocations"][0]["issued_quantity"], "9")
+        self.assertEqual(lot["reserved_quantity"], "0")
+        self.assertEqual(lot["consumed_quantity"], "9")
+        self.assertEqual(lot["status"], "Consumed")
+        self.assertEqual(order.save_count, 1)
+        self.assertEqual(lot.save_count, 1)
+        self.assertEqual(
+            context_calls,
+            [("material_lot", "lot-1"), ("shop_order", "shop-1")],
+        )
+        for table in (
+            "`tabMaterial Lot`",
+            "`tabEvidence Item`",
+            "`tabJob Assignment`",
+            "`tabCrew Profile`",
+        ):
+            self.assertTrue(any(table in query for query, _ in db.lock_queries), table)
+
+    def test_record_final_shop_quality_creates_shop_remnant_lineage(self) -> None:
+        fixtures, order, lot, final_evidence, scrap_evidence = (
+            self.final_quality_ready_fixture()
+        )
+        order["material_allocations"][0]["reserved_quantity"] = 10
+        lot["received_quantity"] = 10
+        lot["reserved_quantity"] = 9
+        final_quality_payload_json = json.dumps(
+            self.final_quality_pass_payload(
+                final_evidence,
+                scrap_evidence,
+                input_quantity="10",
+                remnant_quantity="1",
+            ),
+            separators=(",", ":"),
+        )
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_FINAL_SHOP_QUALITY_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.final_quality_snapshot(
+                api,
+                fixtures,
+                order,
+                lot,
+                [final_evidence, scrap_evidence],
+            ),
+            extra={"final_quality_payload_json": final_quality_payload_json},
+        )
+
+        result = api.record_final_shop_quality("shop-1", "run-shop-0001")
+
+        remnant_lot_id = api._shop_remnant_lot_id("run-shop-0001", "allocation-1")
+        self.assertEqual(order["yields"][0]["remnant_lot"], remnant_lot_id)
+        self.assertEqual(
+            result["remnant_lots"],
+            [
+                {
+                    "name": remnant_lot_id,
+                    "material_lot_id": remnant_lot_id,
+                    "available_quantity": "1",
+                    "unit": "each",
+                    "status": "Available",
+                }
+            ],
+        )
+        remnant_lot = fixtures["lots"][remnant_lot_id]
+        self.assertEqual(remnant_lot["source_kind"], "Shop Remnant")
+        self.assertEqual(remnant_lot["source_shop_order"], "shop-1")
+        self.assertEqual(remnant_lot["source_evidence"], final_evidence["name"])
+        self.assertEqual(remnant_lot["controlled_item"], "item-1")
+        self.assertEqual(remnant_lot["received_quantity"], "1")
+        self.assertEqual(remnant_lot["available_quantity"], "1")
+        self.assertEqual(remnant_lot["status"], "Available")
+        self.assertEqual(remnant_lot.insert_count, 1)
+
+    def test_record_final_shop_quality_records_failure_and_holds_order(self) -> None:
+        fixtures, order, lot, final_evidence, _ = self.final_quality_ready_fixture()
+        final_quality_payload_json = json.dumps(
+            {
+                "action": "fail_to_quality_hold",
+                "inspection": {
+                    "line_no": 1,
+                    "allocation_id": "allocation-1",
+                    "operation_sequence": 1,
+                    "measured_value": "2404",
+                    "measurement_unit": "mm",
+                    "evidence_item": final_evidence["name"],
+                },
+                "reason": "Final inspection requires review.",
+            },
+            separators=(",", ":"),
+        )
+        api, fixtures, _, context_calls = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_FINAL_SHOP_QUALITY_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.final_quality_snapshot(
+                api, fixtures, order, lot, [final_evidence]
+            ),
+            extra={"final_quality_payload_json": final_quality_payload_json},
+        )
+
+        result = api.record_final_shop_quality("shop-1", "run-shop-0001")
+
+        self.assertEqual(result["shop_order"]["status"], "Quality Hold")
+        self.assertEqual(order["status"], "Quality Hold")
+        self.assertEqual(
+            order["quality_hold_reason"], "Final inspection requires review."
+        )
+        final_inspection = order["inspections"][-1]
+        self.assertEqual(final_inspection["inspection_type"], "Final")
+        self.assertEqual(final_inspection["result"], "Fail")
+        self.assertEqual(final_inspection["needs_review"], 1)
+        self.assertEqual(final_inspection["evidence_item"], final_evidence["name"])
+        ncr_id = api._final_quality_ncr_id("run-shop-0001")
+        self.assertEqual(lot["status"], "Quarantined")
+        self.assertEqual(result["material_lot"]["status"], "Quarantined")
+        self.assertEqual(result["nonconformance"]["name"], ncr_id)
+        self.assertEqual(result["nonconformance"]["status"], "Contained")
+        self.assertEqual(
+            fixtures["nonconformances"][ncr_id]["evidence_item"], final_evidence["name"]
+        )
+        self.assertEqual(order.save_count, 1)
+        self.assertEqual(lot.save_count, 1)
+        self.assertEqual(
+            context_calls,
+            [
+                ("material_lot", "lot-1"),
+                ("nonconformance", ncr_id),
+                ("shop_order", "shop-1"),
+            ],
+        )
+
+    def test_record_final_shop_quality_rejects_injected_fields_without_save(self) -> None:
+        fixtures, order, lot, final_evidence, scrap_evidence = (
+            self.final_quality_ready_fixture()
+        )
+        payload = self.final_quality_pass_payload(final_evidence, scrap_evidence)
+        payload["ready_at"] = "injected"
+        final_quality_payload_json = json.dumps(payload, separators=(",", ":"))
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_FINAL_SHOP_QUALITY_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.final_quality_snapshot(
+                api,
+                fixtures,
+                order,
+                lot,
+                [final_evidence, scrap_evidence],
+            ),
+            extra={"final_quality_payload_json": final_quality_payload_json},
+        )
+
+        with self.assertRaisesRegex(FakeValidationError, "invalid_approval_args"):
+            api.record_final_shop_quality("shop-1", "run-shop-0001")
+
+        self.assertEqual(order.save_count, 0)
+        self.assertEqual(lot.save_count, 0)
+        self.assertEqual(order["status"], "In Fabrication")
+        self.assertEqual(len(order["inspections"]), 1)
+        self.assertEqual(order.get("yields", []), [])
+        self.assertEqual(order.get("bundles", []), [])
+
+    def test_record_final_shop_quality_rejects_existing_final_without_save(self) -> None:
+        fixtures, order, lot, final_evidence, scrap_evidence = (
+            self.final_quality_ready_fixture()
+        )
+        order["inspections"].append(
+            {
+                **order["inspections"][0],
+                "inspection_type": "Final",
+                "evidence_item": final_evidence["name"],
+            }
+        )
+        final_quality_payload_json = json.dumps(
+            self.final_quality_pass_payload(final_evidence, scrap_evidence),
+            separators=(",", ":"),
+        )
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_FINAL_SHOP_QUALITY_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.final_quality_snapshot(
+                api,
+                fixtures,
+                order,
+                lot,
+                [final_evidence, scrap_evidence],
+            ),
+            extra={"final_quality_payload_json": final_quality_payload_json},
+        )
+
+        with self.assertRaisesRegex(FakeValidationError, "final_quality_already_recorded"):
+            api.record_final_shop_quality("shop-1", "run-shop-0001")
+
+        self.assertEqual(order.save_count, 0)
+        self.assertEqual(lot.save_count, 0)
+        self.assertEqual(order["status"], "In Fabrication")
+        self.assertEqual(len(order["inspections"]), 2)
+        self.assertEqual(order.get("yields", []), [])
+        self.assertEqual(order.get("bundles", []), [])
 
     def test_shop_command_needs_no_generic_hermes_run_permission(self) -> None:
         fixtures = self.fixture_data()

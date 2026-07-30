@@ -31,9 +31,9 @@ Fresh checks on 2026-07-30 against this migration branch established:
 | Deployment contract | 198 checks passed, 0 failed |
 | D1 backup/restore contract | 33 required production tables and 43 invariant-trigger bindings validated by the deployment verifier |
 | D1 migration chain | 28 migrations applied to an isolated local database |
-| PWA | 209 unit tests; typecheck, lint, format, build, and distribution checks passed |
+| PWA | 210 unit tests; typecheck, lint, format, build, and distribution checks passed |
 | PWA browser | 15 Playwright tests passed; 3 WebGL estimator cases were skipped by the configured suite |
-| Worker | 257 tests, typecheck, and explicit top-level-environment dry-run bundle passed |
+| Worker | 258 tests, typecheck, and explicit top-level-environment dry-run bundle passed |
 | MCP | 100 tests across Frappe, bus, and Newo servers passed |
 | Frappe | 100 unit tests passed |
 | Deployment/recovery tools | 72 tests passed |
@@ -193,7 +193,7 @@ Target gaps:
 | Inventory | none beyond order receipt summary | item/lot/bin/reservation/remnant/count/valuation | receive-reserve-use-reconcile |
 | Shop | no work-centre model | routing, machines, tooling, QC, yield, label, maintenance | physical synthetic/real shop batch |
 | Scheduling | assignment and approval ledger | complete constraint solver and autonomous reschedule | conflict/weather/material test |
-| Human field work | assignment-scoped Work Package, offline cached instructions, protected acknowledgement/stop/start intents, and independent hold-release record | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
+| Human field work | assignment-scoped Work Package, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
 | Safety | plan/acknowledgement | competency, equipment, incident, rescue, stop protection | stop/emergency drill |
 | Quality | completion/evidence | ITP, inspections, NCR, quarantine, disposition | seeded defect containment |
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |

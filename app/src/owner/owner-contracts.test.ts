@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   measurementIntakeOwnerExceptionsResponseSchema,
   ownerNowResponseSchema,
+  ownerRuntimeResponseSchema,
 } from "./owner-contracts";
 
 function ownerNowPayload() {
@@ -41,6 +42,49 @@ function ownerNowPayload() {
       lead_triage_unknown: 0,
       mctb_unproven_due: 0,
       material_exceptions: 0,
+    },
+  };
+}
+
+function ownerRuntimePayload() {
+  return {
+    version: 1,
+    read_model_generated_at: "2026-07-10T12:01:00.000Z",
+    status: "attention",
+    readiness: {
+      status: "not_ready",
+      checks: [
+        { id: "owned_persistence", ok: true },
+        { id: "queue", ok: true },
+        { id: "core_auth", ok: true },
+        { id: "provider_delivery", ok: true },
+        { id: "office_bff", ok: false },
+        { id: "customer_portal", ok: true },
+        { id: "production_schedule", ok: true },
+        { id: "public_estimate", ok: true },
+        { id: "newo", ok: true },
+      ],
+    },
+    operations: {
+      status: "degraded",
+      heartbeat: null,
+      counts: {
+        open_dead_letters: 1,
+        pending: 0,
+        stuck: 0,
+        frappe_errors: 0,
+        replay_failed: 0,
+        replay_stuck: 0,
+      },
+      audit_failures_observed: 0,
+      audit_failure_window_hours: 24,
+      quickbooks_receipts: {
+        available: false,
+        fresh: null,
+        age_seconds: null,
+        events_count: null,
+        replay_count: null,
+      },
     },
   };
 }
@@ -99,6 +143,27 @@ describe("Owner Now read model contract", () => {
       measurementIntakeOwnerExceptionsResponseSchema.safeParse({
         ...payload,
         measurements: [{ ...payload.measurements[0], recovery_disposition: "manual_review" }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts the bounded runtime summary but rejects diagnostic payloads", () => {
+    const payload = ownerRuntimePayload();
+
+    expect(ownerRuntimeResponseSchema.safeParse(payload).success).toBe(true);
+    expect(
+      ownerRuntimeResponseSchema.safeParse({
+        ...payload,
+        operations: {
+          ...payload.operations,
+          recent_audit_failures: [{ error: "must-not-reach-browser" }],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      ownerRuntimeResponseSchema.safeParse({
+        ...payload,
+        readiness: { ...payload.readiness, checks: [...payload.readiness.checks].reverse() },
       }).success,
     ).toBe(false);
   });

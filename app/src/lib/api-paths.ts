@@ -15,6 +15,7 @@ export const API_PATHS = {
   devicePairingRevoke: (deviceId: string) =>
     `/api/v1/device-pairings/${encodeURIComponent(deviceId)}/revoke`,
   logout: "/api/v1/auth/logout",
+  ownerRuntime: "/api/v1/owner/runtime",
   ownerMeasurementIntakeExceptions: "/api/v1/owner/measurement-intake-exceptions",
   newoOperations: "/api/v1/newo/operations",
   production: "/api/v1/production",

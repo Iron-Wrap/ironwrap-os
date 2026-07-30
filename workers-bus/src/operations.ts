@@ -154,6 +154,47 @@ export interface OperationalStatus {
   };
 }
 
+export type OwnerRuntimeCheckId =
+  | "owned_persistence"
+  | "queue"
+  | "core_auth"
+  | "provider_delivery"
+  | "office_bff"
+  | "customer_portal"
+  | "production_schedule"
+  | "public_estimate"
+  | "newo";
+
+/** Browser-safe owner/ops projection of the privileged runtime probes. */
+export interface OwnerRuntimeReadModel {
+  version: 1;
+  read_model_generated_at: string;
+  status: "ready" | "attention";
+  readiness: {
+    status: ReadinessReport["status"];
+    checks: Array<{ id: OwnerRuntimeCheckId; ok: boolean }>;
+  };
+  operations: {
+    status: OperationalStatus["status"];
+    heartbeat: null | {
+      ran_at: string;
+      reconciled: boolean;
+      fresh: boolean;
+      age_seconds: number | null;
+    };
+    counts: OperationalStatus["counts"];
+    audit_failures_observed: number;
+    audit_failure_window_hours: number;
+    quickbooks_receipts: {
+      available: boolean;
+      fresh: boolean | null;
+      age_seconds: number | null;
+      events_count: number | null;
+      replay_count: number | null;
+    };
+  };
+}
+
 export async function getReadiness(env: Env): Promise<ReadinessReport> {
   const runtime = env as unknown as Record<string, unknown>;
   const db = runtime.DB as { prepare?: unknown } | undefined;
@@ -222,6 +263,77 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
 
   const ok = Object.values(checks).every(Boolean);
   return { ok, status: ok ? "ready" : "not_ready", checks, newo };
+}
+
+export async function buildOwnerRuntimeReadModel(
+  env: Env,
+  now = new Date(),
+): Promise<OwnerRuntimeReadModel> {
+  const [readiness, operations] = await Promise.all([
+    getReadiness(env),
+    getOperationalStatus(env, 20, now),
+  ]);
+  const checks: OwnerRuntimeReadModel["readiness"]["checks"] = [
+    {
+      id: "owned_persistence",
+      ok: readiness.checks.d1 && readiness.checks.schema && readiness.checks.raw_store_binding,
+    },
+    { id: "queue", ok: readiness.checks.queue_binding },
+    { id: "core_auth", ok: readiness.checks.auth_configuration },
+    {
+      id: "provider_delivery",
+      ok: readiness.checks.notification_configuration && readiness.checks.jobnimbus_configuration,
+    },
+    {
+      id: "office_bff",
+      ok: readiness.checks.frappe_configuration && readiness.checks.app_bff_configuration,
+    },
+    { id: "customer_portal", ok: readiness.checks.customer_portal_configuration },
+    { id: "production_schedule", ok: readiness.checks.production_schedule_configuration },
+    { id: "public_estimate", ok: readiness.checks.public_estimate_configuration },
+    {
+      id: "newo",
+      ok: readiness.checks.newo_enabled &&
+        readiness.checks.newo_webhook_credentials &&
+        readiness.checks.newo_api_authentication &&
+        readiness.checks.newo_production_actor &&
+        readiness.checks.newo_report_webhook_match &&
+        readiness.checks.newo_configuration_drift &&
+        readiness.checks.newo_queue_binding &&
+        readiness.checks.newo_dlq_state &&
+        readiness.checks.newo_frappe_readiness &&
+        readiness.checks.newo_jobnimbus_bridge &&
+        readiness.checks.newo_booking_mode,
+    },
+  ];
+
+  return {
+    version: 1,
+    read_model_generated_at: operations.generated_at,
+    status: readiness.ok && operations.status === "ok" ? "ready" : "attention",
+    readiness: { status: readiness.status, checks },
+    operations: {
+      status: operations.status,
+      heartbeat: operations.heartbeat
+        ? {
+          ran_at: operations.heartbeat.ran_at,
+          reconciled: operations.heartbeat.reconciled,
+          fresh: operations.heartbeat.fresh,
+          age_seconds: operations.heartbeat.age_seconds,
+        }
+        : null,
+      counts: operations.counts,
+      audit_failures_observed: operations.recent_audit_failures.entries.length,
+      audit_failure_window_hours: operations.recent_audit_failures.window_hours,
+      quickbooks_receipts: {
+        available: operations.quickbooks_receipts.available,
+        fresh: operations.quickbooks_receipts.fresh,
+        age_seconds: operations.quickbooks_receipts.age_seconds,
+        events_count: operations.quickbooks_receipts.events_count,
+        replay_count: operations.quickbooks_receipts.replay_count,
+      },
+    },
+  };
 }
 
 async function getNewoReadiness(env: Env, databaseReady: boolean): Promise<NewoReadinessDetail> {

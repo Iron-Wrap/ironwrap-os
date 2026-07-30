@@ -116,6 +116,7 @@ Broadest supervisor. Reads all system truth and approves governed mutations. New
 - dry_run_release_shop_order
 - dry_run_reserve_shop_order_materials
 - dry_run_advance_shop_order_setup
+- dry_run_record_first_piece_outcome
 - dry_run_supplier_quote
 - dry_run_quote_revision
 - dry_run_bind_quote_price_rules
@@ -155,6 +156,7 @@ Broadest supervisor. Reads all system truth and approves governed mutations. New
 - request_release_shop_order
 - request_reserve_shop_order_materials
 - request_advance_shop_order_setup
+- request_record_first_piece_outcome
 - request_create_supplier_quote
 - request_create_quote_revision
 - request_bind_quote_price_rules

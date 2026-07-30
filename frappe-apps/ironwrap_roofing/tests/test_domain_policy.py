@@ -2907,6 +2907,30 @@ class DomainPolicyTests(unittest.TestCase):
             previous=lot_draft,
             context=lot_context,
         )
+        lot_reserved = {
+            **lot_available,
+            "status": "Reserved",
+            "available_quantity": 2,
+            "reserved_quantity": 8,
+            "consumed_quantity": 0,
+        }
+        validate_record(
+            "material_lot", lot_reserved, previous=lot_available, context=lot_context
+        )
+        lot_quarantined = {**lot_reserved, "status": "Quarantined"}
+        validate_record(
+            "material_lot", lot_quarantined, previous=lot_reserved, context=lot_context
+        )
+        self.assertEqual(
+            {
+                field: lot_quarantined[field]
+                for field in ("available_quantity", "reserved_quantity", "consumed_quantity")
+            },
+            {
+                field: lot_reserved[field]
+                for field in ("available_quantity", "reserved_quantity", "consumed_quantity")
+            },
+        )
 
         line = {
             "line_no": 1,
@@ -3083,6 +3107,7 @@ class DomainPolicyTests(unittest.TestCase):
             "machine_tooling": "Roll former / approved die set",
             "operator": "fabricator@example.com",
             "status": "Complete",
+            "started_at": "2026-07-30 09:12:00",
         }
         setup = {
             **reserved,
@@ -3097,6 +3122,10 @@ class DomainPolicyTests(unittest.TestCase):
             "allocation_id": "alloc:1",
             "operation_sequence": 1,
             "result": "Pass",
+            "nominal_value": 2400,
+            "measured_value": 2400,
+            "tolerance_value": 3,
+            "measurement_unit": "mm",
             "measured_result": "Profile and length within tolerance.",
             "inspected_by": "quality@example.com",
             "inspected_at": "2026-07-30 09:15:00",
@@ -3110,6 +3139,17 @@ class DomainPolicyTests(unittest.TestCase):
             "inspections": [first_piece],
         }
         validate_record("shop_order", fabricating, previous=setup, context=shop_context)
+        self.assert_policy(
+            "first_piece_tolerance_result_mismatch",
+            validate_record,
+            "shop_order",
+            {
+                **fabricating,
+                "inspections": [{**first_piece, "measured_value": 2404}],
+            },
+            previous=setup,
+            context=shop_context,
+        )
         self.assert_policy(
             "missing_first_piece_pass",
             validate_record,
@@ -3204,6 +3244,16 @@ class DomainPolicyTests(unittest.TestCase):
             "shop_order_allocation_lot_ids": {lot_available["material_lot_id"]},
         }
         validate_record("nonconformance", ncr, context=ncr_context)
+        contained_ncr = {
+            **ncr,
+            "status": "Contained",
+            "detected_at": "2026-07-30 09:15:00",
+            "reported_by": "quality@example.com",
+            "description": "First-piece measurement exceeded tolerance.",
+            "evidence_item": "evidence:first-piece-1",
+            "containment": "Material lot quarantined; Shop Order on Quality Hold.",
+        }
+        validate_record("nonconformance", contained_ncr, context=ncr_context)
         self.assert_policy(
             "nonconformance_roof_job_mismatch",
             validate_record,

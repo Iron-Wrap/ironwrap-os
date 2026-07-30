@@ -26,9 +26,11 @@ class FakePermissionError(Exception):
 
 
 class FakeDoc(dict):
-    def __init__(self, values: dict) -> None:
+    def __init__(self, values: dict, *, on_insert=None) -> None:
         super().__init__(values)
         object.__setattr__(self, "save_count", 0)
+        object.__setattr__(self, "insert_count", 0)
+        object.__setattr__(self, "_on_insert", on_insert)
 
     def __getattr__(self, name: str):
         try:
@@ -37,7 +39,7 @@ class FakeDoc(dict):
             raise AttributeError(name) from exc
 
     def __setattr__(self, name: str, value) -> None:
-        if name == "save_count":
+        if name in {"save_count", "insert_count", "_on_insert"}:
             object.__setattr__(self, name, value)
         else:
             self[name] = value
@@ -47,6 +49,11 @@ class FakeDoc(dict):
 
     def save(self) -> None:
         self.save_count += 1
+
+    def insert(self) -> None:
+        if self._on_insert is not None:
+            self._on_insert(self)
+        self.insert_count += 1
 
 
 class FakeDb:
@@ -70,6 +77,8 @@ class FakeDb:
             ("`tabMaterial Takeoff`", "takeoffs"),
             ("`tabSupplier Order`", "supplier_orders"),
             ("`tabWork Package`", "work_packages"),
+            ("`tabJob Assignment`", "job_assignments"),
+            ("`tabCrew Profile`", "crew_profiles"),
             ("`tabEvidence Item`", "evidence"),
         )
         for table, fixture_key in table_maps:
@@ -133,6 +142,7 @@ class ShopFabricationApiTests(unittest.TestCase):
                         "released_at": "",
                         "reserved_at": "",
                         "setup_started_at": "",
+                        "fabrication_started_at": "",
                         "quality_hold_reason": "",
                         "lines": [
                             {
@@ -142,14 +152,16 @@ class ShopFabricationApiTests(unittest.TestCase):
                                 "accepted_quantity": 8,
                                 "billable_quantity": 8,
                                 "unit": "each",
-                                "dimensions": "2400 mm panel length",
+                                "dimensions": "2400 mm",
                                 "tolerance": "± 3 mm",
                                 "orientation": "Eave to ridge",
                                 "invoice_basis": "Each",
+                                "needs_review": 0,
                             }
                         ],
                         "material_allocations": [],
                         "operations": [],
+                        "inspections": [],
                     }
                 )
             },
@@ -159,6 +171,7 @@ class ShopFabricationApiTests(unittest.TestCase):
                         "name": "takeoff-1",
                         "roof_job": "job-1",
                         "status": "Approved",
+                        "modified": "2026-07-30 10:00:30",
                     }
                 )
             },
@@ -168,6 +181,7 @@ class ShopFabricationApiTests(unittest.TestCase):
                         "name": "supplier-1",
                         "roof_job": "job-1",
                         "status": "Received",
+                        "modified": "2026-07-30 10:00:45",
                     }
                 )
             },
@@ -175,8 +189,56 @@ class ShopFabricationApiTests(unittest.TestCase):
                 "package-1": FakeDoc(
                     {
                         "name": "package-1",
+                        "work_package_id": "package-1",
                         "roof_job": "job-1",
+                        "job_assignment": "assignment-1",
+                        "safety_plan": "safety-plan-1",
+                        "version": 1,
                         "status": "Released",
+                        "expires_at": "2026-12-31 23:59:59",
+                        "acknowledged_by": "production@example.com",
+                        "acknowledged_at": "2026-07-30 10:02:30",
+                        "started_at": "",
+                        "modified": "2026-07-30 10:02:45",
+                    }
+                )
+            },
+            "job_assignments": {
+                "assignment-1": FakeDoc(
+                    {
+                        "name": "assignment-1",
+                        "assignment_id": "assignment-1",
+                        "roof_job": "job-1",
+                        "assignment_type": "Production",
+                        "status": "In Progress",
+                        "crew_profile": "crew-1",
+                        "assigned_user": "production@example.com",
+                        "scheduled_start": "2026-07-30 10:00:00",
+                        "supersedes": "",
+                        "modified": "2026-07-30 10:02:50",
+                    }
+                )
+            },
+            "crew_profiles": {
+                "crew-1": FakeDoc(
+                    {
+                        "name": "crew-1",
+                        "crew_profile_id": "crew-1",
+                        "status": "Active",
+                        "crew_type": "Shop fabrication",
+                        "competency_status": "Current",
+                        "competency_checked_at": "2026-07-30 09:00:00",
+                        "competency_expiry": "2026-12-31 23:59:59",
+                        "equipment_status": "Current",
+                        "equipment_checked_at": "2026-07-30 09:00:00",
+                        "equipment_expiry": "2026-12-31 23:59:59",
+                        "wcb_status": "Current",
+                        "wcb_checked_at": "2026-07-30 09:00:00",
+                        "wcb_expiry": "2026-12-31 23:59:59",
+                        "active_stop": 0,
+                        "active_stop_at": "",
+                        "active_stop_reason": "",
+                        "modified": "2026-07-30 10:02:55",
                     }
                 )
             },
@@ -184,11 +246,14 @@ class ShopFabricationApiTests(unittest.TestCase):
                 "evidence-receipt-1": FakeDoc(
                     {
                         "name": "evidence-receipt-1",
+                        "evidence_id": "evidence-receipt-1",
                         "roof_job": "job-1",
                         "sync_state": "Verified",
+                        "modified": "2026-07-30 10:01:30",
                     }
                 )
             },
+            "nonconformances": {},
             "run": {
                 "name": "run-shop-0001",
                 "run_id": "run-shop-0001",
@@ -209,6 +274,103 @@ class ShopFabricationApiTests(unittest.TestCase):
                 "mutation_applied": 0,
             },
         }
+
+    def first_piece_ready_fixture(self) -> tuple[dict, FakeDoc, FakeDoc, FakeDoc]:
+        fixtures = self.fixture_data()
+        fixtures["items"]["item-1"]["status"] = "Approved"
+        order = fixtures["orders"]["shop-1"]
+        order.update(
+            {
+                "status": "Setup / First Piece",
+                "setup_started_at": "2026-07-30 10:03:00",
+                "material_allocations": [
+                    {
+                        "allocation_id": "allocation-1",
+                        "line_no": 1,
+                        "material_lot": "lot-1",
+                        "reserved_quantity": 8,
+                        "issued_quantity": 0,
+                        "unit": "each",
+                        "status": "Reserved",
+                        "needs_review": 0,
+                    }
+                ],
+                "operations": [
+                    {
+                        "sequence": 1,
+                        "operation": "Cut panels",
+                        "machine_tooling": "Shear A",
+                        "operator": "fabricator@example.com",
+                        "status": "In Progress",
+                        "started_at": "2026-07-30 10:03:30",
+                        "completed_at": "",
+                        "notes": "",
+                    }
+                ],
+            }
+        )
+        lot = fixtures["lots"]["lot-1"]
+        lot.update(
+            {
+                "status": "Reserved",
+                "available_quantity": 2,
+                "reserved_quantity": 8,
+                "consumed_quantity": 0,
+            }
+        )
+        evidence = FakeDoc(
+            {
+                "name": "evidence-first-piece-1",
+                "evidence_id": "evidence-first-piece-1",
+                "roof_job": "job-1",
+                "evidence_type": "Measurement Report",
+                "proof_owner": "production@example.com",
+                "proof_slot": "Production",
+                "source_system": "ironwrap-pwa",
+                "r2_key": "field/v1/job-1/first-piece.json",
+                "content_checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "checksum_algorithm": "SHA-256",
+                "content_type": "application/json",
+                "content_length": 128,
+                "capture_actor": "production@example.com",
+                "captured_at": "2026-07-30 10:04:00",
+                "sync_state": "Verified",
+                "verified_at": "2026-07-30 10:04:10",
+                "verification_source": "evidence-verifier",
+                "device_action_id": "device-action-first-piece-1",
+                "modified": "2026-07-30 10:04:00",
+            }
+        )
+        fixtures["evidence"]["evidence-first-piece-1"] = evidence
+        return fixtures, order, lot, evidence
+
+    def first_piece_snapshot(
+        self,
+        api,
+        fixtures: dict,
+        order: FakeDoc,
+        lot: FakeDoc,
+        evidence: FakeDoc,
+        *,
+        authenticated_user: str = "production@example.com",
+    ) -> dict:
+        return api._shop_order_first_piece_snapshot(
+            order,
+            [lot],
+            [evidence],
+            {
+                "material_takeoff": fixtures["takeoffs"]["takeoff-1"],
+                "supplier_order": fixtures["supplier_orders"]["supplier-1"],
+                "work_package": fixtures["work_packages"]["package-1"],
+            },
+            {
+                "work_package": fixtures["work_packages"]["package-1"],
+                "job_assignment": fixtures["job_assignments"]["assignment-1"],
+                "crew_profile": fixtures["crew_profiles"]["crew-1"],
+                "authenticated_user": authenticated_user,
+                "assignment_role": "Production direct assignment",
+            },
+        )
 
     def load_api(
         self,
@@ -232,15 +394,29 @@ class ShopFabricationApiTests(unittest.TestCase):
 
         @contextmanager
         def material_lot_transition_context(document):
-            self.assertIn(document["status"], {"Available", "Quarantined", "Reserved"})
+            self.assertIn(
+                document["status"], {"Available", "Consumed", "Quarantined", "Reserved"}
+            )
             context_calls.append(("material_lot", document["name"]))
+            yield
+
+        @contextmanager
+        def nonconformance_transition_context(document):
+            self.assertEqual(document["status"], "Contained")
+            context_calls.append(("nonconformance", document["name"]))
             yield
 
         @contextmanager
         def shop_order_transition_context(document):
             self.assertIn(
                 document["status"],
-                {"Released", "Reserved", "Setup / First Piece", "Quality Hold"},
+                {
+                    "Released",
+                    "Reserved",
+                    "Setup / First Piece",
+                    "In Fabrication",
+                    "Quality Hold",
+                },
             )
             context_calls.append(("shop_order", document["name"]))
             yield
@@ -250,7 +426,17 @@ class ShopFabricationApiTests(unittest.TestCase):
             controlled_item_transition_context
         )
         validation_module.material_lot_transition_context = material_lot_transition_context
+        validation_module.nonconformance_transition_context = (
+            nonconformance_transition_context
+        )
         validation_module.shop_order_transition_context = shop_order_transition_context
+
+        def validate_business_document(document, kind: str) -> None:
+            self.assertEqual(kind, "work_package")
+            if document.get("authority_error"):
+                raise FakeValidationError(document["authority_error"])
+
+        validation_module.validate_business_document = validate_business_document
         approval_module = types.ModuleType("ironwrap_roofing.approval_receipt")
 
         class FakeApprovalReceiptError(Exception):
@@ -290,17 +476,51 @@ class ShopFabricationApiTests(unittest.TestCase):
         frappe_module.permission_checks = permission_checks
         frappe_module.whitelist = lambda: lambda function: function
 
-        def get_doc(doctype: str, name: str):
+        def get_doc(doctype: str | dict, name: str | None = None):
+            if isinstance(doctype, dict):
+                if doctype.get("doctype") != "Nonconformance":
+                    raise AssertionError(f"unexpected document payload: {doctype}")
+
+                def store_nonconformance(document) -> None:
+                    if document["name"] in fixtures["nonconformances"]:
+                        raise FakeValidationError("nonconformance_already_exists")
+                    fixtures["nonconformances"][document["name"]] = document
+
+                return FakeDoc(doctype, on_insert=store_nonconformance)
             fixture_key = {
                 "Controlled Item": "items",
                 "Material Lot": "lots",
                 "Shop Order": "orders",
+                "Work Package": "work_packages",
             }.get(doctype)
             if fixture_key and name in fixtures[fixture_key]:
                 return fixtures[fixture_key][name]
             raise AssertionError(f"unexpected get_doc: {doctype} {name}")
 
         frappe_module.get_doc = get_doc
+
+        work_package_module = types.ModuleType("ironwrap_roofing.work_package_api")
+
+        def lock_assignment(package, roof_job_id: str, assignment_id: str):
+            assignment = fixtures["job_assignments"].get(assignment_id)
+            if assignment is None or package.get("roof_job") != roof_job_id:
+                raise FakeValidationError("work_package_assignment_mismatch")
+            return dict(assignment)
+
+        def assert_package_current_and_unexpired(package) -> None:
+            if package.get("authority_error"):
+                raise FakeValidationError(package["authority_error"])
+
+        def assert_actor_is_assigned(assignment, actor_user: str) -> str:
+            if assignment.get("assigned_user") != actor_user:
+                raise FakePermissionError("work_package_actor_not_assigned")
+            return "Production direct assignment"
+
+        work_package_module._lock_assignment = lock_assignment
+        work_package_module._assert_package_current_and_unexpired = (
+            assert_package_current_and_unexpired
+        )
+        work_package_module._assert_actor_is_assigned = assert_actor_is_assigned
 
         def throw(message: str, *, exc):
             raise exc(message)
@@ -316,6 +536,7 @@ class ShopFabricationApiTests(unittest.TestCase):
                 "frappe": frappe_module,
                 "ironwrap_roofing.approval_receipt": approval_module,
                 "ironwrap_roofing.document_validation": validation_module,
+                "ironwrap_roofing.work_package_api": work_package_module,
             },
         ):
             spec.loader.exec_module(module)
@@ -820,6 +1041,203 @@ class ShopFabricationApiTests(unittest.TestCase):
         self.assertEqual(order.save_count, 0)
         self.assertEqual(order["status"], "Reserved")
         self.assertEqual(order["operations"], [])
+
+    def test_record_first_piece_outcome_derives_pass_and_starts_fabrication(self) -> None:
+        fixtures, order, lot, evidence = self.first_piece_ready_fixture()
+        first_piece_payload_json = json.dumps(
+            {
+                "action": "pass_to_fabrication",
+                "inspections": [
+                    {
+                        "line_no": 1,
+                        "allocation_id": "allocation-1",
+                        "operation_sequence": 1,
+                        "issued_quantity": "1",
+                        "measured_value": "2400",
+                        "measurement_unit": "mm",
+                        "evidence_item": "evidence-first-piece-1",
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        )
+        api, fixtures, db, context_calls = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_FIRST_PIECE_OUTCOME_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.first_piece_snapshot(api, fixtures, order, lot, evidence),
+            extra={"first_piece_payload_json": first_piece_payload_json},
+        )
+
+        result = api.record_first_piece_outcome("shop-1", "run-shop-0001")
+
+        self.assertEqual(result["shop_order"]["status"], "In Fabrication")
+        self.assertEqual(result["shop_order"]["first_piece_inspection_count"], 1)
+        self.assertEqual(order["fabrication_started_at"], "2026-07-30 10:05:00")
+        self.assertEqual(order["quality_hold_reason"], "")
+        self.assertEqual(
+            order["inspections"],
+            [
+                {
+                    "inspection_type": "First Piece",
+                    "line_no": 1,
+                    "allocation_id": "allocation-1",
+                    "operation_sequence": 1,
+                    "result": "Pass",
+                    "nominal_value": "2400",
+                    "measured_value": "2400",
+                    "tolerance_value": "3",
+                    "measurement_unit": "mm",
+                    "measured_result": "2400 mm; nominal 2400 +/- 3 mm",
+                    "inspected_by": "production@example.com",
+                    "inspected_at": "2026-07-30 10:05:00",
+                    "evidence_item": "evidence-first-piece-1",
+                    "needs_review": 0,
+                }
+            ],
+        )
+        self.assertEqual(order.save_count, 1)
+        self.assertEqual(lot["reserved_quantity"], "7")
+        self.assertEqual(lot["consumed_quantity"], "1")
+        self.assertEqual(order["material_allocations"][0]["issued_quantity"], "1")
+        self.assertEqual(context_calls, [("material_lot", "lot-1"), ("shop_order", "shop-1")])
+        for table in (
+            "`tabMaterial Lot`",
+            "`tabEvidence Item`",
+            "`tabJob Assignment`",
+            "`tabCrew Profile`",
+        ):
+            self.assertTrue(any(table in query for query, _ in db.lock_queries), table)
+
+    def test_record_first_piece_outcome_records_failure_and_holds_order(self) -> None:
+        fixtures, order, lot, evidence = self.first_piece_ready_fixture()
+        first_piece_payload_json = json.dumps(
+            {
+                "action": "fail_to_quality_hold",
+                "inspection": {
+                    "line_no": 1,
+                    "allocation_id": "allocation-1",
+                    "operation_sequence": 1,
+                    "issued_quantity": "1",
+                    "measured_value": "2404",
+                    "measurement_unit": "mm",
+                    "evidence_item": "evidence-first-piece-1",
+                },
+                "reason": "First-piece measurement requires review.",
+            },
+            separators=(",", ":"),
+        )
+        api, fixtures, _, context_calls = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_FIRST_PIECE_OUTCOME_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.first_piece_snapshot(api, fixtures, order, lot, evidence),
+            extra={"first_piece_payload_json": first_piece_payload_json},
+        )
+
+        result = api.record_first_piece_outcome("shop-1", "run-shop-0001")
+
+        self.assertEqual(result["shop_order"]["status"], "Quality Hold")
+        self.assertEqual(order["fabrication_started_at"], "")
+        self.assertEqual(
+            order["quality_hold_reason"], "First-piece measurement requires review."
+        )
+        self.assertEqual(order["inspections"][0]["result"], "Fail")
+        self.assertEqual(order["inspections"][0]["needs_review"], 1)
+        self.assertEqual(lot["status"], "Quarantined")
+        self.assertEqual(lot["condition_status"], "Accepted")
+        self.assertEqual(lot["reserved_quantity"], "7")
+        self.assertEqual(lot["consumed_quantity"], "1")
+        ncr_id = api._first_piece_ncr_id("run-shop-0001")
+        self.assertEqual(result["material_lot"]["status"], "Quarantined")
+        self.assertEqual(result["nonconformance"]["name"], ncr_id)
+        self.assertEqual(result["nonconformance"]["status"], "Contained")
+        self.assertEqual(fixtures["nonconformances"][ncr_id]["evidence_item"], evidence["name"])
+        self.assertEqual(order.save_count, 1)
+        self.assertEqual(lot.save_count, 1)
+        self.assertEqual(
+            context_calls,
+            [
+                ("material_lot", "lot-1"),
+                ("nonconformance", ncr_id),
+                ("shop_order", "shop-1"),
+            ],
+        )
+
+    def test_record_first_piece_outcome_rejects_missing_passes_and_self_inspection(self) -> None:
+        fixtures, order, lot, evidence = self.first_piece_ready_fixture()
+        order["lines"].append(
+            {
+                **order["lines"][0],
+                "line_no": 2,
+                "dimensions": "1800 mm",
+            }
+        )
+        order["material_allocations"].append(
+            {
+                **order["material_allocations"][0],
+                "allocation_id": "allocation-2",
+                "line_no": 2,
+            }
+        )
+        first_piece_payload_json = json.dumps(
+            {
+                "action": "pass_to_fabrication",
+                "inspections": [
+                    {
+                        "line_no": 1,
+                        "allocation_id": "allocation-1",
+                        "operation_sequence": 1,
+                        "issued_quantity": "1",
+                        "measured_value": "2400",
+                        "measurement_unit": "mm",
+                        "evidence_item": "evidence-first-piece-1",
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        )
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_FIRST_PIECE_OUTCOME_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.first_piece_snapshot(api, fixtures, order, lot, evidence),
+            extra={"first_piece_payload_json": first_piece_payload_json},
+        )
+
+        with self.assertRaisesRegex(FakeValidationError, "missing_first_piece_pass"):
+            api.record_first_piece_outcome("shop-1", "run-shop-0001")
+        self.assertEqual(order.save_count, 0)
+
+        order["lines"].pop()
+        order["material_allocations"].pop()
+        order["operations"][0]["operator"] = "production@example.com"
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_FIRST_PIECE_OUTCOME_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.first_piece_snapshot(api, fixtures, order, lot, evidence),
+            extra={"first_piece_payload_json": first_piece_payload_json},
+        )
+
+        with self.assertRaisesRegex(FakePermissionError, "non_independent_inspection"):
+            api.record_first_piece_outcome("shop-1", "run-shop-0001")
+        self.assertEqual(order.save_count, 0)
 
     def test_shop_command_needs_no_generic_hermes_run_permission(self) -> None:
         fixtures = self.fixture_data()

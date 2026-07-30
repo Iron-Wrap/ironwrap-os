@@ -33,6 +33,7 @@ const REQUEST_TO_DRY_RUN = Object.freeze({
   request_release_shop_order: "dry_run_release_shop_order",
   request_reserve_shop_order_materials: "dry_run_reserve_shop_order_materials",
   request_advance_shop_order_setup: "dry_run_advance_shop_order_setup",
+  request_record_first_piece_outcome: "dry_run_record_first_piece_outcome",
   request_create_job_assignment: "dry_run_job_assignment",
   request_create_change_order: "dry_run_change_order",
   request_transition_change_order: "dry_run_change_order_transition",
@@ -2028,6 +2029,44 @@ const ShopOrderSetupWriteInputSchema = ShopOrderSetupInputSchema.extend({
   expected_snapshot_sha256: ShopSnapshotHashSchema,
 }).strict();
 
+const ShopCanonicalDecimalSchema = z.string().regex(/^[0-9]+(?:\.[0-9]+)?$/);
+const ShopFirstPieceMeasurementUnitSchema = z.string()
+  .trim()
+  .min(1)
+  .max(140)
+  .regex(/^[^\x00\r\n]+$/);
+
+const ShopFirstPieceInspectionSchema = z.object({
+  line_no: z.number().int().min(1).max(10_000),
+  allocation_id: IdSchema.regex(/^[^\x00\r\n]+$/),
+  operation_sequence: z.number().int().min(1).max(50),
+  issued_quantity: ShopCanonicalDecimalSchema,
+  measured_value: ShopCanonicalDecimalSchema,
+  measurement_unit: ShopFirstPieceMeasurementUnitSchema,
+  evidence_item: IdSchema.regex(/^[^\x00\r\n]+$/),
+}).strict();
+
+const ShopOrderFirstPiecePayloadSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("pass_to_fabrication"),
+    inspections: z.array(ShopFirstPieceInspectionSchema).min(1).max(200),
+  }).strict(),
+  z.object({
+    action: z.literal("fail_to_quality_hold"),
+    inspection: ShopFirstPieceInspectionSchema,
+    reason: z.string().trim().min(1).max(4_000).regex(/^[^\x00\r\n]+$/),
+  }).strict(),
+]);
+
+const ShopOrderFirstPieceInputSchema = z.object({
+  shop_order_id: IdSchema,
+  first_piece_payload_json: z.string().trim().min(2).max(1_000_000),
+}).strict();
+
+const ShopOrderFirstPieceWriteInputSchema = ShopOrderFirstPieceInputSchema.extend({
+  expected_snapshot_sha256: ShopSnapshotHashSchema,
+}).strict();
+
 export function approvedWriteInputSchema(baseSchema) {
   const approvalShape = {
     request_text: z.string().trim().min(1).max(4000),
@@ -3908,6 +3947,70 @@ export function buildServer(config) {
           advanced: true,
           shop_order_id: args.shop_order_id,
           setup_action: dryRun.setup.action,
+        },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_record_first_piece_outcome",
+    {
+      title: "Dry Run Record First Piece Outcome",
+      description: "Preview one signed first-piece inspection outcome without writing.",
+      inputSchema: ShopOrderFirstPieceInputSchema,
+    },
+    async ({ shop_order_id, first_piece_payload_json }) => text(
+      await buildRecordFirstPieceOutcomePreview(config, shop_order_id, first_piece_payload_json),
+    ),
+  );
+
+  server.registerTool(
+    "request_record_first_piece_outcome",
+    {
+      title: "Request Record First Piece Outcome",
+      description: "Approved-write: record one signed first-piece outcome and transition the Shop Order to fabrication or Quality Hold.",
+      inputSchema: approvedWriteInputSchema(ShopOrderFirstPieceWriteInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const order = await readResource(config, "Shop Order", args.shop_order_id);
+      const dryRun = await buildRecordFirstPieceOutcomePreview(
+        config,
+        args.shop_order_id,
+        args.first_piece_payload_json,
+      );
+      assertSignedShopSnapshot(args, dryRun);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_record_first_piece_outcome",
+        target: { doctype: "Shop Order", name: args.shop_order_id },
+        roofJob: order.roof_job,
+        dryRun,
+        beforeSummary: summarizeShopOrder(order),
+        afterSummary: (result) => {
+          const outcome = result?.message ?? result ?? {};
+          return {
+            shop_order: outcome.shop_order ?? {},
+            ...(outcome.material_lot ? { material_lot: outcome.material_lot } : {}),
+            ...(outcome.nonconformance ? { nonconformance: outcome.nonconformance } : {}),
+          };
+        },
+        execute: () => erpPost(
+          config,
+          "/api/method/ironwrap_roofing.shop_fabrication_api.record_first_piece_outcome",
+          {
+            shop_order_id: args.shop_order_id,
+            hermes_run_id: args.run_id,
+          },
+        ),
+        responseExtra: {
+          first_piece_recorded: true,
+          shop_order_id: args.shop_order_id,
+          first_piece_action: dryRun.first_piece.action,
         },
       }));
     },
@@ -7631,6 +7734,18 @@ function parseShopSetupPayloadJson(raw) {
   return payload;
 }
 
+function parseShopFirstPiecePayloadJson(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("shop_first_piece_payload_invalid");
+  }
+  const result = ShopOrderFirstPiecePayloadSchema.safeParse(parsed);
+  if (!result.success) throw new Error("shop_first_piece_payload_invalid");
+  return result.data;
+}
+
 function controlledItemSnapshot(item) {
   return {
     controlled_item: snapshotValues(item, ["name", "controlled_item_id", "status", "modified"]),
@@ -7694,6 +7809,7 @@ function shopOrderSetupSnapshot(order) {
   const snapshot = shopOrderSnapshot(order);
   Object.assign(snapshot.shop_order, snapshotValues(order, [
     "setup_started_at",
+    "fabrication_started_at",
     "quality_hold_reason",
   ]));
   snapshot.operations = (Array.isArray(order.operations) ? order.operations : []).map((operation) => snapshotValues(operation, [
@@ -7706,6 +7822,136 @@ function shopOrderSetupSnapshot(order) {
     "completed_at",
     "notes",
   ]));
+  return snapshot;
+}
+
+function shopOrderFirstPieceSnapshot(order, lots = [], evidence = [], sources = {}, inspectorAuthority = {}) {
+  const snapshot = shopOrderSetupSnapshot(order);
+  snapshot.lines = (Array.isArray(order.lines) ? order.lines : []).map((line) => snapshotValues(line, [
+    "line_no",
+    "controlled_item",
+    "requested_quantity",
+    "accepted_quantity",
+    "billable_quantity",
+    "unit",
+    "dimensions",
+    "tolerance",
+    "orientation",
+    "invoice_basis",
+    "needs_review",
+  ]));
+  snapshot.material_allocations = (Array.isArray(order.material_allocations) ? order.material_allocations : []).map((allocation) => snapshotValues(allocation, [
+    "allocation_id",
+    "line_no",
+    "material_lot",
+    "reserved_quantity",
+    "issued_quantity",
+    "unit",
+    "status",
+    "needs_review",
+  ]));
+  snapshot.inspections = (Array.isArray(order.inspections) ? order.inspections : []).map((inspection) => snapshotValues(inspection, [
+    "inspection_type",
+    "line_no",
+    "allocation_id",
+    "operation_sequence",
+    "result",
+    "nominal_value",
+    "measured_value",
+    "tolerance_value",
+    "measurement_unit",
+    "measured_result",
+    "inspected_by",
+    "inspected_at",
+    "evidence_item",
+    "needs_review",
+  ]));
+  snapshot.material_lots = lots.map((lot) => snapshotValues(lot, [
+    "name",
+    "material_lot_id",
+    "roof_job",
+    "controlled_item",
+    "unit",
+    "status",
+    "available_quantity",
+    "reserved_quantity",
+    "consumed_quantity",
+    "modified",
+  ]));
+  snapshot.evidence = evidence.map((item) => snapshotValues(item, [
+    "name",
+    "evidence_id",
+    "roof_job",
+    "evidence_type",
+    "proof_owner",
+    "proof_slot",
+    "source_system",
+    "r2_key",
+    "content_checksum",
+    "checksum_algorithm",
+    "content_type",
+    "content_length",
+    "capture_actor",
+    "captured_at",
+    "sync_state",
+    "verified_at",
+    "verification_source",
+    "device_action_id",
+    "modified",
+  ]));
+  snapshot.source_records = {
+    material_takeoff: snapshotValues(sources.materialTakeoff, ["name", "roof_job", "status", "modified"]),
+    supplier_order: snapshotValues(sources.supplierOrder, ["name", "roof_job", "status", "modified"]),
+    work_package: snapshotValues(sources.workPackage, [
+      "name",
+      "work_package_id",
+      "roof_job",
+      "job_assignment",
+      "safety_plan",
+      "version",
+      "status",
+      "expires_at",
+      "acknowledged_by",
+      "acknowledged_at",
+      "started_at",
+      "modified",
+    ]),
+  };
+  snapshot.inspector_authority = {
+    authenticated_user: snapshotText(inspectorAuthority.authenticatedUser),
+    job_assignment: snapshotValues(inspectorAuthority.jobAssignment, [
+      "name",
+      "assignment_id",
+      "roof_job",
+      "assignment_type",
+      "status",
+      "crew_profile",
+      "assigned_user",
+      "scheduled_start",
+      "supersedes",
+      "modified",
+    ]),
+    crew_profile: snapshotValues(inspectorAuthority.crewProfile, [
+      "name",
+      "crew_profile_id",
+      "status",
+      "crew_type",
+      "competency_status",
+      "competency_checked_at",
+      "competency_expiry",
+      "equipment_status",
+      "equipment_checked_at",
+      "equipment_expiry",
+      "wcb_status",
+      "wcb_checked_at",
+      "wcb_expiry",
+      "active_stop",
+      "active_stop_at",
+      "active_stop_reason",
+      "modified",
+    ]),
+    assignment_role: snapshotText(inspectorAuthority.assignmentRole),
+  };
   return snapshot;
 }
 
@@ -7795,6 +8041,261 @@ function assertShopOrderReadyForSetupAction(order, shopOrderId, payload) {
   if (order.status !== "Quality Hold") throw new Error("shop_order_not_resumable_to_setup");
   if (hasRoute && payload.operations) throw new Error("shop_setup_route_already_exists");
   if (!hasRoute && !payload.operations) throw new Error("shop_setup_route_required");
+}
+
+function assertShopOrderReadyForFirstPieceOutcome(order, shopOrderId) {
+  if (!order || order.name !== shopOrderId || order.shop_order_id !== shopOrderId) {
+    throw new Error("shop_order_identity_mismatch");
+  }
+  if (order.status !== "Setup / First Piece") {
+    throw new Error("shop_order_not_ready_for_first_piece");
+  }
+}
+
+const FirstPieceDimensionPattern = /^([0-9]+(?:\.[0-9]+)?) ([A-Za-z][A-Za-z0-9/_-]{0,31})$/;
+const FirstPieceTolerancePattern = /^(?:±|\+\/-) ([0-9]+(?:\.[0-9]+)?) ([A-Za-z][A-Za-z0-9/_-]{0,31})$/;
+
+function parseFirstPieceDecimal(value, { allowZero, errorCode }) {
+  if (typeof value !== "string" || !/^[0-9]+(?:\.[0-9]+)?$/.test(value)) {
+    throw new Error(errorCode);
+  }
+  const [rawWhole, rawFraction = ""] = value.split(".");
+  const whole = rawWhole.replace(/^0+(?=\d)/, "");
+  const fraction = rawFraction.replace(/0+$/, "");
+  const significand = BigInt(`${whole}${fraction}`);
+  if (allowZero ? significand < 0n : significand <= 0n) {
+    throw new Error(errorCode);
+  }
+  return {
+    significand,
+    scale: fraction.length,
+    text: fraction ? `${whole}.${fraction}` : whole,
+  };
+}
+
+function parseFirstPieceStoredDecimal(value, { allowZero, errorCode }) {
+  if (typeof value === "boolean" || value == null) throw new Error(errorCode);
+  return parseFirstPieceDecimal(String(value), { allowZero, errorCode });
+}
+
+function firstPieceDecimalAtScale(value, scale) {
+  return value.significand * (10n ** BigInt(scale - value.scale));
+}
+
+function firstPieceWithinTolerance(measuredValue, nominalValue, toleranceValue) {
+  const scale = Math.max(measuredValue.scale, nominalValue.scale, toleranceValue.scale);
+  const difference = firstPieceDecimalAtScale(measuredValue, scale)
+    - firstPieceDecimalAtScale(nominalValue, scale);
+  const absoluteDifference = difference < 0n ? -difference : difference;
+  return absoluteDifference <= firstPieceDecimalAtScale(toleranceValue, scale);
+}
+
+function parseFirstPieceMeasurementSpec(line) {
+  const dimensions = typeof line?.dimensions === "string"
+    ? line.dimensions.match(FirstPieceDimensionPattern)
+    : null;
+  const tolerance = typeof line?.tolerance === "string"
+    ? line.tolerance.match(FirstPieceTolerancePattern)
+    : null;
+  if (!dimensions || !tolerance || dimensions[2].toLowerCase() !== tolerance[2].toLowerCase()) {
+    throw new Error("shop_first_piece_measurement_spec_invalid");
+  }
+  return {
+    nominalValue: parseFirstPieceDecimal(dimensions[1], {
+      allowZero: false,
+      errorCode: "shop_first_piece_measurement_spec_invalid",
+    }),
+    toleranceValue: parseFirstPieceDecimal(tolerance[1], {
+      allowZero: false,
+      errorCode: "shop_first_piece_measurement_spec_invalid",
+    }),
+    measurementUnit: dimensions[2].toLowerCase(),
+  };
+}
+
+function assertFirstPieceInspectionRows(order, payload, actorUser) {
+  const lines = Array.isArray(order.lines) ? order.lines : [];
+  const allocations = Array.isArray(order.material_allocations) ? order.material_allocations : [];
+  const operations = Array.isArray(order.operations) ? order.operations : [];
+  if (!lines.length || !allocations.length || !operations.length) {
+    throw new Error("shop_first_piece_context_missing");
+  }
+  const linesByNumber = new Map(lines.map((line) => [Number(line.line_no), line]));
+  const allocationsById = new Map(allocations.map((allocation) => [String(allocation.allocation_id), allocation]));
+  const operationsBySequence = new Map(operations.map((operation) => [Number(operation.sequence), operation]));
+  const requestedInspections = payload.action === "pass_to_fabrication"
+    ? payload.inspections
+    : [payload.inspection];
+  const seenLines = new Set();
+  const seenAllocations = new Set();
+  const inspections = [];
+
+  for (const allocation of allocations) {
+    if (allocation.status !== "Reserved") {
+      throw new Error("shop_first_piece_allocation_not_reserved");
+    }
+    const issuedQuantity = parseFirstPieceStoredDecimal(allocation.issued_quantity, {
+      allowZero: true,
+      errorCode: "shop_first_piece_allocation_quantity_invalid",
+    });
+    if (issuedQuantity.significand !== 0n) {
+      throw new Error("shop_first_piece_allocation_already_issued");
+    }
+  }
+
+  for (const inspection of requestedInspections) {
+    const line = linesByNumber.get(inspection.line_no);
+    if (!line) throw new Error("shop_first_piece_line_invalid");
+    const allocation = allocationsById.get(inspection.allocation_id);
+    if (!allocation) throw new Error("shop_first_piece_allocation_invalid");
+    if (Number(allocation.line_no) !== inspection.line_no) {
+      throw new Error("shop_first_piece_allocation_line_mismatch");
+    }
+    const operation = operationsBySequence.get(inspection.operation_sequence);
+    if (!operation) throw new Error("shop_first_piece_operation_invalid");
+    if (!new Set(["In Progress", "Complete"]).has(operation.status) || !operation.started_at) {
+      throw new Error("shop_first_piece_operation_not_started");
+    }
+    if (operation.operator === actorUser) {
+      throw new Error("shop_first_piece_inspector_not_independent");
+    }
+    if (seenLines.has(inspection.line_no)) {
+      throw new Error("shop_first_piece_duplicate_line");
+    }
+    if (seenAllocations.has(inspection.allocation_id)) {
+      throw new Error("shop_first_piece_duplicate_allocation");
+    }
+    seenLines.add(inspection.line_no);
+    seenAllocations.add(inspection.allocation_id);
+    const measurement = parseFirstPieceMeasurementSpec(line);
+    if (inspection.measurement_unit.toLowerCase() !== measurement.measurementUnit) {
+      throw new Error("shop_first_piece_measurement_unit_mismatch");
+    }
+    const issuedQuantity = parseFirstPieceDecimal(inspection.issued_quantity, {
+      allowZero: false,
+      errorCode: "shop_first_piece_issued_quantity_invalid",
+    });
+    const measuredValue = parseFirstPieceDecimal(inspection.measured_value, {
+      allowZero: true,
+      errorCode: "shop_first_piece_measured_value_invalid",
+    });
+    if (firstPieceWithinTolerance(measuredValue, measurement.nominalValue, measurement.toleranceValue)
+      !== (payload.action === "pass_to_fabrication")) {
+      throw new Error("shop_first_piece_tolerance_result_mismatch");
+    }
+    inspections.push({
+      ...inspection,
+      issued_quantity: issuedQuantity.text,
+      nominal_value: measurement.nominalValue.text,
+      measured_value: measuredValue.text,
+      tolerance_value: measurement.toleranceValue.text,
+      measurement_unit: measurement.measurementUnit,
+      measured_result: `${measuredValue.text} ${measurement.measurementUnit}; nominal ${measurement.nominalValue.text} +/- ${measurement.toleranceValue.text} ${measurement.measurementUnit}`,
+    });
+  }
+
+  if (payload.action === "pass_to_fabrication" && (
+    seenLines.size !== linesByNumber.size
+    || [...linesByNumber.keys()].some((lineNo) => !seenLines.has(lineNo))
+  )) {
+    throw new Error("shop_first_piece_passes_incomplete");
+  }
+  return { linesByNumber, allocations, inspections };
+}
+
+function assertFirstPieceMaterialLots(order, linesByNumber, allocations, inspections, lots) {
+  const lotsById = new Map();
+  for (const lot of lots) {
+    lotsById.set(String(lot.name ?? ""), lot);
+    lotsById.set(String(lot.material_lot_id ?? ""), lot);
+  }
+  for (const allocation of allocations) {
+    const materialLotId = String(allocation.material_lot ?? "");
+    const lot = lotsById.get(materialLotId);
+    const line = linesByNumber.get(Number(allocation.line_no));
+    if (!lot || !line || (lot.material_lot_id && lot.material_lot_id !== materialLotId)) {
+      throw new Error("shop_first_piece_lot_mismatch");
+    }
+    if (lot.roof_job !== order.roof_job
+      || lot.controlled_item !== line.controlled_item
+      || allocation.unit !== line.unit
+      || lot.unit !== line.unit) {
+      throw new Error("shop_first_piece_lot_mismatch");
+    }
+    if (lot.status !== "Reserved") throw new Error("shop_first_piece_lot_not_reserved");
+  }
+  const issuedByLot = new Map();
+  for (const inspection of inspections) {
+    const allocation = allocations.find(({ allocation_id }) => allocation_id === inspection.allocation_id);
+    const lotId = String(allocation?.material_lot ?? "");
+    const prior = issuedByLot.get(lotId) ?? { significand: 0n, scale: 0 };
+    const issued = parseFirstPieceDecimal(inspection.issued_quantity, {
+      allowZero: false,
+      errorCode: "shop_first_piece_issued_quantity_invalid",
+    });
+    const allocationReserved = parseFirstPieceStoredDecimal(allocation?.reserved_quantity, {
+      allowZero: false,
+      errorCode: "shop_first_piece_allocation_quantity_invalid",
+    });
+    if (firstPieceDecimalAtScale(issued, Math.max(issued.scale, allocationReserved.scale))
+      > firstPieceDecimalAtScale(allocationReserved, Math.max(issued.scale, allocationReserved.scale))) {
+      throw new Error("shop_first_piece_issue_exceeds_reservation");
+    }
+    const scale = Math.max(prior.scale, issued.scale);
+    issuedByLot.set(lotId, {
+      significand: firstPieceDecimalAtScale(prior, scale) + firstPieceDecimalAtScale(issued, scale),
+      scale,
+    });
+  }
+  for (const [lotId, issuedQuantity] of issuedByLot) {
+    const lot = lotsById.get(lotId);
+    const lotReserved = parseFirstPieceStoredDecimal(lot?.reserved_quantity, {
+      allowZero: false,
+      errorCode: "shop_first_piece_lot_reservation_invalid",
+    });
+    const scale = Math.max(issuedQuantity.scale, lotReserved.scale);
+    if (firstPieceDecimalAtScale(issuedQuantity, scale)
+      > firstPieceDecimalAtScale(lotReserved, scale)) {
+      throw new Error("shop_first_piece_issue_exceeds_lot_reservation");
+    }
+  }
+}
+
+function assertFirstPieceEvidence(order, evidence, evidenceIds, actorUser) {
+  for (const [index, item] of evidence.entries()) {
+    const evidenceId = evidenceIds[index];
+    if (!item || (item.name !== evidenceId && item.evidence_id !== evidenceId)) {
+      throw new Error("shop_first_piece_evidence_identity_mismatch");
+    }
+    assertLinkedRoofJob(order.roof_job, item, "shop_first_piece");
+    if (item.proof_slot !== "Production" || !["Photo", "Measurement Report"].includes(item.evidence_type)) {
+      throw new Error("shop_first_piece_evidence_semantic_invalid");
+    }
+    if (item.sync_state !== "Verified") throw new Error("shop_first_piece_evidence_not_verified");
+    if (item.capture_actor !== actorUser || item.proof_owner !== actorUser) {
+      throw new Error("shop_first_piece_evidence_actor_mismatch");
+    }
+    if (item.source_system !== "ironwrap-pwa" || !item.device_action_id
+      || !item.r2_key || !item.captured_at || !item.verified_at
+      || !item.verification_source || !item.content_type) {
+      throw new Error("shop_first_piece_evidence_provenance_invalid");
+    }
+    if (item.checksum_algorithm !== "SHA-256"
+      || !/^[0-9a-f]{64}$/.test(String(item.content_checksum ?? ""))) {
+      throw new Error("shop_first_piece_evidence_provenance_invalid");
+    }
+    if (!Number.isInteger(Number(item.content_length)) || Number(item.content_length) <= 0) {
+      throw new Error("shop_first_piece_evidence_provenance_invalid");
+    }
+  }
+}
+
+function firstPieceAssignmentRole(jobAssignment, crewProfile, actorUser) {
+  if (jobAssignment.assigned_user === actorUser) return "Production direct assignment";
+  const crewMember = (Array.isArray(crewProfile.members) ? crewProfile.members : [])
+    .find((member) => member.crew_user === actorUser && Number(member.active) === 1);
+  if (!crewMember?.crew_role) throw new Error("shop_first_piece_actor_not_assigned");
+  return `Production crew assignment (${crewMember.crew_role})`;
 }
 
 function assertSignedShopSnapshot(args, preview) {
@@ -8003,6 +8504,104 @@ async function buildAdvanceShopOrderSetupPreview(config, shopOrderId, setupPaylo
               operator,
             })),
           }),
+    },
+  };
+}
+
+async function buildRecordFirstPieceOutcomePreview(config, shopOrderId, firstPiecePayloadJson) {
+  const payload = parseShopFirstPiecePayloadJson(firstPiecePayloadJson);
+  const order = await readResource(config, "Shop Order", shopOrderId);
+  assertShopOrderReadyForFirstPieceOutcome(order, shopOrderId);
+  const { linesByNumber, allocations, inspections } = assertFirstPieceInspectionRows(
+    order,
+    payload,
+    config.actorUser,
+  );
+  const materialLotIds = [...new Set(allocations.map((allocation) => String(allocation.material_lot ?? "")))].sort();
+  if (materialLotIds.some((materialLotId) => !materialLotId)) {
+    throw new Error("shop_first_piece_lot_mismatch");
+  }
+  const evidenceIds = [...new Set(inspections.map((inspection) => inspection.evidence_item))].sort();
+  const [materialTakeoff, supplierOrder, workPackage, lots, evidence] = await Promise.all([
+    readResource(config, "Material Takeoff", order.material_takeoff),
+    readResource(config, "Supplier Order", order.supplier_order),
+    readResource(config, "Work Package", order.work_package),
+    Promise.all(materialLotIds.map((materialLotId) => readResource(config, "Material Lot", materialLotId))),
+    Promise.all(evidenceIds.map((evidenceId) => readResource(config, "Evidence Item", evidenceId))),
+  ]);
+  assertShopSourceRecord(materialTakeoff, {
+    doctype: "Material Takeoff",
+    name: order.material_takeoff,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Approved"]),
+  });
+  assertShopSourceRecord(supplierOrder, {
+    doctype: "Supplier Order",
+    name: order.supplier_order,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Partially Received", "Received"]),
+  });
+  assertShopSourceRecord(workPackage, {
+    doctype: "Work Package",
+    name: order.work_package,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Released", "Acknowledged", "In Progress"]),
+  });
+  const jobAssignmentId = String(workPackage.job_assignment ?? "");
+  if (!jobAssignmentId) throw new Error("shop_first_piece_job_assignment_missing");
+  const jobAssignment = await readResource(config, "Job Assignment", jobAssignmentId);
+  const crewProfileId = String(jobAssignment.crew_profile ?? "");
+  if (!crewProfileId) throw new Error("shop_first_piece_crew_profile_missing");
+  const crewProfile = await readResource(config, "Crew Profile", crewProfileId);
+  if (!jobAssignment.name || !crewProfile.name) throw new Error("shop_first_piece_authority_not_found");
+  const inspectorAuthority = {
+    authenticatedUser: config.actorUser,
+    jobAssignment,
+    crewProfile,
+    assignmentRole: firstPieceAssignmentRole(jobAssignment, crewProfile, config.actorUser),
+  };
+  assertFirstPieceMaterialLots(order, linesByNumber, allocations, inspections, lots);
+  assertFirstPieceEvidence(order, evidence, evidenceIds, config.actorUser);
+  const toStatus = payload.action === "pass_to_fabrication" ? "In Fabrication" : "Quality Hold";
+  const result = payload.action === "pass_to_fabrication" ? "Pass" : "Fail";
+  return {
+    would_write: false,
+    required_tool: "request_record_first_piece_outcome",
+    target: { doctype: "Shop Order", name: shopOrderId },
+    before: summarizeShopOrder(order),
+    source_statuses: {
+      material_takeoff: materialTakeoff.status ?? "",
+      supplier_order: supplierOrder.status ?? "",
+      work_package: workPackage.status ?? "",
+    },
+    expected_snapshot_sha256: digest(shopOrderFirstPieceSnapshot(order, lots, evidence, {
+      materialTakeoff,
+      supplierOrder,
+      workPackage,
+    }, inspectorAuthority)),
+    first_piece: {
+      action: payload.action,
+      from_status: order.status,
+      to_status: toStatus,
+      inspections: inspections.map((inspection) => ({
+        inspection_type: "First Piece",
+        line_no: inspection.line_no,
+        allocation_id: inspection.allocation_id,
+        operation_sequence: inspection.operation_sequence,
+        result,
+        nominal_value: inspection.nominal_value,
+        measured_value: inspection.measured_value,
+        tolerance_value: inspection.tolerance_value,
+        measurement_unit: inspection.measurement_unit,
+        measured_result: inspection.measured_result,
+        inspected_by: config.actorUser,
+        inspected_at: "Frappe server time at execution",
+        evidence_item: inspection.evidence_item,
+        needs_review: result === "Pass" ? 0 : 1,
+      })),
+      ...(payload.action === "pass_to_fabrication"
+        ? { fabrication_started_at: "Frappe server time at execution" }
+        : { reason: payload.reason, quality_hold_reason: payload.reason }),
     },
   };
 }

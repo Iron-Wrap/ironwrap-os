@@ -192,11 +192,11 @@ Target gaps:
 | Preconstruction | seven gates plus current Crew/Safety/Access authority fences, including owner-attributed waivers | complete multi-domain readiness and issuer-backed freshness | stale permit/WCB/weather injection |
 | Procurement | supplier quote/order records | vendor onboarding, PO transmit/ack, substitution, three-way match | duplicate/short/backorder test |
 | Inventory | Partial: signed controlled-item approval, lot receipt, and Shop Order reservation | bin/remnant/count/valuation plus use and reconciliation | receive-reserve-use-reconcile |
-| Shop | Partial: signed release, reservation, setup route, and early Quality Hold | cutting/fabrication, work-centre tooling, yield, label, maintenance, handoff | physical synthetic/real shop batch |
+| Shop | Partial: signed release, reservation, setup route, and independent first-piece pass/hold into fabrication | cutting/fabrication events, work-centre tooling, yield, label, maintenance, final QC, and handoff | physical synthetic/real shop batch |
 | Scheduling | assignment and approval ledger | complete constraint solver and autonomous reschedule | conflict/weather/material test |
 | Human field work | assignment-scoped Work Package, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
 | Safety | plan/acknowledgement plus Crew Profile competence, WCB, equipment, and active-stop release fences | individual equipment/incident/rescue registers and real-world proof | stop/emergency drill |
-| Quality | Partial: early signed Quality Hold during shop setup | ITP, first/final inspection, NCR, quarantine, disposition | seeded defect containment |
+| Quality | Partial: signed independent first-piece pass or Quality Hold with verified evidence | ITP, final inspection, NCR, quarantine, and disposition | seeded defect containment |
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |
 | Closeout | completion/warranty/review records | inspection, as-built, registration, accounting and archive loop | real closeout and recovery |
 | Warranty/service | warranty packet | service case, diagnosis, responsibility, remedy, recovery | callback end to end |

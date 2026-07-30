@@ -51,6 +51,133 @@ function materialLotFixture(overrides = {}) {
   };
 }
 
+function firstPieceOrderFixture(overrides = {}) {
+  return shopOrderFixture({
+    status: "Setup / First Piece",
+    setup_started_at: "2026-07-30 10:10:00",
+    fabrication_started_at: "",
+    quality_hold_reason: "",
+    lines: [{
+      line_no: 1,
+      controlled_item: "item-1",
+      requested_quantity: 8,
+      accepted_quantity: 0,
+      billable_quantity: 0,
+      unit: "each",
+      dimensions: "2400 mm",
+      tolerance: "+/- 3 mm",
+      orientation: "North",
+      invoice_basis: "Each",
+      needs_review: 0,
+    }],
+    material_allocations: [{
+      allocation_id: "alloc-1",
+      line_no: 1,
+      material_lot: "lot-a",
+      reserved_quantity: 3,
+      issued_quantity: 0,
+      unit: "each",
+      status: "Reserved",
+      needs_review: 0,
+    }],
+    operations: [{
+      sequence: 1,
+      operation: "Cut panel",
+      machine_tooling: "Shear 1 / 24ga blade",
+      operator: "fabricator@example.com",
+      status: "In Progress",
+      started_at: "2026-07-30 10:12:00",
+      completed_at: "",
+      notes: "",
+    }],
+    inspections: [],
+    ...overrides,
+  });
+}
+
+function verifiedEvidenceFixture(overrides = {}) {
+  return {
+    name: "evidence-1",
+    evidence_id: "evidence-1",
+    roof_job: "JOB-1",
+    evidence_type: "Photo",
+    proof_owner: "production@example.com",
+    proof_slot: "Production",
+    source_system: "ironwrap-pwa",
+    r2_key: "evidence/JOB-1/evidence-1.jpg",
+    content_checksum: "a".repeat(64),
+    checksum_algorithm: "SHA-256",
+    content_type: "image/jpeg",
+    content_length: 1_024,
+    capture_actor: "production@example.com",
+    captured_at: "2026-07-30 10:14:00",
+    sync_state: "Verified",
+    verified_at: "2026-07-30 10:15:00",
+    verification_source: "r2-ingest",
+    device_action_id: "device-action-1",
+    modified: "2026-07-30 10:15:00",
+    ...overrides,
+  };
+}
+
+function firstPieceWorkPackageFixture(overrides = {}) {
+  return {
+    name: "package-1",
+    work_package_id: "package-1",
+    roof_job: "JOB-1",
+    job_assignment: "assignment-1",
+    safety_plan: "safety-plan-1",
+    version: 1,
+    status: "Released",
+    expires_at: "2099-12-31 23:59:59",
+    acknowledged_by: "production@example.com",
+    acknowledged_at: "2026-07-30 10:10:00",
+    started_at: "2026-07-30 10:11:00",
+    modified: "2026-07-30 10:11:00",
+    ...overrides,
+  };
+}
+
+function firstPieceJobAssignmentFixture(overrides = {}) {
+  return {
+    name: "assignment-1",
+    assignment_id: "assignment-1",
+    roof_job: "JOB-1",
+    assignment_type: "Production",
+    status: "In Progress",
+    crew_profile: "crew-1",
+    assigned_user: "production@example.com",
+    scheduled_start: "2026-07-30 09:00:00",
+    supersedes: "",
+    modified: "2026-07-30 10:10:00",
+    ...overrides,
+  };
+}
+
+function firstPieceCrewProfileFixture(overrides = {}) {
+  return {
+    name: "crew-1",
+    crew_profile_id: "crew-1",
+    status: "Active",
+    crew_type: "Internal",
+    competency_status: "Current",
+    competency_checked_at: "2026-07-01 09:00:00",
+    competency_expiry: "2099-12-31",
+    equipment_status: "Safe",
+    equipment_checked_at: "2026-07-01 09:00:00",
+    equipment_expiry: "2099-12-31",
+    wcb_status: "Not Required",
+    wcb_checked_at: "",
+    wcb_expiry: "",
+    active_stop: 0,
+    active_stop_at: "",
+    active_stop_reason: "",
+    modified: "2026-07-30 10:10:00",
+    members: [],
+    ...overrides,
+  };
+}
+
 function approvalArgs({
   privateKey,
   dryRun,
@@ -412,6 +539,511 @@ test("shop setup rejects control characters before reading a preview", async (t)
     );
   }
   assert.equal(reads, 0);
+});
+
+test("first-piece pass stores one signed outcome and calls only the bounded Frappe method", async (t) => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const actorUser = "production@example.com";
+  const firstPiecePayloadJson = JSON.stringify({
+    action: "pass_to_fabrication",
+    inspections: [{
+      line_no: 1,
+      allocation_id: "alloc-1",
+      operation_sequence: 1,
+      issued_quantity: "1",
+      measured_value: "2400.0",
+      measurement_unit: "mm",
+      evidence_item: "evidence-1",
+    }],
+  });
+  const order = firstPieceOrderFixture();
+  const takeoff = { name: "takeoff-1", roof_job: "JOB-1", status: "Approved" };
+  const supplierOrder = { name: "supplier-1", roof_job: "JOB-1", status: "Received" };
+  const workPackage = firstPieceWorkPackageFixture();
+  const jobAssignment = firstPieceJobAssignmentFixture();
+  const crewProfile = firstPieceCrewProfileFixture();
+  const lot = materialLotFixture({ status: "Reserved", available_quantity: 3, reserved_quantity: 3 });
+  const evidence = verifiedEvidenceFixture();
+  const requests = [];
+  let hermesRunInsert = null;
+  let hermesRunCreates = 0;
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: true,
+    agentRole: "production-controller",
+    actorUser,
+    approverId: "owner@example.com",
+    dryRunSigningKey: "p".repeat(32),
+    approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_record_first_piece_outcome", "request_record_first_piece_outcome"],
+  });
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const target = String(url);
+    const method = init.method ?? "GET";
+    requests.push({ method, target, body: init.body });
+    if (method === "GET" && target.includes("Shop%20Order/shop-1")) return Response.json({ data: order });
+    if (method === "GET" && target.includes("Material%20Takeoff/takeoff-1")) return Response.json({ data: takeoff });
+    if (method === "GET" && target.includes("Supplier%20Order/supplier-1")) return Response.json({ data: supplierOrder });
+    if (method === "GET" && target.includes("Work%20Package/package-1")) return Response.json({ data: workPackage });
+    if (method === "GET" && target.includes("Job%20Assignment/assignment-1")) return Response.json({ data: jobAssignment });
+    if (method === "GET" && target.includes("Crew%20Profile/crew-1")) return Response.json({ data: crewProfile });
+    if (method === "GET" && target.includes("Material%20Lot/lot-a")) return Response.json({ data: lot });
+    if (method === "GET" && target.includes("Evidence%20Item/evidence-1")) return Response.json({ data: evidence });
+    if (method === "GET" && target.includes("Hermes%20Run/run-first-piece-0001")) {
+      return new Response("missing", { status: 404 });
+    }
+    if (method === "POST" && target.endsWith("/api/resource/Hermes%20Run")) {
+      hermesRunCreates += 1;
+      hermesRunInsert = JSON.parse(init.body);
+      return Response.json({ data: { name: "run-first-piece-0001" } });
+    }
+    if (method === "POST" && target.endsWith("/api/method/ironwrap_roofing.shop_fabrication_api.record_first_piece_outcome")) {
+      return Response.json({
+        message: {
+          shop_order: { shop_order_id: "shop-1", status: "In Fabrication" },
+          hermes_run_id: "run-first-piece-0001",
+        },
+      });
+    }
+    if (method === "PUT" && target.includes("Hermes%20Run/run-first-piece-0001")) {
+      return Response.json({ data: { ok: true } });
+    }
+    throw new Error(`unexpected request ${method} ${target}`);
+  });
+
+  const dryRun = parseToolPayload(
+    await server._registeredTools.dry_run_record_first_piece_outcome.handler({
+      shop_order_id: "shop-1",
+      first_piece_payload_json: firstPiecePayloadJson,
+    }),
+  );
+  assert.equal(dryRun.first_piece.to_status, "In Fabrication");
+  assert.equal(dryRun.first_piece.fabrication_started_at, "Frappe server time at execution");
+  assert.deepEqual(dryRun.first_piece.inspections, [{
+    inspection_type: "First Piece",
+    line_no: 1,
+    allocation_id: "alloc-1",
+    operation_sequence: 1,
+    result: "Pass",
+    nominal_value: "2400",
+    measured_value: "2400",
+    tolerance_value: "3",
+    measurement_unit: "mm",
+    measured_result: "2400 mm; nominal 2400 +/- 3 mm",
+    inspected_by: actorUser,
+    inspected_at: "Frappe server time at execution",
+    evidence_item: "evidence-1",
+    needs_review: 0,
+  }]);
+  const args = approvalArgs({
+    privateKey,
+    dryRun,
+    runId: "run-first-piece-0001",
+    args: { shop_order_id: "shop-1", first_piece_payload_json: firstPiecePayloadJson },
+    agentRole: "production-controller",
+    actorUser,
+  });
+
+  const result = parseToolPayload(
+    await server._registeredTools.request_record_first_piece_outcome.handler(args),
+  );
+
+  assert.equal(result.first_piece_recorded, true);
+  assert.equal(result.first_piece_action, "pass_to_fabrication");
+  assert.equal(result.result.message.shop_order.status, "In Fabrication");
+  assert.equal(hermesRunInsert.tool_name, "request_record_first_piece_outcome");
+  assert.equal(JSON.parse(hermesRunInsert.tool_args_json).first_piece_payload_json, firstPiecePayloadJson);
+  assert.equal(
+    JSON.parse(hermesRunInsert.tool_args_json).expected_snapshot_sha256,
+    dryRun.expected_snapshot_sha256,
+  );
+  assert.equal(
+    requests.some(({ method, target }) => method === "PUT" && target.includes("/api/resource/Shop%20Order/")),
+    false,
+  );
+
+  const staleArgs = approvalArgs({
+    privateKey,
+    dryRun,
+    runId: "run-first-piece-stale-0001",
+    args: { shop_order_id: "shop-1", first_piece_payload_json: firstPiecePayloadJson },
+    agentRole: "production-controller",
+    actorUser,
+    expectedSnapshotSha256: "0".repeat(64),
+  });
+  await assert.rejects(
+    async () => await server._registeredTools.request_record_first_piece_outcome.handler(staleArgs),
+  );
+  assert.equal(hermesRunCreates, 1, "a stale signed snapshot must fail before another Hermes Run");
+});
+
+test("first-piece failure is a signed Quality Hold with a derived failed inspection", async (t) => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const actorUser = "production@example.com";
+  const firstPiecePayloadJson = JSON.stringify({
+    action: "fail_to_quality_hold",
+    inspection: {
+      line_no: 1,
+      allocation_id: "alloc-1",
+      operation_sequence: 1,
+      issued_quantity: "1",
+      measured_value: "2404",
+      measurement_unit: "mm",
+      evidence_item: "evidence-1",
+    },
+    reason: "First piece needs correction before fabrication.",
+  });
+  const order = firstPieceOrderFixture();
+  const workPackage = firstPieceWorkPackageFixture();
+  const jobAssignment = firstPieceJobAssignmentFixture();
+  const crewProfile = firstPieceCrewProfileFixture();
+  const requests = [];
+  let hermesRunInsert = null;
+  let hermesRunFinalize = null;
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: true,
+    agentRole: "production-controller",
+    actorUser,
+    approverId: "owner@example.com",
+    dryRunSigningKey: "p".repeat(32),
+    approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_record_first_piece_outcome", "request_record_first_piece_outcome"],
+  });
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const target = String(url);
+    const method = init.method ?? "GET";
+    requests.push({ method, target, body: init.body });
+    if (target.includes("Shop%20Order/shop-1")) return Response.json({ data: order });
+    if (target.includes("Material%20Takeoff/takeoff-1")) return Response.json({ data: { name: "takeoff-1", roof_job: "JOB-1", status: "Approved" } });
+    if (target.includes("Supplier%20Order/supplier-1")) return Response.json({ data: { name: "supplier-1", roof_job: "JOB-1", status: "Received" } });
+    if (target.includes("Work%20Package/package-1")) return Response.json({ data: workPackage });
+    if (target.includes("Job%20Assignment/assignment-1")) return Response.json({ data: jobAssignment });
+    if (target.includes("Crew%20Profile/crew-1")) return Response.json({ data: crewProfile });
+    if (target.includes("Material%20Lot/lot-a")) return Response.json({ data: materialLotFixture({ status: "Reserved", available_quantity: 3, reserved_quantity: 3 }) });
+    if (target.includes("Evidence%20Item/evidence-1")) return Response.json({ data: verifiedEvidenceFixture() });
+    if (method === "GET" && target.includes("Hermes%20Run/run-first-piece-fail-0001")) {
+      return new Response("missing", { status: 404 });
+    }
+    if (method === "POST" && target.endsWith("/api/resource/Hermes%20Run")) {
+      hermesRunInsert = JSON.parse(init.body);
+      return Response.json({ data: { name: "run-first-piece-fail-0001" } });
+    }
+    if (method === "POST" && target.endsWith("/api/method/ironwrap_roofing.shop_fabrication_api.record_first_piece_outcome")) {
+      return Response.json({
+        message: {
+          shop_order: { shop_order_id: "shop-1", status: "Quality Hold" },
+          material_lot: { name: "lot-a", material_lot_id: "lot-a", status: "Quarantined" },
+          nonconformance: {
+            name: "ncr:first-piece:1234",
+            nonconformance_id: "ncr:first-piece:1234",
+            status: "Contained",
+            shop_order: "shop-1",
+            material_lot: "lot-a",
+            evidence_item: "evidence-1",
+          },
+          hermes_run_id: "run-first-piece-fail-0001",
+        },
+      });
+    }
+    if (method === "PUT" && target.includes("Hermes%20Run/run-first-piece-fail-0001")) {
+      hermesRunFinalize = JSON.parse(init.body);
+      return Response.json({ data: { ok: true } });
+    }
+    throw new Error(`unexpected request ${target}`);
+  });
+
+  const dryRun = parseToolPayload(
+    await server._registeredTools.dry_run_record_first_piece_outcome.handler({
+      shop_order_id: "shop-1",
+      first_piece_payload_json: firstPiecePayloadJson,
+    }),
+  );
+  assert.equal(dryRun.first_piece.to_status, "Quality Hold");
+  assert.equal(dryRun.first_piece.quality_hold_reason, "First piece needs correction before fabrication.");
+  assert.equal(dryRun.first_piece.inspections[0].result, "Fail");
+  assert.equal(dryRun.first_piece.inspections[0].measured_result, "2404 mm; nominal 2400 +/- 3 mm");
+  assert.equal(dryRun.first_piece.inspections[0].needs_review, 1);
+  const args = approvalArgs({
+    privateKey,
+    dryRun,
+    runId: "run-first-piece-fail-0001",
+    args: { shop_order_id: "shop-1", first_piece_payload_json: firstPiecePayloadJson },
+    agentRole: "production-controller",
+    actorUser,
+  });
+  const result = parseToolPayload(
+    await server._registeredTools.request_record_first_piece_outcome.handler(args),
+  );
+  assert.equal(result.first_piece_action, "fail_to_quality_hold");
+  assert.equal(result.result.message.shop_order.status, "Quality Hold");
+  assert.equal(hermesRunInsert.tool_name, "request_record_first_piece_outcome");
+  assert.equal(JSON.parse(hermesRunInsert.tool_args_json).first_piece_payload_json, firstPiecePayloadJson);
+  assert.deepEqual(JSON.parse(hermesRunFinalize.after_target_ids), {
+    shop_order: { shop_order_id: "shop-1", status: "Quality Hold" },
+    material_lot: { name: "lot-a", material_lot_id: "lot-a", status: "Quarantined" },
+    nonconformance: {
+      name: "ncr:first-piece:1234",
+      nonconformance_id: "ncr:first-piece:1234",
+      status: "Contained",
+      shop_order: "shop-1",
+      material_lot: "lot-a",
+      evidence_item: "evidence-1",
+    },
+  });
+  assert.equal(
+    requests.some(({ method, target }) => method === "PUT" && target.includes("/api/resource/Shop%20Order/")),
+    false,
+  );
+});
+
+test("first-piece dry run rejects malformed controls before reading Frappe", async (t) => {
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: false,
+    agentRole: "production-controller",
+    actorUser: "production@example.com",
+    dryRunSigningKey: "p".repeat(32),
+    allowedTools: ["dry_run_record_first_piece_outcome"],
+  });
+  let reads = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    reads += 1;
+    throw new Error("invalid first-piece payload must fail before reading Frappe");
+  });
+
+  for (const firstPiecePayloadJson of [
+    JSON.stringify({
+      action: "pass_to_fabrication",
+      inspections: [{
+        line_no: 1,
+        allocation_id: "alloc-1",
+        operation_sequence: 1,
+        issued_quantity: 1,
+        measured_value: "2400",
+        measurement_unit: "mm",
+        evidence_item: "evidence-1",
+      }],
+    }),
+    JSON.stringify({
+      action: "pass_to_fabrication",
+      inspections: [{
+        line_no: 1,
+        allocation_id: "alloc-1",
+        operation_sequence: 1,
+        issued_quantity: "1",
+        measured_value: "2e3",
+        measurement_unit: "mm",
+        evidence_item: "evidence\u0000-1",
+      }],
+    }),
+    JSON.stringify({
+      action: "fail_to_quality_hold",
+      inspection: {
+        line_no: 1,
+        allocation_id: "alloc-1",
+        operation_sequence: 1,
+        issued_quantity: "1",
+        measured_value: "2400",
+        measurement_unit: "mm\n",
+        evidence_item: "evidence-1",
+      },
+      reason: "Rework\rrequired",
+    }),
+  ]) {
+    await assert.rejects(
+      async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({
+        shop_order_id: "shop-1",
+        first_piece_payload_json: firstPiecePayloadJson,
+      }),
+      /shop_first_piece_payload_invalid/,
+    );
+  }
+  assert.equal(reads, 0);
+});
+
+test("first-piece dry run rejects invalid state, lineage, independence, and evidence", async (t) => {
+  const actorUser = "production@example.com";
+  let order = firstPieceOrderFixture();
+  let lot = materialLotFixture({ status: "Reserved", available_quantity: 3, reserved_quantity: 3 });
+  let evidence = verifiedEvidenceFixture();
+  const workPackage = firstPieceWorkPackageFixture();
+  const jobAssignment = firstPieceJobAssignmentFixture();
+  const crewProfile = firstPieceCrewProfileFixture();
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: false,
+    agentRole: "production-controller",
+    actorUser,
+    dryRunSigningKey: "p".repeat(32),
+    allowedTools: ["dry_run_record_first_piece_outcome"],
+  });
+  t.mock.method(globalThis, "fetch", async (url) => {
+    const target = String(url);
+    if (target.includes("Shop%20Order/shop-1")) return Response.json({ data: order });
+    if (target.includes("Material%20Takeoff/takeoff-1")) return Response.json({ data: { name: "takeoff-1", roof_job: "JOB-1", status: "Approved" } });
+    if (target.includes("Supplier%20Order/supplier-1")) return Response.json({ data: { name: "supplier-1", roof_job: "JOB-1", status: "Received" } });
+    if (target.includes("Work%20Package/package-1")) return Response.json({ data: workPackage });
+    if (target.includes("Job%20Assignment/assignment-1")) return Response.json({ data: jobAssignment });
+    if (target.includes("Crew%20Profile/crew-1")) return Response.json({ data: crewProfile });
+    if (target.includes("Material%20Lot/lot-a")) return Response.json({ data: lot });
+    if (target.includes("Evidence%20Item/evidence-1")) return Response.json({ data: evidence });
+    throw new Error(`unexpected request ${target}`);
+  });
+  const validPayload = (inspection = {}) => JSON.stringify({
+    action: "pass_to_fabrication",
+    inspections: [{
+      line_no: 1,
+      allocation_id: "alloc-1",
+      operation_sequence: 1,
+      issued_quantity: "1",
+      measured_value: "2400",
+      measurement_unit: "mm",
+      evidence_item: "evidence-1",
+      ...inspection,
+    }],
+  });
+
+  order = firstPieceOrderFixture({ status: "Reserved" });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload() }),
+    /shop_order_not_ready_for_first_piece/,
+  );
+
+  order = firstPieceOrderFixture({
+    lines: [
+      ...firstPieceOrderFixture().lines,
+      { ...firstPieceOrderFixture().lines[0], line_no: 2, controlled_item: "item-2" },
+    ],
+    material_allocations: [
+      ...firstPieceOrderFixture().material_allocations,
+      { ...firstPieceOrderFixture().material_allocations[0], allocation_id: "alloc-2", line_no: 2, material_lot: "lot-b" },
+    ],
+  });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload() }),
+    /shop_first_piece_passes_incomplete/,
+  );
+
+  order = firstPieceOrderFixture({ operations: [{ ...firstPieceOrderFixture().operations[0], operator: actorUser }] });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload() }),
+    /shop_first_piece_inspector_not_independent/,
+  );
+
+  order = firstPieceOrderFixture({ operations: [{ ...firstPieceOrderFixture().operations[0], status: "Ready", started_at: "" }] });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload() }),
+    /shop_first_piece_operation_not_started/,
+  );
+
+  order = firstPieceOrderFixture({ material_allocations: [{ ...firstPieceOrderFixture().material_allocations[0], issued_quantity: 1 }] });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload() }),
+    /shop_first_piece_allocation_already_issued/,
+  );
+
+  order = firstPieceOrderFixture();
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload({ measured_value: "2404" }) }),
+    /shop_first_piece_tolerance_result_mismatch/,
+  );
+
+  const withinToleranceFailurePayload = JSON.stringify({
+    action: "fail_to_quality_hold",
+    inspection: {
+      line_no: 1,
+      allocation_id: "alloc-1",
+      operation_sequence: 1,
+      issued_quantity: "1",
+      measured_value: "2400",
+      measurement_unit: "mm",
+      evidence_item: "evidence-1",
+    },
+    reason: "A conforming part must not be held as a failed first piece.",
+  });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: withinToleranceFailurePayload }),
+    /shop_first_piece_tolerance_result_mismatch/,
+  );
+
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload({ measurement_unit: "in" }) }),
+    /shop_first_piece_measurement_unit_mismatch/,
+  );
+
+  order = firstPieceOrderFixture();
+  lot = materialLotFixture({ status: "Available", available_quantity: 3, reserved_quantity: 3 });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload() }),
+    /shop_first_piece_lot_not_reserved/,
+  );
+
+  lot = materialLotFixture({ status: "Reserved", available_quantity: 3, reserved_quantity: 3 });
+  evidence = verifiedEvidenceFixture();
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload({ issued_quantity: "4" }) }),
+    /shop_first_piece_issue_exceeds_reservation/,
+  );
+
+  order = firstPieceOrderFixture({
+    lines: [
+      ...firstPieceOrderFixture().lines,
+      { ...firstPieceOrderFixture().lines[0], line_no: 2 },
+    ],
+    material_allocations: [
+      ...firstPieceOrderFixture().material_allocations,
+      { ...firstPieceOrderFixture().material_allocations[0], allocation_id: "alloc-2", line_no: 2 },
+    ],
+  });
+  const overdrawLotPayload = JSON.stringify({
+    action: "pass_to_fabrication",
+    inspections: [
+      {
+        line_no: 1,
+        allocation_id: "alloc-1",
+        operation_sequence: 1,
+        issued_quantity: "2",
+        measured_value: "2400",
+        measurement_unit: "mm",
+        evidence_item: "evidence-1",
+      },
+      {
+        line_no: 2,
+        allocation_id: "alloc-2",
+        operation_sequence: 1,
+        issued_quantity: "2",
+        measured_value: "2400",
+        measurement_unit: "mm",
+        evidence_item: "evidence-1",
+      },
+    ],
+  });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: overdrawLotPayload }),
+    /shop_first_piece_issue_exceeds_lot_reservation/,
+  );
+
+  order = firstPieceOrderFixture();
+  evidence = verifiedEvidenceFixture({ proof_slot: "Quality" });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload() }),
+    /shop_first_piece_evidence_semantic_invalid/,
+  );
+
+  evidence = verifiedEvidenceFixture({ sync_state: "Queued" });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload() }),
+    /shop_first_piece_evidence_not_verified/,
+  );
 });
 
 test("release-shop-order request fails on supplier-order drift before creating a Hermes Run", async (t) => {

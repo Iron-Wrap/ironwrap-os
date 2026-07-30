@@ -2782,6 +2782,40 @@ def _shop_inspections(
                 "First Piece and Final inspections must be independent of the operation's fabricator",
                 "inspections",
             )
+        if inspection_type == "First Piece":
+            require_fields(
+                row,
+                "nominal_value",
+                "measured_value",
+                "tolerance_value",
+                "measurement_unit",
+            )
+            require_nonnegative(row, "measured_value", required=True)
+            nominal = _decimal(row, "nominal_value", required=True)
+            measured = _decimal(row, "measured_value", required=True)
+            tolerance = _decimal(row, "tolerance_value", required=True)
+            if nominal is None or nominal <= 0 or tolerance is None or tolerance <= 0:
+                raise PolicyViolation(
+                    "invalid_first_piece_measurement",
+                    "first-piece nominal and tolerance values must be greater than zero",
+                    "inspections",
+                )
+            if measured is None or _blank(_get(row, "measurement_unit")):
+                raise PolicyViolation(
+                    "invalid_first_piece_measurement",
+                    "first-piece measurement requires a value and unit",
+                    "inspections",
+                )
+            if (
+                _get(operations[int(operation_sequence)], "status")
+                not in {"In Progress", "Complete"}
+                or _blank(_get(operations[int(operation_sequence)], "started_at"))
+            ):
+                raise PolicyViolation(
+                    "first_piece_operation_not_started",
+                    "a first-piece inspection requires a started in-progress or completed operation",
+                    "inspections",
+                )
         result = _get(row, "result")
         if result not in {"Pass", "Fail"}:
             raise PolicyViolation(
@@ -2789,6 +2823,21 @@ def _shop_inspections(
                 "inspection result must be Pass or Fail",
                 "inspections",
             )
+        if inspection_type == "First Piece":
+            within_tolerance = abs(measured - nominal) <= tolerance
+            if (result == "Pass") != within_tolerance:
+                raise PolicyViolation(
+                    "first_piece_tolerance_result_mismatch",
+                    "first-piece result must match the recorded measurement tolerance",
+                    "inspections",
+                )
+            expected_needs_review = 0 if result == "Pass" else 1
+            if _get(row, "needs_review") not in {expected_needs_review, bool(expected_needs_review)}:
+                raise PolicyViolation(
+                    "first_piece_review_state_mismatch",
+                    "first-piece review state must match its result",
+                    "inspections",
+                )
         if result == "Pass" and inspection_type == "First Piece":
             first_piece_passes.add(int(line_no))
         if result == "Pass" and inspection_type == "Final":

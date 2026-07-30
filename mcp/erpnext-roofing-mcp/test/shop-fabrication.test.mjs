@@ -238,6 +238,182 @@ test("reserve-shop-order request stores the exact approved args in Hermes Run an
   assert.equal(hermesRunCreates, 1, "a stale signed snapshot must fail before creating another Hermes Run");
 });
 
+test("advance-shop-order-setup sends one signed route only to the bounded Frappe method", async (t) => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const actorUser = "production@example.com";
+  const setupPayloadJson = JSON.stringify({
+    action: "begin_setup",
+    operations: [{
+      sequence: 1,
+      operation: "Cut panel",
+      machine_tooling: "Shear 1 / 24ga blade",
+      operator: "fabricator@example.com",
+    }],
+  });
+  const order = shopOrderFixture({ status: "Reserved", operations: [] });
+  const takeoff = { name: "takeoff-1", roof_job: "JOB-1", status: "Approved" };
+  const supplierOrder = { name: "supplier-1", roof_job: "JOB-1", status: "Received" };
+  const workPackage = { name: "package-1", roof_job: "JOB-1", status: "Released" };
+  const requests = [];
+  let hermesRunInsert = null;
+  let hermesRunCreates = 0;
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: true,
+    agentRole: "production-controller",
+    actorUser,
+    approverId: "owner@example.com",
+    dryRunSigningKey: "p".repeat(32),
+    approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_advance_shop_order_setup", "request_advance_shop_order_setup"],
+  });
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const target = String(url);
+    const method = init.method ?? "GET";
+    requests.push({ method, target, body: init.body });
+    if (method === "GET" && target.includes("Shop%20Order/shop-1")) return Response.json({ data: order });
+    if (method === "GET" && target.includes("Material%20Takeoff/takeoff-1")) return Response.json({ data: takeoff });
+    if (method === "GET" && target.includes("Supplier%20Order/supplier-1")) return Response.json({ data: supplierOrder });
+    if (method === "GET" && target.includes("Work%20Package/package-1")) return Response.json({ data: workPackage });
+    if (method === "GET" && target.includes("Hermes%20Run/run-shop-setup-0001")) {
+      return new Response("missing", { status: 404 });
+    }
+    if (method === "POST" && target.endsWith("/api/resource/Hermes%20Run")) {
+      hermesRunCreates += 1;
+      hermesRunInsert = JSON.parse(init.body);
+      return Response.json({ data: { name: "run-shop-setup-0001" } });
+    }
+    if (method === "POST" && target.endsWith("/api/method/ironwrap_roofing.shop_fabrication_api.advance_shop_order_setup")) {
+      return Response.json({
+        message: {
+          shop_order: { shop_order_id: "shop-1", status: "Setup / First Piece" },
+          hermes_run_id: "run-shop-setup-0001",
+        },
+      });
+    }
+    if (method === "PUT" && target.includes("Hermes%20Run/run-shop-setup-0001")) {
+      return Response.json({ data: { ok: true } });
+    }
+    throw new Error(`unexpected request ${method} ${target}`);
+  });
+
+  const dryRun = parseToolPayload(
+    await server._registeredTools.dry_run_advance_shop_order_setup.handler({
+      shop_order_id: "shop-1",
+      setup_payload_json: setupPayloadJson,
+    }),
+  );
+  assert.equal(dryRun.setup.to_status, "Setup / First Piece");
+  assert.deepEqual(dryRun.setup.operations, [
+    {
+      sequence: 1,
+      operation: "Cut panel",
+      machine_tooling: "Shear 1 / 24ga blade",
+      operator: "fabricator@example.com",
+    },
+  ]);
+  const args = approvalArgs({
+    privateKey,
+    dryRun,
+    runId: "run-shop-setup-0001",
+    args: { shop_order_id: "shop-1", setup_payload_json: setupPayloadJson },
+    agentRole: "production-controller",
+    actorUser,
+  });
+
+  const result = parseToolPayload(
+    await server._registeredTools.request_advance_shop_order_setup.handler(args),
+  );
+
+  assert.equal(result.advanced, true);
+  assert.equal(result.setup_action, "begin_setup");
+  assert.equal(result.result.message.shop_order.status, "Setup / First Piece");
+  assert.equal(hermesRunInsert.tool_name, "request_advance_shop_order_setup");
+  assert.equal(JSON.parse(hermesRunInsert.tool_args_json).setup_payload_json, setupPayloadJson);
+  assert.equal(
+    JSON.parse(hermesRunInsert.tool_args_json).expected_snapshot_sha256,
+    dryRun.expected_snapshot_sha256,
+  );
+  assert.equal(
+    requests.some(({ method, target }) => method === "PUT" && target.includes("/api/resource/Shop%20Order/")),
+    false,
+  );
+
+  const staleArgs = approvalArgs({
+    privateKey,
+    dryRun,
+    runId: "run-shop-setup-stale-0001",
+    args: { shop_order_id: "shop-1", setup_payload_json: setupPayloadJson },
+    agentRole: "production-controller",
+    actorUser,
+    expectedSnapshotSha256: "0".repeat(64),
+  });
+  await assert.rejects(
+    async () => await server._registeredTools.request_advance_shop_order_setup.handler(staleArgs),
+  );
+  assert.equal(hermesRunCreates, 1, "a stale signed snapshot must fail before another Hermes Run");
+});
+
+test("shop setup rejects control characters before reading a preview", async (t) => {
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: false,
+    agentRole: "production-controller",
+    actorUser: "production@example.com",
+    dryRunSigningKey: "p".repeat(32),
+    allowedTools: ["dry_run_advance_shop_order_setup"],
+  });
+  let reads = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    reads += 1;
+    throw new Error("invalid setup must fail before reading Frappe");
+  });
+
+  for (const setupPayloadJson of [
+    JSON.stringify({
+      action: "begin_setup",
+      operations: [{
+        sequence: 1,
+        operation: "Cut\npanels",
+        machine_tooling: "Shear A",
+        operator: "operator@example.com",
+      }],
+    }),
+    JSON.stringify({
+      action: "begin_setup",
+      operations: [{
+        sequence: 1,
+        operation: "Cut panels",
+        machine_tooling: "Shear\rA",
+        operator: "operator@example.com",
+      }],
+    }),
+    JSON.stringify({
+      action: "begin_setup",
+      operations: [{
+        sequence: 1,
+        operation: "Cut panels",
+        machine_tooling: "Shear A",
+        operator: "operator\u0000@example.com",
+      }],
+    }),
+    JSON.stringify({ action: "place_quality_hold", reason: "Awaiting\ncheck." }),
+  ]) {
+    await assert.rejects(
+      async () => await server._registeredTools.dry_run_advance_shop_order_setup.handler({
+        shop_order_id: "shop-1",
+        setup_payload_json: setupPayloadJson,
+      }),
+      /shop_setup_payload_invalid/,
+    );
+  }
+  assert.equal(reads, 0);
+});
+
 test("release-shop-order request fails on supplier-order drift before creating a Hermes Run", async (t) => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const actorUser = "production@example.com";

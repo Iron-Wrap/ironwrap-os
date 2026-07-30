@@ -24,8 +24,8 @@ Fresh checks on 2026-07-30 against this migration branch established:
 | Contract | Result |
 |---|---|
 | Documentation | 43 registered documents; authority, privacy paths, review metadata, and internal links validated |
-| Frappe model | 54 DocTypes: 44 top-level and 10 child |
-| Hermes policy | 8 roles validated against 159 implemented MCP tools |
+| Frappe model | 64 DocTypes: 48 top-level and 16 child |
+| Hermes policy | 8 roles validated against 169 implemented MCP tools |
 | Tenant isolation config | 2 tenant configs validated |
 | Newo release config | 5 staged tools, 31 operations, 20 production blockers represented |
 | Deployment contract | 198 checks passed, 0 failed |
@@ -77,6 +77,7 @@ Implemented model families:
 - payment milestone, completion, warranty, review request;
 - communication consent/event;
 - versioned Work Package, step, hold point, and immutable Work Package event records;
+- controlled item, material lot, shop order, nonconformance;
 - reconciliation, automation incident, Hermes run, tenant export, white-label tenant, market watch.
 
 Material target gaps:
@@ -190,12 +191,12 @@ Target gaps:
 | Contract | acceptance/evidence | correct agreement selection, cancellation, e-sign, authority | residential/commercial scenarios |
 | Preconstruction | seven gates plus current Crew/Safety/Access authority fences, including owner-attributed waivers | complete multi-domain readiness and issuer-backed freshness | stale permit/WCB/weather injection |
 | Procurement | supplier quote/order records | vendor onboarding, PO transmit/ack, substitution, three-way match | duplicate/short/backorder test |
-| Inventory | none beyond order receipt summary | item/lot/bin/reservation/remnant/count/valuation | receive-reserve-use-reconcile |
-| Shop | no work-centre model | routing, machines, tooling, QC, yield, label, maintenance | physical synthetic/real shop batch |
+| Inventory | Partial: signed controlled-item approval, lot receipt, and Shop Order reservation | bin/remnant/count/valuation plus use and reconciliation | receive-reserve-use-reconcile |
+| Shop | Partial: signed release, reservation, setup route, and early Quality Hold | cutting/fabrication, work-centre tooling, yield, label, maintenance, handoff | physical synthetic/real shop batch |
 | Scheduling | assignment and approval ledger | complete constraint solver and autonomous reschedule | conflict/weather/material test |
 | Human field work | assignment-scoped Work Package, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
 | Safety | plan/acknowledgement plus Crew Profile competence, WCB, equipment, and active-stop release fences | individual equipment/incident/rescue registers and real-world proof | stop/emergency drill |
-| Quality | completion/evidence | ITP, inspections, NCR, quarantine, disposition | seeded defect containment |
+| Quality | Partial: early signed Quality Hold during shop setup | ITP, first/final inspection, NCR, quarantine, disposition | seeded defect containment |
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |
 | Closeout | completion/warranty/review records | inspection, as-built, registration, accounting and archive loop | real closeout and recovery |
 | Warranty/service | warranty packet | service case, diagnosis, responsibility, remedy, recovery | callback end to end |

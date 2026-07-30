@@ -90,7 +90,10 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Field": CREATE_OWN,
         "IronWrap Closeout": READ,
     },
-    "Hermes Run": {"IronWrap Support": WRITE},
+    "Hermes Run": {
+        "IronWrap Production": READ,
+        "IronWrap Support": WRITE,
+    },
     "Instant Estimate Session": {
         "IronWrap Sales": WRITE,
         "IronWrap Estimator": WRITE,

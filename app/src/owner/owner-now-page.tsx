@@ -21,8 +21,9 @@ import type {
   MeasurementIntakeOwnerExceptionsResponse,
   OwnerException,
   OwnerNowResponse,
+  OwnerRuntimeResponse,
 } from "./owner-contracts";
-import { loadMeasurementIntakeExceptions, loadOwnerNow } from "./owner-api";
+import { loadMeasurementIntakeExceptions, loadOwnerNow, loadOwnerRuntime } from "./owner-api";
 import {
   buildDecisionLanes,
   canOpenJob,
@@ -52,6 +53,11 @@ function OwnerNowContent() {
     queryKey: ["measurement-intake-exceptions", session.tenant.id, session.user.id],
     queryFn: () => loadMeasurementIntakeExceptions(),
   });
+  const runtimeQuery = useQuery({
+    queryKey: ["owner-runtime", session.tenant.id, session.user.id],
+    queryFn: () => loadOwnerRuntime(),
+    enabled: false,
+  });
   const model = query.data;
 
   if (!model && query.isPending) return <OwnerNowSkeleton />;
@@ -68,6 +74,10 @@ function OwnerNowContent() {
       measurementLoading={measurementQuery.isPending}
       measurementRefreshFailed={measurementQuery.isError}
       onRetryMeasurements={() => void measurementQuery.refetch()}
+      runtime={runtimeQuery.data}
+      runtimeChecking={runtimeQuery.isFetching}
+      runtimeFailed={runtimeQuery.isError}
+      onCheckRuntime={() => void runtimeQuery.refetch()}
     />
   );
 }
@@ -81,6 +91,10 @@ function OwnerNowScreen({
   measurementLoading,
   measurementRefreshFailed,
   onRetryMeasurements,
+  runtime,
+  runtimeChecking,
+  runtimeFailed,
+  onCheckRuntime,
 }: {
   model: OwnerNowResponse;
   locale: OwnerDateFormatOptions;
@@ -90,6 +104,10 @@ function OwnerNowScreen({
   measurementLoading: boolean;
   measurementRefreshFailed: boolean;
   onRetryMeasurements: () => void;
+  runtime: OwnerRuntimeResponse | undefined;
+  runtimeChecking: boolean;
+  runtimeFailed: boolean;
+  onCheckRuntime: () => void;
 }) {
   const dueTimingAvailable = !model.stale_fields.includes("exceptions.due_at");
   const lanes = buildDecisionLanes(model.exceptions, { dueTimingAvailable });
@@ -132,6 +150,13 @@ function OwnerNowScreen({
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start">
         <main className="min-w-0 space-y-8">
           <DecisionSummary model={model} />
+          <RuntimeTruthPanel
+            data={runtime}
+            checking={runtimeChecking}
+            failed={runtimeFailed}
+            locale={locale}
+            onCheck={onCheckRuntime}
+          />
           <MeasurementIntakeExceptionsPanel
             data={measurementExceptions}
             loading={measurementLoading}
@@ -159,6 +184,146 @@ function OwnerNowScreen({
           <DataConfidence model={model} locale={locale} />
         </aside>
       </div>
+    </section>
+  );
+}
+
+function RuntimeTruthPanel({
+  data,
+  checking,
+  failed,
+  locale,
+  onCheck,
+}: {
+  data: OwnerRuntimeResponse | undefined;
+  checking: boolean;
+  failed: boolean;
+  locale: OwnerDateFormatOptions;
+  onCheck: () => void;
+}) {
+  const actionLabel = checking
+    ? "Checking runtime truth"
+    : data
+      ? "Refresh runtime truth"
+      : failed
+        ? "Retry runtime truth"
+        : "Check runtime truth";
+  if (!data) {
+    return (
+      <section className="border-y border-border py-5" aria-labelledby="runtime-truth-heading">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 id="runtime-truth-heading" className="text-xl font-black tracking-[-0.025em]">
+              Runtime truth
+            </h2>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
+              Run a bounded server-side readiness and operations read. It changes no provider or job
+              state.
+            </p>
+            {failed ? (
+              <p className="mt-2 text-sm font-semibold text-warning" role="status">
+                The runtime read was unavailable. Retry does not change operating state.
+              </p>
+            ) : null}
+          </div>
+          <Button variant="outline" size="compact" busy={checking} onClick={onCheck}>
+            <RotateCcw aria-hidden="true" />
+            {actionLabel}
+          </Button>
+        </div>
+      </section>
+    );
+  }
+
+  const failedChecks = data.readiness.checks.filter((check) => !check.ok);
+  const readyChecks = data.readiness.checks.length - failedChecks.length;
+  const heartbeat = data.operations.heartbeat;
+  const heartbeatState = !heartbeat
+    ? "No heartbeat"
+    : heartbeat.fresh && heartbeat.reconciled
+      ? "Fresh"
+      : "Attention";
+  const quickBooksState = !data.operations.quickbooks_receipts.available
+    ? "No receipt"
+    : data.operations.quickbooks_receipts.fresh
+      ? "Fresh"
+      : "Attention";
+  const metrics = [
+    { label: "Readiness groups", value: `${readyChecks}/${data.readiness.checks.length}` },
+    { label: "Operations", value: data.operations.status === "ok" ? "OK" : "Degraded" },
+    { label: "Heartbeat", value: heartbeatState },
+    { label: "Open dead letters", value: String(data.operations.counts.open_dead_letters) },
+    { label: "Stuck envelopes", value: String(data.operations.counts.stuck) },
+    { label: "Frappe errors", value: String(data.operations.counts.frappe_errors) },
+    {
+      label: "Replay failures",
+      value: String(data.operations.counts.replay_failed + data.operations.counts.replay_stuck),
+    },
+    {
+      label: `Audit failures observed (${data.operations.audit_failure_window_hours}h, max 20)`,
+      value: String(data.operations.audit_failures_observed),
+    },
+    { label: "QuickBooks receipts", value: quickBooksState },
+  ];
+  const generatedAt = safeFormattedDate(data.read_model_generated_at, locale);
+  const heartbeatAt = heartbeat ? safeFormattedDate(heartbeat.ran_at, locale) : null;
+
+  return (
+    <section className="border-y border-border py-5" aria-labelledby="runtime-truth-heading">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 id="runtime-truth-heading" className="text-xl font-black tracking-[-0.025em]">
+              Runtime truth
+            </h2>
+            <span
+              className={`inline-flex items-center gap-1.5 text-sm font-bold ${data.status === "ready" ? "text-ok" : "text-warning"}`}
+            >
+              <span
+                className={`size-1.5 rounded-full ${data.status === "ready" ? "bg-ok" : "bg-warning"}`}
+                aria-hidden="true"
+              />
+              {data.status === "ready" ? "Ready" : "Attention"}
+            </span>
+          </div>
+          <p className="mt-1 text-sm leading-6 text-muted">
+            {generatedAt ? `Read ${generatedAt}. ` : ""}
+            This is a server read, not deployment or business-acceptance proof.
+          </p>
+        </div>
+        <Button variant="outline" size="compact" busy={checking} onClick={onCheck}>
+          <RotateCcw aria-hidden="true" />
+          {actionLabel}
+        </Button>
+      </header>
+
+      {failed ? (
+        <p className="mt-3 text-sm text-warning" role="status">
+          Showing the previous runtime read because the latest check failed.
+        </p>
+      ) : null}
+
+      <dl className="mt-4 grid gap-x-6 gap-y-3 border-y border-border py-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
+        {metrics.map((metric) => (
+          <div key={metric.label}>
+            <dt className="text-muted">{metric.label}</dt>
+            <dd className="mt-0.5 font-bold text-foreground">{metric.value}</dd>
+          </div>
+        ))}
+      </dl>
+      {heartbeatAt ? (
+        <p className="mt-3 text-sm leading-6 text-muted">Latest heartbeat: {heartbeatAt}.</p>
+      ) : null}
+      {failedChecks.length > 0 ? (
+        <p className="mt-3 text-sm leading-6 text-muted">
+          Readiness attention: {failedChecks.map((check) => check.id.replace(/_/g, " ")).join(", ")}
+          .
+        </p>
+      ) : (
+        <p className="mt-3 text-sm leading-6 text-muted">
+          All bounded readiness groups reported ready in this read.
+        </p>
+      )}
     </section>
   );
 }

@@ -96,6 +96,7 @@ import {
   projectMeasurementIntakeOwnerException,
 } from "./measurement-intake-store.ts";
 import { buildNewoOperationsReadModel } from "./newo-operations-read-model.ts";
+import { buildOwnerRuntimeReadModel } from "./operations.ts";
 
 const MAX_ADMIN_BODY_BYTES = 8 * 1024;
 
@@ -592,6 +593,17 @@ export async function handleAuthenticatedRoute(
         { error: "measurement_intake_exception_store_unavailable" },
         502,
       );
+    }
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/owner/runtime") {
+    if (!officeRole(auth))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    try {
+      // This is an explicit, server-side owner/ops read. It deliberately omits
+      // raw pointers, audit entries, provider responses, and admin credentials.
+      return privateAppJson(await buildOwnerRuntimeReadModel(env));
+    } catch {
+      return privateAppJson({ error: "owner_runtime_unavailable" }, 502);
     }
   }
   if (req.method === "GET" && url.pathname === "/api/v1/newo/operations") {

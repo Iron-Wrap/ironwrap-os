@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   loadMeasurementIntakeExceptions,
   loadOwnerNow,
+  loadOwnerRuntime,
   measurementIntakeExceptionsPath,
   ownerNowPath,
+  ownerRuntimePath,
 } from "./owner-api";
 
 function ownerNowPayload() {
@@ -48,6 +50,49 @@ function measurementExceptionsPayload() {
         updated_at: "2026-07-16T12:00:00.000Z",
       },
     ],
+  };
+}
+
+function ownerRuntimePayload() {
+  return {
+    version: 1,
+    read_model_generated_at: "2026-07-10T12:01:00.000Z",
+    status: "attention",
+    readiness: {
+      status: "not_ready",
+      checks: [
+        { id: "owned_persistence", ok: true },
+        { id: "queue", ok: true },
+        { id: "core_auth", ok: true },
+        { id: "provider_delivery", ok: true },
+        { id: "office_bff", ok: false },
+        { id: "customer_portal", ok: true },
+        { id: "production_schedule", ok: true },
+        { id: "public_estimate", ok: true },
+        { id: "newo", ok: true },
+      ],
+    },
+    operations: {
+      status: "degraded",
+      heartbeat: null,
+      counts: {
+        open_dead_letters: 1,
+        pending: 0,
+        stuck: 0,
+        frappe_errors: 0,
+        replay_failed: 0,
+        replay_stuck: 0,
+      },
+      audit_failures_observed: 0,
+      audit_failure_window_hours: 24,
+      quickbooks_receipts: {
+        available: false,
+        fresh: null,
+        age_seconds: null,
+        events_count: null,
+        replay_count: null,
+      },
+    },
   };
 }
 
@@ -95,5 +140,16 @@ describe("Owner Now API client", () => {
     await expect(loadMeasurementIntakeExceptions(fetcher)).rejects.toMatchObject({
       code: "invalid_response",
     });
+  });
+
+  it("uses the explicit, read-only owner runtime endpoint", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(ownerRuntimePayload()));
+
+    await loadOwnerRuntime(fetcher);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      ownerRuntimePath,
+      expect.objectContaining({ method: "GET", credentials: "same-origin", cache: "no-store" }),
+    );
   });
 });

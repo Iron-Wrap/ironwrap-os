@@ -3,11 +3,14 @@ import { API_PATHS } from "../lib/api-paths";
 import {
   measurementIntakeOwnerExceptionsResponseSchema,
   ownerNowResponseSchema,
+  ownerRuntimeResponseSchema,
   type MeasurementIntakeOwnerExceptionsResponse,
   type OwnerNowResponse,
+  type OwnerRuntimeResponse,
 } from "./owner-contracts";
 
 export const ownerNowPath = "/api/v1/owner/now";
+export const ownerRuntimePath = API_PATHS.ownerRuntime;
 export const measurementIntakeExceptionsPath = API_PATHS.ownerMeasurementIntakeExceptions;
 
 export async function loadOwnerNow(fetcher: typeof fetch = fetch): Promise<OwnerNowResponse> {
@@ -24,6 +27,16 @@ export async function loadMeasurementIntakeExceptions(
   return await apiRequest({
     path: measurementIntakeExceptionsPath,
     schema: measurementIntakeOwnerExceptionsResponseSchema,
+    fetcher,
+  });
+}
+
+export async function loadOwnerRuntime(
+  fetcher: typeof fetch = fetch,
+): Promise<OwnerRuntimeResponse> {
+  return await apiRequest({
+    path: ownerRuntimePath,
+    schema: ownerRuntimeResponseSchema,
     fetcher,
   });
 }

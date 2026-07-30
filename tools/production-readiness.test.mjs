@@ -347,7 +347,7 @@ const REQUIRED_D1_TABLES = [
   "customer_portal_links", "customer_portal_access_throttles", "measurement_intake_receipts",
   "production_schedule_approval_requests", "production_schedule_approval_request_events",
   "public_estimate_rate_limits", "governed_transitions", "governed_transition_outbox",
-  "governed_transition_outbox_events",
+  "governed_transition_outbox_events", "field_work_package_actions",
 ];
 
 const REQUIRED_D1_TRIGGER_BINDINGS = [
@@ -1440,6 +1440,14 @@ test("D1 backup fails before upload when the governed-transition outbox evidence
   await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
 });
 
+test("D1 backup fails before upload when the field Work Package action ledger is missing", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { missingTable: "field_work_package_actions" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required production table: field_work_package_actions/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
 test("D1 backup fails before upload when an invariant trigger is missing", async (t) => {
   const mock = await mockD1BackupEnvironment(t, { missingTrigger: "prevent_lead_ack_receipts_delete" });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
@@ -1605,6 +1613,14 @@ test("D1 recovery rejects an export missing the governed-transition outbox evide
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /missing required production table: governed_transition_outbox_events/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
+test("D1 recovery rejects an export missing the field Work Package action ledger", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { missingTable: "field_work_package_actions" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required production table: field_work_package_actions/);
   await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
 });
 

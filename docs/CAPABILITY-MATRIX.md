@@ -24,18 +24,18 @@ Fresh checks on 2026-07-30 against this migration branch established:
 | Contract | Result |
 |---|---|
 | Documentation | 43 registered documents; authority, privacy paths, review metadata, and internal links validated |
-| Frappe model | 50 DocTypes: 42 top-level and 8 child |
+| Frappe model | 54 DocTypes: 44 top-level and 10 child |
 | Hermes policy | 8 roles validated against 159 implemented MCP tools |
 | Tenant isolation config | 2 tenant configs validated |
 | Newo release config | 5 staged tools, 31 operations, 20 production blockers represented |
 | Deployment contract | 198 checks passed, 0 failed |
-| D1 backup/restore contract | 29 required production tables and approval-ledger invariants validated by the deployment verifier |
-| D1 migration chain | 26 migrations applied to an isolated local database |
-| PWA | 199 unit tests; typecheck, lint, format, build, distribution, and Lighthouse assertions passed |
-| PWA browser | 12 Playwright tests passed; 3 WebGL estimator cases were skipped by the configured suite |
-| Worker | 244 tests, typecheck, and explicit top-level-environment dry-run bundle passed |
+| D1 backup/restore contract | 33 required production tables and 43 invariant-trigger bindings validated by the deployment verifier |
+| D1 migration chain | 28 migrations applied to an isolated local database |
+| PWA | 209 unit tests; typecheck, lint, format, build, and distribution checks passed |
+| PWA browser | 15 Playwright tests passed; 3 WebGL estimator cases were skipped by the configured suite |
+| Worker | 257 tests, typecheck, and explicit top-level-environment dry-run bundle passed |
 | MCP | 100 tests across Frappe, bus, and Newo servers passed |
-| Frappe | 92 unit tests, Ruff, compile, and wheel build passed |
+| Frappe | 100 unit tests passed |
 | Deployment/recovery tools | 72 tests passed |
 | Production Node dependencies | `npm audit --omit=dev` reported zero known vulnerabilities for app, Worker, and all three MCP packages |
 
@@ -52,7 +52,7 @@ Implemented:
   work.
 - Raw-first intake for lead, photo, measurement, estimate, QuickBooks, and Newo paths.
 - D1 envelopes, audit, dead letter, source counts, heartbeat, dedup, replay, auth, field action,
-  approval, portal, measurement, rate-limit, outbox, and Newo ledgers.
+  field Work Package action, approval, portal, measurement, rate-limit, outbox, and Newo ledgers.
 - R2 raw/evidence references.
 - Queue/retry/reconciliation behavior.
 - Idempotency and approval ledgers.
@@ -76,6 +76,7 @@ Implemented model families:
 - production gate, crew, assignment, safety plan/acknowledgement, job compliance;
 - payment milestone, completion, warranty, review request;
 - communication consent/event;
+- versioned Work Package, step, hold point, and immutable Work Package event records;
 - reconciliation, automation incident, Hermes run, tenant export, white-label tenant, market watch.
 
 Material target gaps:
@@ -87,7 +88,8 @@ Material target gaps:
 - work centre, machine, tooling, route/operation, calibration, maintenance, downtime;
 - receiving inspection, first-piece/in-process/final inspection, NCR, quarantine, disposition;
 - vehicle, trailer, driver, carrier status, inspection, maintenance, collision, cargo;
-- job-specific work package, task step, hold point, offline acknowledgement, supersession;
+- complete multi-worker work-package acknowledgement, physical evidence-slot enforcement, and
+  production-proven independent hold release;
 - safety incident/near miss/property event distinct from automation incidents;
 - controlled assembly/manufacturer document/technical bulletin/recall/claims substantiation;
 - permit/code/authority object with effective/revocation checks;
@@ -191,7 +193,7 @@ Target gaps:
 | Inventory | none beyond order receipt summary | item/lot/bin/reservation/remnant/count/valuation | receive-reserve-use-reconcile |
 | Shop | no work-centre model | routing, machines, tooling, QC, yield, label, maintenance | physical synthetic/real shop batch |
 | Scheduling | assignment and approval ledger | complete constraint solver and autonomous reschedule | conflict/weather/material test |
-| Human field work | offline check-in/evidence | exact work package, steps, hold points, supersession | full offline job/day |
+| Human field work | assignment-scoped Work Package, offline cached instructions, protected acknowledgement/stop/start intents, and independent hold-release record | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
 | Safety | plan/acknowledgement | competency, equipment, incident, rescue, stop protection | stop/emergency drill |
 | Quality | completion/evidence | ITP, inspections, NCR, quarantine, disposition | seeded defect containment |
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |

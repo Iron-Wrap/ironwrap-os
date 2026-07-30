@@ -1,5 +1,8 @@
 import type { AppEnv, AuthContext } from "./app-types.ts";
-import { approvalBrokerConfig, approvalDecisionConfig } from "./approval-broker-client.ts";
+import {
+  approvalBrokerConfig,
+  approvalDecisionConfig,
+} from "./approval-broker-client.ts";
 import { quoteRevisionApprovalBrokerConfig } from "./quote-revision-approval-broker-client.ts";
 import { productionScheduleApprovalBrokerConfig } from "./production-schedule-approval-broker-client.ts";
 import { productionScheduleApprovalDecisionConfig } from "./production-schedule-approval-authority.ts";
@@ -17,9 +20,18 @@ import {
 import { parseBody } from "./core.ts";
 import { extractGeometry } from "./measurements.ts";
 import { listLeadMctbEvidence, type LeadAckReceipt } from "./store.ts";
+import {
+  fieldWorkPackageForAssignment,
+  fieldWorkPackageProjection,
+} from "./work-package.ts";
 
 const ACTIVE_JOB_STATUSES = ["Won", "In Production"] as const;
-export const ACTIVE_ASSIGNMENT_STATUSES = ["Assigned", "Accepted", "In Progress", "Blocked"] as const;
+export const ACTIVE_ASSIGNMENT_STATUSES = [
+  "Assigned",
+  "Accepted",
+  "In Progress",
+  "Blocked",
+] as const;
 const FIELD_PACKET_PROOF_PAGE_SIZE = 100;
 const OWNER_NOW_SOURCE_LIMIT = 50;
 const SALES_SOURCE_LIMIT = 100;
@@ -45,8 +57,17 @@ const MCTB_SLA_MS = 60_000;
 // Completion is created with the other lifecycle gates, but it is closeout-only.
 // Keep the read model aligned with the authoritative scheduling policy instead of
 // treating an expected incomplete closeout record as a dispatch blocker.
-const SCHEDULING_PRODUCTION_GATES = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"] as const;
-const SCHEDULING_PRODUCTION_GATE_NAMES = new Set<string>(SCHEDULING_PRODUCTION_GATES);
+const SCHEDULING_PRODUCTION_GATES = [
+  "Deposit",
+  "Materials",
+  "Safety",
+  "Access",
+  "Weather",
+  "Crew",
+] as const;
+const SCHEDULING_PRODUCTION_GATE_NAMES = new Set<string>(
+  SCHEDULING_PRODUCTION_GATES,
+);
 const NON_BLOCKING_GATE_STATES = new Set(["Ready", "Waived", "Done"]);
 
 interface ReadModelEnvelope {
@@ -226,6 +247,39 @@ export interface JobReadModel extends ReadModelEnvelope {
       emergency_plan: string | null;
       ppe_requirements: string | null;
       weather_limits: string | null;
+    } | null;
+    work_package: {
+      id: string;
+      version: number;
+      status: "Released" | "Acknowledged" | "In Progress";
+      title: string;
+      objective: string;
+      boundaries: string;
+      prerequisites: string;
+      expected_result: string;
+      stop_conditions: string;
+      make_safe_procedure: string;
+      issued_at: string;
+      expires_at: string;
+      released_at: string;
+      acknowledgement: {
+        current_user_acknowledged: boolean;
+        acknowledged_at: string | null;
+      };
+      steps: Array<{
+        sequence: number;
+        instruction: string;
+        required_evidence: string;
+        acceptance_criteria: string;
+      }>;
+      hold_points: Array<{
+        sequence: number;
+        hold_point: string;
+        release_authority: string;
+        required_evidence: string;
+        acceptance_criteria: string;
+        released: boolean;
+      }>;
     } | null;
     contact: {
       display_name: string | null;
@@ -435,8 +489,10 @@ export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
     workflow_profile: string | null;
   };
   lineage: {
-    measurement_to_takeoff: "linked" | "no_measurement" | "no_takeoff" | "mismatch" | "unknown";
-    quote_to_proposal: "linked" | "no_quote" | "no_proposal" | "mismatch" | "unknown";
+    measurement_to_takeoff:
+      "linked" | "no_measurement" | "no_takeoff" | "mismatch" | "unknown";
+    quote_to_proposal:
+      "linked" | "no_quote" | "no_proposal" | "mismatch" | "unknown";
   };
   measurements: {
     reports: Array<{
@@ -467,15 +523,23 @@ export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
   };
   visual_model: {
     provider: string | null;
-    model_state: "draft" | "needs_review" | "approved" | "rejected" | "unavailable";
+    model_state:
+      "draft" | "needs_review" | "approved" | "rejected" | "unavailable";
     confidence: number | null;
     review_required: boolean;
     approval_recorded: boolean;
     captured_at: string | null;
     approved_at: string | null;
-    measurement_link: "selected_measurement" | "other_measurement" | "unlinked" | "unavailable";
+    measurement_link:
+      "selected_measurement" | "other_measurement" | "unlinked" | "unavailable";
     preview: {
-      state: "available" | "not_recorded" | "not_configured" | "blocked" | "invalid" | "unavailable";
+      state:
+        | "available"
+        | "not_recorded"
+        | "not_configured"
+        | "blocked"
+        | "invalid"
+        | "unavailable";
       url: string | null;
     };
   } | null;
@@ -510,7 +574,8 @@ export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
   };
   quote: EstimatorQuoteProjection | null;
   pricing_snapshot: {
-    state: "recorded" | "review_required" | "expired" | "incomplete" | "unavailable";
+    state:
+      "recorded" | "review_required" | "expired" | "incomplete" | "unavailable";
     quote_id: string | null;
     quote_version: number | null;
     price_book_version: string | null;
@@ -547,7 +612,8 @@ export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
     title: string | null;
     reason: string | null;
     scope_delta: string | null;
-    quote_link: "selected_quote" | "other_quote" | "quote_unavailable" | "no_quote";
+    quote_link:
+      "selected_quote" | "other_quote" | "quote_unavailable" | "no_quote";
     currency: string | null;
     subtotal: number | null;
     tax_amount: number | null;
@@ -562,9 +628,10 @@ export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
     presentation_key: string;
     version: number | null;
     status: string | null;
-    measurement_state: "approved" | "missing" | "review_required" | "unavailable";
+    measurement_state:
+      "approved" | "missing" | "review_required" | "unavailable";
     evidence_roles: Array<
-      "Carrier Scope"
+      | "Carrier Scope"
       | "Code/Manufacturer"
       | "Photo"
       | "Invoice"
@@ -694,70 +761,95 @@ export async function activeAssignmentForJob(
   return preferredAssignment(assignments);
 }
 
-export async function buildTodayReadModel(env: AppEnv, auth: AuthContext): Promise<TodayReadModel> {
+export async function buildTodayReadModel(
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<TodayReadModel> {
   const assignments = await authorizedAssignments(env, auth);
   const preferredByJob = preferredAssignmentsByJob(assignments);
   const assignedJobIds = [...preferredByJob.keys()];
-  if (auth.session.role === "field" && assignedJobIds.length === 0) return emptyToday(env, auth, assignments);
-  const jobs = auth.session.role === "field"
-    ? await listFrappeResource(
-      env,
-      "Roof Job",
-      [
-        ["Roof Job", "name", "in", assignedJobIds],
-        ["Roof Job", "job_status", "in", [...ACTIVE_JOB_STATUSES]],
-      ],
-      100,
-    )
-    : await listFrappeResource(
-      env,
-      "Roof Job",
-      [["Roof Job", "job_status", "in", [...ACTIVE_JOB_STATUSES]]],
-      100,
-    );
+  if (auth.session.role === "field" && assignedJobIds.length === 0)
+    return emptyToday(env, auth, assignments);
+  const jobs =
+    auth.session.role === "field"
+      ? await listFrappeResource(
+          env,
+          "Roof Job",
+          [
+            ["Roof Job", "name", "in", assignedJobIds],
+            ["Roof Job", "job_status", "in", [...ACTIVE_JOB_STATUSES]],
+          ],
+          100,
+        )
+      : await listFrappeResource(
+          env,
+          "Roof Job",
+          [["Roof Job", "job_status", "in", [...ACTIVE_JOB_STATUSES]]],
+          100,
+        );
   const jobIds = jobs.map((row) => text(row.name)).filter(notNull);
-  const propertyIds = jobs.map((row) => text(row.roofing_property)).filter(notNull);
+  const propertyIds = jobs
+    .map((row) => text(row.roofing_property))
+    .filter(notNull);
   const [blockedGates, properties] = await Promise.all([
     jobIds.length > 0
       ? listFrappeResource(
-        env,
-        "Production Gate State",
-        [
-          ["Production Gate State", "roof_job", "in", jobIds],
-          ["Production Gate State", "state", "=", "Blocked"],
-        ],
-        100,
-      )
+          env,
+          "Production Gate State",
+          [
+            ["Production Gate State", "roof_job", "in", jobIds],
+            ["Production Gate State", "state", "=", "Blocked"],
+          ],
+          100,
+        )
       : Promise.resolve([]),
     propertyIds.length > 0
-      ? listFrappeResource(env, "Roofing Property", [["Roofing Property", "name", "in", propertyIds]], 100)
+      ? listFrappeResource(
+          env,
+          "Roofing Property",
+          [["Roofing Property", "name", "in", propertyIds]],
+          100,
+        )
       : Promise.resolve([]),
   ]);
   const propertyById = new Map(properties.map((row) => [text(row.name), row]));
   const blockedByJob = groupBy(blockedGates, "roof_job");
-  const shaped = jobs.flatMap((row) => {
-    const id = text(row.name);
-    const assignmentRow = id ? preferredByJob.get(id) : undefined;
-    if (!id || (auth.session.role === "field" && !assignmentRow)) return [];
-    const blocked = blockedByJob.get(id) ?? [];
-    const assignment = assignmentRow ? assignmentModel(assignmentRow) : null;
-    return [{
-      id,
-      job_number: text(row.job_number),
-      brand: text(row.brand),
-      status: text(row.job_status),
-      address: address(propertyById.get(text(row.roofing_property))),
-      scheduled_start: assignment?.scheduled_start ?? null,
-      scheduled_end: assignment?.scheduled_end ?? null,
-      blocked_gate_count: blocked.length,
-      next_action: assignment?.blocker_reason ?? text(blocked[0]?.blocker_reason) ?? (assignment ? "Open field check-in" : "Assign field work"),
-      assignment,
-    }];
-  }).sort((left, right) => compareSchedule(left.scheduled_start, right.scheduled_start));
+  const shaped = jobs
+    .flatMap((row) => {
+      const id = text(row.name);
+      const assignmentRow = id ? preferredByJob.get(id) : undefined;
+      if (!id || (auth.session.role === "field" && !assignmentRow)) return [];
+      const blocked = blockedByJob.get(id) ?? [];
+      const assignment = assignmentRow ? assignmentModel(assignmentRow) : null;
+      return [
+        {
+          id,
+          job_number: text(row.job_number),
+          brand: text(row.brand),
+          status: text(row.job_status),
+          address: address(propertyById.get(text(row.roofing_property))),
+          scheduled_start: assignment?.scheduled_start ?? null,
+          scheduled_end: assignment?.scheduled_end ?? null,
+          blocked_gate_count: blocked.length,
+          next_action:
+            assignment?.blocker_reason ??
+            text(blocked[0]?.blocker_reason) ??
+            (assignment ? "Open field check-in" : "Assign field work"),
+          assignment,
+        },
+      ];
+    })
+    .sort((left, right) =>
+      compareSchedule(left.scheduled_start, right.scheduled_start),
+    );
   const stale: string[] = [];
   if (properties.length < new Set(propertyIds).size) stale.push("jobs.address");
   return {
-    ...envelope(auth, [...assignments, ...jobs, ...blockedGates, ...properties], stale),
+    ...envelope(
+      auth,
+      [...assignments, ...jobs, ...blockedGates, ...properties],
+      stale,
+    ),
     date: tenantDate(env.APP_TIME_ZONE),
     jobs: shaped,
   };
@@ -767,7 +859,8 @@ export async function buildProductionRunwayReadModel(
   env: AppEnv,
   auth: AuthContext,
 ): Promise<ProductionRunwayReadModel> {
-  if (auth.session.role !== "owner" && auth.session.role !== "ops") throw new Error("owner_scope_required");
+  if (auth.session.role !== "owner" && auth.session.role !== "ops")
+    throw new Error("owner_scope_required");
 
   const schedulePreparationConfigured =
     auth.session.role === "owner" &&
@@ -794,160 +887,224 @@ export async function buildProductionRunwayReadModel(
     // dispatch authority. Avoid requesting it for Ops or disabled rails.
     schedulePreparationConfigured
       ? listOfficeProductionFrappeResource(
-        env,
-        "Crew Profile",
-        [["Crew Profile", "status", "=", "Active"]],
-        PRODUCTION_SOURCE_LIMIT,
-      )
+          env,
+          "Crew Profile",
+          [["Crew Profile", "status", "=", "Active"]],
+          PRODUCTION_SOURCE_LIMIT,
+        )
       : Promise.resolve([]),
   ]);
   const jobIds = jobs.map((row) => text(row.name)).filter(notNull);
   const [gates, materialExceptions] = await Promise.all([
     jobIds.length > 0
       ? listOfficeProductionFrappeResource(
-        env,
-        "Production Gate State",
-        [["Production Gate State", "roof_job", "in", jobIds]],
-        PRODUCTION_SOURCE_LIMIT,
-      )
+          env,
+          "Production Gate State",
+          [["Production Gate State", "roof_job", "in", jobIds]],
+          PRODUCTION_SOURCE_LIMIT,
+        )
       : Promise.resolve([]),
     jobIds.length > 0
       ? listOfficeProductionFrappeResource(
-        env,
-        "Supplier Order",
-        [
-          ["Supplier Order", "roof_job", "in", jobIds],
-          ["Supplier Order", "status", "in", ["Needs Review", "Shortage"]],
-        ],
-        PRODUCTION_SOURCE_LIMIT,
-      )
+          env,
+          "Supplier Order",
+          [
+            ["Supplier Order", "roof_job", "in", jobIds],
+            ["Supplier Order", "status", "in", ["Needs Review", "Shortage"]],
+          ],
+          PRODUCTION_SOURCE_LIMIT,
+        )
       : Promise.resolve([]),
   ]);
 
   const partialSources: string[] = [];
-  if (jobs.length === PRODUCTION_SOURCE_LIMIT) partialSources.push("active_jobs");
-  if (assignments.length === PRODUCTION_SOURCE_LIMIT) partialSources.push("active_assignments");
-  if (gates.length === PRODUCTION_SOURCE_LIMIT) partialSources.push("gate_states");
-  if (materialExceptions.length === PRODUCTION_SOURCE_LIMIT) partialSources.push("material_exceptions");
-  if (crewProfiles.length === PRODUCTION_SOURCE_LIMIT) partialSources.push("crew_profiles");
+  if (jobs.length === PRODUCTION_SOURCE_LIMIT)
+    partialSources.push("active_jobs");
+  if (assignments.length === PRODUCTION_SOURCE_LIMIT)
+    partialSources.push("active_assignments");
+  if (gates.length === PRODUCTION_SOURCE_LIMIT)
+    partialSources.push("gate_states");
+  if (materialExceptions.length === PRODUCTION_SOURCE_LIMIT)
+    partialSources.push("material_exceptions");
+  if (crewProfiles.length === PRODUCTION_SOURCE_LIMIT)
+    partialSources.push("crew_profiles");
 
   const gateRowsByJob = groupBy(gates, "roof_job");
   const materialRowsByJob = groupBy(materialExceptions, "roof_job");
   const assignmentByJob = preferredAssignmentsByJob(assignments);
   const gateRowsComplete = !partialSources.includes("gate_states");
   const assignmentRowsComplete = !partialSources.includes("active_assignments");
-  const materialExceptionRowsComplete = !partialSources.includes("material_exceptions");
+  const materialExceptionRowsComplete = !partialSources.includes(
+    "material_exceptions",
+  );
   const crewProfilesComplete = !partialSources.includes("crew_profiles");
-  const crews = crewProfiles.flatMap((row) => {
-    const id = text(row.name) ?? text(row.crew_profile_id);
-    const name = text(row.crew_name);
-    return id && name ? [{ id, name }] : [];
-  }).sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
-  const shaped = jobs.flatMap((job) => {
-    const id = text(job.name);
-    if (!id) return [];
-    const assignmentRow = assignmentByJob.get(id);
-    const assignment = assignmentRow ? productionAssignmentModel(assignmentRow) : null;
-    const jobGateRows = gateRowsByJob.get(id) ?? [];
-    const latestGatesByName = latestRowsByReference(jobGateRows, "gate");
-    const schedulingGateRowCounts = new Map<string, number>();
-    for (const row of jobGateRows) {
-      const gate = text(row.gate);
-      if (!gate || !SCHEDULING_PRODUCTION_GATE_NAMES.has(gate)) continue;
-      schedulingGateRowCounts.set(gate, (schedulingGateRowCounts.get(gate) ?? 0) + 1);
-    }
-    const hasDuplicateSchedulingGate = [...schedulingGateRowCounts.values()].some((count) => count > 1);
-    const schedulingGates = SCHEDULING_PRODUCTION_GATES.flatMap((gate) => {
-      const row = latestGatesByName.get(gate);
-      return row ? [row] : [];
-    });
-    const schedulingGateProjection = SCHEDULING_PRODUCTION_GATES.map((name) => ({
-      name,
-      state: text(latestGatesByName.get(name)?.state),
-    }));
-    const gateCoverage: ProductionRunwayReadModel["jobs"][number]["gate_coverage"] = !gateRowsComplete
-      ? "unknown"
-      : !hasDuplicateSchedulingGate && SCHEDULING_PRODUCTION_GATES.every((gate) => latestGatesByName.has(gate))
-      ? "complete"
-      : "incomplete";
-    const gateSummary = {
-      expected: SCHEDULING_PRODUCTION_GATES.length,
-      blocked: schedulingGates.filter((gate) => text(gate.state) === "Blocked").length,
-      ready: schedulingGates.filter((gate) => text(gate.state) === "Ready").length,
-      waived: schedulingGates.filter((gate) => text(gate.state) === "Waived").length,
-      done: schedulingGates.filter((gate) => text(gate.state) === "Done").length,
-    };
-    const materialAttention = (materialRowsByJob.get(id) ?? []).flatMap((row) => {
-      const status = text(row.status);
-      return status ? [{ status, requested_delivery_date: text(row.requested_delivery_date) }] : [];
-    });
-    const allReturnedGatesNonBlocking =
-      materialExceptionRowsComplete &&
-      gateCoverage === "complete" &&
-      SCHEDULING_PRODUCTION_GATES.every((gate) => {
-        const state = text(latestGatesByName.get(gate)?.state);
-        return !!state && NON_BLOCKING_GATE_STATES.has(state);
+  const crews = crewProfiles
+    .flatMap((row) => {
+      const id = text(row.name) ?? text(row.crew_profile_id);
+      const name = text(row.crew_name);
+      return id && name ? [{ id, name }] : [];
+    })
+    .sort(
+      (left, right) =>
+        left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+    );
+  const shaped = jobs
+    .flatMap((job) => {
+      const id = text(job.name);
+      if (!id) return [];
+      const assignmentRow = assignmentByJob.get(id);
+      const assignment = assignmentRow
+        ? productionAssignmentModel(assignmentRow)
+        : null;
+      const jobGateRows = gateRowsByJob.get(id) ?? [];
+      const latestGatesByName = latestRowsByReference(jobGateRows, "gate");
+      const schedulingGateRowCounts = new Map<string, number>();
+      for (const row of jobGateRows) {
+        const gate = text(row.gate);
+        if (!gate || !SCHEDULING_PRODUCTION_GATE_NAMES.has(gate)) continue;
+        schedulingGateRowCounts.set(
+          gate,
+          (schedulingGateRowCounts.get(gate) ?? 0) + 1,
+        );
+      }
+      const hasDuplicateSchedulingGate = [
+        ...schedulingGateRowCounts.values(),
+      ].some((count) => count > 1);
+      const schedulingGates = SCHEDULING_PRODUCTION_GATES.flatMap((gate) => {
+        const row = latestGatesByName.get(gate);
+        return row ? [row] : [];
       });
-    const blocked =
-      gateSummary.blocked > 0 ||
-      assignment?.status === "Blocked" ||
-      materialAttention.length > 0;
-    const lane: ProductionRunwayLane = blocked
-      ? "blocked"
-      : assignment?.scheduled_start
-      ? "scheduled"
-      : !assignment && assignmentRowsComplete
-      ? "needs_assignment"
-      : !assignment
-      ? "needs_verification"
-      : allReturnedGatesNonBlocking
-      ? "ready_for_review"
-      : "needs_verification";
-    const nextAction = lane === "blocked"
-      ? "Resolve the source-backed blocker before dispatch review"
-      : lane === "scheduled"
-      ? "Confirm the schedule against current gate coverage"
-      : lane === "needs_assignment"
-      ? "Assign a crew and review gates before scheduling"
-      : lane === "ready_for_review"
-      ? "Review for scheduling; this view does not dispatch work"
-      : "Verify the production-gate records before scheduling";
-    const schedulingPreparationAllowed =
-      schedulePreparationConfigured &&
-      crewProfilesComplete &&
-      crews.length > 0 &&
-      assignmentRowsComplete &&
-      !blocked &&
-      allReturnedGatesNonBlocking;
+      const schedulingGateProjection = SCHEDULING_PRODUCTION_GATES.map(
+        (name) => ({
+          name,
+          state: text(latestGatesByName.get(name)?.state),
+        }),
+      );
+      const gateCoverage: ProductionRunwayReadModel["jobs"][number]["gate_coverage"] =
+        !gateRowsComplete
+          ? "unknown"
+          : !hasDuplicateSchedulingGate &&
+              SCHEDULING_PRODUCTION_GATES.every((gate) =>
+                latestGatesByName.has(gate),
+              )
+            ? "complete"
+            : "incomplete";
+      const gateSummary = {
+        expected: SCHEDULING_PRODUCTION_GATES.length,
+        blocked: schedulingGates.filter(
+          (gate) => text(gate.state) === "Blocked",
+        ).length,
+        ready: schedulingGates.filter((gate) => text(gate.state) === "Ready")
+          .length,
+        waived: schedulingGates.filter((gate) => text(gate.state) === "Waived")
+          .length,
+        done: schedulingGates.filter((gate) => text(gate.state) === "Done")
+          .length,
+      };
+      const materialAttention = (materialRowsByJob.get(id) ?? []).flatMap(
+        (row) => {
+          const status = text(row.status);
+          return status
+            ? [
+                {
+                  status,
+                  requested_delivery_date: text(row.requested_delivery_date),
+                },
+              ]
+            : [];
+        },
+      );
+      const allReturnedGatesNonBlocking =
+        materialExceptionRowsComplete &&
+        gateCoverage === "complete" &&
+        SCHEDULING_PRODUCTION_GATES.every((gate) => {
+          const state = text(latestGatesByName.get(gate)?.state);
+          return !!state && NON_BLOCKING_GATE_STATES.has(state);
+        });
+      const blocked =
+        gateSummary.blocked > 0 ||
+        assignment?.status === "Blocked" ||
+        materialAttention.length > 0;
+      const lane: ProductionRunwayLane = blocked
+        ? "blocked"
+        : assignment?.scheduled_start
+          ? "scheduled"
+          : !assignment && assignmentRowsComplete
+            ? "needs_assignment"
+            : !assignment
+              ? "needs_verification"
+              : allReturnedGatesNonBlocking
+                ? "ready_for_review"
+                : "needs_verification";
+      const nextAction =
+        lane === "blocked"
+          ? "Resolve the source-backed blocker before dispatch review"
+          : lane === "scheduled"
+            ? "Confirm the schedule against current gate coverage"
+            : lane === "needs_assignment"
+              ? "Assign a crew and review gates before scheduling"
+              : lane === "ready_for_review"
+                ? "Review for scheduling; this view does not dispatch work"
+                : "Verify the production-gate records before scheduling";
+      const schedulingPreparationAllowed =
+        schedulePreparationConfigured &&
+        crewProfilesComplete &&
+        crews.length > 0 &&
+        assignmentRowsComplete &&
+        !blocked &&
+        allReturnedGatesNonBlocking;
 
-    return [{
-      id,
-      job_number: text(job.job_number),
-      brand: text(job.brand),
-      service_type: text(job.service_type),
-      status: text(job.job_status),
-      assignment,
-      scheduling_preparation_allowed: schedulingPreparationAllowed,
-      lane,
-      next_action: nextAction,
-      gate_coverage: gateCoverage,
-      gate_summary: gateSummary,
-      scheduling_gates: schedulingGateProjection,
-      material_attention: materialAttention,
-    }];
-  }).sort((left, right) => productionLanePriority(left.lane) - productionLanePriority(right.lane)
-    || compareSchedule(left.assignment?.scheduled_start ?? null, right.assignment?.scheduled_start ?? null)
-    || left.id.localeCompare(right.id));
+      return [
+        {
+          id,
+          job_number: text(job.job_number),
+          brand: text(job.brand),
+          service_type: text(job.service_type),
+          status: text(job.job_status),
+          assignment,
+          scheduling_preparation_allowed: schedulingPreparationAllowed,
+          lane,
+          next_action: nextAction,
+          gate_coverage: gateCoverage,
+          gate_summary: gateSummary,
+          scheduling_gates: schedulingGateProjection,
+          material_attention: materialAttention,
+        },
+      ];
+    })
+    .sort(
+      (left, right) =>
+        productionLanePriority(left.lane) -
+          productionLanePriority(right.lane) ||
+        compareSchedule(
+          left.assignment?.scheduled_start ?? null,
+          right.assignment?.scheduled_start ?? null,
+        ) ||
+        left.id.localeCompare(right.id),
+    );
 
   const stale: string[] = [];
   if (partialSources.length > 0) stale.push("jobs.partial_sources");
-  if (shaped.some((job) => job.gate_coverage !== "complete")) stale.push("jobs.gate_coverage");
+  if (shaped.some((job) => job.gate_coverage !== "complete"))
+    stale.push("jobs.gate_coverage");
   return {
-    ...envelope(auth, [...jobs, ...assignments, ...gates, ...materialExceptions, ...crewProfiles], stale),
+    ...envelope(
+      auth,
+      [
+        ...jobs,
+        ...assignments,
+        ...gates,
+        ...materialExceptions,
+        ...crewProfiles,
+      ],
+      stale,
+    ),
     allowed_actions: [
       "job.read",
       "production.read",
-      ...(schedulePreparationConfigured && crewProfilesComplete && crews.length > 0
+      ...(schedulePreparationConfigured &&
+      crewProfilesComplete &&
+      crews.length > 0
         ? ["production_schedule_approval.prepare"]
         : []),
     ],
@@ -956,9 +1113,13 @@ export async function buildProductionRunwayReadModel(
       active_jobs: shaped.length,
       blocked: shaped.filter((job) => job.lane === "blocked").length,
       scheduled: shaped.filter((job) => job.lane === "scheduled").length,
-      needs_assignment: shaped.filter((job) => job.lane === "needs_assignment").length,
-      ready_for_review: shaped.filter((job) => job.lane === "ready_for_review").length,
-      needs_verification: shaped.filter((job) => job.lane === "needs_verification").length,
+      needs_assignment: shaped.filter((job) => job.lane === "needs_assignment")
+        .length,
+      ready_for_review: shaped.filter((job) => job.lane === "ready_for_review")
+        .length,
+      needs_verification: shaped.filter(
+        (job) => job.lane === "needs_verification",
+      ).length,
     },
     jobs: shaped,
     crews,
@@ -973,9 +1134,15 @@ export async function buildJobReadModel(
   if (!validJobName(jobName)) return null;
   const assignmentRow = await activeAssignmentForJob(env, auth, jobName);
   if (auth.session.role === "field" && !assignmentRow) return null;
-  const jobs = await listFrappeResource(env, "Roof Job", [["Roof Job", "name", "=", jobName]], 1);
+  const jobs = await listFrappeResource(
+    env,
+    "Roof Job",
+    [["Roof Job", "name", "=", jobName]],
+    1,
+  );
   const job = jobs[0];
-  if (!job || !ACTIVE_JOB_STATUSES.includes(text(job.job_status) as never)) return null;
+  if (!job || !ACTIVE_JOB_STATUSES.includes(text(job.job_status) as never))
+    return null;
 
   const propertyId = text(job.roofing_property);
   const customerId = text(job.customer);
@@ -991,55 +1158,150 @@ export async function buildJobReadModel(
     changeOrders,
     safetyPlans,
     customerRows,
+    workPackage,
   ] = await Promise.all([
-    listFrappeResource(env, "Production Gate State", [["Production Gate State", "roof_job", "=", jobName]], 50),
-    listFrappeResourcePage(env, "Evidence Item", [["Evidence Item", "roof_job", "=", jobName]], FIELD_PACKET_PROOF_PAGE_SIZE, 0),
-    listFrappeResource(env, "Field Check-in", [["Field Check-in", "roof_job", "=", jobName]], 50),
+    listFrappeResource(
+      env,
+      "Production Gate State",
+      [["Production Gate State", "roof_job", "=", jobName]],
+      50,
+    ),
+    listFrappeResourcePage(
+      env,
+      "Evidence Item",
+      [["Evidence Item", "roof_job", "=", jobName]],
+      FIELD_PACKET_PROOF_PAGE_SIZE,
+      0,
+    ),
+    listFrappeResource(
+      env,
+      "Field Check-in",
+      [["Field Check-in", "roof_job", "=", jobName]],
+      50,
+    ),
     propertyId
-      ? listFrappeResource(env, "Roofing Property", [["Roofing Property", "name", "=", propertyId]], 1)
+      ? listFrappeResource(
+          env,
+          "Roofing Property",
+          [["Roofing Property", "name", "=", propertyId]],
+          1,
+        )
       : Promise.resolve([]),
-    listFrappeResource(env, "Scope Clause", [
-      ["Scope Clause", "roof_job", "=", jobName],
-      ["Scope Clause", "status", "=", "Approved"],
-    ], 100),
-    listFrappeResource(env, "Measurement Report", [
-      ["Measurement Report", "roof_job", "=", jobName],
-      ["Measurement Report", "review_status", "=", "Approved"],
-    ], 50),
-    listFrappeResource(env, "Material Takeoff", [
-      ["Material Takeoff", "roof_job", "=", jobName],
-      ["Material Takeoff", "status", "=", "Approved"],
-    ], 50),
-    listFrappeResource(env, "Supplier Order", [["Supplier Order", "roof_job", "=", jobName]], 50),
-    listFrappeResource(env, "Change Order", [
-      ["Change Order", "roof_job", "=", jobName],
-      ["Change Order", "status", "in", ["Approved", "Presented", "Accepted"]],
-    ], 50),
-    listFrappeResource(env, "Safety Plan", [
-      ["Safety Plan", "roof_job", "=", jobName],
-      ["Safety Plan", "status", "in", ["Ready", "Acknowledged"]],
-    ], 20),
+    listFrappeResource(
+      env,
+      "Scope Clause",
+      [
+        ["Scope Clause", "roof_job", "=", jobName],
+        ["Scope Clause", "status", "=", "Approved"],
+      ],
+      100,
+    ),
+    listFrappeResource(
+      env,
+      "Measurement Report",
+      [
+        ["Measurement Report", "roof_job", "=", jobName],
+        ["Measurement Report", "review_status", "=", "Approved"],
+      ],
+      50,
+    ),
+    listFrappeResource(
+      env,
+      "Material Takeoff",
+      [
+        ["Material Takeoff", "roof_job", "=", jobName],
+        ["Material Takeoff", "status", "=", "Approved"],
+      ],
+      50,
+    ),
+    listFrappeResource(
+      env,
+      "Supplier Order",
+      [["Supplier Order", "roof_job", "=", jobName]],
+      50,
+    ),
+    listFrappeResource(
+      env,
+      "Change Order",
+      [
+        ["Change Order", "roof_job", "=", jobName],
+        ["Change Order", "status", "in", ["Approved", "Presented", "Accepted"]],
+      ],
+      50,
+    ),
+    listFrappeResource(
+      env,
+      "Safety Plan",
+      [
+        ["Safety Plan", "roof_job", "=", jobName],
+        ["Safety Plan", "status", "in", ["Ready", "Acknowledged"]],
+      ],
+      20,
+    ),
     customerId
-      ? listFrappeResource(env, "Roofing Customer", [["Roofing Customer", "name", "=", customerId]], 1)
+      ? listFrappeResource(
+          env,
+          "Roofing Customer",
+          [["Roofing Customer", "name", "=", customerId]],
+          1,
+        )
       : Promise.resolve([]),
+    auth.session.role === "field" && assignmentRow
+      ? fieldWorkPackageForAssignment(env, jobName, text(assignmentRow.name)!)
+      : Promise.resolve(null),
   ]);
   const property = propertyRows[0];
   const customer = customerRows[0];
-  const proofStream = [...evidence.map(evidenceProofItem), ...checkIns.map(checkInProofItem)]
+  const proofStream = [
+    ...evidence.map(evidenceProofItem),
+    ...checkIns.map(checkInProofItem),
+  ]
     .filter(notNull)
     .sort(compareProofItems);
-  const safety = safetyPlans.sort((a, b) => numberValue(b.version) - numberValue(a.version))[0];
+  const safety = safetyPlans.sort(
+    (a, b) => numberValue(b.version) - numberValue(a.version),
+  )[0];
+  const workPackagePacket = fieldWorkPackageProjection(
+    workPackage,
+    auth.session.role === "field" ? auth.session.frappe_user_id : null,
+  );
   const stale: string[] = [];
-  if (auth.session.role !== "field" && gates.some((row) => !text(row.owner_user))) stale.push("gates.owner");
+  if (
+    auth.session.role !== "field" &&
+    gates.some((row) => !text(row.owner_user))
+  )
+    stale.push("gates.owner");
   if (propertyId && !property) stale.push("job.address");
-  if (!customer || !text(customer.display_name)) stale.push("packet.contact.display_name");
+  if (!customer || !text(customer.display_name))
+    stale.push("packet.contact.display_name");
   if (!customer || !text(customer.phone)) stale.push("packet.contact.phone");
   stale.push("packet.contact.access_instructions");
+  const readEnvelope = envelope(
+    auth,
+    [
+      publicFrappeRow(job),
+      ...(assignmentRow ? [assignmentRow] : []),
+      ...gates,
+      ...evidence,
+      ...checkIns,
+      ...propertyRows,
+      ...customerRows,
+      ...scopeClauses,
+      ...measurements,
+      ...takeoffs,
+      ...supplierOrders,
+      ...changeOrders,
+      ...safetyPlans,
+      ...(workPackage ? [{ modified: workPackage.modified }] : []),
+    ],
+    stale,
+  );
   return {
-    ...envelope(auth, [
-      publicFrappeRow(job), ...(assignmentRow ? [assignmentRow] : []), ...gates, ...evidence, ...checkIns, ...propertyRows, ...customerRows,
-      ...scopeClauses, ...measurements, ...takeoffs, ...supplierOrders, ...changeOrders, ...safetyPlans,
-    ], stale),
+    ...readEnvelope,
+    allowed_actions: [
+      ...readEnvelope.allowed_actions,
+      ...workPackagePacket.allowedActions,
+    ],
     job: {
       id: text(job.name)!,
       roof_job_id: text(job.roof_job_id),
@@ -1051,70 +1313,122 @@ export async function buildJobReadModel(
       current_gate_state: text(job.current_gate_state),
     },
     assignment: assignmentRow ? assignmentModel(assignmentRow) : null,
-    gates: gates.flatMap((row) => gateModel(row, auth.session.role === "field")),
+    gates: gates.flatMap((row) =>
+      gateModel(row, auth.session.role === "field"),
+    ),
     packet: {
       scope_clauses: scopeClauses.flatMap((row) => {
         const id = text(row.scope_clause_id) ?? text(row.name);
-        return id ? [{ id, type: text(row.clause_type), title: text(row.title), text: text(row.clause_text), version: text(row.version) }] : [];
+        return id
+          ? [
+              {
+                id,
+                type: text(row.clause_type),
+                title: text(row.title),
+                text: text(row.clause_text),
+                version: text(row.version),
+              },
+            ]
+          : [];
       }),
       measurements: measurements.flatMap((row) => {
         const id = text(row.measurement_id) ?? text(row.name);
-        return id ? [{ id, provider: text(row.provider), review_status: text(row.review_status), parsed_at: text(row.parsed_at) }] : [];
+        return id
+          ? [
+              {
+                id,
+                provider: text(row.provider),
+                review_status: text(row.review_status),
+                parsed_at: text(row.parsed_at),
+              },
+            ]
+          : [];
       }),
       materials: {
         takeoffs: takeoffs.flatMap((row) => {
           const id = text(row.takeoff_id) ?? text(row.name);
-          return id ? [{ id, status: text(row.status), prepared_at: text(row.prepared_at) }] : [];
+          return id
+            ? [
+                {
+                  id,
+                  status: text(row.status),
+                  prepared_at: text(row.prepared_at),
+                },
+              ]
+            : [];
         }),
         supplier_orders: supplierOrders.flatMap((row) => {
           const id = text(row.supplier_order_id) ?? text(row.name);
-          return id ? [{ id, status: text(row.status), requested_delivery_date: text(row.requested_delivery_date), delivery_notes: text(row.delivery_notes) }] : [];
+          return id
+            ? [
+                {
+                  id,
+                  status: text(row.status),
+                  requested_delivery_date: text(row.requested_delivery_date),
+                  delivery_notes: text(row.delivery_notes),
+                },
+              ]
+            : [];
         }),
       },
       change_orders: changeOrders.flatMap((row) => {
         const id = text(row.change_order_id) ?? text(row.name);
-        return id ? [{
-          id,
-          number: text(row.change_number),
-          version: optionalNumber(row.version),
-          status: text(row.status),
-          title: text(row.title),
-          scope_delta: text(row.scope_delta),
-        }] : [];
+        return id
+          ? [
+              {
+                id,
+                number: text(row.change_number),
+                version: optionalNumber(row.version),
+                status: text(row.status),
+                title: text(row.title),
+                scope_delta: text(row.scope_delta),
+              },
+            ]
+          : [];
       }),
-      safety_plan: safety ? {
-        id: text(safety.safety_plan_id) ?? text(safety.name)!,
-        version: optionalNumber(safety.version),
-        status: text(safety.status),
-        effective_date: text(safety.effective_date),
-        hazard_summary: text(safety.hazard_summary),
-        controls: text(safety.controls),
-        emergency_plan: text(safety.emergency_plan),
-        ppe_requirements: text(safety.ppe_requirements),
-        weather_limits: text(safety.weather_limits),
-      } : null,
-      contact: customer ? {
-        display_name: text(customer.display_name),
-        phone: text(customer.phone),
-        access_instructions: null,
-      } : null,
+      safety_plan: safety
+        ? {
+            id: text(safety.safety_plan_id) ?? text(safety.name)!,
+            version: optionalNumber(safety.version),
+            status: text(safety.status),
+            effective_date: text(safety.effective_date),
+            hazard_summary: text(safety.hazard_summary),
+            controls: text(safety.controls),
+            emergency_plan: text(safety.emergency_plan),
+            ppe_requirements: text(safety.ppe_requirements),
+            weather_limits: text(safety.weather_limits),
+          }
+        : null,
+      work_package: workPackagePacket.work_package,
+      contact: customer
+        ? {
+            display_name: text(customer.display_name),
+            phone: text(customer.phone),
+            access_instructions: null,
+          }
+        : null,
     },
     proof_stream: proofStream,
     proof_page: {
-      next_cursor: evidence.length === FIELD_PACKET_PROOF_PAGE_SIZE ? String(FIELD_PACKET_PROOF_PAGE_SIZE) : null,
+      next_cursor:
+        evidence.length === FIELD_PACKET_PROOF_PAGE_SIZE
+          ? String(FIELD_PACKET_PROOF_PAGE_SIZE)
+          : null,
       page_size: FIELD_PACKET_PROOF_PAGE_SIZE,
     },
     required_proof: gates.flatMap((row) => {
       const id = text(row.gate_id) ?? text(row.name);
       const slot = text(row.gate);
       if (!id || !slot) return [];
-      return [{
-        id,
-        slot,
-        label: `${slot} proof`,
-        state: text(row.state) ?? "Blocked",
-        blocker_reason: text(row.blocker_reason),
-      }];
+      return [
+        {
+          id,
+          slot,
+          label: `${slot} proof`,
+          state: text(row.state) ?? "Blocked",
+          blocker_reason: text(row.blocker_reason),
+        },
+      ];
     }),
   };
 }
@@ -1138,10 +1452,14 @@ export async function buildJobProofReadModel(
   );
   return {
     ...envelope(auth, [...(assignment ? [assignment] : []), ...evidence], []),
-    items: evidence.map(evidenceProofItem).filter(notNull).sort(compareProofItems),
-    next_cursor: evidence.length === FIELD_PACKET_PROOF_PAGE_SIZE
-      ? String(offset + FIELD_PACKET_PROOF_PAGE_SIZE)
-      : null,
+    items: evidence
+      .map(evidenceProofItem)
+      .filter(notNull)
+      .sort(compareProofItems),
+    next_cursor:
+      evidence.length === FIELD_PACKET_PROOF_PAGE_SIZE
+        ? String(offset + FIELD_PACKET_PROOF_PAGE_SIZE)
+        : null,
   };
 }
 
@@ -1150,32 +1468,89 @@ export async function buildOwnerNowReadModel(
   auth: AuthContext,
   now = new Date(),
 ): Promise<OwnerNowReadModel> {
-  if (auth.session.role !== "owner" && auth.session.role !== "ops") throw new Error("owner_scope_required");
-  const [jobs, fieldBlockers, gates, incidents, payments, untriagedLeads, unknownTriageLeads, supplierOrders] = await Promise.all([
-    listFrappeResource(env, "Roof Job", [["Roof Job", "job_status", "in", [...ACTIVE_JOB_STATUSES]]], OWNER_NOW_SOURCE_LIMIT),
-    listFrappeResource(env, "Field Check-in", [
-      ["Field Check-in", "blocker_flag", "=", 1],
-      ["Field Check-in", "status", "in", ["Received", "Needs Review"]],
-      ["Field Check-in", "sync_state", "=", "Verified"],
-    ], OWNER_NOW_SOURCE_LIMIT),
-    listFrappeResource(env, "Production Gate State", [["Production Gate State", "state", "=", "Blocked"]], OWNER_NOW_SOURCE_LIMIT),
-    listFrappeResource(env, "Automation Incident", [["Automation Incident", "status", "in", ["Open", "Acknowledged"]]], OWNER_NOW_SOURCE_LIMIT),
-    listFrappeResource(env, "Payment Milestone", [["Payment Milestone", "status", "in", ["Webhook Seen", "Needs Review"]]], OWNER_NOW_SOURCE_LIMIT),
-    listFrappeResource(env, "Lead Envelope", [["Lead Envelope", "triage_status", "=", "Untriaged"]], OWNER_NOW_SOURCE_LIMIT),
-    listFrappeResource(env, "Lead Envelope", [["Lead Envelope", "triage_status", "=", "Unknown"]], OWNER_NOW_SOURCE_LIMIT),
-    listFrappeResource(env, "Supplier Order", [["Supplier Order", "status", "in", ["Needs Review", "Shortage"]]], OWNER_NOW_SOURCE_LIMIT),
+  if (auth.session.role !== "owner" && auth.session.role !== "ops")
+    throw new Error("owner_scope_required");
+  const [
+    jobs,
+    fieldBlockers,
+    gates,
+    incidents,
+    payments,
+    untriagedLeads,
+    unknownTriageLeads,
+    supplierOrders,
+  ] = await Promise.all([
+    listFrappeResource(
+      env,
+      "Roof Job",
+      [["Roof Job", "job_status", "in", [...ACTIVE_JOB_STATUSES]]],
+      OWNER_NOW_SOURCE_LIMIT,
+    ),
+    listFrappeResource(
+      env,
+      "Field Check-in",
+      [
+        ["Field Check-in", "blocker_flag", "=", 1],
+        ["Field Check-in", "status", "in", ["Received", "Needs Review"]],
+        ["Field Check-in", "sync_state", "=", "Verified"],
+      ],
+      OWNER_NOW_SOURCE_LIMIT,
+    ),
+    listFrappeResource(
+      env,
+      "Production Gate State",
+      [["Production Gate State", "state", "=", "Blocked"]],
+      OWNER_NOW_SOURCE_LIMIT,
+    ),
+    listFrappeResource(
+      env,
+      "Automation Incident",
+      [["Automation Incident", "status", "in", ["Open", "Acknowledged"]]],
+      OWNER_NOW_SOURCE_LIMIT,
+    ),
+    listFrappeResource(
+      env,
+      "Payment Milestone",
+      [["Payment Milestone", "status", "in", ["Webhook Seen", "Needs Review"]]],
+      OWNER_NOW_SOURCE_LIMIT,
+    ),
+    listFrappeResource(
+      env,
+      "Lead Envelope",
+      [["Lead Envelope", "triage_status", "=", "Untriaged"]],
+      OWNER_NOW_SOURCE_LIMIT,
+    ),
+    listFrappeResource(
+      env,
+      "Lead Envelope",
+      [["Lead Envelope", "triage_status", "=", "Unknown"]],
+      OWNER_NOW_SOURCE_LIMIT,
+    ),
+    listFrappeResource(
+      env,
+      "Supplier Order",
+      [["Supplier Order", "status", "in", ["Needs Review", "Shortage"]]],
+      OWNER_NOW_SOURCE_LIMIT,
+    ),
   ]);
   const leadRows = [...untriagedLeads, ...unknownTriageLeads];
-  const leadIds = leadRows.map((row) => text(row.envelope_id) ?? text(row.name)).filter(notNull);
+  const leadIds = leadRows
+    .map((row) => text(row.envelope_id) ?? text(row.name))
+    .filter(notNull);
   const leadEvidence = await listLeadMctbEvidence(env, leadIds);
-  const envelopeById = new Map(leadEvidence.envelopes.map((row) => [row.envelope_id, row]));
+  const envelopeById = new Map(
+    leadEvidence.envelopes.map((row) => [row.envelope_id, row]),
+  );
   const receiptsByEnvelope = new Map<string, LeadAckReceipt[]>();
   for (const receipt of leadEvidence.receipts) {
     const current = receiptsByEnvelope.get(receipt.envelope_id) ?? [];
     current.push(receipt);
     receiptsByEnvelope.set(receipt.envelope_id, current);
   }
-  const leadException = (row: FrappeRow, kind: "untriaged_lead" | "lead_triage_unknown") => {
+  const leadException = (
+    row: FrappeRow,
+    kind: "untriaged_lead" | "lead_triage_unknown",
+  ) => {
     const id = text(row.envelope_id) ?? text(row.name);
     if (!id) return [];
     const owned = envelopeById.get(id);
@@ -1183,13 +1558,19 @@ export async function buildOwnerNowReadModel(
     const source = text(row.source);
     const triageStatus = text(row.triage_status) ?? "Unknown";
     const mctb = mctbStatus(receivedAt, receiptsByEnvelope.get(id) ?? [], now);
-    const titlePrefix = kind === "untriaged_lead" ? "Untriaged lead" : "Lead triage is unknown";
+    const titlePrefix =
+      kind === "untriaged_lead" ? "Untriaged lead" : "Lead triage is unknown";
     return exceptionRow(row, {
       id,
       kind,
       severity: null,
-      title: text(row.contact_name) ? `${titlePrefix}: ${text(row.contact_name)}` : titlePrefix,
-      why: [source, owned?.bus_status ?? text(row.status)].filter(notNull).join(" · ") || null,
+      title: text(row.contact_name)
+        ? `${titlePrefix}: ${text(row.contact_name)}`
+        : titlePrefix,
+      why:
+        [source, owned?.bus_status ?? text(row.status)]
+          .filter(notNull)
+          .join(" · ") || null,
       jobId: text(row.job_ref),
       occurredAt: receivedAt ?? text(row.event_ts),
       receivedAt,
@@ -1198,56 +1579,118 @@ export async function buildOwnerNowReadModel(
       mctb,
     });
   };
-  const untriagedExceptions = untriagedLeads.flatMap((row) => leadException(row, "untriaged_lead"));
-  const unknownTriageExceptions = unknownTriageLeads.flatMap((row) => leadException(row, "lead_triage_unknown"));
+  const untriagedExceptions = untriagedLeads.flatMap((row) =>
+    leadException(row, "untriaged_lead"),
+  );
+  const unknownTriageExceptions = unknownTriageLeads.flatMap((row) =>
+    leadException(row, "lead_triage_unknown"),
+  );
   const exceptions: OwnerNowReadModel["exceptions"] = [
-    ...fieldBlockers.flatMap((row) => exceptionRow(row, {
-      id: text(row.checkin_id) ?? text(row.name), kind: "field_blocker", severity: null,
-      title: `${text(row.blocker_category) ?? "Field"} work-stop reported`, why: text(row.blocker_summary),
-      jobId: text(row.roof_job), occurredAt: text(row.submitted_at),
-    })),
-    ...gates.flatMap((row) => exceptionRow(row, {
-      id: text(row.gate_id) ?? text(row.name), kind: "blocked_gate", severity: null,
-      title: `${text(row.gate) ?? "Production"} gate blocked`, why: text(row.blocker_reason),
-      jobId: text(row.roof_job), occurredAt: text(row.assigned_at), dueAt: text(row.due_at),
-    })),
-    ...incidents.flatMap((row) => exceptionRow(row, {
-      id: text(row.incident_id) ?? text(row.name), kind: "automation_incident", severity: text(row.severity),
-      title: text(row.summary) ?? "Automation incident", why: text(row.category), jobId: text(row.roof_job),
-      occurredAt: text(row.detected_at),
-    })),
-    ...supplierOrders.flatMap((row) => exceptionRow(row, {
-      id: text(row.supplier_order_id) ?? text(row.name), kind: "material_exception", severity: null,
-      title: `Supplier order ${text(row.status) ?? "needs review"}`, why: text(row.delivery_notes),
-      jobId: text(row.roof_job), occurredAt: text(row.prepared_at), dueAt: text(row.requested_delivery_date),
-    })),
-    ...payments.flatMap((row) => exceptionRow(row, {
-      id: text(row.payment_milestone_id) ?? text(row.name), kind: "finance_exception", severity: null,
-      title: `${text(row.milestone_type) ?? "Payment"} needs review`, why: text(row.notes) ?? text(row.status),
-      jobId: text(row.roof_job), occurredAt: text(row.event_ts), dueAt: text(row.due_date),
-    })),
+    ...fieldBlockers.flatMap((row) =>
+      exceptionRow(row, {
+        id: text(row.checkin_id) ?? text(row.name),
+        kind: "field_blocker",
+        severity: null,
+        title: `${text(row.blocker_category) ?? "Field"} work-stop reported`,
+        why: text(row.blocker_summary),
+        jobId: text(row.roof_job),
+        occurredAt: text(row.submitted_at),
+      }),
+    ),
+    ...gates.flatMap((row) =>
+      exceptionRow(row, {
+        id: text(row.gate_id) ?? text(row.name),
+        kind: "blocked_gate",
+        severity: null,
+        title: `${text(row.gate) ?? "Production"} gate blocked`,
+        why: text(row.blocker_reason),
+        jobId: text(row.roof_job),
+        occurredAt: text(row.assigned_at),
+        dueAt: text(row.due_at),
+      }),
+    ),
+    ...incidents.flatMap((row) =>
+      exceptionRow(row, {
+        id: text(row.incident_id) ?? text(row.name),
+        kind: "automation_incident",
+        severity: text(row.severity),
+        title: text(row.summary) ?? "Automation incident",
+        why: text(row.category),
+        jobId: text(row.roof_job),
+        occurredAt: text(row.detected_at),
+      }),
+    ),
+    ...supplierOrders.flatMap((row) =>
+      exceptionRow(row, {
+        id: text(row.supplier_order_id) ?? text(row.name),
+        kind: "material_exception",
+        severity: null,
+        title: `Supplier order ${text(row.status) ?? "needs review"}`,
+        why: text(row.delivery_notes),
+        jobId: text(row.roof_job),
+        occurredAt: text(row.prepared_at),
+        dueAt: text(row.requested_delivery_date),
+      }),
+    ),
+    ...payments.flatMap((row) =>
+      exceptionRow(row, {
+        id: text(row.payment_milestone_id) ?? text(row.name),
+        kind: "finance_exception",
+        severity: null,
+        title: `${text(row.milestone_type) ?? "Payment"} needs review`,
+        why: text(row.notes) ?? text(row.status),
+        jobId: text(row.roof_job),
+        occurredAt: text(row.event_ts),
+        dueAt: text(row.due_date),
+      }),
+    ),
     ...untriagedExceptions,
     ...unknownTriageExceptions,
   ];
   const ownerSources: Array<readonly [string, FrappeRow[]]> = [
-    ["active_jobs", jobs], ["field_blockers", fieldBlockers], ["blocked_gates", gates],
-    ["automation_incidents", incidents], ["finance_exceptions", payments], ["untriaged_leads", untriagedLeads],
+    ["active_jobs", jobs],
+    ["field_blockers", fieldBlockers],
+    ["blocked_gates", gates],
+    ["automation_incidents", incidents],
+    ["finance_exceptions", payments],
+    ["untriaged_leads", untriagedLeads],
     ["lead_triage_unknown", unknownTriageLeads],
     ["material_exceptions", supplierOrders],
   ];
-  const partialSources = ownerSources.flatMap(([name, rows]) => rows.length === OWNER_NOW_SOURCE_LIMIT ? [name] : []);
+  const partialSources = ownerSources.flatMap(([name, rows]) =>
+    rows.length === OWNER_NOW_SOURCE_LIMIT ? [name] : [],
+  );
   const stale = ["exceptions.next_action"];
-  if (exceptions.some((row) => row.due_at === null)) stale.push("exceptions.due_at");
+  if (exceptions.some((row) => row.due_at === null))
+    stale.push("exceptions.due_at");
   if (partialSources.length > 0) stale.push("exceptions.partial_sources");
   return {
-    ...envelope(auth, [...jobs, ...fieldBlockers, ...gates, ...incidents, ...payments, ...leadRows, ...supplierOrders], stale),
+    ...envelope(
+      auth,
+      [
+        ...jobs,
+        ...fieldBlockers,
+        ...gates,
+        ...incidents,
+        ...payments,
+        ...leadRows,
+        ...supplierOrders,
+      ],
+      stale,
+    ),
     exceptions,
     partial_sources: partialSources,
     summary: {
-      active_jobs: jobs.length, field_blockers: fieldBlockers.length, blocked_gates: gates.length, open_incidents: incidents.length,
+      active_jobs: jobs.length,
+      field_blockers: fieldBlockers.length,
+      blocked_gates: gates.length,
+      open_incidents: incidents.length,
       finance_exceptions: payments.length,
-      untriaged_leads: untriagedExceptions.length, lead_triage_unknown: unknownTriageExceptions.length,
-      mctb_unproven_due: untriagedExceptions.filter((row) => mctbMissedSla(row.mctb)).length,
+      untriaged_leads: untriagedExceptions.length,
+      lead_triage_unknown: unknownTriageExceptions.length,
+      mctb_unproven_due: untriagedExceptions.filter((row) =>
+        mctbMissedSla(row.mctb),
+      ).length,
       material_exceptions: supplierOrders.length,
     },
   };
@@ -1258,36 +1701,56 @@ export async function buildOwnerNowReadModel(
  * and consent context needed for a human review. It intentionally excludes raw intake payloads,
  * outbound controls, price-book internals, and generic Frappe queries.
  */
-export async function buildSalesReadModel(env: AppEnv, auth: AuthContext): Promise<SalesReadModel> {
-  if (auth.session.role !== "owner" && auth.session.role !== "ops") throw new Error("office_scope_required");
+export async function buildSalesReadModel(
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<SalesReadModel> {
+  if (auth.session.role !== "owner" && auth.session.role !== "ops")
+    throw new Error("office_scope_required");
 
-  const leads = await listOfficeSalesFrappeResource(env, "Lead Envelope", [], SALES_SOURCE_LIMIT);
+  const leads = await listOfficeSalesFrappeResource(
+    env,
+    "Lead Envelope",
+    [],
+    SALES_SOURCE_LIMIT,
+  );
   const leadIds = leads.map((row) => text(row.name)).filter(notNull);
   const leadJobRefs = leads.map((row) => text(row.job_ref)).filter(notNull);
-  const [jobsLinkedByLead, jobsByReference, estimates, leadConsents] = await Promise.all([
-    leadIds.length > 0
-      ? listOfficeSalesFrappeResource(env, "Roof Job", [["Roof Job", "lead_envelope", "in", leadIds]], SALES_SOURCE_LIMIT)
-      : Promise.resolve([]),
-    leadJobRefs.length > 0
-      ? listOfficeSalesFrappeResource(env, "Roof Job", [["Roof Job", "name", "in", leadJobRefs]], SALES_SOURCE_LIMIT)
-      : Promise.resolve([]),
-    leadIds.length > 0
-      ? listOfficeSalesFrappeResource(
-        env,
-        "Instant Estimate Session",
-        [["Instant Estimate Session", "lead_envelope", "in", leadIds]],
-        SALES_SOURCE_LIMIT,
-      )
-      : Promise.resolve([]),
-    leadIds.length > 0
-      ? listOfficeSalesFrappeResource(
-        env,
-        "Communication Consent",
-        [["Communication Consent", "lead_envelope", "in", leadIds]],
-        SALES_SOURCE_LIMIT,
-      )
-      : Promise.resolve([]),
-  ]);
+  const [jobsLinkedByLead, jobsByReference, estimates, leadConsents] =
+    await Promise.all([
+      leadIds.length > 0
+        ? listOfficeSalesFrappeResource(
+            env,
+            "Roof Job",
+            [["Roof Job", "lead_envelope", "in", leadIds]],
+            SALES_SOURCE_LIMIT,
+          )
+        : Promise.resolve([]),
+      leadJobRefs.length > 0
+        ? listOfficeSalesFrappeResource(
+            env,
+            "Roof Job",
+            [["Roof Job", "name", "in", leadJobRefs]],
+            SALES_SOURCE_LIMIT,
+          )
+        : Promise.resolve([]),
+      leadIds.length > 0
+        ? listOfficeSalesFrappeResource(
+            env,
+            "Instant Estimate Session",
+            [["Instant Estimate Session", "lead_envelope", "in", leadIds]],
+            SALES_SOURCE_LIMIT,
+          )
+        : Promise.resolve([]),
+      leadIds.length > 0
+        ? listOfficeSalesFrappeResource(
+            env,
+            "Communication Consent",
+            [["Communication Consent", "lead_envelope", "in", leadIds]],
+            SALES_SOURCE_LIMIT,
+          )
+        : Promise.resolve([]),
+    ]);
 
   const jobs = uniqueRows([...jobsLinkedByLead, ...jobsByReference]);
 
@@ -1295,113 +1758,144 @@ export async function buildSalesReadModel(env: AppEnv, auth: AuthContext): Promi
   const customerIds = jobs.map((row) => text(row.customer)).filter(notNull);
   const [quotes, jobConsents, customerConsents] = await Promise.all([
     jobIds.length > 0
-      ? listOfficeSalesFrappeResource(env, "Customer Quote", [["Customer Quote", "roof_job", "in", jobIds]], SALES_SOURCE_LIMIT)
+      ? listOfficeSalesFrappeResource(
+          env,
+          "Customer Quote",
+          [["Customer Quote", "roof_job", "in", jobIds]],
+          SALES_SOURCE_LIMIT,
+        )
       : Promise.resolve([]),
     jobIds.length > 0
       ? listOfficeSalesFrappeResource(
-        env,
-        "Communication Consent",
-        [["Communication Consent", "roof_job", "in", jobIds]],
-        SALES_SOURCE_LIMIT,
-      )
+          env,
+          "Communication Consent",
+          [["Communication Consent", "roof_job", "in", jobIds]],
+          SALES_SOURCE_LIMIT,
+        )
       : Promise.resolve([]),
     customerIds.length > 0
       ? listOfficeSalesFrappeResource(
-        env,
-        "Communication Consent",
-        [["Communication Consent", "customer", "in", customerIds]],
-        SALES_SOURCE_LIMIT,
-      )
+          env,
+          "Communication Consent",
+          [["Communication Consent", "customer", "in", customerIds]],
+          SALES_SOURCE_LIMIT,
+        )
       : Promise.resolve([]),
   ]);
   const quoteNames = quotes.map((row) => text(row.name)).filter(notNull);
-  const proposals = quoteNames.length > 0
-    ? await listOfficeSalesFrappeResource(
-      env,
-      "Proposal Evidence Pack",
-      [["Proposal Evidence Pack", "quotation", "in", quoteNames]],
-      SALES_SOURCE_LIMIT,
-    )
-    : [];
+  const proposals =
+    quoteNames.length > 0
+      ? await listOfficeSalesFrappeResource(
+          env,
+          "Proposal Evidence Pack",
+          [["Proposal Evidence Pack", "quotation", "in", quoteNames]],
+          SALES_SOURCE_LIMIT,
+        )
+      : [];
   const proposalSourcePartial = proposals.length === SALES_SOURCE_LIMIT;
 
   const jobById = mapRowsByReference(jobs, "name");
   const latestJobsByLead = latestRowsByReference(jobs, "lead_envelope");
   const estimatesByLead = latestRowsByReference(estimates, "lead_envelope");
-  const quotesByJob = latestRowsByReference(quotes, "roof_job", "quote_version");
+  const quotesByJob = latestRowsByReference(
+    quotes,
+    "roof_job",
+    "quote_version",
+  );
   const proposalsByQuote = latestRowsByReference(proposals, "quotation");
   const publishedProposalsByQuote = latestRowsByReference(
     proposals.filter((row) => proposalStatusIsPublished(text(row.status))),
     "quotation",
   );
-  const consentRows = uniqueRows([...leadConsents, ...jobConsents, ...customerConsents]);
+  const consentRows = uniqueRows([
+    ...leadConsents,
+    ...jobConsents,
+    ...customerConsents,
+  ]);
   const directConsentsByLead = groupBy(consentRows, "lead_envelope");
   const consentsByJob = groupBy(consentRows, "roof_job");
   const consentsByCustomer = groupBy(consentRows, "customer");
-  const consentSourcesPartial = [leadConsents, jobConsents, customerConsents].some((rows) => rows.length === SALES_SOURCE_LIMIT);
+  const consentSourcesPartial = [
+    leadConsents,
+    jobConsents,
+    customerConsents,
+  ].some((rows) => rows.length === SALES_SOURCE_LIMIT);
 
-  const shaped: SalesReadModel["leads"] = leads.flatMap((lead) => {
-    const leadId = text(lead.name);
-    if (!leadId) return [];
-    const linkedJob = latestJobsByLead.get(leadId) ?? jobById.get(text(lead.job_ref) ?? "") ?? null;
-    const jobId = linkedJob ? text(linkedJob.name) : null;
-    const customerId = linkedJob ? text(linkedJob.customer) : null;
-    const linkedConsents = uniqueRows([
-      ...(directConsentsByLead.get(leadId) ?? []),
-      ...(jobId ? consentsByJob.get(jobId) ?? [] : []),
-      ...(customerId ? consentsByCustomer.get(customerId) ?? [] : []),
-    ]);
-    const consentRecords = linkedConsents.map(salesConsentRecord).filter(notNull);
-    const estimate = salesEstimateModel(estimatesByLead.get(leadId));
-    const quoteRow = jobId ? quotesByJob.get(jobId) : undefined;
-    const quote = salesQuoteModel(quoteRow);
-    const quoteName = quoteRow ? text(quoteRow.name) : null;
-    const proposal = quoteName
-      ? salesProposalModel(
-        proposalsByQuote.get(quoteName),
-        publishedProposalsByQuote.get(quoteName),
-        proposalSourcePartial,
-      )
-      : null;
-    const attention = salesAttention(lead, estimate, quote);
-    const consentContext: SalesReadModel["leads"][number]["consent"]["context"] = consentSourcesPartial
-      ? "partial"
-      : consentRecords.length > 0
-        ? "recorded"
-        : "no_linked_record";
-    return [{
-      id: leadId,
-      envelope_id: text(lead.envelope_id) ?? leadId,
-      source: text(lead.source),
-      received_at: text(lead.event_ts),
-      transport_status: text(lead.status),
-      intent_queue: text(lead.intent_queue),
-      contact: {
-        display_name: text(lead.contact_name),
-        phone: text(lead.contact_phone),
-        email: text(lead.contact_email),
-      },
-      triage: {
-        status: text(lead.triage_status),
-        summary: text(lead.triage_summary),
-      },
-      job: linkedJob && jobId ? {
-        id: jobId,
-        job_number: text(linkedJob.job_number),
-        status: text(linkedJob.job_status),
-        service_type: text(linkedJob.service_type),
-        workflow_profile: text(linkedJob.workflow_profile),
-      } : null,
-      estimate,
-      quote,
-      proposal,
-      consent: {
-        context: consentContext,
-        records: consentRecords,
-      },
-      attention,
-    }];
-  }).sort(compareSalesLead);
+  const shaped: SalesReadModel["leads"] = leads
+    .flatMap((lead) => {
+      const leadId = text(lead.name);
+      if (!leadId) return [];
+      const linkedJob =
+        latestJobsByLead.get(leadId) ??
+        jobById.get(text(lead.job_ref) ?? "") ??
+        null;
+      const jobId = linkedJob ? text(linkedJob.name) : null;
+      const customerId = linkedJob ? text(linkedJob.customer) : null;
+      const linkedConsents = uniqueRows([
+        ...(directConsentsByLead.get(leadId) ?? []),
+        ...(jobId ? (consentsByJob.get(jobId) ?? []) : []),
+        ...(customerId ? (consentsByCustomer.get(customerId) ?? []) : []),
+      ]);
+      const consentRecords = linkedConsents
+        .map(salesConsentRecord)
+        .filter(notNull);
+      const estimate = salesEstimateModel(estimatesByLead.get(leadId));
+      const quoteRow = jobId ? quotesByJob.get(jobId) : undefined;
+      const quote = salesQuoteModel(quoteRow);
+      const quoteName = quoteRow ? text(quoteRow.name) : null;
+      const proposal = quoteName
+        ? salesProposalModel(
+            proposalsByQuote.get(quoteName),
+            publishedProposalsByQuote.get(quoteName),
+            proposalSourcePartial,
+          )
+        : null;
+      const attention = salesAttention(lead, estimate, quote);
+      const consentContext: SalesReadModel["leads"][number]["consent"]["context"] =
+        consentSourcesPartial
+          ? "partial"
+          : consentRecords.length > 0
+            ? "recorded"
+            : "no_linked_record";
+      return [
+        {
+          id: leadId,
+          envelope_id: text(lead.envelope_id) ?? leadId,
+          source: text(lead.source),
+          received_at: text(lead.event_ts),
+          transport_status: text(lead.status),
+          intent_queue: text(lead.intent_queue),
+          contact: {
+            display_name: text(lead.contact_name),
+            phone: text(lead.contact_phone),
+            email: text(lead.contact_email),
+          },
+          triage: {
+            status: text(lead.triage_status),
+            summary: text(lead.triage_summary),
+          },
+          job:
+            linkedJob && jobId
+              ? {
+                  id: jobId,
+                  job_number: text(linkedJob.job_number),
+                  status: text(linkedJob.job_status),
+                  service_type: text(linkedJob.service_type),
+                  workflow_profile: text(linkedJob.workflow_profile),
+                }
+              : null,
+          estimate,
+          quote,
+          proposal,
+          consent: {
+            context: consentContext,
+            records: consentRecords,
+          },
+          attention,
+        },
+      ];
+    })
+    .sort(compareSalesLead);
 
   const sourceRows: Array<readonly [string, FrappeRow[]]> = [
     ["leads", leads],
@@ -1414,10 +1908,23 @@ export async function buildSalesReadModel(env: AppEnv, auth: AuthContext): Promi
     ["job_consents", jobConsents],
     ["customer_consents", customerConsents],
   ];
-  const partialSources = sourceRows.flatMap(([name, rows]) => rows.length === SALES_SOURCE_LIMIT ? [name] : []);
-  const base = envelope(auth, [
-    ...leads, ...jobs, ...estimates, ...quotes, ...proposals, ...leadConsents, ...jobConsents, ...customerConsents,
-  ], partialSources.length > 0 ? ["sales.partial_sources"] : []);
+  const partialSources = sourceRows.flatMap(([name, rows]) =>
+    rows.length === SALES_SOURCE_LIMIT ? [name] : [],
+  );
+  const base = envelope(
+    auth,
+    [
+      ...leads,
+      ...jobs,
+      ...estimates,
+      ...quotes,
+      ...proposals,
+      ...leadConsents,
+      ...jobConsents,
+      ...customerConsents,
+    ],
+    partialSources.length > 0 ? ["sales.partial_sources"] : [],
+  );
   const leadTriagePreparationAvailable = Boolean(
     approvalBrokerConfig(env) && auth.session.frappe_user_id?.trim(),
   );
@@ -1427,17 +1934,29 @@ export async function buildSalesReadModel(env: AppEnv, auth: AuthContext): Promi
       ...base.allowed_actions,
       ...(auth.permissions.includes("approvals:read") ? ["approval.read"] : []),
       ...(leadTriagePreparationAvailable ? ["approval.prepare"] : []),
-      ...(auth.permissions.includes("estimator:read") ? ["estimator.read"] : []),
+      ...(auth.permissions.includes("estimator:read")
+        ? ["estimator.read"]
+        : []),
       "sales.read",
     ],
     partial_sources: partialSources,
     summary: {
       listed_leads: shaped.length,
-      triage_unresolved: shaped.filter((lead) => lead.attention.includes("triage_unresolved")).length,
-      estimate_needs_review: shaped.filter((lead) => lead.attention.includes("estimate_needs_review")).length,
-      quote_needs_review: shaped.filter((lead) => lead.attention.includes("quote_needs_review")).length,
-      quote_expired: shaped.filter((lead) => lead.attention.includes("quote_expired")).length,
-      no_linked_consent_record: shaped.filter((lead) => lead.consent.context === "no_linked_record").length,
+      triage_unresolved: shaped.filter((lead) =>
+        lead.attention.includes("triage_unresolved"),
+      ).length,
+      estimate_needs_review: shaped.filter((lead) =>
+        lead.attention.includes("estimate_needs_review"),
+      ).length,
+      quote_needs_review: shaped.filter((lead) =>
+        lead.attention.includes("quote_needs_review"),
+      ).length,
+      quote_expired: shaped.filter((lead) =>
+        lead.attention.includes("quote_expired"),
+      ).length,
+      no_linked_consent_record: shaped.filter(
+        (lead) => lead.consent.context === "no_linked_record",
+      ).length,
     },
     leads: shaped,
   };
@@ -1453,7 +1972,8 @@ export async function buildEstimatorWorkbenchReadModel(
   auth: AuthContext,
   jobName: string,
 ): Promise<EstimatorWorkbenchReadModel | null> {
-  if (auth.session.role !== "owner" && auth.session.role !== "ops") throw new Error("office_scope_required");
+  if (auth.session.role !== "owner" && auth.session.role !== "ops")
+    throw new Error("office_scope_required");
   if (!validJobName(jobName)) return null;
 
   const [job] = await listOfficeEstimatorFrappeResource(
@@ -1521,11 +2041,11 @@ export async function buildEstimatorWorkbenchReadModel(
     ),
     insuranceAccessGranted
       ? listOfficeEstimatorFrappeResource(
-        env,
-        "Insurance Supplement",
-        [["Insurance Supplement", "roof_job", "=", jobId]],
-        ESTIMATOR_SOURCE_LIMIT,
-      )
+          env,
+          "Insurance Supplement",
+          [["Insurance Supplement", "roof_job", "=", jobId]],
+          ESTIMATOR_SOURCE_LIMIT,
+        )
       : Promise.resolve([]),
     listOfficeEstimatorFrappeResource(
       env,
@@ -1536,18 +2056,33 @@ export async function buildEstimatorWorkbenchReadModel(
   ]);
 
   const selectedMeasurementRow = latestRecord(measurementRows);
-  const selectedMeasurementName = selectedMeasurementRow ? text(selectedMeasurementRow.name) : null;
-  const selectedVisualModelRow = latestRecord(visualModelRows);
-  const selectedVisualModelName = selectedVisualModelRow ? text(selectedVisualModelRow.name) : null;
-  const visualModelSourceComplete = visualModelRows.length < ESTIMATOR_SOURCE_LIMIT;
-  const selectedTakeoffRow = selectedMeasurementName
-    ? latestRecord(takeoffRows.filter((row) => text(row.measurement_report) === selectedMeasurementName))
+  const selectedMeasurementName = selectedMeasurementRow
+    ? text(selectedMeasurementRow.name)
     : null;
-  const selectedTakeoffName = selectedTakeoffRow ? text(selectedTakeoffRow.name) : null;
+  const selectedVisualModelRow = latestRecord(visualModelRows);
+  const selectedVisualModelName = selectedVisualModelRow
+    ? text(selectedVisualModelRow.name)
+    : null;
+  const visualModelSourceComplete =
+    visualModelRows.length < ESTIMATOR_SOURCE_LIMIT;
+  const selectedTakeoffRow = selectedMeasurementName
+    ? latestRecord(
+        takeoffRows.filter(
+          (row) => text(row.measurement_report) === selectedMeasurementName,
+        ),
+      )
+    : null;
+  const selectedTakeoffName = selectedTakeoffRow
+    ? text(selectedTakeoffRow.name)
+    : null;
   const selectedQuoteRow = latestRecord(quoteRows, "quote_version");
-  const selectedQuoteName = selectedQuoteRow ? text(selectedQuoteRow.name) : null;
+  const selectedQuoteName = selectedQuoteRow
+    ? text(selectedQuoteRow.name)
+    : null;
   const selectedProposalRow = selectedQuoteName
-    ? latestRecord(proposalRows.filter((row) => text(row.quotation) === selectedQuoteName))
+    ? latestRecord(
+        proposalRows.filter((row) => text(row.quotation) === selectedQuoteName),
+      )
     : null;
   const quote = estimatorQuote(selectedQuoteRow);
   const pricingSnapshot = estimatorPricingSnapshot(quote);
@@ -1555,56 +2090,101 @@ export async function buildEstimatorWorkbenchReadModel(
   const scopeChanges = newestFirst(changeOrderRows).flatMap((row) =>
     estimatorScopeChange(row, selectedQuoteName, quoteRows),
   );
-  const [measurementRead, visualModelRead, takeoffRead, insuranceSupplementReads] = await Promise.all([
+  const [
+    measurementRead,
+    visualModelRead,
+    takeoffRead,
+    insuranceSupplementReads,
+  ] = await Promise.all([
     selectedMeasurementName
-      ? safeEstimatorDetailRead(env, "Measurement Report", selectedMeasurementName)
+      ? safeEstimatorDetailRead(
+          env,
+          "Measurement Report",
+          selectedMeasurementName,
+        )
       : Promise.resolve({ row: null, unavailable_reason: null }),
     selectedVisualModelName && visualModelSourceComplete
-      ? safeEstimatorDetailRead(env, "Visual Property Model", selectedVisualModelName)
+      ? safeEstimatorDetailRead(
+          env,
+          "Visual Property Model",
+          selectedVisualModelName,
+        )
       : Promise.resolve({ row: null, unavailable_reason: null }),
     selectedTakeoffName
       ? safeEstimatorDetailRead(env, "Material Takeoff", selectedTakeoffName)
       : Promise.resolve({ row: null, unavailable_reason: null }),
-    Promise.all(insuranceSupplementRows.map(async (row) => {
-      const name = text(row.name);
-      return {
-        name,
-        read: name
-          ? await safeEstimatorDetailRead(env, "Insurance Supplement", name)
-          : { row: null, unavailable_reason: "insurance_supplement_detail_unavailable" },
-      };
-    })),
+    Promise.all(
+      insuranceSupplementRows.map(async (row) => {
+        const name = text(row.name);
+        return {
+          name,
+          read: name
+            ? await safeEstimatorDetailRead(env, "Insurance Supplement", name)
+            : {
+                row: null,
+                unavailable_reason: "insurance_supplement_detail_unavailable",
+              },
+        };
+      }),
+    ),
   ]);
-  const measurementDetail = matchesMeasurementDetail(measurementRead.row, selectedMeasurementName, jobId)
+  const measurementDetail = matchesMeasurementDetail(
+    measurementRead.row,
+    selectedMeasurementName,
+    jobId,
+  )
     ? measurementRead.row
     : null;
-  const visualModelDetail = visualModelSourceComplete
-    && matchesVisualModelDetail(visualModelRead.row, selectedVisualModelName, jobId)
-    ? visualModelRead.row
-    : null;
-  const takeoffDetail = matchesTakeoffDetail(takeoffRead.row, selectedTakeoffName, jobId, selectedMeasurementName)
+  const visualModelDetail =
+    visualModelSourceComplete &&
+    matchesVisualModelDetail(
+      visualModelRead.row,
+      selectedVisualModelName,
+      jobId,
+    )
+      ? visualModelRead.row
+      : null;
+  const takeoffDetail = matchesTakeoffDetail(
+    takeoffRead.row,
+    selectedTakeoffName,
+    jobId,
+    selectedMeasurementName,
+  )
     ? takeoffRead.row
     : null;
-  const measurementDetailIssue = measurementRead.unavailable_reason
-    ?? (measurementRead.row && !measurementDetail ? "measurement_detail_mismatch" : null);
-  const takeoffDetailIssue = takeoffRead.unavailable_reason
-    ?? (takeoffRead.row && !takeoffDetail ? "takeoff_detail_mismatch" : null);
+  const measurementDetailIssue =
+    measurementRead.unavailable_reason ??
+    (measurementRead.row && !measurementDetail
+      ? "measurement_detail_mismatch"
+      : null);
+  const takeoffDetailIssue =
+    takeoffRead.unavailable_reason ??
+    (takeoffRead.row && !takeoffDetail ? "takeoff_detail_mismatch" : null);
 
   const geometry = measurementDetail
     ? await estimatorGeometryFromRaw(env, text(measurementDetail.raw_key))
     : unavailableEstimatorGeometry(
-      selectedMeasurementRow ? measurementDetailIssue ?? "measurement_detail_unavailable" : "no_measurement_report",
-    );
+        selectedMeasurementRow
+          ? (measurementDetailIssue ?? "measurement_detail_unavailable")
+          : "no_measurement_report",
+      );
   const roofGraph = estimatorRoofGraphProjection(measurementDetail);
   const staleFields: string[] = [];
-  if (selectedMeasurementRow && !measurementDetail) staleFields.push("measurements.selected_detail");
-  if (selectedTakeoffRow && !takeoffDetail) staleFields.push("takeoffs.selected_detail");
+  if (selectedMeasurementRow && !measurementDetail)
+    staleFields.push("measurements.selected_detail");
+  if (selectedTakeoffRow && !takeoffDetail)
+    staleFields.push("takeoffs.selected_detail");
   const insuranceSupplementDetails = new Map<string, FrappeRow | null>();
   for (const { name, read } of insuranceSupplementReads) {
     if (!name) continue;
-    const detail = matchesInsuranceSupplementDetail(read.row, name, jobId) ? read.row : null;
+    const detail = matchesInsuranceSupplementDetail(read.row, name, jobId)
+      ? read.row
+      : null;
     insuranceSupplementDetails.set(name, detail);
-    if (!detail && !staleFields.includes("insurance_supplements.detail_unavailable")) {
+    if (
+      !detail &&
+      !staleFields.includes("insurance_supplements.detail_unavailable")
+    ) {
       staleFields.push("insurance_supplements.detail_unavailable");
     }
   }
@@ -1618,7 +2198,9 @@ export async function buildEstimatorWorkbenchReadModel(
     ["insurance_supplements", insuranceSupplementRows],
     ["scope_clauses", scopeRows],
   ];
-  const partialSources = sourceRows.flatMap(([name, rows]) => rows.length === ESTIMATOR_SOURCE_LIMIT ? [name] : []);
+  const partialSources = sourceRows.flatMap(([name, rows]) =>
+    rows.length === ESTIMATOR_SOURCE_LIMIT ? [name] : [],
+  );
   const base = envelope(
     auth,
     [
@@ -1636,16 +2218,23 @@ export async function buildEstimatorWorkbenchReadModel(
     staleFields,
   );
   const quoteRevisionPreparationAvailable = Boolean(
-    quote && quote.id && quote.version !== null && quote.version > 0 && quote.status !== "Accepted" &&
-      quoteRevisionApprovalBrokerConfig(env) && approvalDecisionConfig(env) &&
-      auth.session.frappe_user_id?.trim(),
+    quote &&
+    quote.id &&
+    quote.version !== null &&
+    quote.version > 0 &&
+    quote.status !== "Accepted" &&
+    quoteRevisionApprovalBrokerConfig(env) &&
+    approvalDecisionConfig(env) &&
+    auth.session.frappe_user_id?.trim(),
   );
   return {
     ...base,
     allowed_actions: [
       ...base.allowed_actions,
       "estimator.read",
-      ...(quoteRevisionPreparationAvailable ? ["quote_revision_approval.prepare"] : []),
+      ...(quoteRevisionPreparationAvailable
+        ? ["quote_revision_approval.prepare"]
+        : []),
     ],
     partial_sources: partialSources,
     job: {
@@ -1663,11 +2252,22 @@ export async function buildEstimatorWorkbenchReadModel(
         selectedTakeoffRow,
         takeoffRows,
       ),
-      quote_to_proposal: quoteToProposalLineage(selectedQuoteRow, selectedProposalRow, proposalRows),
+      quote_to_proposal: quoteToProposalLineage(
+        selectedQuoteRow,
+        selectedProposalRow,
+        proposalRows,
+      ),
     },
     measurements: {
-      reports: newestFirst(measurementRows).flatMap(estimatorMeasurementSummary),
-      selected: estimatorMeasurementSelection(selectedMeasurementRow, measurementDetail, geometry, roofGraph),
+      reports: newestFirst(measurementRows).flatMap(
+        estimatorMeasurementSummary,
+      ),
+      selected: estimatorMeasurementSelection(
+        selectedMeasurementRow,
+        measurementDetail,
+        geometry,
+        roofGraph,
+      ),
     },
     visual_model: estimatorVisualModel(
       env,
@@ -1685,23 +2285,32 @@ export async function buildEstimatorWorkbenchReadModel(
     quote_revision: quoteRevision,
     proposal: estimatorProposal(selectedProposalRow),
     scope_changes: scopeChanges,
-    insurance_supplements: newestFirst(insuranceSupplementRows).flatMap((row, index) =>
-      estimatorInsuranceSupplement(
-        "insurance-supplement-" + (index + 1),
-        row,
-        insuranceSupplementDetails.get(text(row.name) ?? "") ?? null,
-        measurementRows,
-      ),
+    insurance_supplements: newestFirst(insuranceSupplementRows).flatMap(
+      (row, index) =>
+        estimatorInsuranceSupplement(
+          "insurance-supplement-" + (index + 1),
+          row,
+          insuranceSupplementDetails.get(text(row.name) ?? "") ?? null,
+          measurementRows,
+        ),
     ),
     proposal_readiness: estimatorProposalReadiness({
       geometry,
       measurement: selectedMeasurementRow,
       takeoff: selectedTakeoffRow,
       takeoffDetail,
-      takeoffLineage: measurementToTakeoffLineage(selectedMeasurementRow, selectedTakeoffRow, takeoffRows),
+      takeoffLineage: measurementToTakeoffLineage(
+        selectedMeasurementRow,
+        selectedTakeoffRow,
+        takeoffRows,
+      ),
       quote,
       pricingSnapshot,
-      proposalLineage: quoteToProposalLineage(selectedQuoteRow, selectedProposalRow, proposalRows),
+      proposalLineage: quoteToProposalLineage(
+        selectedQuoteRow,
+        selectedProposalRow,
+        proposalRows,
+      ),
       scopeChanges,
       partialSources,
       staleFields,
@@ -1710,8 +2319,16 @@ export async function buildEstimatorWorkbenchReadModel(
   };
 }
 
-function emptyToday(env: AppEnv, auth: AuthContext, rows: FrappeRow[] = []): TodayReadModel {
-  return { ...envelope(auth, rows, []), date: tenantDate(env.APP_TIME_ZONE), jobs: [] };
+function emptyToday(
+  env: AppEnv,
+  auth: AuthContext,
+  rows: FrappeRow[] = [],
+): TodayReadModel {
+  return {
+    ...envelope(auth, rows, []),
+    date: tenantDate(env.APP_TIME_ZONE),
+    jobs: [],
+  };
 }
 
 async function authorizedAssignments(
@@ -1722,7 +2339,8 @@ async function authorizedAssignments(
   const baseFilters: FrappeFilter[] = [
     ["Job Assignment", "status", "in", [...ACTIVE_ASSIGNMENT_STATUSES]],
   ];
-  if (jobName) baseFilters.unshift(["Job Assignment", "roof_job", "=", jobName]);
+  if (jobName)
+    baseFilters.unshift(["Job Assignment", "roof_job", "=", jobName]);
   if (auth.session.role !== "field") {
     return await listFrappeResource(env, "Job Assignment", baseFilters, 100);
   }
@@ -1746,25 +2364,38 @@ async function authorizedAssignments(
       "Crew Profile",
     ),
   ]);
-  const crewProfiles = new Set(memberRows.flatMap((row) => {
-    const parent = text(row.parent);
-    const valid = row.parenttype === "Crew Profile" && row.parentfield === "members" && booleanValue(row.active) === true;
-    return parent && valid && sameUser(row.crew_user, userId) ? [parent] : [];
-  }));
-  const crew = crewProfiles.size > 0
-    ? await listFrappeResource(
-      env,
-      "Job Assignment",
-      [...baseFilters, ["Job Assignment", "crew_profile", "in", [...crewProfiles]]],
-      100,
-    )
-    : [];
+  const crewProfiles = new Set(
+    memberRows.flatMap((row) => {
+      const parent = text(row.parent);
+      const valid =
+        row.parenttype === "Crew Profile" &&
+        row.parentfield === "members" &&
+        booleanValue(row.active) === true;
+      return parent && valid && sameUser(row.crew_user, userId) ? [parent] : [];
+    }),
+  );
+  const crew =
+    crewProfiles.size > 0
+      ? await listFrappeResource(
+          env,
+          "Job Assignment",
+          [
+            ...baseFilters,
+            ["Job Assignment", "crew_profile", "in", [...crewProfiles]],
+          ],
+          100,
+        )
+      : [];
   const deduplicated = new Map<string, FrappeRow>();
   for (const row of [...direct, ...crew]) {
     const id = text(row.name);
-    const active = ACTIVE_ASSIGNMENT_STATUSES.includes(text(row.status) as never);
+    const active = ACTIVE_ASSIGNMENT_STATUSES.includes(
+      text(row.status) as never,
+    );
     const correctJob = !jobName || text(row.roof_job) === jobName;
-    const allowed = sameUser(row.assigned_user, userId) || crewProfiles.has(text(row.crew_profile) ?? "");
+    const allowed =
+      sameUser(row.assigned_user, userId) ||
+      crewProfiles.has(text(row.crew_profile) ?? "");
     if (id && active && correctJob && allowed) deduplicated.set(id, row);
   }
   return [...deduplicated.values()];
@@ -1797,64 +2428,91 @@ function productionAssignmentModel(
 
 function preferredAssignmentsByJob(rows: FrappeRow[]): Map<string, FrappeRow> {
   const grouped = groupBy(rows, "roof_job");
-  return new Map([...grouped.entries()].flatMap(([job, assignments]) => {
-    const preferred = preferredAssignment(assignments);
-    return preferred ? [[job, preferred]] : [];
-  }));
+  return new Map(
+    [...grouped.entries()].flatMap(([job, assignments]) => {
+      const preferred = preferredAssignment(assignments);
+      return preferred ? [[job, preferred]] : [];
+    }),
+  );
 }
 
 function preferredAssignment(rows: FrappeRow[]): FrappeRow | null {
-  return [...rows].sort((left, right) => {
-    const priority = (value: unknown) => ["In Progress", "Blocked", "Accepted", "Assigned"].indexOf(text(value) ?? "");
-    const difference = priority(left.status) - priority(right.status);
-    return difference || compareSchedule(text(left.scheduled_start), text(right.scheduled_start));
-  })[0] ?? null;
+  return (
+    [...rows].sort((left, right) => {
+      const priority = (value: unknown) =>
+        ["In Progress", "Blocked", "Accepted", "Assigned"].indexOf(
+          text(value) ?? "",
+        );
+      const difference = priority(left.status) - priority(right.status);
+      return (
+        difference ||
+        compareSchedule(text(left.scheduled_start), text(right.scheduled_start))
+      );
+    })[0] ?? null
+  );
 }
 
-function gateModel(row: FrappeRow, redactOwner: boolean): JobReadModel["gates"] {
+function gateModel(
+  row: FrappeRow,
+  redactOwner: boolean,
+): JobReadModel["gates"] {
   const gateId = text(row.gate_id) ?? text(row.name);
-  return gateId ? [{
-    id: gateId,
-    name: text(row.gate),
-    state: text(row.state),
-    blocker_reason: text(row.blocker_reason),
-    owner: redactOwner ? null : text(row.owner_user),
-    due_at: text(row.due_at),
-  }] : [];
+  return gateId
+    ? [
+        {
+          id: gateId,
+          name: text(row.gate),
+          state: text(row.state),
+          blocker_reason: text(row.blocker_reason),
+          owner: redactOwner ? null : text(row.owner_user),
+          due_at: text(row.due_at),
+        },
+      ]
+    : [];
 }
 
 function evidenceProofItem(row: FrappeRow): ProofStreamItem | null {
   const id = text(row.evidence_id) ?? text(row.name);
-  return id ? {
-    id,
-    type: text(row.evidence_type),
-    proof_slot: text(row.proof_slot),
-    occurred_at: text(row.captured_at),
-    summary: text(row.summary),
-    customer_safe: booleanValue(row.customer_safe),
-    source: text(row.source_system),
-    sync_state: text(row.sync_state),
-    blocker: false,
-  } : null;
+  return id
+    ? {
+        id,
+        type: text(row.evidence_type),
+        proof_slot: text(row.proof_slot),
+        occurred_at: text(row.captured_at),
+        summary: text(row.summary),
+        customer_safe: booleanValue(row.customer_safe),
+        source: text(row.source_system),
+        sync_state: text(row.sync_state),
+        blocker: false,
+      }
+    : null;
 }
 
 function checkInProofItem(row: FrappeRow): ProofStreamItem | null {
   const id = text(row.checkin_id) ?? text(row.name);
-  return id ? {
-    id,
-    type: "Field Check-in",
-    proof_slot: null,
-    occurred_at: text(row.submitted_at),
-    summary: text(row.blocker_summary) ?? text(row.notes),
-    customer_safe: false,
-    source: text(row.source_system),
-    sync_state: text(row.sync_state),
-    blocker: booleanValue(row.blocker_flag) === true,
-  } : null;
+  return id
+    ? {
+        id,
+        type: "Field Check-in",
+        proof_slot: null,
+        occurred_at: text(row.submitted_at),
+        summary: text(row.blocker_summary) ?? text(row.notes),
+        customer_safe: false,
+        source: text(row.source_system),
+        sync_state: text(row.sync_state),
+        blocker: booleanValue(row.blocker_flag) === true,
+      }
+    : null;
 }
 
-function compareProofItems(left: ProofStreamItem, right: ProofStreamItem): number {
-  return dateValue(right.occurred_at) - dateValue(left.occurred_at) || right.id.localeCompare(left.id);
+function compareProofItems(
+  left: ProofStreamItem,
+  right: ProofStreamItem,
+): number {
+  return (
+    dateValue(right.occurred_at) - dateValue(left.occurred_at) ||
+    right.id.localeCompare(left.id)
+  );
 }
 
 function parseProofCursor(value: string | null): number | null {
@@ -1864,18 +2522,29 @@ function parseProofCursor(value: string | null): number | null {
   return Number.isInteger(offset) && offset <= 100_000 ? offset : null;
 }
 
-function envelope(auth: AuthContext, rows: FrappeRow[], staleFields: string[]): ReadModelEnvelope {
+function envelope(
+  auth: AuthContext,
+  rows: FrappeRow[],
+  staleFields: string[],
+): ReadModelEnvelope {
   return {
     version: 1,
     source_updated_at: newestModified(rows),
     read_model_generated_at: new Date().toISOString(),
     stale_fields: staleFields,
     permissions: auth.permissions,
-    allowed_actions: auth.session.role === "field"
-      ? ["job.read.assigned", "field.checkin.create", "field.evidence.create"]
-      : [
-        "job.read", "lead.read", "lead_triage.read", "field_blocker.read", "incident.read", "finance_exception.read", "material_exception.read",
-      ],
+    allowed_actions:
+      auth.session.role === "field"
+        ? ["job.read.assigned", "field.checkin.create", "field.evidence.create"]
+        : [
+            "job.read",
+            "lead.read",
+            "lead_triage.read",
+            "field_blocker.read",
+            "incident.read",
+            "finance_exception.read",
+            "material_exception.read",
+          ],
   };
 }
 
@@ -1896,12 +2565,25 @@ function exceptionRow(
     mctb?: MctbStatus | null;
   },
 ): OwnerNowReadModel["exceptions"] {
-  return input.id ? [{
-    id: input.id, kind: input.kind, severity: input.severity, title: input.title, why: input.why,
-    next_action: null, job_id: input.jobId, occurred_at: input.occurredAt ?? null, due_at: input.dueAt ?? null,
-    received_at: input.receivedAt ?? null, bus_status: input.busStatus ?? null,
-    triage_status: input.triageStatus ?? null, mctb: input.mctb ?? null,
-  }] : [];
+  return input.id
+    ? [
+        {
+          id: input.id,
+          kind: input.kind,
+          severity: input.severity,
+          title: input.title,
+          why: input.why,
+          next_action: null,
+          job_id: input.jobId,
+          occurred_at: input.occurredAt ?? null,
+          due_at: input.dueAt ?? null,
+          received_at: input.receivedAt ?? null,
+          bus_status: input.busStatus ?? null,
+          triage_status: input.triageStatus ?? null,
+          mctb: input.mctb ?? null,
+        },
+      ]
+    : [];
 }
 
 export function mctbStatus(
@@ -1912,18 +2594,26 @@ export function mctbStatus(
   const receivedMs = receivedAt ? Date.parse(receivedAt) : Number.NaN;
   if (!Number.isFinite(receivedMs)) {
     return {
-      state: "time_unavailable", deadline_at: null, observed_at: null,
-      channel: null, proof_kind: null,
+      state: "time_unavailable",
+      deadline_at: null,
+      observed_at: null,
+      channel: null,
+      proof_kind: null,
     };
   }
   const deadlineMs = receivedMs + MCTB_SLA_MS;
   const deadlineAt = new Date(deadlineMs).toISOString();
-  const accepted = receipts.find((receipt) => receipt.outcome === "provider_accepted");
+  const accepted = receipts.find(
+    (receipt) => receipt.outcome === "provider_accepted",
+  );
   if (accepted) {
     const observedMs = Date.parse(accepted.observed_at);
     if (Number.isFinite(observedMs)) {
       return {
-        state: observedMs <= deadlineMs ? "provider_accepted_within_sla" : "provider_accepted_late",
+        state:
+          observedMs <= deadlineMs
+            ? "provider_accepted_within_sla"
+            : "provider_accepted_late",
         deadline_at: deadlineAt,
         observed_at: accepted.observed_at,
         channel: accepted.channel === "email" ? "email" : null,
@@ -1931,15 +2621,21 @@ export function mctbStatus(
       };
     }
   }
-  const noChannel = receipts.find((receipt) => receipt.outcome === "no_eligible_channel");
+  const noChannel = receipts.find(
+    (receipt) => receipt.outcome === "no_eligible_channel",
+  );
   if (noChannel) {
     return {
-      state: "no_eligible_channel", deadline_at: deadlineAt, observed_at: noChannel.observed_at,
-      channel: null, proof_kind: null,
+      state: "no_eligible_channel",
+      deadline_at: deadlineAt,
+      observed_at: noChannel.observed_at,
+      channel: null,
+      proof_kind: null,
     };
   }
   return {
-    state: now.getTime() <= deadlineMs ? "awaiting_proof" : "unproven_after_sla",
+    state:
+      now.getTime() <= deadlineMs ? "awaiting_proof" : "unproven_after_sla",
     deadline_at: deadlineAt,
     observed_at: null,
     channel: null,
@@ -1948,14 +2644,22 @@ export function mctbStatus(
 }
 
 function mctbMissedSla(mctb: MctbStatus | null): boolean {
-  return mctb?.state === "provider_accepted_late" || mctb?.state === "unproven_after_sla";
+  return (
+    mctb?.state === "provider_accepted_late" ||
+    mctb?.state === "unproven_after_sla"
+  );
 }
 
 function newestModified(rows: FrappeRow[]): string | null {
   let newest: string | null = null;
   for (const row of rows) {
-    if (typeof row.modified !== "string" || Number.isNaN(Date.parse(row.modified))) continue;
-    if (!newest || Date.parse(row.modified) > Date.parse(newest)) newest = row.modified;
+    if (
+      typeof row.modified !== "string" ||
+      Number.isNaN(Date.parse(row.modified))
+    )
+      continue;
+    if (!newest || Date.parse(row.modified) > Date.parse(newest))
+      newest = row.modified;
   }
   return newest;
 }
@@ -1972,7 +2676,10 @@ function groupBy(rows: FrappeRow[], field: string): Map<string, FrappeRow[]> {
   return grouped;
 }
 
-function mapRowsByReference(rows: FrappeRow[], field: string): Map<string, FrappeRow> {
+function mapRowsByReference(
+  rows: FrappeRow[],
+  field: string,
+): Map<string, FrappeRow> {
   const mapped = new Map<string, FrappeRow>();
   for (const row of rows) {
     const key = text(row[field]);
@@ -1991,14 +2698,19 @@ function latestRowsByReference(
     const key = text(row[field]);
     if (!key) continue;
     const current = latest.get(key);
-    if (!current || recordIsNewer(row, current, versionField)) latest.set(key, row);
+    if (!current || recordIsNewer(row, current, versionField))
+      latest.set(key, row);
   }
   return latest;
 }
 
-function latestRecord(rows: FrappeRow[], versionField?: string): FrappeRow | null {
+function latestRecord(
+  rows: FrappeRow[],
+  versionField?: string,
+): FrappeRow | null {
   let latest: FrappeRow | null = null;
-  for (const row of rows) if (!latest || recordIsNewer(row, latest, versionField)) latest = row;
+  for (const row of rows)
+    if (!latest || recordIsNewer(row, latest, versionField)) latest = row;
   return latest;
 }
 
@@ -2021,22 +2733,30 @@ function uniqueRows(rows: FrappeRow[]): FrappeRow[] {
   return [...unique.values()];
 }
 
-function recordIsNewer(candidate: FrappeRow, current: FrappeRow, versionField?: string): boolean {
+function recordIsNewer(
+  candidate: FrappeRow,
+  current: FrappeRow,
+  versionField?: string,
+): boolean {
   if (versionField) {
     const candidateVersion = optionalNumber(candidate[versionField]) ?? -1;
     const currentVersion = optionalNumber(current[versionField]) ?? -1;
-    if (candidateVersion !== currentVersion) return candidateVersion > currentVersion;
+    if (candidateVersion !== currentVersion)
+      return candidateVersion > currentVersion;
   }
   const candidateModified = text(candidate.modified) ?? "";
   const currentModified = text(current.modified) ?? "";
-  return candidateModified.localeCompare(currentModified) > 0
-    || (candidateModified === currentModified && (text(candidate.name) ?? "").localeCompare(text(current.name) ?? "") > 0);
+  return (
+    candidateModified.localeCompare(currentModified) > 0 ||
+    (candidateModified === currentModified &&
+      (text(candidate.name) ?? "").localeCompare(text(current.name) ?? "") > 0)
+  );
 }
 
 function salesEstimateModel(
   row: FrappeRow | undefined,
 ): SalesReadModel["leads"][number]["estimate"] {
-  const id = row ? text(row.estimate_session_id) ?? text(row.name) : null;
+  const id = row ? (text(row.estimate_session_id) ?? text(row.name)) : null;
   if (!row || !id) return null;
   return {
     id,
@@ -2057,7 +2777,7 @@ function salesEstimateModel(
 function salesQuoteModel(
   row: FrappeRow | undefined,
 ): SalesReadModel["leads"][number]["quote"] {
-  const id = row ? text(row.customer_quote_id) ?? text(row.name) : null;
+  const id = row ? (text(row.customer_quote_id) ?? text(row.name)) : null;
   if (!row || !id) return null;
   return {
     id,
@@ -2079,7 +2799,7 @@ function salesProposalModel(
   publishedRow: FrappeRow | undefined,
   sourcePartial: boolean,
 ): SalesReadModel["leads"][number]["proposal"] {
-  const id = row ? text(row.pack_id) ?? text(row.name) : null;
+  const id = row ? (text(row.pack_id) ?? text(row.name)) : null;
   if (!row || !id) return null;
   return {
     id,
@@ -2123,7 +2843,8 @@ function salesAttention(
   const attention: SalesAttentionReason[] = [];
   const triage = text(lead.triage_status);
   if (triage !== "Triaged") attention.push("triage_unresolved");
-  if (estimate?.status === "Captured" || estimate?.status === "Needs Review") attention.push("estimate_needs_review");
+  if (estimate?.status === "Captured" || estimate?.status === "Needs Review")
+    attention.push("estimate_needs_review");
   if (quote?.status === "Needs Review") attention.push("quote_needs_review");
   if (quote?.status === "Expired") attention.push("quote_expired");
   return attention;
@@ -2140,42 +2861,59 @@ function compareSalesLead(
     if (lead.attention.includes("quote_expired")) return 3;
     return 4;
   };
-  return rank(left) - rank(right)
-    || dateValue(right.received_at) - dateValue(left.received_at)
-    || left.id.localeCompare(right.id);
+  return (
+    rank(left) - rank(right) ||
+    dateValue(right.received_at) - dateValue(left.received_at) ||
+    left.id.localeCompare(right.id)
+  );
 }
 
 function estimatorMeasurementSummary(
   row: FrappeRow,
 ): EstimatorWorkbenchReadModel["measurements"]["reports"] {
   const id = text(row.measurement_id) ?? text(row.name);
-  return id ? [{
-    id,
-    provider: text(row.provider),
-    review_status: text(row.review_status),
-    parsed_at: text(row.parsed_at),
-    approved_at: text(row.approved_at),
-  }] : [];
+  return id
+    ? [
+        {
+          id,
+          provider: text(row.provider),
+          review_status: text(row.review_status),
+          parsed_at: text(row.parsed_at),
+          approved_at: text(row.approved_at),
+        },
+      ]
+    : [];
 }
 
 async function safeEstimatorDetailRead(
   env: AppEnv,
-  doctype: "Measurement Report" | "Visual Property Model" | "Material Takeoff" | "Insurance Supplement",
+  doctype:
+    | "Measurement Report"
+    | "Visual Property Model"
+    | "Material Takeoff"
+    | "Insurance Supplement",
   name: string,
 ): Promise<{ row: FrappeRow | null; unavailable_reason: string | null }> {
   try {
-    return { row: await readOfficeEstimatorFrappeResource(env, doctype, name), unavailable_reason: null };
+    return {
+      row: await readOfficeEstimatorFrappeResource(env, doctype, name),
+      unavailable_reason: null,
+    };
   } catch (error) {
-    if (error instanceof Error && error.message === "frappe_read_response_too_large") {
+    if (
+      error instanceof Error &&
+      error.message === "frappe_read_response_too_large"
+    ) {
       return {
         row: null,
-        unavailable_reason: doctype === "Measurement Report"
-          ? "measurement_detail_too_large"
-          : doctype === "Visual Property Model"
-            ? "visual_model_detail_too_large"
-          : doctype === "Material Takeoff"
-            ? "takeoff_detail_too_large"
-            : "insurance_supplement_detail_too_large",
+        unavailable_reason:
+          doctype === "Measurement Report"
+            ? "measurement_detail_too_large"
+            : doctype === "Visual Property Model"
+              ? "visual_model_detail_too_large"
+              : doctype === "Material Takeoff"
+                ? "takeoff_detail_too_large"
+                : "insurance_supplement_detail_too_large",
       };
     }
     throw error;
@@ -2187,7 +2925,12 @@ function matchesMeasurementDetail(
   expectedName: string | null,
   jobName: string,
 ): boolean {
-  return Boolean(row && expectedName && text(row.name) === expectedName && text(row.roof_job) === jobName);
+  return Boolean(
+    row &&
+    expectedName &&
+    text(row.name) === expectedName &&
+    text(row.roof_job) === jobName,
+  );
 }
 
 function matchesVisualModelDetail(
@@ -2195,7 +2938,12 @@ function matchesVisualModelDetail(
   expectedName: string | null,
   jobName: string,
 ): boolean {
-  return Boolean(row && expectedName && text(row.name) === expectedName && text(row.roof_job) === jobName);
+  return Boolean(
+    row &&
+    expectedName &&
+    text(row.name) === expectedName &&
+    text(row.roof_job) === jobName,
+  );
 }
 
 function matchesTakeoffDetail(
@@ -2205,12 +2953,12 @@ function matchesTakeoffDetail(
   measurementName: string | null,
 ): boolean {
   return Boolean(
-    row
-      && expectedName
-      && measurementName
-      && text(row.name) === expectedName
-      && text(row.roof_job) === jobName
-      && text(row.measurement_report) === measurementName,
+    row &&
+    expectedName &&
+    measurementName &&
+    text(row.name) === expectedName &&
+    text(row.roof_job) === jobName &&
+    text(row.measurement_report) === measurementName,
   );
 }
 
@@ -2220,10 +2968,10 @@ function matchesInsuranceSupplementDetail(
   jobName: string,
 ): boolean {
   return Boolean(
-    row
-      && expectedName
-      && text(row.name) === expectedName
-      && text(row.roof_job) === jobName,
+    row &&
+    expectedName &&
+    text(row.name) === expectedName &&
+    text(row.roof_job) === jobName,
   );
 }
 
@@ -2262,22 +3010,32 @@ function estimatorVisualModel(
   const status = visualText(detail.status, 80);
   const needsReview = booleanValue(detail.needs_review);
   const confidence = visualConfidence(detail.confidence);
-  if (!modelName || !provider || !status || needsReview === null || confidence === undefined) {
+  if (
+    !modelName ||
+    !provider ||
+    !status ||
+    needsReview === null ||
+    confidence === undefined
+  ) {
     return unavailableVisualModel();
   }
 
   const capturedAt = visualTimestamp(detail.captured_at);
   const approvedAt = visualTimestamp(detail.approved_at);
-  const approvalRecorded = status === "Approved" && needsReview === false && approvedAt !== null;
-  const modelState = status === "Draft"
-    ? "draft"
-    : status === "Needs Review"
-      ? "needs_review"
-      : status === "Approved"
-        ? approvalRecorded ? "approved" : "needs_review"
-        : status === "Rejected"
-          ? "rejected"
-          : "unavailable";
+  const approvalRecorded =
+    status === "Approved" && needsReview === false && approvedAt !== null;
+  const modelState =
+    status === "Draft"
+      ? "draft"
+      : status === "Needs Review"
+        ? "needs_review"
+        : status === "Approved"
+          ? approvalRecorded
+            ? "approved"
+            : "needs_review"
+          : status === "Rejected"
+            ? "rejected"
+            : "unavailable";
   if (modelState === "unavailable") return unavailableVisualModel();
 
   return {
@@ -2288,12 +3046,21 @@ function estimatorVisualModel(
     approval_recorded: approvalRecorded,
     captured_at: capturedAt,
     approved_at: approvedAt,
-    measurement_link: visualMeasurementLink(modelName, roofAreas, selectedMeasurement),
-    preview: visualPreview(detail.screenshots_json, env.APP_VISUAL_PREVIEW_ALLOWED_ORIGINS),
+    measurement_link: visualMeasurementLink(
+      modelName,
+      roofAreas,
+      selectedMeasurement,
+    ),
+    preview: visualPreview(
+      detail.screenshots_json,
+      env.APP_VISUAL_PREVIEW_ALLOWED_ORIGINS,
+    ),
   };
 }
 
-function unavailableVisualModel(): NonNullable<EstimatorWorkbenchReadModel["visual_model"]> {
+function unavailableVisualModel(): NonNullable<
+  EstimatorWorkbenchReadModel["visual_model"]
+> {
   return {
     provider: null,
     model_state: "unavailable",
@@ -2311,15 +3078,26 @@ function visualMeasurementLink(
   visualModelName: string,
   roofAreas: FrappeRow[],
   selectedMeasurement: FrappeRow | null,
-): NonNullable<EstimatorWorkbenchReadModel["visual_model"]>["measurement_link"] {
-  const areasForModel = roofAreas.filter((area) => text(area.visual_model) === visualModelName);
+): NonNullable<
+  EstimatorWorkbenchReadModel["visual_model"]
+>["measurement_link"] {
+  const areasForModel = roofAreas.filter(
+    (area) => text(area.visual_model) === visualModelName,
+  );
   if (areasForModel.length === 0) {
-    return roofAreas.length === ESTIMATOR_SOURCE_LIMIT ? "unavailable" : "unlinked";
+    return roofAreas.length === ESTIMATOR_SOURCE_LIMIT
+      ? "unavailable"
+      : "unlinked";
   }
-  const linkedMeasurements = areasForModel.map((area) => text(area.measurement_report)).filter(notNull);
+  const linkedMeasurements = areasForModel
+    .map((area) => text(area.measurement_report))
+    .filter(notNull);
   if (linkedMeasurements.length === 0) return "unlinked";
   const selectedNames = selectedMeasurement
-    ? [text(selectedMeasurement.name), text(selectedMeasurement.measurement_id)].filter(notNull)
+    ? [
+        text(selectedMeasurement.name),
+        text(selectedMeasurement.measurement_id),
+      ].filter(notNull)
     : [];
   return selectedNames.some((name) => linkedMeasurements.includes(name))
     ? "selected_measurement"
@@ -2330,12 +3108,17 @@ function visualPreview(
   screenshots: unknown,
   configuredOrigins: string | undefined,
 ): NonNullable<EstimatorWorkbenchReadModel["visual_model"]>["preview"] {
-  if (screenshots === null || screenshots === undefined || (typeof screenshots === "string" && !screenshots.trim())) {
+  if (
+    screenshots === null ||
+    screenshots === undefined ||
+    (typeof screenshots === "string" && !screenshots.trim())
+  ) {
     return { state: "not_recorded", url: null };
   }
   if (typeof screenshots !== "string") return { state: "invalid", url: null };
   const raw = screenshots.trim();
-  if (raw.length > MAX_VISUAL_SCREENSHOT_JSON_LENGTH) return { state: "invalid", url: null };
+  if (raw.length > MAX_VISUAL_SCREENSHOT_JSON_LENGTH)
+    return { state: "invalid", url: null };
 
   let candidates: unknown;
   try {
@@ -2343,7 +3126,10 @@ function visualPreview(
   } catch {
     return { state: "invalid", url: null };
   }
-  if (!Array.isArray(candidates) || candidates.some((candidate) => typeof candidate !== "string")) {
+  if (
+    !Array.isArray(candidates) ||
+    candidates.some((candidate) => typeof candidate !== "string")
+  ) {
     return { state: "invalid", url: null };
   }
   if (candidates.length === 0) return { state: "not_recorded", url: null };
@@ -2353,7 +3139,10 @@ function visualPreview(
 
   let blocked = false;
   let invalid = false;
-  for (const candidate of candidates.slice(0, MAX_VISUAL_SCREENSHOT_CANDIDATES)) {
+  for (const candidate of candidates.slice(
+    0,
+    MAX_VISUAL_SCREENSHOT_CANDIDATES,
+  )) {
     if (candidate.length > MAX_VISUAL_PREVIEW_URL_LENGTH) {
       invalid = true;
       continue;
@@ -2364,13 +3153,17 @@ function visualPreview(
         invalid = true;
         continue;
       }
-      if (allowedOrigins.has(url.origin)) return { state: "available", url: url.href };
+      if (allowedOrigins.has(url.origin))
+        return { state: "available", url: url.href };
       blocked = true;
     } catch {
       invalid = true;
     }
   }
-  return { state: blocked ? "blocked" : invalid ? "invalid" : "unavailable", url: null };
+  return {
+    state: blocked ? "blocked" : invalid ? "invalid" : "unavailable",
+    url: null,
+  };
 }
 
 function visualPreviewAllowedOrigins(value: string | undefined): Set<string> {
@@ -2380,7 +3173,15 @@ function visualPreviewAllowedOrigins(value: string | undefined): Set<string> {
     if (!origin || origin.length > 512) continue;
     try {
       const url = new URL(origin);
-      if (url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) continue;
+      if (
+        url.protocol !== "https:" ||
+        url.username ||
+        url.password ||
+        url.pathname !== "/" ||
+        url.search ||
+        url.hash
+      )
+        continue;
       origins.add(url.origin);
     } catch {
       // A malformed configuration entry cannot widen the browser preview boundary.
@@ -2400,7 +3201,12 @@ function visualTimestamp(value: unknown): string | null {
 }
 
 function visualConfidence(value: unknown): number | null | undefined {
-  if (value === null || value === undefined || (typeof value === "string" && !value.trim())) return null;
+  if (
+    value === null ||
+    value === undefined ||
+    (typeof value === "string" && !value.trim())
+  )
+    return null;
   const result = optionalNumber(value);
   return result !== null && result >= 0 && result <= 100 ? result : undefined;
 }
@@ -2419,17 +3225,22 @@ function estimatorMeasurementSelection(
     ...summary,
     metrics: metricRows.slice(0, MAX_ESTIMATOR_METRICS).flatMap((metric) => {
       const name = text(metric.metric);
-      return name ? [{
-        metric: name,
-        value: optionalNumber(metric.value),
-        unit: text(metric.unit),
-        confidence: text(metric.confidence),
-        source_ref: text(metric.source_ref),
-        needs_review: booleanValue(metric.needs_review) === true,
-      }] : [];
+      return name
+        ? [
+            {
+              metric: name,
+              value: optionalNumber(metric.value),
+              unit: text(metric.unit),
+              confidence: text(metric.confidence),
+              source_ref: text(metric.source_ref),
+              needs_review: booleanValue(metric.needs_review) === true,
+            },
+          ]
+        : [];
     }),
-    metrics_truncated: metricRows.length > MAX_ESTIMATOR_METRICS
-      || booleanValue(detail?.__ironwrap_truncated_measurements) === true,
+    metrics_truncated:
+      metricRows.length > MAX_ESTIMATOR_METRICS ||
+      booleanValue(detail?.__ironwrap_truncated_measurements) === true,
     geometry,
     roof_graph: roofGraph,
   };
@@ -2439,13 +3250,17 @@ function estimatorTakeoffSummary(
   row: FrappeRow,
 ): EstimatorWorkbenchReadModel["takeoffs"]["records"] {
   const id = text(row.takeoff_id) ?? text(row.name);
-  return id ? [{
-    id,
-    measurement_report_id: text(row.measurement_report),
-    status: text(row.status),
-    prepared_at: text(row.prepared_at),
-    approved_at: text(row.approved_at),
-  }] : [];
+  return id
+    ? [
+        {
+          id,
+          measurement_report_id: text(row.measurement_report),
+          status: text(row.status),
+          prepared_at: text(row.prepared_at),
+          approved_at: text(row.approved_at),
+        },
+      ]
+    : [];
 }
 
 function estimatorTakeoffSelection(
@@ -2470,13 +3285,16 @@ function estimatorTakeoffSelection(
       confidence: text(item.confidence),
       needs_review: booleanValue(item.needs_review) === true,
     })),
-    items_truncated: itemRows.length > MAX_ESTIMATOR_TAKEOFF_ITEMS
-      || booleanValue(detail?.__ironwrap_truncated_items) === true,
+    items_truncated:
+      itemRows.length > MAX_ESTIMATOR_TAKEOFF_ITEMS ||
+      booleanValue(detail?.__ironwrap_truncated_items) === true,
   };
 }
 
-function estimatorQuote(row: FrappeRow | null): EstimatorQuoteProjection | null {
-  const id = row ? text(row.customer_quote_id) ?? text(row.name) : null;
+function estimatorQuote(
+  row: FrappeRow | null,
+): EstimatorQuoteProjection | null {
+  const id = row ? (text(row.customer_quote_id) ?? text(row.name)) : null;
   if (!row || !id) return null;
   return {
     id,
@@ -2521,7 +3339,9 @@ function estimatorPricingSnapshot(
       valid_until: null,
     };
   }
-  const complete = Boolean(quote.price_book_version && quote.pricing_effective_at);
+  const complete = Boolean(
+    quote.price_book_version && quote.pricing_effective_at,
+  );
   const status = quote.status;
   return {
     state: !complete
@@ -2548,7 +3368,10 @@ function estimatorQuoteRevision(
   const currentVersion = optionalNumber(current.quote_version);
   if (!supersedes) {
     return {
-      state: currentVersion !== null && currentVersion > 1 ? "unlinked_revision" : "not_revised",
+      state:
+        currentVersion !== null && currentVersion > 1
+          ? "unlinked_revision"
+          : "not_revised",
       prior_quote: null,
       delta: null,
     };
@@ -2556,14 +3379,25 @@ function estimatorQuoteRevision(
   const prior = quotes.find((row) => text(row.name) === supersedes) ?? null;
   if (!prior) {
     return {
-      state: quotes.length === ESTIMATOR_SOURCE_LIMIT ? "history_incomplete" : "prior_quote_missing",
+      state:
+        quotes.length === ESTIMATOR_SOURCE_LIMIT
+          ? "history_incomplete"
+          : "prior_quote_missing",
       prior_quote: null,
       delta: null,
     };
   }
   const priorVersion = optionalNumber(prior.quote_version);
-  if (currentVersion !== null && priorVersion !== null && priorVersion >= currentVersion) {
-    return { state: "invalid_lineage", prior_quote: estimatorQuote(prior), delta: null };
+  if (
+    currentVersion !== null &&
+    priorVersion !== null &&
+    priorVersion >= currentVersion
+  ) {
+    return {
+      state: "invalid_lineage",
+      prior_quote: estimatorQuote(prior),
+      delta: null,
+    };
   }
   return {
     state: "compared",
@@ -2583,12 +3417,21 @@ function estimatorQuoteRevisionDelta(
     deposit_amount: numberDelta(current.deposit_amount, prior.deposit_amount),
     amount_due: numberDelta(current.amount_due, prior.amount_due),
     balance_due: numberDelta(current.balance_due, prior.balance_due),
-    price_book_version_changed: valueChanged(current.price_book_version, prior.price_book_version),
-    pricing_effective_at_changed: valueChanged(current.pricing_effective_at, prior.pricing_effective_at),
+    price_book_version_changed: valueChanged(
+      current.price_book_version,
+      prior.price_book_version,
+    ),
+    pricing_effective_at_changed: valueChanged(
+      current.pricing_effective_at,
+      prior.pricing_effective_at,
+    ),
     tax_code_changed: valueChanged(current.tax_code, prior.tax_code),
     tax_rate_changed: valueChanged(current.tax_rate, prior.tax_rate),
     currency_changed: valueChanged(current.currency, prior.currency),
-    scope_summary_changed: valueChanged(current.scope_summary, prior.scope_summary),
+    scope_summary_changed: valueChanged(
+      current.scope_summary,
+      prior.scope_summary,
+    ),
     assumptions_changed: valueChanged(current.assumptions, prior.assumptions),
     exclusions_changed: valueChanged(current.exclusions, prior.exclusions),
   };
@@ -2609,25 +3452,27 @@ function estimatorScopeChange(
       : quoteRows.some((quote) => text(quote.name) === quoteName)
         ? "other_quote"
         : "quote_unavailable";
-  return [{
-    id,
-    number: text(row.change_number),
-    version: optionalNumber(row.version),
-    status: text(row.status),
-    title: text(row.title),
-    reason: text(row.reason),
-    scope_delta: text(row.scope_delta),
-    quote_link: quoteLink,
-    currency: text(row.currency),
-    subtotal: optionalNumber(row.subtotal),
-    tax_amount: optionalNumber(row.tax_amount),
-    total_amount: optionalNumber(row.total_amount),
-    price_book_version: text(row.price_book_version),
-    requested_at: text(row.requested_at),
-    approved_at: text(row.approved_at),
-    accepted_at: text(row.accepted_at),
-    correction_reason: text(row.correction_reason),
-  }];
+  return [
+    {
+      id,
+      number: text(row.change_number),
+      version: optionalNumber(row.version),
+      status: text(row.status),
+      title: text(row.title),
+      reason: text(row.reason),
+      scope_delta: text(row.scope_delta),
+      quote_link: quoteLink,
+      currency: text(row.currency),
+      subtotal: optionalNumber(row.subtotal),
+      tax_amount: optionalNumber(row.tax_amount),
+      total_amount: optionalNumber(row.total_amount),
+      price_book_version: text(row.price_book_version),
+      requested_at: text(row.requested_at),
+      approved_at: text(row.approved_at),
+      accepted_at: text(row.accepted_at),
+      correction_reason: text(row.correction_reason),
+    },
+  ];
 }
 
 function estimatorInsuranceSupplement(
@@ -2639,9 +3484,10 @@ function estimatorInsuranceSupplement(
   const measurementName = text(row.measurement_report);
   const measurement = measurementName
     ? measurementRows.find(
-      (candidate) =>
-        text(candidate.name) === measurementName || text(candidate.measurement_id) === measurementName,
-    )
+        (candidate) =>
+          text(candidate.name) === measurementName ||
+          text(candidate.measurement_id) === measurementName,
+      )
     : null;
   const measurementState: EstimatorWorkbenchReadModel["insurance_supplements"][number]["measurement_state"] =
     !measurementName
@@ -2651,22 +3497,25 @@ function estimatorInsuranceSupplement(
         : text(measurement.review_status) === "Approved"
           ? "approved"
           : "review_required";
-  const missing: EstimatorWorkbenchReadModel["insurance_supplements"][number]["missing_requirements"] = [];
+  const missing: EstimatorWorkbenchReadModel["insurance_supplements"][number]["missing_requirements"] =
+    [];
   if (!detail) {
     missing.push("source_detail_unavailable");
-    return [{
-      presentation_key: presentationKey,
-      version: optionalNumber(row.version),
-      status: text(row.status),
-      measurement_state: measurementState,
-      evidence_roles: [],
-      missing_requirements: missing,
-      invoice_state: "unavailable",
-      approval_recorded: Boolean(text(row.approved_at)),
-      submission_recorded: Boolean(text(row.submitted_at)),
-      carrier_response_recorded: Boolean(text(row.carrier_response_at)),
-      closed_recorded: Boolean(text(row.closed_at)),
-    }];
+    return [
+      {
+        presentation_key: presentationKey,
+        version: optionalNumber(row.version),
+        status: text(row.status),
+        measurement_state: measurementState,
+        evidence_roles: [],
+        missing_requirements: missing,
+        invoice_state: "unavailable",
+        approval_recorded: Boolean(text(row.approved_at)),
+        submission_recorded: Boolean(text(row.submitted_at)),
+        carrier_response_recorded: Boolean(text(row.carrier_response_at)),
+        closed_recorded: Boolean(text(row.closed_at)),
+      },
+    ];
   }
 
   const roleOrder = [
@@ -2680,14 +3529,17 @@ function estimatorInsuranceSupplement(
   const availableRoles = new Set(
     recordRows(detail.evidence)
       .map((evidence) => text(evidence.evidence_role))
-      .filter((role): role is (typeof roleOrder)[number] =>
-        role !== null && roleOrder.includes(role as (typeof roleOrder)[number]),
+      .filter(
+        (role): role is (typeof roleOrder)[number] =>
+          role !== null &&
+          roleOrder.includes(role as (typeof roleOrder)[number]),
       ),
   );
   const evidenceRoles = roleOrder.filter((role) => availableRoles.has(role));
   if (measurementState !== "approved") missing.push("approved_measurement");
   if (!availableRoles.has("Carrier Scope")) missing.push("carrier_scope");
-  if (!availableRoles.has("Code/Manufacturer")) missing.push("code_or_manufacturer");
+  if (!availableRoles.has("Code/Manufacturer"))
+    missing.push("code_or_manufacturer");
   if (!availableRoles.has("Photo")) missing.push("photo");
   const invoiceRequired = booleanValue(row.invoice_required) !== false;
   if (invoiceRequired && !availableRoles.has("Invoice")) {
@@ -2695,31 +3547,38 @@ function estimatorInsuranceSupplement(
   }
   const status = text(row.status);
   if (
-    ["Submitted", "Carrier Response Recorded", "Closed"].includes(status ?? "")
-    && !availableRoles.has("Submission")
+    ["Submitted", "Carrier Response Recorded", "Closed"].includes(
+      status ?? "",
+    ) &&
+    !availableRoles.has("Submission")
   ) {
     missing.push("submission_artifact");
   }
-  if (status === "Carrier Response Recorded" && !availableRoles.has("Carrier Response")) {
+  if (
+    status === "Carrier Response Recorded" &&
+    !availableRoles.has("Carrier Response")
+  ) {
     missing.push("carrier_response_artifact");
   }
-  return [{
-    presentation_key: presentationKey,
-    version: optionalNumber(row.version),
-    status,
-    measurement_state: measurementState,
-    evidence_roles: evidenceRoles,
-    missing_requirements: missing,
-    invoice_state: availableRoles.has("Invoice")
-      ? "recorded"
-      : invoiceRequired
-        ? "required"
-        : "not_required",
-    approval_recorded: Boolean(text(row.approved_at)),
-    submission_recorded: Boolean(text(row.submitted_at)),
-    carrier_response_recorded: Boolean(text(row.carrier_response_at)),
-    closed_recorded: Boolean(text(row.closed_at)),
-  }];
+  return [
+    {
+      presentation_key: presentationKey,
+      version: optionalNumber(row.version),
+      status,
+      measurement_state: measurementState,
+      evidence_roles: evidenceRoles,
+      missing_requirements: missing,
+      invoice_state: availableRoles.has("Invoice")
+        ? "recorded"
+        : invoiceRequired
+          ? "required"
+          : "not_required",
+      approval_recorded: Boolean(text(row.approved_at)),
+      submission_recorded: Boolean(text(row.submitted_at)),
+      carrier_response_recorded: Boolean(text(row.carrier_response_at)),
+      closed_recorded: Boolean(text(row.closed_at)),
+    },
+  ];
 }
 
 function estimatorProposalReadiness({
@@ -2747,28 +3606,43 @@ function estimatorProposalReadiness({
   partialSources: string[];
   staleFields: string[];
 }): EstimatorWorkbenchReadModel["proposal_readiness"] {
-  const reasons: EstimatorWorkbenchReadModel["proposal_readiness"]["reasons"] = [];
+  const reasons: EstimatorWorkbenchReadModel["proposal_readiness"]["reasons"] =
+    [];
   if (!measurement) reasons.push("measurement_missing");
-  else if (geometry.state !== "recomputed") reasons.push("measurement_source_review_required");
-  if (takeoffLineage !== "linked" || !takeoff || !takeoffDetail) reasons.push("takeoff_link_missing");
-  else if (text(takeoff.status) !== "Approved") reasons.push("takeoff_not_approved");
+  else if (geometry.state !== "recomputed")
+    reasons.push("measurement_source_review_required");
+  if (takeoffLineage !== "linked" || !takeoff || !takeoffDetail)
+    reasons.push("takeoff_link_missing");
+  else if (text(takeoff.status) !== "Approved")
+    reasons.push("takeoff_not_approved");
   if (!quote) reasons.push("quote_missing");
   else {
-    if (pricingSnapshot.state === "incomplete" || pricingSnapshot.state === "unavailable") {
+    if (
+      pricingSnapshot.state === "incomplete" ||
+      pricingSnapshot.state === "unavailable"
+    ) {
       reasons.push("quote_snapshot_incomplete");
     }
-    if (quote.status !== "Approved" && quote.status !== "Accepted") reasons.push("quote_not_approved");
+    if (quote.status !== "Approved" && quote.status !== "Accepted")
+      reasons.push("quote_not_approved");
   }
   if (proposalLineage === "mismatch") reasons.push("proposal_link_mismatch");
-  if (scopeChanges.some((change) =>
-    change.quote_link === "selected_quote"
-      && ["Draft", "Needs Review", "Approved", "Presented"].includes(change.status ?? ""),
-  )) {
+  if (
+    scopeChanges.some(
+      (change) =>
+        change.quote_link === "selected_quote" &&
+        ["Draft", "Needs Review", "Approved", "Presented"].includes(
+          change.status ?? "",
+        ),
+    )
+  ) {
     reasons.push("scope_change_unresolved");
   }
   if (partialSources.length > 0) reasons.push("source_window_partial");
   if (staleFields.length > 0) reasons.push("stale_source_detail");
-  const unavailable = reasons.includes("source_window_partial") || reasons.includes("stale_source_detail");
+  const unavailable =
+    reasons.includes("source_window_partial") ||
+    reasons.includes("stale_source_detail");
   const blocked = reasons.some((reason) =>
     [
       "measurement_missing",
@@ -2779,13 +3653,21 @@ function estimatorProposalReadiness({
     ].includes(reason),
   );
   return {
-    state: unavailable ? "unavailable" : blocked ? "blocked" : reasons.length > 0 ? "review_required" : "ready",
+    state: unavailable
+      ? "unavailable"
+      : blocked
+        ? "blocked"
+        : reasons.length > 0
+          ? "review_required"
+          : "ready",
     reasons,
   };
 }
 
-function estimatorProposal(row: FrappeRow | null): EstimatorWorkbenchReadModel["proposal"] {
-  const id = row ? text(row.pack_id) ?? text(row.name) : null;
+function estimatorProposal(
+  row: FrappeRow | null,
+): EstimatorWorkbenchReadModel["proposal"] {
+  const id = row ? (text(row.pack_id) ?? text(row.name)) : null;
   if (!row || !id) return null;
   return {
     id,
@@ -2803,17 +3685,21 @@ function estimatorScopeClause(
   row: FrappeRow,
 ): EstimatorWorkbenchReadModel["scope_clauses"] {
   const id = text(row.scope_clause_id) ?? text(row.name);
-  return id ? [{
-    id,
-    type: text(row.clause_type),
-    title: text(row.title),
-    text: text(row.clause_text),
-    version: text(row.version),
-    status: text(row.status),
-    source_ref: text(row.source_ref),
-    customer_visible: booleanValue(row.customer_visible) === true,
-    approved_at: text(row.approved_at),
-  }] : [];
+  return id
+    ? [
+        {
+          id,
+          type: text(row.clause_type),
+          title: text(row.title),
+          text: text(row.clause_text),
+          version: text(row.version),
+          status: text(row.status),
+          source_ref: text(row.source_ref),
+          customer_visible: booleanValue(row.customer_visible) === true,
+          approved_at: text(row.approved_at),
+        },
+      ]
+    : [];
 }
 
 /**
@@ -2824,8 +3710,12 @@ function estimatorRoofGraphProjection(
   detail: FrappeRow | null,
 ): EstimatorRoofGraphProjection | null {
   const serialized = detail?.roof_graph_json;
-  if (serialized === null || serialized === undefined || serialized === "") return null;
-  if (typeof serialized !== "string" || serialized.length > MAX_ESTIMATOR_ROOF_GRAPH_JSON_LENGTH) {
+  if (serialized === null || serialized === undefined || serialized === "")
+    return null;
+  if (
+    typeof serialized !== "string" ||
+    serialized.length > MAX_ESTIMATOR_ROOF_GRAPH_JSON_LENGTH
+  ) {
     return unavailableEstimatorRoofGraph();
   }
 
@@ -2836,16 +3726,28 @@ function estimatorRoofGraphProjection(
     return unavailableEstimatorRoofGraph();
   }
   const graph = roofGraphObject(candidate);
-  if (!graph || graph.schema_version !== "roof_graph/v1") return unavailableEstimatorRoofGraph();
+  if (!graph || graph.schema_version !== "roof_graph/v1")
+    return unavailableEstimatorRoofGraph();
 
   const rawRevision = roofGraphIdentifier(graph.revision);
   const persistedRevision = roofGraphIdentifier(detail?.roof_graph_revision);
   const source = roofGraphObject(graph.source);
   const coordinateSystem = roofGraphObject(graph.coordinate_system);
-  if (!rawRevision || !roofGraphSha256(rawRevision) || !persistedRevision || rawRevision !== persistedRevision
-    || !source || !coordinateSystem || typeof graph.needs_review !== "boolean"
-    || !Array.isArray(graph.points) || !Array.isArray(graph.edges) || !Array.isArray(graph.facets)
-    || !Array.isArray(graph.checks) || !roofGraphObject(graph.measurements) || !roofGraphObject(graph.source_refs)) {
+  if (
+    !rawRevision ||
+    !roofGraphSha256(rawRevision) ||
+    !persistedRevision ||
+    rawRevision !== persistedRevision ||
+    !source ||
+    !coordinateSystem ||
+    typeof graph.needs_review !== "boolean" ||
+    !Array.isArray(graph.points) ||
+    !Array.isArray(graph.edges) ||
+    !Array.isArray(graph.facets) ||
+    !Array.isArray(graph.checks) ||
+    !roofGraphObject(graph.measurements) ||
+    !roofGraphObject(graph.source_refs)
+  ) {
     return unavailableEstimatorRoofGraph();
   }
 
@@ -2853,20 +3755,36 @@ function estimatorRoofGraphProjection(
   const rawSha256 = roofGraphIdentifier(source.raw_sha256);
   const provider = roofGraphIdentifier(source.provider);
   const capture = roofGraphObject(source.capture);
-  const sourceProvenance = capture ? roofGraphIdentifier(capture.provenance) : null;
-  if (!rawKey || !rawSha256 || !roofGraphSha256(rawSha256) || rawSha256 !== rawRevision
-    || !provider || !capture || !sourceProvenance || !roofGraphIdentifier(source.ingested_at)
-    || !roofGraphIdentifier(coordinateSystem.kind) || !roofGraphIdentifier(coordinateSystem.provenance)) {
+  const sourceProvenance = capture
+    ? roofGraphIdentifier(capture.provenance)
+    : null;
+  if (
+    !rawKey ||
+    !rawSha256 ||
+    !roofGraphSha256(rawSha256) ||
+    rawSha256 !== rawRevision ||
+    !provider ||
+    !capture ||
+    !sourceProvenance ||
+    !roofGraphIdentifier(source.ingested_at) ||
+    !roofGraphIdentifier(coordinateSystem.kind) ||
+    !roofGraphIdentifier(coordinateSystem.provenance)
+  ) {
     return unavailableEstimatorRoofGraph();
   }
   const recordRawKey = text(detail?.raw_key);
   const recordProvider = text(detail?.provider);
-  if ((recordRawKey && rawKey !== recordRawKey) || (recordProvider && provider !== recordProvider)) {
+  if (
+    (recordRawKey && rawKey !== recordRawKey) ||
+    (recordProvider && provider !== recordProvider)
+  ) {
     return unavailableEstimatorRoofGraph();
   }
-  if (graph.points.length > MAX_ESTIMATOR_ROOF_GRAPH_POINTS
-    || graph.edges.length > MAX_ESTIMATOR_ROOF_GRAPH_EDGES
-    || graph.facets.length > MAX_ESTIMATOR_ROOF_GRAPH_FACETS) {
+  if (
+    graph.points.length > MAX_ESTIMATOR_ROOF_GRAPH_POINTS ||
+    graph.edges.length > MAX_ESTIMATOR_ROOF_GRAPH_EDGES ||
+    graph.facets.length > MAX_ESTIMATOR_ROOF_GRAPH_FACETS
+  ) {
     return unavailableEstimatorRoofGraph();
   }
 
@@ -2877,7 +3795,10 @@ function estimatorRoofGraphProjection(
     const y = point ? roofGraphNumber(point.y) : null;
     return id && x !== null && y !== null ? [{ id, x, y }] : [];
   });
-  if (points.length !== graph.points.length || new Set(points.map((point) => point.id)).size !== points.length) {
+  if (
+    points.length !== graph.points.length ||
+    new Set(points.map((point) => point.id)).size !== points.length
+  ) {
     return unavailableEstimatorRoofGraph();
   }
   const pointIds = new Set(points.map((point) => point.id));
@@ -2886,12 +3807,19 @@ function estimatorRoofGraphProjection(
     const id = edge ? roofGraphIdentifier(edge.id) : null;
     const from = edge ? roofGraphIdentifier(edge.from) : null;
     const to = edge ? roofGraphIdentifier(edge.to) : null;
-    return id && from && to && from !== to && pointIds.has(from) && pointIds.has(to)
+    return id &&
+      from &&
+      to &&
+      from !== to &&
+      pointIds.has(from) &&
+      pointIds.has(to)
       ? [{ id, from, to } satisfies StoredRoofGraphEdge]
       : [];
   });
-  if (storedEdges.length !== graph.edges.length
-    || new Set(storedEdges.map((edge) => edge.id)).size !== storedEdges.length) {
+  if (
+    storedEdges.length !== graph.edges.length ||
+    new Set(storedEdges.map((edge) => edge.id)).size !== storedEdges.length
+  ) {
     return unavailableEstimatorRoofGraph();
   }
   const edgesById = new Map(storedEdges.map((edge) => [edge.id, edge]));
@@ -2909,7 +3837,10 @@ function estimatorRoofGraphProjection(
       return unavailableEstimatorRoofGraph();
     }
     const facetPointIds = roofGraphFacetPointIds(lineIds, edgesById);
-    if (!facetPointIds || facetPointIds.some((pointId) => !pointIds.has(pointId))) {
+    if (
+      !facetPointIds ||
+      facetPointIds.some((pointId) => !pointIds.has(pointId))
+    ) {
       return unavailableEstimatorRoofGraph();
     }
     facetCandidates.push({
@@ -2919,23 +3850,33 @@ function estimatorRoofGraphProjection(
       ring_closed: facet.ringClosed,
     });
   }
-  if (facetCandidates.length !== graph.facets.length
-    || new Set(facetCandidates.map((facet) => facet.id)).size !== facetCandidates.length) {
+  if (
+    facetCandidates.length !== graph.facets.length ||
+    new Set(facetCandidates.map((facet) => facet.id)).size !==
+      facetCandidates.length
+  ) {
     return unavailableEstimatorRoofGraph();
   }
 
   let failedChecks = 0;
   for (const entry of graph.checks) {
     const check = roofGraphObject(entry);
-    if (!check || typeof check.ok !== "boolean") return unavailableEstimatorRoofGraph();
+    if (!check || typeof check.ok !== "boolean")
+      return unavailableEstimatorRoofGraph();
     if (!check.ok) failedChecks += 1;
   }
   const reportStatus = text(detail?.review_status);
-  const requiresReview = graph.needs_review || failedChecks > 0
-    || facetCandidates.some((facet) => !facet.ring_closed) || reportStatus !== "Approved";
-  const reviewStatus: EstimatorRoofGraphProjection["review_status"] = reportStatus === "Rejected"
-    ? "Rejected"
-    : requiresReview ? "Needs Review" : "Approved";
+  const requiresReview =
+    graph.needs_review ||
+    failedChecks > 0 ||
+    facetCandidates.some((facet) => !facet.ring_closed) ||
+    reportStatus !== "Approved";
+  const reviewStatus: EstimatorRoofGraphProjection["review_status"] =
+    reportStatus === "Rejected"
+      ? "Rejected"
+      : requiresReview
+        ? "Needs Review"
+        : "Approved";
 
   return {
     state: requiresReview ? "needs_review" : "available",
@@ -2958,9 +3899,12 @@ function estimatorRoofGraphProjection(
       label: facet.label,
       point_ids: facet.point_ids,
       confidence: null,
-      review_status: reviewStatus === "Rejected"
-        ? "Rejected"
-        : requiresReview || !facet.ring_closed ? "Needs Review" : "Approved",
+      review_status:
+        reviewStatus === "Rejected"
+          ? "Rejected"
+          : requiresReview || !facet.ring_closed
+            ? "Needs Review"
+            : "Approved",
     })),
     check_count: graph.checks.length,
     failed_check_count: failedChecks,
@@ -2986,12 +3930,16 @@ function unavailableEstimatorRoofGraph(): EstimatorRoofGraphProjection {
 }
 
 function roofGraphObject(value: unknown): FrappeRow | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as FrappeRow : null;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as FrappeRow)
+    : null;
 }
 
 function roofGraphIdentifier(value: unknown): string | null {
   const result = text(value);
-  return result && result.length <= MAX_ESTIMATOR_ROOF_GRAPH_IDENTIFIER ? result : null;
+  return result && result.length <= MAX_ESTIMATOR_ROOF_GRAPH_IDENTIFIER
+    ? result
+    : null;
 }
 
 function roofGraphNumber(value: unknown): number | null {
@@ -2999,14 +3947,22 @@ function roofGraphNumber(value: unknown): number | null {
 }
 
 function roofGraphSha256(value: string): boolean {
-  return value.length === 64 && [...value].every((character) => "0123456789abcdef".includes(character));
+  return (
+    value.length === 64 &&
+    [...value].every((character) => "0123456789abcdef".includes(character))
+  );
 }
 
 function roofGraphLineIds(value: unknown): string[] | null {
-  if (!Array.isArray(value) || value.length < 3 || value.length > MAX_ESTIMATOR_ROOF_GRAPH_FACET_EDGES) return null;
+  if (
+    !Array.isArray(value) ||
+    value.length < 3 ||
+    value.length > MAX_ESTIMATOR_ROOF_GRAPH_FACET_EDGES
+  )
+    return null;
   const lineIds = value.map(roofGraphIdentifier);
-  return lineIds.every((lineId): lineId is string => !!lineId)
-    && new Set(lineIds).size === lineIds.length
+  return lineIds.every((lineId): lineId is string => !!lineId) &&
+    new Set(lineIds).size === lineIds.length
     ? lineIds
     : null;
 }
@@ -3017,12 +3973,19 @@ function roofGraphFacetPointIds(
 ): string[] | null {
   const sourceEdges = lineIds.map((lineId) => edgesById.get(lineId));
   if (sourceEdges.some((edge): edge is undefined => !edge)) return null;
-  const walk = (first: StoredRoofGraphEdge, reversed: boolean): string[] | null => {
-    const remaining = sourceEdges.filter((edge) => edge !== first) as StoredRoofGraphEdge[];
+  const walk = (
+    first: StoredRoofGraphEdge,
+    reversed: boolean,
+  ): string[] | null => {
+    const remaining = sourceEdges.filter(
+      (edge) => edge !== first,
+    ) as StoredRoofGraphEdge[];
     const ring = reversed ? [first.to, first.from] : [first.from, first.to];
     while (remaining.length > 0) {
       const current = ring[ring.length - 1];
-      const nextIndex = remaining.findIndex((edge) => edge.from === current || edge.to === current);
+      const nextIndex = remaining.findIndex(
+        (edge) => edge.from === current || edge.to === current,
+      );
       if (nextIndex < 0) return null;
       const [next] = remaining.splice(nextIndex, 1);
       ring.push(next.from === current ? next.to : next.from);
@@ -3038,14 +4001,20 @@ async function estimatorGeometryFromRaw(
   rawKey: string | null,
 ): Promise<EstimatorGeometryProjection> {
   if (!rawKey) return unavailableEstimatorGeometry("raw_source_not_recorded");
-  if (!validMeasurementRawKey(rawKey)) return unavailableEstimatorGeometry("raw_source_rejected");
+  if (!validMeasurementRawKey(rawKey))
+    return unavailableEstimatorGeometry("raw_source_rejected");
   try {
     const source = await env.RAW.get(rawKey);
     if (!source) return unavailableEstimatorGeometry("raw_source_not_found");
-    if (source.size > MAX_ESTIMATOR_RAW_BYTES) return unavailableEstimatorGeometry("raw_source_too_large");
+    if (source.size > MAX_ESTIMATOR_RAW_BYTES)
+      return unavailableEstimatorGeometry("raw_source_too_large");
     const rawText = await source.text();
-    const geometry = extractGeometry(rawText, parseBody(rawText, "application/json"));
-    if (!geometry) return unavailableEstimatorGeometry("raw_source_not_recomputable");
+    const geometry = extractGeometry(
+      rawText,
+      parseBody(rawText, "application/json"),
+    );
+    if (!geometry)
+      return unavailableEstimatorGeometry("raw_source_not_recomputable");
     const failedChecks = geometry.checks.filter((check) => !check.ok);
     return {
       state: geometry.needsReview ? "needs_review" : "recomputed",
@@ -3055,17 +4024,23 @@ async function estimatorGeometryFromRaw(
       checks_truncated: geometry.checks.length > MAX_ESTIMATOR_CHECKS,
       facet_count: geometry.facets.length,
       facets_truncated: geometry.facets.length > MAX_ESTIMATOR_FACETS,
-      metrics_truncated: Object.keys(geometry.measurements).length > MAX_ESTIMATOR_METRICS,
+      metrics_truncated:
+        Object.keys(geometry.measurements).length > MAX_ESTIMATOR_METRICS,
       checks: geometry.checks.slice(0, MAX_ESTIMATOR_CHECKS).map((check) => ({
         check: boundedGeometryText(check.check, MAX_ESTIMATOR_GEOMETRY_LABEL),
         target: boundedGeometryText(check.target, MAX_ESTIMATOR_GEOMETRY_LABEL),
         ok: check.ok,
-        detail: boundedGeometryText(check.detail, MAX_ESTIMATOR_GEOMETRY_DETAIL),
+        detail: boundedGeometryText(
+          check.detail,
+          MAX_ESTIMATOR_GEOMETRY_DETAIL,
+        ),
       })),
       facets: geometry.facets.slice(0, MAX_ESTIMATOR_FACETS).map((facet) => ({
         id: boundedGeometryText(facet.id, MAX_ESTIMATOR_GEOMETRY_LABEL),
         type: boundedGeometryText(facet.type, MAX_ESTIMATOR_GEOMETRY_LABEL),
-        material: facet.material ? boundedGeometryText(facet.material, MAX_ESTIMATOR_GEOMETRY_LABEL) : null,
+        material: facet.material
+          ? boundedGeometryText(facet.material, MAX_ESTIMATOR_GEOMETRY_LABEL)
+          : null,
         pitch: facet.pitch,
         orientation: facet.orientation,
         declared_area: facet.areaDeclared,
@@ -3080,7 +4055,10 @@ async function estimatorGeometryFromRaw(
           metric: boundedGeometryText(metric, MAX_ESTIMATOR_GEOMETRY_LABEL),
           value,
           source_ref: geometry.sourceRefs[metric]
-            ? boundedGeometryText(geometry.sourceRefs[metric], MAX_ESTIMATOR_GEOMETRY_DETAIL)
+            ? boundedGeometryText(
+                geometry.sourceRefs[metric],
+                MAX_ESTIMATOR_GEOMETRY_DETAIL,
+              )
             : null,
         })),
     };
@@ -3089,7 +4067,9 @@ async function estimatorGeometryFromRaw(
   }
 }
 
-function unavailableEstimatorGeometry(reason: string): EstimatorGeometryProjection {
+function unavailableEstimatorGeometry(
+  reason: string,
+): EstimatorGeometryProjection {
   return {
     state: "unavailable",
     reason,
@@ -3106,31 +4086,47 @@ function unavailableEstimatorGeometry(reason: string): EstimatorGeometryProjecti
 }
 
 function validMeasurementRawKey(value: string): boolean {
-  return /^raw\/measurements\/\d{4}-\d{2}-\d{2}\/ow_[0-9a-f-]{36}\.json$/.test(value);
+  return /^raw\/measurements\/\d{4}-\d{2}-\d{2}\/ow_[0-9a-f-]{36}\.json$/.test(
+    value,
+  );
 }
 
 function boundedGeometryText(value: string, maximum: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
-  return compact.length > maximum ? `${compact.slice(0, maximum - 1)}…` : compact;
+  return compact.length > maximum
+    ? `${compact.slice(0, maximum - 1)}…`
+    : compact;
 }
 
 function recordRows(value: unknown): FrappeRow[] {
   return Array.isArray(value)
-    ? value.filter((row): row is FrappeRow => !!row && typeof row === "object" && !Array.isArray(row))
+    ? value.filter(
+        (row): row is FrappeRow =>
+          !!row && typeof row === "object" && !Array.isArray(row),
+      )
     : [];
 }
 
 function address(row: FrappeRow | undefined): string | null {
   if (!row) return null;
-  const locality = [text(row.city), text(row.province), text(row.postal_code)].filter(notNull).join(" ");
-  const parts = [text(row.address_line1), locality || null, text(row.country)].filter(notNull);
+  const locality = [text(row.city), text(row.province), text(row.postal_code)]
+    .filter(notNull)
+    .join(" ");
+  const parts = [
+    text(row.address_line1),
+    locality || null,
+    text(row.country),
+  ].filter(notNull);
   return parts.length > 0 ? parts.join(", ") : null;
 }
 
 function tenantDate(timeZone: string | undefined): string {
   try {
     return new Intl.DateTimeFormat("en-CA", {
-      timeZone: timeZone || "America/Edmonton", year: "numeric", month: "2-digit", day: "2-digit",
+      timeZone: timeZone || "America/Edmonton",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
     }).format(new Date());
   } catch {
     return new Date().toISOString().slice(0, 10);
@@ -3145,7 +4141,13 @@ function compareSchedule(left: string | null, right: string | null): number {
 }
 
 function productionLanePriority(lane: ProductionRunwayLane): number {
-  return ["blocked", "scheduled", "needs_assignment", "ready_for_review", "needs_verification"].indexOf(lane);
+  return [
+    "blocked",
+    "scheduled",
+    "needs_assignment",
+    "ready_for_review",
+    "needs_verification",
+  ].indexOf(lane);
 }
 
 function dateValue(value: string | null): number {
@@ -3189,7 +4191,12 @@ function numberValue(value: unknown): number {
 }
 
 function optionalNumber(value: unknown): number | null {
-  if (value === null || value === undefined || (typeof value === "string" && !value.trim())) return null;
+  if (
+    value === null ||
+    value === undefined ||
+    (typeof value === "string" && !value.trim())
+  )
+    return null;
   const number = typeof value === "number" ? value : Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -3197,13 +4204,16 @@ function optionalNumber(value: unknown): number | null {
 function numberDelta(current: unknown, prior: unknown): number | null {
   const currentNumber = optionalNumber(current);
   const priorNumber = optionalNumber(prior);
-  return currentNumber === null || priorNumber === null ? null : currentNumber - priorNumber;
+  return currentNumber === null || priorNumber === null
+    ? null
+    : currentNumber - priorNumber;
 }
 
 function valueChanged(current: unknown, prior: unknown): boolean {
   const currentText = text(current);
   const priorText = text(prior);
-  if (currentText !== null || priorText !== null) return currentText !== priorText;
+  if (currentText !== null || priorText !== null)
+    return currentText !== priorText;
   return optionalNumber(current) !== optionalNumber(prior);
 }
 

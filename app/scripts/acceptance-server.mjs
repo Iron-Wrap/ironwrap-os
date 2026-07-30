@@ -100,6 +100,7 @@ const fixtureToday = {
 
 const fixtureJob = {
   ...fixtureEnvelope,
+  allowed_actions: ["field.checkin.create", "work_package.acknowledge", "work_package.stop_work"],
   job: {
     id: "JOB-ACCEPTANCE",
     roof_job_id: "roof-job-acceptance",
@@ -156,6 +157,40 @@ const fixtureJob = {
       display_name: "Acceptance Homeowner",
       phone: "+14035550123",
       access_instructions: null,
+    },
+    work_package: {
+      id: "WP-ACCEPTANCE-3",
+      version: 3,
+      status: "Released",
+      title: "North slope replacement",
+      objective: "Replace the north slope to the released drawing.",
+      boundaries: "North slope only; no fascia scope.",
+      prerequisites: "Materials staged and fall protection inspected.",
+      expected_result: "Weather-tight completed north slope.",
+      stop_conditions: "Stop for wind above the plan limit or unprotected edge exposure.",
+      make_safe_procedure: "Secure loose materials and maintain the fall-protection boundary.",
+      issued_at: "2026-07-10T15:00:00.000Z",
+      released_at: "2026-07-10T15:15:00.000Z",
+      expires_at: "2026-07-10T23:00:00.000Z",
+      acknowledgement: { current_user_acknowledged: false, acknowledged_at: null },
+      steps: [
+        {
+          sequence: 1,
+          instruction: "Inspect anchors before roof access.",
+          required_evidence: "Anchor inspection photo.",
+          acceptance_criteria: "Anchor and harness connection are visible.",
+        },
+      ],
+      hold_points: [
+        {
+          sequence: 1,
+          hold_point: "Deck condition review",
+          release_authority: "Production manager",
+          required_evidence: "Deck condition photo.",
+          acceptance_criteria: "Production manager independently releases the hold.",
+          released: false,
+        },
+      ],
     },
   },
   proof_stream: [],

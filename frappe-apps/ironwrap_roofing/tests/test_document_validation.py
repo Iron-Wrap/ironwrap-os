@@ -52,6 +52,14 @@ WORK_PACKAGE_CONTROLLER_PATH = (
     / "work_package"
     / "work_package.py"
 )
+WORK_PACKAGE_EVENT_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "work_package_event"
+    / "work_package_event.py"
+)
 
 
 class FakeValidationError(Exception):
@@ -226,6 +234,74 @@ class DocumentValidationAdapterTests(unittest.TestCase):
 
         controller = EVIDENCE_ITEM_CONTROLLER_PATH.read_text(encoding="utf-8")
         self.assertIn("validate_evidence_verification_mutation(self)", controller)
+
+    def test_work_package_lifecycle_and_events_require_private_command_contexts(
+        self,
+    ) -> None:
+        adapter, _ = self.load_adapter()
+        released = {
+            "name": "wp:job-1:v1",
+            "status": "Released",
+            "released_by": "supervisor@example.com",
+            "released_at": "2026-07-10 08:00:00",
+            "acknowledged_by": None,
+            "acknowledged_at": None,
+            "acknowledgement_device_action_id": None,
+            "started_at": None,
+            "blocked_by": None,
+            "blocked_at": None,
+            "blocked_device_action_id": None,
+            "blocker_reason": None,
+            "completed_at": None,
+        }
+        acknowledged = FakeDocument(
+            {
+                **released,
+                "status": "Acknowledged",
+                "acknowledged_by": "crew@example.com",
+                "acknowledged_at": "2026-07-10 08:15:00",
+                "acknowledgement_device_action_id": "field-ack-0001",
+            },
+            previous=released,
+        )
+        with self.assertRaisesRegex(FakeValidationError, "bounded Work Package"):
+            adapter.validate_work_package_runtime_mutation(acknowledged)
+        with adapter.work_package_transition_context(acknowledged):
+            adapter.validate_work_package_runtime_mutation(acknowledged)
+
+        event = FakeDocument(
+            {
+                "work_package_event_id": "wpe-ack-1",
+                "event_type": "Acknowledged",
+                "work_package": "wp:job-1:v1",
+                "roof_job": "job-1",
+                "job_assignment": "assignment-1",
+                "work_package_version": 1,
+                "actor_user": "crew@example.com",
+                "actor_role": "Production direct assignment",
+                "device_action_id": "field-ack-0001",
+                "occurred_at": "2026-07-10 08:15:00",
+                "payload_hash": "a" * 64,
+                "hold_point_sequence": None,
+                "evidence_item": None,
+                "blocker_reason": None,
+            }
+        )
+        with self.assertRaisesRegex(FakeValidationError, "bounded Work Package"):
+            adapter.validate_work_package_event_mutation(event)
+        with adapter.work_package_event_issuance_context(event):
+            adapter.validate_work_package_event_mutation(event)
+        with self.assertRaisesRegex(FakeValidationError, "append-only"):
+            adapter.validate_work_package_event_mutation(
+                FakeDocument({**event, "actor_role": "Forged"}, previous=dict(event))
+            )
+
+        package_controller = WORK_PACKAGE_CONTROLLER_PATH.read_text(encoding="utf-8")
+        event_controller = WORK_PACKAGE_EVENT_CONTROLLER_PATH.read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("validate_work_package_runtime_mutation(self)", package_controller)
+        self.assertIn("validate_work_package_event_mutation(self)", event_controller)
 
     def test_customer_quote_correction_loads_contract_lineage_context(self) -> None:
         fields = (

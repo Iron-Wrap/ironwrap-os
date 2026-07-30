@@ -35,7 +35,7 @@ Fresh checks on 2026-07-30 against this migration branch established:
 | PWA browser | 15 Playwright tests passed; 3 WebGL estimator cases were skipped by the configured suite |
 | Worker | 258 tests, typecheck, and explicit top-level-environment dry-run bundle passed |
 | MCP | 100 tests across Frappe, bus, and Newo servers passed |
-| Frappe | 100 unit tests passed |
+| Frappe | 102 unit tests passed |
 | Deployment/recovery tools | 72 tests passed |
 | Production Node dependencies | `npm audit --omit=dev` reported zero known vulnerabilities for app, Worker, and all three MCP packages |
 
@@ -179,7 +179,7 @@ Target gaps:
 | Domain | Current state | Autonomous target gap | Proof required |
 |---|---|---|---|
 | Governance | Target prose and owner role | corporate/delegation/policy objects and activation separation | policy change audit |
-| Legal/licence | Generic compliance record | full authority register, expiry/revocation, jurisdiction rules | issuer recheck and blocked release |
+| Legal/licence | job compliance authority records with effective/expiry/revocation fences and owner-attributed waivers | full authority register, jurisdiction rules, and issuer integration | issuer recheck and blocked release |
 | Marketing | lead source + market watch | claims ledger, campaign side effects, suppression | unsupported claim rejected |
 | Lead intake | Strong implemented spine | all real sources cut over and bridge retirement | real dual-brand lead, reconcile |
 | Consent/comms | consent/event records and policy checks | autonomous provider send and response/suppression loop | opt-in/send/reply/STOP/reconcile |
@@ -188,19 +188,19 @@ Target gaps:
 | Design | scope/options/quote evidence | controlled assemblies, details, bulletins, engineer/permit | system/version conflict block |
 | Estimate | takeoff/price/quote/revision | complete shop/labour/equipment/risk costing | estimate-to-actual closed job |
 | Contract | acceptance/evidence | correct agreement selection, cancellation, e-sign, authority | residential/commercial scenarios |
-| Preconstruction | seven gates + safety/compliance | complete multi-domain readiness and freshness | stale permit/WCB/weather injection |
+| Preconstruction | seven gates plus current Crew/Safety/Access authority fences, including owner-attributed waivers | complete multi-domain readiness and issuer-backed freshness | stale permit/WCB/weather injection |
 | Procurement | supplier quote/order records | vendor onboarding, PO transmit/ack, substitution, three-way match | duplicate/short/backorder test |
 | Inventory | none beyond order receipt summary | item/lot/bin/reservation/remnant/count/valuation | receive-reserve-use-reconcile |
 | Shop | no work-centre model | routing, machines, tooling, QC, yield, label, maintenance | physical synthetic/real shop batch |
 | Scheduling | assignment and approval ledger | complete constraint solver and autonomous reschedule | conflict/weather/material test |
 | Human field work | assignment-scoped Work Package, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
-| Safety | plan/acknowledgement | competency, equipment, incident, rescue, stop protection | stop/emergency drill |
+| Safety | plan/acknowledgement plus Crew Profile competence, WCB, equipment, and active-stop release fences | individual equipment/incident/rescue registers and real-world proof | stop/emergency drill |
 | Quality | completion/evidence | ITP, inspections, NCR, quarantine, disposition | seeded defect containment |
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |
 | Closeout | completion/warranty/review records | inspection, as-built, registration, accounting and archive loop | real closeout and recovery |
 | Warranty/service | warranty packet | service case, diagnosis, responsibility, remedy, recovery | callback end to end |
 | Finance | payment mirror + reconciliation | invoice/holdback/payment/refund/tax/payroll contracts | provider sandbox and accountant signoff |
-| Workforce | crew/assignment | HR, apprenticeship, competency, time, accommodation | worker lifecycle |
+| Workforce | crew/assignment plus current competence and WCB summary controls | individual worker authority, HR, apprenticeship, time, accommodation | worker lifecycle |
 | Fleet/equipment | none | asset/driver/inspection/maintenance/cargo/incident | unsafe asset release blocked |
 | Facility | deployment infra only | shop/building/fire/security/environmental operations | facility inspection/drill |
 | Privacy/security | strong technical controls, consent; production dependency audit clear | complete data inventory, DSAR, breach, retention/destruction; resolve or explicitly accept dev-toolchain advisories | restore, breach, access, production-audit tests |

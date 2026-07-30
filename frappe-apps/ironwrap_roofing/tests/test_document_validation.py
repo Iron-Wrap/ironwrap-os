@@ -60,6 +60,30 @@ WORK_PACKAGE_EVENT_CONTROLLER_PATH = (
     / "work_package_event"
     / "work_package_event.py"
 )
+MATERIAL_LOT_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "material_lot"
+    / "material_lot.py"
+)
+NONCONFORMANCE_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "nonconformance"
+    / "nonconformance.py"
+)
+SHOP_ORDER_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "shop_order"
+    / "shop_order.py"
+)
 
 
 class FakeValidationError(Exception):
@@ -418,6 +442,76 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         )
         self.assertIn("validate_work_package_runtime_mutation(self)", package_controller)
         self.assertIn("validate_work_package_event_mutation(self)", event_controller)
+
+    def test_shop_domain_lifecycles_require_private_command_contexts(self) -> None:
+        adapter, _ = self.load_adapter()
+        lot_draft = FakeDocument({"name": "lot-1", "status": "Draft"})
+        lot_available = FakeDocument(
+            {"name": "lot-1", "status": "Available"}, previous=dict(lot_draft)
+        )
+        with self.assertRaisesRegex(FakeValidationError, "Material Lot lifecycle"):
+            adapter.validate_material_lot_runtime_mutation(lot_available)
+        with adapter.material_lot_transition_context(lot_available):
+            adapter.validate_material_lot_runtime_mutation(lot_available)
+
+        ncr_draft = FakeDocument({"name": "ncr-1", "status": "Draft"})
+        ncr_open = FakeDocument(
+            {
+                "name": "ncr-1",
+                "status": "Open",
+                "containment": "",
+                "disposition": "",
+                "disposition_by": "",
+                "disposition_at": "",
+                "closed_by": "",
+                "closed_at": "",
+                "closure_evidence": "",
+            },
+            previous=dict(ncr_draft),
+        )
+        with self.assertRaisesRegex(FakeValidationError, "Nonconformance lifecycle"):
+            adapter.validate_nonconformance_runtime_mutation(ncr_open)
+        with adapter.nonconformance_transition_context(ncr_open):
+            adapter.validate_nonconformance_runtime_mutation(ncr_open)
+
+        shop_draft = FakeDocument({"name": "shop-1", "status": "Draft", "lines": []})
+        shop_released = FakeDocument(
+            {
+                "name": "shop-1",
+                "status": "Released",
+                "released_by": "production@example.com",
+                "released_at": "2026-07-30 09:00:00",
+                "reserved_at": "",
+                "setup_started_at": "",
+                "fabrication_started_at": "",
+                "quality_hold_reason": "",
+                "ready_at": "",
+                "handed_over_to": "",
+                "handed_over_at": "",
+                "handoff_evidence": "",
+                "invoice_payment_milestone": "",
+                "invoice_ready_at": "",
+                "closed_at": "",
+                "lines": [{"line_no": 1}],
+                "material_allocations": [],
+                "operations": [],
+                "yields": [],
+                "inspections": [],
+                "bundles": [],
+            },
+            previous=dict(shop_draft),
+        )
+        with self.assertRaisesRegex(FakeValidationError, "Shop Order lifecycle"):
+            adapter.validate_shop_order_runtime_mutation(shop_released)
+        with adapter.shop_order_transition_context(shop_released):
+            adapter.validate_shop_order_runtime_mutation(shop_released)
+
+        for path, call in (
+            (MATERIAL_LOT_CONTROLLER_PATH, "validate_material_lot_runtime_mutation(self)"),
+            (NONCONFORMANCE_CONTROLLER_PATH, "validate_nonconformance_runtime_mutation(self)"),
+            (SHOP_ORDER_CONTROLLER_PATH, "validate_shop_order_runtime_mutation(self)"),
+        ):
+            self.assertIn(call, path.read_text(encoding="utf-8"))
 
     def test_customer_quote_correction_loads_contract_lineage_context(self) -> None:
         fields = (

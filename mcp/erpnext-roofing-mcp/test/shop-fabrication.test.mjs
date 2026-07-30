@@ -42,6 +42,7 @@ function materialLotFixture(overrides = {}) {
     supplier_order: "supplier-1",
     source_shop_order: "",
     status: "Available",
+    received_quantity: 10,
     available_quantity: 6,
     reserved_quantity: 0,
     consumed_quantity: 4,
@@ -175,6 +176,21 @@ function firstPieceCrewProfileFixture(overrides = {}) {
     modified: "2026-07-30 10:10:00",
     members: [],
     ...overrides,
+  };
+}
+
+function firstPieceAuthorityResponse({
+  actorUser = "production@example.com",
+  workPackage = firstPieceWorkPackageFixture(),
+  jobAssignment = firstPieceJobAssignmentFixture(),
+  crewProfile = firstPieceCrewProfileFixture(),
+} = {}) {
+  return {
+    authenticated_user: actorUser,
+    work_package: workPackage,
+    job_assignment: jobAssignment,
+    crew_profile: crewProfile,
+    assignment_role: "Production direct assignment",
   };
 }
 
@@ -586,11 +602,13 @@ test("first-piece pass stores one signed outcome and calls only the bounded Frap
     if (method === "GET" && target.includes("Shop%20Order/shop-1")) return Response.json({ data: order });
     if (method === "GET" && target.includes("Material%20Takeoff/takeoff-1")) return Response.json({ data: takeoff });
     if (method === "GET" && target.includes("Supplier%20Order/supplier-1")) return Response.json({ data: supplierOrder });
-    if (method === "GET" && target.includes("Work%20Package/package-1")) return Response.json({ data: workPackage });
     if (method === "GET" && target.includes("Job%20Assignment/assignment-1")) return Response.json({ data: jobAssignment });
     if (method === "GET" && target.includes("Crew%20Profile/crew-1")) return Response.json({ data: crewProfile });
     if (method === "GET" && target.includes("Material%20Lot/lot-a")) return Response.json({ data: lot });
     if (method === "GET" && target.includes("Evidence%20Item/evidence-1")) return Response.json({ data: evidence });
+    if (method === "POST" && target.endsWith("/api/method/ironwrap_roofing.shop_fabrication_api.preview_first_piece_authority")) {
+      return Response.json({ message: firstPieceAuthorityResponse({ actorUser, workPackage, jobAssignment, crewProfile }) });
+    }
     if (method === "GET" && target.includes("Hermes%20Run/run-first-piece-0001")) {
       return new Response("missing", { status: 404 });
     }
@@ -637,6 +655,24 @@ test("first-piece pass stores one signed outcome and calls only the bounded Frap
     evidence_item: "evidence-1",
     needs_review: 0,
   }]);
+  assert.deepEqual(dryRun.effects, {
+    shop_order: { shop_order_id: "shop-1", status: "In Fabrication" },
+    material_allocations: [{
+      allocation_id: "alloc-1",
+      material_lot: "lot-a",
+      issued_quantity: "1",
+      status: "Issued",
+    }],
+    material_lots: [{
+      name: "lot-a",
+      material_lot_id: "lot-a",
+      status: "Reserved",
+      available_quantity: "3",
+      reserved_quantity: "2",
+      consumed_quantity: "5",
+    }],
+  });
+  assert.equal(requests.some(({ method, target }) => method === "GET" && target.includes("Work%20Package/package-1")), false);
   const args = approvalArgs({
     privateKey,
     dryRun,
@@ -721,11 +757,13 @@ test("first-piece failure is a signed Quality Hold with a derived failed inspect
     if (target.includes("Shop%20Order/shop-1")) return Response.json({ data: order });
     if (target.includes("Material%20Takeoff/takeoff-1")) return Response.json({ data: { name: "takeoff-1", roof_job: "JOB-1", status: "Approved" } });
     if (target.includes("Supplier%20Order/supplier-1")) return Response.json({ data: { name: "supplier-1", roof_job: "JOB-1", status: "Received" } });
-    if (target.includes("Work%20Package/package-1")) return Response.json({ data: workPackage });
     if (target.includes("Job%20Assignment/assignment-1")) return Response.json({ data: jobAssignment });
     if (target.includes("Crew%20Profile/crew-1")) return Response.json({ data: crewProfile });
     if (target.includes("Material%20Lot/lot-a")) return Response.json({ data: materialLotFixture({ status: "Reserved", available_quantity: 3, reserved_quantity: 3 }) });
     if (target.includes("Evidence%20Item/evidence-1")) return Response.json({ data: verifiedEvidenceFixture() });
+    if (method === "POST" && target.endsWith("/api/method/ironwrap_roofing.shop_fabrication_api.preview_first_piece_authority")) {
+      return Response.json({ message: firstPieceAuthorityResponse({ actorUser, workPackage, jobAssignment, crewProfile }) });
+    }
     if (method === "GET" && target.includes("Hermes%20Run/run-first-piece-fail-0001")) {
       return new Response("missing", { status: 404 });
     }
@@ -768,6 +806,32 @@ test("first-piece failure is a signed Quality Hold with a derived failed inspect
   assert.equal(dryRun.first_piece.inspections[0].result, "Fail");
   assert.equal(dryRun.first_piece.inspections[0].measured_result, "2404 mm; nominal 2400 +/- 3 mm");
   assert.equal(dryRun.first_piece.inspections[0].needs_review, 1);
+  assert.deepEqual(dryRun.effects, {
+    shop_order: { shop_order_id: "shop-1", status: "Quality Hold" },
+    material_allocations: [{
+      allocation_id: "alloc-1",
+      material_lot: "lot-a",
+      issued_quantity: "1",
+      status: "Issued",
+    }],
+    material_lots: [{
+      name: "lot-a",
+      material_lot_id: "lot-a",
+      status: "Quarantined",
+      available_quantity: "3",
+      reserved_quantity: "2",
+      consumed_quantity: "5",
+    }],
+    nonconformance: {
+      action: "create",
+      nonconformance_id: "derived from the approved Hermes Run ID at execution",
+      status: "Contained",
+      shop_order: "shop-1",
+      material_lot: "lot-a",
+      evidence_item: "evidence-1",
+      containment: "Material Lot lot-a quarantined; Shop Order placed on Quality Hold.",
+    },
+  });
   const args = approvalArgs({
     privateKey,
     dryRun,
@@ -873,9 +937,9 @@ test("first-piece dry run rejects invalid state, lineage, independence, and evid
   let order = firstPieceOrderFixture();
   let lot = materialLotFixture({ status: "Reserved", available_quantity: 3, reserved_quantity: 3 });
   let evidence = verifiedEvidenceFixture();
-  const workPackage = firstPieceWorkPackageFixture();
-  const jobAssignment = firstPieceJobAssignmentFixture();
-  const crewProfile = firstPieceCrewProfileFixture();
+  let workPackage = firstPieceWorkPackageFixture();
+  let jobAssignment = firstPieceJobAssignmentFixture();
+  let crewProfile = firstPieceCrewProfileFixture();
   const server = buildServer({
     baseUrl: "https://erp.example",
     apiKey: "key",
@@ -886,16 +950,23 @@ test("first-piece dry run rejects invalid state, lineage, independence, and evid
     dryRunSigningKey: "p".repeat(32),
     allowedTools: ["dry_run_record_first_piece_outcome"],
   });
-  t.mock.method(globalThis, "fetch", async (url) => {
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
     const target = String(url);
+    const method = init.method ?? "GET";
     if (target.includes("Shop%20Order/shop-1")) return Response.json({ data: order });
     if (target.includes("Material%20Takeoff/takeoff-1")) return Response.json({ data: { name: "takeoff-1", roof_job: "JOB-1", status: "Approved" } });
     if (target.includes("Supplier%20Order/supplier-1")) return Response.json({ data: { name: "supplier-1", roof_job: "JOB-1", status: "Received" } });
-    if (target.includes("Work%20Package/package-1")) return Response.json({ data: workPackage });
+    if (target.includes("Work%20Package/package-1")) throw new Error("first-piece authority must provide the locked Work Package snapshot");
     if (target.includes("Job%20Assignment/assignment-1")) return Response.json({ data: jobAssignment });
     if (target.includes("Crew%20Profile/crew-1")) return Response.json({ data: crewProfile });
     if (target.includes("Material%20Lot/lot-a")) return Response.json({ data: lot });
     if (target.includes("Evidence%20Item/evidence-1")) return Response.json({ data: evidence });
+    if (method === "POST" && target.endsWith("/api/method/ironwrap_roofing.shop_fabrication_api.preview_first_piece_authority")) {
+      if (jobAssignment.status === "Draft" || !jobAssignment.scheduled_start || workPackage.expires_at === "2000-01-01 00:00:00") {
+        return new Response("authority denied", { status: 417 });
+      }
+      return Response.json({ message: firstPieceAuthorityResponse({ actorUser, workPackage, jobAssignment, crewProfile }) });
+    }
     throw new Error(`unexpected request ${target}`);
   });
   const validPayload = (inspection = {}) => JSON.stringify({
@@ -1043,6 +1114,20 @@ test("first-piece dry run rejects invalid state, lineage, independence, and evid
   await assert.rejects(
     async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload() }),
     /shop_first_piece_evidence_not_verified/,
+  );
+
+  evidence = verifiedEvidenceFixture();
+  jobAssignment = firstPieceJobAssignmentFixture({ status: "Draft", scheduled_start: "" });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload() }),
+    /erpnext_http_417/,
+  );
+
+  jobAssignment = firstPieceJobAssignmentFixture();
+  workPackage = firstPieceWorkPackageFixture({ expires_at: "2000-01-01 00:00:00" });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_first_piece_outcome.handler({ shop_order_id: "shop-1", first_piece_payload_json: validPayload() }),
+    /erpnext_http_417/,
   );
 });
 

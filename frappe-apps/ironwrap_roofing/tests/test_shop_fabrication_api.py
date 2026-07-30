@@ -372,6 +372,32 @@ class ShopFabricationApiTests(unittest.TestCase):
             },
         )
 
+    def test_preview_first_piece_authority_reuses_current_package_validation(self) -> None:
+        fixtures, order, _, _ = self.first_piece_ready_fixture()
+        api, fixtures, db, _ = self.load_api(fixtures)
+
+        preview = api.preview_first_piece_authority("shop-1")
+
+        self.assertEqual(preview["authenticated_user"], "production@example.com")
+        self.assertEqual(preview["work_package"]["name"], "package-1")
+        self.assertEqual(preview["work_package"]["job_assignment"], "assignment-1")
+        self.assertEqual(preview["job_assignment"]["assignment_id"], "assignment-1")
+        self.assertEqual(preview["crew_profile"]["crew_profile_id"], "crew-1")
+        self.assertEqual(preview["assignment_role"], "Production direct assignment")
+        for table in (
+            "`tabShop Order`",
+            "`tabMaterial Takeoff`",
+            "`tabSupplier Order`",
+            "`tabWork Package`",
+            "`tabJob Assignment`",
+            "`tabCrew Profile`",
+        ):
+            self.assertTrue(any(table in query for query, _ in db.lock_queries), table)
+
+        fixtures["work_packages"]["package-1"]["authority_error"] = "work_package_expired"
+        with self.assertRaisesRegex(FakeValidationError, "work_package_expired"):
+            api.preview_first_piece_authority(order["name"])
+
     def load_api(
         self,
         fixtures: dict | None = None,

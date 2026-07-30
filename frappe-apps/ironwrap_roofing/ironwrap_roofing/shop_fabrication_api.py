@@ -941,6 +941,54 @@ def _lock_first_piece_inspector_authority(
     }
 
 
+def _first_piece_inspector_authority_snapshot(
+    inspector_authority: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "authenticated_user": _snapshot_text(
+            inspector_authority["authenticated_user"]
+        ),
+        "job_assignment": _snapshot_values(
+            inspector_authority["job_assignment"],
+            (
+                "name",
+                "assignment_id",
+                "roof_job",
+                "assignment_type",
+                "status",
+                "crew_profile",
+                "assigned_user",
+                "scheduled_start",
+                "supersedes",
+                "modified",
+            ),
+        ),
+        "crew_profile": _snapshot_values(
+            inspector_authority["crew_profile"],
+            (
+                "name",
+                "crew_profile_id",
+                "status",
+                "crew_type",
+                "competency_status",
+                "competency_checked_at",
+                "competency_expiry",
+                "equipment_status",
+                "equipment_checked_at",
+                "equipment_expiry",
+                "wcb_status",
+                "wcb_checked_at",
+                "wcb_expiry",
+                "active_stop",
+                "active_stop_at",
+                "active_stop_reason",
+                "modified",
+            ),
+        ),
+        "assignment_role": _snapshot_text(inspector_authority["assignment_role"]),
+    }
+
+
 def _first_piece_measurement_spec(line: Mapping[str, Any]) -> dict[str, Decimal | str]:
     dimensions = line.get("dimensions")
     tolerance = line.get("tolerance")
@@ -1213,55 +1261,49 @@ def _shop_order_first_piece_snapshot(
             ),
         ),
     }
-    snapshot["inspector_authority"] = {
-        "authenticated_user": _snapshot_text(
-            inspector_authority["authenticated_user"]
-        ),
-        "job_assignment": _snapshot_values(
-            inspector_authority["job_assignment"],
-            (
-                "name",
-                "assignment_id",
-                "roof_job",
-                "assignment_type",
-                "status",
-                "crew_profile",
-                "assigned_user",
-                "scheduled_start",
-                "supersedes",
-                "modified",
-            ),
-        ),
-        "crew_profile": _snapshot_values(
-            inspector_authority["crew_profile"],
-            (
-                "name",
-                "crew_profile_id",
-                "status",
-                "crew_type",
-                "competency_status",
-                "competency_checked_at",
-                "competency_expiry",
-                "equipment_status",
-                "equipment_checked_at",
-                "equipment_expiry",
-                "wcb_status",
-                "wcb_checked_at",
-                "wcb_expiry",
-                "active_stop",
-                "active_stop_at",
-                "active_stop_reason",
-                "modified",
-            ),
-        ),
-        "assignment_role": _snapshot_text(inspector_authority["assignment_role"]),
-    }
+    snapshot["inspector_authority"] = _first_piece_inspector_authority_snapshot(
+        inspector_authority
+    )
     return snapshot
 
 
 def _first_piece_ncr_id(hermes_run_id: str) -> str:
     digest = hashlib.sha256(f"first-piece:{hermes_run_id}".encode("utf-8")).hexdigest()
     return f"ncr:first-piece:{digest[:32]}"
+
+
+@frappe.whitelist()
+def preview_first_piece_authority(shop_order_id: str) -> dict[str, Any]:
+    """Return the current authority snapshot required for a first-piece preview."""
+
+    authenticated_user = _assert_post_and_permissions(
+        doctype="Shop Order", allowed_roles=SHOP_ROLES
+    )
+    shop_order_id = _clean_identifier(shop_order_id, "shop_order_id")
+    order = _lock_shop_order(shop_order_id)
+    _lock_shop_sources(order)
+    inspector_authority = _lock_first_piece_inspector_authority(
+        order, authenticated_user=authenticated_user
+    )
+    preview = _first_piece_inspector_authority_snapshot(inspector_authority)
+    preview["work_package"] = _snapshot_values(
+        inspector_authority["work_package"],
+        (
+            "name",
+            "work_package_id",
+            "roof_job",
+            "job_assignment",
+            "safety_plan",
+            "version",
+            "status",
+            "expires_at",
+            "acknowledged_by",
+            "acknowledged_at",
+            "started_at",
+            "modified",
+        ),
+    )
+    return preview
 
 
 def _set(document: Any, field: str, value: Any) -> None:

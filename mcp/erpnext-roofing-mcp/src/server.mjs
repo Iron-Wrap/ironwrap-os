@@ -8261,6 +8261,109 @@ function assertFirstPieceMaterialLots(order, linesByNumber, allocations, inspect
   }
 }
 
+function firstPieceDecimalValue(significand, scale) {
+  const digits = significand.toString();
+  if (scale === 0) return { significand, scale, text: digits };
+  const text = digits.length <= scale
+    ? `0.${"0".repeat(scale - digits.length)}${digits}`
+    : `${digits.slice(0, -scale)}.${digits.slice(-scale)}`;
+  return {
+    significand,
+    scale,
+    text: text.replace(/0+$/, "").replace(/\.$/, ""),
+  };
+}
+
+function firstPieceDecimalAdd(left, right) {
+  const scale = Math.max(left.scale, right.scale);
+  return firstPieceDecimalValue(
+    firstPieceDecimalAtScale(left, scale) + firstPieceDecimalAtScale(right, scale),
+    scale,
+  );
+}
+
+function firstPieceDecimalSubtract(left, right) {
+  const scale = Math.max(left.scale, right.scale);
+  const difference = firstPieceDecimalAtScale(left, scale) - firstPieceDecimalAtScale(right, scale);
+  if (difference < 0n) throw new Error("shop_first_piece_lot_balance_invalid");
+  return firstPieceDecimalValue(difference, scale);
+}
+
+function firstPieceDecimalCompare(left, right) {
+  const scale = Math.max(left.scale, right.scale);
+  return firstPieceDecimalAtScale(left, scale) - firstPieceDecimalAtScale(right, scale);
+}
+
+function firstPieceInventoryEffects(action, allocations, inspections, lots) {
+  const lotsById = new Map();
+  for (const lot of lots) {
+    lotsById.set(String(lot.name ?? ""), lot);
+    lotsById.set(String(lot.material_lot_id ?? ""), lot);
+  }
+  const issuedByLot = new Map();
+  const allocationEffects = inspections.map((inspection) => {
+    const allocation = allocations.find(({ allocation_id }) => allocation_id === inspection.allocation_id);
+    const materialLotId = String(allocation?.material_lot ?? "");
+    const issued = parseFirstPieceDecimal(inspection.issued_quantity, {
+      allowZero: false,
+      errorCode: "shop_first_piece_issued_quantity_invalid",
+    });
+    issuedByLot.set(
+      materialLotId,
+      firstPieceDecimalAdd(issuedByLot.get(materialLotId) ?? firstPieceDecimalValue(0n, 0), issued),
+    );
+    return {
+      allocation_id: inspection.allocation_id,
+      material_lot: materialLotId,
+      issued_quantity: issued.text,
+      status: "Issued",
+    };
+  });
+  const failedAllocationId = action === "fail_to_quality_hold"
+    ? inspections[0]?.allocation_id
+    : null;
+  const failedLotId = failedAllocationId
+    ? String(allocations.find(({ allocation_id }) => allocation_id === failedAllocationId)?.material_lot ?? "")
+    : null;
+  const materialLots = [...issuedByLot.entries()].map(([materialLotId, issued]) => {
+    const lot = lotsById.get(materialLotId);
+    if (!lot) throw new Error("shop_first_piece_lot_mismatch");
+    const available = parseFirstPieceStoredDecimal(lot.available_quantity, {
+      allowZero: true,
+      errorCode: "shop_first_piece_lot_balance_invalid",
+    });
+    const reserved = parseFirstPieceStoredDecimal(lot.reserved_quantity, {
+      allowZero: false,
+      errorCode: "shop_first_piece_lot_balance_invalid",
+    });
+    const consumed = parseFirstPieceStoredDecimal(lot.consumed_quantity, {
+      allowZero: true,
+      errorCode: "shop_first_piece_lot_balance_invalid",
+    });
+    const received = parseFirstPieceStoredDecimal(lot.received_quantity, {
+      allowZero: false,
+      errorCode: "shop_first_piece_lot_balance_invalid",
+    });
+    const nextReserved = firstPieceDecimalSubtract(reserved, issued);
+    const nextConsumed = firstPieceDecimalAdd(consumed, issued);
+    let status;
+    if (materialLotId === failedLotId) status = "Quarantined";
+    else if (firstPieceDecimalCompare(nextReserved, firstPieceDecimalValue(0n, 0)) > 0n) status = "Reserved";
+    else if (firstPieceDecimalCompare(available, firstPieceDecimalValue(0n, 0)) > 0n) status = "Available";
+    else if (firstPieceDecimalCompare(nextConsumed, received) === 0n) status = "Consumed";
+    else throw new Error("shop_first_piece_lot_balance_invalid");
+    return {
+      name: lot.name ?? materialLotId,
+      material_lot_id: lot.material_lot_id ?? materialLotId,
+      status,
+      available_quantity: available.text,
+      reserved_quantity: nextReserved.text,
+      consumed_quantity: nextConsumed.text,
+    };
+  });
+  return { allocationEffects, materialLots, failedLotId };
+}
+
 function assertFirstPieceEvidence(order, evidence, evidenceIds, actorUser) {
   for (const [index, item] of evidence.entries()) {
     const evidenceId = evidenceIds[index];
@@ -8290,12 +8393,30 @@ function assertFirstPieceEvidence(order, evidence, evidenceIds, actorUser) {
   }
 }
 
-function firstPieceAssignmentRole(jobAssignment, crewProfile, actorUser) {
-  if (jobAssignment.assigned_user === actorUser) return "Production direct assignment";
-  const crewMember = (Array.isArray(crewProfile.members) ? crewProfile.members : [])
-    .find((member) => member.crew_user === actorUser && Number(member.active) === 1);
-  if (!crewMember?.crew_role) throw new Error("shop_first_piece_actor_not_assigned");
-  return `Production crew assignment (${crewMember.crew_role})`;
+async function readFirstPieceInspectorAuthority(config, shopOrderId) {
+  const response = await erpPost(
+    config,
+    "/api/method/ironwrap_roofing.shop_fabrication_api.preview_first_piece_authority",
+    { shop_order_id: shopOrderId },
+  );
+  const authority = response?.message;
+  if (
+    !authority
+    || authority.authenticated_user !== config.actorUser
+    || !authority.work_package?.name
+    || !authority.job_assignment?.name
+    || !authority.crew_profile?.name
+    || !authority.assignment_role
+  ) {
+    throw new Error("shop_first_piece_authority_not_found");
+  }
+  return {
+    authenticatedUser: authority.authenticated_user,
+    workPackage: authority.work_package,
+    jobAssignment: authority.job_assignment,
+    crewProfile: authority.crew_profile,
+    assignmentRole: authority.assignment_role,
+  };
 }
 
 function assertSignedShopSnapshot(args, preview) {
@@ -8522,10 +8643,9 @@ async function buildRecordFirstPieceOutcomePreview(config, shopOrderId, firstPie
     throw new Error("shop_first_piece_lot_mismatch");
   }
   const evidenceIds = [...new Set(inspections.map((inspection) => inspection.evidence_item))].sort();
-  const [materialTakeoff, supplierOrder, workPackage, lots, evidence] = await Promise.all([
+  const [materialTakeoff, supplierOrder, lots, evidence] = await Promise.all([
     readResource(config, "Material Takeoff", order.material_takeoff),
     readResource(config, "Supplier Order", order.supplier_order),
-    readResource(config, "Work Package", order.work_package),
     Promise.all(materialLotIds.map((materialLotId) => readResource(config, "Material Lot", materialLotId))),
     Promise.all(evidenceIds.map((evidenceId) => readResource(config, "Evidence Item", evidenceId))),
   ]);
@@ -8541,29 +8661,27 @@ async function buildRecordFirstPieceOutcomePreview(config, shopOrderId, firstPie
     roofJob: order.roof_job,
     allowedStatuses: new Set(["Partially Received", "Received"]),
   });
+  const inspectorAuthority = await readFirstPieceInspectorAuthority(config, shopOrderId);
+  const workPackage = inspectorAuthority.workPackage;
   assertShopSourceRecord(workPackage, {
     doctype: "Work Package",
     name: order.work_package,
     roofJob: order.roof_job,
     allowedStatuses: new Set(["Released", "Acknowledged", "In Progress"]),
   });
-  const jobAssignmentId = String(workPackage.job_assignment ?? "");
-  if (!jobAssignmentId) throw new Error("shop_first_piece_job_assignment_missing");
-  const jobAssignment = await readResource(config, "Job Assignment", jobAssignmentId);
-  const crewProfileId = String(jobAssignment.crew_profile ?? "");
-  if (!crewProfileId) throw new Error("shop_first_piece_crew_profile_missing");
-  const crewProfile = await readResource(config, "Crew Profile", crewProfileId);
-  if (!jobAssignment.name || !crewProfile.name) throw new Error("shop_first_piece_authority_not_found");
-  const inspectorAuthority = {
-    authenticatedUser: config.actorUser,
-    jobAssignment,
-    crewProfile,
-    assignmentRole: firstPieceAssignmentRole(jobAssignment, crewProfile, config.actorUser),
-  };
   assertFirstPieceMaterialLots(order, linesByNumber, allocations, inspections, lots);
   assertFirstPieceEvidence(order, evidence, evidenceIds, config.actorUser);
   const toStatus = payload.action === "pass_to_fabrication" ? "In Fabrication" : "Quality Hold";
   const result = payload.action === "pass_to_fabrication" ? "Pass" : "Fail";
+  const inventoryEffects = firstPieceInventoryEffects(
+    payload.action,
+    allocations,
+    inspections,
+    lots,
+  );
+  const failedLot = inventoryEffects.materialLots.find(
+    (lot) => lot.material_lot_id === inventoryEffects.failedLotId || lot.name === inventoryEffects.failedLotId,
+  );
   return {
     would_write: false,
     required_tool: "request_record_first_piece_outcome",
@@ -8602,6 +8720,25 @@ async function buildRecordFirstPieceOutcomePreview(config, shopOrderId, firstPie
       ...(payload.action === "pass_to_fabrication"
         ? { fabrication_started_at: "Frappe server time at execution" }
         : { reason: payload.reason, quality_hold_reason: payload.reason }),
+    },
+    effects: {
+      shop_order: {
+        shop_order_id: order.shop_order_id ?? order.name,
+        status: toStatus,
+      },
+      material_allocations: inventoryEffects.allocationEffects,
+      material_lots: inventoryEffects.materialLots,
+      ...(payload.action === "fail_to_quality_hold" ? {
+        nonconformance: {
+          action: "create",
+          nonconformance_id: "derived from the approved Hermes Run ID at execution",
+          status: "Contained",
+          shop_order: order.name,
+          material_lot: failedLot?.name ?? inventoryEffects.failedLotId,
+          evidence_item: inspections[0].evidence_item,
+          containment: `Material Lot ${failedLot?.material_lot_id ?? inventoryEffects.failedLotId} quarantined; Shop Order placed on Quality Hold.`,
+        },
+      } : {}),
     },
   };
 }

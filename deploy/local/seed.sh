@@ -42,18 +42,18 @@ ingest() {
     -H "Authorization: Bearer $INGEST_TOKEN" -H 'content-type: application/json' \
     -d "$1" | j
 }
-ingest '{"brand":"IronWrap","name":"Alice Tremblay","email":"ilya@ironwrapexteriors.com","phone":"+1-780-555-0142","address":"1013 Moville St, Ohaton, AB","message":"Metal roof quote for a 1,900 sq ft bungalow. Current shingles are 18 years old.","source_page":"https://ironwrapexteriors.com/metal-roofing","service_intent":"metal_roofing","external_id":"local-seed-iw-001"}'
-ingest '{"brand":"iRoof Alberta","name":"Brian Konrad","email":"ilya@ironwrapexteriors.com","phone":"+1-780-555-0177","address":"590 Hermitage Rd NW, Edmonton, AB","message":"Asphalt re-roof, garage included. Please call after 5pm.","source_page":"https://iroofalberta.ca/roof-replacement","service_intent":"roofing","external_id":"local-seed-ir-001"}'
+ingest '{"brand":"IronWrap","name":"Synthetic Homeowner A","email":"customer-a@example.invalid","phone":"+1-780-555-0101","address":"100 Example Ave, Edmonton, AB","message":"Metal roof quote for a 1,900 sq ft bungalow. Current shingles are 18 years old.","source_page":"https://ironwrapexteriors.com/metal-roofing","service_intent":"metal_roofing","external_id":"local-seed-iw-001"}'
+ingest '{"brand":"iRoof Alberta","name":"Synthetic Homeowner B","email":"customer-b@example.invalid","phone":"+1-780-555-0102","address":"200 Example Ave, Edmonton, AB","message":"Asphalt re-roof, garage included. Please call after 5pm.","source_page":"https://iroofalberta.ca/roof-replacement","service_intent":"roofing","external_id":"local-seed-ir-001"}'
 
 # 3. estimator session --------------------------------------------------------
 step "ingesting synthetic estimate session"
 curl -sf -X POST "$BUS/ingest/estimate" \
   -H "Authorization: Bearer $INGEST_TOKEN" -H 'content-type: application/json' \
-  -d '{"brand":"IronWrap","project_key":"local-seed-proj-001","name":"Alice Tremblay","email":"ilya@ironwrapexteriors.com","phone":"+1-780-555-0142","address":"1013 Moville St, Ohaton, AB","services":[{"service":"metal_roofing","quantity":22.5,"unit":"squares"}],"totals":{"subtotal_cad":41250,"total_cad":43312.5},"raw":{"profile":"standing-seam-24ga","colour":"charcoal"}}' | j
+  -d '{"brand":"IronWrap","project_key":"local-seed-proj-001","name":"Synthetic Homeowner A","email":"customer-a@example.invalid","phone":"+1-780-555-0101","address":"100 Example Ave, Edmonton, AB","services":[{"service":"metal_roofing","quantity":22.5,"unit":"squares"}],"totals":{"subtotal_cad":41250,"total_cad":43312.5},"raw":{"profile":"standing-seam-24ga","colour":"charcoal"}}' | j
 
-# 4. measurement intake (real AppliCad XML sample) ----------------------------
-step "ingesting real AppliCad measurement sample (1013 Moville St)"
-XML_FILE="$REPO_ROOT/samples/1013 Moville St.xml"
+# 4. measurement intake (sanitized synthetic AppliCad fixture) ----------------
+step "ingesting synthetic AppliCad measurement fixture"
+XML_FILE="$REPO_ROOT/tools/fixtures/synthetic-applicad-roof.xml"
 if [ -f "$XML_FILE" ]; then
   python3 - "$XML_FILE" > /tmp/ironwrap-measurement-payload.json <<'PYEOF'
 import json, sys
@@ -62,9 +62,9 @@ print(json.dumps({
     "brand": "IronWrap",
     "provider": "applicad",
     "external_id": "local-seed-meas-001",
-    "name": "Alice Tremblay", "email": "ilya@ironwrapexteriors.com",
-    "phone": "+1-780-555-0142", "address": "1013 Moville St, Ohaton, AB",
-    "filename": "1013 Moville St.xml",
+    "name": "Synthetic Homeowner A", "email": "customer-a@example.invalid",
+    "phone": "+1-780-555-0101", "address": "100 Example Ave, Edmonton, AB",
+    "filename": "synthetic-applicad-roof.xml",
     "content_type": "text/xml",
     "content": xml,
 }))

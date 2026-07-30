@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import assert from "node:assert/strict";
 
-const file = process.argv.find((arg) => arg.endsWith(".xml")) ?? "samples/1013 Moville St.xml";
+const file =
+  process.argv.find((arg) => arg.endsWith(".xml")) ??
+  "tools/fixtures/synthetic-applicad-roof.xml";
 const xml = readFileSync(file, "utf8");
 
 function attrs(tag) {

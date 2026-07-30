@@ -31,7 +31,7 @@ Build `app/dist`, then validate the Worker bundle:
 ```bash
 npm ci --prefix app
 npm run build --prefix app
-npm run deploy --prefix workers-bus -- --dry-run
+npm run deploy --prefix workers-bus -- --dry-run --env=""
 ```
 
 Do not run the production gate successfully by weakening it. `node tools/validate-newo-config.mjs --production` must remain red until the evidence indexes are updated from real proof.
@@ -67,10 +67,10 @@ Store values only as Cloudflare secrets:
 
 ```bash
 cd workers-bus
-npx wrangler secret put NEWO_API_KEY
-npx wrangler secret put NEWO_WEBHOOK_TOKEN
-npx wrangler secret put NEWO_BOOKING_TOKEN
-npx wrangler secret put NEWO_CONTROL_SIGNING_SECRET
+npx wrangler secret put NEWO_API_KEY --env=""
+npx wrangler secret put NEWO_WEBHOOK_TOKEN --env=""
+npx wrangler secret put NEWO_BOOKING_TOKEN --env=""
+npx wrangler secret put NEWO_CONTROL_SIGNING_SECRET --env=""
 ```
 
 Production also requires the existing Frappe and notification secrets. `/ready` cannot pass with `NEWO_WEBHOOK_TOKEN` absent or Frappe disabled/unreachable.

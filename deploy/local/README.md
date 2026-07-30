@@ -11,7 +11,7 @@ cd workers-bus && npm run dev
 1. `app/dist` is built (PWA served by the Worker on `http://localhost:7100`)
 2. throwaway Hermes approval key material exists in `deploy/local/keys/` (gitignored)
 3. the docker-compose Frappe v15 + MariaDB + Redis stack is up and answering on
-   `http://localhost:8000` (all 48 DocTypes, provisioned by `frappe-init.sh`)
+   `http://localhost:8000` (the committed DocType contract is provisioned by `frappe-init.sh`)
 4. `workers-bus/.dev.vars` carries the local Frappe integration API key/secret
 5. every D1 migration is applied to the local Miniflare database
 

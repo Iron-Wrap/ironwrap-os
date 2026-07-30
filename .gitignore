@@ -28,12 +28,10 @@ deploy/local/keys/
 
 # Scratch / logs / generated render artifacts
 tmp/
+output/
 *.log
 .gstack/
 .runtime-logs/
 
 # Nested product repo — own remote + branch discipline (see AGENTS.md repo map)
 Facet/
-
-# Deletable duplicate inputs (see AGENTS.md housekeeping)
-samples/_duplicates/

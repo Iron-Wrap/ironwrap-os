@@ -1,16 +1,17 @@
-# White-Label Clone Playbook (Maturity Gate 11)
+# White-Label Tenant Clone Playbook
 
 How to stand up a second contractor ("tenant") on the IronWrap OS stack with fully isolated
-brand, config, data, and tools. Gate 11 passes when a demo tenant runs end to end on its own
+brand, config, data, and tools. Acceptance requires a demo tenant to run end to end on its own
 copies of everything, with zero shared state with the live IronWrap tenant.
 
-Blueprint reference: `docs/HERMES-ERPNEXT-END-PRODUCT-BLUEPRINT.md`, sections
-"White-Label Productization" and "Maturity Gates".
+Authority: `docs/AUTONOMOUS-OPERATING-SYSTEM.md`,
+`docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md`, and the second-tenant production-proof requirement in
+`docs/CAPABILITY-MATRIX.md`.
 
 ## Isolation Model
 
-One of each, per contractor. Nothing is shared. Multi-tenant consolidation is explicitly
-deferred until the cloneable shape is proven (see the blueprint's Non-Goals).
+One of each, per contractor. Nothing is shared. Multi-tenant consolidation remains deferred until
+the cloneable shape is proven with isolation, export, restore, and negative cross-tenant tests.
 
 | Layer | Per-tenant unit | Repo artifact |
 | --- | --- | --- |
@@ -63,9 +64,10 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    the BFF to be enabled.
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
-   (applies `workers-bus/migrations/0001_init.sql` through
-   `0021_public_estimate_rate_limits.sql`).
-7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store;
+   (applies all committed migrations, currently through
+   `0026_newo_reconciliation.sql`).
+7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store
+   with the exact tenant `--env <tenant-environment>` or tenant `--config <path>` target;
    never pass a generic Cloudflare token to a repository script. Required set:
    `INGEST_TOKEN`, `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY` (if bridging),
    `GOOGLE_SERVICE_ACCOUNT_JSON`, `QB_WEBHOOK_TOKEN`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`,
@@ -74,7 +76,9 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 8. Compare the intended Worker runtime values before deployment (this reads supplied env values;
    it does not inspect or change a live Worker):
    `IRONWRAP_TENANT_CONFIG=<tenant> APP_TENANT_ID=<tenant> APP_TENANT_NAME='<tenant app name>' APP_TENANT_BRAND='<tenant brand>' APP_LOCALE=en-CA APP_TIME_ZONE=America/Edmonton APP_CURRENCY=CAD FROM_EMAIL=<declared sender mailbox> APP_BFF_ENABLED=false APP_CUSTOMER_PORTAL_ENABLED=false node tools/validate-tenant-runtime.mjs`.
-   Run `npm test`, `npm run typecheck`, and `npx wrangler deploy --dry-run` in `workers-bus/`.
+   Run `npm test`, `npm run typecheck`, and an explicitly targeted
+   `npx wrangler deploy --dry-run --env <tenant-environment>` (or the tenant config equivalent)
+   in `workers-bus/`.
    A deliberate deployment in the tenant's Cloudflare account and separate live health/origin checks
    remain required before treating this step as complete.
 
@@ -94,7 +98,7 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    '<worker-api-user-email>'`. The Frappe app rejects `Verified` evidence through
    ordinary Desk/REST writes, so this site-local configuration is required before
    field evidence can become gate-eligible.
-5. Never adopt frappe/press (AGPL, Frappe Cloud's control plane): per-tenant provisioning
+6. Never adopt frappe/press (AGPL, Frappe Cloud's control plane): per-tenant provisioning
    stays on IronWrap's own scripts (`config/tenants/` + validators + this playbook).
 
 ### 4. Drive / evidence namespace
@@ -155,9 +159,10 @@ Run all of these before calling the clone done:
 8. Email: the demo instant-ack sends from the tenant's `FROM_EMAIL`, never from an
    ironwrapexteriors.com or iroofalberta.ca mailbox.
 
-## Gate 11 Acceptance Checklist
+## Acceptance Checklist
 
-Gate 11 (blueprint): "A second demo company runs with separate brand/config/data/tools."
+A second demo company runs with separate brand, configuration, data, tools, evidence, and
+recovery boundaries.
 
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.

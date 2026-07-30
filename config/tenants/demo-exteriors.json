@@ -1,7 +1,7 @@
 {
   "tenant": {
     "id": "demo-exteriors",
-    "display_name": "Demo Exteriors Co (fake gate-11 clone tenant)",
+    "display_name": "Demo Exteriors Co (synthetic isolation tenant)",
     "status": "demo"
   },
   "runtime": {

@@ -72,7 +72,7 @@ export type SourceCountValidation =
   | { ok: true; day: string; channel: Source; count: number }
   | { ok: false; reason: "invalid_day" | "invalid_channel" | "invalid_count" };
 
-/** Owned-store identity for an event. Matches the spec's `ow_envelope_id` external ref. */
+/** Stable owned-intake identity for an event. */
 export function newEnvelopeId(): string {
   return "ow_" + crypto.randomUUID();
 }
@@ -161,7 +161,7 @@ export function validateInbound(env: Envelope): { ok: boolean; reason?: string }
   return { ok: true };
 }
 
-// Intent → queue routing (spec 16). Order matters: most specific first.
+// Intent → queue routing. Order matters: most specific first.
 const ROUTES: Array<[RegExp, string]> = [
   [/\b(warranty|complaint|dispute|leak|emergency)\b/i, "human_escalation"],
   [/\b(insurance|hail|claim|class\s*4)\b/i, "insurance_sales"],

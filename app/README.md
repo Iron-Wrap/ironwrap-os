@@ -5,7 +5,7 @@ independent Vite application that talks only to the same-origin Worker BFF under
 It never calls Frappe directly and it ships no demo jobs, leads, customers, or fallback business
 data.
 
-## What P0 includes
+## Implemented surface
 
 - Vite 8, React 19, TypeScript 7, Tailwind 4, local Radix/CVA UI primitives, TanStack Router and
   Query, Workbox through `vite-plugin-pwa`, and IndexedDB through `idb`.
@@ -20,17 +20,17 @@ data.
   remains a supplemental scalable asset.
 - A durable IndexedDB outbox with Blob support, stable `device_action_id`, idempotency headers,
   CSRF-at-send, exponential retry, conflict retention, and server-confirmed completion.
-- A locally contract-tested, read-only Owner Now decision board: work-stops, operating exceptions,
+- A contract-tested, read-only Owner Now decision board: work-stops, operating exceptions,
   and lead attention are separated into proof-safe lanes; data limits stay visible; and job packets
   open only when the BFF grants `job.read`. It does not invent delivery, follow-up, approvals, or
   financial impact.
-- A locally contract-tested governed Approvals inbox: server-safe before/patch diff cards, a
+- A contract-tested governed Approvals inbox: server-safe before/patch diff cards, a
   permanent local-only scope fence, BFF-issued `approval.approve` / `approval.reject` /
   `approval.reconcile` capability, stable idempotency for approve/reject, and an explicit no-retry
   `Execution Uncertain` state with one immutable evidence reconciliation. It never
   receives a receipt, raw write arguments, broker output, Frappe credential, or generic tool picker.
   Approval decisions are deliberately online-only and are never placed in the field outbox.
-- A locally contract-tested Sales-to-triage preparation flow: an exact `Untriaged` Lead Envelope
+- A contract-tested Sales-to-triage preparation flow: an exact `Untriaged` Lead Envelope
   exposes `approval.prepare` only when its BFF grants it. The route submits only the Frappe Lead
   Envelope name and one internal summary; the Worker derives the broker-bound request text and
   returns the user to the existing human review queue. It cannot send a customer message, modify
@@ -67,7 +67,8 @@ data.
 - A capability-limited customer Portal: a share link resolves only a published project projection
   and does not expose raw evidence, internal notes, prices outside the approved proposal record,
   or an office session. Today, Job, Check-in, Owner Now, Production Runway, Approvals, Sales,
-  Measurement Workbench, Draft Revision review, and Settings have implemented North Star
+  Measurement Workbench, Draft Revision review, and Settings implement the canonical interaction
+  and evidence
   foundations. The inbox and production runway remain review surfaces, not generic editors or
   dispatch controls; live broker/Frappe/operator proof remains a deployment gate.
 
@@ -206,9 +207,10 @@ and geolocation to this origin. Blob/data allowances are narrowly retained for c
 the service worker. The production build fails unless `_headers`, the web manifest, and every
 required PNG icon exist in `dist` with the expected manifest purposes.
 
-## Product rules carried forward
+## Product rules
 
-The shell follows the binding North Star: evidence before claims, camera/voice before keyboard,
+The shell follows the canonical operating and evidence contracts: evidence before claims,
+camera/voice before keyboard,
 physical gate locks, exception-first owner work, one clear next action, undoable interaction design,
-trade-language errors, and visible sync truth. P1 and later routes must preserve these laws and may
+trade-language errors, and visible sync truth. New routes must preserve these laws and may
 not add fake production data to make an unfinished screen look populated.

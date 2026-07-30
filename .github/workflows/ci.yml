@@ -40,6 +40,8 @@ jobs:
         run: node tools/validate-tenant-config.mjs
       - name: Validate staged Newo contracts, hashes, evidence inventory, and safe defaults
         run: node tools/validate-newo-config.mjs
+      - name: Validate documentation authority, privacy, and links
+        run: node tools/validate-documentation.mjs
       - name: Test Newo production gate refusal while provider evidence is pending
         run: node --test tools/validate-newo-config.test.mjs
       - name: Test tenant runtime preflight
@@ -109,7 +111,14 @@ jobs:
       - name: Typecheck Worker bus
         run: npm run typecheck --prefix workers-bus
       - name: Bundle Worker without deploying
-        run: npm run deploy --prefix workers-bus -- --dry-run
+        run: npm run deploy --prefix workers-bus -- --dry-run --env=""
+      - name: Audit shipped Node dependencies
+        run: |
+          npm audit --omit=dev --prefix app
+          npm audit --omit=dev --prefix workers-bus
+          npm audit --omit=dev --prefix mcp/erpnext-roofing-mcp
+          npm audit --omit=dev --prefix mcp/ironwrap-bus-mcp
+          npm audit --omit=dev --prefix mcp/newo-mcp
 
       - name: Test production-readiness verifier
         run: node --test tools/production-readiness.test.mjs

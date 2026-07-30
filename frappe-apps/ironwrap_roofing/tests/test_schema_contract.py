@@ -206,7 +206,7 @@ NEW_BLUEPRINT_FIELDS = {
 NEW_BLUEPRINT_FIELDS.update(
     {
         "Appointment Request": {"appointment_request_id", "reception_session", "request_status", "booking_mode", "preferred_windows_json", "timezone", "requested_at", "raw_key", "payload_hash"},
-        "Crew Profile": {"crew_profile_id", "crew_name", "status", "primary_lead", "members", "home_region", "timezone"},
+        "Crew Profile": {"crew_profile_id", "crew_name", "status", "primary_lead", "members", "home_region", "timezone", "competency_status", "competency_checked_at", "competency_expiry", "equipment_status", "equipment_checked_at", "equipment_expiry", "wcb_status", "wcb_checked_at", "wcb_expiry", "active_stop", "active_stop_at", "active_stop_reason"},
         "Job Assignment": {"assignment_id", "roof_job", "status", "crew_profile", "assigned_user", "scheduled_start", "scheduled_end", "supersedes", "correction_reason"},
         "Change Order": {"change_order_id", "roof_job", "version", "status", "subtotal", "tax_amount", "total_amount", "tax_policy_snapshot_json", "items", "contract_acceptance", "supersedes", "correction_reason"},
         "Safety Plan": {"safety_plan_id", "roof_job", "version", "status", "hazard_summary", "controls", "emergency_plan", "acknowledgements", "supersedes", "correction_reason"},

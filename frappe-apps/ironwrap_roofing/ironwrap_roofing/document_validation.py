@@ -120,12 +120,43 @@ JOB_ASSIGNMENT_SCHEDULE_CONTEXT_FIELDS = (
     "roof_job",
     "assignment_type",
     "status",
+    "crew_profile",
     "scheduled_start",
     "supersedes",
 )
 _JOB_ASSIGNMENT_SCHEDULE_CONTEXT_SELECT = ", ".join(
     JOB_ASSIGNMENT_SCHEDULE_CONTEXT_FIELDS
 )
+CREW_PROFILE_CONTEXT_FIELDS = (
+    "name",
+    "crew_profile_id",
+    "status",
+    "crew_type",
+    "competency_status",
+    "competency_checked_at",
+    "competency_expiry",
+    "equipment_status",
+    "equipment_checked_at",
+    "equipment_expiry",
+    "wcb_status",
+    "wcb_checked_at",
+    "wcb_expiry",
+    "active_stop",
+    "active_stop_at",
+    "active_stop_reason",
+)
+_CREW_PROFILE_CONTEXT_SELECT = ", ".join(CREW_PROFILE_CONTEXT_FIELDS)
+JOB_COMPLIANCE_CONTEXT_FIELDS = (
+    "name",
+    "compliance_record_id",
+    "roof_job",
+    "required_before_gate",
+    "status",
+    "effective_date",
+    "expiry_date",
+    "supersedes",
+)
+_JOB_COMPLIANCE_CONTEXT_SELECT = ", ".join(JOB_COMPLIANCE_CONTEXT_FIELDS)
 SAFETY_PLAN_CONTEXT_FIELDS = (
     "name",
     "safety_plan_id",
@@ -759,10 +790,12 @@ def _locked_production_gates(
 
 
 def _locked_scheduled_production_context(
-    roof_job: Any,
+    roof_job: Any, crew_profile: Any | None = None
 ) -> tuple[
     list[dict[str, Any]],
     dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, Any]],
 ]:
@@ -796,7 +829,52 @@ def _locked_scheduled_production_context(
             as_dict=True,
         )
     ]
-    return gates, gate_evidence, assignments, supplier_order_exceptions
+    crew_profile_names = sorted(
+        {
+            str(row.get("crew_profile"))
+            for row in assignments
+            if row.get("crew_profile")
+        }
+        | ({str(crew_profile)} if crew_profile else set())
+    )
+    crew_profiles = (
+        [
+            dict(row)
+            for row in frappe.db.sql(
+                f"""
+                SELECT {_CREW_PROFILE_CONTEXT_SELECT}
+                FROM `tabCrew Profile`
+                WHERE name IN ({", ".join("%s" for _ in crew_profile_names)})
+                FOR UPDATE
+                """,
+                tuple(crew_profile_names),
+                as_dict=True,
+            )
+        ]
+        if crew_profile_names
+        else []
+    )
+    compliance_rows = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_JOB_COMPLIANCE_CONTEXT_SELECT}
+            FROM `tabJob Compliance Record`
+            WHERE roof_job = %s
+            FOR UPDATE
+            """,
+            (roof_job,),
+            as_dict=True,
+        )
+    ]
+    return (
+        gates,
+        gate_evidence,
+        assignments,
+        supplier_order_exceptions,
+        crew_profiles,
+        compliance_rows,
+    )
 
 
 def _locked_work_package_context(
@@ -804,6 +882,8 @@ def _locked_work_package_context(
 ) -> tuple[
     list[dict[str, Any]],
     dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, Any]],
@@ -850,7 +930,52 @@ def _locked_work_package_context(
             as_dict=True,
         )
     ]
-    return gates, gate_evidence, assignments, safety_plans, work_packages
+    crew_profile_names = sorted(
+        {
+            str(row.get("crew_profile"))
+            for row in assignments
+            if row.get("crew_profile")
+        }
+    )
+    crew_profiles = (
+        [
+            dict(row)
+            for row in frappe.db.sql(
+                f"""
+                SELECT {_CREW_PROFILE_CONTEXT_SELECT}
+                FROM `tabCrew Profile`
+                WHERE name IN ({", ".join("%s" for _ in crew_profile_names)})
+                FOR UPDATE
+                """,
+                tuple(crew_profile_names),
+                as_dict=True,
+            )
+        ]
+        if crew_profile_names
+        else []
+    )
+    compliance_rows = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_JOB_COMPLIANCE_CONTEXT_SELECT}
+            FROM `tabJob Compliance Record`
+            WHERE roof_job = %s
+            FOR UPDATE
+            """,
+            (roof_job,),
+            as_dict=True,
+        )
+    ]
+    return (
+        gates,
+        gate_evidence,
+        assignments,
+        safety_plans,
+        work_packages,
+        crew_profiles,
+        compliance_rows,
+    )
 
 
 def _assert_unique_production_gate(document: Any) -> None:
@@ -1175,7 +1300,20 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
             context["gate_evidence"],
             context["job_assignment_rows"],
             context["supplier_order_exception_rows"],
-        ) = _locked_scheduled_production_context(document.get("roof_job"))
+            context["crew_profile_rows"],
+            context["job_compliance_rows"],
+        ) = _locked_scheduled_production_context(
+            document.get("roof_job"), document.get("crew_profile")
+        )
+        crew_profile = document.get("crew_profile")
+        context["scheduled_assignment_crew_profile"] = next(
+            (
+                row
+                for row in context["crew_profile_rows"]
+                if crew_profile in {row.get("name"), row.get("crew_profile_id")}
+            ),
+            None,
+        )
         target = document.get("supersedes")
         if target:
             context["superseded_record"] = next(
@@ -1193,6 +1331,8 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
             context["job_assignment_rows"],
             context["safety_plan_rows"],
             context["work_package_rows"],
+            context["crew_profile_rows"],
+            context["job_compliance_rows"],
         ) = _locked_work_package_context(document.get("roof_job"))
         assignment = document.get("job_assignment")
         context["work_package_assignment"] = next(
@@ -1200,6 +1340,19 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
                 row
                 for row in context["job_assignment_rows"]
                 if assignment in {row.get("name"), row.get("assignment_id")}
+            ),
+            None,
+        )
+        crew_profile = (
+            context["work_package_assignment"].get("crew_profile")
+            if context.get("work_package_assignment")
+            else None
+        )
+        context["work_package_crew_profile"] = next(
+            (
+                row
+                for row in context["crew_profile_rows"]
+                if crew_profile in {row.get("name"), row.get("crew_profile_id")}
             ),
             None,
         )
@@ -1244,6 +1397,22 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
 
 
 def validate_business_document(document: Any, kind: str) -> None:
+    if kind in {"job_compliance_record", "production_gate_state"} and document.get(
+        "status" if kind == "job_compliance_record" else "state"
+    ) == "Waived":
+        actor = getattr(getattr(frappe, "session", None), "user", None)
+        if not actor or actor == "Guest" or document.get("waived_by") != actor:
+            frappe.throw(
+                "a waiver must be attributed to the current owner-level actor",
+                exc=frappe.PermissionError,
+            )
+        if not {"IronWrap Owner", "System Manager"}.intersection(
+            frappe.get_roles(actor)
+        ):
+            frappe.throw(
+                "a waiver requires an IronWrap Owner or System Manager role",
+                exc=frappe.PermissionError,
+            )
     try:
         validate_record(
             kind,

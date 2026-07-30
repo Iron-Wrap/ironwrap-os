@@ -173,6 +173,41 @@ def gate_evidence_context(gates: list[dict[str, object]]) -> dict[str, dict[str,
     }
 
 
+def current_crew_authority(**overrides: object) -> dict[str, object]:
+    crew: dict[str, object] = {
+        "name": "crew-1",
+        "crew_profile_id": "crew-1",
+        "status": "Active",
+        "crew_type": "Subcontractor",
+        "competency_status": "Current",
+        "competency_checked_at": "2026-07-01 08:00:00",
+        "competency_expiry": "2026-12-31",
+        "equipment_status": "Safe",
+        "equipment_checked_at": "2026-07-01 08:00:00",
+        "equipment_expiry": "2026-12-31",
+        "wcb_status": "Current",
+        "wcb_checked_at": "2026-07-01 08:00:00",
+        "wcb_expiry": "2026-12-31",
+        "active_stop": 0,
+    }
+    crew.update(overrides)
+    return crew
+
+
+def current_compliance_authority(gate: str, **overrides: object) -> dict[str, object]:
+    record: dict[str, object] = {
+        "name": f"compliance:{gate.lower()}:1",
+        "compliance_record_id": f"compliance:{gate.lower()}:1",
+        "roof_job": "job-1",
+        "required_before_gate": gate,
+        "status": "Approved",
+        "effective_date": "2026-07-01",
+        "expiry_date": "2026-12-31",
+    }
+    record.update(overrides)
+    return record
+
+
 class DomainPolicyTests(unittest.TestCase):
     def assert_policy(self, code: str, function, *args, **kwargs) -> PolicyViolation:
         with self.assertRaises(PolicyViolation) as caught:
@@ -974,10 +1009,19 @@ class DomainPolicyTests(unittest.TestCase):
             "assigned_at": "2026-07-10 08:00:00",
             "scheduled_start": "2026-07-11 08:00:00",
         }
+        authority_context = {
+            "scheduled_assignment_crew_profile": current_crew_authority(),
+            "job_compliance_rows": [
+                current_compliance_authority(gate)
+                for gate in ("Crew", "Safety", "Access")
+            ],
+        }
 
         # Completion is intentionally not required to schedule production work.
         validate_record(
-            "job_assignment", assignment, context={"gates": gates, "gate_evidence": gate_evidence}
+            "job_assignment",
+            assignment,
+            context={"gates": gates, "gate_evidence": gate_evidence, **authority_context},
         )
 
         self.assert_policy(
@@ -1135,6 +1179,13 @@ class DomainPolicyTests(unittest.TestCase):
             "gate_evidence": {},
             "job_assignment_rows": [current],
             "supplier_order_exception_rows": [],
+            "scheduled_assignment_crew_profile": current_crew_authority(
+                name="crew-2", crew_profile_id="crew-2"
+            ),
+            "job_compliance_rows": [
+                current_compliance_authority(gate)
+                for gate in ("Crew", "Safety", "Access")
+            ],
         }
 
         self.assert_policy(
@@ -1203,6 +1254,7 @@ class DomainPolicyTests(unittest.TestCase):
             "roof_job": "job-1",
             "assignment_type": "Production",
             "status": "Assigned",
+            "crew_profile": "crew-1",
             "scheduled_start": "2026-07-10 12:00:00",
         }
         safety_plan = {
@@ -1262,6 +1314,11 @@ class DomainPolicyTests(unittest.TestCase):
                 "gate_evidence": gate_evidence_context(gates),
                 "job_assignment_rows": [assignment],
                 "work_package_assignment": assignment,
+                "work_package_crew_profile": current_crew_authority(),
+                "job_compliance_rows": [
+                    current_compliance_authority(gate)
+                    for gate in ("Crew", "Safety", "Access")
+                ],
                 "safety_plan_rows": [safety_plan],
                 "work_package_safety_plan": safety_plan,
                 "work_package_rows": [],
@@ -1401,6 +1458,260 @@ class DomainPolicyTests(unittest.TestCase):
             {**released, "status": "Superseded"},
             previous=released,
             context={"superseding_work_package": revision},
+        )
+
+    def test_crew_authority_blocks_scheduled_and_released_production(self) -> None:
+        gates = [
+            {
+                "roof_job": "job-1",
+                "gate": gate,
+                "state": "Done",
+                "evidence_item": f"ev-{gate.lower()}",
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+            }
+            for gate in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
+        ]
+        crew = current_crew_authority()
+        compliance_rows = [
+            current_compliance_authority(gate) for gate in ("Crew", "Safety", "Access")
+        ]
+        assignment = {
+            "name": "assignment:authority",
+            "assignment_id": "assignment:authority",
+            "roof_job": "job-1",
+            "assignment_type": "Production",
+            "status": "Assigned",
+            "crew_profile": "crew-1",
+            "assigned_by": "production@example.com",
+            "assigned_at": "2026-07-10 08:00:00",
+            "scheduled_start": "2026-07-11 08:00:00",
+        }
+        safety_plan = {
+            "name": "safety:authority",
+            "safety_plan_id": "safety:authority",
+            "roof_job": "job-1",
+            "version": 1,
+            "status": "Acknowledged",
+        }
+        released = {
+            "work_package_id": "work-package:authority",
+            "roof_job": "job-1",
+            "job_assignment": assignment["assignment_id"],
+            "safety_plan": safety_plan["safety_plan_id"],
+            "version": 1,
+            "status": "Released",
+            "title": "Authority-gated production work",
+            "objective": "Perform only the released production scope.",
+            "boundaries": "No work outside the released scope.",
+            "prerequisites": "All production controls remain current.",
+            "expected_result": "Released work is completed safely.",
+            "stop_conditions": "Stop for unsafe conditions or authority loss.",
+            "make_safe_procedure": "Secure the site and notify production.",
+            "issued_at": "2026-07-10 08:00:00",
+            "expires_at": "2026-07-12 08:00:00",
+            "released_by": "production@example.com",
+            "released_at": "2026-07-10 09:00:00",
+            "steps": [
+                {
+                    "sequence": 1,
+                    "instruction": "Confirm current authority before work.",
+                    "required_evidence": "Field check-in.",
+                    "acceptance_criteria": "Authority remains current.",
+                }
+            ],
+            "hold_points": [
+                {
+                    "sequence": 1,
+                    "hold_point": "Authority verification",
+                    "release_authority": "IronWrap Production",
+                    "required_evidence": "Current authority record.",
+                    "acceptance_criteria": "Authority permits the work.",
+                }
+            ],
+        }
+
+        def scheduled_context(**overrides: object) -> dict[str, object]:
+            context: dict[str, object] = {
+                "gates": gates,
+                "gate_evidence": gate_evidence_context(gates),
+                "scheduled_assignment_crew_profile": crew,
+                "job_compliance_rows": compliance_rows,
+            }
+            context.update(overrides)
+            return context
+
+        def release_context(**overrides: object) -> dict[str, object]:
+            context: dict[str, object] = {
+                "now": "2026-07-10 10:00:00",
+                "gates": gates,
+                "gate_evidence": gate_evidence_context(gates),
+                "job_assignment_rows": [assignment],
+                "work_package_assignment": assignment,
+                "work_package_crew_profile": crew,
+                "job_compliance_rows": compliance_rows,
+                "safety_plan_rows": [safety_plan],
+                "work_package_safety_plan": safety_plan,
+                "work_package_rows": [],
+            }
+            context.update(overrides)
+            return context
+
+        def assert_authority_block(
+            code: str,
+            *,
+            crew_profile: dict[str, object] | None = crew,
+            authorities: list[dict[str, object]] = compliance_rows,
+        ) -> None:
+            self.assert_policy(
+                code,
+                validate_record,
+                "job_assignment",
+                assignment,
+                context=scheduled_context(
+                    scheduled_assignment_crew_profile=crew_profile,
+                    job_compliance_rows=authorities,
+                ),
+            )
+            self.assert_policy(
+                code,
+                validate_record,
+                "work_package",
+                released,
+                context=release_context(
+                    work_package_crew_profile=crew_profile,
+                    job_compliance_rows=authorities,
+                ),
+            )
+
+        validate_record("job_assignment", assignment, context=scheduled_context())
+        validate_record("work_package", released, context=release_context())
+        self.assert_policy(
+            "production_assignment_requires_crew_profile",
+            validate_record,
+            "job_assignment",
+            {**assignment, "crew_profile": "", "assigned_user": "lead@example.com"},
+            context=scheduled_context(),
+        )
+        self.assert_policy(
+            "work_package_crew_authority_required",
+            validate_record,
+            "work_package",
+            released,
+            context=release_context(
+                work_package_assignment={**assignment, "crew_profile": ""}
+            ),
+        )
+        assert_authority_block("unverified_assignment_crew_profile", crew_profile=None)
+
+        for code, invalid_crew in (
+            (
+                "crew_competency_not_current",
+                current_crew_authority(competency_status="Expired"),
+            ),
+            (
+                "crew_competency_expired",
+                current_crew_authority(competency_expiry="2026-07-09"),
+            ),
+            (
+                "crew_wcb_not_current",
+                current_crew_authority(wcb_status="Revoked"),
+            ),
+            ("crew_wcb_expired", current_crew_authority(wcb_expiry="2026-07-09")),
+            ("unsafe_crew_equipment", current_crew_authority(equipment_status="Unsafe")),
+            (
+                "crew_equipment_inspection_expired",
+                current_crew_authority(equipment_expiry="2026-07-09"),
+            ),
+            (
+                "active_crew_stop",
+                current_crew_authority(
+                    active_stop=1,
+                    active_stop_at="2026-07-10 07:00:00",
+                    active_stop_reason="Weather stop remains active.",
+                ),
+            ),
+        ):
+            with self.subTest(crew_authority=code):
+                assert_authority_block(code, crew_profile=invalid_crew)
+
+        for gate in ("Crew", "Safety", "Access"):
+            with self.subTest(missing_compliance_authority=gate):
+                assert_authority_block(
+                    "missing_compliance_authority",
+                    authorities=[
+                        row for row in compliance_rows if row["required_before_gate"] != gate
+                    ],
+                )
+            with self.subTest(expired_compliance_authority=gate):
+                assert_authority_block(
+                    "expired_compliance_authority",
+                    authorities=[
+                        {**row, "expiry_date": "2026-07-09"}
+                        if row["required_before_gate"] == gate
+                        else row
+                        for row in compliance_rows
+                    ],
+                )
+            with self.subTest(not_yet_effective_compliance_authority=gate):
+                assert_authority_block(
+                    "compliance_authority_not_effective",
+                    authorities=[
+                        {**row, "effective_date": "2026-07-12"}
+                        if row["required_before_gate"] == gate
+                        else row
+                        for row in compliance_rows
+                    ],
+                )
+            with self.subTest(ambiguous_compliance_authority=gate):
+                assert_authority_block(
+                    "ambiguous_compliance_authority",
+                    authorities=[
+                        *compliance_rows,
+                        current_compliance_authority(
+                            gate,
+                            name=f"compliance:{gate.lower()}:2",
+                            compliance_record_id=f"compliance:{gate.lower()}:2",
+                        ),
+                    ],
+                )
+
+        waived_safety_gates = [
+            {
+                **gate,
+                "state": "Waived",
+                "waived_by": "owner@example.com",
+                "waived_at": "2026-07-10 08:00:00",
+                "waiver_reason": "Owner accepted the documented exception.",
+            }
+            if gate["gate"] == "Safety"
+            else gate
+            for gate in gates
+        ]
+        missing_safety_authority = [
+            row for row in compliance_rows if row["required_before_gate"] != "Safety"
+        ]
+        self.assert_policy(
+            "missing_compliance_authority",
+            validate_record,
+            "job_assignment",
+            assignment,
+            context=scheduled_context(
+                gates=waived_safety_gates,
+                gate_evidence=gate_evidence_context(waived_safety_gates),
+                job_compliance_rows=missing_safety_authority,
+            ),
+        )
+        self.assert_policy(
+            "missing_compliance_authority",
+            validate_record,
+            "work_package",
+            released,
+            context=release_context(
+                gates=waived_safety_gates,
+                gate_evidence=gate_evidence_context(waived_safety_gates),
+                job_compliance_rows=missing_safety_authority,
+            ),
         )
 
     def test_ready_and_done_gates_require_verified_same_job_evidence(self) -> None:
@@ -1649,9 +1960,17 @@ class DomainPolicyTests(unittest.TestCase):
             "crew_profile_id": "crew-1",
             "crew_name": "Calgary Metal Crew",
             "status": "Active",
+            "crew_type": "Internal",
             "primary_lead": "lead@example.com",
             "home_region": "Calgary, AB",
             "timezone": "America/Edmonton",
+            "competency_status": "Current",
+            "competency_checked_at": "2026-07-01 08:00:00",
+            "competency_expiry": "2026-12-31",
+            "equipment_status": "Safe",
+            "equipment_checked_at": "2026-07-01 08:00:00",
+            "equipment_expiry": "2026-12-31",
+            "active_stop": 0,
             "members": [
                 {"crew_user": "lead@example.com", "active": 1},
                 {"crew_user": "roofer@example.com", "active": 1},
@@ -1717,6 +2036,8 @@ class DomainPolicyTests(unittest.TestCase):
             "status": "Waived",
             "required_before_gate": "Materials",
             "owner_user": "production@example.com",
+            "effective_date": "2026-07-01",
+            "expiry_date": "2026-12-31",
             "waived_by": "owner@example.com",
             "waived_at": "2026-07-10 09:00:00",
             "waiver_reason": "Authority confirmed no permit is required for like-for-like work.",

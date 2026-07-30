@@ -346,7 +346,8 @@ const REQUIRED_D1_TABLES = [
   "quote_revision_approval_requests", "quote_revision_approval_request_events",
   "customer_portal_links", "customer_portal_access_throttles", "measurement_intake_receipts",
   "production_schedule_approval_requests", "production_schedule_approval_request_events",
-  "public_estimate_rate_limits",
+  "public_estimate_rate_limits", "governed_transitions", "governed_transition_outbox",
+  "governed_transition_outbox_events",
 ];
 
 const REQUIRED_D1_TRIGGER_BINDINGS = [
@@ -381,6 +382,18 @@ const REQUIRED_D1_TRIGGER_BINDINGS = [
   ["prevent_production_schedule_approval_event_update", "production_schedule_approval_request_events"],
   ["prevent_production_schedule_approval_event_delete", "production_schedule_approval_request_events"],
   ["prevent_production_schedule_approval_delete", "production_schedule_approval_requests"],
+  ["prevent_governed_transition_update", "governed_transitions"],
+  ["prevent_governed_transition_delete", "governed_transitions"],
+  ["enforce_governed_transition_outbox_update", "governed_transition_outbox"],
+  ["prevent_governed_transition_outbox_delete", "governed_transition_outbox"],
+  ["append_governed_transition_outbox_intent_event", "governed_transition_outbox"],
+  ["append_governed_transition_outbox_state_event", "governed_transition_outbox"],
+  ["prevent_governed_transition_outbox_event_update", "governed_transition_outbox_events"],
+  ["prevent_governed_transition_outbox_event_delete", "governed_transition_outbox_events"],
+  ["enqueue_governed_transition_from_approval_claim", "approval_requests"],
+  ["project_governed_transition_outbox_terminal", "approval_requests"],
+  ["project_governed_transition_outbox_reconciliation", "approval_requests"],
+  ["renew_approval_execution_lease_from_governed_outbox_claim", "governed_transition_outbox"],
 ];
 
 function d1TriggerSql(name, table, {
@@ -403,11 +416,17 @@ function d1TriggerSql(name, table, {
     return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, 'lead_ack_receipts_immutable'); END;`;
   }
   if (name === weakApprovalTrigger) {
-    const timing = name.endsWith("_event_delete") || name.endsWith("_approval_delete") ? "DELETE" : "UPDATE";
+    const timing = name.endsWith("_delete") ? "DELETE" : "UPDATE";
     return `CREATE TRIGGER ${name} BEFORE ${timing} ON ${table} BEGIN SELECT 1; END;`;
   }
   if (name === wrongTimingApprovalTrigger) {
-    const [bindingAbort, eventAbort, deleteAbort] = name.startsWith("prevent_production_schedule_")
+    const [bindingAbort, eventAbort, deleteAbort] = name.startsWith("prevent_governed_transition_outbox_event_")
+      ? [
+        "governed_transition_outbox_binding_immutable",
+        "governed_transition_outbox_events_immutable",
+        "governed_transition_outbox_events_append_only",
+      ]
+      : name.startsWith("prevent_production_schedule_")
       ? [
         "production_schedule_approval_binding_immutable",
         "production_schedule_approval_events_immutable",
@@ -472,6 +491,33 @@ function d1TriggerSql(name, table, {
   }
   if (name === "prevent_production_schedule_approval_delete") {
     return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'production_schedule_approvals_append_only'); END;`;
+  }
+  if (name === "prevent_governed_transition_update") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'governed_transitions_immutable'); END;`;
+  }
+  if (name === "prevent_governed_transition_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'governed_transitions_append_only'); END;`;
+  }
+  if (name === "enforce_governed_transition_outbox_update") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'governed_transition_outbox_binding_immutable') WHERE 0; SELECT RAISE(ABORT, 'governed_transition_outbox_invalid_uncertain_transition') WHERE 0; SELECT RAISE(ABORT, 'governed_transition_outbox_terminal') WHERE 0; END;`;
+  }
+  if (name === "prevent_governed_transition_outbox_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'governed_transition_outbox_append_only'); END;`;
+  }
+  if (name === "prevent_governed_transition_outbox_event_update") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'governed_transition_outbox_events_immutable'); END;`;
+  }
+  if (name === "prevent_governed_transition_outbox_event_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'governed_transition_outbox_events_append_only'); END;`;
+  }
+  if (name === "append_governed_transition_outbox_intent_event") {
+    return `CREATE TRIGGER ${name} AFTER INSERT ON ${table} BEGIN SELECT 1; END;`;
+  }
+  if (name === "append_governed_transition_outbox_state_event") {
+    return `CREATE TRIGGER ${name} AFTER UPDATE OF state ON ${table} BEGIN SELECT 1; END;`;
+  }
+  if (name === "renew_approval_execution_lease_from_governed_outbox_claim") {
+    return `CREATE TRIGGER ${name} AFTER UPDATE OF state ON ${table} BEGIN SELECT 1; END;`;
   }
   if (name.startsWith("append_approval_request_")) {
     return `CREATE TRIGGER ${name} AFTER INSERT ON ${table} BEGIN SELECT 1; END;`;
@@ -590,6 +636,7 @@ async function mockD1RestoreEnvironment(t, {
   triggerMismatch = false,
   triggerSemanticsMismatch = false,
   quoteRevisionTriggerSemanticsMismatch = false,
+  governedTransitionTriggerSemanticsMismatch = false,
   missingTrigger = "",
   weakReceiptTrigger = "",
   wrongTimingReceiptTrigger = "",
@@ -688,6 +735,14 @@ async function mockD1RestoreEnvironment(t, {
     })),
     success: true,
   }]);
+  const governedTransitionSemanticallyMismatchedTriggers = JSON.stringify([{
+    results: REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({
+      trigger_name,
+      table_name,
+      trigger_sql: d1TriggerSql(trigger_name, table_name, { wrongTimingApprovalTrigger: "prevent_governed_transition_outbox_event_update" }),
+    })),
+    success: true,
+  }]);
 
   await writeExecutable(path.join(staged.workerBin, "wrangler"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -710,7 +765,7 @@ if (( json == 1 )); then
   elif [[ "$file" == *target-verify.sql ]]; then
     if [[ "$MOCK_ROW_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedRows}'; else printf '%s\\n' '${matchingRows}'; fi
   elif [[ "$file" == *target-trigger-verify.sql ]]; then
-    if [[ "$MOCK_QUOTE_REVISION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${quoteRevisionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${semanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedTriggers}'; else printf '%s\\n' '${matchingTriggers}'; fi
+    if [[ "$MOCK_GOVERNED_TRANSITION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${governedTransitionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_QUOTE_REVISION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${quoteRevisionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${semanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedTriggers}'; else printf '%s\\n' '${matchingTriggers}'; fi
   fi
 fi
 `);
@@ -759,6 +814,7 @@ esac
       MOCK_TRIGGER_MISMATCH: triggerMismatch ? "1" : "0",
       MOCK_TRIGGER_SEMANTICS_MISMATCH: triggerSemanticsMismatch ? "1" : "0",
       MOCK_QUOTE_REVISION_TRIGGER_SEMANTICS_MISMATCH: quoteRevisionTriggerSemanticsMismatch ? "1" : "0",
+      MOCK_GOVERNED_TRANSITION_TRIGGER_SEMANTICS_MISMATCH: governedTransitionTriggerSemanticsMismatch ? "1" : "0",
       D1_BACKUP_API_TOKEN: "cloudflare_d1_backup_read_4c8f0b2d6a9137e5",
       D1_RESTORE_API_TOKEN: "",
       D1_PRODUCTION_ACCOUNT_ID: "7ee5775bc1ba46f05c5a65235b60e939",
@@ -1376,6 +1432,14 @@ test("D1 backup fails before upload when the privacy-safe public-estimate rate-l
   await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
 });
 
+test("D1 backup fails before upload when the governed-transition outbox evidence table is missing", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { missingTable: "governed_transition_outbox_events" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required production table: governed_transition_outbox_events/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
 test("D1 backup fails before upload when an invariant trigger is missing", async (t) => {
   const mock = await mockD1BackupEnvironment(t, { missingTrigger: "prevent_lead_ack_receipts_delete" });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
@@ -1398,6 +1462,14 @@ test("D1 backup rejects a quote-revision ledger trigger without immutable semant
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_quote_revision_approval_event_delete/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
+test("D1 backup rejects a governed-transition event trigger without immutable semantics", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { weakApprovalTrigger: "prevent_governed_transition_outbox_event_delete" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_governed_transition_outbox_event_delete/);
   await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
 });
 
@@ -1528,6 +1600,14 @@ test("D1 recovery rejects an export missing the privacy-safe public-estimate rat
   await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
 });
 
+test("D1 recovery rejects an export missing the governed-transition outbox evidence table", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { missingTable: "governed_transition_outbox_events" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required production table: governed_transition_outbox_events/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
 test("D1 recovery rejects a local receipt trigger without immutable update/delete semantics", async (t) => {
   const mock = await mockD1RestoreEnvironment(t, { weakReceiptTrigger: "prevent_lead_ack_receipts_update" });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
@@ -1549,6 +1629,14 @@ test("D1 recovery rejects a local production-schedule ledger trigger without imm
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_production_schedule_approval_event_delete/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
+test("D1 recovery rejects a governed-transition outbox event trigger without immutable semantics", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { weakApprovalTrigger: "prevent_governed_transition_outbox_event_update" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_governed_transition_outbox_event_update/);
   await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
 });
 
@@ -1578,6 +1666,18 @@ test("remote D1 drill rejects receipt triggers without immutable update/delete s
 
 test("remote D1 drill rejects quote-revision ledger triggers without immutable semantics", async (t) => {
   const mock = await mockD1RestoreEnvironment(t, { quoteRevisionTriggerSemanticsMismatch: true });
+  mock.env.D1_RESTORE_MODE = "remote";
+  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
+  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+  assert.equal(operations.length, 4);
+});
+
+test("remote D1 drill rejects governed-transition outbox event triggers without immutable semantics", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { governedTransitionTriggerSemanticsMismatch: true });
   mock.env.D1_RESTORE_MODE = "remote";
   mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
   mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;

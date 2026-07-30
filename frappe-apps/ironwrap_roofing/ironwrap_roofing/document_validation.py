@@ -218,6 +218,9 @@ _TRUSTED_WORK_PACKAGE_EVENT_ISSUANCE: ContextVar[
     "ironwrap_trusted_work_package_event_issuance",
     default=None,
 )
+_TRUSTED_CONTROLLED_ITEM_TRANSITION: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar("ironwrap_trusted_controlled_item_transition", default=None)
 _TRUSTED_MATERIAL_LOT_TRANSITION: ContextVar[
     tuple[str, tuple[tuple[str, str], ...]] | None
 ] = ContextVar("ironwrap_trusted_material_lot_transition", default=None)
@@ -290,6 +293,12 @@ WORK_PACKAGE_EVENT_ISSUANCE_FIELDS = (
     "hold_point_sequence",
     "evidence_item",
     "blocker_reason",
+)
+CONTROLLED_ITEM_RUNTIME_FIELDS = (
+    "status",
+    "approved_by",
+    "approved_at",
+    "approval_note",
 )
 MATERIAL_LOT_RUNTIME_FIELDS = (
     "status",
@@ -435,6 +444,10 @@ def _material_lot_runtime_snapshot(document: Any) -> tuple[tuple[str, str], ...]
     return _runtime_snapshot(document, MATERIAL_LOT_RUNTIME_FIELDS)
 
 
+def _controlled_item_runtime_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, CONTROLLED_ITEM_RUNTIME_FIELDS)
+
+
 def _nonconformance_runtime_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
     return _runtime_snapshot(document, NONCONFORMANCE_RUNTIME_FIELDS)
 
@@ -550,6 +563,19 @@ def work_package_transition_context(document: Any):
         yield
     finally:
         _TRUSTED_WORK_PACKAGE_TRANSITION.reset(token)
+
+
+@contextmanager
+def controlled_item_transition_context(document: Any):
+    """Authorize one exact Controlled Item approval or retirement command."""
+
+    token = _TRUSTED_CONTROLLED_ITEM_TRANSITION.set(
+        (str(document.get("name") or ""), _controlled_item_runtime_snapshot(document))
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_CONTROLLED_ITEM_TRANSITION.reset(token)
 
 
 @contextmanager
@@ -685,6 +711,17 @@ def validate_material_lot_runtime_mutation(document: Any) -> None:
         fields=MATERIAL_LOT_RUNTIME_FIELDS,
         trusted=_TRUSTED_MATERIAL_LOT_TRANSITION,
         label="Material Lot",
+    )
+
+
+def validate_controlled_item_runtime_mutation(document: Any) -> None:
+    """Keep Controlled Item approval facts command-owned after drafting."""
+
+    _validate_draft_only_runtime_mutation(
+        document,
+        fields=CONTROLLED_ITEM_RUNTIME_FIELDS,
+        trusted=_TRUSTED_CONTROLLED_ITEM_TRANSITION,
+        label="Controlled Item",
     )
 
 
@@ -1283,8 +1320,17 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
                 "Supplier Quote", document.get("source_quote"), "status"
             )
     elif kind == "material_lot":
-        context["supplier_order_status"] = _value(
-            "Supplier Order", document.get("supplier_order"), "status"
+        context["controlled_item"] = frappe.db.get_value(
+            "Controlled Item",
+            document.get("controlled_item"),
+            ("name", "status"),
+            as_dict=True,
+        )
+        context["supplier_order"] = frappe.db.get_value(
+            "Supplier Order",
+            document.get("supplier_order"),
+            ("name", "roof_job", "status"),
+            as_dict=True,
         )
         if document.get("source_kind") == "Shop Remnant":
             context["source_shop_order"] = frappe.db.get_value(
@@ -1318,18 +1364,30 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
                 if row.get("material_lot")
             }
     elif kind == "shop_order":
-        context["takeoff_status"] = _value(
-            "Material Takeoff", document.get("material_takeoff"), "status"
+        context["material_takeoff"] = frappe.db.get_value(
+            "Material Takeoff",
+            document.get("material_takeoff"),
+            ("name", "roof_job", "status"),
+            as_dict=True,
         )
-        context["supplier_order_status"] = _value(
-            "Supplier Order", document.get("supplier_order"), "status"
+        context["supplier_order"] = frappe.db.get_value(
+            "Supplier Order",
+            document.get("supplier_order"),
+            ("name", "roof_job", "status"),
+            as_dict=True,
         )
-        context["work_package_status"] = _value(
-            "Work Package", document.get("work_package"), "status"
+        context["work_package"] = frappe.db.get_value(
+            "Work Package",
+            document.get("work_package"),
+            ("name", "roof_job", "status"),
+            as_dict=True,
         )
         payment_milestone = document.get("invoice_payment_milestone")
-        context["invoice_payment_milestone_status"] = _value(
-            "Payment Milestone", payment_milestone, "status"
+        context["invoice_payment_milestone"] = frappe.db.get_value(
+            "Payment Milestone",
+            payment_milestone,
+            ("name", "roof_job", "shop_order", "status"),
+            as_dict=True,
         )
         material_lot_ids = sorted(
             {

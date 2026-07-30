@@ -60,6 +60,14 @@ WORK_PACKAGE_EVENT_CONTROLLER_PATH = (
     / "work_package_event"
     / "work_package_event.py"
 )
+CONTROLLED_ITEM_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "controlled_item"
+    / "controlled_item.py"
+)
 MATERIAL_LOT_CONTROLLER_PATH = (
     Path(__file__).resolve().parents[1]
     / "ironwrap_roofing"
@@ -445,6 +453,30 @@ class DocumentValidationAdapterTests(unittest.TestCase):
 
     def test_shop_domain_lifecycles_require_private_command_contexts(self) -> None:
         adapter, _ = self.load_adapter()
+        item_draft = FakeDocument(
+            {
+                "name": "item-1",
+                "status": "Draft",
+                "approved_by": "",
+                "approved_at": "",
+                "approval_note": "",
+            }
+        )
+        item_approved = FakeDocument(
+            {
+                "name": "item-1",
+                "status": "Approved",
+                "approved_by": "owner@example.com",
+                "approved_at": "2026-07-30 08:00:00",
+                "approval_note": "Approved metal system specification.",
+            },
+            previous=dict(item_draft),
+        )
+        with self.assertRaisesRegex(FakeValidationError, "Controlled Item lifecycle"):
+            adapter.validate_controlled_item_runtime_mutation(item_approved)
+        with adapter.controlled_item_transition_context(item_approved):
+            adapter.validate_controlled_item_runtime_mutation(item_approved)
+
         lot_draft = FakeDocument({"name": "lot-1", "status": "Draft"})
         lot_available = FakeDocument(
             {"name": "lot-1", "status": "Available"}, previous=dict(lot_draft)
@@ -507,6 +539,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             adapter.validate_shop_order_runtime_mutation(shop_released)
 
         for path, call in (
+            (CONTROLLED_ITEM_CONTROLLER_PATH, "validate_controlled_item_runtime_mutation(self)"),
             (MATERIAL_LOT_CONTROLLER_PATH, "validate_material_lot_runtime_mutation(self)"),
             (NONCONFORMANCE_CONTROLLER_PATH, "validate_nonconformance_runtime_mutation(self)"),
             (SHOP_ORDER_CONTROLLER_PATH, "validate_shop_order_runtime_mutation(self)"),
@@ -516,10 +549,26 @@ class DocumentValidationAdapterTests(unittest.TestCase):
     def test_shop_context_resolves_lot_ncr_and_remnant_lineage(self) -> None:
         adapter, _ = self.load_adapter(
             values={
-                ("Material Takeoff", "takeoff-1", "status"): "Approved",
-                ("Supplier Order", "supplier-1", "status"): "Received",
-                ("Work Package", "package-1", "status"): "Released",
-                ("Payment Milestone", None, "status"): None,
+                ("Controlled Item", "item-1", ("name", "status")): {
+                    "name": "item-1",
+                    "status": "Approved",
+                },
+                ("Material Takeoff", "takeoff-1", ("name", "roof_job", "status")): {
+                    "name": "takeoff-1",
+                    "roof_job": "job-1",
+                    "status": "Approved",
+                },
+                ("Supplier Order", "supplier-1", ("name", "roof_job", "status")): {
+                    "name": "supplier-1",
+                    "roof_job": "job-1",
+                    "status": "Received",
+                },
+                ("Work Package", "package-1", ("name", "roof_job", "status")): {
+                    "name": "package-1",
+                    "roof_job": "job-1",
+                    "status": "Released",
+                },
+                ("Payment Milestone", None, ("name", "roof_job", "shop_order", "status")): None,
                 (
                     "Material Lot",
                     "lot-1",
@@ -592,6 +641,9 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             "shop_order",
         )
         self.assertEqual(shop_context["material_lots"]["lot-1"]["roof_job"], "job-1")
+        self.assertEqual(shop_context["material_takeoff"]["roof_job"], "job-1")
+        self.assertEqual(shop_context["supplier_order"]["roof_job"], "job-1")
+        self.assertEqual(shop_context["work_package"]["roof_job"], "job-1")
 
         ncr_context = adapter._context(
             FakeDocument({"shop_order": "shop-1", "material_lot": "lot-1"}),
@@ -604,6 +656,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         remnant_context = adapter._context(
             FakeDocument(
                 {
+                    "controlled_item": "item-1",
                     "supplier_order": None,
                     "source_kind": "Shop Remnant",
                     "source_shop_order": "shop-1",

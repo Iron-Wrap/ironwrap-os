@@ -9,7 +9,7 @@ from typing import Any
 import frappe
 
 from ironwrap_roofing.domain_policy import PolicyViolation, validate_record
-from ironwrap_roofing.domain_policy import parse_json_field
+from ironwrap_roofing.domain_policy import SHOP_ORDER_FINAL_STATUSES, parse_json_field
 
 
 CORRECTION_TARGETS: dict[str, tuple[str, str, tuple[str, ...]]] = {
@@ -218,6 +218,15 @@ _TRUSTED_WORK_PACKAGE_EVENT_ISSUANCE: ContextVar[
     "ironwrap_trusted_work_package_event_issuance",
     default=None,
 )
+_TRUSTED_MATERIAL_LOT_TRANSITION: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar("ironwrap_trusted_material_lot_transition", default=None)
+_TRUSTED_NONCONFORMANCE_TRANSITION: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar("ironwrap_trusted_nonconformance_transition", default=None)
+_TRUSTED_SHOP_ORDER_TRANSITION: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar("ironwrap_trusted_shop_order_transition", default=None)
 
 # A Field Companion verification is a service fact, not a value a Desk/REST
 # caller may write into an Evidence Item.  The narrow issuer command builds
@@ -282,6 +291,40 @@ WORK_PACKAGE_EVENT_ISSUANCE_FIELDS = (
     "evidence_item",
     "blocker_reason",
 )
+MATERIAL_LOT_RUNTIME_FIELDS = ("status",)
+NONCONFORMANCE_RUNTIME_FIELDS = (
+    "status",
+    "containment",
+    "disposition",
+    "disposition_by",
+    "disposition_at",
+    "closed_by",
+    "closed_at",
+    "closure_evidence",
+)
+SHOP_ORDER_RUNTIME_FIELDS = (
+    "status",
+    "released_by",
+    "released_at",
+    "reserved_at",
+    "setup_started_at",
+    "fabrication_started_at",
+    "quality_hold_reason",
+    "ready_at",
+    "handed_over_to",
+    "handed_over_at",
+    "handoff_evidence",
+    "invoice_payment_milestone",
+    "invoice_ready_at",
+    "closed_at",
+    "lines",
+    "material_allocations",
+    "operations",
+    "yields",
+    "inspections",
+    "bundles",
+)
+SHOP_ORDER_LIFECYCLE_FIELDS = SHOP_ORDER_RUNTIME_FIELDS[:14]
 
 
 def _as_dict(document: Any) -> Any:
@@ -372,6 +415,27 @@ def _work_package_event_issuance_snapshot(
         )
         for field in WORK_PACKAGE_EVENT_ISSUANCE_FIELDS
     )
+
+
+def _runtime_snapshot(
+    document: Any, fields: tuple[str, ...]
+) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (field, "" if document.get(field) is None else str(document.get(field)))
+        for field in fields
+    )
+
+
+def _material_lot_runtime_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, MATERIAL_LOT_RUNTIME_FIELDS)
+
+
+def _nonconformance_runtime_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, NONCONFORMANCE_RUNTIME_FIELDS)
+
+
+def _shop_order_runtime_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, SHOP_ORDER_RUNTIME_FIELDS)
 
 
 @contextmanager
@@ -484,6 +548,45 @@ def work_package_transition_context(document: Any):
 
 
 @contextmanager
+def material_lot_transition_context(document: Any):
+    """Authorize one exact inventory-lot lifecycle mutation from a bounded command."""
+
+    token = _TRUSTED_MATERIAL_LOT_TRANSITION.set(
+        (str(document.get("name") or ""), _material_lot_runtime_snapshot(document))
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_MATERIAL_LOT_TRANSITION.reset(token)
+
+
+@contextmanager
+def nonconformance_transition_context(document: Any):
+    """Authorize one exact NCR lifecycle mutation from a bounded command."""
+
+    token = _TRUSTED_NONCONFORMANCE_TRANSITION.set(
+        (str(document.get("name") or ""), _nonconformance_runtime_snapshot(document))
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_NONCONFORMANCE_TRANSITION.reset(token)
+
+
+@contextmanager
+def shop_order_transition_context(document: Any):
+    """Authorize one exact Shop Order lifecycle mutation from a bounded command."""
+
+    token = _TRUSTED_SHOP_ORDER_TRANSITION.set(
+        (str(document.get("name") or ""), _shop_order_runtime_snapshot(document))
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_SHOP_ORDER_TRANSITION.reset(token)
+
+
+@contextmanager
 def work_package_event_issuance_context(document: Any):
     """Authorize one append-only Work Package event issued by the bounded API."""
 
@@ -541,6 +644,81 @@ def validate_work_package_runtime_mutation(document: Any) -> None:
         return
     frappe.throw(
         "Work Package lifecycle can only be changed through the bounded Work Package commands.",
+        exc=frappe.ValidationError,
+    )
+
+
+def _validate_draft_only_runtime_mutation(
+    document: Any,
+    *,
+    fields: tuple[str, ...],
+    trusted: ContextVar[tuple[str, tuple[tuple[str, str], ...]] | None],
+    label: str,
+) -> None:
+    current = _runtime_snapshot(document, fields)
+    previous_document = _previous(document)
+    if previous_document is None:
+        if document.get("status") == "Draft" and all(
+            not value for field, value in current if field != "status"
+        ):
+            return
+    elif _runtime_snapshot(previous_document, fields) == current:
+        return
+    if trusted.get() == (str(document.get("name") or ""), current):
+        return
+    frappe.throw(
+        f"{label} lifecycle can only be changed through bounded Shop commands.",
+        exc=frappe.ValidationError,
+    )
+
+
+def validate_material_lot_runtime_mutation(document: Any) -> None:
+    """Keep lot receipt, reservation, and quarantine states command-owned."""
+
+    _validate_draft_only_runtime_mutation(
+        document,
+        fields=MATERIAL_LOT_RUNTIME_FIELDS,
+        trusted=_TRUSTED_MATERIAL_LOT_TRANSITION,
+        label="Material Lot",
+    )
+
+
+def validate_nonconformance_runtime_mutation(document: Any) -> None:
+    """Keep NCR containment and disposition states command-owned."""
+
+    _validate_draft_only_runtime_mutation(
+        document,
+        fields=NONCONFORMANCE_RUNTIME_FIELDS,
+        trusted=_TRUSTED_NONCONFORMANCE_TRANSITION,
+        label="Nonconformance",
+    )
+
+
+def validate_shop_order_runtime_mutation(document: Any) -> None:
+    """Permit drafting, but require a private context for every released mutation."""
+
+    current = _shop_order_runtime_snapshot(document)
+    previous_document = _previous(document)
+    if previous_document is None:
+        lifecycle = _runtime_snapshot(document, SHOP_ORDER_LIFECYCLE_FIELDS)
+        if document.get("status") == "Draft" and all(
+            not value for field, value in lifecycle if field != "status"
+        ):
+            return
+    elif (
+        previous_document.get("status") == "Draft"
+        and document.get("status") == "Draft"
+    ):
+        return
+    elif _shop_order_runtime_snapshot(previous_document) == current:
+        return
+    if _TRUSTED_SHOP_ORDER_TRANSITION.get() == (
+        str(document.get("name") or ""),
+        current,
+    ):
+        return
+    frappe.throw(
+        "Shop Order lifecycle can only be changed through bounded Shop commands.",
         exc=frappe.ValidationError,
     )
 
@@ -1098,6 +1276,32 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
         if kind == "supplier_order":
             context["supplier_quote_status"] = _value(
                 "Supplier Quote", document.get("source_quote"), "status"
+            )
+    elif kind == "material_lot":
+        context["supplier_order_status"] = _value(
+            "Supplier Order", document.get("supplier_order"), "status"
+        )
+    elif kind == "shop_order":
+        context["takeoff_status"] = _value(
+            "Material Takeoff", document.get("material_takeoff"), "status"
+        )
+        context["supplier_order_status"] = _value(
+            "Supplier Order", document.get("supplier_order"), "status"
+        )
+        context["work_package_status"] = _value(
+            "Work Package", document.get("work_package"), "status"
+        )
+        payment_milestone = document.get("invoice_payment_milestone")
+        context["invoice_payment_milestone_status"] = _value(
+            "Payment Milestone", payment_milestone, "status"
+        )
+        if document.get("status") in SHOP_ORDER_FINAL_STATUSES:
+            context["open_nonconformance_count"] = frappe.db.count(
+                "Nonconformance",
+                filters={
+                    "shop_order": document.get("name") or document.get("shop_order_id"),
+                    "status": ["in", ["Open", "Contained", "Dispositioned"]],
+                },
             )
     elif kind == "proposal_evidence_pack":
         publication = _APPROVED_PROPOSAL_PUBLICATION.get()

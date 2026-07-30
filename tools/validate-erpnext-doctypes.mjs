@@ -189,7 +189,7 @@ const specs = [
     name: "Payment Milestone",
     dir: "payment_milestone",
     idField: "payment_milestone_id",
-    requiredFields: ["payment_milestone_id", "roof_job", "milestone_type", "status", "qb_entity_type", "qb_entity_id", "qb_operation", "realm_id", "event_ts", "raw_key", "notes"],
+    requiredFields: ["payment_milestone_id", "roof_job", "shop_order", "milestone_type", "status", "qb_entity_type", "qb_entity_id", "qb_operation", "realm_id", "event_ts", "raw_key", "notes"],
   },
   {
     name: "Production Gate State",
@@ -684,6 +684,46 @@ specs.push(
       encryption_key_ref: { fieldtype: "Data", read_only: 1 },
     },
   },
+  {
+    name: "Controlled Item", dir: "controlled_item", idField: "controlled_item_id",
+    requiredFields: ["controlled_item_id", "status", "revision", "item_kind", "unit", "profile", "gauge", "coating", "colour", "dimension_spec", "tolerance", "lot_required", "certificate_required", "source_ref", "approved_by", "approved_at", "approval_note"],
+  },
+  {
+    name: "Material Lot", dir: "material_lot", idField: "material_lot_id",
+    requiredFields: ["material_lot_id", "roof_job", "controlled_item", "source_kind", "supplier_order", "source_shop_order", "source_evidence", "lot_number", "certificate_reference", "condition_status", "received_quantity", "unit", "received_at", "status"],
+  },
+  {
+    name: "Nonconformance", dir: "nonconformance", idField: "nonconformance_id",
+    requiredFields: ["nonconformance_id", "shop_order", "material_lot", "status", "detected_at", "reported_by", "description", "evidence_item", "containment", "disposition", "disposition_by", "disposition_at", "closed_by", "closed_at", "closure_evidence"],
+  },
+  {
+    name: "Shop Order Line", dir: "shop_order_line", child: true,
+    requiredFields: ["line_no", "controlled_item", "requested_quantity", "accepted_quantity", "billable_quantity", "unit", "dimensions", "tolerance", "orientation", "invoice_basis", "needs_review"],
+  },
+  {
+    name: "Shop Material Allocation", dir: "shop_material_allocation", child: true,
+    requiredFields: ["allocation_id", "line_no", "material_lot", "reserved_quantity", "issued_quantity", "unit", "status", "needs_review"],
+  },
+  {
+    name: "Shop Operation", dir: "shop_operation", child: true,
+    requiredFields: ["sequence", "operation", "machine_tooling", "operator", "status", "started_at", "completed_at", "notes"],
+  },
+  {
+    name: "Shop Yield", dir: "shop_yield", child: true,
+    requiredFields: ["allocation_id", "operation_sequence", "input_quantity", "finished_quantity", "remnant_quantity", "remnant_lot", "scrap_quantity", "scrap_disposition", "evidence_item"],
+  },
+  {
+    name: "Shop Inspection", dir: "shop_inspection", child: true,
+    requiredFields: ["inspection_type", "line_no", "allocation_id", "operation_sequence", "result", "measured_result", "inspected_by", "inspected_at", "evidence_item", "needs_review"],
+  },
+  {
+    name: "Shop Bundle", dir: "shop_bundle", child: true,
+    requiredFields: ["bundle_id", "line_no", "material_lot", "piece_identity", "accepted_quantity", "unit", "label_text", "handoff_status", "handed_over_to", "handed_over_at", "handoff_evidence", "condition", "needs_review"],
+  },
+  {
+    name: "Shop Order", dir: "shop_order", idField: "shop_order_id",
+    requiredFields: ["shop_order_id", "roof_job", "material_takeoff", "supplier_order", "work_package", "status", "released_by", "released_at", "reserved_at", "setup_started_at", "fabrication_started_at", "quality_hold_reason", "ready_at", "handed_over_to", "handed_over_at", "handoff_evidence", "invoice_payment_milestone", "invoice_ready_at", "closed_at", "lines", "material_allocations", "operations", "yields", "inspections", "bundles"],
+  },
 );
 
 const appRoot = "frappe-apps/ironwrap_roofing/ironwrap_roofing";
@@ -695,12 +735,12 @@ const discoveredDirs = readdirSync(doctypePath, { withFileTypes: true })
   .filter((dir) => existsSync(join(doctypePath, dir, `${dir}.json`)))
   .sort();
 
-assert.equal(specs.length, 54, "the product contract must contain exactly 54 DocTypes");
-assert.equal(specs.filter((spec) => spec.child).length, 10, "expected ten child-table DocTypes");
-assert.equal(specs.filter((spec) => !spec.child).length, 44, "expected 44 top-level DocTypes");
+assert.equal(specs.length, 64, "the product contract must contain exactly 64 DocTypes");
+assert.equal(specs.filter((spec) => spec.child).length, 16, "expected sixteen child-table DocTypes");
+assert.equal(specs.filter((spec) => !spec.child).length, 48, "expected 48 top-level DocTypes");
 assert.equal(new Set(specs.map((spec) => spec.name)).size, specs.length, "duplicate DocType name in validator");
 assert.equal(new Set(expectedDirs).size, specs.length, "duplicate DocType directory in validator");
-assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 54-type product contract");
+assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 64-type product contract");
 
 const pythonContracts = readPythonContracts();
 assert.deepEqual(
@@ -953,4 +993,4 @@ function validateRuntimeWiring() {
   assert.match(adapter, /def\s+deny_business_document_delete\s*\(/, "append-only delete guard is missing");
 }
 
-console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (44 top-level + 10 child)`);
+console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (48 top-level + 16 child)`);

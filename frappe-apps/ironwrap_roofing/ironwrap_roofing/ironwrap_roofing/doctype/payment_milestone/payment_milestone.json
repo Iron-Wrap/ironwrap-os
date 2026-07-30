@@ -9,6 +9,7 @@
   "field_order": [
     "payment_milestone_id",
     "roof_job",
+    "shop_order",
     "milestone_type",
     "milestone_version",
     "status",
@@ -41,6 +42,7 @@
   "fields": [
     { "fieldname": "payment_milestone_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Payment Milestone ID", "reqd": 1, "unique": 1 },
     { "fieldname": "roof_job", "fieldtype": "Link", "in_standard_filter": 1, "label": "Roof Job", "options": "Roof Job" },
+    { "fieldname": "shop_order", "fieldtype": "Link", "in_standard_filter": 1, "label": "Shop Order", "options": "Shop Order" },
     { "fieldname": "milestone_type", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Milestone Type", "options": "Invoice\nPayment\nOther", "reqd": 1 },
     { "default": "1", "fieldname": "milestone_version", "fieldtype": "Int", "label": "Milestone Version", "reqd": 1 },
     { "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Status", "options": "Webhook Seen\nNeeds Review\nMatched\nIgnored", "reqd": 1 },

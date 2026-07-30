@@ -412,6 +412,26 @@ class ShopFabricationApiTests(unittest.TestCase):
             any("`tabSupplier Order`" in query for query, _ in db.lock_queries)
         )
 
+    def test_receive_material_lot_rejects_condition_drift_after_preview(self) -> None:
+        fixtures = self.fixture_data()
+        fixtures["items"]["item-1"]["status"] = "Approved"
+        lot = fixtures["lots"]["lot-1"]
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECEIVE_MATERIAL_LOT_TOOL,
+            target_doctype="Material Lot",
+            target_name="lot-1",
+            target_field="material_lot_id",
+            snapshot=api._material_lot_snapshot(lot),
+        )
+        lot["condition_status"] = "Quarantined"
+
+        with self.assertRaisesRegex(FakeValidationError, "stale_snapshot"):
+            api.receive_material_lot("lot-1", "run-shop-0001")
+        self.assertEqual(lot.save_count, 0)
+
     def test_receive_shop_remnant_requires_a_final_locked_source_order(self) -> None:
         fixtures = self.fixture_data()
         fixtures["items"]["item-1"]["status"] = "Approved"

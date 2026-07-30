@@ -565,6 +565,13 @@ def _material_lot_snapshot(document: Any) -> dict[str, Any]:
                 "material_lot_id",
                 "roof_job",
                 "controlled_item",
+                "source_kind",
+                "supplier_order",
+                "source_shop_order",
+                "source_evidence",
+                "condition_status",
+                "received_quantity",
+                "unit",
                 "status",
                 "available_quantity",
                 "reserved_quantity",
@@ -644,7 +651,10 @@ def approve_controlled_item(
         target_field="controlled_item_id",
     )
     item = _lock_controlled_item(controlled_item_id)
-    _assert_current_snapshot(args["expected_snapshot_sha256"], _controlled_item_snapshot(item))
+    _assert_current_snapshot(
+        args["expected_snapshot_sha256"],
+        _controlled_item_snapshot(item),
+    )
     if item.get("status") != "Draft":
         _fail("shop_command_item_not_preparable", "Controlled Item must be Draft")
     approved_at = str(frappe.utils.now_datetime())
@@ -690,7 +700,10 @@ def receive_material_lot(
     )
     lot = _lock_material_lot(material_lot_id)
     _assert_run_roof_job(run, lot)
-    _assert_current_snapshot(args["expected_snapshot_sha256"], _material_lot_snapshot(lot))
+    _assert_current_snapshot(
+        args["expected_snapshot_sha256"],
+        _material_lot_snapshot(lot),
+    )
     if lot.get("status") != "Draft":
         _fail("shop_command_lot_not_receivable", "Material Lot must be Draft")
     item = _lock_controlled_item(
@@ -785,7 +798,10 @@ def release_shop_order(
     )
     order = _lock_shop_order(shop_order_id)
     _assert_run_roof_job(run, order)
-    _assert_current_snapshot(args["expected_snapshot_sha256"], _shop_order_snapshot(order))
+    _assert_current_snapshot(
+        args["expected_snapshot_sha256"],
+        _shop_order_snapshot(order),
+    )
     if order.get("status") != "Draft":
         _fail("shop_command_order_not_releasable", "Shop Order must be Draft")
     _lock_shop_sources(order)
@@ -845,7 +861,8 @@ def reserve_shop_order_materials(
         for material_lot_id in sorted(requested_by_lot)
     ]
     _assert_current_snapshot(
-        args["expected_snapshot_sha256"], _shop_order_snapshot(order, lots)
+        args["expected_snapshot_sha256"],
+        _shop_order_snapshot(order, lots),
     )
     lots_by_id = {str(lot.get("material_lot_id")): lot for lot in lots}
     for lot_id, requested in requested_by_lot.items():

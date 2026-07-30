@@ -2999,6 +2999,29 @@ class DomainPolicyTests(unittest.TestCase):
         validate_record(
             "shop_order", quality_hold, previous=reserved, context=shop_context
         )
+        quarantined_lot_context = {
+            **shop_context,
+            "material_lots": {
+                lot_available["material_lot_id"]: {
+                    **lot_available,
+                    "status": "Quarantined",
+                }
+            },
+        }
+        validate_record(
+            "shop_order",
+            quality_hold,
+            previous=reserved,
+            context=quarantined_lot_context,
+        )
+        self.assert_policy(
+            "shop_allocation_lot_unavailable",
+            validate_record,
+            "shop_order",
+            reserved,
+            previous=released,
+            context=quarantined_lot_context,
+        )
         self.assert_policy(
             "shop_allocation_roof_job_mismatch",
             validate_record,

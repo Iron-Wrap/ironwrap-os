@@ -2634,7 +2634,10 @@ def _shop_allocations(
                 "allocation, Material Lot, and Shop Order line must share a unit",
                 "material_allocations",
             )
-        if _get(material_lot, "status") not in {"Available", "Reserved", "Consumed"}:
+        allowed_lot_statuses = {"Available", "Reserved", "Consumed"}
+        if _get(record, "status") == "Quality Hold":
+            allowed_lot_statuses.add("Quarantined")
+        if _get(material_lot, "status") not in allowed_lot_statuses:
             raise PolicyViolation(
                 "shop_allocation_lot_unavailable",
                 "allocation Material Lot is not available for this shop flow",

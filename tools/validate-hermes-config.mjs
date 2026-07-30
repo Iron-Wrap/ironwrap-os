@@ -166,6 +166,7 @@ const WRITE_PAIRS = {
   request_reserve_shop_order_materials: "dry_run_reserve_shop_order_materials",
   request_advance_shop_order_setup: "dry_run_advance_shop_order_setup",
   request_record_first_piece_outcome: "dry_run_record_first_piece_outcome",
+  request_record_final_shop_quality: "dry_run_record_final_shop_quality",
   request_create_supplier_quote: "dry_run_supplier_quote",
   request_create_quote_revision: "dry_run_quote_revision",
   request_bind_quote_price_rules: "dry_run_bind_quote_price_rules",
@@ -221,13 +222,13 @@ for (const tool of NEW_STRICT_READS) {
 }
 
 const frappeTools = new Set([...inventory].filter((tool) => toolServer.get(tool) === "erpnext-roofing-mcp"));
-assert.equal(frappeTools.size, 143, "Frappe MCP inventory must stay at the reviewed 143-tool contract");
+assert.equal(frappeTools.size, 145, "Frappe MCP inventory must stay at the reviewed 145-tool contract");
 assert.equal([...frappeTools].filter((tool) => reads.has(tool)).length, 75,
   "Frappe MCP must expose 75 read tools");
-assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 34,
-  "Frappe MCP must expose 34 dry-run tools");
-assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 34,
-  "Frappe MCP must expose 34 approved-write tools");
+assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 35,
+  "Frappe MCP must expose 35 dry-run tools");
+assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 35,
+  "Frappe MCP must expose 35 approved-write tools");
 const newoTools = new Set([...inventory].filter((tool) => toolServer.get(tool) === "newo-mcp"));
 assert.equal(newoTools.size, 20, "Newo MCP inventory must stay at the reviewed 20-tool contract");
 assert.equal([...newoTools].filter((tool) => reads.has(tool)).length, 17,
@@ -236,7 +237,7 @@ assert.equal([...newoTools].filter((tool) => dryRuns.has(tool)).length, 1,
   "Newo MCP must expose one exact-argument dry-run tool");
 assert.equal([...newoTools].filter((tool) => requests.has(tool)).length, 2,
   "Newo MCP must expose separate approval and receipt-consuming execution tools");
-assert.equal(inventory.size, 171, "three-server Hermes inventory must stay at 171 tools");
+assert.equal(inventory.size, 173, "three-server Hermes inventory must stay at 173 tools");
 
 // Contract Acceptance is evidence produced by the customer/provider, never an agent mutation.
 assert.ok(reads.has("get_contract_acceptance") && reads.has("list_contract_acceptances_for_job"),
@@ -297,7 +298,7 @@ for (const match of shopFabricationSource.matchAll(
     new Set([...match[2].matchAll(/"([^"]+)"/g)].map((role) => role[1])),
   );
 }
-assert.equal(shopToolRoles.size, 6, "Frappe shop tool-role map must cover the six bounded shop commands");
+assert.equal(shopToolRoles.size, 7, "Frappe shop tool-role map must cover the seven bounded shop commands");
 for (const [tool, allowedTitles] of shopToolRoles) {
   const grantedTitles = new Set(
     Object.values(config.roles)

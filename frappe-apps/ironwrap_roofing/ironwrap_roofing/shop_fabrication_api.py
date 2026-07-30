@@ -190,12 +190,6 @@ def _assert_post_and_permissions(
             f"the authenticated principal cannot write {doctype}",
             permission=True,
         )
-    if not frappe.has_permission("Hermes Run", ptype="read", user=authenticated_user):
-        _fail(
-            "shop_command_permission_denied",
-            "the authenticated principal cannot read Hermes Run",
-            permission=True,
-        )
     return authenticated_user
 
 

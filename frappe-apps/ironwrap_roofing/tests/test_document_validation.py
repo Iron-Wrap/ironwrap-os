@@ -506,6 +506,24 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         with adapter.nonconformance_transition_context(ncr_open):
             adapter.validate_nonconformance_runtime_mutation(ncr_open)
 
+        ncr_contained = FakeDocument(
+            {
+                "name": "ncr-first-piece-1",
+                "status": "Contained",
+                "containment": "Material Lot quarantined; Shop Order on Quality Hold.",
+                "disposition": "",
+                "disposition_by": "",
+                "disposition_at": "",
+                "closed_by": "",
+                "closed_at": "",
+                "closure_evidence": "",
+            }
+        )
+        with self.assertRaisesRegex(FakeValidationError, "Nonconformance lifecycle"):
+            adapter.validate_nonconformance_runtime_mutation(ncr_contained)
+        with adapter.nonconformance_transition_context(ncr_contained):
+            adapter.validate_nonconformance_runtime_mutation(ncr_contained)
+
         shop_draft = FakeDocument({"name": "shop-1", "status": "Draft", "lines": []})
         shop_released = FakeDocument(
             {

@@ -41,6 +41,7 @@ Manages gates, assignments, safety plans, compliance records, and supplier order
 - dry_run_release_shop_order
 - dry_run_reserve_shop_order_materials
 - dry_run_advance_shop_order_setup
+- dry_run_record_first_piece_outcome
 - dry_run_job_assignment
 - dry_run_safety_plan
 - dry_run_safety_acknowledgement
@@ -54,6 +55,7 @@ Manages gates, assignments, safety plans, compliance records, and supplier order
 - request_release_shop_order
 - request_reserve_shop_order_materials
 - request_advance_shop_order_setup
+- request_record_first_piece_outcome
 - request_create_job_assignment
 - request_create_safety_plan
 - request_record_safety_acknowledgement

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import defaultdict
 from collections.abc import Mapping
 from contextlib import ExitStack
@@ -26,19 +27,35 @@ from ironwrap_roofing.approval_receipt import (
 from ironwrap_roofing.document_validation import (
     controlled_item_transition_context,
     material_lot_transition_context,
+    nonconformance_transition_context,
     shop_order_transition_context,
+    validate_business_document,
+)
+from ironwrap_roofing.work_package_api import (
+    _assert_actor_is_assigned,
+    _assert_package_current_and_unexpired,
+    _lock_assignment,
 )
 
 
 MAX_IDENTIFIER_LENGTH = 140
 MAX_REQUEST_TEXT_LENGTH = 4_000
 SHA256_HEX_LENGTH = 64
+CANONICAL_DECIMAL_RE = re.compile(r"^[0-9]+(?:\.[0-9]+)?$")
+FIRST_PIECE_DIMENSION_RE = re.compile(
+    r"^(?P<nominal>[0-9]+(?:\.[0-9]+)?) (?P<unit>[A-Za-z][A-Za-z0-9/_-]{0,31})$"
+)
+FIRST_PIECE_TOLERANCE_RE = re.compile(
+    r"^(?:±|\+/-) (?P<tolerance>[0-9]+(?:\.[0-9]+)?) (?P<unit>[A-Za-z][A-Za-z0-9/_-]{0,31})$"
+)
+FIRST_PIECE_EVIDENCE_TYPES = frozenset({"Photo", "Measurement Report"})
 
 APPROVE_CONTROLLED_ITEM_TOOL = "request_approve_controlled_item"
 RECEIVE_MATERIAL_LOT_TOOL = "request_receive_material_lot"
 RELEASE_SHOP_ORDER_TOOL = "request_release_shop_order"
 RESERVE_SHOP_ORDER_TOOL = "request_reserve_shop_order_materials"
 ADVANCE_SHOP_ORDER_SETUP_TOOL = "request_advance_shop_order_setup"
+RECORD_FIRST_PIECE_OUTCOME_TOOL = "request_record_first_piece_outcome"
 
 OWNER_ROLES = frozenset({"System Manager", "IronWrap Owner"})
 SHOP_ROLES = OWNER_ROLES | {"IronWrap Production"}
@@ -51,6 +68,9 @@ SHOP_TOOL_AGENT_ROLES = {
     RELEASE_SHOP_ORDER_TOOL: frozenset({"Owner Operator", "Production Controller"}),
     RESERVE_SHOP_ORDER_TOOL: frozenset({"Owner Operator", "Production Controller"}),
     ADVANCE_SHOP_ORDER_SETUP_TOOL: frozenset({"Owner Operator", "Production Controller"}),
+    RECORD_FIRST_PIECE_OUTCOME_TOOL: frozenset(
+        {"Owner Operator", "Production Controller"}
+    ),
 }
 
 
@@ -144,7 +164,11 @@ def _parse_approved_arguments(
         ),
     }
     for field in extra_fields:
-        if field in {"allocations_json", "setup_payload_json"}:
+        if field in {
+            "allocations_json",
+            "setup_payload_json",
+            "first_piece_payload_json",
+        }:
             value = parsed.get(field)
             if not isinstance(value, str) or not value:
                 _fail(
@@ -403,6 +427,32 @@ def _positive_decimal(value: Any, field: str) -> Decimal:
     return result
 
 
+def _nonnegative_decimal(value: Any, field: str) -> Decimal:
+    if isinstance(value, bool):
+        _fail("shop_command_invalid_approval_args", f"{field} must be numeric")
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        _fail("shop_command_invalid_approval_args", f"{field} must be numeric")
+        raise AssertionError("frappe.throw must raise") from exc  # pragma: no cover
+    if not result.is_finite() or result < 0:
+        _fail("shop_command_invalid_approval_args", f"{field} must be nonnegative")
+    return result
+
+
+def _canonical_decimal(value: Any, field: str, *, allow_zero: bool) -> Decimal:
+    if not isinstance(value, str) or not CANONICAL_DECIMAL_RE.fullmatch(value):
+        _fail(
+            "shop_command_invalid_approval_args",
+            f"{field} must be canonical decimal text",
+        )
+    result = Decimal(value)
+    if (allow_zero and result < 0) or (not allow_zero and result <= 0):
+        comparison = "nonnegative" if allow_zero else "greater than zero"
+        _fail("shop_command_invalid_approval_args", f"{field} must be {comparison}")
+    return result
+
+
 def _decimal_text(value: Decimal) -> str:
     rendered = format(value, "f")
     return rendered.rstrip("0").rstrip(".") if "." in rendered else rendered
@@ -543,11 +593,108 @@ def _parse_setup_payload(order: Any, raw: str) -> tuple[str, list[dict[str, Any]
     raise AssertionError("frappe.throw must raise")  # pragma: no cover
 
 
-def _lock_evidence(evidence_id: str, *, roof_job: str) -> None:
+def _parse_first_piece_inspection(raw: Any) -> dict[str, Any]:
+    expected_fields = {
+        "line_no",
+        "allocation_id",
+        "operation_sequence",
+        "issued_quantity",
+        "measured_value",
+        "measurement_unit",
+        "evidence_item",
+    }
+    if not isinstance(raw, Mapping) or set(raw) != expected_fields:
+        _fail(
+            "shop_command_invalid_approval_args",
+            "first-piece inspection has an unsupported shape",
+        )
+    line_no = _positive_decimal(raw.get("line_no"), "line_no")
+    operation_sequence = _positive_decimal(
+        raw.get("operation_sequence"), "operation_sequence"
+    )
+    if line_no != line_no.to_integral_value():
+        _fail("shop_command_invalid_approval_args", "line_no must be an integer")
+    if operation_sequence != operation_sequence.to_integral_value():
+        _fail(
+            "shop_command_invalid_approval_args",
+            "operation_sequence must be an integer",
+        )
+    return {
+        "line_no": int(line_no),
+        "allocation_id": _clean_identifier(raw.get("allocation_id"), "allocation_id"),
+        "operation_sequence": int(operation_sequence),
+        "issued_quantity": _canonical_decimal(
+            raw.get("issued_quantity"), "issued_quantity", allow_zero=False
+        ),
+        "measured_value": _canonical_decimal(
+            raw.get("measured_value"), "measured_value", allow_zero=True
+        ),
+        "measurement_unit": _clean_identifier(
+            raw.get("measurement_unit"), "measurement_unit"
+        ),
+        "evidence_item": _clean_identifier(raw.get("evidence_item"), "evidence_item"),
+    }
+
+
+def _parse_first_piece_payload(
+    order: Any, raw: str
+) -> tuple[str, list[dict[str, Any]], str | None]:
+    payload = _parse_json(raw, field="first_piece_payload_json")
+    if not isinstance(payload, Mapping):
+        _fail(
+            "shop_command_invalid_approval_args",
+            "first_piece_payload_json must be an object",
+        )
+    if order.get("status") != "Setup / First Piece":
+        _fail(
+            "shop_command_order_not_first_piece_ready",
+            "Shop Order must be in Setup / First Piece",
+        )
+    action = payload.get("action")
+    if action == "pass_to_fabrication":
+        if set(payload) != {"action", "inspections"}:
+            _fail(
+                "shop_command_invalid_approval_args",
+                "pass_to_fabrication requires only action and inspections",
+            )
+        raw_inspections = payload.get("inspections")
+        if not isinstance(raw_inspections, list) or not raw_inspections:
+            _fail(
+                "shop_command_invalid_approval_args",
+                "pass_to_fabrication requires at least one inspection",
+            )
+        inspections = [_parse_first_piece_inspection(row) for row in raw_inspections]
+        if len({row["line_no"] for row in inspections}) != len(inspections):
+            _fail(
+                "shop_command_invalid_approval_args",
+                "first-piece inspections must have unique lines",
+            )
+        if len({row["allocation_id"] for row in inspections}) != len(inspections):
+            _fail(
+                "shop_command_invalid_approval_args",
+                "first-piece inspections must have unique allocations",
+            )
+        return action, inspections, None
+    if action == "fail_to_quality_hold":
+        if set(payload) != {"action", "inspection", "reason"}:
+            _fail(
+                "shop_command_invalid_approval_args",
+                "fail_to_quality_hold requires only action, inspection, and reason",
+            )
+        return (
+            action,
+            [_parse_first_piece_inspection(payload.get("inspection"))],
+            _clean_request_text(payload.get("reason"), field="reason"),
+        )
+    _fail("shop_command_invalid_approval_args", "unsupported first-piece action")
+    raise AssertionError("frappe.throw must raise")  # pragma: no cover
+
+
+def _lock_evidence(evidence_id: str, *, roof_job: str) -> dict[str, Any]:
     evidence = _lock_row(
         "Evidence Item",
         evidence_id,
-        fields="name, roof_job, sync_state",
+        fields="name, evidence_id, roof_job, sync_state, modified",
         not_found_code="shop_command_evidence_not_found",
     )
     if evidence.get("roof_job") != roof_job or evidence.get("sync_state") != "Verified":
@@ -555,6 +702,90 @@ def _lock_evidence(evidence_id: str, *, roof_job: str) -> None:
             "shop_command_evidence_unverified",
             "shop evidence must be verified and belong to the same Roof Job",
         )
+    return evidence
+
+
+def _lock_first_piece_evidence(
+    evidence_id: str,
+    *,
+    roof_job: str,
+    inspector: str,
+) -> dict[str, Any]:
+    evidence = _lock_row(
+        "Evidence Item",
+        evidence_id,
+        fields=(
+            "name, evidence_id, roof_job, evidence_type, proof_owner, proof_slot, "
+            "source_system, r2_key, content_checksum, checksum_algorithm, content_type, "
+            "content_length, capture_actor, captured_at, sync_state, verified_at, "
+            "verification_source, device_action_id, modified"
+        ),
+        not_found_code="shop_command_evidence_not_found",
+    )
+    if evidence.get("roof_job") != roof_job:
+        _fail(
+            "shop_command_evidence_job_mismatch",
+            "first-piece evidence must belong to the same Roof Job",
+        )
+    if evidence.get("proof_slot") != "Production" or evidence.get(
+        "evidence_type"
+    ) not in FIRST_PIECE_EVIDENCE_TYPES:
+        _fail(
+            "shop_command_first_piece_evidence_semantic_invalid",
+            "first-piece evidence must be a Production Photo or Measurement Report",
+        )
+    if evidence.get("sync_state") != "Verified":
+        _fail(
+            "shop_command_first_piece_evidence_unverified",
+            "first-piece evidence must be verified",
+        )
+    if (
+        evidence.get("capture_actor") != inspector
+        or evidence.get("proof_owner") != inspector
+    ):
+        _fail(
+            "shop_command_first_piece_evidence_actor_mismatch",
+            "first-piece evidence must be captured and owned by the independent inspector",
+            permission=True,
+        )
+    if evidence.get("source_system") != "ironwrap-pwa" or not evidence.get(
+        "device_action_id"
+    ):
+        _fail(
+            "shop_command_first_piece_evidence_provenance_invalid",
+            "first-piece evidence must originate from an identified IronWrap PWA action",
+        )
+    if not all(
+        evidence.get(field)
+        for field in (
+            "r2_key",
+            "captured_at",
+            "verified_at",
+            "verification_source",
+            "content_type",
+        )
+    ):
+        _fail(
+            "shop_command_first_piece_evidence_provenance_invalid",
+            "first-piece evidence is missing immutable capture or verification provenance",
+        )
+    if evidence.get("checksum_algorithm") != "SHA-256" or not re.fullmatch(
+        r"[0-9a-f]{64}", str(evidence.get("content_checksum") or "")
+    ):
+        _fail(
+            "shop_command_first_piece_evidence_provenance_invalid",
+            "first-piece evidence must retain a SHA-256 checksum",
+        )
+    try:
+        content_length = int(evidence.get("content_length"))
+    except (TypeError, ValueError):
+        content_length = 0
+    if content_length <= 0:
+        _fail(
+            "shop_command_first_piece_evidence_provenance_invalid",
+            "first-piece evidence content length must be positive",
+        )
+    return evidence
 
 
 def _lock_controlled_item(controlled_item_id: str) -> Any:
@@ -599,7 +830,7 @@ def _lock_shop_order(shop_order_id: str) -> Any:
         shop_order_id,
         fields=(
             "name, shop_order_id, roof_job, material_takeoff, supplier_order, work_package, "
-            "status, setup_started_at, quality_hold_reason, modified"
+            "status, setup_started_at, fabrication_started_at, quality_hold_reason, modified"
         ),
         not_found_code="shop_command_shop_order_not_found",
     )
@@ -612,18 +843,19 @@ def _lock_shop_order(shop_order_id: str) -> Any:
     return document
 
 
-def _lock_shop_sources(order: Any) -> None:
+def _lock_shop_sources(order: Any) -> dict[str, dict[str, Any]]:
     source_specs = (
         ("Material Takeoff", "material_takeoff", {"Approved"}),
         ("Supplier Order", "supplier_order", {"Partially Received", "Received"}),
         ("Work Package", "work_package", {"Released", "Acknowledged", "In Progress"}),
     )
+    sources: dict[str, dict[str, Any]] = {}
     for doctype, field, allowed_statuses in source_specs:
         source_id = _clean_identifier(order.get(field), field)
         source = _lock_row(
             doctype,
             source_id,
-            fields="name, roof_job, status",
+            fields="name, roof_job, status, modified",
             not_found_code="shop_command_source_not_found",
         )
         if (
@@ -634,6 +866,7 @@ def _lock_shop_sources(order: Any) -> None:
                 "shop_command_source_not_ready",
                 "Shop Order source records must be current and on the same Roof Job",
             )
+        sources[field] = source
     for row in order.get("lines") or []:
         controlled_item_id = _clean_identifier(
             row.get("controlled_item"), "controlled_item"
@@ -644,6 +877,105 @@ def _lock_shop_sources(order: Any) -> None:
                 "shop_command_item_not_approved",
                 "Shop Order lines require Approved Controlled Items",
             )
+    return sources
+
+
+def _lock_first_piece_inspector_authority(
+    order: Any,
+    *,
+    authenticated_user: str,
+) -> dict[str, Any]:
+    package = _lock_document(
+        "Work Package",
+        _clean_identifier(order.get("work_package"), "work_package"),
+        fields=(
+            "name, work_package_id, roof_job, job_assignment, safety_plan, version, status, "
+            "expires_at, acknowledged_by, acknowledged_at, started_at, modified"
+        ),
+        not_found_code="shop_command_work_package_not_found",
+    )
+    if package.get("name") != order.get("work_package") or package.get(
+        "roof_job"
+    ) != order.get("roof_job"):
+        _fail(
+            "shop_command_work_package_mismatch",
+            "Shop Order Work Package no longer matches the locked Roof Job",
+        )
+    # This is the shared current-authority proof: it locks and reevaluates the
+    # package's crew, compliance, safety-plan, gate, expiry, and supersession
+    # state rather than duplicating a drifting subset in the shop command.
+    validate_business_document(package, "work_package")
+    assignment = _lock_assignment(
+        package,
+        str(order.get("roof_job")),
+        _clean_identifier(package.get("job_assignment"), "job_assignment"),
+    )
+    _assert_package_current_and_unexpired(package)
+    assignment_role = _assert_actor_is_assigned(assignment, authenticated_user)
+    assignment_snapshot = _lock_row(
+        "Job Assignment",
+        _clean_identifier(assignment.get("name"), "job_assignment"),
+        fields=(
+            "name, assignment_id, roof_job, assignment_type, status, crew_profile, "
+            "assigned_user, scheduled_start, supersedes, modified"
+        ),
+        not_found_code="shop_command_job_assignment_not_found",
+    )
+    crew_profile = _lock_row(
+        "Crew Profile",
+        _clean_identifier(assignment.get("crew_profile"), "crew_profile"),
+        fields=(
+            "name, crew_profile_id, status, crew_type, competency_status, "
+            "competency_checked_at, competency_expiry, equipment_status, "
+            "equipment_checked_at, equipment_expiry, wcb_status, wcb_checked_at, "
+            "wcb_expiry, active_stop, active_stop_at, active_stop_reason, modified"
+        ),
+        not_found_code="shop_command_crew_profile_not_found",
+    )
+    return {
+        "work_package": package,
+        "job_assignment": assignment_snapshot,
+        "crew_profile": crew_profile,
+        "authenticated_user": authenticated_user,
+        "assignment_role": assignment_role,
+    }
+
+
+def _first_piece_measurement_spec(line: Mapping[str, Any]) -> dict[str, Decimal | str]:
+    dimensions = line.get("dimensions")
+    tolerance = line.get("tolerance")
+    dimension_match = (
+        FIRST_PIECE_DIMENSION_RE.fullmatch(dimensions)
+        if isinstance(dimensions, str)
+        else None
+    )
+    tolerance_match = (
+        FIRST_PIECE_TOLERANCE_RE.fullmatch(tolerance)
+        if isinstance(tolerance, str)
+        else None
+    )
+    if not dimension_match or not tolerance_match:
+        _fail(
+            "shop_command_first_piece_measurement_spec_invalid",
+            "first-piece lines require canonical dimension and tolerance text",
+        )
+    nominal = _canonical_decimal(
+        dimension_match.group("nominal"), "dimensions", allow_zero=False
+    )
+    allowed_tolerance = _canonical_decimal(
+        tolerance_match.group("tolerance"), "tolerance", allow_zero=False
+    )
+    dimension_unit = dimension_match.group("unit").lower()
+    if dimension_unit != tolerance_match.group("unit").lower():
+        _fail(
+            "shop_command_first_piece_measurement_spec_invalid",
+            "first-piece dimension and tolerance units must match",
+        )
+    return {
+        "nominal_value": nominal,
+        "tolerance_value": allowed_tolerance,
+        "measurement_unit": dimension_unit,
+    }
 
 
 def _controlled_item_snapshot(document: Any) -> dict[str, Any]:
@@ -722,7 +1054,10 @@ def _shop_order_snapshot(order: Any, lots: list[Any] | None = None) -> dict[str,
 def _shop_order_setup_snapshot(order: Any) -> dict[str, Any]:
     snapshot = _shop_order_snapshot(order)
     snapshot["shop_order"].update(
-        _snapshot_values(order, ("setup_started_at", "quality_hold_reason"))
+        _snapshot_values(
+            order,
+            ("setup_started_at", "fabrication_started_at", "quality_hold_reason"),
+        )
     )
     snapshot["operations"] = [
         _snapshot_values(
@@ -741,6 +1076,192 @@ def _shop_order_setup_snapshot(order: Any) -> dict[str, Any]:
         for operation in order.get("operations") or []
     ]
     return snapshot
+
+
+def _shop_order_first_piece_snapshot(
+    order: Any,
+    lots: list[Any],
+    evidence: list[Mapping[str, Any]],
+    sources: Mapping[str, Mapping[str, Any]],
+    inspector_authority: Mapping[str, Any],
+) -> dict[str, Any]:
+    snapshot = _shop_order_setup_snapshot(order)
+    snapshot["lines"] = [
+        _snapshot_values(
+            line,
+            (
+                "line_no",
+                "controlled_item",
+                "requested_quantity",
+                "accepted_quantity",
+                "billable_quantity",
+                "unit",
+                "dimensions",
+                "tolerance",
+                "orientation",
+                "invoice_basis",
+                "needs_review",
+            ),
+        )
+        for line in order.get("lines") or []
+    ]
+    snapshot["material_allocations"] = [
+        _snapshot_values(
+            allocation,
+            (
+                "allocation_id",
+                "line_no",
+                "material_lot",
+                "reserved_quantity",
+                "issued_quantity",
+                "unit",
+                "status",
+                "needs_review",
+            ),
+        )
+        for allocation in order.get("material_allocations") or []
+    ]
+    snapshot["inspections"] = [
+        _snapshot_values(
+            inspection,
+            (
+                "inspection_type",
+                "line_no",
+                "allocation_id",
+                "operation_sequence",
+                "result",
+                "nominal_value",
+                "measured_value",
+                "tolerance_value",
+                "measurement_unit",
+                "measured_result",
+                "inspected_by",
+                "inspected_at",
+                "evidence_item",
+                "needs_review",
+            ),
+        )
+        for inspection in order.get("inspections") or []
+    ]
+    snapshot["material_lots"] = [
+        _snapshot_values(
+            lot,
+            (
+                "name",
+                "material_lot_id",
+                "roof_job",
+                "controlled_item",
+                "unit",
+                "status",
+                "available_quantity",
+                "reserved_quantity",
+                "consumed_quantity",
+                "modified",
+            ),
+        )
+        for lot in lots
+    ]
+    snapshot["evidence"] = [
+        _snapshot_values(
+            item,
+            (
+                "name",
+                "evidence_id",
+                "roof_job",
+                "evidence_type",
+                "proof_owner",
+                "proof_slot",
+                "source_system",
+                "r2_key",
+                "content_checksum",
+                "checksum_algorithm",
+                "content_type",
+                "content_length",
+                "capture_actor",
+                "captured_at",
+                "sync_state",
+                "verified_at",
+                "verification_source",
+                "device_action_id",
+                "modified",
+            ),
+        )
+        for item in evidence
+    ]
+    snapshot["source_records"] = {
+        "material_takeoff": _snapshot_values(
+            sources["material_takeoff"], ("name", "roof_job", "status", "modified")
+        ),
+        "supplier_order": _snapshot_values(
+            sources["supplier_order"], ("name", "roof_job", "status", "modified")
+        ),
+        "work_package": _snapshot_values(
+            inspector_authority["work_package"],
+            (
+                "name",
+                "work_package_id",
+                "roof_job",
+                "job_assignment",
+                "safety_plan",
+                "version",
+                "status",
+                "expires_at",
+                "acknowledged_by",
+                "acknowledged_at",
+                "started_at",
+                "modified",
+            ),
+        ),
+    }
+    snapshot["inspector_authority"] = {
+        "authenticated_user": _snapshot_text(
+            inspector_authority["authenticated_user"]
+        ),
+        "job_assignment": _snapshot_values(
+            inspector_authority["job_assignment"],
+            (
+                "name",
+                "assignment_id",
+                "roof_job",
+                "assignment_type",
+                "status",
+                "crew_profile",
+                "assigned_user",
+                "scheduled_start",
+                "supersedes",
+                "modified",
+            ),
+        ),
+        "crew_profile": _snapshot_values(
+            inspector_authority["crew_profile"],
+            (
+                "name",
+                "crew_profile_id",
+                "status",
+                "crew_type",
+                "competency_status",
+                "competency_checked_at",
+                "competency_expiry",
+                "equipment_status",
+                "equipment_checked_at",
+                "equipment_expiry",
+                "wcb_status",
+                "wcb_checked_at",
+                "wcb_expiry",
+                "active_stop",
+                "active_stop_at",
+                "active_stop_reason",
+                "modified",
+            ),
+        ),
+        "assignment_role": _snapshot_text(inspector_authority["assignment_role"]),
+    }
+    return snapshot
+
+
+def _first_piece_ncr_id(hermes_run_id: str) -> str:
+    digest = hashlib.sha256(f"first-piece:{hermes_run_id}".encode("utf-8")).hexdigest()
+    return f"ncr:first-piece:{digest[:32]}"
 
 
 def _set(document: Any, field: str, value: Any) -> None:
@@ -1116,3 +1637,308 @@ def advance_shop_order_setup(
         },
         "hermes_run_id": hermes_run_id,
     }
+
+
+@frappe.whitelist()
+def record_first_piece_outcome(
+    shop_order_id: str,
+    hermes_run_id: str,
+) -> dict[str, Any]:
+    """Record a signed first-piece pass or hold before shop fabrication starts."""
+
+    authenticated_user = _assert_post_and_permissions(
+        doctype="Shop Order", allowed_roles=SHOP_ROLES
+    )
+    shop_order_id = _clean_identifier(shop_order_id, "shop_order_id")
+    hermes_run_id = _clean_identifier(hermes_run_id, "hermes_run_id")
+    run = _lock_hermes_run(hermes_run_id)
+    args = _assert_approved_run(
+        run,
+        hermes_run_id=hermes_run_id,
+        authenticated_user=authenticated_user,
+        tool_name=RECORD_FIRST_PIECE_OUTCOME_TOOL,
+        target_doctype="Shop Order",
+        target_name=shop_order_id,
+        target_field="shop_order_id",
+        extra_fields=frozenset({"first_piece_payload_json"}),
+    )
+    order = _lock_shop_order(shop_order_id)
+    _assert_run_roof_job(run, order)
+    sources = _lock_shop_sources(order)
+    action, inspections, hold_reason = _parse_first_piece_payload(
+        order,
+        args["first_piece_payload_json"],
+    )
+    lines = {
+        int(line.get("line_no")): line for line in order.get("lines") or []
+    }
+    allocations = {
+        str(allocation.get("allocation_id")): allocation
+        for allocation in order.get("material_allocations") or []
+    }
+    operations = {
+        int(operation.get("sequence")): operation
+        for operation in order.get("operations") or []
+    }
+    if not lines or not allocations or not operations:
+        _fail(
+            "shop_command_first_piece_context_missing",
+            "Shop Order requires lines, reservations, and a shop route",
+        )
+    lot_ids = sorted(
+        {
+            _clean_identifier(allocation.get("material_lot"), "material_lot")
+            for allocation in allocations.values()
+        }
+    )
+    lots = [_lock_material_lot(material_lot_id) for material_lot_id in lot_ids]
+    evidence_ids = sorted({inspection["evidence_item"] for inspection in inspections})
+    evidence = [
+        _lock_first_piece_evidence(
+            evidence_id,
+            roof_job=order.get("roof_job"),
+            inspector=authenticated_user,
+        )
+        for evidence_id in evidence_ids
+    ]
+    inspector_authority = _lock_first_piece_inspector_authority(
+        order, authenticated_user=authenticated_user
+    )
+    _assert_current_snapshot(
+        args["expected_snapshot_sha256"],
+        _shop_order_first_piece_snapshot(
+            order, lots, evidence, sources, inspector_authority
+        ),
+    )
+    lots_by_id = {str(lot.get("material_lot_id")): lot for lot in lots}
+    for allocation in allocations.values():
+        line = lines.get(int(allocation.get("line_no")))
+        lot = lots_by_id.get(str(allocation.get("material_lot")))
+        if (
+            line is None
+            or lot is None
+            or allocation.get("status") != "Reserved"
+            or lot.get("status") != "Reserved"
+            or lot.get("roof_job") != order.get("roof_job")
+            or lot.get("controlled_item") != line.get("controlled_item")
+            or allocation.get("unit") != line.get("unit")
+            or lot.get("unit") != line.get("unit")
+        ):
+            _fail(
+                "shop_command_invalid_first_piece_allocation",
+                "first-piece inspection requires current reserved material lineage",
+            )
+        if _nonnegative_decimal(
+            allocation.get("issued_quantity"), "issued_quantity"
+        ) != 0:
+            _fail(
+                "shop_command_first_piece_allocation_already_issued",
+                "first-piece inspection requires an unissued material allocation",
+            )
+    inspected_lines = {inspection["line_no"] for inspection in inspections}
+    if action == "pass_to_fabrication" and inspected_lines != set(lines):
+        _fail(
+            "shop_command_missing_first_piece_pass",
+            "every Shop Order line needs one passed First Piece inspection",
+        )
+    issue_by_lot: defaultdict[str, Decimal] = defaultdict(Decimal)
+    for inspection in inspections:
+        allocation = allocations.get(inspection["allocation_id"])
+        operation = operations.get(inspection["operation_sequence"])
+        if (
+            inspection["line_no"] not in lines
+            or allocation is None
+            or operation is None
+            or int(allocation.get("line_no")) != inspection["line_no"]
+        ):
+            _fail(
+                "shop_command_invalid_first_piece_reference",
+                "inspection must reference the current line, allocation, and operation",
+            )
+        if operation.get("status") not in {"In Progress", "Complete"} or not operation.get(
+            "started_at"
+        ):
+            _fail(
+                "shop_command_first_piece_operation_not_started",
+                "first-piece inspection requires a started in-progress or completed operation",
+            )
+        if operation.get("operator") == authenticated_user:
+            _fail(
+                "shop_command_non_independent_inspection",
+                "the operation fabricator cannot inspect its own first piece",
+                permission=True,
+            )
+        measurement = _first_piece_measurement_spec(lines[inspection["line_no"]])
+        if inspection["measurement_unit"].lower() != measurement["measurement_unit"]:
+            _fail(
+                "shop_command_first_piece_measurement_unit_mismatch",
+                "first-piece measurement unit must match the controlled line",
+            )
+        within_tolerance = (
+            abs(inspection["measured_value"] - measurement["nominal_value"])
+            <= measurement["tolerance_value"]
+        )
+        if (action == "pass_to_fabrication") != within_tolerance:
+            _fail(
+                "shop_command_first_piece_tolerance_result_mismatch",
+                "first-piece action must match the measured tolerance result",
+            )
+        inspection["nominal_value"] = measurement["nominal_value"]
+        inspection["tolerance_value"] = measurement["tolerance_value"]
+        inspection["measurement_unit"] = measurement["measurement_unit"]
+        inspection["measured_result"] = (
+            f"{_decimal_text(inspection['measured_value'])} {measurement['measurement_unit']}; "
+            f"nominal {_decimal_text(measurement['nominal_value'])} +/- "
+            f"{_decimal_text(measurement['tolerance_value'])} {measurement['measurement_unit']}"
+        )
+        remaining = _positive_decimal(
+            allocation.get("reserved_quantity"), "reserved_quantity"
+        )
+        if inspection["issued_quantity"] > remaining:
+            _fail(
+                "shop_command_first_piece_issue_exceeds_reservation",
+                "first-piece issue exceeds the approved material allocation",
+            )
+        issue_by_lot[str(allocation.get("material_lot"))] += inspection[
+            "issued_quantity"
+        ]
+    for material_lot_id, issued_quantity in issue_by_lot.items():
+        lot = lots_by_id[material_lot_id]
+        if issued_quantity > _positive_decimal(
+            lot.get("reserved_quantity"), "reserved_quantity"
+        ):
+            _fail(
+                "shop_command_first_piece_issue_exceeds_lot_reservation",
+                "first-piece issue exceeds the locked Material Lot reservation",
+            )
+    inspected_at = str(frappe.utils.now_datetime())
+    for inspection in inspections:
+        allocation = allocations[inspection["allocation_id"]]
+        allocation["issued_quantity"] = _decimal_text(inspection["issued_quantity"])
+        allocation["status"] = "Issued"
+    for material_lot_id, issued_quantity in issue_by_lot.items():
+        lot = lots_by_id[material_lot_id]
+        available = _nonnegative_decimal(lot.get("available_quantity"), "available_quantity")
+        reserved = _positive_decimal(lot.get("reserved_quantity"), "reserved_quantity")
+        consumed = _nonnegative_decimal(lot.get("consumed_quantity"), "consumed_quantity")
+        received = _positive_decimal(lot.get("received_quantity"), "received_quantity")
+        next_reserved = reserved - issued_quantity
+        next_consumed = consumed + issued_quantity
+        lot.reserved_quantity = _decimal_text(next_reserved)
+        lot.consumed_quantity = _decimal_text(next_consumed)
+        if next_reserved > 0:
+            lot.status = "Reserved"
+        elif available > 0:
+            lot.status = "Available"
+        elif next_consumed == received:
+            lot.status = "Consumed"
+        else:
+            _fail(
+                "shop_command_first_piece_lot_balance_invalid",
+                "Material Lot balances cannot classify the issued first-piece state",
+            )
+    existing_inspections = list(order.get("inspections") or [])
+    result = "Pass" if action == "pass_to_fabrication" else "Fail"
+    existing_inspections.extend(
+        {
+            "inspection_type": "First Piece",
+            "line_no": inspection["line_no"],
+            "allocation_id": inspection["allocation_id"],
+            "operation_sequence": inspection["operation_sequence"],
+            "result": result,
+            "nominal_value": _decimal_text(inspection["nominal_value"]),
+            "measured_value": _decimal_text(inspection["measured_value"]),
+            "tolerance_value": _decimal_text(inspection["tolerance_value"]),
+            "measurement_unit": inspection["measurement_unit"],
+            "measured_result": inspection["measured_result"],
+            "inspected_by": authenticated_user,
+            "inspected_at": inspected_at,
+            "evidence_item": inspection["evidence_item"],
+            "needs_review": 0 if result == "Pass" else 1,
+        }
+        for inspection in inspections
+    )
+    _set(order, "inspections", existing_inspections)
+    if action == "pass_to_fabrication":
+        order.status = "In Fabrication"
+        order.fabrication_started_at = inspected_at
+        order.quality_hold_reason = ""
+    else:
+        if not frappe.has_permission(
+            "Nonconformance", ptype="create", user=authenticated_user
+        ):
+            _fail(
+                "shop_command_nonconformance_permission_denied",
+                "the authenticated principal cannot create the required Nonconformance",
+                permission=True,
+            )
+        order.status = "Quality Hold"
+        order.quality_hold_reason = hold_reason
+    nonconformance = None
+    failed_lot = None
+    if action == "fail_to_quality_hold":
+        failed = inspections[0]
+        failed_lot = lots_by_id[str(allocations[failed["allocation_id"]].get("material_lot"))]
+        failed_lot.status = "Quarantined"
+        nonconformance = frappe.get_doc(
+            {
+                "doctype": "Nonconformance",
+                "name": _first_piece_ncr_id(hermes_run_id),
+                "nonconformance_id": _first_piece_ncr_id(hermes_run_id),
+                "shop_order": order.get("name"),
+                "material_lot": failed_lot.get("name"),
+                "status": "Contained",
+                "detected_at": inspected_at,
+                "reported_by": authenticated_user,
+                "description": hold_reason,
+                "evidence_item": failed["evidence_item"],
+                "containment": (
+                    f"Material Lot {failed_lot.get('material_lot_id')} quarantined; "
+                    "Shop Order placed on Quality Hold."
+                ),
+            }
+        )
+    with ExitStack() as stack:
+        for lot in lots:
+            stack.enter_context(material_lot_transition_context(lot))
+        if nonconformance is not None:
+            stack.enter_context(nonconformance_transition_context(nonconformance))
+        stack.enter_context(shop_order_transition_context(order))
+        if nonconformance is not None:
+            nonconformance.insert()
+        for lot in lots:
+            lot.save()
+        order.save()
+    response = {
+        "shop_order": {
+            "name": order.get("name"),
+            "shop_order_id": order.get("shop_order_id"),
+            "roof_job": order.get("roof_job"),
+            "status": order.get("status"),
+            "fabrication_started_at": str(order.get("fabrication_started_at") or ""),
+            "quality_hold_reason": order.get("quality_hold_reason") or "",
+            "first_piece_inspection_count": len(
+                [
+                    inspection
+                    for inspection in order.get("inspections") or []
+                    if inspection.get("inspection_type") == "First Piece"
+                ]
+            ),
+        },
+        "hermes_run_id": hermes_run_id,
+    }
+    if failed_lot is not None and nonconformance is not None:
+        response["material_lot"] = {
+            "name": failed_lot.get("name"),
+            "material_lot_id": failed_lot.get("material_lot_id"),
+            "status": failed_lot.get("status"),
+        }
+        response["nonconformance"] = {
+            "name": nonconformance.get("name"),
+            "nonconformance_id": nonconformance.get("nonconformance_id"),
+            "status": nonconformance.get("status"),
+            "shop_order": nonconformance.get("shop_order"),
+            "material_lot": nonconformance.get("material_lot"),
+            "evidence_item": nonconformance.get("evidence_item"),
+        }
+    return response

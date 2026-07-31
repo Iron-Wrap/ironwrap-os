@@ -36,6 +36,7 @@ import {
   retryMeasurementIntakeReceipts,
 } from "./measurements.ts";
 import { handleEstimateIngest, retryEstimateErpNextSyncs } from "./estimates.ts";
+import { handleFacetDesignIngest } from "./facet-design-ingest.ts";
 import { handleQuickbooksWebhook } from "./quickbooks.ts";
 import {
   handlePublicInstantEstimate,
@@ -313,6 +314,9 @@ async function routeRequest(
         req.headers.get("x-idempotency-key"),
     );
   }
+  // Facet has a separately provisioned HMAC authority. It must never fall through to the broad
+  // lead-ingest bearer token route, and this receipt has no Frappe projection in this slice.
+  if (url.pathname === "/ingest/facet-design") return await handleFacetDesignIngest(req, env);
   const ingest = url.pathname.match(/^\/ingest\/([a-z]+)$/);
   if (req.method === "POST" && ingest) {
     if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN))

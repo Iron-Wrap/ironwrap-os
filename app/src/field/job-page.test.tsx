@@ -1,10 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
+import { apiCommand } from "../lib/api";
+import { getOutboxAction, queueOutboxAction, saveOutboxAction } from "../storage/outbox";
+import { flushOutbox } from "../storage/outbox-processor";
+import type { OutboxAction } from "../storage/outbox-types";
 import type { JobResponse } from "./field-contracts";
 import { loadJob } from "./field-cache";
 import { JobPage } from "./field-pages";
@@ -16,6 +21,16 @@ vi.mock("./field-cache", () => ({
   loadToday: vi.fn(),
   prefetchAssignedPackets: vi.fn(),
 }));
+
+vi.mock("../storage/outbox", () => ({
+  getOutboxAction: vi.fn(),
+  queueOutboxAction: vi.fn(),
+  saveOutboxAction: vi.fn(),
+}));
+
+vi.mock("../storage/outbox-processor", () => ({ flushOutbox: vi.fn() }));
+
+vi.mock("../lib/api", () => ({ apiCommand: vi.fn() }));
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({
@@ -145,6 +160,7 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
         phone: "+14035550123",
         access_instructions: null,
       },
+      work_package: null,
     },
     proof_stream: [
       {
@@ -173,6 +189,110 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
   };
 }
 
+function releasedWorkPackage(): NonNullable<JobResponse["packet"]["work_package"]> {
+  return {
+    id: "WP-1",
+    version: 3,
+    status: "Released",
+    title: "North slope replacement",
+    objective: "Replace the north slope to the released drawing.",
+    boundaries: "North slope only; no fascia scope.",
+    prerequisites: "Materials staged and fall protection inspected.",
+    expected_result: "Weather-tight completed north slope.",
+    stop_conditions: "Stop for wind above the plan limit or unprotected edge exposure.",
+    make_safe_procedure: "Secure loose materials and maintain the fall-protection boundary.",
+    issued_at: "2026-07-10T15:00:00.000Z",
+    released_at: "2026-07-10T15:15:00.000Z",
+    expires_at: "2026-07-10T23:00:00.000Z",
+    acknowledgement: { current_user_acknowledged: false, acknowledged_at: null },
+    steps: [
+      {
+        sequence: 1,
+        instruction: "Inspect anchors before roof access.",
+        required_evidence: "Anchor inspection photo.",
+        acceptance_criteria: "Anchor and harness connection are visible.",
+      },
+    ],
+    hold_points: [
+      {
+        sequence: 1,
+        hold_point: "Deck condition review",
+        release_authority: "Production manager",
+        required_evidence: "Deck condition photo.",
+        acceptance_criteria: "Production manager independently releases the hold.",
+        released: false,
+      },
+    ],
+  };
+}
+
+function workPackageModel(overrides: Partial<JobResponse> = {}): JobResponse {
+  const model = jobModel();
+  return {
+    ...model,
+    gates: [],
+    allowed_actions: [
+      "field.checkin.create",
+      "work_package.acknowledge",
+      "work_package.stop_work",
+      "work_package.start",
+    ],
+    packet: { ...model.packet, work_package: releasedWorkPackage() },
+    ...overrides,
+  };
+}
+
+function startableWorkPackageModel(): JobResponse {
+  const model = workPackageModel();
+  const workPackage = model.packet.work_package;
+  if (!workPackage) throw new Error("Expected a Work Package fixture.");
+  return {
+    ...model,
+    packet: {
+      ...model.packet,
+      work_package: {
+        ...workPackage,
+        status: "Acknowledged",
+        acknowledgement: {
+          current_user_acknowledged: true,
+          acknowledged_at: "2026-07-10T15:20:00.000Z",
+        },
+        hold_points: workPackage.hold_points.map((holdPoint) => ({
+          ...holdPoint,
+          released: true,
+        })),
+      },
+    },
+  };
+}
+
+function queuedWorkPackageAction(
+  kind: "work_package_acknowledgement" | "work_package_stop",
+): OutboxAction {
+  return {
+    deviceActionId: `${kind}-action`,
+    tenantId: fieldSession.tenant.id,
+    userId: fieldSession.user.id,
+    kind,
+    endpoint:
+      kind === "work_package_acknowledgement"
+        ? "/api/v1/jobs/JOB-1/work-package/acknowledgements"
+        : "/api/v1/jobs/JOB-1/work-package/stop-work",
+    method: "POST",
+    payload:
+      kind === "work_package_acknowledgement"
+        ? { work_package_id: "WP-1" }
+        : { work_package_id: "WP-1", blocker_reason: "Wind exceeds the plan limit." },
+    attachments: [],
+    state: "queued",
+    attempts: 0,
+    nextAttemptAt: 1_000,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    version: 2,
+  };
+}
+
 function renderJob(model = jobModel(), session = fieldSession) {
   vi.mocked(loadJob).mockResolvedValue(model);
   return render(
@@ -187,7 +307,17 @@ function renderJob(model = jobModel(), session = fieldSession) {
 }
 
 describe("JobPage", () => {
-  beforeEach(() => vi.clearAllMocks());
+  const originalOnline = navigator.onLine;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
+    vi.mocked(getOutboxAction).mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: originalOnline });
+  });
 
   it("turns a blocked gate into a work lock while preserving the permitted blocker-capture path", async () => {
     renderJob();
@@ -232,5 +362,136 @@ describe("JobPage", () => {
 
     expect(await screen.findByText(/Offline packet from/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Load older proof" })).not.toBeInTheDocument();
+  });
+
+  it("renders the exact cached Work Package while keeping offline work authority closed", async () => {
+    renderJob(workPackageModel({ stale_fields: ["offline.cached_packet"] }));
+
+    expect(await screen.findByRole("heading", { name: "North slope replacement" })).toBeVisible();
+    expect(screen.getByText("v3 · Released")).toBeVisible();
+    expect(screen.getByText(/Step 1.*Inspect anchors before roof access\./)).toBeVisible();
+    expect(screen.getByText(/Pending independent release by Production manager/i)).toBeVisible();
+    expect(screen.getByText(/may be expired or superseded/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Acknowledge this package" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Start work from current packet" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/never resumes work itself/i)).toBeVisible();
+  });
+
+  it("queues acknowledgement and Stop Work intents offline without a local work-state change", async () => {
+    const user = userEvent.setup();
+    const acknowledgement = queuedWorkPackageAction("work_package_acknowledgement");
+    const stopWork = queuedWorkPackageAction("work_package_stop");
+    vi.mocked(saveOutboxAction)
+      .mockResolvedValueOnce(acknowledgement)
+      .mockResolvedValueOnce(stopWork);
+    vi.mocked(queueOutboxAction)
+      .mockResolvedValueOnce(acknowledgement)
+      .mockResolvedValueOnce(stopWork);
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+    renderJob(workPackageModel({ stale_fields: ["offline.cached_packet"] }));
+
+    await user.click(await screen.findByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "Acknowledge this package" }));
+    await waitFor(() => {
+      expect(saveOutboxAction).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          kind: "work_package_acknowledgement",
+          endpoint: "/api/v1/jobs/JOB-1/work-package/acknowledgements",
+          payload: { work_package_id: "WP-1" },
+        }),
+      );
+    });
+
+    await user.type(
+      screen.getByLabelText("What requires work to stop?"),
+      "Wind exceeds the plan limit.",
+    );
+    await user.click(screen.getByRole("button", { name: "Stop Work and save report" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Stop work now/i);
+    await waitFor(() => {
+      expect(saveOutboxAction).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          kind: "work_package_stop",
+          endpoint: "/api/v1/jobs/JOB-1/work-package/stop-work",
+          payload: { work_package_id: "WP-1", blocker_reason: "Wind exceeds the plan limit." },
+        }),
+      );
+    });
+    expect(flushOutbox).not.toHaveBeenCalled();
+    expect(screen.getByText(/does not change package status or unlock work/i)).toBeVisible();
+  });
+
+  it("removes Start after Stop Work until a fresh worker packet restores a server capability", async () => {
+    const user = userEvent.setup();
+    const stopWork = queuedWorkPackageAction("work_package_stop");
+    vi.mocked(saveOutboxAction).mockResolvedValue(stopWork);
+    vi.mocked(queueOutboxAction).mockResolvedValue(stopWork);
+    renderJob(startableWorkPackageModel());
+
+    expect(
+      await screen.findByRole("button", { name: "Start work from current packet" }),
+    ).toBeVisible();
+    await user.type(
+      screen.getByLabelText("What requires work to stop?"),
+      "Wind exceeds the plan limit.",
+    );
+    await user.click(screen.getByRole("button", { name: "Stop Work and save report" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Stop work now/i);
+    expect(
+      screen.queryByRole("button", { name: "Start work from current packet" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/never resumes work itself/i)).toBeVisible();
+  });
+
+  it("does not advertise Start while any server packet hold remains pending", async () => {
+    const startable = startableWorkPackageModel();
+    const workPackage = startable.packet.work_package;
+    if (!workPackage) throw new Error("Expected a Work Package fixture.");
+    renderJob({
+      ...startable,
+      packet: {
+        ...startable.packet,
+        work_package: {
+          ...workPackage,
+          hold_points: workPackage.hold_points.map((holdPoint) => ({
+            ...holdPoint,
+            released: false,
+          })),
+        },
+      },
+    });
+
+    expect(
+      await screen.findByText(/Pending independent release by Production manager/i),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Start work from current packet" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers Start only from a fresh server capability and sends it directly online", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiCommand).mockResolvedValue(undefined);
+    renderJob(startableWorkPackageModel());
+
+    await user.click(await screen.findByRole("button", { name: "Start work from current packet" }));
+
+    await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(1));
+    const options = vi.mocked(apiCommand).mock.calls[0]?.[0];
+    expect(options).toMatchObject({
+      path: "/api/v1/jobs/JOB-1/work-package/start",
+      csrfToken: "csrf",
+      body: { payload: { work_package_id: "WP-1" } },
+    });
+    expect(options?.deviceActionId).toEqual(expect.any(String));
+    expect(options?.idempotencyKey).toBe(options?.deviceActionId);
+    expect(options?.body).toMatchObject({ device_action_id: options?.deviceActionId });
+    expect(saveOutboxAction).not.toHaveBeenCalled();
   });
 });

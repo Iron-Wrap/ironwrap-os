@@ -142,10 +142,32 @@ export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSess
 function actionLabel(action: OutboxAction): string {
   const jobId = jobIdFromEndpoint(action.endpoint);
   const actionName =
-    action.kind === "field_checkin"
-      ? "Field check-in"
-      : action.kind.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-  return jobId ? `${actionName} · job ${jobId}` : actionName;
+    action.kind === "work_package_acknowledgement"
+      ? "Work Package acknowledgement"
+      : action.kind === "work_package_stop"
+        ? "Stop Work report"
+        : "Field check-in";
+  const workPackageId = workPackageIdFromPayload(action);
+  return [
+    actionName,
+    workPackageId ? `package ${workPackageId}` : null,
+    jobId ? `job ${jobId}` : null,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" · ");
+}
+
+function workPackageIdFromPayload(action: OutboxAction): string | undefined {
+  if (
+    action.kind === "field_checkin" ||
+    !action.payload ||
+    Array.isArray(action.payload) ||
+    typeof action.payload !== "object"
+  ) {
+    return undefined;
+  }
+  const workPackageId = action.payload.work_package_id;
+  return typeof workPackageId === "string" && workPackageId.trim() ? workPackageId : undefined;
 }
 
 function jobIdFromEndpoint(endpoint: string): string | undefined {

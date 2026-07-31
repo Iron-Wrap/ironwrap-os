@@ -95,6 +95,7 @@ function job(id: string): JobResponse {
       change_orders: [],
       safety_plan: null,
       contact: { display_name: "Homeowner", phone: "+14035550123", access_instructions: null },
+      work_package: null,
     },
     proof_stream: [],
     proof_page: { next_cursor: null, page_size: 100 },
@@ -141,6 +142,25 @@ describe("field packet cache", () => {
       code: "offline_packet_unavailable",
     });
     expect(await hasCachedJobPacket(session, "JOB-Z")).toBe(false);
+  });
+
+  it("keeps a legacy cached packet without a Work Package readable but not authorized", async () => {
+    const current = job("JOB-LEGACY");
+    const { work_package: _workPackage, ...legacyPacket } = current.packet;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ ...current, packet: legacyPacket }));
+
+    const online = await loadJob(session, "JOB-LEGACY", fetcher);
+    expect(online.packet.work_package).toBeNull();
+
+    const offline = await loadJob(
+      session,
+      "JOB-LEGACY",
+      vi.fn<typeof fetch>().mockRejectedValue(new TypeError("offline")),
+    );
+    expect(offline.packet.work_package).toBeNull();
+    expect(offline.stale_fields).toContain("offline.cached_packet");
   });
 
   it("sends the current device proof for every field packet request without caching it in the packet", async () => {

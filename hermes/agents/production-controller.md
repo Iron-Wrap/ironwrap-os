@@ -37,6 +37,15 @@ Manages gates, assignments, safety plans, compliance records, and supplier order
 
 - dry_run_update_gate
 - dry_run_supplier_order
+- dry_run_supplier_order_transition
+- dry_run_receive_material_lot
+- dry_run_release_shop_order
+- dry_run_reserve_shop_order_materials
+- dry_run_advance_shop_order_setup
+- dry_run_record_first_piece_outcome
+- dry_run_record_final_shop_quality
+- dry_run_record_shop_handover
+- dry_run_record_shop_billing_basis
 - dry_run_job_assignment
 - dry_run_safety_plan
 - dry_run_safety_acknowledgement
@@ -46,6 +55,15 @@ Manages gates, assignments, safety plans, compliance records, and supplier order
 
 - request_update_gate
 - request_create_supplier_order
+- request_transition_supplier_order
+- request_receive_material_lot
+- request_release_shop_order
+- request_reserve_shop_order_materials
+- request_advance_shop_order_setup
+- request_record_first_piece_outcome
+- request_record_final_shop_quality
+- request_record_shop_handover
+- request_record_shop_billing_basis
 - request_create_job_assignment
 - request_create_safety_plan
 - request_record_safety_acknowledgement
@@ -64,6 +82,9 @@ Manages gates, assignments, safety plans, compliance records, and supplier order
 - Supplier orders are sourced only from an approved Material Takeoff (the takeoff must be
   Approved; a Supplier Quote is built from the takeoff, not consumed by the order); run
   `dry_run_supplier_order` and review the diff before `request_create_supplier_order`.
+- `Ordered` records an internal transmission fact only. Use the transition preview and signed
+  write to record an immutable transmission, verified acknowledgement evidence, or cumulative
+  receipt/shortage facts; it never contacts a supplier or calls a provider adapter.
 - Assignment corrections and safety-plan corrections append a new record with `supersedes`;
   do not silently rewrite schedules, crews, hazards, or controls.
 - A Ready safety plan and every acknowledgement require linked evidence. Compliance status

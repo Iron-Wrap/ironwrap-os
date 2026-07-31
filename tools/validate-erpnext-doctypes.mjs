@@ -192,7 +192,7 @@ const specs = [
     name: "Payment Milestone",
     dir: "payment_milestone",
     idField: "payment_milestone_id",
-    requiredFields: ["payment_milestone_id", "roof_job", "shop_order", "milestone_type", "status", "qb_entity_type", "qb_entity_id", "qb_operation", "realm_id", "event_ts", "raw_key", "notes"],
+    requiredFields: ["payment_milestone_id", "roof_job", "shop_order", "milestone_type", "status", "qb_entity_type", "qb_entity_id", "qb_operation", "realm_id", "event_ts", "raw_key", "raw_payload_hash", "notes"],
   },
   {
     name: "Production Gate State",
@@ -674,7 +674,7 @@ specs.push(
   },
   {
     name: "Integration Reconciliation", dir: "integration_reconciliation", idField: "reconciliation_id",
-    requiredFields: ["reconciliation_id", "roof_job", "system_name", "entity_type", "external_entity_id", "local_doctype", "local_name", "direction", "status", "detected_at", "source_version", "source_amount", "local_amount", "currency", "diff_json", "source_payload_hash", "local_payload_hash", "last_attempt_at", "attempt_count", "resolution_action", "resolved_by", "resolved_at", "resolution_evidence", "automation_incident", "supersedes", "correction_reason", "notes"],
+    requiredFields: ["reconciliation_id", "roof_job", "system_name", "entity_type", "external_entity_id", "local_doctype", "local_name", "direction", "status", "detected_at", "raw_key", "source_version", "source_amount", "local_amount", "currency", "diff_json", "source_payload_hash", "local_payload_hash", "last_attempt_at", "attempt_count", "resolution_action", "resolved_by", "resolved_at", "resolution_evidence", "automation_incident", "supersedes", "correction_reason", "notes"],
     fieldContracts: { diff_json: { fieldtype: "Code", options: "JSON" } },
   },
   {

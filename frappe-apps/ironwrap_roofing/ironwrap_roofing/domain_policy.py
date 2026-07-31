@@ -364,6 +364,16 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "work_package_event": ("work_package_event_id",),
 }
 
+QUICKBOOKS_FINANCE_ENTITY_TYPES = frozenset({"Invoice", "Payment", "CreditMemo", "RefundReceipt"})
+QUICKBOOKS_MILESTONE_TYPES = {
+    "Invoice": "Invoice",
+    "Payment": "Payment",
+    "CreditMemo": "Credit",
+    "RefundReceipt": "Refund",
+}
+QUICKBOOKS_FINANCE_OPERATIONS = frozenset({"Create", "Update", "Delete", "Void"})
+
+
 WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
     "appointment_request": (
         "reception_session",
@@ -532,6 +542,7 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "local_name",
         "direction",
         "detected_at",
+        "raw_key",
         "source_payload_hash",
         "local_payload_hash",
         "supersedes",
@@ -569,6 +580,7 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "qb_entity_id",
         "realm_id",
         "raw_key",
+        "raw_payload_hash",
         "supersedes",
     ),
     # A gate's job/gate identity is fixed. Letting either move would bypass the
@@ -2110,6 +2122,74 @@ def _validate_reconciliation(record: Any, context: Mapping[str, Any]) -> None:
             raise PolicyViolation("unmatched_amount", "matched monetary values must agree")
     if status in {"Resolved", "Ignored"}:
         require_fields(record, "resolution_action", "resolved_by", "resolved_at", "resolution_evidence")
+    if _get(record, "system_name") == "QuickBooks":
+        require_fields(
+            record,
+            "entity_type",
+            "external_entity_id",
+            "local_doctype",
+            "local_name",
+            "direction",
+            "status",
+            "detected_at",
+            "source_version",
+            "raw_key",
+            "source_payload_hash",
+            "local_payload_hash",
+        )
+        if _get(record, "entity_type") not in QUICKBOOKS_FINANCE_ENTITY_TYPES:
+            raise PolicyViolation(
+                "unsupported_quickbooks_entity",
+                "QuickBooks reconciliation accepts only invoice, payment, credit, or refund entities",
+                "entity_type",
+            )
+        if _get(record, "direction") != "Inbound":
+            raise PolicyViolation(
+                "invalid_quickbooks_reconciliation_direction",
+                "QuickBooks webhook reconciliation must be inbound",
+                "direction",
+            )
+        if _get(record, "source_version") not in QUICKBOOKS_FINANCE_OPERATIONS:
+            raise PolicyViolation(
+                "invalid_quickbooks_operation",
+                "QuickBooks webhook operation is unsupported",
+                "source_version",
+            )
+        if not str(_get(record, "raw_key") or "").startswith("raw/quickbooks/"):
+            raise PolicyViolation(
+                "invalid_quickbooks_raw_key",
+                "QuickBooks reconciliation must point to immutable raw webhook evidence",
+                "raw_key",
+            )
+        require_sha256(record, "source_payload_hash", "local_payload_hash")
+        if status == "Pending":
+            if _get(record, "source_payload_hash") == _get(record, "local_payload_hash"):
+                raise PolicyViolation(
+                    "premature_quickbooks_reconciliation",
+                    "a raw webhook receipt cannot reconcile itself without provider detail",
+                    "local_payload_hash",
+                )
+            if _blank(_get(record, "roof_job")):
+                if _get(record, "local_doctype") != "Unresolved QuickBooks Event":
+                    raise PolicyViolation(
+                        "quickbooks_unresolved_linkage",
+                        "missing exact job linkage must remain an unresolved QuickBooks event",
+                        "local_doctype",
+                    )
+            elif _get(record, "local_doctype") != "Payment Milestone":
+                raise PolicyViolation(
+                    "quickbooks_linked_doctype_mismatch",
+                    "linked QuickBooks finance reconciliation must point to a Payment Milestone",
+                    "local_doctype",
+                )
+        if status == "Matched":
+            require_fields(record, "roof_job")
+            if _get(record, "local_doctype") != "Payment Milestone":
+                raise PolicyViolation(
+                    "quickbooks_matched_linkage_missing",
+                    "matched QuickBooks finance reconciliation requires an exact Payment Milestone linkage",
+                    "local_doctype",
+                )
     _validate_correction(record, context)
 
 
@@ -3981,12 +4061,66 @@ def _validate_payment_milestone(record: Any, context: Mapping[str, Any]) -> None
         context,
         "status",
         {
-            "Webhook Seen": {"Needs Review", "Matched", "Ignored"},
+            "Webhook Seen": {"Needs Review", "Ignored"},
             "Needs Review": {"Matched", "Ignored"},
             "Matched": set(),
             "Ignored": set(),
         },
     )
+    if _get(record, "status") == "Webhook Seen":
+        require_fields(
+            record,
+            "roof_job",
+            "milestone_type",
+            "milestone_version",
+            "qb_entity_type",
+            "qb_entity_id",
+            "qb_operation",
+            "realm_id",
+            "event_ts",
+            "raw_key",
+            "raw_payload_hash",
+        )
+        entity_type = _get(record, "qb_entity_type")
+        if entity_type not in QUICKBOOKS_FINANCE_ENTITY_TYPES:
+            raise PolicyViolation(
+                "unsupported_quickbooks_entity",
+                "Webhook Seen milestones accept only supported QuickBooks finance entities",
+                "qb_entity_type",
+            )
+        if _get(record, "milestone_type") != QUICKBOOKS_MILESTONE_TYPES[entity_type]:
+            raise PolicyViolation(
+                "quickbooks_milestone_type_mismatch",
+                "milestone type must match the immutable QuickBooks entity type",
+                "milestone_type",
+            )
+        if _get(record, "qb_operation") not in QUICKBOOKS_FINANCE_OPERATIONS:
+            raise PolicyViolation(
+                "invalid_quickbooks_operation",
+                "Webhook Seen milestones require a supported QuickBooks operation",
+                "qb_operation",
+            )
+        if not str(_get(record, "raw_key") or "").startswith("raw/quickbooks/"):
+            raise PolicyViolation(
+                "invalid_quickbooks_raw_key",
+                "Webhook Seen milestones must point to immutable raw webhook evidence",
+                "raw_key",
+            )
+        require_sha256(record, "raw_payload_hash")
+        if _get(record, "payment_status") not in {None, "", "Not Due"} or not _blank(_get(record, "truth_source")) or not _blank(_get(record, "truth_at")):
+            raise PolicyViolation(
+                "webhook_payment_milestone_provider_truth_unavailable",
+                "a webhook receipt cannot establish payment status or provider truth",
+                "payment_status",
+            )
+        for field in ("subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due"):
+            value = _decimal(record, field)
+            if value is not None and value != Decimal("0"):
+                raise PolicyViolation(
+                    "webhook_payment_milestone_provider_truth_unavailable",
+                    "a webhook receipt cannot establish financial amounts",
+                    field,
+                )
     if _get(record, "status") == "Matched":
         require_fields(
             record,

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { deriveMeasurementIntakeIdentity, parseMeasurementSubmission, reportExt } from "../src/measurements.ts";
-import { pushMeasurementToErpNext } from "../src/erpnext.ts";
+import { pushMeasurementToErpNext, pushQuickBooksEventToErpNext } from "../src/erpnext.ts";
 import { ROOF_GRAPH_SCHEMA_VERSION, type RoofGraphV1 } from "../src/roof-graph.ts";
 import { handleQuickbooksWebhook, parseQbEvents, verifyIntuitSignature } from "../src/quickbooks.ts";
 
@@ -129,18 +129,24 @@ test("pushMeasurementToErpNext: an unmatched report is unlinked and explicitly n
   assert.equal(evidence.evidence_type, "Measurement Report");
 });
 
-test("parseQbEvents: flattens entity changes; tolerates junk", () => {
+test("parseQbEvents: keeps only supported QuickBooks finance identities", () => {
   const ev = parseQbEvents({
     eventNotifications: [{
-      realmId: "R1",
+      realmId: "1234567890",
       dataChangeEvent: { entities: [
         { name: "Invoice", id: "42", operation: "Update" },
         { name: "Payment", id: "7", operation: "Create" },
+        { name: "CreditMemo", id: "8", operation: "Delete" },
+        { name: "RefundReceipt", id: "9", operation: "Void" },
+        { name: "Vendor", id: "10", operation: "Update" },
+        { name: "Invoice", id: "", operation: "Update" },
+        { name: "Invoice", id: "11", operation: "Merge" },
       ] },
     }],
   });
-  assert.equal(ev.length, 2);
-  assert.deepEqual(ev[0], { realmId: "R1", type: "Invoice", id: "42", operation: "Update" });
+  assert.equal(ev.length, 4);
+  assert.deepEqual(ev[0], { realmId: "1234567890", type: "Invoice", id: "42", operation: "Update" });
+  assert.deepEqual(ev.map((event) => event.type), ["Invoice", "Payment", "CreditMemo", "RefundReceipt"]);
   assert.deepEqual(parseQbEvents({}), []);
   assert.deepEqual(parseQbEvents(null), []);
 });
@@ -157,15 +163,21 @@ test("verifyIntuitSignature: accepts a correct HMAC, rejects wrong/empty", async
   assert.equal(await verifyIntuitSignature("", body, sig), false);
 });
 
-test("handleQuickbooksWebhook: signed event creates ERPNext Payment Milestone rows", async (t) => {
+test("handleQuickbooksWebhook: raw finance identities open Pending reconciliation work without provider-truth claims", async (t) => {
   const fetches: Array<{ url: string; init: RequestInit }> = [];
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     fetches.push({ url, init: init ?? {} });
     if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0001" }] });
+    if (url.includes("/api/resource/Integration%20Reconciliation?")) return json({ data: [] });
+    if (url.endsWith("/api/resource/Integration%20Reconciliation")) {
+      const body = JSON.parse(String(init?.body));
+      return json({ data: { name: body.reconciliation_id } });
+    }
     if (url.includes("/api/resource/Payment%20Milestone?")) return json({ data: [] });
     if (url.endsWith("/api/resource/Payment%20Milestone")) {
-      return json({ data: { name: `PM-000${fetches.filter((f) => f.url.endsWith("/api/resource/Payment%20Milestone")).length}` } });
+      const body = JSON.parse(String(init?.body));
+      return json({ data: { name: body.payment_milestone_id } });
     }
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -186,22 +198,15 @@ test("handleQuickbooksWebhook: signed event creates ERPNext Payment Milestone ro
           bind(...args: unknown[]) {
             return {
               first: async () => {
-                if (sql.includes("FROM quickbooks_webhook_receipts")) {
-                  return receipts.get(String(args[0])) ?? null;
-                }
+                if (sql.includes("FROM quickbooks_webhook_receipts")) return receipts.get(String(args[0])) ?? null;
                 return null;
               },
               run: async () => {
                 writes.push({ sql, args });
                 if (sql.includes("INSERT INTO quickbooks_webhook_receipts")) {
                   receipts.set(String(args[0]), {
-                    payload_hash: args[0],
-                    first_seen_at: args[1],
-                    last_seen_at: args[2],
-                    envelope_id: args[3],
-                    raw_key: args[4],
-                    events_count: args[5],
-                    replay_count: 0,
+                    payload_hash: args[0], first_seen_at: args[1], last_seen_at: args[2], envelope_id: args[3],
+                    raw_key: args[4], events_count: args[5], replay_count: 0,
                   });
                 }
                 if (sql.includes("UPDATE quickbooks_webhook_receipts")) {
@@ -221,10 +226,12 @@ test("handleQuickbooksWebhook: signed event creates ERPNext Payment Milestone ro
   };
   const bodyText = JSON.stringify({
     eventNotifications: [{
-      realmId: "R1",
+      realmId: "1234567890",
       dataChangeEvent: { entities: [
         { name: "Invoice", id: "42", operation: "Update" },
-        { name: "Payment", id: "7", operation: "Create" },
+        { name: "Payment", id: "7", operation: "Create", TotalAmt: 999999, status: "Paid" },
+        { name: "CreditMemo", id: "8", operation: "Delete" },
+        { name: "RefundReceipt", id: "9", operation: "Void" },
       ] },
     }],
   });
@@ -234,12 +241,18 @@ test("handleQuickbooksWebhook: signed event creates ERPNext Payment Milestone ro
   const result = await res.json() as {
     events?: number;
     erpnext_payment_milestone_ids?: string[];
+    erpnext_reconciliation_ids?: string[];
+    unresolved_reconciliation_ids?: string[];
+    provider_truth_reconciled?: boolean;
     erpnext_error?: string | null;
   };
 
   assert.equal(res.status, 200);
-  assert.equal(result.events, 2);
-  assert.deepEqual(result.erpnext_payment_milestone_ids, ["PM-0001", "PM-0002"]);
+  assert.equal(result.events, 4);
+  assert.deepEqual(result.erpnext_payment_milestone_ids, ["qb:1234567890:Invoice:42"]);
+  assert.equal(result.erpnext_reconciliation_ids?.length, 4);
+  assert.equal(result.unresolved_reconciliation_ids?.length, 3);
+  assert.equal(result.provider_truth_reconciled, false);
   assert.equal(result.erpnext_error, null);
   assert.equal(rawWrites.length, 1);
   assert.match(rawWrites[0].key, /^raw\/quickbooks\/\d{4}-\d{2}-\d{2}\/ow_/);
@@ -247,26 +260,79 @@ test("handleQuickbooksWebhook: signed event creates ERPNext Payment Milestone ro
   const posted = fetches
     .filter((f) => f.url.endsWith("/api/resource/Payment%20Milestone"))
     .map((f) => JSON.parse(String(f.init.body)));
-  assert.equal(posted.length, 2);
-  assert.deepEqual(posted.map((p) => p.payment_milestone_id), ["qb:R1:Invoice:42", "qb:R1:Payment:7"]);
+  assert.equal(posted.length, 1);
+  assert.deepEqual(posted.map((p) => p.payment_milestone_id), ["qb:1234567890:Invoice:42"]);
   assert.equal(posted[0].roof_job, "RJ-0001");
   assert.equal(posted[0].milestone_type, "Invoice");
   assert.equal(posted[0].status, "Webhook Seen");
   assert.equal(posted[0].raw_key, rawWrites[0].key);
-  assert.equal(posted[1].milestone_type, "Payment");
-  assert.equal(posted[1].roof_job, undefined);
+  assert.match(posted[0].raw_payload_hash, /^[a-f0-9]{64}$/);
+  for (const field of ["payment_status", "truth_source", "truth_at", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due"]) {
+    assert.equal(field in posted[0], false, `${field} must not be inferred from a webhook`);
+  }
+
+  const reconciliations = fetches
+    .filter((f) => f.url.endsWith("/api/resource/Integration%20Reconciliation"))
+    .map((f) => JSON.parse(String(f.init.body)));
+  assert.equal(reconciliations.length, 4);
+  assert.deepEqual(reconciliations.map((row) => row.entity_type), ["Invoice", "Payment", "CreditMemo", "RefundReceipt"]);
+  assert.ok(reconciliations.every((row) => row.status === "Pending"));
+  assert.ok(reconciliations.every((row) => /^[a-f0-9]{64}$/.test(row.source_payload_hash)));
+  assert.ok(reconciliations.every((row) => /^[a-f0-9]{64}$/.test(row.local_payload_hash) && row.source_payload_hash !== row.local_payload_hash));
+  assert.equal(reconciliations[0].roof_job, "RJ-0001");
+  assert.equal(reconciliations[0].local_doctype, "Payment Milestone");
+  assert.equal(reconciliations[0].local_name, "qb:1234567890:Invoice:42");
+  assert.equal(reconciliations[0].raw_key, rawWrites[0].key);
+  for (const row of reconciliations.slice(1)) {
+    assert.equal("roof_job" in row, false);
+    assert.equal(row.local_doctype, "Unresolved QuickBooks Event");
+  }
   assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") &&
-    w.args.includes("erpnext_quickbooks") && w.args.includes("payment_milestone:PM-0001")));
+    w.args.includes("erpnext_quickbooks") && w.args.some((arg) => String(arg).startsWith("integration_reconciliation:qbr:"))));
 
   const replay = await handleQuickbooksWebhook(env as never, bodyText, sig);
-  const replayBody = await replay.json() as { replay?: boolean; envelope_id?: string; events?: number };
+  const replayBody = await replay.json() as { replay?: boolean; envelope_id?: string; events?: number; provider_truth_reconciled?: boolean };
 
   assert.equal(replay.status, 200);
   assert.equal(replayBody.replay, true);
-  assert.equal(replayBody.events, 2);
+  assert.equal(replayBody.events, 4);
+  assert.equal(replayBody.provider_truth_reconciled, false);
   assert.equal(rawWrites.length, 1);
-  assert.equal(fetches.filter((f) => f.url.endsWith("/api/resource/Payment%20Milestone")).length, 2);
+  assert.equal(fetches.filter((f) => f.url.endsWith("/api/resource/Payment%20Milestone")).length, 1);
+  assert.equal(fetches.filter((f) => f.url.endsWith("/api/resource/Integration%20Reconciliation")).length, 4);
   assert.ok(writes.some((w) => w.sql.includes("UPDATE quickbooks_webhook_receipts")));
-  assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") &&
-    w.args.includes("webhook_replay")));
+  assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") && w.args.includes("webhook_replay")));
+});
+
+test("pushQuickBooksEventToErpNext: rejects a tampered reconciliation receipt without mutation", async (t) => {
+  const fetches: Array<{ url: string; init: RequestInit }> = [];
+  const payloadHash = "a".repeat(64);
+  const reconciliationId = `qbr:${payloadHash}:0`;
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    fetches.push({ url, init: init ?? {} });
+    if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [] });
+    if (url.includes("/api/resource/Integration%20Reconciliation?")) return json({ data: [{ name: reconciliationId }] });
+    if (url.endsWith(`/api/resource/Integration%20Reconciliation/${encodeURIComponent(reconciliationId)}`)) {
+      return json({ data: {
+        name: reconciliationId, status: "Pending", reconciliation_id: reconciliationId,
+        system_name: "QuickBooks", entity_type: "Invoice", external_entity_id: "42",
+        local_doctype: "Unresolved QuickBooks Event", local_name: reconciliationId, direction: "Inbound",
+        raw_key: "raw/quickbooks/2026-07-31/ow_test.json", source_version: "Update",
+        source_payload_hash: "b".repeat(64), local_payload_hash: "c".repeat(64),
+      } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  await assert.rejects(
+    pushQuickBooksEventToErpNext({
+      ERPNEXT_ENABLED: "true", ERPNEXT_BASE_URL: "https://erp.example.com", ERPNEXT_API_KEY: "erp-key", ERPNEXT_API_SECRET: "erp-secret",
+    } as never, {
+      realmId: "1234567890", type: "Invoice", id: "42", operation: "Update",
+      rawKey: "raw/quickbooks/2026-07-31/ow_test.json", eventTs: "2026-07-31T12:00:00.000Z", payloadHash, eventIndex: 0,
+    }),
+    /erpnext_quickbooks_reconciliation_conflict/,
+  );
+  assert.equal(fetches.some((request) => request.init.method === "POST" || request.init.method === "PUT"), false);
 });

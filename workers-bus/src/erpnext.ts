@@ -102,6 +102,15 @@ export interface ErpNextQuickBooksEventInput {
   operation: string;
   rawKey: string;
   eventTs: string;
+  payloadHash: string;
+  eventIndex: number;
+}
+
+export interface ErpNextQuickBooksEventResult {
+  reconciliationName: string;
+  paymentMilestoneName: string | null;
+  unresolved: boolean;
+  reused: boolean;
 }
 
 export async function pushToErpNext(
@@ -850,29 +859,162 @@ export async function pushPhotoEvidenceToErpNext(
 export async function pushQuickBooksEventToErpNext(
   env: Env,
   input: ErpNextQuickBooksEventInput,
-): Promise<ErpNextResult | null> {
+): Promise<ErpNextQuickBooksEventResult | null> {
   const cfg = env as ErpEnv;
   if (!isOn(cfg.ERPNEXT_ENABLED)) return null;
   if (!cfg.ERPNEXT_API_KEY || !cfg.ERPNEXT_API_SECRET) throw new Error("erpnext_no_token");
+  validateQuickBooksEvent(input);
 
   const base = normalizeBaseUrl(cfg.ERPNEXT_BASE_URL);
-  const entityType = input.type || "Other";
-  const roofJob = entityType === "Invoice"
-    ? await findByTerm(cfg, base, "Roof Job", "qb_invoice_ref", input.id)
+  const invoiceRoofJob = input.type === "Invoice"
+    ? await findUniqueByTerm(cfg, base, "Roof Job", "qb_invoice_ref", input.id)
     : null;
-  return await upsertByField(cfg, base, "Payment Milestone", "payment_milestone_id", paymentMilestoneId(input), {
-    payment_milestone_id: paymentMilestoneId(input),
+  const existingMilestone = input.type === "Invoice" || invoiceRoofJob
+    ? null
+    : await findExactQuickBooksMilestone(cfg, base, input);
+  const roofJob = invoiceRoofJob ?? existingMilestone?.roofJob ?? null;
+  const paymentMilestoneName = roofJob
+    ? (input.type === "Invoice" ? paymentMilestoneId(input) : existingMilestone?.name ?? null)
+    : null;
+  const reconciliationId = quickBooksReconciliationId(input);
+  const reconciliation = await createImmutableQuickBooksReconciliation(cfg, base, reconciliationId, {
+    reconciliation_id: reconciliationId,
     roof_job: roofJob ?? undefined,
-    milestone_type: milestoneType(entityType),
-    status: input.operation === "Delete" ? "Needs Review" : "Webhook Seen",
-    qb_entity_type: entityType,
+    system_name: "QuickBooks",
+    entity_type: input.type,
+    external_entity_id: input.id,
+    local_doctype: paymentMilestoneName ? "Payment Milestone" : "Unresolved QuickBooks Event",
+    local_name: paymentMilestoneName ?? reconciliationId,
+    direction: "Inbound",
+    status: "Pending",
+    detected_at: frappeDatetime(input.eventTs),
+    raw_key: input.rawKey,
+    source_version: input.operation,
+    source_payload_hash: input.payloadHash,
+    local_payload_hash: await quickBooksProjectionHash(input),
+    attempt_count: 0,
+    notes: "Webhook identity captured. Provider amount, status, posting, and reconciliation facts require an authenticated QuickBooks read.",
+  });
+
+  if (input.type === "Invoice" && roofJob) {
+    await createImmutableQuickBooksMilestone(cfg, base, input, roofJob);
+  }
+
+  return {
+    reconciliationName: reconciliation.name,
+    paymentMilestoneName,
+    unresolved: !roofJob,
+    reused: reconciliation.reused,
+  };
+}
+
+const QUICKBOOKS_FINANCE_TYPES = new Set(["Invoice", "Payment", "CreditMemo", "RefundReceipt"]);
+const QUICKBOOKS_FINANCE_OPERATIONS = new Set(["Create", "Update", "Delete", "Void"]);
+const QUICKBOOKS_ID = /^[1-9][0-9]{0,31}$/;
+const SHA256 = /^[a-f0-9]{64}$/;
+
+function validateQuickBooksEvent(input: ErpNextQuickBooksEventInput): void {
+  if (!QUICKBOOKS_ID.test(input.realmId) || !QUICKBOOKS_ID.test(input.id)) throw new Error("erpnext_quickbooks_invalid_identity");
+  if (!QUICKBOOKS_FINANCE_TYPES.has(input.type) || !QUICKBOOKS_FINANCE_OPERATIONS.has(input.operation)) {
+    throw new Error("erpnext_quickbooks_unsupported_event");
+  }
+  if (!SHA256.test(input.payloadHash) || !input.rawKey.startsWith("raw/quickbooks/") || !Number.isInteger(input.eventIndex) || input.eventIndex < 0) {
+    throw new Error("erpnext_quickbooks_invalid_receipt");
+  }
+}
+
+async function createImmutableQuickBooksMilestone(
+  env: ErpEnv,
+  base: string,
+  input: ErpNextQuickBooksEventInput,
+  roofJob: string,
+): Promise<ErpNextResult> {
+  const id = paymentMilestoneId(input);
+  const existingName = await findByTerm(env, base, "Payment Milestone", "payment_milestone_id", id);
+  if (existingName) {
+    const existing = await readResource(env, base, "Payment Milestone", existingName);
+    if (
+      str(existing.roof_job) !== roofJob ||
+      str(existing.qb_entity_type) !== input.type ||
+      str(existing.qb_entity_id) !== input.id ||
+      str(existing.realm_id) !== input.realmId ||
+      str(existing.milestone_type) !== milestoneType(input.type)
+    ) throw new Error("erpnext_quickbooks_payment_milestone_conflict");
+    return { name: existingName, reused: true };
+  }
+  const created = await erpFetch(env, base, "POST", `/api/resource/${enc("Payment Milestone")}`, {
+    payment_milestone_id: id,
+    roof_job: roofJob,
+    milestone_type: milestoneType(input.type),
+    milestone_version: 1,
+    status: "Webhook Seen",
+    qb_entity_type: input.type,
     qb_entity_id: input.id,
     qb_operation: input.operation,
     realm_id: input.realmId,
     event_ts: frappeDatetime(input.eventTs),
     raw_key: input.rawKey,
-    notes: "QuickBooks webhook event captured. Amount/status detail requires QuickBooks OAuth read.",
+    raw_payload_hash: input.payloadHash,
+    notes: "QuickBooks webhook identity captured. No provider amount, payment, posted, or reconciled fact has been read.",
   });
+  const name = readName(created);
+  if (!name || name !== id) throw new Error("erpnext_quickbooks_payment_milestone_name_mismatch");
+  return { name, reused: false };
+}
+
+async function findExactQuickBooksMilestone(
+  env: ErpEnv,
+  base: string,
+  input: ErpNextQuickBooksEventInput,
+): Promise<{ name: string; roofJob: string } | null> {
+  const name = await findUniqueByTerm(env, base, "Payment Milestone", "payment_milestone_id", paymentMilestoneId(input));
+  if (!name) return null;
+  const existing = await readResource(env, base, "Payment Milestone", name);
+  const roofJob = str(existing.roof_job);
+  if (!roofJob) return null;
+  if (
+    str(existing.qb_entity_type) !== input.type ||
+    str(existing.qb_entity_id) !== input.id ||
+    str(existing.realm_id) !== input.realmId ||
+    str(existing.milestone_type) !== milestoneType(input.type)
+  ) throw new Error("erpnext_quickbooks_payment_milestone_conflict");
+  return { name, roofJob };
+}
+
+async function createImmutableQuickBooksReconciliation(
+  env: ErpEnv,
+  base: string,
+  reconciliationId: string,
+  doc: Record<string, unknown>,
+): Promise<ErpNextResult> {
+  const existingName = await findByTerm(env, base, "Integration Reconciliation", "reconciliation_id", reconciliationId);
+  if (existingName) {
+    const existing = await readResource(env, base, "Integration Reconciliation", existingName);
+    const immutable = [
+      "reconciliation_id", "roof_job", "system_name", "entity_type", "external_entity_id", "local_doctype", "local_name",
+      "direction", "raw_key", "source_version", "source_payload_hash", "local_payload_hash",
+    ];
+    if (str(existing.status) !== "Pending" || immutable.some((field) => valueForComparison(existing[field]) !== valueForComparison(doc[field]))) {
+      throw new Error("erpnext_quickbooks_reconciliation_conflict");
+    }
+    return { name: existingName, reused: true };
+  }
+  const created = await erpFetch(env, base, "POST", `/api/resource/${enc("Integration Reconciliation")}`, doc);
+  const name = readName(created);
+  if (!name || name !== reconciliationId) throw new Error("erpnext_quickbooks_reconciliation_name_mismatch");
+  return { name, reused: false };
+}
+
+function valueForComparison(value: unknown): string {
+  return value === undefined || value === null ? "" : String(value);
+}
+
+async function quickBooksProjectionHash(input: ErpNextQuickBooksEventInput): Promise<string> {
+  const text = [
+    "quickbooks-reconciliation/v1", input.realmId, input.type, input.id, input.operation,
+    input.rawKey, input.payloadHash, String(input.eventIndex),
+  ].join("\n");
+  return await sha256Bytes(new TextEncoder().encode(text));
 }
 
 async function createIfMissingByField(
@@ -919,6 +1061,25 @@ async function findByTerm(env: ErpEnv, base: string, doctype: string, field: str
   const rows = Array.isArray(found.data) ? found.data as Array<{ name?: unknown }> : [];
   const name = rows[0]?.name;
   return typeof name === "string" && name ? name : null;
+}
+
+async function findUniqueByTerm(env: ErpEnv, base: string, doctype: string, field: string, value: string): Promise<string | null> {
+  const fields = encodeURIComponent(JSON.stringify(["name"]));
+  const filters = encodeURIComponent(JSON.stringify([[doctype, field, "=", value]]));
+  const path = `/api/resource/${enc(doctype)}?fields=${fields}&filters=${filters}&limit_page_length=2`;
+  const found = await erpFetch(env, base, "GET", path);
+  const rows = Array.isArray(found.data) ? found.data as Array<{ name?: unknown }> : [];
+  if (rows.length !== 1) return null;
+  const name = rows[0]?.name;
+  return typeof name === "string" && name ? name : null;
+}
+
+async function readResource(env: ErpEnv, base: string, doctype: string, name: string): Promise<Record<string, unknown>> {
+  const found = await erpFetch(env, base, "GET", `/api/resource/${enc(doctype)}/${enc(name)}`);
+  if (!found.data || typeof found.data !== "object" || Array.isArray(found.data)) {
+    throw new Error(`erpnext_read_no_record:${doctype}`);
+  }
+  return found.data as Record<string, unknown>;
 }
 
 async function erpFetch(
@@ -998,13 +1159,19 @@ function fieldCheckInId(submissionId: string): string {
 }
 
 function paymentMilestoneId(input: ErpNextQuickBooksEventInput): string {
-  return `qb:${input.realmId || "unknown"}:${input.type || "Other"}:${input.id || "unknown"}`;
+  return `qb:${input.realmId}:${input.type}:${input.id}`;
 }
 
 function milestoneType(type: string): string {
   if (type === "Invoice") return "Invoice";
   if (type === "Payment") return "Payment";
+  if (type === "CreditMemo") return "Credit";
+  if (type === "RefundReceipt") return "Refund";
   return "Other";
+}
+
+function quickBooksReconciliationId(input: ErpNextQuickBooksEventInput): string {
+  return `qbr:${input.payloadHash}:${input.eventIndex}`;
 }
 
 function photoSummary(index: number, fileName: string, caption: string | null, error?: string | null, isVoice = false): string {

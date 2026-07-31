@@ -158,7 +158,7 @@ Implemented or represented:
 
 - JobNimbus bridge;
 - Google email/Drive paths;
-- QuickBooks webhook receipts/mirrors;
+- QuickBooks raw webhook receipts, immutable Webhook Seen projections for exact invoice-to-job links, and Pending reconciliation work;
 - Newo inbound/control/reconciliation;
 - Cloudflare D1/R2/Queue/Workers;
 - Frappe and Hermes;
@@ -171,7 +171,7 @@ Target gaps:
 - direct supplier transmission/acknowledgement and provider reconciliation;
 - permit/regulator submission/status;
 - WCB clearance retrieval/status;
-- accounting invoice/payment/refund/payroll/tax side-effect contracts;
+- authenticated provider-detail reads and reconciliation for invoice/payment/credit/refund/payroll/tax facts; webhook identity alone never establishes paid, posted, or reconciled truth;
 - legal/commercial e-sign determination, cancellation, and business-acceptance proof;
 - machine, scanner, scale, printer, vehicle, wearable, and sensor identity/telemetry;
 - vendor failure and provider-switch continuity.
@@ -201,7 +201,7 @@ Target gaps:
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |
 | Closeout | completion/warranty/review records | inspection, as-built, registration, accounting and archive loop | real closeout and recovery |
 | Warranty/service | warranty packet | service case, diagnosis, responsibility, remedy, recovery | callback end to end |
-| Finance | payment mirror, reconciliation, and linked Shop Order billing-basis readiness | provider-issued invoice/holdback/payment/refund/tax/payroll contracts | provider sandbox, linked mirror, and accountant signoff |
+| Finance | Partial: raw-backed immutable QuickBooks webhook identity ledger and Pending reconciliation work; no webhook-only provider payment, posting, or reconciliation truth | authenticated provider detail, provider-issued invoice/holdback/payment/refund/tax/payroll contracts, and accountant-approved reconciliation | provider sandbox, linked mirror, and accountant signoff |
 | Workforce | crew/assignment plus current competence and WCB summary controls | individual worker authority, HR, apprenticeship, time, accommodation | worker lifecycle |
 | Fleet/equipment | none | asset/driver/inspection/maintenance/cargo/incident | unsafe asset release blocked |
 | Facility | deployment infra only | shop/building/fire/security/environmental operations | facility inspection/drill |

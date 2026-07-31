@@ -2731,6 +2731,7 @@ class DomainPolicyTests(unittest.TestCase):
     def test_reconciliation_and_tenant_export_fail_closed(self) -> None:
         reconciliation = {
             "reconciliation_id": "recon-1",
+            "roof_job": "job-1",
             "system_name": "QuickBooks",
             "entity_type": "Invoice",
             "external_entity_id": "qb-1",
@@ -2739,6 +2740,8 @@ class DomainPolicyTests(unittest.TestCase):
             "direction": "Inbound",
             "status": "Matched",
             "detected_at": "2026-07-10 11:00:00",
+            "raw_key": "raw/quickbooks/2026-07-10/ow-recon.json",
+            "source_version": "Update",
             "source_amount": 1050,
             "local_amount": 1050,
             "currency": "CAD",
@@ -2752,6 +2755,66 @@ class DomainPolicyTests(unittest.TestCase):
             validate_record,
             "integration_reconciliation",
             {**reconciliation, "local_payload_hash": "b" * 64},
+        )
+
+        webhook_milestone = {
+            "payment_milestone_id": "qb:1234567890:Invoice:42",
+            "roof_job": "job-1",
+            "milestone_type": "Invoice",
+            "milestone_version": 1,
+            "status": "Webhook Seen",
+            "qb_entity_type": "Invoice",
+            "qb_entity_id": "42",
+            "qb_operation": "Update",
+            "realm_id": "1234567890",
+            "event_ts": "2026-07-10 11:00:00",
+            "raw_key": "raw/quickbooks/2026-07-10/ow-webhook.json",
+            "raw_payload_hash": "c" * 64,
+        }
+        validate_record("payment_milestone", webhook_milestone)
+        self.assert_policy(
+            "webhook_payment_milestone_provider_truth_unavailable",
+            validate_record,
+            "payment_milestone",
+            {**webhook_milestone, "payment_status": "Paid", "amount_paid": 1},
+        )
+        self.assert_policy(
+            "invalid_state_transition",
+            validate_record,
+            "payment_milestone",
+            {**webhook_milestone, "status": "Matched"},
+            previous=webhook_milestone,
+        )
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "payment_milestone",
+            {**webhook_milestone, "raw_payload_hash": "d" * 64},
+            previous=webhook_milestone,
+        )
+
+        pending = {
+            "reconciliation_id": f"qbr:{'c' * 64}:0",
+            "system_name": "QuickBooks",
+            "entity_type": "Payment",
+            "external_entity_id": "7",
+            "local_doctype": "Unresolved QuickBooks Event",
+            "local_name": f"qbr:{'c' * 64}:0",
+            "direction": "Inbound",
+            "status": "Pending",
+            "detected_at": "2026-07-10 11:00:00",
+            "raw_key": "raw/quickbooks/2026-07-10/ow-webhook.json",
+            "source_version": "Create",
+            "source_payload_hash": "c" * 64,
+            "local_payload_hash": "d" * 64,
+            "attempt_count": 0,
+        }
+        validate_record("integration_reconciliation", pending)
+        self.assert_policy(
+            "quickbooks_unresolved_linkage",
+            validate_record,
+            "integration_reconciliation",
+            {**pending, "local_doctype": "Payment Milestone"},
         )
 
         export = {

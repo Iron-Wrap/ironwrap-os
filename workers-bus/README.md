@@ -38,6 +38,13 @@ estimator/configurator
 [3] ERPNext Lead Envelope + Roof Job + Instant Estimate Session when enabled
 [4] response returns ERPNext ids/errors to the estimator frontend; retries return the original ids
 
+Facet approved design
+  │  POST /ingest/facet-design  (dedicated HMAC; never INGEST_TOKEN)
+  ▼
+[1] signed raw event + source→local allowlist → immutable R2 ........... FIRST
+[2] design receipt + hashed nonce → D1 ........ no quote/contract/Frappe mutation
+[3] scheduled projection uses an exact anchor allowlist → review-only Frappe evidence + pending reconciliation
+
 IronWrap PWA
   │  passwordless session cookie + exact-origin CORS + CSRF on authenticated mutations
   ▼
@@ -65,6 +72,8 @@ IronWrap PWA
 | Intent → owner queue routing | `core.ts:classifyIntent` |
 | Frappe consumer | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
 | Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: retry-safe project/idempotency key + raw R2 + D1 envelope + Frappe Instant Estimate Session without JobNimbus/GHL dependency |
+| Facet approved-design receipt | `facet-design-ingest.ts` verifies a dedicated raw-body HMAC plus source-tenant allowlist, stores immutable R2 evidence first, then local-tenant D1 event/nonce anchors; it is distinct from estimate, quote, contract, and customer acceptance |
+| Facet review projection | `facet-design-projection.ts` reads only immutable D1 anchors, requires an exact deployment-controlled job/quote association, and creates non-customer-safe Evidence Item plus Pending Integration Reconciliation records; it never changes a quote, contract, acceptance, or Proposal Evidence Pack |
 | Passwordless app auth | `app-auth.ts` + D1 migration `0011`; one-time hashed links, hashed fixed-TTL sessions, exact-origin CORS, CSRF, throttles, and audit |
 | Permission-shaped PWA reads | `app-read-models.ts` + `frappe-read.ts`; hard-coded DocType/field/filter allowlists and fail-closed field assignment |
 
@@ -76,6 +85,8 @@ src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   Config-gated JobNimbus push adapter
 src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, estimate, measurement, evidence, field check-in, and payment milestone rows
 src/estimates.ts   Owned estimator/configurator intake; idempotent by project/key; no JobNimbus/GHL queue
+src/facet-design-ingest.ts Signed Facet approved-design evidence receipt; no Frappe or commercial mutation
+src/facet-design-projection.ts Scheduled review-only D1-anchor projection through a separately authenticated Frappe command
 src/measurement-intake-store.ts Durable, hashed measurement receipt/lease ledger and exception query
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; no prospect-SMS implementation
@@ -115,18 +126,30 @@ npx wrangler secret put NEWO_WEBHOOK_TOKEN --env=""  # only when Newo phone inta
 npx wrangler secret put JOBNIMBUS_API_KEY --env=""
 npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON --env=""
 npx wrangler secret put QB_WEBHOOK_TOKEN --env=""  # when the QuickBooks webhook is connected
+npx wrangler secret put QB_RECONCILIATION_ISSUER_API_KEY --env=""
+npx wrangler secret put QB_RECONCILIATION_ISSUER_API_SECRET --env=""
 npx wrangler secret put ERPNEXT_API_KEY --env=""  # when the Frappe bridge is enabled
 npx wrangler secret put ERPNEXT_API_SECRET --env=""
 npx wrangler secret put PUBLIC_ESTIMATE_TURNSTILE_SECRET --env=""
 npx wrangler secret put PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER --env=""  # 32+ random characters
 npx wrangler secret put APP_AUTH_PEPPER --env=""  # 32+ random characters; required before APP_BFF_ENABLED=true
 npx wrangler secret put APPROVAL_BROKER_SHARED_SECRET --env=""  # only when the governed approval broker is enabled
+npx wrangler secret put FACET_DESIGN_INGEST_HMAC_KEY --env=""  # separate Facet event authority
+npx wrangler secret put FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY --env=""  # separate projection HMAC
+npx wrangler secret put FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY --env=""  # dedicated Frappe role
+npx wrangler secret put FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET --env=""
 
 npm test                     # pure-logic self-test
 npm run typecheck            # tsc --noEmit
 (cd ../app && npm ci && npm run build)  # creates the static-assets directory
 npx wrangler deploy --env=""
 ```
+
+QuickBooks projection also needs the non-secret Worker vars `QB_EXPECTED_REALM_ID` and
+`QB_RECONCILIATION_ISSUER_USER`. The user must be a separate Frappe service principal with only
+the IronWrap QuickBooks Reconciliation Issuer role, using the two issuer secrets above, and must
+match the Frappe site config `ironwrap_quickbooks_reconciliation_issuer_user`. Do not reuse the
+general Worker, Hermes MCP, Administrator, or human-finance credentials.
 
 ## Endpoints
 
@@ -135,6 +158,7 @@ npx wrangler deploy --env=""
 | POST | `/ingest/:source` | `Bearer INGEST_TOKEN` | ingest a lead (`source` ∈ website,phone,gbp,ad,referral,manual) |
 | POST | `/webhook/newo` | `Bearer NEWO_WEBHOOK_TOKEN` | receive an authenticated Newo Custom Tool handoff as canonical `phone` intake; raw provider body is retained first and duplicate retries do not repeat acknowledgement/queue work. See [`docs/NEWO-INTEGRATION.md`](../docs/NEWO-INTEGRATION.md). |
 | POST | `/ingest/estimate` | `Bearer INGEST_TOKEN` | ingest public estimator/configurator payloads into owned R2/D1 and ERPNext without a JobNimbus/GHL queue dependency; accepts stable project ids or `Idempotency-Key`/`X-Idempotency-Key` for retry-safe replay |
+| POST | `/ingest/facet-design` | dedicated HMAC + exact source-tenant map | receive only `facet.design.approved.v1` design-decision evidence; raw R2 first, immutable local-tenant D1 receipt/nonce second, no quote/contract/Frappe side effect |
 | GET | `/public/instant-estimate/config` | exact configured `Origin` when supplied | public Turnstile/site availability envelope; an Origin-less same-origin GET is allowed without CORS headers |
 | POST | `/public/instant-estimate` | exact configured `Origin` + Turnstile | public estimate qualification; raw canonical consent is stored first, client/IP rate keys are HMAC hashes only, and a non-binding CAD range is returned only from an enabled server rule |
 | POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos, file them to Google Drive, and optionally sync ERPNext Evidence Items |
@@ -149,7 +173,7 @@ npx wrangler deploy --env=""
 | GET | `/admin/dead-letter?limit=50` | `Bearer ADMIN_TOKEN` | read unrecovered dead-letter rows |
 | GET | `/admin/measurements/exceptions?limit=50` | `Bearer ADMIN_TOKEN` | read unmatched or retryable measurement receipts without idempotency/payload hash fields or lease tokens; opaque receipt ids and raw pointers remain available for review. Retryable and expired-lease receipts re-drive sequentially from verified R2 raw sources with bounded backoff |
 | POST | `/admin/app-users` | `Bearer ADMIN_TOKEN` | provision/update/deactivate one user on this deployment's configured tenant |
-| POST | `/webhook/quickbooks` | `intuit-signature` | capture signed QuickBooks invoice/payment events with payload-hash replay protection |
+| POST | `/webhook/quickbooks` | `intuit-signature` | accept expected-realm signed finance identities, persist receipt plus durable projection row, and issue only Pending Frappe reconciliation work |
 | POST | `/api/v1/auth/magic-link/request` | exact allowed `Origin` | request a link; active/unknown/inactive/throttled identities receive the same `202` body |
 | POST | `/api/v1/auth/magic-link/consume` | exact allowed `Origin` | atomically consume a one-time token and set the fixed-TTL `__Host-ironwrap_session` cookie; GET is not supported |
 | GET | `/api/v1/session` | cookie optional | exact authenticated/unauthenticated bootstrap envelope; always `200`, `private, no-store` |
@@ -465,6 +489,55 @@ explicitly `private, no-store`), content/type/frame/referrer/permissions/HSTS ha
 asset binding and remain cacheable. A safe caller-supplied correlation id is preserved; otherwise
 the Worker generates one.
 
+### Facet design-event receipt contract
+
+Leave `FACET_DESIGN_INGEST_ENABLED=false` until `FACET_DESIGN_INGEST_HMAC_KEY` and an exact
+`FACET_DESIGN_INGEST_TENANT_MAP_JSON` source-to-local allowlist (for example,
+`{"facet-production":"ironwrap"}`) are independently configured. HMAC proves the Facet deployment;
+it does not authorize arbitrary Facet tenants. The sender posts UTF-8 JSON with exactly
+`event_id`, `event_type`, `schema_version`, `occurred_at`, `tenant_id`, `facet_project_id`,
+`design_revision` (`id`, lowercase `sha256`), and a non-empty object `frozen_evidence`.
+`event_type` is exactly `facet.design.approved.v1`; `schema_version` is exactly `1`.
+`frozen_evidence.design` is a non-empty object, and `design_revision` must be exactly
+`{id:"facet-json-v1:${sha256(canonicalJson(frozen_evidence.design))}",sha256:"…"}` with the
+same lowercase SHA-256 value in both places.
+
+The headers are `X-IronWrap-Event-Id`, `X-IronWrap-Event-Timestamp` (13-digit Unix milliseconds,
+within five minutes), `X-IronWrap-Event-Nonce` (32–128 base64url characters), and
+`X-IronWrap-Event-Signature` (unpadded base64url HMAC-SHA256). Sign exactly
+`${timestamp}.${nonce}.${sha256(rawBody)}`; the header event id must equal the JSON event id.
+The JSON `tenant_id` is a Facet source tenant: it must be an exact map key whose configured value
+equals `APP_TENANT_ID`. Missing, malformed, unknown, or mismatched mappings fail before R2/D1;
+the D1 receipt persists only the mapped local tenant. The Worker records only hashes and anchors in
+D1 after immutable R2 storage. A first `202` and fresh-nonce idempotent `200` return the durable
+`accepted`, `event_id`, `status:"received"`, `raw_sha256`, `frozen_evidence_sha256`, and
+`design_revision:{id,sha256}` anchors (the latter also has `idempotent_replay:true`). Reusing a
+nonce is rejected. This event is a customer design decision, not a quote, contract acceptance, or
+Frappe write.
+
+### Facet-to-Frappe review projection
+
+`FACET_DESIGN_FRAPPE_PROJECTION_ENABLED` stays `false` until a dedicated Frappe user has only the
+`IronWrap Facet Design Projection Service` role, its user email and separate HMAC are configured
+in the Frappe site, and its distinct API key, API secret, and HMAC are stored as Worker secrets.
+Never reuse the ingress HMAC, broad ERP identity, or customer-acceptance identity.
+
+The non-secret `FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON` is a reviewed deployment setting
+with exactly `{"schema_version":1,"associations":[...]}`. Each association contains only opaque
+`event_id`, `tenant_id`, `facet_project_id`, design revision id/hash, frozen-evidence hash,
+`roof_job_id`, and `customer_quote_id`; do not put names, addresses, prices, or free-form operator
+input in it. Every source anchor must exactly equal the immutable D1 receipt. A missing association
+is held and an anchor mismatch is rejected in the append-only
+`facet_design_projection_attempts` ledger; neither condition calls Frappe.
+
+For an exact approved current quote belonging to the locked Roof Job, the scheduled Worker command
+creates one deterministic, non-customer-safe Evidence Item and one Pending Integration
+Reconciliation record. It does not read R2 on this path and does not create or update a quote,
+price, contract, acceptance, or Proposal Evidence Pack. An estimator must reconcile the evidence
+before any commercial use. Before enabling the flag, run a disposable live proof for success,
+missing/mismatched association, exact replay, and Frappe refusal, then retain only redacted IDs and
+release evidence.
+
 Replay mutation bodies are strict and require `run_id` (3–128 safe identifier characters),
 `approved_by` (3–128 characters), and `reason` (10–500 characters). Targeted example:
 `{"envelope_id":"ow_…","run_id":"hermes-run-…","approved_by":"owner@example.com","reason":"Cause verified fixed; approved for replay."}`.
@@ -491,10 +564,12 @@ the ledger attempt failed, so the same exact request can CAS the ledger into a n
    mailbox authority, folder permissions, and retention against the target tenant.
 3. **SMS / carrier registration** — the Worker does not send prospect SMS. Any external SMS
    bridge requires current carrier/consent evidence and separate delivery reconciliation.
-4. **QuickBooks webhook** — the receiver captures signed events, records a
-   payload-hash receipt to block replay side effects, and can mirror Invoice/Payment
-   webhook events into Frappe Payment Milestone rows. This is not full accounting authority;
-   posted values require authenticated read-back and reconciliation.
+4. **QuickBooks webhook** — the receiver accepts only the configured company realm, anchors a
+   signed raw receipt plus one durable outbox row per supported identity, and projects bounded
+   Pending reconciliation work through a distinct least-privilege Frappe issuer. Frappe failures
+   remain leased/retryable with capped backoff and escalate after five attempts; only the documented
+   immutable identity conflict is terminal. This is not accounting authority: amounts, payment,
+   posting, and reconciliation facts require authenticated QuickBooks read-back.
 5. **ERPNext bridge** — disabled by default. Before setting `ERPNEXT_ENABLED=true`, apply
    migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,
    Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Measurement Value,
@@ -512,8 +587,8 @@ the ledger attempt failed, so the same exact request can CAS the ledger into a n
    correct Roof Job instead of accepting a false match. Photo sync creates one photo Evidence
    Item per submitted Jotform photo, links Drive file ids/URLs when available, and
    creates a Field Check-in summary row for the submission. QuickBooks webhook
-   sync creates Payment Milestone event rows and links invoice events to Roof Job
-   when `qb_invoice_ref` matches.
+   sync creates only Pending reconciliation work and may create immutable Payment Milestone
+   event rows when `qb_invoice_ref` matches; it never asserts provider accounting truth.
    Roof Job sync also creates missing initial production gate rows without resetting
    existing gate state. ERPNext is still a consumer, not the raw intake source.
 

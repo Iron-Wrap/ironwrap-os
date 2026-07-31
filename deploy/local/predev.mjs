@@ -57,6 +57,17 @@ if (!existsSync(privateKeyPath) || !existsSync(publicKeyPath) || !existsSync(dry
   writeFileSync(dryRunKeyPath, `${randomBytes(32).toString("hex")}\n`, { mode: 0o600 });
 }
 
+const acceptanceHmacPath = path.join(keysDir, "customer-acceptance-hmac-key.txt");
+if (!existsSync(acceptanceHmacPath)) {
+  log("generating throwaway customer-acceptance HMAC key into deploy/local/keys/");
+  mkdirSync(keysDir, { recursive: true });
+  writeFileSync(acceptanceHmacPath, `${randomBytes(32).toString("base64url")}\n`, { mode: 0o600 });
+}
+const acceptanceHmacKey = readFileSync(acceptanceHmacPath, "utf8").trim();
+if (!/^[A-Za-z0-9_-]{43}$/.test(acceptanceHmacKey)) {
+  fail("customer acceptance HMAC key is invalid; remove deploy/local/keys/customer-acceptance-hmac-key.txt and retry");
+}
+
 // 2. Frappe stack -------------------------------------------------------------
 log("ensuring local Frappe stack is up (docker compose)");
 try {
@@ -101,6 +112,45 @@ try {
 }
 if (!creds?.api_key || !creds?.api_secret) fail("integration credentials are empty");
 
+let quickBooksIssuerCreds;
+try {
+  quickBooksIssuerCreds = JSON.parse(
+    run("docker", [
+      "compose", "-f", composeFile, "exec", "-T", "frappe",
+      "cat", "/home/frappe/frappe-bench/sites/ironwrap.localhost/.quickbooks_reconciliation_issuer_credentials",
+    ]),
+  );
+} catch {
+  fail("could not read QuickBooks reconciliation issuer credentials from the container");
+}
+if (!quickBooksIssuerCreds?.api_key || !quickBooksIssuerCreds?.api_secret) {
+  fail("QuickBooks reconciliation issuer credentials are empty");
+}
+
+let acceptanceCreds;
+try {
+  acceptanceCreds = JSON.parse(
+    run("docker", [
+      "compose", "-f", composeFile, "exec", "-T", "frappe",
+      "cat", "/home/frappe/frappe-bench/sites/ironwrap.localhost/.customer_acceptance_credentials",
+    ]),
+  );
+} catch {
+  fail("could not read customer acceptance credentials from the container");
+}
+if (!acceptanceCreds?.api_key || !acceptanceCreds?.api_secret) {
+  fail("customer acceptance credentials are empty");
+}
+try {
+  run("docker", [
+    "compose", "-f", composeFile, "exec", "-T", "frappe",
+    "bench", "--site", "ironwrap.localhost", "set-config",
+    "ironwrap_customer_acceptance_hmac_key", acceptanceHmacKey,
+  ]);
+} catch {
+  fail("could not configure the local customer acceptance HMAC key");
+}
+
 const vars = existsSync(devVarsPath) ? readFileSync(devVarsPath, "utf8") : "";
 const setVar = (src, key, value) => {
   const line = `${key}=${value}`;
@@ -112,6 +162,11 @@ let next = vars;
 for (const [key, value] of [
   ["ERPNEXT_API_KEY", creds.api_key],
   ["ERPNEXT_API_SECRET", creds.api_secret],
+  ["QB_RECONCILIATION_ISSUER_API_KEY", quickBooksIssuerCreds.api_key],
+  ["QB_RECONCILIATION_ISSUER_API_SECRET", quickBooksIssuerCreds.api_secret],
+  ["APP_CUSTOMER_ACCEPTANCE_HMAC_KEY", acceptanceHmacKey],
+  ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY", acceptanceCreds.api_key],
+  ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET", acceptanceCreds.api_secret],
 ]) {
   next = setVar(next, key, value);
 }

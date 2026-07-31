@@ -2732,7 +2732,7 @@ class DomainPolicyTests(unittest.TestCase):
         reconciliation = {
             "reconciliation_id": "recon-1",
             "roof_job": "job-1",
-            "system_name": "QuickBooks",
+            "system_name": "Accounting Bridge",
             "entity_type": "Invoice",
             "external_entity_id": "qb-1",
             "local_doctype": "Payment Milestone",
@@ -2810,6 +2810,26 @@ class DomainPolicyTests(unittest.TestCase):
             "attempt_count": 0,
         }
         validate_record("integration_reconciliation", pending)
+        self.assert_policy(
+            "quickbooks_initial_status_must_be_pending",
+            validate_record,
+            "integration_reconciliation",
+            {**pending, "status": "Matched"},
+        )
+        self.assert_policy(
+            "quickbooks_provider_truth_unavailable",
+            validate_record,
+            "integration_reconciliation",
+            {
+                **pending,
+                "status": "Resolved",
+                "resolution_action": "Await authenticated provider read",
+                "resolved_by": "finance@example.com",
+                "resolved_at": "2026-07-10 12:00:00",
+                "resolution_evidence": "ev-provider-read",
+            },
+            previous=pending,
+        )
         self.assert_policy(
             "quickbooks_unresolved_linkage",
             validate_record,

@@ -19,7 +19,7 @@ the cloneable shape is proven with isolation, export, restore, and negative cros
 | Hermes | One Hermes profile (own memory, skills, MCP allowlist) | MCP env vars below |
 | Cloudflare | One Worker + D1 + R2 + queues + secrets set | `workers-bus/wrangler.jsonc` |
 | Storage | One Drive namespace (Shared Drives) + one R2 bucket | `SHARED_DRIVE_ID_*` vars, `RAW` binding |
-| Accounting | One QuickBooks connection (own realm, own webhook verifier) | `QB_WEBHOOK_TOKEN` secret |
+| Accounting | One QuickBooks connection (own realm, verifier, and bounded Frappe issuer) | `QB_EXPECTED_REALM_ID`, `QB_WEBHOOK_TOKEN`, and tenant-only issuer credentials |
 | Brand | One brand/template pack + tenant config | `config/tenants/<tenant>.json` |
 
 Why isolation first: the risk register lists "Tenant leakage" as a product-killing risk.
@@ -62,15 +62,20 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    If `APP_BFF_ENABLED=true`, set a canonical HTTPS `APP_PUBLIC_ORIGIN` and include that exact
    value in comma-separated `APP_ALLOWED_ORIGINS`. `APP_CUSTOMER_PORTAL_ENABLED=true` requires
    the BFF to be enabled.
+   Set `QB_EXPECTED_REALM_ID` to the tenant's one approved QuickBooks company realm and
+   `QB_RECONCILIATION_ISSUER_USER` to its separate Frappe issuer identity. These are
+   tenant-only non-secret Worker vars; neither may be copied from another tenant or point to the
+   general Worker/MCP user.
 6. Run migrations against the NEW database:
    `npx wrangler d1 migrations apply <tenant>-bus --remote`
    (applies all committed migrations, currently through
-   `0028_work_package_actions.sql`).
+   `0031_quickbooks_projection_outbox.sql`).
 7. Secrets: use individual `wrangler secret put <NAME>` commands from an approved secret store
    with the exact tenant `--env <tenant-environment>` or tenant `--config <path>` target;
    never pass a generic Cloudflare token to a repository script. Required set:
    `INGEST_TOKEN`, `ADMIN_TOKEN`, `JOBNIMBUS_API_KEY` (if bridging),
-   `GOOGLE_SERVICE_ACCOUNT_JSON`, `QB_WEBHOOK_TOKEN`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`,
+   `GOOGLE_SERVICE_ACCOUNT_JSON`, `QB_WEBHOOK_TOKEN`, `QB_RECONCILIATION_ISSUER_API_KEY`,
+   `QB_RECONCILIATION_ISSUER_API_SECRET`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`,
    and `APP_AUTH_PEPPER`; add each broker shared secret only when its isolated broker is enabled.
    All tokens are NEW values, never reused from another tenant.
 8. Compare the intended Worker runtime values before deployment (this reads supplied env values;
@@ -93,12 +98,16 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 4. Create a tenant-scoped API key/secret pair for the bus, plus a separate pair for every
    Hermes MCP actor. Each MCP pair must be issued to exactly that process's
    `HERMES_ACTOR_USER`; never use the bus pair to attest an actor action.
-5. Bind the exact bus API user as the verified Field Companion evidence issuer:
+5. Create a third non-interactive QuickBooks issuer user with only the IronWrap QuickBooks
+   Reconciliation Issuer role and its own API key/secret. Set
+   `ironwrap_quickbooks_reconciliation_issuer_user` to that exact user. Do not grant it a
+   human finance role, System Manager, or the general bus/MCP roles.
+6. Bind the exact bus API user as the verified Field Companion evidence issuer:
    `bench --site <tenant-site> set-config ironwrap_field_evidence_issuer_user
    '<worker-api-user-email>'`. The Frappe app rejects `Verified` evidence through
    ordinary Desk/REST writes, so this site-local configuration is required before
    field evidence can become gate-eligible.
-6. Never adopt frappe/press (AGPL, Frappe Cloud's control plane): per-tenant provisioning
+7. Never adopt frappe/press (AGPL, Frappe Cloud's control plane): per-tenant provisioning
    stays on IronWrap's own scripts (`config/tenants/` + validators + this playbook).
 
 ### 4. Drive / evidence namespace
@@ -113,6 +122,9 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
 1. Connect the tenant's own QuickBooks company (own realm id).
 2. Register the tenant Worker's `POST /webhook/quickbooks` URL in the tenant's own Intuit
    app; set that verifier as `QB_WEBHOOK_TOKEN` on the tenant Worker.
+3. Set the exact realm and separate issuer values above, then prove one signed expected-realm
+   event creates the raw receipt, durable projection row, and Pending Frappe reconciliation.
+   A deploy dry-run or local test cannot substitute for this tenant-account proof.
 
 ### 6. Hermes profile + MCP servers
 
@@ -166,11 +178,12 @@ recovery boundaries.
 
 - [ ] `config/tenants/<tenant>.json` exists and `node tools/validate-tenant-config.mjs` passes.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
-- [ ] All 28 D1 migrations through `0028_work_package_actions.sql` applied to the tenant database.
+- [ ] All 31 D1 migrations through `0031_quickbooks_projection_outbox.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
-  and `ironwrap_field_evidence_issuer_user` bound to that dedicated Worker user.
+  `ironwrap_field_evidence_issuer_user` bound to that dedicated Worker user, and a separate
+  QuickBooks issuer user/role/key pair bound through `ironwrap_quickbooks_reconciliation_issuer_user`.
 - [ ] Tenant Shared Drives + R2 bucket receive a test job's files.
-- [ ] Tenant QuickBooks webhook verified (signature accepted on `POST /webhook/quickbooks`).
+- [ ] Tenant QuickBooks expected realm and signed webhook verified: receipt/outbox and exactly one Pending Frappe reconciliation exist; provider accounting facts are still read-back/reconciliation work.
 - [ ] Tenant Hermes profile answers a read-only question from tenant data via all granted MCP servers.
 - [ ] A test lead flows source -> bus envelope -> tenant ERPNext record -> tenant-branded ack email.
 - [ ] All 8 tenant-leakage checks above pass.

@@ -112,6 +112,21 @@ try {
 }
 if (!creds?.api_key || !creds?.api_secret) fail("integration credentials are empty");
 
+let quickBooksIssuerCreds;
+try {
+  quickBooksIssuerCreds = JSON.parse(
+    run("docker", [
+      "compose", "-f", composeFile, "exec", "-T", "frappe",
+      "cat", "/home/frappe/frappe-bench/sites/ironwrap.localhost/.quickbooks_reconciliation_issuer_credentials",
+    ]),
+  );
+} catch {
+  fail("could not read QuickBooks reconciliation issuer credentials from the container");
+}
+if (!quickBooksIssuerCreds?.api_key || !quickBooksIssuerCreds?.api_secret) {
+  fail("QuickBooks reconciliation issuer credentials are empty");
+}
+
 let acceptanceCreds;
 try {
   acceptanceCreds = JSON.parse(
@@ -147,6 +162,8 @@ let next = vars;
 for (const [key, value] of [
   ["ERPNEXT_API_KEY", creds.api_key],
   ["ERPNEXT_API_SECRET", creds.api_secret],
+  ["QB_RECONCILIATION_ISSUER_API_KEY", quickBooksIssuerCreds.api_key],
+  ["QB_RECONCILIATION_ISSUER_API_SECRET", quickBooksIssuerCreds.api_secret],
   ["APP_CUSTOMER_ACCEPTANCE_HMAC_KEY", acceptanceHmacKey],
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY", acceptanceCreds.api_key],
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET", acceptanceCreds.api_secret],

@@ -43,6 +43,12 @@ const REQUIRED_ENV_NAMES = [
   "ERPNEXT_API_KEY",
   "ERPNEXT_API_SECRET",
   "ERPNEXT_INTEGRATION_USER",
+  "QB_WEBHOOK_TOKEN",
+  "QB_EXPECTED_REALM_ID",
+  "QB_RECONCILIATION_ISSUER_USER",
+  "QB_RECONCILIATION_ISSUER_API_KEY",
+  "QB_RECONCILIATION_ISSUER_API_SECRET",
+  "IRONWRAP_QUICKBOOKS_RECONCILIATION_ISSUER_USER",
   "PUBLIC_ESTIMATE_ENABLED",
   "PUBLIC_ESTIMATE_ALLOWED_ORIGINS",
   "PUBLIC_ESTIMATE_ALLOWED_BRANDS",
@@ -125,6 +131,9 @@ const LIVE_REQUIRED_ENV_NAMES = REQUIRED_ENV_NAMES.filter(
 const SECRET_ENV_NAMES = [
   "ERPNEXT_API_KEY",
   "ERPNEXT_API_SECRET",
+  "QB_WEBHOOK_TOKEN",
+  "QB_RECONCILIATION_ISSUER_API_KEY",
+  "QB_RECONCILIATION_ISSUER_API_SECRET",
   "PUBLIC_ESTIMATE_TURNSTILE_SECRET",
   "PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER",
   "IRONWRAP_ADMIN_TOKEN",
@@ -560,15 +569,15 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   checks.push(check("contract.d1_backup.safety", d1Backup.includes("set -euo pipefail") && d1Backup.includes("set +x") && d1Backup.includes("umask 077") && d1Backup.includes("this command accepts no arguments") && d1Backup.includes("mktemp -d") && d1Backup.includes("flock -n") && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Backup), "D1 backup uses strict no-argv, no-tracing, private-temp, locking, and signal controls", "D1 backup lacks strict no-argv, no-tracing, private-temp, locking, or signal controls"));
   checks.push(check("contract.d1_backup.source", d1Backup.includes('EXPECTED_ACCOUNT_ID="7ee5775bc1ba46f05c5a65235b60e939"') && d1Backup.includes('EXPECTED_DATABASE_NAME="ironwrap-bus"') && d1Backup.includes('EXPECTED_DATABASE_ID="f0674848-13df-4422-9896-8ba2719663b8"') && d1Backup.includes('"account_id": "$D1_PRODUCTION_ACCOUNT_ID"') && d1Backup.includes('"database_id": "$D1_PRODUCTION_DATABASE_ID"'), "D1 backup is bound to the exact production account, name, UUID, and generated config", "D1 backup must bind an exact generated config to the committed production D1 coordinates"));
   checks.push(check("contract.d1_backup.wrangler", d1Backup.includes('workers-bus/node_modules/.bin/wrangler') && d1Backup.includes('workers-bus/package-lock.json') && d1Backup.includes('CLOUDFLARE_API_TOKEN="$d1_backup_api_token" "$WRANGLER" d1 export') && d1Backup.includes("--remote --config") && d1Backup.includes("exact Wrangler 4 version") && d1Backup.includes("unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN"), "D1 backup uses the locked local Wrangler 4 remote export with command-scoped read authority", "D1 backup must use exact Wrangler 4 and command-scope only the dedicated D1 backup token"));
-  checks.push(check("contract.d1_backup.validation", d1Backup.includes("sqlite3 -bail") && d1Backup.includes("PRAGMA integrity_check") && d1Backup.includes("measurement_intake_receipts,production_schedule_approval_requests,production_schedule_approval_request_events,public_estimate_rate_limits,governed_transitions,governed_transition_outbox,governed_transition_outbox_events,field_work_package_actions") && d1Backup.includes("REQUIRED_TABLE_COUNT=33") && d1Backup.includes("REQUIRED_TRIGGER_COUNT=43") && d1Backup.includes("prevent_production_schedule_approval_binding_rewrite=production_schedule_approval_requests") && d1Backup.includes("renew_approval_execution_lease_from_governed_outbox_claim=governed_transition_outbox") && d1Backup.includes("REQUIRED_APPROVAL_TRIGGER_SEMANTICS=") && d1Backup.includes("production_schedule_approval_events_immutable") && d1Backup.includes("governed_transition_outbox_invalid_uncertain_transition") && d1Backup.includes("governed_transition_outbox_terminal") && d1Backup.includes("governed_transition_outbox_events_immutable") && d1Backup.includes("type='trigger'") && d1Backup.includes("IRONWRAP-D1-BACKUP-MANIFEST.txt") && d1Backup.includes("sql_sha256="), "D1 backup proves an isolated SQLite import, all 33 required production tables, all 43 invariant triggers, and a hashed manifest", "D1 backup must validate all 33 production tables, including governed-transition outbox and field Work Package action evidence, all 43 trigger bindings with immutable/no-retry semantics, and bind the exported SQL to a manifest before encryption"));
+  checks.push(check("contract.d1_backup.validation", d1Backup.includes("sqlite3 -bail") && d1Backup.includes("PRAGMA integrity_check") && d1Backup.includes("quickbooks_projection_outbox") && d1Backup.includes("measurement_intake_receipts,production_schedule_approval_requests,production_schedule_approval_request_events,public_estimate_rate_limits,governed_transitions,governed_transition_outbox,governed_transition_outbox_events,field_work_package_actions") && d1Backup.includes("REQUIRED_TABLE_COUNT=34") && d1Backup.includes("REQUIRED_TRIGGER_COUNT=43") && d1Backup.includes("prevent_production_schedule_approval_binding_rewrite=production_schedule_approval_requests") && d1Backup.includes("renew_approval_execution_lease_from_governed_outbox_claim=governed_transition_outbox") && d1Backup.includes("REQUIRED_APPROVAL_TRIGGER_SEMANTICS=") && d1Backup.includes("production_schedule_approval_events_immutable") && d1Backup.includes("governed_transition_outbox_invalid_uncertain_transition") && d1Backup.includes("governed_transition_outbox_terminal") && d1Backup.includes("governed_transition_outbox_events_immutable") && d1Backup.includes("type='trigger'") && d1Backup.includes("IRONWRAP-D1-BACKUP-MANIFEST.txt") && d1Backup.includes("sql_sha256="), "D1 backup proves an isolated SQLite import, all 34 required production tables, all 43 invariant triggers, and a hashed manifest", "D1 backup must validate all 34 production tables, including the durable QuickBooks projection outbox, governed-transition outbox, and field Work Package action evidence, all 43 trigger bindings with immutable/no-retry semantics, and bind the exported SQL to a manifest before encryption"));
   checks.push(check("contract.d1_backup.atomic", d1Backup.includes("age --encrypt") && d1Backup.includes("rclone copy") && d1Backup.includes("--immutable") && d1Backup.includes("rclone check") && d1Backup.includes("IRONWRAP-D1-BACKUP-COMPLETE") && d1Backup.indexOf("rclone check") < d1Backup.lastIndexOf("rclone copyto") && d1Backup.includes("remote_complete=1"), "D1 backup encrypts, uploads immutably, verifies, and commits its marker last", "D1 backup must encrypt and remotely verify immutable objects before publishing its completion marker"));
   checks.push(check("contract.d1_backup.retention", d1Backup.includes("MARKER_RETENTION_HOURS") && d1Backup.includes("DATA_RETENTION_HOURS=$((MARKER_RETENTION_HOURS + 1))") && d1Backup.indexOf("**/IRONWRAP-D1-BACKUP-COMPLETE") < d1Backup.indexOf("**/*.age") && d1Backup.includes("remote_started == 1 && remote_complete == 0") && d1Backup.includes("rclone purge"), "D1 retention hides markers before data and incomplete generations are purged", "D1 retention and incomplete-upload cleanup must preserve atomic visibility"));
 
   const d1Restore = contents.get("deploy/restore-d1-from-r2.sh") ?? "";
   checks.push(check("contract.d1_restore.safety", d1Restore.includes("set -euo pipefail") && d1Restore.includes("set +x") && d1Restore.includes("umask 077") && d1Restore.includes("this command accepts no arguments") && d1Restore.includes('mode="${D1_RESTORE_MODE:-verify}"') && d1Restore.includes("mktemp -d") && d1Restore.includes("flock -n") && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Restore), "D1 restore defaults to local verification with strict no-argv, private-temp, lock, and signal controls", "D1 restore must default to verification and fail closed around argv, plaintext, concurrency, and signals"));
   checks.push(check("contract.d1_restore.selection", d1Restore.includes("D1_RESTORE_R2_COMPLETED_PREFIX") && d1Restore.includes("IRONWRAP-D1-BACKUP-COMPLETE") && !/rclone\s+ls[fdj]?\b/.test(d1Restore), "D1 restore requires one exact marker-bearing prefix and never discovers latest", "D1 restore must never discover latest or accept an uncommitted generation"));
-  checks.push(check("contract.d1_restore.local", d1Restore.includes("sha256sum --check") && d1Restore.includes("age --decrypt") && d1Restore.indexOf("sha256sum --check") < d1Restore.indexOf("age --decrypt") && d1Restore.includes("sqlite3 -bail") && d1Restore.includes("PRAGMA integrity_check") && d1Restore.includes("measurement_intake_receipts,production_schedule_approval_requests,production_schedule_approval_request_events,public_estimate_rate_limits,governed_transitions,governed_transition_outbox,governed_transition_outbox_events,field_work_package_actions") && d1Restore.includes("REQUIRED_TABLE_COUNT=33") && d1Restore.includes("REQUIRED_TRIGGER_COUNT=43") && d1Restore.includes("renew_approval_execution_lease_from_governed_outbox_claim=governed_transition_outbox") && d1Restore.includes("governed_transition_outbox_invalid_uncertain_transition") && d1Restore.includes("governed_transition_outbox_terminal") && d1Restore.includes("local-trigger-inventory.txt") && d1Restore.includes("verify_receipt_trigger_semantics") && d1Restore.includes("verify_approval_trigger_semantics") && d1Restore.includes("no remote mutation performed"), "D1 restore cryptographically and structurally verifies all 33 required tables, all 43 trigger bindings, and immutable governed-transition semantics locally before any remote mutation", "D1 restore must verify ciphertext, manifest, SQL import, integrity, all 33 tables including governed-transition outbox and field Work Package action evidence, all 43 trigger bindings, and immutable/no-retry semantics locally first"));
-  checks.push(check("contract.d1_restore.remote", d1Restore.includes("ironwrap-restore-drill-") && d1Restore.includes("production D1 database can never be a restore target") && d1Restore.includes('RESTORE_D1:$D1_RESTORE_TARGET_DATABASE_NAME@$D1_RESTORE_TARGET_DATABASE_ID') && d1Restore.includes('"database_id": "$D1_RESTORE_TARGET_DATABASE_ID"') && d1Restore.includes("target must be an empty dedicated drill database") && d1Restore.includes("local-table-counts.txt") && d1Restore.includes("target-trigger-verify.sql") && d1Restore.includes("sql AS trigger_sql") && d1Restore.includes("immutableSemantics") && d1Restore.includes("production_schedule_approval_events_immutable") && d1Restore.includes("governed_transition_outbox_invalid_uncertain_transition") && d1Restore.includes("governed_transition_outbox_terminal") && d1Restore.includes("governed_transition_outbox_events_immutable") && d1Restore.includes("remote D1 restore table row counts differ") && d1Restore.includes("remote D1 restore trigger inventory or receipt semantics differ") && d1Restore.includes('CLOUDFLARE_API_TOKEN="$d1_restore_api_token" "$WRANGLER" d1 execute') && d1Restore.includes('"$d1_backup_api_token" == "$d1_restore_api_token"') && d1Restore.includes("unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN D1_RESTORE_API_TOKEN"), "remote D1 restore is exact-target-confirmed, empty-target-only, account-bound, production-denied, and equivalent for all 33 tables plus 43 governed trigger bindings", "remote D1 restore must reject unsafe targets, match every row count plus all 43 trigger bindings and immutable/no-retry semantics, and use a distinct ephemeral write token"));
+  checks.push(check("contract.d1_restore.local", d1Restore.includes("sha256sum --check") && d1Restore.includes("age --decrypt") && d1Restore.indexOf("sha256sum --check") < d1Restore.indexOf("age --decrypt") && d1Restore.includes("sqlite3 -bail") && d1Restore.includes("PRAGMA integrity_check") && d1Restore.includes("quickbooks_projection_outbox") && d1Restore.includes("measurement_intake_receipts,production_schedule_approval_requests,production_schedule_approval_request_events,public_estimate_rate_limits,governed_transitions,governed_transition_outbox,governed_transition_outbox_events,field_work_package_actions") && d1Restore.includes("REQUIRED_TABLE_COUNT=34") && d1Restore.includes("REQUIRED_TRIGGER_COUNT=43") && d1Restore.includes("renew_approval_execution_lease_from_governed_outbox_claim=governed_transition_outbox") && d1Restore.includes("governed_transition_outbox_invalid_uncertain_transition") && d1Restore.includes("governed_transition_outbox_terminal") && d1Restore.includes("local-trigger-inventory.txt") && d1Restore.includes("verify_receipt_trigger_semantics") && d1Restore.includes("verify_approval_trigger_semantics") && d1Restore.includes("no remote mutation performed"), "D1 restore cryptographically and structurally verifies all 34 required tables, all 43 trigger bindings, and immutable governed-transition semantics locally before any remote mutation", "D1 restore must verify ciphertext, manifest, SQL import, integrity, all 34 tables including the durable QuickBooks projection outbox, governed-transition outbox, and field Work Package action evidence, all 43 trigger bindings, and immutable/no-retry semantics locally first"));
+  checks.push(check("contract.d1_restore.remote", d1Restore.includes("ironwrap-restore-drill-") && d1Restore.includes("production D1 database can never be a restore target") && d1Restore.includes('RESTORE_D1:$D1_RESTORE_TARGET_DATABASE_NAME@$D1_RESTORE_TARGET_DATABASE_ID') && d1Restore.includes('"database_id": "$D1_RESTORE_TARGET_DATABASE_ID"') && d1Restore.includes("target must be an empty dedicated drill database") && d1Restore.includes("local-table-counts.txt") && d1Restore.includes("target-trigger-verify.sql") && d1Restore.includes("sql AS trigger_sql") && d1Restore.includes("immutableSemantics") && d1Restore.includes("production_schedule_approval_events_immutable") && d1Restore.includes("governed_transition_outbox_invalid_uncertain_transition") && d1Restore.includes("governed_transition_outbox_terminal") && d1Restore.includes("governed_transition_outbox_events_immutable") && d1Restore.includes("remote D1 restore table row counts differ") && d1Restore.includes("remote D1 restore trigger inventory or receipt semantics differ") && d1Restore.includes('CLOUDFLARE_API_TOKEN="$d1_restore_api_token" "$WRANGLER" d1 execute') && d1Restore.includes('"$d1_backup_api_token" == "$d1_restore_api_token"') && d1Restore.includes("unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN D1_RESTORE_API_TOKEN"), "remote D1 restore is exact-target-confirmed, empty-target-only, account-bound, production-denied, and equivalent for all 34 tables plus 43 governed trigger bindings", "remote D1 restore must reject unsafe targets, match every row count plus all 43 trigger bindings and immutable/no-retry semantics, and use a distinct ephemeral write token"));
   checks.push(check("contract.d1_restore.cleanup", d1Restore.includes('rm -rf -- "$WORK_DIR"') && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Restore), "D1 restore removes decrypted plaintext on success, failure, and signals", "D1 restore must clean decrypted plaintext in every exit path"));
 
   const buildScript = contents.get("deploy/build-production-image.sh") ?? "";
@@ -662,6 +671,9 @@ export async function validateLiveEnv({
   const secretMinimums = {
     ERPNEXT_API_KEY: 10,
     ERPNEXT_API_SECRET: 16,
+    QB_WEBHOOK_TOKEN: 24,
+    QB_RECONCILIATION_ISSUER_API_KEY: 10,
+    QB_RECONCILIATION_ISSUER_API_SECRET: 16,
     IRONWRAP_ADMIN_TOKEN: 24,
     HERMES_WRITE_TOKEN: 32,
     HERMES_DRY_RUN_SIGNING_KEY: 32,
@@ -683,6 +695,9 @@ export async function validateLiveEnv({
   const purposeSecrets = [
     env.ERPNEXT_API_KEY,
     env.ERPNEXT_API_SECRET,
+    env.QB_WEBHOOK_TOKEN,
+    env.QB_RECONCILIATION_ISSUER_API_KEY,
+    env.QB_RECONCILIATION_ISSUER_API_SECRET,
     env.ADMIN_TOKEN,
     env.INGEST_TOKEN,
     env.HERMES_WRITE_TOKEN,
@@ -696,7 +711,7 @@ export async function validateLiveEnv({
       env.PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER,
     ] : []),
   ];
-  checks.push(check("live.secret.separation", purposeSecrets.every((value) => typeof value === "string") && new Set(purposeSecrets).size === purposeSecrets.length, "privileged credentials are separated by purpose", "Frappe, bus, approval, D1 export, and R2 backup credentials must not be reused across purposes"));
+  checks.push(check("live.secret.separation", purposeSecrets.every((value) => typeof value === "string") && new Set(purposeSecrets).size === purposeSecrets.length, "privileged credentials are separated by purpose", "Frappe, QuickBooks, bus, approval, D1 export, and R2 backup credentials must not be reused across purposes"));
   const restoreApiToken = env.D1_RESTORE_API_TOKEN;
   const restoreTokenUnset = restoreApiToken === undefined || restoreApiToken === "";
   const restoreTokenSeparated = validSecret(env, "D1_RESTORE_API_TOKEN", 24) && ![
@@ -708,6 +723,21 @@ export async function validateLiveEnv({
   checks.push(check("live.secret.d1_restore_ephemeral", restoreTokenStateSafe, restoreTokenUnset ? "D1 restore write token is not persisted in verification mode" : "remote drill token is valid and separated from backup authority", "D1_RESTORE_API_TOKEN must be unset for verify or a valid just-in-time token distinct from D1 backup and R2 credentials for remote"));
 
   checks.push(check("live.gate.integration", env.ERPNEXT_ENABLED === "true", "Frappe integration is explicitly enabled", "ERPNEXT_ENABLED must equal true for production readiness"));
+  checks.push(check(
+    "live.quickbooks.realm",
+    /^[1-9][0-9]{0,31}$/.test(env.QB_EXPECTED_REALM_ID ?? ""),
+    "QuickBooks expected realm is a concrete numeric company id",
+    "QB_EXPECTED_REALM_ID must be one concrete numeric QuickBooks company realm",
+  ));
+  const quickBooksIssuerUser = env.QB_RECONCILIATION_ISSUER_USER ?? "";
+  checks.push(check(
+    "live.quickbooks.issuer",
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(quickBooksIssuerUser) &&
+      quickBooksIssuerUser !== env.ERPNEXT_INTEGRATION_USER &&
+      quickBooksIssuerUser === env.IRONWRAP_QUICKBOOKS_RECONCILIATION_ISSUER_USER,
+    "QuickBooks issuer is a dedicated Frappe principal matched to site config",
+    "QB_RECONCILIATION_ISSUER_USER must be a dedicated Frappe email distinct from ERPNEXT_INTEGRATION_USER and match IRONWRAP_QUICKBOOKS_RECONCILIATION_ISSUER_USER",
+  ));
   checks.push(check(
     "live.gate.public_estimate",
     publicEstimateEnabled || env.PUBLIC_ESTIMATE_ENABLED === "false",

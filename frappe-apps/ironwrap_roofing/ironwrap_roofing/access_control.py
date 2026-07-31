@@ -4,6 +4,9 @@ from __future__ import annotations
 
 SYSTEM_MANAGER = "System Manager"
 CUSTOMER_ACCEPTANCE_SERVICE_ROLE = "IronWrap Customer Acceptance Service"
+QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE = (
+    "IronWrap QuickBooks Reconciliation Issuer"
+)
 
 IRONWRAP_ROLES = (
     "IronWrap Owner",
@@ -15,7 +18,10 @@ IRONWRAP_ROLES = (
     "IronWrap Closeout",
     "IronWrap Support",
 )
-IRONWRAP_SERVICE_ROLES = (CUSTOMER_ACCEPTANCE_SERVICE_ROLE,)
+IRONWRAP_SERVICE_ROLES = (
+    CUSTOMER_ACCEPTANCE_SERVICE_ROLE,
+    QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE,
+)
 ALL_IRONWRAP_ROLES = IRONWRAP_ROLES + IRONWRAP_SERVICE_ROLES
 
 READ = "read"
@@ -108,6 +114,10 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Finance": WRITE,
         "IronWrap Production": READ,
         "IronWrap Support": WRITE,
+        # Generic creation is independently rejected for QuickBooks by a
+        # private issuer context; this create-only role exists solely so the
+        # bounded command can insert one Pending record.
+        QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE: CREATE,
     },
     "Insurance Supplement": {"IronWrap Estimator": WRITE},
     "Job Assignment": {

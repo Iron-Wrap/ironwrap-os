@@ -298,6 +298,43 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(FakeValidationError, "required_fields"):
             adapter.validate_business_document(FakeDocument({}), "lead_envelope")
 
+    def test_quickbooks_reconciliation_creation_requires_the_private_issuer_context(self) -> None:
+        adapter, _ = self.load_adapter()
+        issued = FakeDocument(
+            {
+                "reconciliation_id": f"qbr:{'a' * 64}:0",
+                "system_name": "QuickBooks",
+                "entity_type": "Payment",
+                "external_entity_id": "7",
+                "local_doctype": "Unresolved QuickBooks Event",
+                "local_name": f"qbr:{'a' * 64}:0",
+                "direction": "Inbound",
+                "status": "Pending",
+                "detected_at": "2026-07-31 10:00:00",
+                "raw_key": "raw/quickbooks/2026-07-31/ow_test.json",
+                "source_version": "Create",
+                "source_payload_hash": "a" * 64,
+                "local_payload_hash": "b" * 64,
+                "attempt_count": 0,
+                "notes": "Webhook identity captured. Provider detail remains unverified.",
+            }
+        )
+        with self.assertRaisesRegex(FakePermissionError, "dedicated Worker command"):
+            adapter.validate_business_document(issued, "integration_reconciliation")
+        with self.assertRaisesRegex(FakePermissionError, "dedicated Worker command"):
+            adapter.validate_business_document(
+                FakeDocument({**issued, "system_name": "quickbooks"}),
+                "integration_reconciliation",
+            )
+
+        with adapter.quickbooks_reconciliation_issuance_context(issued):
+            adapter.validate_business_document(issued, "integration_reconciliation")
+
+        forged = FakeDocument({**issued, "raw_key": "raw/quickbooks/other.json"})
+        with adapter.quickbooks_reconciliation_issuance_context(issued):
+            with self.assertRaisesRegex(FakePermissionError, "dedicated Worker command"):
+                adapter.validate_business_document(forged, "integration_reconciliation")
+
     def test_waivers_require_the_current_owner_actor(self) -> None:
         compliance = FakeDocument(
             {

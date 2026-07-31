@@ -64,6 +64,15 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
   assert.equal(config.vars.FACET_DESIGN_INGEST_TENANT_MAP_JSON, "{}");
   assert.equal(config.env.local.vars.FACET_DESIGN_INGEST_TENANT_MAP_JSON, "{}");
   assert.equal(config.env.staging.vars.FACET_DESIGN_INGEST_TENANT_MAP_JSON, "{}");
+  assert.equal(config.vars.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED, "false");
+  assert.equal(config.env.local.vars.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED, "false");
+  assert.equal(config.env.staging.vars.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED, "false");
+  for (const environment of [config.vars, config.env.local.vars, config.env.staging.vars]) {
+    assert.deepEqual(JSON.parse(environment.FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON), {
+      schema_version: 1,
+      associations: [],
+    });
+  }
   assert.deepEqual(
     config.env.staging.queues.producers.find((queue: { binding: string }) => queue.binding === "NEWO_QUEUE"),
     { binding: "NEWO_QUEUE", queue: "ironwrap-staging-newo-events" },
@@ -305,9 +314,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     const migrations = (await readdir(new URL("../migrations/", import.meta.url)))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 31);
+    assert.equal(migrations.length, 32);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0031_quickbooks_projection_outbox.sql");
+    assert.equal(migrations.at(-1), "0032_facet_design_frappe_projection.sql");
     for (const migration of migrations) {
       db.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -324,7 +333,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
          SUM(type = 'trigger') AS triggers
        FROM sqlite_master`,
     ).get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 45, indexes: 72, triggers: 57 });
+    assert.deepEqual({ ...counts }, { tables: 46, indexes: 76, triggers: 59 });
 
     const quickBooksOutboxColumns = db.prepare(
       "PRAGMA table_info(quickbooks_projection_outbox)",
@@ -418,4 +427,21 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
   } finally {
     db.close();
   }
+});
+
+test("0032 keeps Facet projection outcomes append-only, anchored, and commercially inert", async () => {
+  const sql = await readFile(new URL("../migrations/0032_facet_design_frappe_projection.sql", import.meta.url), "utf8");
+  const schema = sql.replace(/^--.*$/gm, "");
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS facet_design_projection_attempts\b/);
+  assert.match(sql, /FOREIGN KEY \(event_id\) REFERENCES facet_design_events\(event_id\) ON DELETE RESTRICT/);
+  assert.match(sql, /idx_facet_design_projection_one_success/);
+  assert.match(sql, /idx_facet_design_projection_one_frappe_rejection/);
+  assert.match(sql, /facet_design_projection_attempts_append_only_update/);
+  assert.match(sql, /facet_design_projection_attempts_append_only_delete/);
+  for (const field of [
+    "tenant_id", "facet_project_id", "design_revision_id", "design_revision_sha256",
+    "frozen_evidence_sha256", "raw_key", "raw_sha256", "association_sha256",
+  ]) assert.match(sql, new RegExp(`${field}\\s+TEXT`));
+  assert.doesNotMatch(schema, /price|amount|contract_acceptance|proposal_evidence_pack|customer_name|address/i);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });

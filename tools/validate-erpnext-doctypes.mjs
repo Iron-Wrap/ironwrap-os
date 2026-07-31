@@ -24,6 +24,7 @@ const canonicalIronWrapRoles = [
 const canonicalServiceRoles = [
   "IronWrap Customer Acceptance Service",
   "IronWrap QuickBooks Reconciliation Issuer",
+  "IronWrap Facet Design Projection Service",
 ];
 
 const specs = [

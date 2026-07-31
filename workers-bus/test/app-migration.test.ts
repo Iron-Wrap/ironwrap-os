@@ -58,6 +58,12 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
   assert.equal(config.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED, "false");
   assert.equal(config.env.local.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED, "false");
   assert.equal(config.env.staging.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED, "false");
+  assert.equal(config.vars.FACET_DESIGN_INGEST_ENABLED, "false");
+  assert.equal(config.env.local.vars.FACET_DESIGN_INGEST_ENABLED, "false");
+  assert.equal(config.env.staging.vars.FACET_DESIGN_INGEST_ENABLED, "false");
+  assert.equal(config.vars.FACET_DESIGN_INGEST_TENANT_MAP_JSON, "{}");
+  assert.equal(config.env.local.vars.FACET_DESIGN_INGEST_TENANT_MAP_JSON, "{}");
+  assert.equal(config.env.staging.vars.FACET_DESIGN_INGEST_TENANT_MAP_JSON, "{}");
   assert.deepEqual(
     config.env.staging.queues.producers.find((queue: { binding: string }) => queue.binding === "NEWO_QUEUE"),
     { binding: "NEWO_QUEUE", queue: "ironwrap-staging-newo-events" },
@@ -251,6 +257,29 @@ test("0029 keeps customer contract acceptance hash-addressed and append-only", a
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
+test("0030 keeps Facet design ingress immutable, hash-addressed, and commercially inert", async () => {
+  const sql = await readFile(new URL("../migrations/0030_facet_design_ingest.sql", import.meta.url), "utf8");
+  const schema = sql.replace(/^--.*$/gm, "");
+  for (const table of ["facet_design_events", "facet_design_ingest_nonces"]) {
+    assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+  }
+  for (const trigger of [
+    "facet_design_events_append_only_update",
+    "facet_design_events_append_only_delete",
+    "facet_design_ingest_nonces_append_only_update",
+    "facet_design_ingest_nonces_append_only_delete",
+  ]) {
+    assert.match(sql, new RegExp(`CREATE TRIGGER IF NOT EXISTS ${trigger}\\b`));
+  }
+  assert.match(sql, /event_type = 'facet\.design\.approved\.v1'/);
+  assert.match(sql, /schema_version = 1/);
+  assert.match(sql, /design_revision_sha256 TEXT NOT NULL/);
+  assert.match(sql, /frozen_evidence_sha256 TEXT NOT NULL/);
+  assert.match(sql, /raw_key TEXT NOT NULL UNIQUE/);
+  assert.doesNotMatch(schema, /quote|contract|acceptance|frappe|payload_json/i);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
 test("the complete D1 migration chain applies cleanly and carries every schedule-ledger invariant", async () => {
   const db = new DatabaseSync(":memory:");
   try {
@@ -258,9 +287,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     const migrations = (await readdir(new URL("../migrations/", import.meta.url)))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 29);
+    assert.equal(migrations.length, 30);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0029_customer_contract_acceptance.sql");
+    assert.equal(migrations.at(-1), "0030_facet_design_ingest.sql");
     for (const migration of migrations) {
       db.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -277,7 +306,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
          SUM(type = 'trigger') AS triggers
        FROM sqlite_master`,
     ).get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 42, indexes: 70, triggers: 53 });
+    assert.deepEqual({ ...counts }, { tables: 44, indexes: 71, triggers: 57 });
 
     const newoTables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'newo_%' ORDER BY name",

@@ -10,8 +10,8 @@
 // truth is in the file, not the vendor UI.
 //
 // Pure, zero-dep, Workers-safe (no DOMParser; the flat attribute grammar is
-// parsed directly). ESX (Xactimate) is a zip wrapper around XML: unzip upstream
-// and feed the XML here; no zip support in v1.
+// parsed directly). ESX (Xactimate) is a zip wrapper around XML: esx.ts opens
+// the wrapper and routes any recognized XML payload here.
 
 export interface GeoPoint { id: string; x: number; y: number; z: number }
 export interface GeoLine {
@@ -88,8 +88,8 @@ export function chainRing(lineIds: string[], lines: Map<string, GeoLine>): strin
   return ring.slice(0, -1);
 }
 
-/** True 3D planar polygon area via Newell's method (works at any pitch/orientation). */
-export function newellArea(ring: string[], points: Map<string, GeoPoint>): number | null {
+/** Unnormalized Newell plane normal of an ordered 3D ring; null on missing points. */
+export function newellNormal(ring: string[], points: Map<string, GeoPoint>): [number, number, number] | null {
   if (ring.length < 3) return null;
   let nx = 0, ny = 0, nz = 0;
   for (let i = 0; i < ring.length; i++) {
@@ -100,7 +100,13 @@ export function newellArea(ring: string[], points: Map<string, GeoPoint>): numbe
     ny += (a.z - b.z) * (a.x + b.x);
     nz += (a.x - b.x) * (a.y + b.y);
   }
-  return Math.sqrt(nx * nx + ny * ny + nz * nz) / 2;
+  return [nx, ny, nz];
+}
+
+/** True 3D planar polygon area via Newell's method (works at any pitch/orientation). */
+export function newellArea(ring: string[], points: Map<string, GeoPoint>): number | null {
+  const n = newellNormal(ring, points);
+  return n ? Math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) / 2 : null;
 }
 
 /** Detect an AppliCad geometry export. Pure. */

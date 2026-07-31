@@ -1,6 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { extractAndScrubMagicLinkToken } from "./magic-link-fragment";
+import {
+  clearPendingMagicLinkToken,
+  extractAndScrubMagicLinkToken,
+  takeMagicLinkTokenFromWindow,
+} from "./magic-link-fragment";
+
+afterEach(() => clearPendingMagicLinkToken());
 
 describe("extractAndScrubMagicLinkToken", () => {
   it("takes the token from the fragment and scrubs it before consumption", () => {
@@ -24,5 +30,16 @@ describe("extractAndScrubMagicLinkToken", () => {
 
     expect(token).toBeUndefined();
     expect(replaceState).not.toHaveBeenCalled();
+  });
+
+  it("keeps an early-scrubbed token available to its route, then permits a later link", () => {
+    window.history.replaceState(null, "", "/portal#token=portal-token");
+
+    expect(takeMagicLinkTokenFromWindow()).toBe("portal-token");
+    expect(window.location.hash).toBe("");
+
+    clearPendingMagicLinkToken();
+    window.history.replaceState(null, "", "/contract-accept#token=acceptance-token");
+    expect(takeMagicLinkTokenFromWindow()).toBe("acceptance-token");
   });
 });

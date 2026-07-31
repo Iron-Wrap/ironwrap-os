@@ -887,6 +887,11 @@ function validLiveEnv() {
     BUS_BASE_URL: "https://bus.ironwrapexteriors.com",
     INGEST_TOKEN: "ingest_4ef90c12a86b43d1ab75f3e8",
     ADMIN_TOKEN: adminToken,
+    FRAPPE_BASE_URL: "https://os.ironwrapexteriors.com",
+    FRAPPE_API_KEY: "launch_proof_key_6a8f21",
+    FRAPPE_API_SECRET: "launch_proof_secret_8d1c4b7a2e",
+    FRAPPE_PROOF_POLL_ATTEMPTS: "3",
+    FRAPPE_PROOF_POLL_INTERVAL_MS: "1000",
     FRAPPE_SITE: "os.ironwrapexteriors.com",
     BACKEND_CONTAINER: "frappe-backend-1",
     RCLONE_CONFIG_R2_TYPE: "s3",
@@ -985,6 +990,19 @@ test("contract mode rejects a committed lead-broker secret", async (t) => {
   assert.equal(result.checks.find((item) => item.id === "contract.env.secret.APPROVAL_BROKER_SHARED_SECRET")?.status, "fail");
 });
 
+test("contract mode requires the launch-proof Frappe configuration inventory", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
+  const envPath = path.join(root, "deploy/env.example");
+  const env = await readFile(envPath, "utf8");
+  await writeFile(envPath, env.replace(/^FRAPPE_API_SECRET=.*\n/m, ""));
+
+  const result = await validateContract({ repoRoot: root });
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.find((item) => item.id === "contract.env.FRAPPE_API_SECRET")?.status, "fail");
+});
+
 test("live-env mode accepts a complete locked production environment", async () => {
   const result = await validateLiveEnv({ env: validLiveEnv(), ...validApprovalPublicKeyOptions() });
   assert.equal(result.ok, true, renderHuman(result));
@@ -1002,6 +1020,25 @@ test("live-env mode requires a concrete realm and dedicated QuickBooks issuer", 
   assert.equal(result.ok, false);
   for (const id of ["live.quickbooks.realm", "live.quickbooks.issuer", "live.secret.separation"]) {
     assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
+  }
+});
+
+test("live-env mode requires dedicated bounded launch-proof credentials", async () => {
+  const env = validLiveEnv();
+  env.FRAPPE_BASE_URL = "https://other.ironwrapexteriors.com";
+  env.FRAPPE_API_SECRET = env.ERPNEXT_API_SECRET;
+  env.FRAPPE_PROOF_POLL_ATTEMPTS = "6";
+  env.FRAPPE_PROOF_POLL_INTERVAL_MS = "5001";
+
+  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
+  assert.equal(result.ok, false);
+  for (const id of [
+    "live.launch_proof.base_url_consistency",
+    "live.secret.separation",
+    "live.launch_proof.poll_attempts",
+    "live.launch_proof.poll_interval",
+  ]) {
+    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail");
   }
 });
 

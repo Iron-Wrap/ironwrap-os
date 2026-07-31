@@ -8,6 +8,7 @@ QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE = (
     "IronWrap QuickBooks Reconciliation Issuer"
 )
 FACET_DESIGN_PROJECTION_SERVICE_ROLE = "IronWrap Facet Design Projection Service"
+LAUNCH_PROOF_READER_ROLE = "IronWrap Launch Proof Reader"
 
 IRONWRAP_ROLES = (
     "IronWrap Owner",
@@ -23,6 +24,7 @@ IRONWRAP_SERVICE_ROLES = (
     CUSTOMER_ACCEPTANCE_SERVICE_ROLE,
     QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE,
     FACET_DESIGN_PROJECTION_SERVICE_ROLE,
+    LAUNCH_PROOF_READER_ROLE,
 )
 ALL_IRONWRAP_ROLES = IRONWRAP_ROLES + IRONWRAP_SERVICE_ROLES
 
@@ -113,6 +115,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Sales": WRITE,
         "IronWrap Estimator": WRITE,
         "IronWrap Support": READ,
+        LAUNCH_PROOF_READER_ROLE: READ,
     },
     "Integration Reconciliation": {
         "IronWrap Finance": WRITE,

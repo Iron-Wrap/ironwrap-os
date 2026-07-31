@@ -500,14 +500,20 @@ separate review-gated `/public/instant-estimate` contract above.
 
 ```bash
 node tools/launch-proof.mjs
-BUS_BASE_URL=... INGEST_TOKEN=... ADMIN_TOKEN=... node tools/launch-proof.mjs --execute > launch-proof-evidence.json
+BUS_BASE_URL=... INGEST_TOKEN=... ADMIN_TOKEN=... FRAPPE_BASE_URL=... FRAPPE_API_KEY=... FRAPPE_API_SECRET=... node tools/launch-proof.mjs --execute > launch-proof-evidence.json
 ```
 
-The dry run makes no network request. In execute mode, the runner proves `/health` and every
-`/ready` check before it creates a fixture; then it verifies website intake, estimator idempotency,
-admin read-back, reconciliation, and a fresh/reconciled `/admin/status` with no dead-letter,
-stuck, Frappe, replay, or recent-audit failure. It emits only redacted evidence and response
-request ids; do not add tokens or raw responses to the artifact.
+The dry run makes no network request. Execute mode refuses to send even a synthetic POST unless
+the bounded Frappe proof configuration is complete. It then proves `/health` and every `/ready`
+check before it creates a fixture; verifies website intake, estimator idempotency, admin read-back,
+reconciliation, and a fresh/reconciled `/admin/status`; and finally polls the GET-only synthetic
+Frappe correlation endpoint at most five times. The artifact contains only redacted evidence and
+response request ids; do not add tokens, raw Frappe responses, or document data to it.
+
+A matched synthetic Frappe projection is evidence only: it does not retire JobNimbus, GHL, or any
+other bridge. A missing, mismatched, timed-out, or unavailable projection must return
+`bridge_keep_enabled=true` and `reconciliation_required=true`; reconcile it before any cutover
+decision.
 
 Archive `launch-proof-evidence.json` with the release commit and image digest. Verify the fixture
 in D1/R2 and in Frappe as Lead Envelope, Roofing Customer/Property, Roof Job, and seven Production

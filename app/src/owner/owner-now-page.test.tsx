@@ -1,18 +1,24 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SessionProvider } from "../auth/session-context";
 import type { AuthenticatedSession } from "../auth/session";
-import type { MeasurementIntakeOwnerExceptionsResponse, OwnerNowResponse } from "./owner-contracts";
-import { loadMeasurementIntakeExceptions, loadOwnerNow } from "./owner-api";
+import type {
+  MeasurementIntakeOwnerExceptionsResponse,
+  OwnerNowResponse,
+  OwnerRuntimeResponse,
+} from "./owner-contracts";
+import { loadMeasurementIntakeExceptions, loadOwnerNow, loadOwnerRuntime } from "./owner-api";
 import { OwnerNowPage } from "./owner-now-page";
 import { buildDecisionLanes, formatOwnerDate, validJobId } from "./owner-now-utils";
 
 vi.mock("./owner-api", () => ({
   loadOwnerNow: vi.fn(),
   loadMeasurementIntakeExceptions: vi.fn(),
+  loadOwnerRuntime: vi.fn(),
 }));
 vi.mock("@tanstack/react-router", () => ({
   Link: ({
@@ -237,6 +243,49 @@ function measurementExceptionsModel(): MeasurementIntakeOwnerExceptionsResponse 
   };
 }
 
+function ownerRuntimeModel(): OwnerRuntimeResponse {
+  return {
+    version: 1,
+    read_model_generated_at: "2026-07-10T12:01:00.000Z",
+    status: "attention",
+    readiness: {
+      status: "not_ready",
+      checks: [
+        { id: "owned_persistence", ok: true },
+        { id: "queue", ok: true },
+        { id: "core_auth", ok: true },
+        { id: "provider_delivery", ok: true },
+        { id: "office_bff", ok: false },
+        { id: "customer_portal", ok: true },
+        { id: "production_schedule", ok: true },
+        { id: "public_estimate", ok: true },
+        { id: "newo", ok: true },
+      ],
+    },
+    operations: {
+      status: "degraded",
+      heartbeat: null,
+      counts: {
+        open_dead_letters: 1,
+        pending: 0,
+        stuck: 2,
+        frappe_errors: 0,
+        replay_failed: 0,
+        replay_stuck: 1,
+      },
+      audit_failures_observed: 1,
+      audit_failure_window_hours: 24,
+      quickbooks_receipts: {
+        available: false,
+        fresh: null,
+        age_seconds: null,
+        events_count: null,
+        replay_count: null,
+      },
+    },
+  };
+}
+
 function renderOwner({
   session = ownerSession,
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
@@ -257,6 +306,7 @@ describe("OwnerNowPage", () => {
   beforeEach(() => {
     vi.mocked(loadOwnerNow).mockResolvedValue(ownerNowModel());
     vi.mocked(loadMeasurementIntakeExceptions).mockResolvedValue(measurementExceptionsModel());
+    vi.mocked(loadOwnerRuntime).mockResolvedValue(ownerRuntimeModel());
   });
 
   it("turns proof-safe exceptions into a decision board without fabricating actions or delivery", async () => {
@@ -432,6 +482,21 @@ describe("OwnerNowPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Now" })).toBeVisible();
     expect(loadOwnerNow).toHaveBeenCalledOnce();
+  });
+
+  it("runs the bounded runtime read only after the owner asks for it", async () => {
+    const user = userEvent.setup();
+    renderOwner();
+
+    await screen.findByRole("button", { name: "Check runtime truth" });
+    expect(loadOwnerRuntime).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Check runtime truth" }));
+
+    expect(await screen.findByText("Open dead letters")).toBeVisible();
+    expect(screen.getByText("Audit failures observed (24h, max 20)")).toBeVisible();
+    expect(screen.getByText("Readiness attention: office bff.")).toBeVisible();
+    expect(loadOwnerRuntime).toHaveBeenCalledOnce();
   });
 
   it("keeps lane order, dates, and job links deterministic and defensive", () => {

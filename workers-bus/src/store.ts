@@ -42,6 +42,42 @@ export interface QuickBooksWebhookReceipt {
   replay_count: number;
 }
 
+/**
+ * A webhook receipt proves delivery only.  Projection is a separately durable
+ * per-entity concern: pending rows are retried, projected rows are never sent
+ * again, and rejected rows remain auditable without reaching Frappe.
+ */
+export type QuickBooksProjectionStatus = "pending" | "projected" | "rejected";
+
+export interface QuickBooksProjectionOutbox {
+  payload_hash: string;
+  event_index: number;
+  realm_id: string;
+  entity_type: string;
+  entity_id: string;
+  operation: string;
+  projection_status: QuickBooksProjectionStatus;
+  attempt_count: number;
+  last_error: string | null;
+  last_attempt_at: string | null;
+  next_attempt_at: string;
+  escalated_at: string | null;
+  lease_token: string | null;
+  lease_expires_at: string | null;
+  projected_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NewQuickBooksProjectionOutbox {
+  event_index: number;
+  realm_id: string;
+  entity_type: string;
+  entity_id: string;
+  operation: string;
+  projection_status: QuickBooksProjectionStatus;
+}
+
 export type LeadAckOutcome = "provider_accepted" | "attempt_failed" | "no_eligible_channel";
 
 export interface LeadAckReceipt {
@@ -408,6 +444,52 @@ export async function insertQuickBooksWebhookReceipt(
   ).run();
 }
 
+/**
+ * Atomically anchor the signed payload receipt and every entity's projection
+ * intent.  A later webhook retry must never infer completion merely because a
+ * receipt exists.
+ */
+export async function insertQuickBooksWebhookReceiptWithProjectionOutbox(
+  env: Env,
+  receipt: Omit<QuickBooksWebhookReceipt, "replay_count">,
+  events: NewQuickBooksProjectionOutbox[],
+): Promise<void> {
+  const now = receipt.first_seen_at;
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO quickbooks_webhook_receipts
+         (payload_hash, first_seen_at, last_seen_at, envelope_id, raw_key, events_count, replay_count)
+       VALUES (?,?,?,?,?,?,0)`,
+    ).bind(
+      receipt.payload_hash,
+      receipt.first_seen_at,
+      receipt.last_seen_at,
+      receipt.envelope_id,
+      receipt.raw_key,
+      receipt.events_count,
+    ),
+    ...events.map((event) => env.DB.prepare(
+      `INSERT INTO quickbooks_projection_outbox
+         (payload_hash, event_index, realm_id, entity_type, entity_id, operation, projection_status,
+          attempt_count, last_error, last_attempt_at, next_attempt_at, escalated_at,
+          lease_token, lease_expires_at, projected_at,
+          created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,0,NULL,NULL,?,NULL,NULL,NULL,NULL,?,?)`,
+    ).bind(
+      receipt.payload_hash,
+      event.event_index,
+      event.realm_id,
+      event.entity_type,
+      event.entity_id,
+      event.operation,
+      event.projection_status,
+      now,
+      now,
+      now,
+    )),
+  ]);
+}
+
 export async function recordQuickBooksWebhookReplay(env: Env, payloadHash: string): Promise<void> {
   await env.DB.prepare(
     `UPDATE quickbooks_webhook_receipts
@@ -416,16 +498,145 @@ export async function recordQuickBooksWebhookReplay(env: Env, payloadHash: strin
   ).bind(nowIso(), payloadHash).run();
 }
 
+/** Only due, expired-or-unleased pending items are eligible for a projection attempt. */
+export async function listReadyQuickBooksProjectionOutbox(
+  env: Env,
+  payloadHash: string,
+  now: string,
+): Promise<QuickBooksProjectionOutbox[]> {
+  const result = await env.DB.prepare(
+    `SELECT * FROM quickbooks_projection_outbox
+     WHERE payload_hash = ? AND projection_status = 'pending'
+       AND next_attempt_at <= ?
+       AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+     ORDER BY event_index ASC`,
+  ).bind(payloadHash, now, now).all<QuickBooksProjectionOutbox>();
+  return result.results ?? [];
+}
+
+/** The frequent cron recovers due work even when the provider stops redelivering. */
+export async function listDueQuickBooksProjectionOutbox(
+  env: Env,
+  now: string,
+  limit: number,
+): Promise<QuickBooksProjectionOutbox[]> {
+  const result = await env.DB.prepare(
+    `SELECT * FROM quickbooks_projection_outbox
+     WHERE projection_status = 'pending' AND next_attempt_at <= ?
+       AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+     ORDER BY next_attempt_at ASC, updated_at ASC, payload_hash ASC, event_index ASC
+     LIMIT ?`,
+  ).bind(now, now, limit).all<QuickBooksProjectionOutbox>();
+  return result.results ?? [];
+}
+
+/** A conditional update gives concurrent Intuit redeliveries one projection owner. */
+export async function claimQuickBooksProjectionOutbox(
+  env: Env,
+  item: Pick<QuickBooksProjectionOutbox, "payload_hash" | "event_index">,
+  leaseToken: string,
+  now: string,
+  leaseExpiresAt: string,
+): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `UPDATE quickbooks_projection_outbox
+     SET lease_token = ?, lease_expires_at = ?, attempt_count = attempt_count + 1,
+         last_attempt_at = ?, last_error = NULL, updated_at = ?
+     WHERE payload_hash = ? AND event_index = ? AND projection_status = 'pending'
+       AND next_attempt_at <= ?
+       AND (lease_expires_at IS NULL OR lease_expires_at <= ?)`,
+  ).bind(
+    leaseToken,
+    leaseExpiresAt,
+    now,
+    now,
+    item.payload_hash,
+    item.event_index,
+    now,
+    now,
+  ).run();
+  return Number(result.meta.changes ?? 0) === 1;
+}
+
+export async function markQuickBooksProjectionProjected(
+  env: Env,
+  item: Pick<QuickBooksProjectionOutbox, "payload_hash" | "event_index">,
+  leaseToken: string,
+  now: string,
+): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `UPDATE quickbooks_projection_outbox
+     SET projection_status = 'projected', lease_token = NULL, lease_expires_at = NULL,
+         last_error = NULL, projected_at = ?, updated_at = ?
+     WHERE payload_hash = ? AND event_index = ? AND projection_status = 'pending' AND lease_token = ?`,
+  ).bind(now, now, item.payload_hash, item.event_index, leaseToken).run();
+  return Number(result.meta.changes ?? 0) === 1;
+}
+
+/** A non-retryable projection rejection is retained for operator follow-up. */
+export async function markQuickBooksProjectionRejected(
+  env: Env,
+  item: Pick<QuickBooksProjectionOutbox, "payload_hash" | "event_index">,
+  leaseToken: string,
+  error: string,
+  now: string,
+): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `UPDATE quickbooks_projection_outbox
+     SET projection_status = 'rejected', lease_token = NULL, lease_expires_at = NULL,
+         last_error = ?, updated_at = ?
+     WHERE payload_hash = ? AND event_index = ? AND projection_status = 'pending' AND lease_token = ?`,
+  ).bind(error, now, item.payload_hash, item.event_index, leaseToken).run();
+  return Number(result.meta.changes ?? 0) === 1;
+}
+
+/** Leave the item pending after a transient Frappe/D1 failure; no terminal ack is implied. */
+export async function releaseQuickBooksProjectionOutbox(
+  env: Env,
+  item: Pick<QuickBooksProjectionOutbox, "payload_hash" | "event_index">,
+  leaseToken: string,
+  error: string,
+  now: string,
+  nextAttemptAt: string,
+  escalate: boolean,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE quickbooks_projection_outbox
+     SET lease_token = NULL, lease_expires_at = NULL, last_error = ?, next_attempt_at = ?,
+         escalated_at = CASE WHEN ? = 1 AND escalated_at IS NULL THEN ? ELSE escalated_at END,
+         updated_at = ?
+     WHERE payload_hash = ? AND event_index = ? AND projection_status = 'pending' AND lease_token = ?`,
+  ).bind(
+    error,
+    nextAttemptAt,
+    escalate ? 1 : 0,
+    now,
+    now,
+    item.payload_hash,
+    item.event_index,
+    leaseToken,
+  ).run();
+}
+
+export async function countPendingQuickBooksProjectionOutbox(env: Env, payloadHash: string): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS pending_count FROM quickbooks_projection_outbox
+     WHERE payload_hash = ? AND projection_status = 'pending'`,
+  ).bind(payloadHash).first<{ pending_count: number }>();
+  return Number(row?.pending_count ?? 0);
+}
+
 /** Non-mutating D1/schema probe used by the public readiness route. */
 export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
   const artifacts = await env.DB.prepare(
     `SELECT
        COALESCE(SUM(CASE WHEN type = 'table' AND name IN
          ('envelopes','audit_log','dead_letter','source_counts','heartbeat',
-          'quickbooks_webhook_receipts','dedup_claims','replay_requests','app_users',
+          'quickbooks_webhook_receipts','quickbooks_projection_outbox','dedup_claims','replay_requests','app_users',
           'app_magic_links','app_sessions','app_auth_throttles','app_auth_audit',
-          'field_actions','field_action_media','app_action_throttles','app_device_pairings',
+          'field_actions','field_action_media','field_work_package_actions','app_action_throttles','app_device_pairings',
           'app_devices','lead_ack_receipts','approval_requests','approval_request_events',
+          'governed_transitions','governed_transition_outbox','governed_transition_outbox_events',
           'quote_revision_approval_requests','quote_revision_approval_request_events',
           'production_schedule_approval_requests','production_schedule_approval_request_events',
           'customer_portal_links','customer_portal_access_throttles',
@@ -435,16 +646,20 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
        COALESCE(SUM(CASE WHEN type = 'index' AND name IN
          ('idx_dead_letter_open_envelope','idx_audit_result_ts','idx_envelopes_operational',
           'idx_envelopes_erpnext_error_open','idx_heartbeat_ran_at','idx_qb_receipts_last_seen',
+          'idx_qb_projection_outbox_pending',
           'idx_audit_run_id','idx_replay_requests_status_updated',
           'idx_app_users_tenant_role_active','idx_app_magic_links_user_expiry',
           'idx_app_sessions_user_expiry','idx_app_auth_throttles_expiry',
           'idx_app_auth_audit_tenant_created','idx_field_actions_job_created',
           'idx_field_actions_recovery','idx_field_action_media_evidence',
+          'idx_field_work_package_actions_job_created','idx_field_work_package_actions_recovery',
           'idx_app_action_throttles_expiry','idx_app_sessions_device_active',
           'idx_app_device_pairings_user_expiry','idx_app_devices_tenant_user_active',
           'idx_lead_ack_receipts_envelope_observed','idx_approval_requests_tenant_state_updated',
           'idx_approval_requests_state_lease','idx_approval_requests_pending_expiry',
           'idx_approval_request_events_tenant_created',
+          'idx_governed_transitions_tenant_created','idx_governed_transition_outbox_pending',
+          'idx_governed_transition_outbox_events_tenant_created',
           'idx_quote_revision_approvals_tenant_state_updated',
           'idx_quote_revision_approvals_state_lease','idx_quote_revision_approvals_pending_expiry',
           'idx_quote_revision_approvals_active_target',
@@ -472,6 +687,16 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'append_approval_request_transition_event','append_approval_request_reconciliation_event',
           'prevent_approval_request_event_update','prevent_approval_request_event_delete',
           'prevent_approval_request_delete',
+          'prevent_governed_transition_update','prevent_governed_transition_delete',
+          'enforce_governed_transition_outbox_update','prevent_governed_transition_outbox_delete',
+          'append_governed_transition_outbox_intent_event',
+          'append_governed_transition_outbox_state_event',
+          'renew_approval_execution_lease_from_governed_outbox_claim',
+          'prevent_governed_transition_outbox_event_update',
+          'prevent_governed_transition_outbox_event_delete',
+          'enqueue_governed_transition_from_approval_claim',
+          'project_governed_transition_outbox_terminal',
+          'project_governed_transition_outbox_reconciliation',
           'prevent_quote_revision_approval_binding_rewrite',
           'enforce_quote_revision_approval_transition',
           'enforce_quote_revision_approval_reconciliation',
@@ -502,6 +727,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             s.day AS source_day, s.channel, s.count AS source_count,
             h.ran_at, h.reconciled, h.dead_letter_open,
             q.last_seen_at, q.events_count, q.replay_count,
+            qpo.projection_status AS quickbooks_projection_status,
+            qpo.attempt_count AS quickbooks_projection_attempt_count,
             lar.receipt_id AS lead_ack_receipt_id, lar.outcome AS lead_ack_outcome,
             c.dedup_key,
             rr.run_id AS replay_run_id, rr.selection AS replay_selection,
@@ -515,9 +742,15 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             aa.event AS auth_audit_event, aa.outcome AS auth_audit_outcome,
             fa.device_action_id AS field_action_id, fa.payload_hash AS field_payload_hash,
             fam.attachment_id AS field_attachment_id, fam.checksum_sha256 AS field_media_checksum,
+            fwpa.device_action_id AS field_work_package_action_id,
+            fwpa.work_package_id AS field_work_package_id,
             aat.scope AS action_throttle_scope, aat.attempts AS action_throttle_attempts,
             ar.approval_request_id, ar.state AS approval_state, ar.run_id AS approval_run_id,
             are.event_type AS approval_event_type, are.request_version AS approval_event_version,
+            gt.transition_id AS governed_transition_id, gt.subject_ref AS governed_transition_subject_ref,
+            gto.outbox_id AS governed_outbox_id, gto.state AS governed_outbox_state,
+            gto.attempt_count AS governed_outbox_attempt_count,
+            gtoe.event_type AS governed_outbox_event_type,
             qrar.quote_revision_approval_id,
             qrar.state AS quote_revision_approval_state,
             qrar.run_id AS quote_revision_approval_run_id,
@@ -555,6 +788,7 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN source_counts s ON 1 = 0
      LEFT JOIN heartbeat h ON 1 = 0
      LEFT JOIN quickbooks_webhook_receipts q ON 1 = 0
+     LEFT JOIN quickbooks_projection_outbox qpo ON 1 = 0
      LEFT JOIN lead_ack_receipts lar ON 1 = 0
      LEFT JOIN dedup_claims c ON 1 = 0
      LEFT JOIN replay_requests rr ON 1 = 0
@@ -567,9 +801,13 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN app_auth_audit aa ON 1 = 0
      LEFT JOIN field_actions fa ON 1 = 0
      LEFT JOIN field_action_media fam ON 1 = 0
+     LEFT JOIN field_work_package_actions fwpa ON 1 = 0
      LEFT JOIN app_action_throttles aat ON 1 = 0
      LEFT JOIN approval_requests ar ON 1 = 0
      LEFT JOIN approval_request_events are ON 1 = 0
+     LEFT JOIN governed_transitions gt ON 1 = 0
+     LEFT JOIN governed_transition_outbox gto ON 1 = 0
+     LEFT JOIN governed_transition_outbox_events gtoe ON 1 = 0
      LEFT JOIN quote_revision_approval_requests qrar ON 1 = 0
      LEFT JOIN quote_revision_approval_request_events qrare ON 1 = 0
      LEFT JOIN production_schedule_approval_requests psar ON 1 = 0
@@ -585,9 +823,9 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN newo_reconciliation_runs nrr ON 1 = 0
      LIMIT 0`,
   ).all();
-  return Number(artifacts?.table_count ?? 0) === 34 &&
-    Number(artifacts?.index_count ?? 0) === 50 &&
-    Number(artifacts?.trigger_count ?? 0) === 31;
+  return Number(artifacts?.table_count ?? 0) === 39 &&
+    Number(artifacts?.index_count ?? 0) === 56 &&
+    Number(artifacts?.trigger_count ?? 0) === 43;
 }
 
 /** Envelopes still pending past the threshold — the retry sweep re-drives these. */

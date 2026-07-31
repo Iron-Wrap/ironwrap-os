@@ -36,16 +36,30 @@ import {
   retryMeasurementIntakeReceipts,
 } from "./measurements.ts";
 import { handleEstimateIngest, retryEstimateErpNextSyncs } from "./estimates.ts";
-import { handleQuickbooksWebhook } from "./quickbooks.ts";
+import { handleFacetDesignIngest } from "./facet-design-ingest.ts";
+import {
+  handleQuickbooksWebhook,
+  recoverDueQuickBooksProjections,
+} from "./quickbooks.ts";
+import { reconcileFacetDesignFrappeProjections } from "./facet-design-projection.ts";
 import {
   handlePublicInstantEstimate,
   prunePublicEstimateRateLimits,
   type PublicEstimatorEnv,
 } from "./public-estimator.ts";
 import { ensureJobFolder, googleConfigured } from "./google.ts";
-import { handleAdminAppUserProvision, handleAppApi } from "./app-api.ts";
+import {
+  handleAdminAppUserProvision,
+  handleAppApi,
+  recoverPendingLeadTriageOutbox,
+} from "./app-api.ts";
 import { pruneAuthRecords } from "./app-auth-store.ts";
 import { handleCustomerPortalResolve } from "./customer-portal.ts";
+import {
+  handleCustomerPortalAcceptanceChallenge,
+  handleCustomerPortalAcceptanceConfirm,
+  reconcileCustomerContractAcceptanceAttempts,
+} from "./customer-contract-acceptance.ts";
 import { pruneCustomerPortalRecords } from "./customer-portal-store.ts";
 import {
   listMeasurementIntakeExceptions,
@@ -72,6 +86,22 @@ type BusQueueMessage = { envelope_id: string } | NewoQueueMessage;
 
 const MAX_BODY_BYTES = 256 * 1024;
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
+
+async function recoverLeadTriageOutboxThenExpireLeases(env: Env): Promise<void> {
+  try {
+    await recoverPendingLeadTriageOutbox(env);
+  } catch (error) {
+    log({ at: "approval_outbox_recovery", error: String(error) });
+  }
+  // A broker timeout must never trigger a second write. Recovery runs first
+  // only for a provably never-attempted outbox; every other lease expires into
+  // owner-visible reconciliation work.
+  try {
+    await markExpiredExecutionLeases(env, new Date().toISOString());
+  } catch (error) {
+    log({ at: "approval_lease_sweep", error: String(error) });
+  }
+}
 const escapeHtml = (value: string): string => value
   .replace(/&/g, "&amp;")
   .replace(/</g, "&lt;")
@@ -168,12 +198,18 @@ export default {
           retryEstimateErpNextSyncs(env).catch((error) =>
             log({ at: "estimate_erpnext_retry", error: String(error) }),
           ),
-          // A broker timeout must never trigger an invisible second Frappe write.
-          // The durable request becomes owner-visible reconciliation work instead.
-          markExpiredExecutionLeases(env, new Date().toISOString()).catch(
-            (error) =>
-              log({ at: "approval_lease_sweep", error: String(error) }),
+          recoverDueQuickBooksProjections(env).then((result) => {
+            if (result.due > 0) log({ at: "quickbooks_projection_recovery", ...result });
+          }).catch((error) =>
+            log({ at: "quickbooks_projection_recovery", error: String(error) }),
           ),
+          reconcileCustomerContractAcceptanceAttempts(env).catch((error) =>
+            log({ at: "customer_contract_acceptance_reconcile", error: String(error) }),
+          ),
+          reconcileFacetDesignFrappeProjections(env).catch((error) =>
+            log({ at: "facet_design_frappe_projection_reconcile", error: String(error) }),
+          ),
+          recoverLeadTriageOutboxThenExpireLeases(env),
           // Quote-revision execution has an independent ledger and broker. Its
           // lease therefore becomes explicit reconciliation work independently of
           // the lead-triage authority.
@@ -237,6 +273,18 @@ async function routeRequest(
       env as import("./app-types.ts").AppEnv,
     );
   }
+  if (url.pathname === "/api/v1/customer-portal/acceptance/challenge") {
+    return await handleCustomerPortalAcceptanceChallenge(
+      req,
+      env as import("./app-types.ts").AppEnv,
+    );
+  }
+  if (url.pathname === "/api/v1/customer-portal/acceptance/confirm") {
+    return await handleCustomerPortalAcceptanceConfirm(
+      req,
+      env as import("./app-types.ts").AppEnv,
+    );
+  }
   if (url.pathname.startsWith("/api/v1/"))
     return await handleAppApi(req, env, ctx);
   // Jobsite-photo intake (Phase 3) — checked before the generic /ingest/:source match.
@@ -278,6 +326,9 @@ async function routeRequest(
         req.headers.get("x-idempotency-key"),
     );
   }
+  // Facet has a separately provisioned HMAC authority. It must never fall through to the broad
+  // lead-ingest bearer token route, and this receipt has no Frappe projection in this slice.
+  if (url.pathname === "/ingest/facet-design") return await handleFacetDesignIngest(req, env);
   const ingest = url.pathname.match(/^\/ingest\/([a-z]+)$/);
   if (req.method === "POST" && ingest) {
     if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN))

@@ -338,7 +338,7 @@ async function stageD1Script(root, source) {
 
 const REQUIRED_D1_TABLES = [
   "envelopes", "audit_log", "dead_letter", "source_counts", "heartbeat",
-  "quickbooks_webhook_receipts", "dedup_claims", "replay_requests",
+  "quickbooks_webhook_receipts", "quickbooks_projection_outbox", "dedup_claims", "replay_requests",
   "field_actions", "field_action_media",
   "app_users", "app_magic_links", "app_sessions", "app_auth_throttles", "app_auth_audit",
   "app_action_throttles", "app_device_pairings", "app_devices", "lead_ack_receipts",
@@ -852,6 +852,12 @@ function validLiveEnv() {
     ERPNEXT_API_KEY: "frappe_key_8c921",
     ERPNEXT_API_SECRET: "frappe_secret_d1a9f80c42",
     ERPNEXT_INTEGRATION_USER: "worker@ironwrapexteriors.com",
+    QB_WEBHOOK_TOKEN: "quickbooks_webhook_4c8f0b2d6a9137e5",
+    QB_EXPECTED_REALM_ID: "123456789012345",
+    QB_RECONCILIATION_ISSUER_USER: "quickbooks-issuer@ironwrapexteriors.com",
+    QB_RECONCILIATION_ISSUER_API_KEY: "quickbooks_issuer_key_8c921",
+    QB_RECONCILIATION_ISSUER_API_SECRET: "quickbooks_issuer_secret_d1a9f80c42",
+    IRONWRAP_QUICKBOOKS_RECONCILIATION_ISSUER_USER: "quickbooks-issuer@ironwrapexteriors.com",
     PUBLIC_ESTIMATE_ENABLED: "true",
     PUBLIC_ESTIMATE_ALLOWED_ORIGINS: "https://bus.ironwrapexteriors.com",
     PUBLIC_ESTIMATE_ALLOWED_BRANDS: "ironwrap,iroof",
@@ -881,6 +887,11 @@ function validLiveEnv() {
     BUS_BASE_URL: "https://bus.ironwrapexteriors.com",
     INGEST_TOKEN: "ingest_4ef90c12a86b43d1ab75f3e8",
     ADMIN_TOKEN: adminToken,
+    FRAPPE_BASE_URL: "https://os.ironwrapexteriors.com",
+    FRAPPE_API_KEY: "launch_proof_key_6a8f21",
+    FRAPPE_API_SECRET: "launch_proof_secret_8d1c4b7a2e",
+    FRAPPE_PROOF_POLL_ATTEMPTS: "3",
+    FRAPPE_PROOF_POLL_INTERVAL_MS: "1000",
     FRAPPE_SITE: "os.ironwrapexteriors.com",
     BACKEND_CONTAINER: "frappe-backend-1",
     RCLONE_CONFIG_R2_TYPE: "s3",
@@ -979,10 +990,56 @@ test("contract mode rejects a committed lead-broker secret", async (t) => {
   assert.equal(result.checks.find((item) => item.id === "contract.env.secret.APPROVAL_BROKER_SHARED_SECRET")?.status, "fail");
 });
 
+test("contract mode requires the launch-proof Frappe configuration inventory", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
+  const envPath = path.join(root, "deploy/env.example");
+  const env = await readFile(envPath, "utf8");
+  await writeFile(envPath, env.replace(/^FRAPPE_API_SECRET=.*\n/m, ""));
+
+  const result = await validateContract({ repoRoot: root });
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.find((item) => item.id === "contract.env.FRAPPE_API_SECRET")?.status, "fail");
+});
+
 test("live-env mode accepts a complete locked production environment", async () => {
   const result = await validateLiveEnv({ env: validLiveEnv(), ...validApprovalPublicKeyOptions() });
   assert.equal(result.ok, true, renderHuman(result));
   assert.equal(result.summary.failed, 0);
+});
+
+test("live-env mode requires a concrete realm and dedicated QuickBooks issuer", async () => {
+  const env = validLiveEnv();
+  env.QB_EXPECTED_REALM_ID = "not-a-realm";
+  env.QB_RECONCILIATION_ISSUER_USER = env.ERPNEXT_INTEGRATION_USER;
+  env.IRONWRAP_QUICKBOOKS_RECONCILIATION_ISSUER_USER = env.ERPNEXT_INTEGRATION_USER;
+  env.QB_RECONCILIATION_ISSUER_API_KEY = env.ERPNEXT_API_KEY;
+
+  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
+  assert.equal(result.ok, false);
+  for (const id of ["live.quickbooks.realm", "live.quickbooks.issuer", "live.secret.separation"]) {
+    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail", id);
+  }
+});
+
+test("live-env mode requires dedicated bounded launch-proof credentials", async () => {
+  const env = validLiveEnv();
+  env.FRAPPE_BASE_URL = "https://other.ironwrapexteriors.com";
+  env.FRAPPE_API_SECRET = env.ERPNEXT_API_SECRET;
+  env.FRAPPE_PROOF_POLL_ATTEMPTS = "6";
+  env.FRAPPE_PROOF_POLL_INTERVAL_MS = "5001";
+
+  const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
+  assert.equal(result.ok, false);
+  for (const id of [
+    "live.launch_proof.base_url_consistency",
+    "live.secret.separation",
+    "live.launch_proof.poll_attempts",
+    "live.launch_proof.poll_interval",
+  ]) {
+    assert.equal(result.checks.find((item) => item.id === id)?.status, "fail");
+  }
 });
 
 test("live-env mode accepts an explicitly disabled public estimator without its enable-time secrets", async () => {
@@ -1448,6 +1505,14 @@ test("D1 backup fails before upload when the field Work Package action ledger is
   await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
 });
 
+test("D1 backup fails before upload when the durable QuickBooks projection outbox is missing", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { missingTable: "quickbooks_projection_outbox" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required production table: quickbooks_projection_outbox/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
 test("D1 backup fails before upload when an invariant trigger is missing", async (t) => {
   const mock = await mockD1BackupEnvironment(t, { missingTrigger: "prevent_lead_ack_receipts_delete" });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
@@ -1621,6 +1686,14 @@ test("D1 recovery rejects an export missing the field Work Package action ledger
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /missing required production table: field_work_package_actions/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
+test("D1 recovery rejects an export missing the durable QuickBooks projection outbox", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { missingTable: "quickbooks_projection_outbox" });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required production table: quickbooks_projection_outbox/);
   await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
 });
 

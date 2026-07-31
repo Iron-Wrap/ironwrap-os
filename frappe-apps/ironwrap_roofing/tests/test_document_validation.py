@@ -8,6 +8,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from ironwrap_roofing.access_control import (
+    CUSTOMER_ACCEPTANCE_SERVICE_ROLE,
+    FACET_DESIGN_PROJECTION_SERVICE_ROLE,
+)
+
 
 ADAPTER_PATH = (
     Path(__file__).resolve().parents[1] / "ironwrap_roofing" / "document_validation.py"
@@ -36,6 +41,30 @@ EVIDENCE_ITEM_CONTROLLER_PATH = (
     / "evidence_item"
     / "evidence_item.py"
 )
+INTEGRATION_RECONCILIATION_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "integration_reconciliation"
+    / "integration_reconciliation.py"
+)
+CUSTOMER_QUOTE_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "customer_quote"
+    / "customer_quote.py"
+)
+CONTRACT_ACCEPTANCE_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "contract_acceptance"
+    / "contract_acceptance.py"
+)
 PROPOSAL_EVIDENCE_PACK_CONTROLLER_PATH = (
     Path(__file__).resolve().parents[1]
     / "ironwrap_roofing"
@@ -60,9 +89,45 @@ WORK_PACKAGE_EVENT_CONTROLLER_PATH = (
     / "work_package_event"
     / "work_package_event.py"
 )
+CONTROLLED_ITEM_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "controlled_item"
+    / "controlled_item.py"
+)
+MATERIAL_LOT_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "material_lot"
+    / "material_lot.py"
+)
+NONCONFORMANCE_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "nonconformance"
+    / "nonconformance.py"
+)
+SHOP_ORDER_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "shop_order"
+    / "shop_order.py"
+)
 
 
 class FakeValidationError(Exception):
+    pass
+
+
+class FakePermissionError(Exception):
     pass
 
 
@@ -95,8 +160,53 @@ def gate_evidence_rows(gates: list[dict]) -> list[dict]:
     ]
 
 
+def current_crew_authority(crew_profile_id: str) -> dict:
+    return {
+        "name": crew_profile_id,
+        "crew_profile_id": crew_profile_id,
+        "status": "Active",
+        "crew_type": "Internal",
+        "competency_status": "Current",
+        "competency_checked_at": "2026-07-01 08:00:00",
+        "competency_expiry": "2026-12-31",
+        "equipment_status": "Safe",
+        "equipment_checked_at": "2026-07-01 08:00:00",
+        "equipment_expiry": "2026-12-31",
+        "wcb_status": "Not Required",
+        "wcb_checked_at": "2026-07-01 08:00:00",
+        "wcb_expiry": "",
+        "active_stop": 0,
+        "active_stop_at": "",
+        "active_stop_reason": "",
+    }
+
+
+def current_compliance_authorities(roof_job: str) -> list[dict]:
+    return [
+        {
+            "name": f"compliance:{gate.lower()}",
+            "compliance_record_id": f"compliance:{gate.lower()}",
+            "roof_job": roof_job,
+            "required_before_gate": gate,
+            "status": "Passed",
+            "effective_date": "2026-01-01",
+            "expiry_date": "2026-12-31",
+            "supersedes": "",
+        }
+        for gate in ("Crew", "Safety", "Access")
+    ]
+
+
 class DocumentValidationAdapterTests(unittest.TestCase):
-    def load_adapter(self, *, values=None, counts=None, rows=None):
+    def load_adapter(
+        self,
+        *,
+        values=None,
+        counts=None,
+        rows=None,
+        session_user="owner@example.com",
+        roles=None,
+    ):
         values = values or {}
         counts = counts or {}
         rows = rows or {}
@@ -104,6 +214,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         lock_calls = []
         frappe_module = types.ModuleType("frappe")
         frappe_module.ValidationError = FakeValidationError
+        frappe_module.PermissionError = FakePermissionError
 
         def sql(query, values, *, as_dict):
             normalized = " ".join(query.split())
@@ -128,6 +239,19 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 return [
                     dict(row)
                     for row in rows.get("Job Assignment", [])
+                    if row.get("roof_job") == values[0]
+                ]
+            if "`tabCrew Profile`" in normalized:
+                requested_names = set(values)
+                return [
+                    dict(row)
+                    for row in rows.get("Crew Profile", [])
+                    if row.get("name") in requested_names
+                ]
+            if "`tabJob Compliance Record`" in normalized:
+                return [
+                    dict(row)
+                    for row in rows.get("Job Compliance Record", [])
                     if row.get("roof_job") == values[0]
                 ]
             if "`tabSafety Plan`" in normalized:
@@ -158,6 +282,10 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         frappe_module.utils = types.SimpleNamespace(
             now_datetime=lambda: "2026-07-10 10:00:00"
         )
+        frappe_module.session = types.SimpleNamespace(user=session_user)
+        frappe_module.get_roles = lambda _user: (
+            roles if roles is not None else ["IronWrap Owner"]
+        )
 
         def get_all(doctype, *, filters, fields):
             calls.append((doctype, filters, fields))
@@ -180,6 +308,92 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         adapter, _ = self.load_adapter()
         with self.assertRaisesRegex(FakeValidationError, "required_fields"):
             adapter.validate_business_document(FakeDocument({}), "lead_envelope")
+
+    def test_quickbooks_reconciliation_creation_requires_the_private_issuer_context(self) -> None:
+        adapter, _ = self.load_adapter()
+        issued = FakeDocument(
+            {
+                "reconciliation_id": f"qbr:{'a' * 64}:0",
+                "system_name": "QuickBooks",
+                "entity_type": "Payment",
+                "external_entity_id": "7",
+                "local_doctype": "Unresolved QuickBooks Event",
+                "local_name": f"qbr:{'a' * 64}:0",
+                "direction": "Inbound",
+                "status": "Pending",
+                "detected_at": "2026-07-31 10:00:00",
+                "raw_key": "raw/quickbooks/2026-07-31/ow_test.json",
+                "source_version": "Create",
+                "source_payload_hash": "a" * 64,
+                "local_payload_hash": "b" * 64,
+                "attempt_count": 0,
+                "notes": "Webhook identity captured. Provider detail remains unverified.",
+            }
+        )
+        with self.assertRaisesRegex(FakePermissionError, "dedicated Worker command"):
+            adapter.validate_business_document(issued, "integration_reconciliation")
+        with self.assertRaisesRegex(FakePermissionError, "dedicated Worker command"):
+            adapter.validate_business_document(
+                FakeDocument({**issued, "system_name": "quickbooks"}),
+                "integration_reconciliation",
+            )
+
+        with adapter.quickbooks_reconciliation_issuance_context(issued):
+            adapter.validate_business_document(issued, "integration_reconciliation")
+
+        forged = FakeDocument({**issued, "raw_key": "raw/quickbooks/other.json"})
+        with adapter.quickbooks_reconciliation_issuance_context(issued):
+            with self.assertRaisesRegex(FakePermissionError, "dedicated Worker command"):
+                adapter.validate_business_document(forged, "integration_reconciliation")
+
+    def test_waivers_require_the_current_owner_actor(self) -> None:
+        compliance = FakeDocument(
+            {
+                "compliance_record_id": "compliance:safety:1",
+                "roof_job": "job-1",
+                "jurisdiction": "Calgary, AB",
+                "record_type": "Inspection",
+                "authority_name": "IronWrap Safety",
+                "status": "Waived",
+                "required_before_gate": "Safety",
+                "effective_date": "2026-07-01",
+                "expiry_date": "2026-12-31",
+                "owner_user": "owner@example.com",
+                "waived_by": "owner@example.com",
+                "waived_at": "2026-07-10 08:00:00",
+                "waiver_reason": "Owner accepted the documented exception.",
+            }
+        )
+        gate = FakeDocument(
+            {
+                "gate_id": "gate-safety-1",
+                "roof_job": "job-1",
+                "gate": "Safety",
+                "state": "Waived",
+                "owner_user": "owner@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+                "waived_by": "owner@example.com",
+                "waived_at": "2026-07-10 08:00:00",
+                "waiver_reason": "Owner accepted the documented exception.",
+            }
+        )
+        adapter, _ = self.load_adapter()
+        adapter.validate_business_document(compliance, "job_compliance_record")
+        adapter.validate_business_document(gate, "production_gate_state")
+
+        production_adapter, _ = self.load_adapter(
+            session_user="production@example.com", roles=["IronWrap Production"]
+        )
+        with self.assertRaisesRegex(FakePermissionError, "Owner or System Manager"):
+            production_adapter.validate_business_document(
+                FakeDocument({**compliance, "waived_by": "production@example.com"}),
+                "job_compliance_record",
+            )
+        with self.assertRaisesRegex(FakePermissionError, "current owner-level actor"):
+            adapter.validate_business_document(
+                FakeDocument({**gate, "waived_by": "other@example.com"}),
+                "production_gate_state",
+            )
 
     def test_previous_document_is_passed_to_immutable_policy(self) -> None:
         adapter, _ = self.load_adapter()
@@ -234,6 +448,353 @@ class DocumentValidationAdapterTests(unittest.TestCase):
 
         controller = EVIDENCE_ITEM_CONTROLLER_PATH.read_text(encoding="utf-8")
         self.assertIn("validate_evidence_verification_mutation(self)", controller)
+
+    def test_facet_design_projection_records_require_private_context_and_are_immutable(self) -> None:
+        adapter, _ = self.load_adapter(
+            session_user="facet-projection@example.invalid",
+            roles=[FACET_DESIGN_PROJECTION_SERVICE_ROLE],
+        )
+        evidence = FakeDocument(
+            {
+                "evidence_id": "facet-design:proof-1",
+                "device_action_id": "facet-projection:proof-1",
+                "roof_job": "job-1",
+                "evidence_type": "Other",
+                "proof_owner": "facet-projection@example.invalid",
+                "proof_slot": "Estimate",
+                "source_system": "ironwrap-facet-design",
+                "r2_key": "facet-design/v1/facet-event-0001.json",
+                "content_checksum": "a" * 64,
+                "checksum_algorithm": "SHA-256",
+                "content_type": "application/json",
+                "content_length": 512,
+                "capture_actor": "facet-projection@example.invalid",
+                "captured_at": "2026-07-31T12:01:00.000Z",
+                "sync_state": "Verified",
+                "verified_at": "2026-07-31 12:02:00",
+                "verification_source": "ironwrap-worker-r2-facet-design-projection",
+                "customer_safe": 0,
+                "summary": "Facet design revision evidence; estimator reconciliation required before commercial use.",
+            }
+        )
+        reconciliation = FakeDocument(
+            {
+                "reconciliation_id": "facet-design-projection:proof-1",
+                "roof_job": "job-1",
+                "system_name": "Facet",
+                "entity_type": "Design Revision",
+                "external_entity_id": "facet-event:proof-1",
+                "local_doctype": "Customer Quote",
+                "local_name": "quote-1",
+                "direction": "Inbound",
+                "status": "Pending",
+                "detected_at": "2026-07-31T12:01:00.000Z",
+                "raw_key": "facet-design/v1/facet-event-0001.json",
+                "source_version": f"facet-json-v1:{'a' * 64}",
+                "source_payload_hash": "b" * 64,
+                "local_payload_hash": "c" * 64,
+                "last_attempt_at": "2026-07-31 12:02:00",
+                "attempt_count": 1,
+                "resolution_evidence": None,
+                "diff_json": '{"commercial_state":"none"}',
+            }
+        )
+        with self.assertRaisesRegex(FakeValidationError, "immutable"):
+            adapter.validate_facet_design_projection_evidence_mutation(evidence)
+        with self.assertRaisesRegex(FakeValidationError, "immutable"):
+            adapter.validate_facet_design_projection_reconciliation_mutation(reconciliation)
+        with adapter.facet_design_projection_issuance_context(evidence, reconciliation):
+            adapter.validate_facet_design_projection_evidence_mutation(evidence)
+            adapter.validate_evidence_verification_mutation(evidence)
+            adapter.validate_facet_design_projection_reconciliation_mutation(reconciliation)
+
+        with self.assertRaisesRegex(FakeValidationError, "immutable"):
+            adapter.validate_facet_design_projection_evidence_mutation(
+                FakeDocument({**evidence, "customer_safe": 1}, previous=dict(evidence))
+            )
+        normal_adapter, _ = self.load_adapter()
+        for field, value in {
+            "lead_envelope": "lead-1",
+            "source_uri": "https://example.invalid/facet-design.json",
+            "drive_file_id": "drive-file-1",
+            "latitude": 53.5461,
+            "longitude": -113.4938,
+            "location_accuracy_m": 5,
+            "correction_of": "facet-design:prior-proof",
+            "correction_reason": "forged correction",
+        }.items():
+            with self.subTest(projected_evidence_field=field):
+                with self.assertRaisesRegex(FakeValidationError, "immutable"):
+                    normal_adapter.validate_facet_design_projection_evidence_mutation(
+                        FakeDocument({**evidence, field: value}, previous=dict(evidence))
+                    )
+        for field, value in {
+            "source_amount": 1,
+            "local_amount": 1,
+            "currency": "CAD",
+            "last_attempt_at": "2026-07-31 12:03:00",
+            "attempt_count": 2,
+            "diff_json": '{"commercial_state":"forged"}',
+            "notes": "forged note",
+        }.items():
+            with self.subTest(projected_reconciliation_anchor_field=field):
+                with self.assertRaisesRegex(FakeValidationError, "immutable"):
+                    normal_adapter.validate_facet_design_projection_reconciliation_mutation(
+                        FakeDocument({**reconciliation, field: value}, previous=dict(reconciliation))
+                    )
+        for field, value in {
+            "resolution_action": "forged resolution",
+            "resolved_by": "owner@example.invalid",
+            "resolved_at": "2026-07-31 12:03:00",
+            "resolution_evidence": "forged-resolution-evidence",
+            "automation_incident": "incident-1",
+            "supersedes": "facet-design-projection:prior-proof",
+            "correction_reason": "forged correction",
+        }.items():
+            with self.subTest(projected_reconciliation_lifecycle_field=field):
+                with self.assertRaisesRegex(FakeValidationError, "immutable"):
+                    normal_adapter.validate_facet_design_projection_reconciliation_mutation(
+                        FakeDocument({**reconciliation, field: value}, previous=dict(reconciliation))
+                    )
+
+        mismatch = FakeDocument(
+            {**reconciliation, "status": "Mismatch"}, previous=dict(reconciliation)
+        )
+        normal_adapter.validate_facet_design_projection_reconciliation_mutation(mismatch)
+        normal_adapter.validate_business_document(mismatch, "integration_reconciliation")
+        resolved = FakeDocument(
+            {
+                **mismatch,
+                "status": "Resolved",
+                "resolution_action": "Estimator confirmed the approved design revision.",
+                "resolved_by": "owner@example.invalid",
+                "resolved_at": "2026-07-31 12:04:00",
+                "resolution_evidence": "facet-resolution-evidence-1",
+            },
+            previous=dict(mismatch),
+        )
+        normal_adapter.validate_facet_design_projection_reconciliation_mutation(resolved)
+        normal_adapter.validate_business_document(resolved, "integration_reconciliation")
+
+        service_adapter, _ = self.load_adapter(
+            session_user="facet-projection@example.invalid",
+            roles=[FACET_DESIGN_PROJECTION_SERVICE_ROLE],
+        )
+        with self.assertRaisesRegex(FakePermissionError, "Facet design projection service users"):
+            service_adapter.validate_evidence_verification_mutation(
+                FakeDocument({"evidence_id": "forged", "sync_state": "Local"})
+            )
+
+        evidence_controller = EVIDENCE_ITEM_CONTROLLER_PATH.read_text(encoding="utf-8")
+        reconciliation_controller = INTEGRATION_RECONCILIATION_CONTROLLER_PATH.read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("validate_facet_design_projection_evidence_mutation(self)", evidence_controller)
+        self.assertIn(
+            "validate_facet_design_projection_reconciliation_mutation(self)",
+            reconciliation_controller,
+        )
+
+    def test_customer_contract_acceptance_requires_the_private_command_context(self) -> None:
+        adapter, _ = self.load_adapter()
+        evidence = FakeDocument(
+            {
+                "evidence_id": "contract-receipt:accept-1",
+                "device_action_id": "accept-1",
+                "roof_job": "job-1",
+                "evidence_type": "Signed Document",
+                "proof_slot": "Contract",
+                "source_system": "ironwrap-customer-portal",
+                "r2_key": "customer-contract-acceptance/v1/job-1/accept-1.json",
+                "content_checksum": "a" * 64,
+                "checksum_algorithm": "SHA-256",
+                "content_type": "application/json",
+                "content_length": 512,
+                "capture_actor": "customer-acceptance@example.com",
+                "captured_at": "2026-07-31T10:00:00Z",
+                "sync_state": "Verified",
+                "verified_at": "2026-07-31 10:01:00",
+                "verification_source": "ironwrap-worker-r2-customer-contract-acceptance",
+                "customer_safe": 0,
+            }
+        )
+        acceptance = FakeDocument(
+            {
+                "acceptance_id": "accept-1",
+                "roof_job": "job-1",
+                "customer": "customer-1",
+                "customer_quote": "cq-1",
+                "proposal_evidence_pack": "proposal:cq-1",
+                "contract_version": "cq-1:v1",
+                "status": "Accepted",
+                "signer_name": "Alex Customer",
+                "signer_email": "alex@example.com",
+                "signer_ip": "203.0.113.10",
+                "accepted_at": "2026-07-31T10:00:00Z",
+                "acceptance_method": "Click to Accept",
+                "evidence_item": "contract-receipt:accept-1",
+                "terms_hash": "b" * 64,
+                "terms_snapshot_json": "{\"anchor\":{\"quote_id\":\"cq-1\"}}",
+                "document_checksum": "a" * 64,
+                "source_system": "ironwrap-customer-portal",
+                "provider_reference": "challenge-1",
+                "captured_by": "customer-acceptance@example.com",
+            }
+        )
+        quote = FakeDocument(
+            {
+                "name": "cq-1",
+                "status": "Accepted",
+                "acceptance_evidence": "contract-receipt:accept-1",
+                "contract_acceptance": "accept-1",
+                "accepted_at": "2026-07-31T10:00:00Z",
+            },
+            previous={
+                "name": "cq-1",
+                "status": "Approved",
+                "acceptance_evidence": "",
+                "contract_acceptance": "",
+                "accepted_at": "",
+            },
+        )
+        with self.assertRaisesRegex(FakeValidationError, "bounded customer contract"):
+            adapter.validate_contract_acceptance_mutation(acceptance)
+        with self.assertRaisesRegex(FakeValidationError, "bounded customer contract"):
+            adapter.validate_customer_quote_acceptance_mutation(quote)
+        with adapter.customer_contract_acceptance_issuance_context(
+            evidence, acceptance, quote
+        ):
+            adapter.validate_evidence_verification_mutation(evidence)
+            adapter.validate_contract_acceptance_mutation(acceptance)
+            adapter.validate_customer_quote_acceptance_mutation(quote)
+
+        quote_controller = CUSTOMER_QUOTE_CONTROLLER_PATH.read_text(encoding="utf-8")
+        acceptance_controller = CONTRACT_ACCEPTANCE_CONTROLLER_PATH.read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("validate_customer_quote_acceptance_mutation(self)", quote_controller)
+        self.assertIn("validate_contract_acceptance_mutation(self)", acceptance_controller)
+
+    def test_customer_acceptance_service_has_no_generic_document_write_path(self) -> None:
+        adapter, _ = self.load_adapter(
+            session_user="customer-acceptance@example.com",
+            roles=[CUSTOMER_ACCEPTANCE_SERVICE_ROLE],
+        )
+        generic_documents = (
+            (
+                "evidence",
+                adapter.validate_evidence_verification_mutation,
+                FakeDocument(
+                    {
+                        "evidence_id": "contract-receipt:forged",
+                        "sync_state": "Local",
+                    }
+                ),
+            ),
+            (
+                "acceptance",
+                adapter.validate_contract_acceptance_mutation,
+                FakeDocument(
+                    {
+                        "acceptance_id": "accept-forged",
+                        "status": "Declined",
+                    }
+                ),
+            ),
+            (
+                "quote",
+                adapter.validate_customer_quote_acceptance_mutation,
+                FakeDocument(
+                    {
+                        "name": "cq-1",
+                        "status": "Draft",
+                        "acceptance_evidence": "",
+                        "contract_acceptance": "",
+                        "accepted_at": "",
+                    },
+                    previous={
+                        "name": "cq-1",
+                        "status": "Draft",
+                        "acceptance_evidence": "",
+                        "contract_acceptance": "",
+                        "accepted_at": "",
+                    },
+                ),
+            ),
+        )
+        for name, validator, document in generic_documents:
+            with self.subTest(path=name):
+                with self.assertRaisesRegex(
+                    FakePermissionError, "Customer acceptance service users"
+                ):
+                    validator(document)
+
+        evidence = FakeDocument(
+            {
+                "evidence_id": "contract-receipt:accept-1",
+                "device_action_id": "accept-1",
+                "roof_job": "job-1",
+                "evidence_type": "Signed Document",
+                "proof_slot": "Contract",
+                "source_system": "ironwrap-customer-portal",
+                "r2_key": "customer-contract-acceptance/v1/job-1/accept-1.json",
+                "content_checksum": "a" * 64,
+                "checksum_algorithm": "SHA-256",
+                "content_type": "application/json",
+                "content_length": 512,
+                "capture_actor": "customer-acceptance@example.com",
+                "captured_at": "2026-07-31T10:00:00Z",
+                "sync_state": "Verified",
+                "verified_at": "2026-07-31 10:01:00",
+                "verification_source": "ironwrap-worker-r2-customer-contract-acceptance",
+                "customer_safe": 0,
+            }
+        )
+        acceptance = FakeDocument(
+            {
+                "acceptance_id": "accept-1",
+                "roof_job": "job-1",
+                "customer": "customer-1",
+                "customer_quote": "cq-1",
+                "proposal_evidence_pack": "proposal:cq-1",
+                "contract_version": "cq-1:v1",
+                "status": "Accepted",
+                "signer_name": "Alex Customer",
+                "signer_email": "alex@example.com",
+                "signer_ip": "203.0.113.10",
+                "accepted_at": "2026-07-31T10:00:00Z",
+                "acceptance_method": "Click to Accept",
+                "evidence_item": "contract-receipt:accept-1",
+                "terms_hash": "b" * 64,
+                "terms_snapshot_json": "{\"anchor\":{\"quote_id\":\"cq-1\"}}",
+                "document_checksum": "a" * 64,
+                "source_system": "ironwrap-customer-portal",
+                "provider_reference": "challenge-1",
+                "captured_by": "customer-acceptance@example.com",
+            }
+        )
+        quote = FakeDocument(
+            {
+                "name": "cq-1",
+                "status": "Accepted",
+                "acceptance_evidence": "contract-receipt:accept-1",
+                "contract_acceptance": "accept-1",
+                "accepted_at": "2026-07-31T10:00:00Z",
+            },
+            previous={
+                "name": "cq-1",
+                "status": "Approved",
+                "acceptance_evidence": "",
+                "contract_acceptance": "",
+                "accepted_at": "",
+            },
+        )
+        with adapter.customer_contract_acceptance_issuance_context(
+            evidence, acceptance, quote
+        ):
+            adapter.validate_evidence_verification_mutation(evidence)
+            adapter.validate_contract_acceptance_mutation(acceptance)
+            adapter.validate_customer_quote_acceptance_mutation(quote)
 
     def test_work_package_lifecycle_and_events_require_private_command_contexts(
         self,
@@ -302,6 +863,239 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         )
         self.assertIn("validate_work_package_runtime_mutation(self)", package_controller)
         self.assertIn("validate_work_package_event_mutation(self)", event_controller)
+
+    def test_shop_domain_lifecycles_require_private_command_contexts(self) -> None:
+        adapter, _ = self.load_adapter()
+        item_draft = FakeDocument(
+            {
+                "name": "item-1",
+                "status": "Draft",
+                "approved_by": "",
+                "approved_at": "",
+                "approval_note": "",
+            }
+        )
+        item_approved = FakeDocument(
+            {
+                "name": "item-1",
+                "status": "Approved",
+                "approved_by": "owner@example.com",
+                "approved_at": "2026-07-30 08:00:00",
+                "approval_note": "Approved metal system specification.",
+            },
+            previous=dict(item_draft),
+        )
+        with self.assertRaisesRegex(FakeValidationError, "Controlled Item lifecycle"):
+            adapter.validate_controlled_item_runtime_mutation(item_approved)
+        with adapter.controlled_item_transition_context(item_approved):
+            adapter.validate_controlled_item_runtime_mutation(item_approved)
+
+        lot_draft = FakeDocument({"name": "lot-1", "status": "Draft"})
+        lot_available = FakeDocument(
+            {"name": "lot-1", "status": "Available"}, previous=dict(lot_draft)
+        )
+        with self.assertRaisesRegex(FakeValidationError, "Material Lot lifecycle"):
+            adapter.validate_material_lot_runtime_mutation(lot_available)
+        with adapter.material_lot_transition_context(lot_available):
+            adapter.validate_material_lot_runtime_mutation(lot_available)
+
+        ncr_draft = FakeDocument({"name": "ncr-1", "status": "Draft"})
+        ncr_open = FakeDocument(
+            {
+                "name": "ncr-1",
+                "status": "Open",
+                "containment": "",
+                "disposition": "",
+                "disposition_by": "",
+                "disposition_at": "",
+                "closed_by": "",
+                "closed_at": "",
+                "closure_evidence": "",
+            },
+            previous=dict(ncr_draft),
+        )
+        with self.assertRaisesRegex(FakeValidationError, "Nonconformance lifecycle"):
+            adapter.validate_nonconformance_runtime_mutation(ncr_open)
+        with adapter.nonconformance_transition_context(ncr_open):
+            adapter.validate_nonconformance_runtime_mutation(ncr_open)
+
+        ncr_contained = FakeDocument(
+            {
+                "name": "ncr-first-piece-1",
+                "status": "Contained",
+                "containment": "Material Lot quarantined; Shop Order on Quality Hold.",
+                "disposition": "",
+                "disposition_by": "",
+                "disposition_at": "",
+                "closed_by": "",
+                "closed_at": "",
+                "closure_evidence": "",
+            }
+        )
+        with self.assertRaisesRegex(FakeValidationError, "Nonconformance lifecycle"):
+            adapter.validate_nonconformance_runtime_mutation(ncr_contained)
+        with adapter.nonconformance_transition_context(ncr_contained):
+            adapter.validate_nonconformance_runtime_mutation(ncr_contained)
+
+        shop_draft = FakeDocument({"name": "shop-1", "status": "Draft", "lines": []})
+        shop_released = FakeDocument(
+            {
+                "name": "shop-1",
+                "status": "Released",
+                "released_by": "production@example.com",
+                "released_at": "2026-07-30 09:00:00",
+                "reserved_at": "",
+                "setup_started_at": "",
+                "fabrication_started_at": "",
+                "quality_hold_reason": "",
+                "ready_at": "",
+                "handed_over_to": "",
+                "handed_over_at": "",
+                "handoff_evidence": "",
+                "invoice_payment_milestone": "",
+                "invoice_ready_at": "",
+                "closed_at": "",
+                "lines": [{"line_no": 1}],
+                "material_allocations": [],
+                "operations": [],
+                "yields": [],
+                "inspections": [],
+                "bundles": [],
+            },
+            previous=dict(shop_draft),
+        )
+        with self.assertRaisesRegex(FakeValidationError, "Shop Order lifecycle"):
+            adapter.validate_shop_order_runtime_mutation(shop_released)
+        with adapter.shop_order_transition_context(shop_released):
+            adapter.validate_shop_order_runtime_mutation(shop_released)
+
+        for path, call in (
+            (CONTROLLED_ITEM_CONTROLLER_PATH, "validate_controlled_item_runtime_mutation(self)"),
+            (MATERIAL_LOT_CONTROLLER_PATH, "validate_material_lot_runtime_mutation(self)"),
+            (NONCONFORMANCE_CONTROLLER_PATH, "validate_nonconformance_runtime_mutation(self)"),
+            (SHOP_ORDER_CONTROLLER_PATH, "validate_shop_order_runtime_mutation(self)"),
+        ):
+            self.assertIn(call, path.read_text(encoding="utf-8"))
+
+    def test_shop_context_resolves_lot_ncr_and_remnant_lineage(self) -> None:
+        adapter, _ = self.load_adapter(
+            values={
+                ("Controlled Item", "item-1", ("name", "status")): {
+                    "name": "item-1",
+                    "status": "Approved",
+                },
+                ("Material Takeoff", "takeoff-1", ("name", "roof_job", "status")): {
+                    "name": "takeoff-1",
+                    "roof_job": "job-1",
+                    "status": "Approved",
+                },
+                ("Supplier Order", "supplier-1", ("name", "roof_job", "status")): {
+                    "name": "supplier-1",
+                    "roof_job": "job-1",
+                    "status": "Received",
+                },
+                ("Work Package", "package-1", ("name", "roof_job", "status")): {
+                    "name": "package-1",
+                    "roof_job": "job-1",
+                    "status": "Released",
+                },
+                ("Payment Milestone", None, ("name", "roof_job", "shop_order", "status")): None,
+                (
+                    "Material Lot",
+                    "lot-1",
+                    (
+                        "name",
+                        "material_lot_id",
+                        "roof_job",
+                        "controlled_item",
+                    "unit",
+                    "received_quantity",
+                    "available_quantity",
+                    "reserved_quantity",
+                    "consumed_quantity",
+                    "status",
+                    ),
+                ): {
+                    "name": "lot-1",
+                    "material_lot_id": "lot-1",
+                    "roof_job": "job-1",
+                    "controlled_item": "item-1",
+                    "unit": "each",
+                    "received_quantity": 10,
+                    "available_quantity": 10,
+                    "reserved_quantity": 0,
+                    "consumed_quantity": 0,
+                    "status": "Available",
+                },
+                (
+                    "Shop Order",
+                    "shop-1",
+                    ("name", "shop_order_id", "roof_job", "status"),
+                ): {
+                    "name": "shop-1",
+                    "shop_order_id": "shop-1",
+                    "roof_job": "job-1",
+                    "status": "In Fabrication",
+                },
+                (
+                    "Material Lot",
+                    "lot-1",
+                    ("name", "material_lot_id", "roof_job", "controlled_item", "unit", "status"),
+                ): {
+                    "name": "lot-1",
+                    "material_lot_id": "lot-1",
+                    "roof_job": "job-1",
+                    "controlled_item": "item-1",
+                    "unit": "each",
+                    "status": "Reserved",
+                },
+                ("Shop Order", "shop-1", ("name", "roof_job", "status")): {
+                    "name": "shop-1",
+                    "roof_job": "job-1",
+                    "status": "Ready",
+                },
+            },
+            rows={"Shop Material Allocation": [{"parent": "shop-1", "material_lot": "lot-1"}]},
+        )
+        shop_context = adapter._context(
+            FakeDocument(
+                {
+                    "roof_job": "job-1",
+                    "material_takeoff": "takeoff-1",
+                    "supplier_order": "supplier-1",
+                    "work_package": "package-1",
+                    "status": "Reserved",
+                    "invoice_payment_milestone": None,
+                    "material_allocations": [{"material_lot": "lot-1"}],
+                }
+            ),
+            "shop_order",
+        )
+        self.assertEqual(shop_context["material_lots"]["lot-1"]["roof_job"], "job-1")
+        self.assertEqual(shop_context["material_takeoff"]["roof_job"], "job-1")
+        self.assertEqual(shop_context["supplier_order"]["roof_job"], "job-1")
+        self.assertEqual(shop_context["work_package"]["roof_job"], "job-1")
+
+        ncr_context = adapter._context(
+            FakeDocument({"shop_order": "shop-1", "material_lot": "lot-1"}),
+            "nonconformance",
+        )
+        self.assertEqual(ncr_context["shop_order"]["roof_job"], "job-1")
+        self.assertEqual(ncr_context["material_lot"]["status"], "Reserved")
+        self.assertEqual(ncr_context["shop_order_allocation_lot_ids"], {"lot-1"})
+
+        remnant_context = adapter._context(
+            FakeDocument(
+                {
+                    "controlled_item": "item-1",
+                    "supplier_order": None,
+                    "source_kind": "Shop Remnant",
+                    "source_shop_order": "shop-1",
+                }
+            ),
+            "material_lot",
+        )
+        self.assertEqual(remnant_context["source_shop_order"]["status"], "Ready")
 
     def test_customer_quote_correction_loads_contract_lineage_context(self) -> None:
         fields = (
@@ -669,16 +1463,23 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             }
         )
         adapter, calls = self.load_adapter(
-            rows={"Production Gate State": gates, "Evidence Item": gate_evidence_rows(gates)}
+            rows={
+                "Production Gate State": gates,
+                "Evidence Item": gate_evidence_rows(gates),
+                "Crew Profile": [current_crew_authority("crew-1")],
+                "Job Compliance Record": current_compliance_authorities("job-1"),
+            }
         )
         adapter.validate_business_document(document, "job_assignment")
         self.assertEqual(calls, [])
-        self.assertEqual(len(adapter._test_lock_calls), 5)
+        self.assertEqual(len(adapter._test_lock_calls), 7)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
         self.assertIn("`tabEvidence Item`", adapter._test_lock_calls[2][0])
         self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[3][0])
         self.assertIn("`tabSupplier Order`", adapter._test_lock_calls[4][0])
+        self.assertIn("`tabCrew Profile`", adapter._test_lock_calls[5][0])
+        self.assertIn("`tabJob Compliance Record`", adapter._test_lock_calls[6][0])
         self.assertIn("FOR UPDATE", adapter._test_lock_calls[2][0])
         self.assertTrue(
             all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
@@ -793,6 +1594,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             "roof_job": "job-1",
             "assignment_type": "Production",
             "status": "Assigned",
+            "crew_profile": "crew-1",
             "scheduled_start": "2026-07-10 12:00:00",
         }
         safety_plan = {
@@ -845,18 +1647,22 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 "Production Gate State": gates,
                 "Evidence Item": gate_evidence_rows(gates),
                 "Job Assignment": [assignment],
+                "Crew Profile": [current_crew_authority("crew-1")],
+                "Job Compliance Record": current_compliance_authorities("job-1"),
                 "Safety Plan": [safety_plan],
             }
         )
         adapter.validate_business_document(document, "work_package")
         self.assertEqual(calls, [])
-        self.assertEqual(len(adapter._test_lock_calls), 6)
+        self.assertEqual(len(adapter._test_lock_calls), 8)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
         self.assertIn("`tabEvidence Item`", adapter._test_lock_calls[2][0])
         self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[3][0])
         self.assertIn("`tabSafety Plan`", adapter._test_lock_calls[4][0])
         self.assertIn("`tabWork Package`", adapter._test_lock_calls[5][0])
+        self.assertIn("`tabCrew Profile`", adapter._test_lock_calls[6][0])
+        self.assertIn("`tabJob Compliance Record`", adapter._test_lock_calls[7][0])
         self.assertTrue(
             all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
         )
@@ -866,6 +1672,8 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 "Production Gate State": gates,
                 "Evidence Item": gate_evidence_rows(gates),
                 "Job Assignment": [assignment],
+                "Crew Profile": [current_crew_authority("crew-1")],
+                "Job Compliance Record": current_compliance_authorities("job-1"),
                 "Safety Plan": [
                     safety_plan,
                     {
@@ -927,13 +1735,17 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 "Production Gate State": gates,
                 "Evidence Item": gate_evidence_rows(gates),
                 "Job Assignment": [source],
+                "Crew Profile": [current_crew_authority("crew-2")],
+                "Job Compliance Record": current_compliance_authorities("job-1"),
             },
         )
         adapter.validate_business_document(correction, "job_assignment")
-        self.assertEqual(len(adapter._test_lock_calls), 5)
+        self.assertEqual(len(adapter._test_lock_calls), 7)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[3][0])
         self.assertIn("`tabSupplier Order`", adapter._test_lock_calls[4][0])
+        self.assertIn("`tabCrew Profile`", adapter._test_lock_calls[5][0])
+        self.assertIn("`tabJob Compliance Record`", adapter._test_lock_calls[6][0])
         self.assertTrue(
             all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
         )
@@ -944,6 +1756,8 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 "Production Gate State": gates,
                 "Evidence Item": gate_evidence_rows(gates),
                 "Job Assignment": [source, {**correction, "name": "assignment:correction"}],
+                "Crew Profile": [current_crew_authority("crew-2")],
+                "Job Compliance Record": current_compliance_authorities("job-1"),
             },
         )
         with self.assertRaisesRegex(
@@ -958,6 +1772,8 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             rows={
                 "Production Gate State": gates,
                 "Evidence Item": gate_evidence_rows(gates),
+                "Crew Profile": [current_crew_authority("crew-2")],
+                "Job Compliance Record": current_compliance_authorities("job-1"),
                 "Supplier Order": [
                     {
                         "name": "supplier-order-1",
@@ -991,25 +1807,12 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         order = FakeDocument(
             {
                 "supplier_order_id": "supplier-order-1",
-                "status": "Shortage",
+                "status": "Draft",
                 "roof_job": "job-1",
-                "material_takeoff": "takeoff-1",
-                "source_quote": "supplier-quote-1",
-                "supplier": "supplier-1",
-                "approved_by": "owner@example.com",
-                "approved_at": "2026-07-10 08:00:00",
-                "received_at": "2026-07-10 09:00:00",
-                "order_summary_json": '{"source":"test"}',
-                "receipt_evidence_json": '{"receipt":"test"}',
-                "items": [{"quantity": 1, "received_qty": 0, "shortage_qty": 1}],
+                "items": [],
             }
         )
-        adapter, _ = self.load_adapter(
-            values={
-                ("Material Takeoff", "takeoff-1", "status"): "Approved",
-                ("Supplier Quote", "supplier-quote-1", "status"): "Approved",
-            }
-        )
+        adapter, _ = self.load_adapter()
 
         adapter.validate_business_document(order, "supplier_order")
 
@@ -1018,6 +1821,48 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         self.assertIn("`tabRoof Job`", query)
         self.assertIn("FOR UPDATE", query)
         self.assertEqual(values, ("job-1",))
+
+    def test_supplier_order_context_resolves_acknowledgement_and_receipt_evidence(self) -> None:
+        evidence_rows = [
+            {
+                "name": evidence_id,
+                "roof_job": "job-1",
+                "proof_slot": "Materials",
+                "sync_state": "Verified",
+                "content_checksum": "a" * 64,
+                "checksum_algorithm": "SHA-256",
+                "verified_at": "2026-07-10 12:00:00",
+                "verification_source": "synthetic-test",
+                "r2_key": f"private/job-1/{evidence_id}.pdf",
+            }
+            for evidence_id in ("evidence:ack-1", "evidence:receipt-1")
+        ]
+        adapter, calls = self.load_adapter(
+            values={
+                ("Material Takeoff", "takeoff-1", "status"): "Approved",
+                ("Supplier Quote", "quote-1", "status"): "Approved",
+            },
+            rows={"Evidence Item": evidence_rows},
+        )
+        context = adapter._context(
+            FakeDocument(
+                {
+                    "roof_job": "job-1",
+                    "material_takeoff": "takeoff-1",
+                    "source_quote": "quote-1",
+                    "supplier_acknowledgement_evidence": "evidence:ack-1",
+                    "receipt_evidence_json": '{"evidence_item_ids":["evidence:receipt-1"]}',
+                }
+            ),
+            "supplier_order",
+        )
+
+        self.assertEqual(set(context["supplier_order_evidence"]), {
+            "evidence:ack-1",
+            "evidence:receipt-1",
+        })
+        evidence_call = next(call for call in calls if call[0] == "Evidence Item")
+        self.assertEqual(evidence_call[1], {"name": ["in", ["evidence:ack-1", "evidence:receipt-1"]]})
 
     def test_safety_acknowledgements_require_the_atomic_append_context(self) -> None:
         adapter, _ = self.load_adapter()

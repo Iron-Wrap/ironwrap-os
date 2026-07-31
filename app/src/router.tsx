@@ -19,6 +19,10 @@ const loadCustomerPortalPage = () => import("./portal/customer-portal-page");
 const CustomerPortalPage = lazy(async () => ({
   default: (await loadCustomerPortalPage()).CustomerPortalPage,
 }));
+const CustomerContractAcceptancePage = lazy(async () => ({
+  default: (await import("./portal/customer-contract-acceptance-page"))
+    .CustomerContractAcceptancePage,
+}));
 const PublicEstimatePage = lazy(async () => ({
   default: (await import("./public-estimate/public-estimate-page")).PublicEstimatePage,
 }));
@@ -136,6 +140,12 @@ const portalRootRoute = createRoute({
   component: CustomerPortalRoute,
 });
 
+const customerContractAcceptanceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/contract-accept",
+  component: CustomerContractAcceptanceRoute,
+});
+
 const publicEstimateRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/estimate",
@@ -166,6 +176,20 @@ function CustomerPortalRoute() {
       }
     >
       <CustomerPortalPage />
+    </Suspense>
+  );
+}
+
+function CustomerContractAcceptanceRoute() {
+  return (
+    <Suspense
+      fallback={
+        <main className="grid min-h-dvh place-items-center p-4" aria-busy="true">
+          Opening your contract confirmation…
+        </main>
+      }
+    >
+      <CustomerContractAcceptancePage />
     </Suspense>
   );
 }
@@ -431,6 +455,7 @@ const routeTree = rootRoute.addChildren([
   verifyRoute,
   pairRoute,
   portalRootRoute,
+  customerContractAcceptanceRoute,
   publicEstimateRoute,
   authenticatedRoute.addChildren([
     todayRoute,

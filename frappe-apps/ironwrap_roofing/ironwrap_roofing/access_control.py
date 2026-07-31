@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 SYSTEM_MANAGER = "System Manager"
+CUSTOMER_ACCEPTANCE_SERVICE_ROLE = "IronWrap Customer Acceptance Service"
+QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE = (
+    "IronWrap QuickBooks Reconciliation Issuer"
+)
+FACET_DESIGN_PROJECTION_SERVICE_ROLE = "IronWrap Facet Design Projection Service"
+LAUNCH_PROOF_READER_ROLE = "IronWrap Launch Proof Reader"
 
 IRONWRAP_ROLES = (
     "IronWrap Owner",
@@ -14,10 +20,19 @@ IRONWRAP_ROLES = (
     "IronWrap Closeout",
     "IronWrap Support",
 )
+IRONWRAP_SERVICE_ROLES = (
+    CUSTOMER_ACCEPTANCE_SERVICE_ROLE,
+    QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE,
+    FACET_DESIGN_PROJECTION_SERVICE_ROLE,
+    LAUNCH_PROOF_READER_ROLE,
+)
+ALL_IRONWRAP_ROLES = IRONWRAP_ROLES + IRONWRAP_SERVICE_ROLES
 
 READ = "read"
 WRITE = "write"
+WRITE_EXISTING = "write_existing"
 CREATE_OWN = "create_own"
+CREATE = "create"
 
 # Each Frappe site is one tenant.  These roles never grant cross-site access.
 DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
@@ -43,6 +58,10 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Closeout": READ,
         "IronWrap Support": READ,
     },
+    "Controlled Item": {
+        "IronWrap Estimator": WRITE,
+        "IronWrap Production": READ,
+    },
     "Completion Packet": {
         "IronWrap Production": WRITE,
         "IronWrap Field": CREATE_OWN,
@@ -53,6 +72,8 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Estimator": WRITE,
         "IronWrap Finance": READ,
         "IronWrap Production": READ,
+        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: WRITE_EXISTING,
+        FACET_DESIGN_PROJECTION_SERVICE_ROLE: READ,
     },
     "Contract Acceptance": {
         "IronWrap Sales": WRITE,
@@ -61,6 +82,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Production": READ,
         "IronWrap Closeout": READ,
         "IronWrap Support": READ,
+        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: CREATE,
     },
     "Crew Profile": {
         "IronWrap Production": WRITE,
@@ -80,6 +102,8 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Field": CREATE_OWN,
         "IronWrap Closeout": WRITE,
         "IronWrap Support": READ,
+        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: CREATE,
+        FACET_DESIGN_PROJECTION_SERVICE_ROLE: CREATE,
     },
     "Field Check-in": {
         "IronWrap Production": WRITE,
@@ -91,11 +115,17 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Sales": WRITE,
         "IronWrap Estimator": WRITE,
         "IronWrap Support": READ,
+        LAUNCH_PROOF_READER_ROLE: READ,
     },
     "Integration Reconciliation": {
         "IronWrap Finance": WRITE,
         "IronWrap Production": READ,
         "IronWrap Support": WRITE,
+        # Generic creation is independently rejected for QuickBooks by a
+        # private issuer context; this create-only role exists solely so the
+        # bounded command can insert one Pending record.
+        QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE: CREATE,
+        FACET_DESIGN_PROJECTION_SERVICE_ROLE: CREATE,
     },
     "Insurance Supplement": {"IronWrap Estimator": WRITE},
     "Job Assignment": {
@@ -120,6 +150,11 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Support": READ,
     },
     "Market Watch Item": {"IronWrap Support": WRITE, "IronWrap Estimator": READ},
+    "Material Lot": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": READ,
+        "IronWrap Finance": READ,
+    },
     "Material Takeoff": {
         "IronWrap Estimator": WRITE,
         "IronWrap Production": READ,
@@ -129,6 +164,12 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Estimator": WRITE,
         "IronWrap Production": READ,
         "IronWrap Field": READ,
+    },
+    "Nonconformance": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": CREATE_OWN,
+        "IronWrap Closeout": READ,
+        "IronWrap Support": READ,
     },
     "Option Package": {
         "IronWrap Estimator": WRITE,
@@ -152,6 +193,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Estimator": WRITE,
         "IronWrap Sales": WRITE,
         "IronWrap Closeout": READ,
+        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: READ,
     },
     "Review Request": {
         "IronWrap Closeout": WRITE,
@@ -175,6 +217,8 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Finance": READ,
         "IronWrap Closeout": WRITE,
         "IronWrap Support": READ,
+        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: READ,
+        FACET_DESIGN_PROJECTION_SERVICE_ROLE: READ,
     },
     "Roofing Customer": {
         "IronWrap Sales": WRITE,
@@ -183,6 +227,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Finance": READ,
         "IronWrap Closeout": READ,
         "IronWrap Support": READ,
+        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: READ,
     },
     "Roofing Property": {
         "IronWrap Sales": WRITE,
@@ -196,6 +241,12 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Field": READ,
         "IronWrap Closeout": READ,
         "IronWrap Support": READ,
+    },
+    "Shop Order": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": READ,
+        "IronWrap Finance": READ,
+        "IronWrap Closeout": READ,
     },
     "Scope Clause": {
         "IronWrap Estimator": WRITE,
@@ -256,10 +307,14 @@ def permission_row(role: str, access: str) -> dict[str, int | str]:
     }
     if access == WRITE:
         row.update({"create": 1, "write": 1, "print": 1, "report": 1})
+    elif access == WRITE_EXISTING:
+        row.update({"write": 1})
     elif access == READ:
         row.update({"print": 1, "report": 1})
     elif access == CREATE_OWN:
         row.update({"create": 1, "write": 1, "if_owner": 1})
+    elif access == CREATE:
+        row.update({"create": 1})
     else:
         raise ValueError(f"unknown access level {access!r}")
     return row

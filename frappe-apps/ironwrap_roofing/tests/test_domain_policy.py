@@ -173,6 +173,115 @@ def gate_evidence_context(gates: list[dict[str, object]]) -> dict[str, dict[str,
     }
 
 
+def supplier_order_evidence(evidence_id: str = "evidence:materials-1") -> dict[str, object]:
+    return {
+        "name": evidence_id,
+        "roof_job": "job-1",
+        "proof_slot": "Materials",
+        "sync_state": "Verified",
+        "content_checksum": "a" * 64,
+        "checksum_algorithm": "SHA-256",
+        "verified_at": "2026-07-10T12:00:00.000Z",
+        "verification_source": "worker-checksum",
+        "r2_key": f"private/job-1/{evidence_id}.pdf",
+    }
+
+
+def supplier_order_context(**overrides: object) -> dict[str, object]:
+    context: dict[str, object] = {
+        "takeoff_status": "Approved",
+        "supplier_quote_status": "Approved",
+        "supplier_order_evidence": {
+            "evidence:materials-1": supplier_order_evidence(),
+            "evidence:materials-2": supplier_order_evidence("evidence:materials-2"),
+        },
+    }
+    context.update(overrides)
+    return context
+
+
+def supplier_order_record(status: str = "Needs Review", **overrides: object) -> dict[str, object]:
+    record: dict[str, object] = {
+        "supplier_order_id": "so-1",
+        "status": status,
+        "roof_job": "job-1",
+        "material_takeoff": "to-1",
+        "source_quote": "sq-1",
+        "supplier": "supplier-1",
+        "prepared_at": "2026-07-10 10:00:00",
+        "approved_by": "owner@example.com",
+        "approved_at": "2026-07-10 11:00:00",
+        "requested_delivery_date": "2026-07-15",
+        "order_summary_json": '{"quote":"sq-1"}',
+        "assumptions": "Confirmed selection.",
+        "exclusions": "Freight variance.",
+        "delivery_notes": "Call before delivery.",
+        "items": [
+            {
+                "category": "Roof Surface",
+                "item_name": "Panel",
+                "quantity": "10",
+                "unit": "each",
+                "source_ref": "takeoff:1",
+                "status": "Draft",
+                "received_qty": "0",
+                "shortage_qty": "0",
+                "substitution_notes": "",
+                "needs_review": 1,
+            },
+            {
+                "category": "Trim",
+                "item_name": "Flashing",
+                "quantity": "5",
+                "unit": "each",
+                "source_ref": "takeoff:2",
+                "status": "Draft",
+                "received_qty": "0",
+                "shortage_qty": "0",
+                "substitution_notes": "",
+                "needs_review": 1,
+            },
+        ],
+    }
+    record.update(overrides)
+    return record
+
+
+def current_crew_authority(**overrides: object) -> dict[str, object]:
+    crew: dict[str, object] = {
+        "name": "crew-1",
+        "crew_profile_id": "crew-1",
+        "status": "Active",
+        "crew_type": "Subcontractor",
+        "competency_status": "Current",
+        "competency_checked_at": "2026-07-01 08:00:00",
+        "competency_expiry": "2026-12-31",
+        "equipment_status": "Safe",
+        "equipment_checked_at": "2026-07-01 08:00:00",
+        "equipment_expiry": "2026-12-31",
+        "wcb_status": "Current",
+        "wcb_checked_at": "2026-07-01 08:00:00",
+        "wcb_expiry": "2026-12-31",
+        "active_stop": 0,
+    }
+    crew.update(overrides)
+    return crew
+
+
+def current_compliance_authority(gate: str, **overrides: object) -> dict[str, object]:
+    record: dict[str, object] = {
+        "name": f"compliance:{gate.lower()}:1",
+        "compliance_record_id": f"compliance:{gate.lower()}:1",
+        "roof_job": "job-1",
+        "required_before_gate": gate,
+        "status": "Approved",
+        "effective_date": "2026-07-01",
+        "expiry_date": "2026-12-31",
+    }
+    record.update(overrides)
+    return record
+
+
 class DomainPolicyTests(unittest.TestCase):
     def assert_policy(self, code: str, function, *args, **kwargs) -> PolicyViolation:
         with self.assertRaises(PolicyViolation) as caught:
@@ -482,26 +591,279 @@ class DomainPolicyTests(unittest.TestCase):
         }
         validate_record("supplier_quote", quote, context={"takeoff_status": "Approved"})
 
+        review = supplier_order_record("Needs Review")
         order = {
-            "supplier_order_id": "so-1",
+            **review,
             "status": "Approved",
-            "roof_job": "job-1",
-            "material_takeoff": "to-1",
-            "source_quote": "sq-1",
-            "supplier": "supplier-1",
-            "approved_by": "owner@example.com",
-            "approved_at": "2026-07-10 11:30:00",
-            "order_summary_json": '{"quote":"sq-1"}',
-            "items": [{"quantity": 20, "received_qty": 0, "shortage_qty": 0}],
+            "items": [{**row, "needs_review": 0} for row in review["items"]],
         }
-        context = {"takeoff_status": "Approved", "supplier_quote_status": "Approved"}
-        validate_record("supplier_order", order, context=context)
+        context = supplier_order_context()
+        validate_record("supplier_order", order, previous=review, context=context)
         self.assert_policy(
             "unapproved_supplier_quote",
             validate_record,
             "supplier_order",
             order,
+            previous=review,
             context={**context, "supplier_quote_status": "Draft"},
+        )
+
+    def test_supplier_order_lifecycle_is_explicit_and_freezes_approved_facts(self) -> None:
+        draft = supplier_order_record("Draft")
+        review = {**draft, "status": "Needs Review"}
+        approved = {
+            **review,
+            "status": "Approved",
+            "items": [{**row, "needs_review": 0} for row in review["items"]],
+        }
+        validate_record("supplier_order", draft, context=supplier_order_context())
+        validate_record(
+            "supplier_order", review, previous=draft, context=supplier_order_context()
+        )
+        validate_record(
+            "supplier_order",
+            approved,
+            previous=review,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "invalid_state_transition",
+            validate_record,
+            "supplier_order",
+            {**approved, "status": "Received"},
+            previous=approved,
+            context=supplier_order_context(),
+        )
+
+        transmitted = {
+            **approved,
+            "status": "Ordered",
+            "internal_transmission_id": "transmission:so-1",
+            "internal_transmitted_at": "2026-07-10 12:00:00",
+        }
+        validate_record(
+            "supplier_order",
+            transmitted,
+            previous=approved,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "supplier_order_items_immutable",
+            validate_record,
+            "supplier_order",
+            {
+                **transmitted,
+                "items": [
+                    {**transmitted["items"][0], "quantity": "11"},
+                    *transmitted["items"][1:],
+                ],
+            },
+            previous=transmitted,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "immutable_field",
+            validate_record,
+            "supplier_order",
+            {**transmitted, "source_quote": "sq-other"},
+            previous=transmitted,
+            context=supplier_order_context(),
+        )
+
+    def test_supplier_order_lifecycle_facts_require_their_transition_state(self) -> None:
+        draft = supplier_order_record("Draft")
+        review = {**draft, "status": "Needs Review"}
+        approved = {
+            **review,
+            "status": "Approved",
+            "items": [{**row, "needs_review": 0} for row in review["items"]],
+        }
+        context = supplier_order_context()
+        pre_transmission_states = (
+            (draft, None),
+            (review, draft),
+            (approved, review),
+        )
+        for record, previous in pre_transmission_states:
+            for field, value in (
+                ("internal_transmission_id", "transmission:so-1"),
+                ("internal_transmitted_at", "2026-07-10 12:00:00"),
+            ):
+                with self.subTest(status=record["status"], field=field):
+                    self.assert_policy(
+                        "supplier_order_transmission_before_ordered",
+                        validate_record,
+                        "supplier_order",
+                        {**record, field: value},
+                        previous=previous,
+                        context=context,
+                    )
+
+        transmitted = {
+            **approved,
+            "status": "Ordered",
+            "internal_transmission_id": "transmission:so-1",
+            "internal_transmitted_at": "2026-07-10 12:00:00",
+        }
+        cancelled = {**transmitted, "status": "Cancelled"}
+        validate_record("supplier_order", transmitted, previous=approved, context=context)
+        validate_record("supplier_order", cancelled, previous=transmitted, context=context)
+
+        for record, previous in (
+            (draft, None),
+            (review, draft),
+            (approved, review),
+            (transmitted, approved),
+            (cancelled, transmitted),
+        ):
+            for field, value in (
+                ("received_at", "2026-07-11 08:00:00"),
+                ("receipt_evidence_json", '{"evidence_item_ids":["evidence:materials-1"]}'),
+            ):
+                with self.subTest(status=record["status"], field=field):
+                    self.assert_policy(
+                        "supplier_order_receipt_facts_before_receiving",
+                        validate_record,
+                        "supplier_order",
+                        {**record, field: value},
+                        previous=previous,
+                        context=context,
+                    )
+
+    def test_supplier_order_acknowledgement_and_receipts_are_evidence_backed(self) -> None:
+        approved = supplier_order_record(
+            "Approved",
+            items=[
+                {**row, "needs_review": 0}
+                for row in supplier_order_record()["items"]
+            ],
+        )
+        transmitted = {
+            **approved,
+            "status": "Ordered",
+            "internal_transmission_id": "transmission:so-1",
+            "internal_transmitted_at": "2026-07-10 12:00:00",
+        }
+        acknowledged = {
+            **transmitted,
+            "supplier_acknowledgement_id": "ack:so-1",
+            "supplier_acknowledged_at": "2026-07-10 12:05:00",
+            "supplier_acknowledgement_evidence": "evidence:materials-1",
+        }
+        validate_record(
+            "supplier_order",
+            acknowledged,
+            previous=transmitted,
+            context=supplier_order_context(),
+        )
+        validate_record(
+            "supplier_order",
+            acknowledged,
+            previous=acknowledged,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "supplier_order",
+            {**acknowledged, "supplier_acknowledgement_id": "ack:other"},
+            previous=acknowledged,
+            context=supplier_order_context(),
+        )
+
+        partial = {
+            **acknowledged,
+            "status": "Partially Received",
+            "received_at": "2026-07-11 08:00:00",
+            "receipt_evidence_json": '{"evidence_item_ids":["evidence:materials-2"]}',
+            "items": [
+                {**acknowledged["items"][0], "status": "Ordered", "received_qty": "5"},
+                {**acknowledged["items"][1], "status": "Ordered"},
+            ],
+        }
+        validate_record(
+            "supplier_order",
+            partial,
+            previous=acknowledged,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "invalid_state_transition",
+            validate_record,
+            "supplier_order",
+            {**partial, "status": "Cancelled"},
+            previous=partial,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "supplier_order_evidence_missing",
+            validate_record,
+            "supplier_order",
+            partial,
+            previous=acknowledged,
+            context=supplier_order_context(supplier_order_evidence={}),
+        )
+        self.assert_policy(
+            "supplier_order_receipt_evidence_not_append_only",
+            validate_record,
+            "supplier_order",
+            {
+                **partial,
+                "receipt_evidence_json": '{"evidence_item_ids":["evidence:materials-1"]}',
+            },
+            previous=partial,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "supplier_order_quantity_overage",
+            validate_record,
+            "supplier_order",
+            {
+                **partial,
+                "items": [
+                    {**partial["items"][0], "received_qty": "11"},
+                    partial["items"][1],
+                ],
+            },
+            previous=partial,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "supplier_order_received_quantity_mismatch",
+            validate_record,
+            "supplier_order",
+            {**partial, "status": "Received"},
+            previous=partial,
+            context=supplier_order_context(),
+        )
+
+        shortage = {
+            **partial,
+            "status": "Shortage",
+            "items": [
+                {**partial["items"][0], "status": "Received", "received_qty": "10"},
+                {**partial["items"][1], "status": "Shortage", "shortage_qty": "5"},
+            ],
+        }
+        validate_record(
+            "supplier_order",
+            shortage,
+            previous=partial,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "supplier_order_receipts_finalized",
+            validate_record,
+            "supplier_order",
+            {
+                **shortage,
+                "items": [
+                    {**shortage["items"][0], "received_qty": "9"},
+                    shortage["items"][1],
+                ],
+            },
+            previous=shortage,
+            context=supplier_order_context(),
         )
 
     def test_customer_quote_revision_is_minimal_and_cannot_replace_a_contract(self) -> None:
@@ -974,10 +1336,19 @@ class DomainPolicyTests(unittest.TestCase):
             "assigned_at": "2026-07-10 08:00:00",
             "scheduled_start": "2026-07-11 08:00:00",
         }
+        authority_context = {
+            "scheduled_assignment_crew_profile": current_crew_authority(),
+            "job_compliance_rows": [
+                current_compliance_authority(gate)
+                for gate in ("Crew", "Safety", "Access")
+            ],
+        }
 
         # Completion is intentionally not required to schedule production work.
         validate_record(
-            "job_assignment", assignment, context={"gates": gates, "gate_evidence": gate_evidence}
+            "job_assignment",
+            assignment,
+            context={"gates": gates, "gate_evidence": gate_evidence, **authority_context},
         )
 
         self.assert_policy(
@@ -1135,6 +1506,13 @@ class DomainPolicyTests(unittest.TestCase):
             "gate_evidence": {},
             "job_assignment_rows": [current],
             "supplier_order_exception_rows": [],
+            "scheduled_assignment_crew_profile": current_crew_authority(
+                name="crew-2", crew_profile_id="crew-2"
+            ),
+            "job_compliance_rows": [
+                current_compliance_authority(gate)
+                for gate in ("Crew", "Safety", "Access")
+            ],
         }
 
         self.assert_policy(
@@ -1203,6 +1581,7 @@ class DomainPolicyTests(unittest.TestCase):
             "roof_job": "job-1",
             "assignment_type": "Production",
             "status": "Assigned",
+            "crew_profile": "crew-1",
             "scheduled_start": "2026-07-10 12:00:00",
         }
         safety_plan = {
@@ -1262,6 +1641,11 @@ class DomainPolicyTests(unittest.TestCase):
                 "gate_evidence": gate_evidence_context(gates),
                 "job_assignment_rows": [assignment],
                 "work_package_assignment": assignment,
+                "work_package_crew_profile": current_crew_authority(),
+                "job_compliance_rows": [
+                    current_compliance_authority(gate)
+                    for gate in ("Crew", "Safety", "Access")
+                ],
                 "safety_plan_rows": [safety_plan],
                 "work_package_safety_plan": safety_plan,
                 "work_package_rows": [],
@@ -1401,6 +1785,260 @@ class DomainPolicyTests(unittest.TestCase):
             {**released, "status": "Superseded"},
             previous=released,
             context={"superseding_work_package": revision},
+        )
+
+    def test_crew_authority_blocks_scheduled_and_released_production(self) -> None:
+        gates = [
+            {
+                "roof_job": "job-1",
+                "gate": gate,
+                "state": "Done",
+                "evidence_item": f"ev-{gate.lower()}",
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+            }
+            for gate in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
+        ]
+        crew = current_crew_authority()
+        compliance_rows = [
+            current_compliance_authority(gate) for gate in ("Crew", "Safety", "Access")
+        ]
+        assignment = {
+            "name": "assignment:authority",
+            "assignment_id": "assignment:authority",
+            "roof_job": "job-1",
+            "assignment_type": "Production",
+            "status": "Assigned",
+            "crew_profile": "crew-1",
+            "assigned_by": "production@example.com",
+            "assigned_at": "2026-07-10 08:00:00",
+            "scheduled_start": "2026-07-11 08:00:00",
+        }
+        safety_plan = {
+            "name": "safety:authority",
+            "safety_plan_id": "safety:authority",
+            "roof_job": "job-1",
+            "version": 1,
+            "status": "Acknowledged",
+        }
+        released = {
+            "work_package_id": "work-package:authority",
+            "roof_job": "job-1",
+            "job_assignment": assignment["assignment_id"],
+            "safety_plan": safety_plan["safety_plan_id"],
+            "version": 1,
+            "status": "Released",
+            "title": "Authority-gated production work",
+            "objective": "Perform only the released production scope.",
+            "boundaries": "No work outside the released scope.",
+            "prerequisites": "All production controls remain current.",
+            "expected_result": "Released work is completed safely.",
+            "stop_conditions": "Stop for unsafe conditions or authority loss.",
+            "make_safe_procedure": "Secure the site and notify production.",
+            "issued_at": "2026-07-10 08:00:00",
+            "expires_at": "2026-07-12 08:00:00",
+            "released_by": "production@example.com",
+            "released_at": "2026-07-10 09:00:00",
+            "steps": [
+                {
+                    "sequence": 1,
+                    "instruction": "Confirm current authority before work.",
+                    "required_evidence": "Field check-in.",
+                    "acceptance_criteria": "Authority remains current.",
+                }
+            ],
+            "hold_points": [
+                {
+                    "sequence": 1,
+                    "hold_point": "Authority verification",
+                    "release_authority": "IronWrap Production",
+                    "required_evidence": "Current authority record.",
+                    "acceptance_criteria": "Authority permits the work.",
+                }
+            ],
+        }
+
+        def scheduled_context(**overrides: object) -> dict[str, object]:
+            context: dict[str, object] = {
+                "gates": gates,
+                "gate_evidence": gate_evidence_context(gates),
+                "scheduled_assignment_crew_profile": crew,
+                "job_compliance_rows": compliance_rows,
+            }
+            context.update(overrides)
+            return context
+
+        def release_context(**overrides: object) -> dict[str, object]:
+            context: dict[str, object] = {
+                "now": "2026-07-10 10:00:00",
+                "gates": gates,
+                "gate_evidence": gate_evidence_context(gates),
+                "job_assignment_rows": [assignment],
+                "work_package_assignment": assignment,
+                "work_package_crew_profile": crew,
+                "job_compliance_rows": compliance_rows,
+                "safety_plan_rows": [safety_plan],
+                "work_package_safety_plan": safety_plan,
+                "work_package_rows": [],
+            }
+            context.update(overrides)
+            return context
+
+        def assert_authority_block(
+            code: str,
+            *,
+            crew_profile: dict[str, object] | None = crew,
+            authorities: list[dict[str, object]] = compliance_rows,
+        ) -> None:
+            self.assert_policy(
+                code,
+                validate_record,
+                "job_assignment",
+                assignment,
+                context=scheduled_context(
+                    scheduled_assignment_crew_profile=crew_profile,
+                    job_compliance_rows=authorities,
+                ),
+            )
+            self.assert_policy(
+                code,
+                validate_record,
+                "work_package",
+                released,
+                context=release_context(
+                    work_package_crew_profile=crew_profile,
+                    job_compliance_rows=authorities,
+                ),
+            )
+
+        validate_record("job_assignment", assignment, context=scheduled_context())
+        validate_record("work_package", released, context=release_context())
+        self.assert_policy(
+            "production_assignment_requires_crew_profile",
+            validate_record,
+            "job_assignment",
+            {**assignment, "crew_profile": "", "assigned_user": "lead@example.com"},
+            context=scheduled_context(),
+        )
+        self.assert_policy(
+            "work_package_crew_authority_required",
+            validate_record,
+            "work_package",
+            released,
+            context=release_context(
+                work_package_assignment={**assignment, "crew_profile": ""}
+            ),
+        )
+        assert_authority_block("unverified_assignment_crew_profile", crew_profile=None)
+
+        for code, invalid_crew in (
+            (
+                "crew_competency_not_current",
+                current_crew_authority(competency_status="Expired"),
+            ),
+            (
+                "crew_competency_expired",
+                current_crew_authority(competency_expiry="2026-07-09"),
+            ),
+            (
+                "crew_wcb_not_current",
+                current_crew_authority(wcb_status="Revoked"),
+            ),
+            ("crew_wcb_expired", current_crew_authority(wcb_expiry="2026-07-09")),
+            ("unsafe_crew_equipment", current_crew_authority(equipment_status="Unsafe")),
+            (
+                "crew_equipment_inspection_expired",
+                current_crew_authority(equipment_expiry="2026-07-09"),
+            ),
+            (
+                "active_crew_stop",
+                current_crew_authority(
+                    active_stop=1,
+                    active_stop_at="2026-07-10 07:00:00",
+                    active_stop_reason="Weather stop remains active.",
+                ),
+            ),
+        ):
+            with self.subTest(crew_authority=code):
+                assert_authority_block(code, crew_profile=invalid_crew)
+
+        for gate in ("Crew", "Safety", "Access"):
+            with self.subTest(missing_compliance_authority=gate):
+                assert_authority_block(
+                    "missing_compliance_authority",
+                    authorities=[
+                        row for row in compliance_rows if row["required_before_gate"] != gate
+                    ],
+                )
+            with self.subTest(expired_compliance_authority=gate):
+                assert_authority_block(
+                    "expired_compliance_authority",
+                    authorities=[
+                        {**row, "expiry_date": "2026-07-09"}
+                        if row["required_before_gate"] == gate
+                        else row
+                        for row in compliance_rows
+                    ],
+                )
+            with self.subTest(not_yet_effective_compliance_authority=gate):
+                assert_authority_block(
+                    "compliance_authority_not_effective",
+                    authorities=[
+                        {**row, "effective_date": "2026-07-12"}
+                        if row["required_before_gate"] == gate
+                        else row
+                        for row in compliance_rows
+                    ],
+                )
+            with self.subTest(ambiguous_compliance_authority=gate):
+                assert_authority_block(
+                    "ambiguous_compliance_authority",
+                    authorities=[
+                        *compliance_rows,
+                        current_compliance_authority(
+                            gate,
+                            name=f"compliance:{gate.lower()}:2",
+                            compliance_record_id=f"compliance:{gate.lower()}:2",
+                        ),
+                    ],
+                )
+
+        waived_safety_gates = [
+            {
+                **gate,
+                "state": "Waived",
+                "waived_by": "owner@example.com",
+                "waived_at": "2026-07-10 08:00:00",
+                "waiver_reason": "Owner accepted the documented exception.",
+            }
+            if gate["gate"] == "Safety"
+            else gate
+            for gate in gates
+        ]
+        missing_safety_authority = [
+            row for row in compliance_rows if row["required_before_gate"] != "Safety"
+        ]
+        self.assert_policy(
+            "missing_compliance_authority",
+            validate_record,
+            "job_assignment",
+            assignment,
+            context=scheduled_context(
+                gates=waived_safety_gates,
+                gate_evidence=gate_evidence_context(waived_safety_gates),
+                job_compliance_rows=missing_safety_authority,
+            ),
+        )
+        self.assert_policy(
+            "missing_compliance_authority",
+            validate_record,
+            "work_package",
+            released,
+            context=release_context(
+                gates=waived_safety_gates,
+                gate_evidence=gate_evidence_context(waived_safety_gates),
+                job_compliance_rows=missing_safety_authority,
+            ),
         )
 
     def test_ready_and_done_gates_require_verified_same_job_evidence(self) -> None:
@@ -1649,9 +2287,17 @@ class DomainPolicyTests(unittest.TestCase):
             "crew_profile_id": "crew-1",
             "crew_name": "Calgary Metal Crew",
             "status": "Active",
+            "crew_type": "Internal",
             "primary_lead": "lead@example.com",
             "home_region": "Calgary, AB",
             "timezone": "America/Edmonton",
+            "competency_status": "Current",
+            "competency_checked_at": "2026-07-01 08:00:00",
+            "competency_expiry": "2026-12-31",
+            "equipment_status": "Safe",
+            "equipment_checked_at": "2026-07-01 08:00:00",
+            "equipment_expiry": "2026-12-31",
+            "active_stop": 0,
             "members": [
                 {"crew_user": "lead@example.com", "active": 1},
                 {"crew_user": "roofer@example.com", "active": 1},
@@ -1717,6 +2363,8 @@ class DomainPolicyTests(unittest.TestCase):
             "status": "Waived",
             "required_before_gate": "Materials",
             "owner_user": "production@example.com",
+            "effective_date": "2026-07-01",
+            "expiry_date": "2026-12-31",
             "waived_by": "owner@example.com",
             "waived_at": "2026-07-10 09:00:00",
             "waiver_reason": "Authority confirmed no permit is required for like-for-like work.",
@@ -1988,6 +2636,51 @@ class DomainPolicyTests(unittest.TestCase):
                 "captured_by": "sales@example.com",
             },
         )
+        portal_acceptance = {
+            "acceptance_id": "accept-portal-1",
+            "roof_job": "job-1",
+            "customer": "customer-1",
+            "customer_quote": "cq-1",
+            "proposal_evidence_pack": "proposal:cq-1",
+            "contract_version": "cq-1:v1",
+            "status": "Accepted",
+            "signer_name": "Alex Customer",
+            "signer_email": "alex@example.com",
+            "signer_ip": "203.0.113.10",
+            "accepted_at": "2026-07-10 10:00:00",
+            "acceptance_method": "Click to Accept",
+            "evidence_item": "ev-contract-portal-1",
+            "terms_hash": "a" * 64,
+            "terms_snapshot_json": '{"anchor":{"quote_id":"cq-1"}}',
+            "document_checksum": "b" * 64,
+            "source_system": "ironwrap-customer-portal",
+            "provider_reference": "challenge-1",
+            "captured_by": "customer-acceptance@example.com",
+        }
+        validate_record("contract_acceptance", portal_acceptance)
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "contract_acceptance",
+            {
+                key: value
+                for key, value in portal_acceptance.items()
+                if key != "terms_snapshot_json"
+            },
+        )
+        self.assert_policy(
+            "empty_json_contract",
+            validate_record,
+            "contract_acceptance",
+            {**portal_acceptance, "terms_snapshot_json": "{}"},
+        )
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "contract_acceptance",
+            {**portal_acceptance, "terms_snapshot_json": '{"anchor":{"quote_id":"cq-2"}}'},
+            previous=portal_acceptance,
+        )
         self.assert_policy(
             "invalid_acceptance_method",
             validate_record,
@@ -2038,7 +2731,8 @@ class DomainPolicyTests(unittest.TestCase):
     def test_reconciliation_and_tenant_export_fail_closed(self) -> None:
         reconciliation = {
             "reconciliation_id": "recon-1",
-            "system_name": "QuickBooks",
+            "roof_job": "job-1",
+            "system_name": "Accounting Bridge",
             "entity_type": "Invoice",
             "external_entity_id": "qb-1",
             "local_doctype": "Payment Milestone",
@@ -2046,6 +2740,8 @@ class DomainPolicyTests(unittest.TestCase):
             "direction": "Inbound",
             "status": "Matched",
             "detected_at": "2026-07-10 11:00:00",
+            "raw_key": "raw/quickbooks/2026-07-10/ow-recon.json",
+            "source_version": "Update",
             "source_amount": 1050,
             "local_amount": 1050,
             "currency": "CAD",
@@ -2059,6 +2755,86 @@ class DomainPolicyTests(unittest.TestCase):
             validate_record,
             "integration_reconciliation",
             {**reconciliation, "local_payload_hash": "b" * 64},
+        )
+
+        webhook_milestone = {
+            "payment_milestone_id": "qb:1234567890:Invoice:42",
+            "roof_job": "job-1",
+            "milestone_type": "Invoice",
+            "milestone_version": 1,
+            "status": "Webhook Seen",
+            "qb_entity_type": "Invoice",
+            "qb_entity_id": "42",
+            "qb_operation": "Update",
+            "realm_id": "1234567890",
+            "event_ts": "2026-07-10 11:00:00",
+            "raw_key": "raw/quickbooks/2026-07-10/ow-webhook.json",
+            "raw_payload_hash": "c" * 64,
+        }
+        validate_record("payment_milestone", webhook_milestone)
+        self.assert_policy(
+            "webhook_payment_milestone_provider_truth_unavailable",
+            validate_record,
+            "payment_milestone",
+            {**webhook_milestone, "payment_status": "Paid", "amount_paid": 1},
+        )
+        self.assert_policy(
+            "invalid_state_transition",
+            validate_record,
+            "payment_milestone",
+            {**webhook_milestone, "status": "Matched"},
+            previous=webhook_milestone,
+        )
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "payment_milestone",
+            {**webhook_milestone, "raw_payload_hash": "d" * 64},
+            previous=webhook_milestone,
+        )
+
+        pending = {
+            "reconciliation_id": f"qbr:{'c' * 64}:0",
+            "system_name": "QuickBooks",
+            "entity_type": "Payment",
+            "external_entity_id": "7",
+            "local_doctype": "Unresolved QuickBooks Event",
+            "local_name": f"qbr:{'c' * 64}:0",
+            "direction": "Inbound",
+            "status": "Pending",
+            "detected_at": "2026-07-10 11:00:00",
+            "raw_key": "raw/quickbooks/2026-07-10/ow-webhook.json",
+            "source_version": "Create",
+            "source_payload_hash": "c" * 64,
+            "local_payload_hash": "d" * 64,
+            "attempt_count": 0,
+        }
+        validate_record("integration_reconciliation", pending)
+        self.assert_policy(
+            "quickbooks_initial_status_must_be_pending",
+            validate_record,
+            "integration_reconciliation",
+            {**pending, "status": "Matched"},
+        )
+        self.assert_policy(
+            "quickbooks_provider_truth_unavailable",
+            validate_record,
+            "integration_reconciliation",
+            {
+                **pending,
+                "status": "Resolved",
+                "resolution_action": "Await authenticated provider read",
+                "resolved_by": "finance@example.com",
+                "resolved_at": "2026-07-10 12:00:00",
+                "resolution_evidence": "ev-provider-read",
+            },
+            previous=pending,
+        )
+        self.assert_policy(
+            "quickbooks_unresolved_linkage",
+            validate_record,
+            "integration_reconciliation",
+            {**pending, "local_doctype": "Payment Milestone"},
         )
 
         export = {
@@ -2469,6 +3245,654 @@ class DomainPolicyTests(unittest.TestCase):
             "white_label_tenant",
             tenant,
             context={"other_active_tenants": 1},
+        )
+
+    def test_supply_only_shop_order_requires_traceable_material_quality_and_yield(self) -> None:
+        item = {
+            "controlled_item_id": "item:panel:24ga:v1",
+            "status": "Approved",
+            "revision": 1,
+            "item_kind": "Finished Product",
+            "unit": "each",
+            "profile": "Standing seam panel",
+            "gauge": "24 ga",
+            "coating": "PVDF",
+            "colour": "Charcoal",
+            "dimension_spec": "16 in cover width",
+            "tolerance": "± 3 mm",
+            "lot_required": 1,
+            "certificate_required": 1,
+            "source_ref": "supplier-spec:2026-07",
+            "approved_by": "owner@example.com",
+            "approved_at": "2026-07-30 08:00:00",
+            "approval_note": "Approved metal system specification.",
+        }
+        validate_record("controlled_item", item)
+        self.assert_policy(
+            "immutable_field",
+            validate_record,
+            "controlled_item",
+            {**item, "source_ref": "supplier-spec:forged"},
+            previous=item,
+        )
+
+        lot_draft = {
+            "material_lot_id": "lot:coil:001",
+            "roof_job": "job-1",
+            "controlled_item": item["controlled_item_id"],
+            "source_kind": "Supplier Receipt",
+            "supplier_order": "so-1",
+            "source_evidence": "evidence:receipt-1",
+            "lot_number": "SUP-COIL-001",
+            "condition_status": "Accepted",
+            "received_quantity": 10,
+            "unit": "each",
+            "status": "Draft",
+        }
+        lot_context = {
+            "controlled_item": {
+                "name": item["controlled_item_id"],
+                "status": "Approved",
+            },
+            "supplier_order": {
+                "name": "so-1",
+                "roof_job": "job-1",
+                "status": "Received",
+            },
+        }
+        validate_record("material_lot", lot_draft, context=lot_context)
+        lot_available = {
+            **lot_draft,
+            "status": "Available",
+            "received_at": "2026-07-30 08:30:00",
+            "available_quantity": 10,
+            "reserved_quantity": 0,
+            "consumed_quantity": 0,
+        }
+        validate_record(
+            "material_lot", lot_available, previous=lot_draft, context=lot_context
+        )
+        self.assert_policy(
+            "unreceived_supplier_order",
+            validate_record,
+            "material_lot",
+            lot_available,
+            previous=lot_draft,
+            context={
+                **lot_context,
+                "supplier_order": {
+                    **lot_context["supplier_order"],
+                    "status": "Approved",
+                },
+            },
+        )
+        self.assert_policy(
+            "unapproved_material_lot_item",
+            validate_record,
+            "material_lot",
+            lot_available,
+            previous=lot_draft,
+            context={
+                **lot_context,
+                "controlled_item": {
+                    **lot_context["controlled_item"],
+                    "status": "Draft",
+                },
+            },
+        )
+        self.assert_policy(
+            "cross_job_material_lot_supplier_order",
+            validate_record,
+            "material_lot",
+            lot_available,
+            previous=lot_draft,
+            context={
+                **lot_context,
+                "supplier_order": {
+                    **lot_context["supplier_order"],
+                    "roof_job": "job-other",
+                },
+            },
+        )
+        self.assert_policy(
+            "material_lot_balance_mismatch",
+            validate_record,
+            "material_lot",
+            {**lot_available, "available_quantity": 9},
+            previous=lot_draft,
+            context=lot_context,
+        )
+        lot_reserved = {
+            **lot_available,
+            "status": "Reserved",
+            "available_quantity": 2,
+            "reserved_quantity": 8,
+            "consumed_quantity": 0,
+        }
+        validate_record(
+            "material_lot", lot_reserved, previous=lot_available, context=lot_context
+        )
+        lot_quarantined = {**lot_reserved, "status": "Quarantined"}
+        validate_record(
+            "material_lot", lot_quarantined, previous=lot_reserved, context=lot_context
+        )
+        self.assertEqual(
+            {
+                field: lot_quarantined[field]
+                for field in ("available_quantity", "reserved_quantity", "consumed_quantity")
+            },
+            {
+                field: lot_reserved[field]
+                for field in ("available_quantity", "reserved_quantity", "consumed_quantity")
+            },
+        )
+
+        line = {
+            "line_no": 1,
+            "controlled_item": item["controlled_item_id"],
+            "requested_quantity": 8,
+            "accepted_quantity": 8,
+            "billable_quantity": 8,
+            "unit": "each",
+            "dimensions": "2400 mm panel length",
+            "tolerance": "± 3 mm",
+            "orientation": "Eave to ridge",
+            "invoice_basis": "Each",
+            "needs_review": 0,
+        }
+        draft = {
+            "shop_order_id": "shop:job-1:001",
+            "roof_job": "job-1",
+            "material_takeoff": "takeoff-1",
+            "supplier_order": "so-1",
+            "work_package": "wp:shop-1",
+            "status": "Draft",
+            "lines": [line],
+        }
+        source_context = {
+            "material_takeoff": {
+                "name": "takeoff-1",
+                "roof_job": "job-1",
+                "status": "Approved",
+            },
+            "supplier_order": {
+                "name": "so-1",
+                "roof_job": "job-1",
+                "status": "Received",
+            },
+            "work_package": {
+                "name": "wp:shop-1",
+                "roof_job": "job-1",
+                "status": "Released",
+            },
+        }
+        validate_record("shop_order", draft, context=source_context)
+        released = {
+            **draft,
+            "status": "Released",
+            "released_by": "production@example.com",
+            "released_at": "2026-07-30 09:00:00",
+        }
+        validate_record("shop_order", released, previous=draft, context=source_context)
+        self.assert_policy(
+            "cross_job_shop_supplier_order",
+            validate_record,
+            "shop_order",
+            released,
+            previous=draft,
+            context={
+                **source_context,
+                "supplier_order": {
+                    **source_context["supplier_order"],
+                    "roof_job": "job-other",
+                },
+            },
+        )
+
+        allocation = {
+            "allocation_id": "alloc:1",
+            "line_no": 1,
+            "material_lot": lot_available["material_lot_id"],
+            "reserved_quantity": 10,
+            "issued_quantity": 10,
+            "unit": "each",
+            "status": "Issued",
+            "needs_review": 0,
+        }
+        shop_context = {
+            **source_context,
+            "material_lots": {lot_available["material_lot_id"]: lot_available},
+        }
+        reserved = {
+            **released,
+            "status": "Reserved",
+            "reserved_at": "2026-07-30 09:05:00",
+            "material_allocations": [allocation],
+        }
+        validate_record("shop_order", reserved, previous=released, context=shop_context)
+        quality_hold = {
+            **reserved,
+            "status": "Quality Hold",
+            "quality_hold_reason": "Incoming material inspection requires containment.",
+        }
+        validate_record(
+            "shop_order", quality_hold, previous=reserved, context=shop_context
+        )
+        quarantined_lot_context = {
+            **shop_context,
+            "material_lots": {
+                lot_available["material_lot_id"]: {
+                    **lot_available,
+                    "status": "Quarantined",
+                }
+            },
+        }
+        validate_record(
+            "shop_order",
+            quality_hold,
+            previous=reserved,
+            context=quarantined_lot_context,
+        )
+        self.assert_policy(
+            "shop_allocation_lot_unavailable",
+            validate_record,
+            "shop_order",
+            reserved,
+            previous=released,
+            context=quarantined_lot_context,
+        )
+        self.assert_policy(
+            "shop_allocation_roof_job_mismatch",
+            validate_record,
+            "shop_order",
+            reserved,
+            previous=released,
+            context={
+                **shop_context,
+                "material_lots": {
+                    lot_available["material_lot_id"]: {**lot_available, "roof_job": "job-other"}
+                },
+            },
+        )
+        self.assert_policy(
+            "shop_allocation_item_mismatch",
+            validate_record,
+            "shop_order",
+            reserved,
+            previous=released,
+            context={
+                **shop_context,
+                "material_lots": {
+                    lot_available["material_lot_id"]: {
+                        **lot_available,
+                        "controlled_item": "item:other",
+                    }
+                },
+            },
+        )
+        self.assert_policy(
+            "shop_allocation_unit_mismatch",
+            validate_record,
+            "shop_order",
+            reserved,
+            previous=released,
+            context={
+                **shop_context,
+                "material_lots": {
+                    lot_available["material_lot_id"]: {**lot_available, "unit": "kg"}
+                },
+            },
+        )
+        self.assert_policy(
+            "shop_allocation_quantity_exceeds_lot",
+            validate_record,
+            "shop_order",
+            reserved,
+            previous=released,
+            context={
+                **shop_context,
+                "material_lots": {
+                    lot_available["material_lot_id"]: {**lot_available, "received_quantity": 9}
+                },
+            },
+        )
+        operation = {
+            "sequence": 1,
+            "operation": "Form standing seam panel",
+            "machine_tooling": "Roll former / approved die set",
+            "operator": "fabricator@example.com",
+            "status": "Complete",
+            "started_at": "2026-07-30 09:12:00",
+        }
+        setup = {
+            **reserved,
+            "status": "Setup / First Piece",
+            "setup_started_at": "2026-07-30 09:10:00",
+            "operations": [operation],
+        }
+        validate_record("shop_order", setup, previous=reserved, context=shop_context)
+        first_piece = {
+            "inspection_type": "First Piece",
+            "line_no": 1,
+            "allocation_id": "alloc:1",
+            "operation_sequence": 1,
+            "result": "Pass",
+            "nominal_value": 2400,
+            "measured_value": 2400,
+            "tolerance_value": 3,
+            "measurement_unit": "mm",
+            "measured_result": "Profile and length within tolerance.",
+            "inspected_by": "quality@example.com",
+            "inspected_at": "2026-07-30 09:15:00",
+            "evidence_item": "evidence:first-piece-1",
+            "needs_review": 0,
+        }
+        fabricating = {
+            **setup,
+            "status": "In Fabrication",
+            "fabrication_started_at": "2026-07-30 09:20:00",
+            "inspections": [first_piece],
+        }
+        validate_record("shop_order", fabricating, previous=setup, context=shop_context)
+        self.assert_policy(
+            "first_piece_tolerance_result_mismatch",
+            validate_record,
+            "shop_order",
+            {
+                **fabricating,
+                "inspections": [{**first_piece, "measured_value": 2404}],
+            },
+            previous=setup,
+            context=shop_context,
+        )
+        self.assert_policy(
+            "missing_first_piece_pass",
+            validate_record,
+            "shop_order",
+            {**fabricating, "inspections": []},
+            previous=setup,
+            context=shop_context,
+        )
+        self.assert_policy(
+            "non_independent_shop_inspection",
+            validate_record,
+            "shop_order",
+            {
+                **fabricating,
+                "inspections": [{**first_piece, "inspected_by": operation["operator"]}],
+            },
+            previous=setup,
+            context=shop_context,
+        )
+
+        final = {
+            **first_piece,
+            "inspection_type": "Final",
+            "evidence_item": "evidence:final-1",
+        }
+        ready = {
+            **fabricating,
+            "status": "Ready",
+            "ready_at": "2026-07-30 10:00:00",
+            "inspections": [first_piece, final],
+            "yields": [
+                {
+                    "allocation_id": "alloc:1",
+                    "operation_sequence": 1,
+                    "input_quantity": 10,
+                    "finished_quantity": 8,
+                    "remnant_quantity": 1,
+                    "remnant_lot": "lot:remnant:001",
+                    "scrap_quantity": 1,
+                    "scrap_disposition": "recycle-bin:metal",
+                    "evidence_item": "evidence:scrap-1",
+                }
+            ],
+            "bundles": [
+                {
+                    "bundle_id": "bundle:1",
+                    "line_no": 1,
+                    "material_lot": lot_available["material_lot_id"],
+                    "piece_identity": "panel:1-8",
+                    "accepted_quantity": 8,
+                    "unit": "each",
+                    "label_text": "job-1 / panel 1-8 / lot SUP-COIL-001",
+                    "handoff_status": "Prepared",
+                    "condition": "Finish protected; no visible damage.",
+                    "needs_review": 0,
+                }
+            ],
+        }
+        ready_context = {**shop_context, "open_nonconformance_count": 0}
+        validate_record("shop_order", ready, previous=fabricating, context=ready_context)
+        self.assert_policy(
+            "open_shop_nonconformance",
+            validate_record,
+            "shop_order",
+            ready,
+            previous=fabricating,
+            context={**ready_context, "open_nonconformance_count": 1},
+        )
+        self.assert_policy(
+            "shop_yield_conservation_mismatch",
+            validate_record,
+            "shop_order",
+            {
+                **ready,
+                "yields": [
+                    {**ready["yields"][0], "finished_quantity": 7}
+                ],
+            },
+            previous=fabricating,
+            context=ready_context,
+        )
+
+        handed_over_bundle = {
+            **ready["bundles"][0],
+            "handoff_status": "Handed Over",
+            "handed_over_to": "install@example.com",
+            "handed_over_at": "2026-07-30 10:10:00",
+            "handoff_evidence": "evidence:bundle-handoff-1",
+        }
+        handed_over = {
+            **ready,
+            "status": "Handed Over",
+            "handed_over_to": "install@example.com",
+            "handed_over_at": "2026-07-30 10:10:00",
+            "handoff_evidence": "evidence:order-handoff-1",
+            "bundles": [handed_over_bundle],
+        }
+        validate_record(
+            "shop_order", handed_over, previous=ready, context=ready_context
+        )
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "shop_order",
+            {**handed_over, "handoff_evidence": None},
+            previous=ready,
+            context=ready_context,
+        )
+        self.assert_policy(
+            "unhanded_shop_bundle",
+            validate_record,
+            "shop_order",
+            {**handed_over, "bundles": [ready["bundles"][0]]},
+            previous=ready,
+            context=ready_context,
+        )
+
+        invoice_milestone = {
+            "name": "payment:shop-1:invoice-1",
+            "roof_job": "job-1",
+            "shop_order": draft["shop_order_id"],
+            "status": "Webhook Seen",
+        }
+        invoice_context = {
+            **ready_context,
+            "invoice_payment_milestone": invoice_milestone,
+        }
+        invoice_ready = {
+            **handed_over,
+            "status": "Invoice Ready",
+            "invoice_payment_milestone": invoice_milestone["name"],
+            "invoice_ready_at": "2026-07-30 10:15:00",
+        }
+        validate_record(
+            "shop_order",
+            invoice_ready,
+            previous=handed_over,
+            context=invoice_context,
+        )
+        self.assert_policy(
+            "cross_job_shop_invoice_basis",
+            validate_record,
+            "shop_order",
+            invoice_ready,
+            previous=handed_over,
+            context={
+                **invoice_context,
+                "invoice_payment_milestone": {
+                    **invoice_milestone,
+                    "roof_job": "job-other",
+                },
+            },
+        )
+        self.assert_policy(
+            "shop_invoice_basis_mismatch",
+            validate_record,
+            "shop_order",
+            invoice_ready,
+            previous=handed_over,
+            context={
+                **invoice_context,
+                "invoice_payment_milestone": {
+                    **invoice_milestone,
+                    "shop_order": "shop:job-other:001",
+                },
+            },
+        )
+        self.assert_policy(
+            "unverified_shop_invoice_basis",
+            validate_record,
+            "shop_order",
+            invoice_ready,
+            previous=handed_over,
+            context={
+                **invoice_context,
+                "invoice_payment_milestone": {
+                    **invoice_milestone,
+                    "status": "Ignored",
+                },
+            },
+        )
+
+        ncr = {
+            "nonconformance_id": "ncr:shop-1:1",
+            "shop_order": draft["shop_order_id"],
+            "material_lot": lot_available["material_lot_id"],
+            "status": "Draft",
+        }
+        ncr_context = {
+            "shop_order": {"name": draft["shop_order_id"], "roof_job": "job-1"},
+            "material_lot": lot_available,
+            "shop_order_allocation_lot_ids": {lot_available["material_lot_id"]},
+        }
+        validate_record("nonconformance", ncr, context=ncr_context)
+        contained_ncr = {
+            **ncr,
+            "status": "Contained",
+            "detected_at": "2026-07-30 09:15:00",
+            "reported_by": "quality@example.com",
+            "description": "First-piece measurement exceeded tolerance.",
+            "evidence_item": "evidence:first-piece-1",
+            "containment": "Material lot quarantined; Shop Order on Quality Hold.",
+        }
+        validate_record("nonconformance", contained_ncr, context=ncr_context)
+        self.assert_policy(
+            "nonconformance_roof_job_mismatch",
+            validate_record,
+            "nonconformance",
+            ncr,
+            context={
+                **ncr_context,
+                "material_lot": {**lot_available, "roof_job": "job-other"},
+            },
+        )
+        self.assert_policy(
+            "nonconformance_unallocated_lot",
+            validate_record,
+            "nonconformance",
+            ncr,
+            context={**ncr_context, "shop_order_allocation_lot_ids": {"lot:other"}},
+        )
+
+        remnant_draft = {
+            "material_lot_id": "lot:remnant:001",
+            "roof_job": "job-1",
+            "controlled_item": item["controlled_item_id"],
+            "source_kind": "Shop Remnant",
+            "source_shop_order": draft["shop_order_id"],
+            "source_evidence": "evidence:remnant-1",
+            "lot_number": "REM-001",
+            "condition_status": "Accepted",
+            "received_quantity": 1,
+            "unit": "each",
+            "status": "Draft",
+        }
+        validate_record("material_lot", remnant_draft)
+        remnant_available = {
+            **remnant_draft,
+            "status": "Available",
+            "received_at": "2026-07-30 10:00:00",
+            "available_quantity": 1,
+            "reserved_quantity": 0,
+            "consumed_quantity": 0,
+        }
+        remnant_context = {
+            "controlled_item": {
+                "name": item["controlled_item_id"],
+                "status": "Approved",
+            },
+            "source_shop_order": {
+                "name": draft["shop_order_id"],
+                "roof_job": "job-1",
+                "status": "Ready",
+            },
+        }
+        validate_record(
+            "material_lot",
+            remnant_available,
+            previous=remnant_draft,
+            context=remnant_context,
+        )
+        self.assert_policy(
+            "unfinalized_shop_remnant",
+            validate_record,
+            "material_lot",
+            remnant_available,
+            previous=remnant_draft,
+            context={
+                **remnant_context,
+                "source_shop_order": {
+                    **remnant_context["source_shop_order"],
+                    "status": "In Fabrication",
+                },
+            },
+        )
+        self.assert_policy(
+            "cross_job_shop_remnant",
+            validate_record,
+            "material_lot",
+            remnant_available,
+            previous=remnant_draft,
+            context={
+                **remnant_context,
+                "source_shop_order": {
+                    **remnant_context["source_shop_order"],
+                    "roof_job": "job-other",
+                },
+            },
         )
 
 

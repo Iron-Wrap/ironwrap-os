@@ -21,6 +21,7 @@ export function takeMagicLinkTokenFromWindow(): string | undefined {
 }
 
 export function clearPendingMagicLinkToken(): void {
+  fragmentRead = false;
   pendingToken = undefined;
 }
 

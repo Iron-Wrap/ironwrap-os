@@ -2,7 +2,8 @@
 
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
-Last verified: 2026-07-30
+Last verified: 2026-07-31
+Latest phase delta verified: 2026-07-31 (repository checks only)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
 ## Status vocabulary
@@ -24,8 +25,8 @@ Fresh checks on 2026-07-30 against this migration branch established:
 | Contract | Result |
 |---|---|
 | Documentation | 43 registered documents; authority, privacy paths, review metadata, and internal links validated |
-| Frappe model | 54 DocTypes: 44 top-level and 10 child |
-| Hermes policy | 8 roles validated against 159 implemented MCP tools |
+| Frappe model | 64 DocTypes: 48 top-level and 16 child |
+| Hermes policy | 8 roles validated against 169 implemented MCP tools |
 | Tenant isolation config | 2 tenant configs validated |
 | Newo release config | 5 staged tools, 31 operations, 20 production blockers represented |
 | Deployment contract | 198 checks passed, 0 failed |
@@ -35,7 +36,7 @@ Fresh checks on 2026-07-30 against this migration branch established:
 | PWA browser | 15 Playwright tests passed; 3 WebGL estimator cases were skipped by the configured suite |
 | Worker | 258 tests, typecheck, and explicit top-level-environment dry-run bundle passed |
 | MCP | 100 tests across Frappe, bus, and Newo servers passed |
-| Frappe | 100 unit tests passed |
+| Frappe | 102 unit tests passed |
 | Deployment/recovery tools | 72 tests passed |
 | Production Node dependencies | `npm audit --omit=dev` reported zero known vulnerabilities for app, Worker, and all three MCP packages |
 
@@ -77,6 +78,7 @@ Implemented model families:
 - payment milestone, completion, warranty, review request;
 - communication consent/event;
 - versioned Work Package, step, hold point, and immutable Work Package event records;
+- controlled item, material lot, shop order, nonconformance;
 - reconciliation, automation incident, Hermes run, tenant export, white-label tenant, market watch.
 
 Material target gaps:
@@ -105,10 +107,13 @@ Implemented:
 - owner, lead, estimator, production, field, finance-reconciliation, closeout, and support roles.
 - no direct accounting mutation.
 - Frappe, bus, and Newo boundaries.
+- versioned deterministic lead-triage shadow evaluation with an adversarial corpus; it is
+  informational only and cannot issue a receipt, activate policy, reach a route, or write a record.
 
 Current constraint:
 
 - most consequential Frappe writes require a human approval receipt;
+- a `shadow_eligible` lead-triage result still requires the existing human approval receipt;
 - customer communication is generally record-only;
 - routine autonomous external supplier, customer, accounting, regulator, and machine side effects
   are not present.
@@ -134,7 +139,7 @@ Implemented surfaces:
 - owner, approval inbox, sales, production, Newo operations;
 - estimator workbench and quote revision;
 - production schedule approval;
-- customer portal links and resolution;
+- customer portal links and resolution, plus disabled email-bound customer contract confirmation;
 - settings.
 
 Target gaps:
@@ -156,7 +161,7 @@ Implemented or represented:
 
 - JobNimbus bridge;
 - Google email/Drive paths;
-- QuickBooks webhook receipts/mirrors;
+- QuickBooks raw webhook receipts, immutable Webhook Seen projections for exact invoice-to-job links, and Pending reconciliation work;
 - Newo inbound/control/reconciliation;
 - Cloudflare D1/R2/Queue/Workers;
 - Frappe and Hermes;
@@ -166,11 +171,11 @@ Target gaps:
 
 - proof-backed retirement of temporary CRM/automation bridges;
 - direct customer send with consent/delivery/suppression reconciliation;
-- direct supplier order and acknowledgement;
+- direct supplier transmission/acknowledgement and provider reconciliation;
 - permit/regulator submission/status;
 - WCB clearance retrieval/status;
-- accounting invoice/payment/refund/payroll/tax side-effect contracts;
-- commercial e-sign or owned signing;
+- authenticated provider-detail reads and reconciliation for invoice/payment/credit/refund/payroll/tax facts; webhook identity alone never establishes paid, posted, or reconciled truth;
+- legal/commercial e-sign determination, cancellation, and business-acceptance proof;
 - machine, scanner, scale, printer, vehicle, wearable, and sensor identity/telemetry;
 - vendor failure and provider-switch continuity.
 
@@ -179,7 +184,7 @@ Target gaps:
 | Domain | Current state | Autonomous target gap | Proof required |
 |---|---|---|---|
 | Governance | Target prose and owner role | corporate/delegation/policy objects and activation separation | policy change audit |
-| Legal/licence | Generic compliance record | full authority register, expiry/revocation, jurisdiction rules | issuer recheck and blocked release |
+| Legal/licence | job compliance authority records with effective/expiry/revocation fences and owner-attributed waivers | full authority register, jurisdiction rules, and issuer integration | issuer recheck and blocked release |
 | Marketing | lead source + market watch | claims ledger, campaign side effects, suppression | unsupported claim rejected |
 | Lead intake | Strong implemented spine | all real sources cut over and bridge retirement | real dual-brand lead, reconcile |
 | Consent/comms | consent/event records and policy checks | autonomous provider send and response/suppression loop | opt-in/send/reply/STOP/reconcile |
@@ -187,20 +192,20 @@ Target gaps:
 | Survey | measurement/roof graph/evidence | field work package, calibration, conflict resolution | real site and conflicting source test |
 | Design | scope/options/quote evidence | controlled assemblies, details, bulletins, engineer/permit | system/version conflict block |
 | Estimate | takeoff/price/quote/revision | complete shop/labour/equipment/risk costing | estimate-to-actual closed job |
-| Contract | acceptance/evidence | correct agreement selection, cancellation, e-sign, authority | residential/commercial scenarios |
-| Preconstruction | seven gates + safety/compliance | complete multi-domain readiness and freshness | stale permit/WCB/weather injection |
-| Procurement | supplier quote/order records | vendor onboarding, PO transmit/ack, substitution, three-way match | duplicate/short/backorder test |
-| Inventory | none beyond order receipt summary | item/lot/bin/reservation/remnant/count/valuation | receive-reserve-use-reconcile |
-| Shop | no work-centre model | routing, machines, tooling, QC, yield, label, maintenance | physical synthetic/real shop batch |
+| Contract | Partial: email-bound, single-use click-to-accept evidence pinned to an approved quote, proposal pack, and canonical terms snapshot | correct agreement selection, cancellation, legal/commercial e-sign determination, authority, and live business proof | residential/commercial scenarios |
+| Preconstruction | seven gates plus current Crew/Safety/Access authority fences, including owner-attributed waivers | complete multi-domain readiness and issuer-backed freshness | stale permit/WCB/weather injection |
+| Procurement | Partial: supplier quote/order records plus signed internal transmission, evidence-backed acknowledgement, and receipt/shortage conservation facts; `Ordered` is internal only | vendor onboarding, direct supplier transmission/acknowledgement, substitution, three-way match, provider reconciliation | duplicate/short/backorder test |
+| Inventory | Partial: signed controlled-item approval, lot receipt/reservation, and reconciled shop yield/remnant/scrap lineage | bin/count/valuation plus physical use and reconciliation | receive-reserve-use-yield-reconcile |
+| Shop | Partial: signed release, reservation, setup route, independent first-piece/final QC, yield, labeled bundles, custody handover, and provider-mirror billing-basis readiness | cutting/fabrication event capture, work-centre tooling/maintenance, physical dispatch proof, and live reconciliation | physical synthetic/real shop batch including handover and billing basis |
 | Scheduling | assignment and approval ledger | complete constraint solver and autonomous reschedule | conflict/weather/material test |
 | Human field work | assignment-scoped Work Package, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
-| Safety | plan/acknowledgement | competency, equipment, incident, rescue, stop protection | stop/emergency drill |
-| Quality | completion/evidence | ITP, inspections, NCR, quarantine, disposition | seeded defect containment |
+| Safety | plan/acknowledgement plus Crew Profile competence, WCB, equipment, and active-stop release fences | individual equipment/incident/rescue registers and real-world proof | stop/emergency drill |
+| Quality | Partial: signed independent first-piece/final inspection, Quality Hold, NCR/quarantine, and verified evidence | ITP, disposition workflow, and live proof | seeded defect containment and final-inspection regression |
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |
 | Closeout | completion/warranty/review records | inspection, as-built, registration, accounting and archive loop | real closeout and recovery |
 | Warranty/service | warranty packet | service case, diagnosis, responsibility, remedy, recovery | callback end to end |
-| Finance | payment mirror + reconciliation | invoice/holdback/payment/refund/tax/payroll contracts | provider sandbox and accountant signoff |
-| Workforce | crew/assignment | HR, apprenticeship, competency, time, accommodation | worker lifecycle |
+| Finance | Partial: raw-backed immutable QuickBooks webhook identity ledger and Pending reconciliation work; no webhook-only provider payment, posting, or reconciliation truth | authenticated provider detail, provider-issued invoice/holdback/payment/refund/tax/payroll contracts, and accountant-approved reconciliation | provider sandbox, linked mirror, and accountant signoff |
+| Workforce | crew/assignment plus current competence and WCB summary controls | individual worker authority, HR, apprenticeship, time, accommodation | worker lifecycle |
 | Fleet/equipment | none | asset/driver/inspection/maintenance/cargo/incident | unsafe asset release blocked |
 | Facility | deployment infra only | shop/building/fire/security/environmental operations | facility inspection/drill |
 | Privacy/security | strong technical controls, consent; production dependency audit clear | complete data inventory, DSAR, breach, retention/destruction; resolve or explicitly accept dev-toolchain advisories | restore, breach, access, production-audit tests |

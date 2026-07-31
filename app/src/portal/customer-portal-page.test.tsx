@@ -32,4 +32,10 @@ describe("CustomerPortalView", () => {
     expect(screen.getByText("<img src=x onerror=alert(1)>")).toBeInTheDocument();
     expect(container.querySelector("img")).toBeNull();
   });
+
+  it("does not offer acceptance from a read-only capability without an approved quote", () => {
+    render(<CustomerPortalView model={model} portalToken={"a".repeat(43)} />);
+
+    expect(screen.queryByRole("button", { name: /email me a confirmation link/i })).toBeNull();
+  });
 });

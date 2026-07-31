@@ -25,6 +25,51 @@ RELEASABLE_WORK_PACKAGE_ASSIGNMENT_STATUSES = frozenset(
     ("Assigned", "Accepted", "In Progress")
 )
 ACTIVE_SUPPLIER_ORDER_EXCEPTION_STATUSES = frozenset(("Needs Review", "Shortage"))
+SUPPLIER_ORDER_STATUSES = frozenset(
+    (
+        "Draft",
+        "Needs Review",
+        "Approved",
+        "Ordered",
+        "Partially Received",
+        "Received",
+        "Shortage",
+        "Cancelled",
+    )
+)
+SUPPLIER_ORDER_POST_APPROVAL_STATUSES = frozenset(
+    ("Approved", "Ordered", "Partially Received", "Received", "Shortage")
+)
+SUPPLIER_ORDER_RECEIPT_STATUSES = frozenset(
+    ("Partially Received", "Received", "Shortage")
+)
+SUPPLIER_ORDER_FINAL_STATUSES = frozenset(("Received", "Shortage", "Cancelled"))
+SUPPLIER_ORDER_FROZEN_FIELDS = (
+    "roof_job",
+    "material_takeoff",
+    "source_quote",
+    "supplier",
+    "prepared_at",
+    "approved_by",
+    "approved_at",
+    "requested_delivery_date",
+    "order_summary_json",
+    "assumptions",
+    "exclusions",
+    "delivery_notes",
+)
+SUPPLIER_ORDER_ITEM_FROZEN_FIELDS = (
+    "category",
+    "item_name",
+    "quantity",
+    "unit",
+    "source_ref",
+    "substitution_notes",
+    "needs_review",
+)
+CREW_AUTHORITY_COMPLIANCE_GATES = frozenset(("Crew", "Safety", "Access"))
+CURRENT_AUTHORITY_STATUSES = frozenset(("Approved", "Passed", "Waived"))
+CURRENT_COMPLIANCE_GATE_STATES = frozenset(("Ready", "Done", "Waived"))
 WORK_PACKAGE_RELEASE_STATUSES = frozenset(("Released", "Acknowledged", "In Progress"))
 WORK_PACKAGE_FROZEN_FIELDS = (
     "roof_job",
@@ -56,6 +101,22 @@ WORK_PACKAGE_EVENT_TYPES = frozenset(
         "Hold Point Evidence",
         "Hold Point Released",
     )
+)
+SHOP_ORDER_RELEASED_STATUSES = frozenset(
+    (
+        "Released",
+        "Reserved",
+        "Setup / First Piece",
+        "In Fabrication",
+        "Quality Hold",
+        "Ready",
+        "Handed Over",
+        "Invoice Ready",
+        "Closed",
+    )
+)
+SHOP_ORDER_FINAL_STATUSES = frozenset(
+    ("Ready", "Handed Over", "Invoice Ready", "Closed")
 )
 
 
@@ -260,6 +321,7 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "communication_consent": ("consent_id",),
     "completion_packet": ("completion_packet_id",),
     "contract_acceptance": ("acceptance_id",),
+    "controlled_item": ("controlled_item_id",),
     "crew_profile": ("crew_profile_id",),
     "customer_decision": ("decision_id",),
     "customer_quote": ("customer_quote_id",),
@@ -272,9 +334,11 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "job_assignment": ("assignment_id",),
     "job_compliance_record": ("compliance_record_id",),
     "lead_envelope": ("envelope_id",),
+    "material_lot": ("material_lot_id",),
     "market_watch_item": ("watch_id",),
     "material_takeoff": ("takeoff_id",),
     "measurement_report": ("measurement_id",),
+    "nonconformance": ("nonconformance_id",),
     "option_package": ("option_package_id",),
     "payment_milestone": ("payment_milestone_id",),
     "price_book_rule": ("price_rule_id",),
@@ -287,6 +351,7 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "roofing_customer": ("customer_id",),
     "roofing_property": ("property_key",),
     "safety_plan": ("safety_plan_id",),
+    "shop_order": ("shop_order_id",),
     "scope_clause": ("scope_clause_id",),
     "supplier_order": ("supplier_order_id",),
     "supplier_profile": ("supplier_id",),
@@ -298,6 +363,16 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "work_package": ("work_package_id",),
     "work_package_event": ("work_package_event_id",),
 }
+
+QUICKBOOKS_FINANCE_ENTITY_TYPES = frozenset({"Invoice", "Payment", "CreditMemo", "RefundReceipt"})
+QUICKBOOKS_MILESTONE_TYPES = {
+    "Invoice": "Invoice",
+    "Payment": "Payment",
+    "CreditMemo": "Credit",
+    "RefundReceipt": "Refund",
+}
+QUICKBOOKS_FINANCE_OPERATIONS = frozenset({"Create", "Update", "Delete", "Void"})
+
 
 WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
     "appointment_request": (
@@ -343,6 +418,7 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "roof_job",
         "customer",
         "customer_quote",
+        "proposal_evidence_pack",
         "change_order",
         "contract_version",
         "status",
@@ -353,6 +429,7 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "acceptance_method",
         "evidence_item",
         "terms_hash",
+        "terms_snapshot_json",
         "document_checksum",
         "source_system",
         "provider_reference",
@@ -465,6 +542,7 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "local_name",
         "direction",
         "detected_at",
+        "raw_key",
         "source_payload_hash",
         "local_payload_hash",
         "supersedes",
@@ -502,6 +580,7 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "qb_entity_id",
         "realm_id",
         "raw_key",
+        "raw_payload_hash",
         "supersedes",
     ),
     # A gate's job/gate identity is fixed. Letting either move would bypass the
@@ -532,6 +611,14 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
     # A customer-visible clause is quote-owned. Once an operator associates it with a job/quote,
     # it must not be silently repointed to a later commercial revision.
     "scope_clause": ("roof_job", "customer_quote"),
+    "supplier_order": (
+        "internal_transmission_id",
+        "internal_transmitted_at",
+        "supplier_acknowledgement_id",
+        "supplier_acknowledged_at",
+        "supplier_acknowledgement_evidence",
+        "received_at",
+    ),
     "safety_plan": ("roof_job", "version", "prepared_by", "prepared_at", "supersedes"),
     "tenant_export_run": ("tenant", "requested_by", "requested_at", "scope_json", "supersedes"),
     "visual_property_model": ("provider", "provider_model_id", "model_uri", "raw_key"),
@@ -562,6 +649,7 @@ JSON_FIELDS: dict[str, tuple[str, ...]] = {
     "change_order": ("tax_policy_snapshot_json",),
     "communication_event": ("policy_reasons_json",),
     "completion_packet": ("photo_evidence_json", "evidence_summary_json"),
+    "contract_acceptance": ("terms_snapshot_json",),
     "customer_quote": (
         "quote_summary_json",
         "tax_policy_snapshot_json",
@@ -830,6 +918,177 @@ def _validate_crew_profile(record: Any, _context: Mapping[str, Any]) -> None:
             raise PolicyViolation("duplicate_crew_member", "active crew users must be unique")
         if _get(record, "primary_lead") not in active_users:
             raise PolicyViolation("invalid_crew_lead", "primary lead must be an active member")
+        require_fields(
+            record,
+            "competency_status",
+            "competency_checked_at",
+            "competency_expiry",
+            "equipment_status",
+            "equipment_checked_at",
+            "equipment_expiry",
+        )
+        if _get(record, "crew_type") in {"Subcontractor", "Mixed"}:
+            require_fields(record, "wcb_status", "wcb_checked_at", "wcb_expiry")
+        if bool(_get(record, "active_stop")):
+            require_fields(record, "active_stop_at", "active_stop_reason")
+        elif any(
+            not _blank(_get(record, field))
+            for field in ("active_stop_at", "active_stop_reason")
+        ):
+            raise PolicyViolation(
+                "stale_active_stop",
+                "active stop details are valid only while the stop is active",
+                "active_stop_reason",
+            )
+
+
+def _current_rows(rows: Sequence[Any], *, identity_field: str) -> list[Any]:
+    superseded = {
+        str(_get(row, "supersedes"))
+        for row in rows
+        if not _blank(_get(row, "supersedes"))
+    }
+    return [
+        row
+        for row in rows
+        if _record_references(row, identity_field).isdisjoint(superseded)
+    ]
+
+
+def _reference_date(value: Any) -> str | None:
+    if _blank(value):
+        return None
+    return str(value).strip()[:10]
+
+
+def _require_future_or_present(
+    record: Any, field: str, reference_date: str, code: str, message: str
+) -> None:
+    value = _reference_date(_get(record, field))
+    if not value or value < reference_date:
+        raise PolicyViolation(code, message, field)
+
+
+def _require_effective_on_or_before(
+    record: Any, field: str, reference_date: str, code: str, message: str
+) -> None:
+    value = _reference_date(_get(record, field))
+    if not value or value > reference_date:
+        raise PolicyViolation(code, message, field)
+
+
+def _require_crew_authority_ready(
+    crew: Any | None, reference_date: str, *, field: str = "crew_profile"
+) -> None:
+    if crew is None:
+        raise PolicyViolation(
+            "unverified_assignment_crew_profile",
+            "the linked Crew Profile could not be verified",
+            field,
+        )
+    if _get(crew, "status") != "Active":
+        raise PolicyViolation(
+            "inactive_assignment_crew_profile",
+            "the linked Crew Profile must be Active",
+            field,
+        )
+    if _get(crew, "competency_status") != "Current":
+        raise PolicyViolation(
+            "crew_competency_not_current",
+            "the linked Crew Profile does not have current competency authority",
+            field,
+        )
+    if _get(crew, "equipment_status") != "Safe":
+        raise PolicyViolation(
+            "unsafe_crew_equipment",
+            "the linked Crew Profile does not have safe inspected equipment authority",
+            field,
+        )
+    if bool(_get(crew, "active_stop")):
+        raise PolicyViolation(
+            "active_crew_stop",
+            "the linked Crew Profile has an active stop and cannot be scheduled or released",
+            field,
+        )
+    if _get(crew, "crew_type") in {"Subcontractor", "Mixed"}:
+        if _get(crew, "wcb_status") != "Current":
+            raise PolicyViolation(
+                "crew_wcb_not_current",
+                "the linked Crew Profile does not have current WCB authority",
+                field,
+            )
+        _require_future_or_present(
+            crew,
+            "wcb_expiry",
+            reference_date,
+            "crew_wcb_expired",
+            "the linked Crew Profile WCB authority expires before the scheduled or released work",
+        )
+    _require_future_or_present(
+        crew,
+        "competency_expiry",
+        reference_date,
+        "crew_competency_expired",
+        "the linked Crew Profile competency expires before the scheduled or released work",
+    )
+    _require_future_or_present(
+        crew,
+        "equipment_expiry",
+        reference_date,
+        "crew_equipment_inspection_expired",
+        "the linked Crew Profile equipment inspection expires before the scheduled or released work",
+    )
+
+
+def _require_current_compliance_authority(
+    rows: Sequence[Any], reference_date: str, gates: Sequence[Any]
+) -> None:
+    required_gates = {
+        str(_get(gate, "gate"))
+        for gate in gates
+        if _get(gate, "gate") in CREW_AUTHORITY_COMPLIANCE_GATES
+        and _get(gate, "state") in CURRENT_COMPLIANCE_GATE_STATES
+    }
+    current_rows = _current_rows(rows, identity_field="compliance_record_id")
+    for gate in sorted(required_gates):
+        matching_rows = [
+            row
+            for row in current_rows
+            if _get(row, "required_before_gate") == gate
+        ]
+        if not matching_rows:
+            raise PolicyViolation(
+                "missing_compliance_authority",
+                f"a current {gate} compliance authority is required before scheduling or release",
+                "required_before_gate",
+            )
+        if len(matching_rows) != 1:
+            raise PolicyViolation(
+                "ambiguous_compliance_authority",
+                f"exactly one current {gate} compliance authority is required before scheduling or release",
+                "required_before_gate",
+            )
+        row = matching_rows[0]
+        if _get(row, "status") not in CURRENT_AUTHORITY_STATUSES:
+            raise PolicyViolation(
+                "compliance_gate_block",
+                "current Crew/Safety/Access compliance authority is required before scheduling or release",
+                "required_before_gate",
+            )
+        _require_effective_on_or_before(
+            row,
+            "effective_date",
+            reference_date,
+            "compliance_authority_not_effective",
+            "a current Crew/Safety/Access compliance authority is not effective for the scheduled or released work",
+        )
+        _require_future_or_present(
+            row,
+            "expiry_date",
+            reference_date,
+            "expired_compliance_authority",
+            "a current Crew/Safety/Access compliance authority expires before the scheduled or released work",
+        )
 
 
 def _assignment_references(record: Any) -> set[str]:
@@ -934,6 +1193,12 @@ def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
     has_user = not _blank(_get(record, "assigned_user"))
     if has_crew == has_user:
         raise PolicyViolation("assignment_target", "assign exactly one crew or user")
+    if _get(record, "assignment_type") == "Production" and has_user:
+        raise PolicyViolation(
+            "production_assignment_requires_crew_profile",
+            "a Production assignment must target a Crew Profile with current authority",
+            "crew_profile",
+        )
     start = _get(record, "scheduled_start")
     end = _get(record, "scheduled_end")
     if not _blank(end) and _blank(start):
@@ -951,6 +1216,18 @@ def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
             "production_schedule_gate_block",
             context,
         )
+        if has_crew:
+            reference_date = _reference_date(start)
+            if reference_date:
+                _require_crew_authority_ready(
+                    context.get("scheduled_assignment_crew_profile"),
+                    reference_date,
+                )
+                _require_current_compliance_authority(
+                    context.get("job_compliance_rows", ()),
+                    reference_date,
+                    context.get("gates", ()),
+                )
     status = _get(record, "status")
     _enforce_state_transition(
         record,
@@ -1075,6 +1352,26 @@ def _validate_work_package_release_context(
             "stale_work_package_assignment",
             "the linked Job Assignment has been superseded",
             "job_assignment",
+        )
+    if _blank(_get(assignment, "crew_profile")):
+        raise PolicyViolation(
+            "work_package_crew_authority_required",
+            "a released Work Package requires a Crew Profile with current authority",
+            "job_assignment",
+        )
+    reference_date = _reference_date(
+        context.get("now") or _get(record, "released_at") or _get(record, "issued_at")
+    )
+    if reference_date:
+        _require_crew_authority_ready(
+            context.get("work_package_crew_profile"),
+            reference_date,
+            field="job_assignment",
+        )
+        _require_current_compliance_authority(
+            context.get("job_compliance_rows", ()),
+            reference_date,
+            context.get("gates", ()),
         )
 
     safety_plan = context.get("work_package_safety_plan")
@@ -1732,6 +2029,8 @@ def _validate_compliance(record: Any, context: Mapping[str, Any]) -> None:
         require_fields(record, "external_reference", "evidence_item")
     if status in {"Passed", "Failed"}:
         require_fields(record, "inspected_at")
+    if status in CURRENT_AUTHORITY_STATUSES:
+        require_fields(record, "effective_date", "expiry_date")
     if status == "Waived":
         require_fields(record, "waived_by", "waived_at", "waiver_reason")
     elif any(not _blank(_get(record, field)) for field in ("waived_by", "waived_at", "waiver_reason")):
@@ -1781,6 +2080,15 @@ def _validate_contract_acceptance(record: Any, context: Mapping[str, Any]) -> No
         require_fields(record, "accepted_at")
         if method == "Click to Accept":
             require_fields(record, "signer_ip")
+        if _get(record, "source_system") == "ironwrap-customer-portal":
+            require_fields(record, "proposal_evidence_pack", "terms_snapshot_json")
+            parse_json_field(
+                record,
+                "terms_snapshot_json",
+                required=True,
+                container_types=(dict,),
+                non_empty=True,
+            )
     require_sha256(record, "terms_hash", "document_checksum")
     _validate_correction(record, context)
 
@@ -1788,6 +2096,24 @@ def _validate_contract_acceptance(record: Any, context: Mapping[str, Any]) -> No
 def _validate_reconciliation(record: Any, context: Mapping[str, Any]) -> None:
     require_nonnegative(record, "attempt_count")
     status = _get(record, "status")
+    system_name = _get(record, "system_name")
+    quickbooks = isinstance(system_name, str) and system_name.strip().casefold() == "quickbooks"
+    previous = context.get("_previous")
+    # A webhook is only a provider identity signal. It may open Pending work,
+    # but cannot assert that provider and local accounting truth are matched or
+    # resolved until a future authenticated provider-side resolver exists.
+    if quickbooks and previous is None and status != "Pending":
+        raise PolicyViolation(
+            "quickbooks_initial_status_must_be_pending",
+            "QuickBooks reconciliation must begin Pending",
+            "status",
+        )
+    if quickbooks and status in {"Matched", "Resolved"}:
+        raise PolicyViolation(
+            "quickbooks_provider_truth_unavailable",
+            "QuickBooks Matched and Resolved states require an authenticated provider-side resolver",
+            "status",
+        )
     _enforce_state_transition(
         record,
         context,
@@ -1814,6 +2140,74 @@ def _validate_reconciliation(record: Any, context: Mapping[str, Any]) -> None:
             raise PolicyViolation("unmatched_amount", "matched monetary values must agree")
     if status in {"Resolved", "Ignored"}:
         require_fields(record, "resolution_action", "resolved_by", "resolved_at", "resolution_evidence")
+    if quickbooks:
+        require_fields(
+            record,
+            "entity_type",
+            "external_entity_id",
+            "local_doctype",
+            "local_name",
+            "direction",
+            "status",
+            "detected_at",
+            "source_version",
+            "raw_key",
+            "source_payload_hash",
+            "local_payload_hash",
+        )
+        if _get(record, "entity_type") not in QUICKBOOKS_FINANCE_ENTITY_TYPES:
+            raise PolicyViolation(
+                "unsupported_quickbooks_entity",
+                "QuickBooks reconciliation accepts only invoice, payment, credit, or refund entities",
+                "entity_type",
+            )
+        if _get(record, "direction") != "Inbound":
+            raise PolicyViolation(
+                "invalid_quickbooks_reconciliation_direction",
+                "QuickBooks webhook reconciliation must be inbound",
+                "direction",
+            )
+        if _get(record, "source_version") not in QUICKBOOKS_FINANCE_OPERATIONS:
+            raise PolicyViolation(
+                "invalid_quickbooks_operation",
+                "QuickBooks webhook operation is unsupported",
+                "source_version",
+            )
+        if not str(_get(record, "raw_key") or "").startswith("raw/quickbooks/"):
+            raise PolicyViolation(
+                "invalid_quickbooks_raw_key",
+                "QuickBooks reconciliation must point to immutable raw webhook evidence",
+                "raw_key",
+            )
+        require_sha256(record, "source_payload_hash", "local_payload_hash")
+        if status == "Pending":
+            if _get(record, "source_payload_hash") == _get(record, "local_payload_hash"):
+                raise PolicyViolation(
+                    "premature_quickbooks_reconciliation",
+                    "a raw webhook receipt cannot reconcile itself without provider detail",
+                    "local_payload_hash",
+                )
+            if _blank(_get(record, "roof_job")):
+                if _get(record, "local_doctype") != "Unresolved QuickBooks Event":
+                    raise PolicyViolation(
+                        "quickbooks_unresolved_linkage",
+                        "missing exact job linkage must remain an unresolved QuickBooks event",
+                        "local_doctype",
+                    )
+            elif _get(record, "local_doctype") != "Payment Milestone":
+                raise PolicyViolation(
+                    "quickbooks_linked_doctype_mismatch",
+                    "linked QuickBooks finance reconciliation must point to a Payment Milestone",
+                    "local_doctype",
+                )
+        if status == "Matched":
+            require_fields(record, "roof_job")
+            if _get(record, "local_doctype") != "Payment Milestone":
+                raise PolicyViolation(
+                    "quickbooks_matched_linkage_missing",
+                    "matched QuickBooks finance reconciliation requires an exact Payment Milestone linkage",
+                    "local_doctype",
+                )
     _validate_correction(record, context)
 
 
@@ -2024,26 +2418,1367 @@ def _validate_supplier_quote(record: Any, context: Mapping[str, Any]) -> None:
 
 def _validate_supplier_order(record: Any, context: Mapping[str, Any]) -> None:
     status = _get(record, "status")
-    gated = {"Approved", "Ordered", "Partially Received", "Received", "Shortage"}
-    if status not in gated:
-        return
-    require_fields(record, "roof_job", "material_takeoff", "supplier", "source_quote")
-    require_approval(record)
-    if _context_status(context, "takeoff_status") != "Approved":
+    if status not in SUPPLIER_ORDER_STATUSES:
         raise PolicyViolation(
-            "unapproved_takeoff", "linked Material Takeoff must be Approved"
+            "invalid_supplier_order_status", "unsupported supplier order status", "status"
         )
-    if _context_status(context, "supplier_quote_status") != "Approved":
+
+    previous = context.get("_previous")
+    if previous is None and status not in {"Draft", "Needs Review"}:
         raise PolicyViolation(
-            "unapproved_supplier_quote", "linked Supplier Quote must be Approved"
+            "invalid_supplier_order_initial_state",
+            "a Supplier Order must begin in Draft or Needs Review",
+            "status",
         )
-    parse_json_field(record, "order_summary_json", required=True, non_empty=True)
-    rows = _require_clean_rows(record, "items", quantity_field="quantity")
-    for row in rows:
-        require_nonnegative(row, "received_qty", "shortage_qty")
-    if status in {"Received", "Shortage"}:
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Needs Review", "Cancelled"},
+            "Needs Review": {"Draft", "Approved", "Cancelled"},
+            "Approved": {"Ordered", "Cancelled"},
+            "Ordered": {"Partially Received", "Received", "Shortage", "Cancelled"},
+            "Partially Received": {"Received", "Shortage"},
+            "Received": set(),
+            "Shortage": set(),
+            "Cancelled": set(),
+        },
+    )
+
+    if status in {"Draft", "Needs Review", "Approved"} and any(
+        not _blank(_get(record, field))
+        for field in ("internal_transmission_id", "internal_transmitted_at")
+    ):
+        raise PolicyViolation(
+            "supplier_order_transmission_before_ordered",
+            "internal transmission facts require the Ordered state",
+            "internal_transmission_id",
+        )
+
+    if status in {"Draft", "Needs Review", "Approved", "Ordered", "Cancelled"} and any(
+        not _blank(_get(record, field))
+        for field in ("received_at", "receipt_evidence_json")
+    ):
+        raise PolicyViolation(
+            "supplier_order_receipt_facts_before_receiving",
+            "receipt timestamp and evidence require a receipt or shortage state",
+            "received_at",
+        )
+
+    if status in SUPPLIER_ORDER_POST_APPROVAL_STATUSES:
+        require_fields(record, "roof_job", "material_takeoff", "supplier", "source_quote")
+        require_approval(record)
+        if _context_status(context, "takeoff_status") != "Approved":
+            raise PolicyViolation(
+                "unapproved_takeoff", "linked Material Takeoff must be Approved"
+            )
+        if _context_status(context, "supplier_quote_status") != "Approved":
+            raise PolicyViolation(
+                "unapproved_supplier_quote", "linked Supplier Quote must be Approved"
+            )
+        parse_json_field(record, "order_summary_json", required=True, non_empty=True)
+
+    rows = (
+        _require_clean_rows(record, "items", quantity_field="quantity")
+        if status in SUPPLIER_ORDER_POST_APPROVAL_STATUSES
+        else _rows(record, "items")
+    )
+    _lock_after_status(
+        record,
+        context,
+        set(SUPPLIER_ORDER_POST_APPROVAL_STATUSES | SUPPLIER_ORDER_FINAL_STATUSES),
+        *SUPPLIER_ORDER_FROZEN_FIELDS,
+    )
+    _lock_supplier_order_items(record, previous)
+
+    if status in {"Draft", "Needs Review", "Approved", "Ordered"}:
+        for index, row in enumerate(rows, start=1):
+            received = _decimal(row, "received_qty", required=True)
+            shortage = _decimal(row, "shortage_qty", required=True)
+            if received != Decimal("0") or shortage != Decimal("0"):
+                raise PolicyViolation(
+                    "supplier_order_receipt_before_receiving",
+                    "receipt quantities require a receipt or shortage state",
+                    f"items[{index}]",
+                )
+
+    if status in {"Ordered", *SUPPLIER_ORDER_RECEIPT_STATUSES}:
+        require_fields(record, "internal_transmission_id", "internal_transmitted_at")
+
+    _validate_supplier_order_acknowledgement(record, context, status)
+
+    if status in SUPPLIER_ORDER_RECEIPT_STATUSES:
         require_fields(record, "received_at")
-        parse_json_field(record, "receipt_evidence_json", required=True, non_empty=True)
+        evidence_ids = _supplier_order_receipt_evidence_ids(record)
+        _require_supplier_order_evidence(
+            record,
+            context,
+            evidence_ids,
+            "receipt_evidence_json",
+        )
+        if previous is not None and _get(previous, "status") in SUPPLIER_ORDER_RECEIPT_STATUSES:
+            prior_ids = _supplier_order_receipt_evidence_ids(previous)
+            if not set(prior_ids).issubset(evidence_ids):
+                raise PolicyViolation(
+                    "supplier_order_receipt_evidence_not_append_only",
+                    "receipt evidence cannot be removed after receiving begins",
+                    "receipt_evidence_json",
+                )
+        _validate_supplier_order_receipts(rows, status)
+
+
+def _lock_supplier_order_items(record: Any, previous: Any) -> None:
+    if previous is None:
+        return
+    previous_status = _get(previous, "status")
+    if previous_status not in (
+        SUPPLIER_ORDER_POST_APPROVAL_STATUSES | SUPPLIER_ORDER_FINAL_STATUSES
+    ):
+        return
+    previous_rows = _rows(previous, "items")
+    current_rows = _rows(record, "items")
+    if len(previous_rows) != len(current_rows):
+        raise PolicyViolation(
+            "supplier_order_items_immutable",
+            "approved Supplier Order items cannot be added, removed, or reordered",
+            "items",
+        )
+    for index, (before, after) in enumerate(zip(previous_rows, current_rows), start=1):
+        try:
+            enforce_immutable(after, before, *SUPPLIER_ORDER_ITEM_FROZEN_FIELDS)
+        except PolicyViolation as exc:
+            raise PolicyViolation(
+                "supplier_order_items_immutable",
+                "approved Supplier Order source item facts cannot change",
+                f"items[{index}]",
+            ) from exc
+        if previous_status in SUPPLIER_ORDER_FINAL_STATUSES:
+            try:
+                enforce_immutable(after, before, "status", "received_qty", "shortage_qty")
+            except PolicyViolation as exc:
+                raise PolicyViolation(
+                    "supplier_order_receipts_finalized",
+                    "final Supplier Order receipt quantities cannot change",
+                    f"items[{index}]",
+                ) from exc
+
+
+def _supplier_order_receipt_evidence_ids(record: Any) -> tuple[str, ...]:
+    contract = parse_json_field(
+        record,
+        "receipt_evidence_json",
+        required=True,
+        container_types=(dict,),
+        non_empty=True,
+    )
+    if set(contract) != {"evidence_item_ids"}:
+        raise PolicyViolation(
+            "invalid_supplier_order_receipt_evidence",
+            "receipt evidence must contain exactly evidence_item_ids",
+            "receipt_evidence_json",
+        )
+    evidence_ids = contract.get("evidence_item_ids")
+    if not isinstance(evidence_ids, list) or not 1 <= len(evidence_ids) <= 50:
+        raise PolicyViolation(
+            "invalid_supplier_order_receipt_evidence",
+            "receipt evidence requires 1 to 50 Evidence Item IDs",
+            "receipt_evidence_json",
+        )
+    normalized = tuple(
+        value.strip() if isinstance(value, str) else "" for value in evidence_ids
+    )
+    if (
+        any(not value or len(value) > 140 for value in normalized)
+        or len(set(normalized)) != len(normalized)
+    ):
+        raise PolicyViolation(
+            "invalid_supplier_order_receipt_evidence",
+            "receipt Evidence Item IDs must be unique bounded values",
+            "receipt_evidence_json",
+        )
+    return normalized
+
+
+def _require_supplier_order_evidence(
+    record: Any,
+    context: Mapping[str, Any],
+    evidence_ids: tuple[str, ...],
+    field: str,
+) -> None:
+    evidence = context.get("supplier_order_evidence", {})
+    if not isinstance(evidence, Mapping):
+        evidence = {}
+    for evidence_id in evidence_ids:
+        source = evidence.get(evidence_id)
+        if not isinstance(source, Mapping) or _get(source, "roof_job") != _get(record, "roof_job"):
+            raise PolicyViolation(
+                "supplier_order_evidence_missing",
+                "supplier order evidence must resolve to the same Roof Job",
+                field,
+            )
+        if (
+            _get(source, "proof_slot") != "Materials"
+            or _get(source, "sync_state") != "Verified"
+            or _get(source, "checksum_algorithm") != "SHA-256"
+            or _blank(_get(source, "verified_at"))
+            or _blank(_get(source, "verification_source"))
+            or not any(
+                not _blank(_get(source, pointer))
+                for pointer in ("source_uri", "r2_key", "drive_file_id")
+            )
+        ):
+            raise PolicyViolation(
+                "unverified_supplier_order_evidence",
+                "supplier order evidence must be verified Materials evidence with durable provenance",
+                field,
+            )
+        require_sha256(source, "content_checksum")
+
+
+def _validate_supplier_order_acknowledgement(
+    record: Any, context: Mapping[str, Any], status: str
+) -> None:
+    acknowledgement_fields = (
+        "supplier_acknowledgement_id",
+        "supplier_acknowledged_at",
+        "supplier_acknowledgement_evidence",
+    )
+    if not any(not _blank(_get(record, field)) for field in acknowledgement_fields):
+        return
+    if status not in {"Ordered", *SUPPLIER_ORDER_RECEIPT_STATUSES}:
+        raise PolicyViolation(
+            "supplier_order_acknowledgement_before_transmission",
+            "supplier acknowledgement requires an internally transmitted order",
+            "supplier_acknowledgement_id",
+        )
+    require_fields(record, "internal_transmission_id", "internal_transmitted_at")
+    require_fields(record, *acknowledgement_fields)
+    _require_supplier_order_evidence(
+        record,
+        context,
+        (str(_get(record, "supplier_acknowledgement_evidence")),),
+        "supplier_acknowledgement_evidence",
+    )
+
+
+def _validate_supplier_order_receipts(rows: list[Any], status: str) -> None:
+    total_received = Decimal("0")
+    total_shortage = Decimal("0")
+    all_accounted_for = True
+    for index, row in enumerate(rows, start=1):
+        ordered = _decimal(row, "quantity", required=True)
+        received = _decimal(row, "received_qty", required=True)
+        shortage = _decimal(row, "shortage_qty", required=True)
+        if ordered is None or ordered <= Decimal("0"):
+            raise PolicyViolation(
+                "invalid_supplier_order_quantity",
+                "ordered quantity must be greater than zero",
+                f"items[{index}]",
+            )
+        if received is None or shortage is None:
+            raise PolicyViolation(
+                "required_number",
+                "received and shortage quantities are required",
+                f"items[{index}]",
+            )
+        if received < Decimal("0") or shortage < Decimal("0"):
+            raise PolicyViolation(
+                "negative_value",
+                "received and shortage quantities must be nonnegative",
+                f"items[{index}]",
+            )
+        accounted_for = received + shortage
+        if accounted_for > ordered:
+            raise PolicyViolation(
+                "supplier_order_quantity_overage",
+                "received plus shortage quantity cannot exceed the ordered quantity",
+                f"items[{index}]",
+            )
+        all_accounted_for = all_accounted_for and accounted_for == ordered
+        total_received += received
+        total_shortage += shortage
+        expected_item_status = (
+            "Shortage"
+            if shortage > Decimal("0")
+            else "Received"
+            if received == ordered
+            else "Ordered"
+        )
+        if _get(row, "status") != expected_item_status:
+            raise PolicyViolation(
+                "supplier_order_item_receipt_status",
+                "item status must match its received and shortage quantities",
+                f"items[{index}]",
+            )
+
+    if status == "Partially Received":
+        if total_received <= Decimal("0") or all_accounted_for:
+            raise PolicyViolation(
+                "supplier_order_partial_receipt_invalid",
+                "partial receipt needs received quantity and an outstanding item balance",
+                "status",
+            )
+    elif status == "Received":
+        if not all_accounted_for or total_shortage != Decimal("0"):
+            raise PolicyViolation(
+                "supplier_order_received_quantity_mismatch",
+                "Received requires every ordered quantity to be received with no shortage",
+                "status",
+            )
+    elif status == "Shortage" and (
+        not all_accounted_for or total_shortage <= Decimal("0")
+    ):
+        raise PolicyViolation(
+            "supplier_order_shortage_quantity_mismatch",
+            "Shortage requires every ordered quantity to be received or short with a positive shortage",
+            "status",
+        )
+
+
+def _validate_controlled_item(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in {"Draft", "Approved", "Retired"}:
+        raise PolicyViolation("invalid_controlled_item_status", "unsupported item status", "status")
+    require_fields(
+        record,
+        "status",
+        "revision",
+        "item_kind",
+        "unit",
+        "profile",
+        "gauge",
+        "coating",
+        "colour",
+        "dimension_spec",
+        "tolerance",
+        "source_ref",
+    )
+    revision = _decimal(record, "revision", required=True)
+    if revision is not None and revision < 1:
+        raise PolicyViolation(
+            "invalid_controlled_item_revision",
+            "revision must be at least 1",
+            "revision",
+        )
+    if _get(record, "item_kind") not in {"Raw Material", "Finished Product"}:
+        raise PolicyViolation("invalid_controlled_item_kind", "unsupported item kind", "item_kind")
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Approved", "Retired"},
+            "Approved": {"Retired"},
+            "Retired": set(),
+        },
+    )
+    if status == "Approved":
+        require_approval(record, note="approval_note")
+    _lock_after_status(
+        record,
+        context,
+        {"Approved", "Retired"},
+        "revision",
+        "item_kind",
+        "unit",
+        "profile",
+        "gauge",
+        "coating",
+        "colour",
+        "dimension_spec",
+        "tolerance",
+        "lot_required",
+        "certificate_required",
+        "source_ref",
+    )
+
+
+def _validate_material_lot(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in {
+        "Draft",
+        "Available",
+        "Reserved",
+        "Quarantined",
+        "Consumed",
+        "Exhausted",
+    }:
+        raise PolicyViolation("invalid_material_lot_status", "unsupported lot status", "status")
+    require_fields(
+        record,
+        "roof_job",
+        "controlled_item",
+        "source_kind",
+        "lot_number",
+        "condition_status",
+        "received_quantity",
+        "unit",
+        "status",
+    )
+    require_nonnegative(record, "received_quantity", required=True)
+    received = _decimal(record, "received_quantity", required=True)
+    if received is not None and received <= 0:
+        raise PolicyViolation(
+            "invalid_material_lot_quantity",
+            "received quantity must be greater than zero",
+            "received_quantity",
+        )
+    if status != "Draft":
+        controlled_item = context.get("controlled_item")
+        if not isinstance(controlled_item, Mapping):
+            raise PolicyViolation(
+                "unverified_material_lot_item",
+                "a released Material Lot requires its Controlled Item",
+                "controlled_item",
+            )
+        if _get(controlled_item, "status") != "Approved":
+            raise PolicyViolation(
+                "unapproved_material_lot_item",
+                "a released Material Lot requires an Approved Controlled Item",
+                "controlled_item",
+            )
+    source_kind = _get(record, "source_kind")
+    if source_kind == "Supplier Receipt":
+        require_fields(record, "supplier_order", "source_evidence")
+        supplier_order = context.get("supplier_order")
+        if not isinstance(supplier_order, Mapping):
+            raise PolicyViolation(
+                "unverified_material_lot_supplier_order",
+                "a supplier Material Lot requires its source Supplier Order",
+                "supplier_order",
+            )
+        if _get(supplier_order, "roof_job") != _get(record, "roof_job"):
+            raise PolicyViolation(
+                "cross_job_material_lot_supplier_order",
+                "a supplier Material Lot must remain on its Supplier Order's Roof Job",
+                "supplier_order",
+            )
+        if _get(supplier_order, "status") not in {
+            "Partially Received",
+            "Received",
+        }:
+            raise PolicyViolation(
+                "unreceived_supplier_order",
+                "a supplier lot requires a received source Supplier Order",
+                "supplier_order",
+            )
+    elif source_kind == "Customer Stock":
+        require_fields(record, "source_evidence")
+    elif source_kind == "Shop Remnant":
+        require_fields(record, "source_shop_order", "source_evidence")
+        if status != "Draft":
+            source_shop_order = context.get("source_shop_order")
+            if not isinstance(source_shop_order, Mapping):
+                raise PolicyViolation(
+                    "unverified_shop_remnant_source",
+                    "a released remnant lot requires its source Shop Order",
+                    "source_shop_order",
+                )
+            if _get(source_shop_order, "roof_job") != _get(record, "roof_job"):
+                raise PolicyViolation(
+                    "cross_job_shop_remnant",
+                    "a remnant lot must remain on its source Shop Order's Roof Job",
+                    "source_shop_order",
+                )
+            if _get(source_shop_order, "status") not in SHOP_ORDER_FINAL_STATUSES:
+                raise PolicyViolation(
+                    "unfinalized_shop_remnant",
+                    "a remnant lot can only be released from a Ready or later Shop Order",
+                    "source_shop_order",
+                )
+    else:
+        raise PolicyViolation("invalid_material_lot_source", "unsupported lot source", "source_kind")
+    if _get(record, "condition_status") not in {"Accepted", "Damaged", "Quarantined"}:
+        raise PolicyViolation(
+            "invalid_material_lot_condition",
+            "unsupported receiving condition",
+            "condition_status",
+        )
+    if _get(record, "condition_status") == "Quarantined" and status != "Quarantined":
+        raise PolicyViolation(
+            "quarantined_lot_status",
+            "a quarantined receiving condition requires Quarantined status",
+            "status",
+        )
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Available", "Quarantined"},
+            "Available": {"Reserved", "Quarantined", "Exhausted"},
+            "Reserved": {"Available", "Consumed", "Exhausted", "Quarantined"},
+            "Quarantined": {"Available", "Reserved", "Exhausted"},
+            "Consumed": {"Exhausted"},
+            "Exhausted": set(),
+        },
+    )
+    if status != "Draft":
+        require_fields(
+            record,
+            "received_at",
+            "source_evidence",
+            "available_quantity",
+            "reserved_quantity",
+            "consumed_quantity",
+        )
+        require_nonnegative(
+            record,
+            "available_quantity",
+            "reserved_quantity",
+            "consumed_quantity",
+            required=True,
+        )
+        available = _decimal(record, "available_quantity", required=True)
+        reserved = _decimal(record, "reserved_quantity", required=True)
+        consumed = _decimal(record, "consumed_quantity", required=True)
+        if (
+            received is None
+            or available is None
+            or reserved is None
+            or consumed is None
+        ):
+            return
+        if abs(received - (available + reserved + consumed)) > Decimal("0.01"):
+            raise PolicyViolation(
+                "material_lot_balance_mismatch",
+                "received quantity must equal available plus reserved plus consumed quantity",
+                "received_quantity",
+            )
+        if status == "Available" and (available <= 0 or reserved != 0):
+            raise PolicyViolation(
+                "invalid_available_material_lot",
+                "an Available Material Lot must have stock and no active reservation",
+                "status",
+            )
+        if status == "Reserved" and reserved <= 0:
+            raise PolicyViolation(
+                "invalid_reserved_material_lot",
+                "a Reserved Material Lot must have an active reserved quantity",
+                "status",
+            )
+        if status in {"Consumed", "Exhausted"} and (
+            available != 0 or reserved != 0 or consumed != received
+        ):
+            raise PolicyViolation(
+                "invalid_consumed_material_lot",
+                "a consumed or exhausted Material Lot must have no available or reserved quantity",
+                "status",
+            )
+    _lock_after_status(
+        record,
+        context,
+        {"Available", "Reserved", "Quarantined", "Consumed", "Exhausted"},
+        "roof_job",
+        "controlled_item",
+        "source_kind",
+        "supplier_order",
+        "source_shop_order",
+        "source_evidence",
+        "lot_number",
+        "certificate_reference",
+        "condition_status",
+        "received_quantity",
+        "unit",
+        "received_at",
+    )
+
+
+def _shop_lines(record: Any, *, require_output: bool) -> dict[int, Any]:
+    rows = _require_clean_rows(record, "lines", quantity_field="requested_quantity")
+    lines: dict[int, Any] = {}
+    for expected, row in enumerate(rows, start=1):
+        line_no = _decimal(row, "line_no", required=True)
+        if line_no != expected:
+            raise PolicyViolation(
+                "invalid_shop_line_sequence",
+                "line numbers must be contiguous and start at 1",
+                "lines",
+            )
+        require_fields(
+            row,
+            "controlled_item",
+            "unit",
+            "dimensions",
+            "tolerance",
+            "orientation",
+            "invoice_basis",
+        )
+        requested = _decimal(row, "requested_quantity", required=True)
+        if requested is not None and requested <= 0:
+            raise PolicyViolation(
+                "invalid_shop_line_quantity",
+                "requested quantity must be greater than zero",
+                "lines",
+            )
+        if require_output:
+            require_nonnegative(row, "accepted_quantity", "billable_quantity", required=True)
+            accepted = _decimal(row, "accepted_quantity", required=True)
+            billable = _decimal(row, "billable_quantity", required=True)
+            if accepted is not None and accepted <= 0:
+                raise PolicyViolation(
+                    "invalid_shop_accepted_quantity",
+                    "accepted quantity must be greater than zero",
+                    "lines",
+                )
+            if accepted is not None and billable is not None and billable != accepted:
+                raise PolicyViolation(
+                    "shop_billable_quantity_mismatch",
+                    "billable quantity must equal accepted quantity for this supply-only slice",
+                    "lines",
+                )
+        lines[int(line_no)] = row
+    return lines
+
+
+def _shop_allocations(
+    record: Any, lines: Mapping[int, Any], context: Mapping[str, Any]
+) -> dict[str, Any]:
+    rows = _require_clean_rows(
+        record, "material_allocations", quantity_field="reserved_quantity"
+    )
+    allocations: dict[str, Any] = {}
+    reserved_by_lot: dict[str, Decimal] = {}
+    material_lots = context.get("material_lots")
+    if not isinstance(material_lots, Mapping):
+        raise PolicyViolation(
+            "unverified_shop_material_lots",
+            "Shop Order material allocations require locked Material Lot context",
+            "material_allocations",
+        )
+    for row in rows:
+        require_fields(row, "allocation_id", "line_no", "material_lot", "unit", "status")
+        allocation_id = str(_get(row, "allocation_id"))
+        if allocation_id in allocations:
+            raise PolicyViolation(
+                "duplicate_shop_allocation", "allocation IDs must be unique", "material_allocations"
+            )
+        line_no = _decimal(row, "line_no", required=True)
+        if line_no is None or int(line_no) not in lines:
+            raise PolicyViolation(
+                "unknown_shop_allocation_line",
+                "allocation must reference a Shop Order line",
+                "material_allocations",
+            )
+        material_lot_id = str(_get(row, "material_lot"))
+        material_lot = material_lots.get(material_lot_id)
+        if not isinstance(material_lot, Mapping):
+            raise PolicyViolation(
+                "unverified_shop_material_lot",
+                "allocation must reference a verified Material Lot",
+                "material_allocations",
+            )
+        line = lines[int(line_no)]
+        if _get(material_lot, "roof_job") != _get(record, "roof_job"):
+            raise PolicyViolation(
+                "shop_allocation_roof_job_mismatch",
+                "allocation Material Lot must belong to this Roof Job",
+                "material_allocations",
+            )
+        if _get(material_lot, "controlled_item") != _get(line, "controlled_item"):
+            raise PolicyViolation(
+                "shop_allocation_item_mismatch",
+                "allocation Material Lot must match its Shop Order line item",
+                "material_allocations",
+            )
+        if _get(row, "unit") != _get(line, "unit") or _get(material_lot, "unit") != _get(
+            line, "unit"
+        ):
+            raise PolicyViolation(
+                "shop_allocation_unit_mismatch",
+                "allocation, Material Lot, and Shop Order line must share a unit",
+                "material_allocations",
+            )
+        allowed_lot_statuses = {"Available", "Reserved", "Consumed"}
+        if _get(record, "status") == "Quality Hold":
+            allowed_lot_statuses.add("Quarantined")
+        if _get(material_lot, "status") not in allowed_lot_statuses:
+            raise PolicyViolation(
+                "shop_allocation_lot_unavailable",
+                "allocation Material Lot is not available for this shop flow",
+                "material_allocations",
+            )
+        require_nonnegative(row, "issued_quantity", required=True)
+        reserved = _decimal(row, "reserved_quantity", required=True)
+        issued = _decimal(row, "issued_quantity", required=True)
+        if reserved is not None and reserved <= 0:
+            raise PolicyViolation(
+                "invalid_shop_reservation_quantity",
+                "reserved quantity must be greater than zero",
+                "material_allocations",
+            )
+        if reserved is not None and issued is not None and issued > reserved:
+            raise PolicyViolation(
+                "shop_issue_exceeds_reservation",
+                "issued quantity cannot exceed the reservation",
+                "material_allocations",
+            )
+        if reserved is not None:
+            reserved_by_lot[material_lot_id] = (
+                reserved_by_lot.get(material_lot_id, Decimal("0")) + reserved
+            )
+        if _get(row, "status") not in {"Planned", "Reserved", "Issued", "Released"}:
+            raise PolicyViolation(
+                "invalid_shop_allocation_status",
+                "unsupported allocation status",
+                "material_allocations",
+            )
+        allocations[allocation_id] = row
+    for material_lot_id, reserved in reserved_by_lot.items():
+        received = _decimal(
+            material_lots[material_lot_id], "received_quantity", required=True
+        )
+        if received is None:
+            raise PolicyViolation(
+                "unverified_shop_material_lot",
+                "allocation Material Lot must include its received quantity",
+                "material_allocations",
+            )
+        if reserved > received:
+            raise PolicyViolation(
+                "shop_allocation_quantity_exceeds_lot",
+                "allocation reservations cannot exceed the Material Lot quantity",
+                "material_allocations",
+            )
+    return allocations
+
+
+def _shop_operations(record: Any) -> dict[int, Any]:
+    rows = _rows(record, "operations")
+    if not rows:
+        raise PolicyViolation("missing_shop_operations", "a shop route is required", "operations")
+    operations: dict[int, Any] = {}
+    for expected, row in enumerate(rows, start=1):
+        sequence = _decimal(row, "sequence", required=True)
+        if sequence != expected:
+            raise PolicyViolation(
+                "invalid_shop_operation_sequence",
+                "operation sequence must be contiguous and start at 1",
+                "operations",
+            )
+        require_fields(row, "operation", "machine_tooling", "operator", "status")
+        if _get(row, "status") not in {
+            "Planned",
+            "Ready",
+            "In Progress",
+            "Complete",
+            "Blocked",
+        }:
+            raise PolicyViolation(
+                "invalid_shop_operation_status",
+                "unsupported operation status",
+                "operations",
+            )
+        operations[int(sequence)] = row
+    return operations
+
+
+def _shop_inspections(
+    record: Any,
+    lines: Mapping[int, Any],
+    allocations: Mapping[str, Any],
+    operations: Mapping[int, Any],
+    *,
+    require_first_piece: bool,
+    require_final: bool,
+) -> None:
+    rows = _rows(record, "inspections")
+    first_piece_passes: set[int] = set()
+    final_passes: set[int] = set()
+    for row in rows:
+        require_fields(
+            row,
+            "inspection_type",
+            "line_no",
+            "allocation_id",
+            "operation_sequence",
+            "result",
+            "measured_result",
+            "inspected_by",
+            "inspected_at",
+            "evidence_item",
+        )
+        inspection_type = _get(row, "inspection_type")
+        if inspection_type not in {"Incoming", "First Piece", "Final"}:
+            raise PolicyViolation(
+                "invalid_shop_inspection_type",
+                "unsupported inspection type",
+                "inspections",
+            )
+        line_no = _decimal(row, "line_no", required=True)
+        allocation_id = str(_get(row, "allocation_id"))
+        if line_no is None or int(line_no) not in lines or allocation_id not in allocations:
+            raise PolicyViolation(
+                "invalid_shop_inspection_reference",
+                "inspection must reference a current line and allocation",
+                "inspections",
+            )
+        allocation_line = _decimal(allocations[allocation_id], "line_no", required=True)
+        if allocation_line is None or int(allocation_line) != int(line_no):
+            raise PolicyViolation(
+                "cross_line_shop_inspection",
+                "inspection allocation must belong to its line",
+                "inspections",
+            )
+        operation_sequence = _decimal(row, "operation_sequence", required=True)
+        if operation_sequence is None or int(operation_sequence) not in operations:
+            raise PolicyViolation(
+                "invalid_shop_inspection_operation",
+                "inspection must reference a current shop operation",
+                "inspections",
+            )
+        if (
+            inspection_type in {"First Piece", "Final"}
+            and _get(row, "inspected_by")
+            == _get(operations[int(operation_sequence)], "operator")
+        ):
+            raise PolicyViolation(
+                "non_independent_shop_inspection",
+                "First Piece and Final inspections must be independent of the operation's fabricator",
+                "inspections",
+            )
+        if inspection_type == "First Piece":
+            require_fields(
+                row,
+                "nominal_value",
+                "measured_value",
+                "tolerance_value",
+                "measurement_unit",
+            )
+            require_nonnegative(row, "measured_value", required=True)
+            nominal = _decimal(row, "nominal_value", required=True)
+            measured = _decimal(row, "measured_value", required=True)
+            tolerance = _decimal(row, "tolerance_value", required=True)
+            if nominal is None or nominal <= 0 or tolerance is None or tolerance <= 0:
+                raise PolicyViolation(
+                    "invalid_first_piece_measurement",
+                    "first-piece nominal and tolerance values must be greater than zero",
+                    "inspections",
+                )
+            if measured is None or _blank(_get(row, "measurement_unit")):
+                raise PolicyViolation(
+                    "invalid_first_piece_measurement",
+                    "first-piece measurement requires a value and unit",
+                    "inspections",
+                )
+            if (
+                _get(operations[int(operation_sequence)], "status")
+                not in {"In Progress", "Complete"}
+                or _blank(_get(operations[int(operation_sequence)], "started_at"))
+            ):
+                raise PolicyViolation(
+                    "first_piece_operation_not_started",
+                    "a first-piece inspection requires a started in-progress or completed operation",
+                    "inspections",
+                )
+        result = _get(row, "result")
+        if result not in {"Pass", "Fail"}:
+            raise PolicyViolation(
+                "invalid_shop_inspection_result",
+                "inspection result must be Pass or Fail",
+                "inspections",
+            )
+        if inspection_type == "First Piece":
+            within_tolerance = abs(measured - nominal) <= tolerance
+            if (result == "Pass") != within_tolerance:
+                raise PolicyViolation(
+                    "first_piece_tolerance_result_mismatch",
+                    "first-piece result must match the recorded measurement tolerance",
+                    "inspections",
+                )
+            expected_needs_review = 0 if result == "Pass" else 1
+            if _get(row, "needs_review") not in {expected_needs_review, bool(expected_needs_review)}:
+                raise PolicyViolation(
+                    "first_piece_review_state_mismatch",
+                    "first-piece review state must match its result",
+                    "inspections",
+                )
+        if result == "Pass" and inspection_type == "First Piece":
+            first_piece_passes.add(int(line_no))
+        if result == "Pass" and inspection_type == "Final":
+            final_passes.add(int(line_no))
+    if require_first_piece and set(lines) - first_piece_passes:
+        raise PolicyViolation(
+            "missing_first_piece_pass",
+            "every Shop Order line needs a passed First Piece inspection",
+            "inspections",
+        )
+    if require_final and set(lines) - final_passes:
+        raise PolicyViolation(
+            "missing_final_shop_inspection",
+            "every Shop Order line needs a passed Final inspection",
+            "inspections",
+        )
+
+
+def _shop_yield_and_bundles(
+    record: Any,
+    lines: Mapping[int, Any],
+    allocations: Mapping[str, Any],
+    operations: Mapping[int, Any],
+    *,
+    require_handover: bool,
+) -> None:
+    yields = _rows(record, "yields")
+    used_by_allocation: dict[str, Decimal] = {}
+    finished_by_line: dict[int, Decimal] = {}
+    for row in yields:
+        require_fields(
+            row,
+            "allocation_id",
+            "operation_sequence",
+            "input_quantity",
+            "finished_quantity",
+            "remnant_quantity",
+            "scrap_quantity",
+        )
+        allocation_id = str(_get(row, "allocation_id"))
+        operation_sequence = _decimal(row, "operation_sequence", required=True)
+        if (
+            allocation_id not in allocations
+            or operation_sequence is None
+            or int(operation_sequence) not in operations
+        ):
+            raise PolicyViolation(
+                "invalid_shop_yield_reference",
+                "yield must reference a current allocation and operation",
+                "yields",
+            )
+        require_nonnegative(
+            row,
+            "input_quantity",
+            "finished_quantity",
+            "remnant_quantity",
+            "scrap_quantity",
+            required=True,
+        )
+        input_quantity = _decimal(row, "input_quantity", required=True)
+        finished = _decimal(row, "finished_quantity", required=True)
+        remnant = _decimal(row, "remnant_quantity", required=True)
+        scrap = _decimal(row, "scrap_quantity", required=True)
+        if input_quantity is None or finished is None or remnant is None or scrap is None:
+            continue
+        if abs(input_quantity - (finished + remnant + scrap)) > Decimal("0.01"):
+            raise PolicyViolation(
+                "shop_yield_conservation_mismatch",
+                "input quantity must equal finished plus remnant plus scrap",
+                "yields",
+            )
+        if remnant > 0:
+            require_fields(row, "remnant_lot")
+        elif not _blank(_get(row, "remnant_lot")):
+            raise PolicyViolation(
+                "stale_shop_remnant_lot",
+                "remnant lot is only valid when remnant quantity is positive",
+                "yields",
+            )
+        if scrap > 0:
+            require_fields(row, "scrap_disposition", "evidence_item")
+        elif any(
+            not _blank(_get(row, field)) for field in ("scrap_disposition", "evidence_item")
+        ):
+            raise PolicyViolation(
+                "stale_shop_scrap_metadata",
+                "scrap metadata is only valid when scrap quantity is positive",
+                "yields",
+            )
+        used_by_allocation[allocation_id] = used_by_allocation.get(
+            allocation_id, Decimal("0")
+        ) + input_quantity
+        allocation_line = _decimal(allocations[allocation_id], "line_no", required=True)
+        if allocation_line is not None:
+            line_no = int(allocation_line)
+            finished_by_line[line_no] = finished_by_line.get(
+                line_no, Decimal("0")
+            ) + finished
+
+    for allocation_id, allocation in allocations.items():
+        issued = _decimal(allocation, "issued_quantity", required=True)
+        used = used_by_allocation.get(allocation_id, Decimal("0"))
+        if issued is not None and used != issued:
+            raise PolicyViolation(
+                "shop_issue_yield_mismatch",
+                "every issued quantity must reconcile to yield rows",
+                "yields",
+            )
+
+    bundles = _require_clean_rows(record, "bundles", quantity_field="accepted_quantity")
+    bundle_ids: set[str] = set()
+    bundled_by_line: dict[int, Decimal] = {}
+    allocation_lots = {str(_get(row, "material_lot")) for row in allocations.values()}
+    for row in bundles:
+        require_fields(
+            row,
+            "bundle_id",
+            "line_no",
+            "material_lot",
+            "piece_identity",
+            "accepted_quantity",
+            "unit",
+            "label_text",
+            "handoff_status",
+            "condition",
+        )
+        bundle_id = str(_get(row, "bundle_id"))
+        if bundle_id in bundle_ids:
+            raise PolicyViolation("duplicate_shop_bundle", "bundle IDs must be unique", "bundles")
+        bundle_ids.add(bundle_id)
+        line_no = _decimal(row, "line_no", required=True)
+        quantity = _decimal(row, "accepted_quantity", required=True)
+        if line_no is None or int(line_no) not in lines:
+            raise PolicyViolation(
+                "unknown_shop_bundle_line",
+                "bundle must reference a Shop Order line",
+                "bundles",
+            )
+        if str(_get(row, "material_lot")) not in allocation_lots:
+            raise PolicyViolation(
+                "unknown_shop_bundle_lot",
+                "bundle must use an allocated Material Lot",
+                "bundles",
+            )
+        if quantity is None or quantity <= 0:
+            raise PolicyViolation(
+                "invalid_shop_bundle_quantity",
+                "bundle quantity must be greater than zero",
+                "bundles",
+            )
+        if _get(row, "unit") != _get(lines[int(line_no)], "unit"):
+            raise PolicyViolation(
+                "shop_bundle_unit_mismatch",
+                "bundle unit must match its Shop Order line",
+                "bundles",
+            )
+        handoff_status = _get(row, "handoff_status")
+        if handoff_status not in {"Prepared", "Handed Over"}:
+            raise PolicyViolation(
+                "invalid_shop_bundle_handoff_status",
+                "unsupported bundle handoff status",
+                "bundles",
+            )
+        if handoff_status == "Handed Over":
+            require_fields(row, "handed_over_to", "handed_over_at", "handoff_evidence")
+        elif any(
+            not _blank(_get(row, field))
+            for field in ("handed_over_to", "handed_over_at", "handoff_evidence")
+        ):
+            raise PolicyViolation(
+                "stale_shop_bundle_handoff",
+                "handoff metadata is only valid after handover",
+                "bundles",
+            )
+        bundled_by_line[int(line_no)] = bundled_by_line.get(
+            int(line_no), Decimal("0")
+        ) + quantity
+
+    for line_no, line in lines.items():
+        accepted = _decimal(line, "accepted_quantity", required=True)
+        if finished_by_line.get(line_no, Decimal("0")) != accepted:
+            raise PolicyViolation(
+                "shop_finished_quantity_mismatch",
+                "finished yield must equal the accepted line quantity",
+                "yields",
+            )
+        if bundled_by_line.get(line_no, Decimal("0")) != accepted:
+            raise PolicyViolation(
+                "shop_bundle_quantity_mismatch",
+                "labeled bundles must equal the accepted line quantity",
+                "bundles",
+            )
+    if require_handover and any(
+        _get(row, "handoff_status") != "Handed Over" for row in bundles
+    ):
+        raise PolicyViolation(
+            "unhanded_shop_bundle",
+            "every bundle must be handed over before order handoff",
+            "bundles",
+        )
+
+
+def _validate_shop_order(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in {"Draft", *SHOP_ORDER_RELEASED_STATUSES}:
+        raise PolicyViolation("invalid_shop_order_status", "unsupported shop status", "status")
+    require_fields(
+        record,
+        "roof_job",
+        "material_takeoff",
+        "supplier_order",
+        "work_package",
+        "status",
+    )
+    if context.get("_previous") is None and status != "Draft":
+        raise PolicyViolation(
+            "invalid_shop_order_initial_state",
+            "a Shop Order must begin in Draft",
+            "status",
+        )
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Released"},
+            "Released": {"Reserved"},
+            "Reserved": {"Setup / First Piece", "Quality Hold"},
+            "Setup / First Piece": {"In Fabrication", "Quality Hold"},
+            "In Fabrication": {"Quality Hold", "Ready"},
+            "Quality Hold": {"Setup / First Piece", "In Fabrication"},
+            "Ready": {"Quality Hold", "Handed Over"},
+            "Handed Over": {"Invoice Ready", "Quality Hold"},
+            "Invoice Ready": {"Closed", "Quality Hold"},
+            "Closed": set(),
+        },
+    )
+    if status == "Draft":
+        return
+    lines = _shop_lines(record, require_output=status in SHOP_ORDER_FINAL_STATUSES)
+    material_takeoff = context.get("material_takeoff")
+    if not isinstance(material_takeoff, Mapping):
+        raise PolicyViolation(
+            "unverified_shop_takeoff",
+            "Shop Order release requires its Material Takeoff",
+            "material_takeoff",
+        )
+    if _get(material_takeoff, "roof_job") != _get(record, "roof_job"):
+        raise PolicyViolation(
+            "cross_job_shop_takeoff",
+            "Shop Order Material Takeoff must share its Roof Job",
+            "material_takeoff",
+        )
+    if _get(material_takeoff, "status") != "Approved":
+        raise PolicyViolation(
+            "unapproved_shop_takeoff",
+            "Shop Order release requires an Approved Material Takeoff",
+            "material_takeoff",
+        )
+    supplier_order = context.get("supplier_order")
+    if not isinstance(supplier_order, Mapping):
+        raise PolicyViolation(
+            "unverified_shop_supplier_order",
+            "Shop Order release requires its Supplier Order",
+            "supplier_order",
+        )
+    if _get(supplier_order, "roof_job") != _get(record, "roof_job"):
+        raise PolicyViolation(
+            "cross_job_shop_supplier_order",
+            "Shop Order Supplier Order must share its Roof Job",
+            "supplier_order",
+        )
+    if _get(supplier_order, "status") not in {
+        "Partially Received",
+        "Received",
+    }:
+        raise PolicyViolation(
+            "unreceived_shop_supplier_order",
+            "Shop Order release requires a received Supplier Order",
+            "supplier_order",
+        )
+    work_package = context.get("work_package")
+    if not isinstance(work_package, Mapping):
+        raise PolicyViolation(
+            "unverified_shop_work_package",
+            "Shop Order release requires its Work Package",
+            "work_package",
+        )
+    if _get(work_package, "roof_job") != _get(record, "roof_job"):
+        raise PolicyViolation(
+            "cross_job_shop_work_package",
+            "Shop Order Work Package must share its Roof Job",
+            "work_package",
+        )
+    if _get(work_package, "status") not in {
+        "Released",
+        "Acknowledged",
+        "In Progress",
+    }:
+        raise PolicyViolation(
+            "unreleased_shop_work_package",
+            "Shop Order release requires a released Work Package",
+            "work_package",
+        )
+    if status == "Released":
+        require_fields(record, "released_by", "released_at")
+    allocations = (
+        _shop_allocations(record, lines, context)
+        if status in SHOP_ORDER_RELEASED_STATUSES - {"Released"}
+        else {}
+    )
+    operations = (
+        _shop_operations(record)
+        if status in {"Setup / First Piece", "In Fabrication", *SHOP_ORDER_FINAL_STATUSES}
+        or (status == "Quality Hold" and _rows(record, "operations"))
+        else {}
+    )
+    if status == "Reserved":
+        require_fields(record, "reserved_at")
+    if status == "Setup / First Piece":
+        require_fields(record, "setup_started_at")
+    if status in {"In Fabrication", *SHOP_ORDER_FINAL_STATUSES}:
+        _shop_inspections(
+            record,
+            lines,
+            allocations,
+            operations,
+            require_first_piece=True,
+            require_final=status in SHOP_ORDER_FINAL_STATUSES,
+        )
+    elif status == "Quality Hold" and operations:
+        _shop_inspections(
+            record,
+            lines,
+            allocations,
+            operations,
+            require_first_piece=False,
+            require_final=False,
+        )
+    if status == "In Fabrication":
+        require_fields(record, "fabrication_started_at")
+    if status == "Quality Hold":
+        require_fields(record, "quality_hold_reason")
+    if status in SHOP_ORDER_FINAL_STATUSES:
+        if context.get("open_nonconformance_count") is None:
+            raise PolicyViolation(
+                "unverified_shop_nonconformance_state",
+                "Shop Order readiness requires a locked nonconformance check",
+            )
+        if int(context["open_nonconformance_count"] or 0) > 0:
+            raise PolicyViolation(
+                "open_shop_nonconformance",
+                "an unresolved Nonconformance blocks shop readiness",
+            )
+        _shop_yield_and_bundles(
+            record,
+            lines,
+            allocations,
+            operations,
+            require_handover=status in {"Handed Over", "Invoice Ready", "Closed"},
+        )
+    if status == "Ready":
+        require_fields(record, "ready_at")
+    if status in {"Handed Over", "Invoice Ready", "Closed"}:
+        require_fields(record, "handed_over_to", "handed_over_at", "handoff_evidence")
+    if status in {"Invoice Ready", "Closed"}:
+        require_fields(record, "invoice_payment_milestone", "invoice_ready_at")
+        payment_milestone = context.get("invoice_payment_milestone")
+        if not isinstance(payment_milestone, Mapping):
+            raise PolicyViolation(
+                "unverified_shop_invoice_basis",
+                "Invoice Ready requires its Payment Milestone",
+                "invoice_payment_milestone",
+            )
+        if _get(payment_milestone, "roof_job") != _get(record, "roof_job"):
+            raise PolicyViolation(
+                "cross_job_shop_invoice_basis",
+                "Payment Milestone must share the Shop Order Roof Job",
+                "invoice_payment_milestone",
+            )
+        if str(_get(payment_milestone, "shop_order")) != str(
+            _get(record, "shop_order_id")
+        ):
+            raise PolicyViolation(
+                "shop_invoice_basis_mismatch",
+                "Payment Milestone must be linked to this Shop Order",
+                "invoice_payment_milestone",
+            )
+        if _get(payment_milestone, "status") not in {
+            "Webhook Seen",
+            "Needs Review",
+            "Matched",
+        }:
+            raise PolicyViolation(
+                "unverified_shop_invoice_basis",
+                "Invoice Ready requires a linked payment milestone",
+                "invoice_payment_milestone",
+            )
+    if status == "Closed":
+        require_fields(record, "closed_at")
+        if _get(context["invoice_payment_milestone"], "status") != "Matched":
+            raise PolicyViolation(
+                "unmatched_shop_payment",
+                "Shop Order close requires a Matched payment milestone",
+                "invoice_payment_milestone",
+            )
+    _lock_after_status(
+        record,
+        context,
+        SHOP_ORDER_RELEASED_STATUSES,
+        "roof_job",
+        "material_takeoff",
+        "supplier_order",
+        "work_package",
+        "lines",
+    )
+
+
+def _validate_nonconformance(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in {"Draft", "Open", "Contained", "Dispositioned", "Closed"}:
+        raise PolicyViolation(
+            "invalid_nonconformance_status", "unsupported nonconformance status", "status"
+        )
+    require_fields(record, "shop_order", "material_lot", "status")
+    shop_order = context.get("shop_order")
+    material_lot = context.get("material_lot")
+    if not isinstance(shop_order, Mapping) or not isinstance(material_lot, Mapping):
+        raise PolicyViolation(
+            "unverified_nonconformance_lineage",
+            "Nonconformance requires its Shop Order and Material Lot lineage",
+        )
+    if _get(shop_order, "roof_job") != _get(material_lot, "roof_job"):
+        raise PolicyViolation(
+            "nonconformance_roof_job_mismatch",
+            "Nonconformance Shop Order and Material Lot must share a Roof Job",
+        )
+    allocation_lot_ids = context.get("shop_order_allocation_lot_ids")
+    if not isinstance(allocation_lot_ids, (set, frozenset, tuple, list)):
+        raise PolicyViolation(
+            "unverified_nonconformance_allocation",
+            "Nonconformance requires the Shop Order allocation lineage",
+        )
+    material_lot_ids = {
+        str(value)
+        for value in (_get(material_lot, "name"), _get(material_lot, "material_lot_id"))
+        if not _blank(value)
+    }
+    if not material_lot_ids & {str(value) for value in allocation_lot_ids}:
+        raise PolicyViolation(
+            "nonconformance_unallocated_lot",
+            "Nonconformance Material Lot must be allocated to its Shop Order",
+            "material_lot",
+        )
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Open"},
+            "Open": {"Contained"},
+            "Contained": {"Dispositioned"},
+            "Dispositioned": {"Closed"},
+            "Closed": set(),
+        },
+    )
+    if status in {"Open", "Contained", "Dispositioned", "Closed"}:
+        require_fields(record, "detected_at", "reported_by", "description", "evidence_item")
+    if status in {"Contained", "Dispositioned", "Closed"}:
+        require_fields(record, "containment")
+    if status in {"Dispositioned", "Closed"}:
+        require_fields(record, "disposition", "disposition_by", "disposition_at")
+    if status == "Closed":
+        require_fields(record, "closed_by", "closed_at", "closure_evidence")
+    _lock_after_status(
+        record,
+        context,
+        {"Open", "Contained", "Dispositioned", "Closed"},
+        "shop_order",
+        "material_lot",
+        "detected_at",
+        "reported_by",
+        "description",
+        "evidence_item",
+    )
 
 
 def _validate_customer_quote_correction(record: Any, context: Mapping[str, Any]) -> None:
@@ -2170,6 +3905,8 @@ def _validate_customer_quote(record: Any, context: Mapping[str, Any]) -> None:
         "tax_policy_snapshot_json",
         "quote_total",
         "currency",
+        "deposit_amount",
+        "amount_due",
         "scope_summary",
         "assumptions",
         "exclusions",
@@ -2342,12 +4079,66 @@ def _validate_payment_milestone(record: Any, context: Mapping[str, Any]) -> None
         context,
         "status",
         {
-            "Webhook Seen": {"Needs Review", "Matched", "Ignored"},
+            "Webhook Seen": {"Needs Review", "Ignored"},
             "Needs Review": {"Matched", "Ignored"},
             "Matched": set(),
             "Ignored": set(),
         },
     )
+    if _get(record, "status") == "Webhook Seen":
+        require_fields(
+            record,
+            "roof_job",
+            "milestone_type",
+            "milestone_version",
+            "qb_entity_type",
+            "qb_entity_id",
+            "qb_operation",
+            "realm_id",
+            "event_ts",
+            "raw_key",
+            "raw_payload_hash",
+        )
+        entity_type = _get(record, "qb_entity_type")
+        if entity_type not in QUICKBOOKS_FINANCE_ENTITY_TYPES:
+            raise PolicyViolation(
+                "unsupported_quickbooks_entity",
+                "Webhook Seen milestones accept only supported QuickBooks finance entities",
+                "qb_entity_type",
+            )
+        if _get(record, "milestone_type") != QUICKBOOKS_MILESTONE_TYPES[entity_type]:
+            raise PolicyViolation(
+                "quickbooks_milestone_type_mismatch",
+                "milestone type must match the immutable QuickBooks entity type",
+                "milestone_type",
+            )
+        if _get(record, "qb_operation") not in QUICKBOOKS_FINANCE_OPERATIONS:
+            raise PolicyViolation(
+                "invalid_quickbooks_operation",
+                "Webhook Seen milestones require a supported QuickBooks operation",
+                "qb_operation",
+            )
+        if not str(_get(record, "raw_key") or "").startswith("raw/quickbooks/"):
+            raise PolicyViolation(
+                "invalid_quickbooks_raw_key",
+                "Webhook Seen milestones must point to immutable raw webhook evidence",
+                "raw_key",
+            )
+        require_sha256(record, "raw_payload_hash")
+        if _get(record, "payment_status") not in {None, "", "Not Due"} or not _blank(_get(record, "truth_source")) or not _blank(_get(record, "truth_at")):
+            raise PolicyViolation(
+                "webhook_payment_milestone_provider_truth_unavailable",
+                "a webhook receipt cannot establish payment status or provider truth",
+                "payment_status",
+            )
+        for field in ("subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due"):
+            value = _decimal(record, field)
+            if value is not None and value != Decimal("0"):
+                raise PolicyViolation(
+                    "webhook_payment_milestone_provider_truth_unavailable",
+                    "a webhook receipt cannot establish financial amounts",
+                    field,
+                )
     if _get(record, "status") == "Matched":
         require_fields(
             record,
@@ -2468,6 +4259,23 @@ def _validate_proposal(record: Any, context: Mapping[str, Any]) -> None:
             "customer messages require a dedicated approved delivery workflow",
             "customer_message",
         )
+    _lock_after_status(
+        record,
+        context,
+        {"Approved"},
+        "pack_id",
+        "roof_job",
+        "quotation",
+        "prepared_at",
+        "approved_by",
+        "approved_at",
+        "evidence_summary_json",
+        "assumptions",
+        "exclusions",
+        "signed_evidence",
+        "signed_at",
+        "customer_message",
+    )
 
 
 def _is_approved_proposal_publication(
@@ -3476,6 +5284,7 @@ VALIDATORS = {
     "communication_event": _validate_communication,
     "completion_packet": _validate_completion,
     "contract_acceptance": _validate_contract_acceptance,
+    "controlled_item": _validate_controlled_item,
     "crew_profile": _validate_crew_profile,
     "customer_decision": _validate_customer_decision,
     "customer_quote": _validate_customer_quote,
@@ -3488,8 +5297,10 @@ VALIDATORS = {
     "job_assignment": _validate_job_assignment,
     "job_compliance_record": _validate_compliance,
     "lead_envelope": _validate_lead_envelope,
+    "material_lot": _validate_material_lot,
     "material_takeoff": _validate_takeoff,
     "measurement_report": _validate_measurement,
+    "nonconformance": _validate_nonconformance,
     "option_package": _validate_option_package,
     "payment_milestone": _validate_payment_milestone,
     "price_book_rule": _validate_price_rule,
@@ -3500,6 +5311,7 @@ VALIDATORS = {
     "roof_area": _validate_roof_area,
     "roof_job": _validate_roof_job,
     "safety_plan": _validate_safety_plan,
+    "shop_order": _validate_shop_order,
     "scope_clause": _validate_scope_clause,
     "supplier_order": _validate_supplier_order,
     "supplier_quote": _validate_supplier_quote,

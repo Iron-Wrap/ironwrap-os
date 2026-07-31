@@ -8,7 +8,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ironwrap_roofing.access_control import CUSTOMER_ACCEPTANCE_SERVICE_ROLE
+from ironwrap_roofing.access_control import (
+    CUSTOMER_ACCEPTANCE_SERVICE_ROLE,
+    FACET_DESIGN_PROJECTION_SERVICE_ROLE,
+)
 
 
 ADAPTER_PATH = (
@@ -37,6 +40,14 @@ EVIDENCE_ITEM_CONTROLLER_PATH = (
     / "doctype"
     / "evidence_item"
     / "evidence_item.py"
+)
+INTEGRATION_RECONCILIATION_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "integration_reconciliation"
+    / "integration_reconciliation.py"
 )
 CUSTOMER_QUOTE_CONTROLLER_PATH = (
     Path(__file__).resolve().parents[1]
@@ -437,6 +448,152 @@ class DocumentValidationAdapterTests(unittest.TestCase):
 
         controller = EVIDENCE_ITEM_CONTROLLER_PATH.read_text(encoding="utf-8")
         self.assertIn("validate_evidence_verification_mutation(self)", controller)
+
+    def test_facet_design_projection_records_require_private_context_and_are_immutable(self) -> None:
+        adapter, _ = self.load_adapter(
+            session_user="facet-projection@example.invalid",
+            roles=[FACET_DESIGN_PROJECTION_SERVICE_ROLE],
+        )
+        evidence = FakeDocument(
+            {
+                "evidence_id": "facet-design:proof-1",
+                "device_action_id": "facet-projection:proof-1",
+                "roof_job": "job-1",
+                "evidence_type": "Other",
+                "proof_owner": "facet-projection@example.invalid",
+                "proof_slot": "Estimate",
+                "source_system": "ironwrap-facet-design",
+                "r2_key": "facet-design/v1/facet-event-0001.json",
+                "content_checksum": "a" * 64,
+                "checksum_algorithm": "SHA-256",
+                "content_type": "application/json",
+                "content_length": 512,
+                "capture_actor": "facet-projection@example.invalid",
+                "captured_at": "2026-07-31T12:01:00.000Z",
+                "sync_state": "Verified",
+                "verified_at": "2026-07-31 12:02:00",
+                "verification_source": "ironwrap-worker-r2-facet-design-projection",
+                "customer_safe": 0,
+                "summary": "Facet design revision evidence; estimator reconciliation required before commercial use.",
+            }
+        )
+        reconciliation = FakeDocument(
+            {
+                "reconciliation_id": "facet-design-projection:proof-1",
+                "roof_job": "job-1",
+                "system_name": "Facet",
+                "entity_type": "Design Revision",
+                "external_entity_id": "facet-event:proof-1",
+                "local_doctype": "Customer Quote",
+                "local_name": "quote-1",
+                "direction": "Inbound",
+                "status": "Pending",
+                "detected_at": "2026-07-31T12:01:00.000Z",
+                "raw_key": "facet-design/v1/facet-event-0001.json",
+                "source_version": f"facet-json-v1:{'a' * 64}",
+                "source_payload_hash": "b" * 64,
+                "local_payload_hash": "c" * 64,
+                "last_attempt_at": "2026-07-31 12:02:00",
+                "attempt_count": 1,
+                "resolution_evidence": None,
+                "diff_json": '{"commercial_state":"none"}',
+            }
+        )
+        with self.assertRaisesRegex(FakeValidationError, "immutable"):
+            adapter.validate_facet_design_projection_evidence_mutation(evidence)
+        with self.assertRaisesRegex(FakeValidationError, "immutable"):
+            adapter.validate_facet_design_projection_reconciliation_mutation(reconciliation)
+        with adapter.facet_design_projection_issuance_context(evidence, reconciliation):
+            adapter.validate_facet_design_projection_evidence_mutation(evidence)
+            adapter.validate_evidence_verification_mutation(evidence)
+            adapter.validate_facet_design_projection_reconciliation_mutation(reconciliation)
+
+        with self.assertRaisesRegex(FakeValidationError, "immutable"):
+            adapter.validate_facet_design_projection_evidence_mutation(
+                FakeDocument({**evidence, "customer_safe": 1}, previous=dict(evidence))
+            )
+        normal_adapter, _ = self.load_adapter()
+        for field, value in {
+            "lead_envelope": "lead-1",
+            "source_uri": "https://example.invalid/facet-design.json",
+            "drive_file_id": "drive-file-1",
+            "latitude": 53.5461,
+            "longitude": -113.4938,
+            "location_accuracy_m": 5,
+            "correction_of": "facet-design:prior-proof",
+            "correction_reason": "forged correction",
+        }.items():
+            with self.subTest(projected_evidence_field=field):
+                with self.assertRaisesRegex(FakeValidationError, "immutable"):
+                    normal_adapter.validate_facet_design_projection_evidence_mutation(
+                        FakeDocument({**evidence, field: value}, previous=dict(evidence))
+                    )
+        for field, value in {
+            "source_amount": 1,
+            "local_amount": 1,
+            "currency": "CAD",
+            "last_attempt_at": "2026-07-31 12:03:00",
+            "attempt_count": 2,
+            "diff_json": '{"commercial_state":"forged"}',
+            "notes": "forged note",
+        }.items():
+            with self.subTest(projected_reconciliation_anchor_field=field):
+                with self.assertRaisesRegex(FakeValidationError, "immutable"):
+                    normal_adapter.validate_facet_design_projection_reconciliation_mutation(
+                        FakeDocument({**reconciliation, field: value}, previous=dict(reconciliation))
+                    )
+        for field, value in {
+            "resolution_action": "forged resolution",
+            "resolved_by": "owner@example.invalid",
+            "resolved_at": "2026-07-31 12:03:00",
+            "resolution_evidence": "forged-resolution-evidence",
+            "automation_incident": "incident-1",
+            "supersedes": "facet-design-projection:prior-proof",
+            "correction_reason": "forged correction",
+        }.items():
+            with self.subTest(projected_reconciliation_lifecycle_field=field):
+                with self.assertRaisesRegex(FakeValidationError, "immutable"):
+                    normal_adapter.validate_facet_design_projection_reconciliation_mutation(
+                        FakeDocument({**reconciliation, field: value}, previous=dict(reconciliation))
+                    )
+
+        mismatch = FakeDocument(
+            {**reconciliation, "status": "Mismatch"}, previous=dict(reconciliation)
+        )
+        normal_adapter.validate_facet_design_projection_reconciliation_mutation(mismatch)
+        normal_adapter.validate_business_document(mismatch, "integration_reconciliation")
+        resolved = FakeDocument(
+            {
+                **mismatch,
+                "status": "Resolved",
+                "resolution_action": "Estimator confirmed the approved design revision.",
+                "resolved_by": "owner@example.invalid",
+                "resolved_at": "2026-07-31 12:04:00",
+                "resolution_evidence": "facet-resolution-evidence-1",
+            },
+            previous=dict(mismatch),
+        )
+        normal_adapter.validate_facet_design_projection_reconciliation_mutation(resolved)
+        normal_adapter.validate_business_document(resolved, "integration_reconciliation")
+
+        service_adapter, _ = self.load_adapter(
+            session_user="facet-projection@example.invalid",
+            roles=[FACET_DESIGN_PROJECTION_SERVICE_ROLE],
+        )
+        with self.assertRaisesRegex(FakePermissionError, "Facet design projection service users"):
+            service_adapter.validate_evidence_verification_mutation(
+                FakeDocument({"evidence_id": "forged", "sync_state": "Local"})
+            )
+
+        evidence_controller = EVIDENCE_ITEM_CONTROLLER_PATH.read_text(encoding="utf-8")
+        reconciliation_controller = INTEGRATION_RECONCILIATION_CONTROLLER_PATH.read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("validate_facet_design_projection_evidence_mutation(self)", evidence_controller)
+        self.assertIn(
+            "validate_facet_design_projection_reconciliation_mutation(self)",
+            reconciliation_controller,
+        )
 
     def test_customer_contract_acceptance_requires_the_private_command_context(self) -> None:
         adapter, _ = self.load_adapter()

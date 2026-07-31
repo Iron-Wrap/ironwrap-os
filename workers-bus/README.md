@@ -43,7 +43,7 @@ Facet approved design
   ▼
 [1] signed raw event + source→local allowlist → immutable R2 ........... FIRST
 [2] design receipt + hashed nonce → D1 ........ no quote/contract/Frappe mutation
-[3] later projection consumes the anchored receipt, not a caller retry
+[3] scheduled projection uses an exact anchor allowlist → review-only Frappe evidence + pending reconciliation
 
 IronWrap PWA
   │  passwordless session cookie + exact-origin CORS + CSRF on authenticated mutations
@@ -73,6 +73,7 @@ IronWrap PWA
 | Frappe consumer | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
 | Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: retry-safe project/idempotency key + raw R2 + D1 envelope + Frappe Instant Estimate Session without JobNimbus/GHL dependency |
 | Facet approved-design receipt | `facet-design-ingest.ts` verifies a dedicated raw-body HMAC plus source-tenant allowlist, stores immutable R2 evidence first, then local-tenant D1 event/nonce anchors; it is distinct from estimate, quote, contract, and customer acceptance |
+| Facet review projection | `facet-design-projection.ts` reads only immutable D1 anchors, requires an exact deployment-controlled job/quote association, and creates non-customer-safe Evidence Item plus Pending Integration Reconciliation records; it never changes a quote, contract, acceptance, or Proposal Evidence Pack |
 | Passwordless app auth | `app-auth.ts` + D1 migration `0011`; one-time hashed links, hashed fixed-TTL sessions, exact-origin CORS, CSRF, throttles, and audit |
 | Permission-shaped PWA reads | `app-read-models.ts` + `frappe-read.ts`; hard-coded DocType/field/filter allowlists and fail-closed field assignment |
 
@@ -84,7 +85,8 @@ src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   Config-gated JobNimbus push adapter
 src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, estimate, measurement, evidence, field check-in, and payment milestone rows
 src/estimates.ts   Owned estimator/configurator intake; idempotent by project/key; no JobNimbus/GHL queue
-src/facet-design-ingest.ts Signed Facet approved-design evidence receipt; no Frappe projection or commercial mutation
+src/facet-design-ingest.ts Signed Facet approved-design evidence receipt; no Frappe or commercial mutation
+src/facet-design-projection.ts Scheduled review-only D1-anchor projection through a separately authenticated Frappe command
 src/measurement-intake-store.ts Durable, hashed measurement receipt/lease ledger and exception query
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; no prospect-SMS implementation
@@ -133,6 +135,9 @@ npx wrangler secret put PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER --env=""  # 32+ random
 npx wrangler secret put APP_AUTH_PEPPER --env=""  # 32+ random characters; required before APP_BFF_ENABLED=true
 npx wrangler secret put APPROVAL_BROKER_SHARED_SECRET --env=""  # only when the governed approval broker is enabled
 npx wrangler secret put FACET_DESIGN_INGEST_HMAC_KEY --env=""  # separate Facet event authority
+npx wrangler secret put FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY --env=""  # separate projection HMAC
+npx wrangler secret put FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY --env=""  # dedicated Frappe role
+npx wrangler secret put FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET --env=""
 
 npm test                     # pure-logic self-test
 npm run typecheck            # tsc --noEmit
@@ -508,9 +513,30 @@ D1 after immutable R2 storage. A first `202` and fresh-nonce idempotent `200` re
 `accepted`, `event_id`, `status:"received"`, `raw_sha256`, `frozen_evidence_sha256`, and
 `design_revision:{id,sha256}` anchors (the latter also has `idempotent_replay:true`). Reusing a
 nonce is rejected. This event is a customer design decision, not a quote, contract acceptance, or
-Frappe write. A future projection must map the anchored local `tenant_id`, `facet_project_id`,
-design revision id/hash, frozen-evidence hash, and R2 raw key into an explicitly governed Frappe
-design record.
+Frappe write.
+
+### Facet-to-Frappe review projection
+
+`FACET_DESIGN_FRAPPE_PROJECTION_ENABLED` stays `false` until a dedicated Frappe user has only the
+`IronWrap Facet Design Projection Service` role, its user email and separate HMAC are configured
+in the Frappe site, and its distinct API key, API secret, and HMAC are stored as Worker secrets.
+Never reuse the ingress HMAC, broad ERP identity, or customer-acceptance identity.
+
+The non-secret `FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON` is a reviewed deployment setting
+with exactly `{"schema_version":1,"associations":[...]}`. Each association contains only opaque
+`event_id`, `tenant_id`, `facet_project_id`, design revision id/hash, frozen-evidence hash,
+`roof_job_id`, and `customer_quote_id`; do not put names, addresses, prices, or free-form operator
+input in it. Every source anchor must exactly equal the immutable D1 receipt. A missing association
+is held and an anchor mismatch is rejected in the append-only
+`facet_design_projection_attempts` ledger; neither condition calls Frappe.
+
+For an exact approved current quote belonging to the locked Roof Job, the scheduled Worker command
+creates one deterministic, non-customer-safe Evidence Item and one Pending Integration
+Reconciliation record. It does not read R2 on this path and does not create or update a quote,
+price, contract, acceptance, or Proposal Evidence Pack. An estimator must reconcile the evidence
+before any commercial use. Before enabling the flag, run a disposable live proof for success,
+missing/mismatched association, exact replay, and Frappe refusal, then retain only redacted IDs and
+release evidence.
 
 Replay mutation bodies are strict and require `run_id` (3–128 safe identifier characters),
 `approved_by` (3–128 characters), and `reason` (10–500 characters). Targeted example:

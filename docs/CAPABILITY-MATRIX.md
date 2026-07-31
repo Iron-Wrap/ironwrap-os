@@ -2,7 +2,7 @@
 
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
-Last verified: 2026-07-30
+Last verified: 2026-07-31
 Latest phase delta verified: 2026-07-31 (repository checks only)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
@@ -107,10 +107,13 @@ Implemented:
 - owner, lead, estimator, production, field, finance-reconciliation, closeout, and support roles.
 - no direct accounting mutation.
 - Frappe, bus, and Newo boundaries.
+- versioned deterministic lead-triage shadow evaluation with an adversarial corpus; it is
+  informational only and cannot issue a receipt, activate policy, reach a route, or write a record.
 
 Current constraint:
 
 - most consequential Frappe writes require a human approval receipt;
+- a `shadow_eligible` lead-triage result still requires the existing human approval receipt;
 - customer communication is generally record-only;
 - routine autonomous external supplier, customer, accounting, regulator, and machine side effects
   are not present.

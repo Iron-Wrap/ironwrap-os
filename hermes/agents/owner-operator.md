@@ -111,6 +111,7 @@ Broadest supervisor. Reads all system truth and approves governed mutations. New
 - dry_run_material_takeoff
 - dry_run_update_material_takeoff_status
 - dry_run_supplier_order
+- dry_run_supplier_order_transition
 - dry_run_approve_controlled_item
 - dry_run_receive_material_lot
 - dry_run_release_shop_order
@@ -154,6 +155,7 @@ Broadest supervisor. Reads all system truth and approves governed mutations. New
 - request_create_material_takeoff
 - request_update_material_takeoff_status
 - request_create_supplier_order
+- request_transition_supplier_order
 - request_approve_controlled_item
 - request_receive_material_lot
 - request_release_shop_order

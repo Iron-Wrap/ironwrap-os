@@ -80,6 +80,7 @@ class FakeDb:
             ("`tabJob Assignment`", "job_assignments"),
             ("`tabCrew Profile`", "crew_profiles"),
             ("`tabEvidence Item`", "evidence"),
+            ("`tabPayment Milestone`", "payment_milestones"),
         )
         for table, fixture_key in table_maps:
             if table in normalized:
@@ -250,6 +251,22 @@ class ShopFabricationApiTests(unittest.TestCase):
                         "roof_job": "job-1",
                         "sync_state": "Verified",
                         "modified": "2026-07-30 10:01:30",
+                    }
+                )
+            },
+            "payment_milestones": {
+                "payment-milestone-1": FakeDoc(
+                    {
+                        "name": "payment-milestone-1",
+                        "payment_milestone_id": "payment-milestone-1",
+                        "roof_job": "job-1",
+                        "shop_order": "shop-1",
+                        "milestone_type": "Invoice",
+                        "status": "Matched",
+                        "qb_entity_type": "Invoice",
+                        "qb_entity_id": "qb-invoice-1",
+                        "raw_key": "quickbooks/v1/invoices/qb-invoice-1.json",
+                        "modified": "2026-07-30 10:10:20",
                     }
                 )
             },
@@ -525,6 +542,91 @@ class ShopFabricationApiTests(unittest.TestCase):
             ],
         }
 
+    def handover_ready_fixture(self) -> tuple[dict, FakeDoc, FakeDoc]:
+        fixtures, order, _, _, handoff_evidence = self.final_quality_ready_fixture()
+        bundle = self.final_quality_pass_payload(handoff_evidence, handoff_evidence)[
+            "bundles"
+        ][0]
+        bundle.update(
+            {
+                "handoff_status": "Prepared",
+                "handed_over_to": "",
+                "handed_over_at": "",
+                "handoff_evidence": "",
+                "needs_review": 0,
+            }
+        )
+        order.update(
+            {
+                "status": "Ready",
+                "ready_at": "2026-07-30 10:11:00",
+                "handed_over_to": "",
+                "handed_over_at": "",
+                "handoff_evidence": "",
+                "invoice_payment_milestone": "",
+                "invoice_ready_at": "",
+                "bundles": [bundle],
+            }
+        )
+        return fixtures, order, handoff_evidence
+
+    def handed_over_fixture(self) -> tuple[dict, FakeDoc, FakeDoc]:
+        fixtures, order, handoff_evidence = self.handover_ready_fixture()
+        order.update(
+            {
+                "status": "Handed Over",
+                "handed_over_to": "field@example.com",
+                "handed_over_at": "2026-07-30 10:12:00",
+                "handoff_evidence": handoff_evidence["name"],
+            }
+        )
+        for bundle in order["bundles"]:
+            bundle.update(
+                {
+                    "handoff_status": "Handed Over",
+                    "handed_over_to": order["handed_over_to"],
+                    "handed_over_at": order["handed_over_at"],
+                    "handoff_evidence": handoff_evidence["name"],
+                }
+            )
+        return fixtures, order, handoff_evidence
+
+    def handover_snapshot(
+        self,
+        api,
+        fixtures: dict,
+        order: FakeDoc,
+        handoff_evidence: FakeDoc,
+    ) -> dict:
+        return api._shop_order_handover_snapshot(
+            order,
+            [handoff_evidence],
+            {
+                "material_takeoff": fixtures["takeoffs"]["takeoff-1"],
+                "supplier_order": fixtures["supplier_orders"]["supplier-1"],
+                "work_package": fixtures["work_packages"]["package-1"],
+            },
+        )
+
+    def billing_basis_snapshot(
+        self,
+        api,
+        fixtures: dict,
+        order: FakeDoc,
+        payment_milestone: FakeDoc,
+        handoff_evidence: FakeDoc,
+    ) -> dict:
+        return api._shop_order_billing_basis_snapshot(
+            order,
+            payment_milestone,
+            handoff_evidence,
+            {
+                "material_takeoff": fixtures["takeoffs"]["takeoff-1"],
+                "supplier_order": fixtures["supplier_orders"]["supplier-1"],
+                "work_package": fixtures["work_packages"]["package-1"],
+            },
+        )
+
     def test_preview_first_piece_authority_reuses_current_package_validation(self) -> None:
         fixtures, order, _, _ = self.first_piece_ready_fixture()
         api, fixtures, db, _ = self.load_api(fixtures)
@@ -596,6 +698,8 @@ class ShopFabricationApiTests(unittest.TestCase):
                     "In Fabrication",
                     "Quality Hold",
                     "Ready",
+                    "Handed Over",
+                    "Invoice Ready",
                 },
             )
             context_calls.append(("shop_order", document["name"]))
@@ -681,6 +785,7 @@ class ShopFabricationApiTests(unittest.TestCase):
                 "Material Lot": "lots",
                 "Shop Order": "orders",
                 "Work Package": "work_packages",
+                "Payment Milestone": "payment_milestones",
             }.get(doctype)
             if fixture_key and name in fixtures[fixture_key]:
                 return fixtures[fixture_key][name]
@@ -1722,6 +1827,354 @@ class ShopFabricationApiTests(unittest.TestCase):
         self.assertEqual(len(order["inspections"]), 2)
         self.assertEqual(order.get("yields", []), [])
         self.assertEqual(order.get("bundles", []), [])
+
+    def test_record_shop_handover_sets_bundle_and_root_custody(self) -> None:
+        fixtures, order, handoff_evidence = self.handover_ready_fixture()
+        handover_payload_json = json.dumps(
+            {
+                "handed_over_to": "field@example.com",
+                "handoff_evidence": handoff_evidence["name"],
+            },
+            separators=(",", ":"),
+        )
+        api, fixtures, db, context_calls = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_SHOP_HANDOVER_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.handover_snapshot(api, fixtures, order, handoff_evidence),
+            extra={"handover_payload_json": handover_payload_json},
+        )
+
+        result = api.record_shop_handover("shop-1", "run-shop-0001")
+
+        self.assertEqual(result["shop_order"]["status"], "Handed Over")
+        self.assertEqual(order["status"], "Handed Over")
+        self.assertEqual(order["handed_over_to"], "field@example.com")
+        self.assertEqual(order["handed_over_at"], "2026-07-30 10:05:00")
+        self.assertEqual(order["handoff_evidence"], handoff_evidence["name"])
+        for bundle in order["bundles"]:
+            self.assertEqual(bundle["handoff_status"], "Handed Over")
+            self.assertEqual(bundle["handed_over_to"], order["handed_over_to"])
+            self.assertEqual(bundle["handed_over_at"], order["handed_over_at"])
+            self.assertEqual(bundle["handoff_evidence"], order["handoff_evidence"])
+        self.assertEqual(order.save_count, 1)
+        self.assertEqual(context_calls, [("shop_order", "shop-1")])
+        for table in (
+            "`tabHermes Run`",
+            "`tabShop Order`",
+            "`tabEvidence Item`",
+        ):
+            self.assertTrue(any(table in query for query, _ in db.lock_queries), table)
+
+    def test_record_shop_handover_rejects_generic_verified_evidence(self) -> None:
+        fixtures, order, handoff_evidence = self.handover_ready_fixture()
+        generic_evidence = FakeDoc(
+            {
+                **handoff_evidence,
+                "name": "evidence-generic-verified-1",
+                "evidence_id": "evidence-generic-verified-1",
+                "evidence_type": "Measurement Report",
+            }
+        )
+        fixtures["evidence"][generic_evidence["name"]] = generic_evidence
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_SHOP_HANDOVER_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.handover_snapshot(api, fixtures, order, generic_evidence),
+            extra={
+                "handover_payload_json": json.dumps(
+                    {
+                        "handed_over_to": "field@example.com",
+                        "handoff_evidence": generic_evidence["name"],
+                    },
+                    separators=(",", ":"),
+                )
+            },
+        )
+
+        with self.assertRaisesRegex(
+            FakeValidationError, "handover_evidence_semantic_invalid"
+        ):
+            api.record_shop_handover("shop-1", "run-shop-0001")
+
+        self.assertEqual(order.save_count, 0)
+
+    def test_record_shop_handover_rejects_invalid_replayed_bundle_or_stale_state(
+        self,
+    ) -> None:
+        fixtures, order, handoff_evidence = self.handover_ready_fixture()
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_SHOP_HANDOVER_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.handover_snapshot(api, fixtures, order, handoff_evidence),
+            extra={
+                "handover_payload_json": json.dumps(
+                    {
+                        "handed_over_to": "field@example.com",
+                        "handoff_evidence": handoff_evidence["name"],
+                        "handed_over_at": "injected",
+                    },
+                    separators=(",", ":"),
+                )
+            },
+        )
+        with self.assertRaisesRegex(FakeValidationError, "invalid_approval_args"):
+            api.record_shop_handover("shop-1", "run-shop-0001")
+        self.assertEqual(order.save_count, 0)
+
+        fixtures, order, handoff_evidence = self.handover_ready_fixture()
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_SHOP_HANDOVER_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.handover_snapshot(api, fixtures, order, handoff_evidence),
+            extra={
+                "handover_payload_json": json.dumps(
+                    {
+                        "handed_over_to": "field@example.com",
+                        "handoff_evidence": handoff_evidence["name"],
+                    },
+                    separators=(",", ":"),
+                )
+            },
+        )
+        fixtures["run"]["mutation_applied"] = 1
+        with self.assertRaisesRegex(FakeValidationError, "run_already_consumed"):
+            api.record_shop_handover("shop-1", "run-shop-0001")
+        self.assertEqual(order.save_count, 0)
+
+        fixtures, order, handoff_evidence = self.handover_ready_fixture()
+        order["bundles"][0]["handed_over_to"] = "field@example.com"
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_SHOP_HANDOVER_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.handover_snapshot(api, fixtures, order, handoff_evidence),
+            extra={
+                "handover_payload_json": json.dumps(
+                    {
+                        "handed_over_to": "field@example.com",
+                        "handoff_evidence": handoff_evidence["name"],
+                    },
+                    separators=(",", ":"),
+                )
+            },
+        )
+        with self.assertRaisesRegex(FakeValidationError, "handover_bundle_state_invalid"):
+            api.record_shop_handover("shop-1", "run-shop-0001")
+        self.assertEqual(order.save_count, 0)
+
+        fixtures, order, handoff_evidence = self.handover_ready_fixture()
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_SHOP_HANDOVER_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.handover_snapshot(api, fixtures, order, handoff_evidence),
+            extra={
+                "handover_payload_json": json.dumps(
+                    {
+                        "handed_over_to": "field@example.com",
+                        "handoff_evidence": handoff_evidence["name"],
+                    },
+                    separators=(",", ":"),
+                )
+            },
+        )
+        order["modified"] = "2026-07-30 10:13:00"
+        with self.assertRaisesRegex(FakeValidationError, "stale_snapshot"):
+            api.record_shop_handover("shop-1", "run-shop-0001")
+        self.assertEqual(order.save_count, 0)
+
+    def test_record_shop_billing_basis_binds_raw_backed_invoice_milestone(self) -> None:
+        fixtures, order, handoff_evidence = self.handed_over_fixture()
+        payment_milestone = fixtures["payment_milestones"]["payment-milestone-1"]
+        billing_basis_payload_json = json.dumps(
+            {"payment_milestone_id": payment_milestone["name"]},
+            separators=(",", ":"),
+        )
+        api, fixtures, db, context_calls = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_SHOP_BILLING_BASIS_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.billing_basis_snapshot(
+                api,
+                fixtures,
+                order,
+                payment_milestone,
+                handoff_evidence,
+            ),
+            extra={"billing_basis_payload_json": billing_basis_payload_json},
+        )
+
+        result = api.record_shop_billing_basis("shop-1", "run-shop-0001")
+
+        self.assertEqual(result["shop_order"]["status"], "Invoice Ready")
+        self.assertEqual(order["status"], "Invoice Ready")
+        self.assertEqual(
+            order["invoice_payment_milestone"], payment_milestone["name"]
+        )
+        self.assertEqual(order["invoice_ready_at"], "2026-07-30 10:05:00")
+        self.assertEqual(result["payment_milestone"]["qb_entity_id"], "qb-invoice-1")
+        self.assertEqual(order.save_count, 1)
+        self.assertEqual(payment_milestone.save_count, 0)
+        self.assertEqual(context_calls, [("shop_order", "shop-1")])
+        self.assertTrue(
+            any("`tabPayment Milestone`" in query for query, _ in db.lock_queries)
+        )
+
+    def test_record_shop_billing_basis_rechecks_handoff_evidence(self) -> None:
+        fixtures, order, handoff_evidence = self.handed_over_fixture()
+        payment_milestone = fixtures["payment_milestones"]["payment-milestone-1"]
+        handoff_evidence["evidence_type"] = "Measurement Report"
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_SHOP_BILLING_BASIS_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.billing_basis_snapshot(
+                api,
+                fixtures,
+                order,
+                payment_milestone,
+                handoff_evidence,
+            ),
+            extra={
+                "billing_basis_payload_json": json.dumps(
+                    {"payment_milestone_id": payment_milestone["name"]},
+                    separators=(",", ":"),
+                )
+            },
+        )
+
+        with self.assertRaisesRegex(
+            FakeValidationError, "handover_evidence_semantic_invalid"
+        ):
+            api.record_shop_billing_basis("shop-1", "run-shop-0001")
+
+        self.assertEqual(order.save_count, 0)
+
+    def test_record_shop_billing_basis_rejects_cross_mismatched_or_unverified_basis(
+        self,
+    ) -> None:
+        fixtures, order, handoff_evidence = self.handed_over_fixture()
+        payment_milestone = fixtures["payment_milestones"]["payment-milestone-1"]
+        payment_milestone["roof_job"] = "job-2"
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_SHOP_BILLING_BASIS_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.billing_basis_snapshot(
+                api,
+                fixtures,
+                order,
+                payment_milestone,
+                handoff_evidence,
+            ),
+            extra={
+                "billing_basis_payload_json": json.dumps(
+                    {"payment_milestone_id": payment_milestone["name"]},
+                    separators=(",", ":"),
+                )
+            },
+        )
+        with self.assertRaisesRegex(FakeValidationError, "billing_basis_lineage_mismatch"):
+            api.record_shop_billing_basis("shop-1", "run-shop-0001")
+        self.assertEqual(order.save_count, 0)
+
+        fixtures, order, handoff_evidence = self.handed_over_fixture()
+        payment_milestone = fixtures["payment_milestones"]["payment-milestone-1"]
+        payment_milestone["shop_order"] = "shop-2"
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_SHOP_BILLING_BASIS_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.billing_basis_snapshot(
+                api,
+                fixtures,
+                order,
+                payment_milestone,
+                handoff_evidence,
+            ),
+            extra={
+                "billing_basis_payload_json": json.dumps(
+                    {"payment_milestone_id": payment_milestone["name"]},
+                    separators=(",", ":"),
+                )
+            },
+        )
+        with self.assertRaisesRegex(FakeValidationError, "billing_basis_lineage_mismatch"):
+            api.record_shop_billing_basis("shop-1", "run-shop-0001")
+        self.assertEqual(order.save_count, 0)
+
+        fixtures, order, handoff_evidence = self.handed_over_fixture()
+        payment_milestone = fixtures["payment_milestones"]["payment-milestone-1"]
+        payment_milestone["raw_key"] = ""
+        api, fixtures, _, _ = self.load_api(fixtures)
+        self.bind_run(
+            api,
+            fixtures,
+            tool_name=api.RECORD_SHOP_BILLING_BASIS_TOOL,
+            target_doctype="Shop Order",
+            target_name="shop-1",
+            target_field="shop_order_id",
+            snapshot=self.billing_basis_snapshot(
+                api,
+                fixtures,
+                order,
+                payment_milestone,
+                handoff_evidence,
+            ),
+            extra={
+                "billing_basis_payload_json": json.dumps(
+                    {"payment_milestone_id": payment_milestone["name"]},
+                    separators=(",", ":"),
+                )
+            },
+        )
+        with self.assertRaisesRegex(FakeValidationError, "billing_basis_unverified"):
+            api.record_shop_billing_basis("shop-1", "run-shop-0001")
+        self.assertEqual(order.save_count, 0)
 
     def test_shop_command_needs_no_generic_hermes_run_permission(self) -> None:
         fixtures = self.fixture_data()

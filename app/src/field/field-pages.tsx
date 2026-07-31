@@ -17,15 +17,17 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
+import { isOfflineSession } from "../auth/session";
 import { useInitialToday, useSession } from "../auth/session-context";
 import { getDeviceSecret } from "../auth/device-credential";
 import { OutboxStateBadge } from "../components/outbox-state-badge";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-panel";
+import { apiCommand } from "../lib/api";
 import { getOutboxAction, queueOutboxAction, saveOutboxAction } from "../storage/outbox";
 import { flushOutbox } from "../storage/outbox-processor";
-import type { OutboxAction } from "../storage/outbox-types";
+import type { JsonValue, OutboxAction } from "../storage/outbox-types";
 import {
   hasCachedJobPacket,
   cacheToday,
@@ -586,6 +588,7 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
           <JobOfflineNotice generatedAt={model.read_model_generated_at} dateOptions={dateOptions} />
         ) : null}
         {dataLimits.length > 0 ? <JobDataLimits fields={dataLimits} /> : null}
+        <WorkPackagePanel model={model} offline={offline} dateOptions={dateOptions} />
         <WorkStatus model={model} blockedGates={blockedGates} dateOptions={dateOptions} />
         <CaptureProofPanel
           jobId={model.job.id}
@@ -695,6 +698,429 @@ function JobDataLimits({ fields }: { fields: string[] }) {
         missing value or change a gate from this screen.
       </p>
     </details>
+  );
+}
+
+function WorkPackagePanel({
+  model,
+  offline,
+  dateOptions,
+}: {
+  model: JobResponse;
+  offline: boolean;
+  dateOptions: FieldDateOptions;
+}) {
+  const session = useSession();
+  const queryClient = useQueryClient();
+  const workPackage = model.packet.work_package;
+  const [acknowledgementConfirmed, setAcknowledgementConfirmed] = useState(false);
+  const [stopReason, setStopReason] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [savingAction, setSavingAction] = useState<
+    "work_package_acknowledgement" | "work_package_stop" | null
+  >(null);
+  const [savedAction, setSavedAction] = useState<OutboxAction | null>(null);
+  const [stopInstructionActive, setStopInstructionActive] = useState(false);
+  const [startingWork, setStartingWork] = useState(false);
+
+  useEffect(() => {
+    if (!savedAction || savedAction.state === "verified" || savedAction.state === "needs_attention")
+      return;
+    const interval = window.setInterval(() => {
+      void getOutboxAction(savedAction.deviceActionId).then(
+        (latest) => latest && setSavedAction(latest),
+      );
+    }, 1_000);
+    return () => window.clearInterval(interval);
+  }, [savedAction]);
+
+  if (!workPackage) {
+    return (
+      <section
+        className="border-2 border-warning/45 bg-warning-soft p-4 sm:p-5"
+        aria-labelledby="work-package-heading"
+      >
+        <p className="text-sm font-semibold text-warning">Physical work package</p>
+        <h2 id="work-package-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
+          No current released Work Package
+        </h2>
+        <p className="mt-2 leading-6 text-muted">
+          Do not start, resume, release a hold point, or change scope. Reconnect for a current
+          issued package or ask production to resolve the assignment.
+        </p>
+      </section>
+    );
+  }
+
+  const activeWorkPackage = workPackage;
+  const canAcknowledge =
+    model.allowed_actions.includes("work_package.acknowledge") &&
+    !workPackage.acknowledgement.current_user_acknowledged;
+  const canStop = model.allowed_actions.includes("work_package.stop_work");
+  const canAttemptSync = navigator.onLine && !isOfflineSession(session);
+  const canStart =
+    !offline &&
+    !stopInstructionActive &&
+    canAttemptSync &&
+    workPackage.status === "Acknowledged" &&
+    workPackage.hold_points.every((holdPoint) => holdPoint.released) &&
+    model.allowed_actions.includes("work_package.start");
+
+  async function saveWorkPackageAction(kind: "work_package_acknowledgement" | "work_package_stop") {
+    setSavingAction(kind);
+    setActionError(null);
+    try {
+      const payload: JsonValue =
+        kind === "work_package_acknowledgement"
+          ? { work_package_id: activeWorkPackage.id }
+          : { work_package_id: activeWorkPackage.id, blocker_reason: stopReason.trim() };
+      const action = await saveOutboxAction({
+        tenantId: session.tenant.id,
+        userId: session.user.id,
+        kind,
+        endpoint: workPackageActionEndpoint(model.job.id, kind),
+        payload,
+      });
+      setSavedAction(action);
+      const queued = await queueOutboxAction(action.deviceActionId);
+      setSavedAction(queued);
+      if (!canAttemptSync) return;
+      await flushOutbox({
+        tenantId: session.tenant.id,
+        userId: session.user.id,
+        csrfToken: session.csrf_token,
+        deviceProof: getDeviceSecret,
+      });
+      const latest = await getOutboxAction(action.deviceActionId);
+      if (latest) setSavedAction(latest);
+      await queryClient.invalidateQueries({
+        queryKey: ["job", session.tenant.id, session.user.id, model.job.id],
+      });
+    } catch (error) {
+      setActionError(messageFor(error));
+    } finally {
+      setSavingAction(null);
+    }
+  }
+
+  function saveAcknowledgement() {
+    if (!acknowledgementConfirmed) {
+      setActionError("Confirm that you reviewed this exact Work Package before acknowledging it.");
+      return;
+    }
+    void saveWorkPackageAction("work_package_acknowledgement");
+  }
+
+  function saveStopWork() {
+    if (!stopReason.trim()) {
+      setActionError("Describe the condition requiring work to stop.");
+      return;
+    }
+    setStopInstructionActive(true);
+    void saveWorkPackageAction("work_package_stop");
+  }
+
+  async function startWork() {
+    if (!canStart) return;
+    setStartingWork(true);
+    setActionError(null);
+    const deviceActionId = crypto.randomUUID();
+    try {
+      await apiCommand({
+        path: workPackageStartEndpoint(model.job.id),
+        body: {
+          device_action_id: deviceActionId,
+          payload: { work_package_id: activeWorkPackage.id },
+        },
+        csrfToken: session.csrf_token,
+        idempotencyKey: deviceActionId,
+        deviceActionId,
+        deviceProof: getDeviceSecret,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["job", session.tenant.id, session.user.id, model.job.id],
+      });
+    } catch (error) {
+      setActionError(messageFor(error));
+    } finally {
+      setStartingWork(false);
+    }
+  }
+
+  return (
+    <section
+      className="border-2 border-foreground bg-surface-raised"
+      aria-labelledby="work-package-heading"
+    >
+      <header className="border-b border-border px-4 py-4 sm:px-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-muted">Released physical work package</p>
+            <h2 id="work-package-heading" className="mt-1 text-2xl font-black tracking-[-0.03em]">
+              {workPackage.title}
+            </h2>
+          </div>
+          <p className="border border-border bg-surface px-3 py-2 text-sm font-bold">
+            v{workPackage.version} · {workPackage.status}
+          </p>
+        </div>
+        <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3">
+          <JobFact
+            label="Issued"
+            value={formatFieldTimestamp(workPackage.issued_at, dateOptions)}
+          />
+          <JobFact
+            label="Released"
+            value={formatFieldTimestamp(workPackage.released_at, dateOptions)}
+          />
+          <JobFact
+            label="Expires"
+            value={formatFieldTimestamp(workPackage.expires_at, dateOptions)}
+          />
+        </dl>
+      </header>
+
+      {offline ? (
+        <div
+          className="flex items-start gap-3 border-b border-warning/35 bg-warning-soft p-4 text-warning"
+          role="status"
+        >
+          <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+          <p className="font-bold leading-6">
+            This is a saved package copy. It may be expired or superseded. You may save an
+            acknowledgement or Stop Work report, but neither changes package status or authorizes
+            starting, resuming, releasing a hold point, or changing scope.
+          </p>
+        </div>
+      ) : null}
+
+      <div className="space-y-5 p-4 sm:p-5">
+        <dl className="grid gap-4 sm:grid-cols-2">
+          <JobFact label="Objective" value={workPackage.objective} />
+          <JobFact label="Expected result" value={workPackage.expected_result} />
+          <JobFact label="Boundaries" value={workPackage.boundaries} />
+          <JobFact label="Prerequisites" value={workPackage.prerequisites} />
+          <JobFact label="Stop conditions" value={workPackage.stop_conditions} />
+          <JobFact label="Make safe" value={workPackage.make_safe_procedure} />
+        </dl>
+
+        <section aria-labelledby="work-package-steps-heading">
+          <h3 id="work-package-steps-heading" className="font-black">
+            Ordered steps
+          </h3>
+          <ol className="mt-3 space-y-3">
+            {workPackage.steps.map((step) => (
+              <li key={step.sequence} className="border border-border p-4">
+                <p className="font-black">
+                  Step {step.sequence} · {step.instruction}
+                </p>
+                <p className="mt-2 text-sm leading-6 text-muted">
+                  Evidence: {step.required_evidence}
+                </p>
+                <p className="mt-1 text-sm leading-6 text-muted">
+                  Acceptance: {step.acceptance_criteria}
+                </p>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section aria-labelledby="work-package-holds-heading">
+          <h3 id="work-package-holds-heading" className="font-black">
+            Hold points
+          </h3>
+          <ol className="mt-3 space-y-3">
+            {workPackage.hold_points.map((holdPoint) => (
+              <li
+                key={holdPoint.sequence}
+                className={
+                  holdPoint.released
+                    ? "border border-ok/35 bg-ok-soft p-4"
+                    : "border border-warning/35 bg-warning-soft p-4"
+                }
+              >
+                <p
+                  className={holdPoint.released ? "font-black text-ok" : "font-black text-warning"}
+                >
+                  Hold {holdPoint.sequence} · {holdPoint.hold_point}
+                </p>
+                <p className="mt-2 text-sm leading-6 text-muted">
+                  {holdPoint.released
+                    ? "Independently released in the server ledger. A current server capability is still required before starting work."
+                    : `Pending independent release by ${holdPoint.release_authority}. Field evidence can be captured, but this app cannot release the hold point.`}
+                </p>
+                <p className="mt-1 text-sm leading-6 text-muted">
+                  Evidence: {holdPoint.required_evidence} · Acceptance:{" "}
+                  {holdPoint.acceptance_criteria}
+                </p>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section
+          className="border border-border p-4"
+          aria-labelledby="work-package-acknowledgement-heading"
+        >
+          <h3 id="work-package-acknowledgement-heading" className="font-black">
+            Individual acknowledgement
+          </h3>
+          {workPackage.acknowledgement.current_user_acknowledged ? (
+            <p className="mt-2 text-sm leading-6 text-ok">
+              You acknowledged this exact package
+              {workPackage.acknowledgement.acknowledged_at
+                ? ` at ${formatFieldTimestamp(workPackage.acknowledgement.acknowledged_at, dateOptions)}`
+                : ""}
+              .
+            </p>
+          ) : canAcknowledge ? (
+            <>
+              <label className="mt-3 flex items-start gap-3 text-sm leading-6">
+                <input
+                  type="checkbox"
+                  className="mt-1 size-5"
+                  checked={acknowledgementConfirmed}
+                  onChange={(event) => setAcknowledgementConfirmed(event.target.checked)}
+                />
+                I reviewed this exact version, its boundaries, stop conditions, make-safe procedure,
+                steps, and hold points.
+              </label>
+              <Button
+                type="button"
+                size="field"
+                fullWidth
+                className="mt-4"
+                variant="accent"
+                disabled={!acknowledgementConfirmed}
+                busy={savingAction === "work_package_acknowledgement"}
+                onClick={saveAcknowledgement}
+              >
+                <Check aria-hidden="true" />
+                Acknowledge this package
+              </Button>
+            </>
+          ) : (
+            <p className="mt-2 text-sm leading-6 text-muted">
+              Acknowledgement is unavailable until a current server packet grants it. It is never a
+              client-side work authorization.
+            </p>
+          )}
+        </section>
+
+        <section className="border border-border p-4" aria-labelledby="work-package-start-heading">
+          <h3 id="work-package-start-heading" className="font-black">
+            Start work
+          </h3>
+          {canStart ? (
+            <>
+              <p className="mt-2 text-sm leading-6 text-muted">
+                This submits a fresh online request against the server's current released and
+                acknowledged package. It is not saved for offline replay.
+              </p>
+              <Button
+                type="button"
+                size="field"
+                fullWidth
+                className="mt-4"
+                variant="accent"
+                busy={startingWork}
+                onClick={() => void startWork()}
+              >
+                Start work from current packet
+              </Button>
+            </>
+          ) : (
+            <p className="mt-2 text-sm leading-6 text-muted">
+              A fresh online packet and server capability are required to start work. This app never
+              resumes work itself.
+            </p>
+          )}
+        </section>
+
+        <section
+          className="border-2 border-danger/55 bg-danger-soft/45 p-4"
+          aria-labelledby="stop-work-heading"
+        >
+          <h3 id="stop-work-heading" className="font-black text-danger">
+            Stop Work
+          </h3>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            If a stop condition applies, stop work now and make the area safe before saving this
+            report. A saved report is not a server-verified status change.
+          </p>
+          {stopInstructionActive ? (
+            <p className="mt-3 font-bold leading-6 text-danger" role="alert">
+              Stop work now. Follow the make-safe procedure while this report remains saved on the
+              device for server verification.
+            </p>
+          ) : null}
+          {canStop ? (
+            <>
+              <label className="mt-4 block font-bold" htmlFor="work-package-stop-reason">
+                What requires work to stop?
+              </label>
+              <textarea
+                id="work-package-stop-reason"
+                className="mt-2 min-h-28 w-full border bg-surface p-4"
+                maxLength={1000}
+                value={stopReason}
+                onChange={(event) => setStopReason(event.target.value)}
+              />
+              <Button
+                type="button"
+                size="field"
+                fullWidth
+                className="mt-4"
+                variant="danger"
+                busy={savingAction === "work_package_stop"}
+                onClick={saveStopWork}
+              >
+                <AlertTriangle aria-hidden="true" />
+                Stop Work and save report
+              </Button>
+            </>
+          ) : (
+            <p className="mt-3 text-sm leading-6 text-muted">
+              This packet cannot submit another Stop Work report. Stop physically if needed and
+              contact production immediately.
+            </p>
+          )}
+        </section>
+
+        {actionError ? (
+          <p className="font-semibold text-danger" role="alert">
+            {actionError}
+          </p>
+        ) : null}
+        {savedAction ? <WorkPackageActionState action={savedAction} /> : null}
+        {!offline && !canAttemptSync ? (
+          <p className="text-sm leading-6 text-warning" role="status">
+            This device needs a current verified sign-in before it can send a saved Work Package
+            action.
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function WorkPackageActionState({ action }: { action: OutboxAction }) {
+  const label =
+    action.kind === "work_package_acknowledgement" ? "Acknowledgement" : "Stop Work report";
+  const detail =
+    action.state === "verified"
+      ? "The server verified this intent. Reopen the packet for a current work state."
+      : action.state === "needs_attention"
+        ? "This saved intent needs review. It did not change package status or unlock work."
+        : `${label} is saved on this device and awaits server verification. It does not change package status or unlock work.`;
+  return (
+    <div
+      className="flex flex-wrap items-start justify-between gap-3 border border-border bg-surface-muted p-4"
+      role="status"
+    >
+      <p className="max-w-xl text-sm leading-6 text-muted">{detail}</p>
+      <OutboxStateBadge state={action.state} />
+    </div>
   );
 }
 
@@ -1062,6 +1488,18 @@ function JobFact({ label, value }: { label: string; value: string }) {
 function joinKnown(values: Array<string | null>): string | null {
   const known = values.filter((value): value is string => Boolean(value));
   return known.length > 0 ? known.join(" · ") : null;
+}
+
+function workPackageActionEndpoint(
+  jobId: string,
+  kind: "work_package_acknowledgement" | "work_package_stop",
+): string {
+  const base = `/api/v1/jobs/${encodeURIComponent(jobId)}/work-package`;
+  return kind === "work_package_acknowledgement" ? `${base}/acknowledgements` : `${base}/stop-work`;
+}
+
+function workPackageStartEndpoint(jobId: string): string {
+  return `/api/v1/jobs/${encodeURIComponent(jobId)}/work-package/start`;
 }
 
 export function CheckInPage() {

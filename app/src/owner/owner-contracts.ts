@@ -105,9 +105,85 @@ export const measurementIntakeOwnerExceptionsResponseSchema = z
   .object({ measurements: z.array(measurementIntakeOwnerExceptionSchema) })
   .strict();
 
+export const ownerRuntimeCheckIds = [
+  "owned_persistence",
+  "queue",
+  "core_auth",
+  "provider_delivery",
+  "office_bff",
+  "customer_portal",
+  "production_schedule",
+  "public_estimate",
+  "newo",
+] as const;
+
+const ownerRuntimeChecksSchema = z
+  .array(z.object({ id: z.enum(ownerRuntimeCheckIds), ok: z.boolean() }).strict())
+  .length(ownerRuntimeCheckIds.length)
+  .superRefine((checks, context) => {
+    checks.forEach((check, index) => {
+      if (check.id === ownerRuntimeCheckIds[index]) return;
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [index, "id"],
+        message: "owner_runtime_check_order_invalid",
+      });
+    });
+  });
+
+export const ownerRuntimeResponseSchema = z
+  .object({
+    version: z.literal(1),
+    read_model_generated_at: isoTimestampSchema,
+    status: z.enum(["ready", "attention"]),
+    readiness: z
+      .object({
+        status: z.enum(["ready", "not_ready"]),
+        checks: ownerRuntimeChecksSchema,
+      })
+      .strict(),
+    operations: z
+      .object({
+        status: z.enum(["ok", "degraded"]),
+        heartbeat: z
+          .object({
+            ran_at: isoTimestampSchema,
+            reconciled: z.boolean(),
+            fresh: z.boolean(),
+            age_seconds: z.number().int().nonnegative().nullable(),
+          })
+          .strict()
+          .nullable(),
+        counts: z
+          .object({
+            open_dead_letters: z.number().int().nonnegative(),
+            pending: z.number().int().nonnegative(),
+            stuck: z.number().int().nonnegative(),
+            frappe_errors: z.number().int().nonnegative(),
+            replay_failed: z.number().int().nonnegative(),
+            replay_stuck: z.number().int().nonnegative(),
+          })
+          .strict(),
+        audit_failures_observed: z.number().int().nonnegative().max(20),
+        audit_failure_window_hours: z.number().int().positive(),
+        quickbooks_receipts: z
+          .object({
+            available: z.boolean(),
+            fresh: z.boolean().nullable(),
+            age_seconds: z.number().int().nonnegative().nullable(),
+            events_count: z.number().int().nonnegative().nullable(),
+            replay_count: z.number().int().nonnegative().nullable(),
+          })
+          .strict(),
+      })
+      .strict(),
+  })
+  .strict();
+
 export type OwnerException = z.infer<typeof ownerExceptionSchema>;
 export type OwnerNowResponse = z.infer<typeof ownerNowResponseSchema>;
 export type MeasurementIntakeOwnerException = z.infer<typeof measurementIntakeOwnerExceptionSchema>;
 export type MeasurementIntakeOwnerExceptionsResponse = z.infer<
   typeof measurementIntakeOwnerExceptionsResponseSchema
 >;
+export type OwnerRuntimeResponse = z.infer<typeof ownerRuntimeResponseSchema>;

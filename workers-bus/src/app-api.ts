@@ -24,12 +24,17 @@ import {
   createApprovalRequest,
   denyApprovalRequest,
   finalizeApprovalExecution,
+  getApprovalRequest,
   getApprovalRequestByPrepareKey,
   getCurrentApprovalRequest,
   listApprovalRequests,
   matchesApprovalPreparation,
   reconcileApprovalUncertainty,
 } from "./approval-store.ts";
+import {
+  claimGovernedTransitionOutbox,
+  claimNextPendingGovernedTransitionOutbox,
+} from "./transition-kernel.ts";
 import {
   ApprovalBrokerError,
   approvalBrokerConfig,
@@ -91,11 +96,13 @@ import {
 import { handleCustomerPortalLinks } from "./customer-portal.ts";
 import { APP_API_VERSION, type AppEnv, type AuthContext } from "./app-types.ts";
 import { handleFieldAction } from "./field-actions.ts";
+import { handleWorkPackageAction, type WorkPackageActionKind } from "./work-package-actions.ts";
 import {
   listMeasurementIntakeExceptions,
   projectMeasurementIntakeOwnerException,
 } from "./measurement-intake-store.ts";
 import { buildNewoOperationsReadModel } from "./newo-operations-read-model.ts";
+import { buildOwnerRuntimeReadModel } from "./operations.ts";
 
 const MAX_ADMIN_BODY_BYTES = 8 * 1024;
 
@@ -530,6 +537,33 @@ export async function handleAuthenticatedRoute(
       return appJson({ error: "upstream_unavailable" }, 502);
     }
   }
+  const workPackageAcknowledgementMatch = url.pathname.match(
+    /^\/api\/v1\/jobs\/([^/]+)\/work-package\/acknowledgements$/,
+  );
+  if (req.method === "POST" && workPackageAcknowledgementMatch) {
+    return await handleFieldWorkPackageRoute(
+      req,
+      env,
+      auth,
+      workPackageAcknowledgementMatch[1],
+      "acknowledge",
+    );
+  }
+  const workPackageStopMatch = url.pathname.match(
+    /^\/api\/v1\/jobs\/([^/]+)\/work-package\/stop-work$/,
+  );
+  if (req.method === "POST" && workPackageStopMatch) {
+    return await handleFieldWorkPackageRoute(req, env, auth, workPackageStopMatch[1], "stop_work");
+  }
+  const workPackageStartMatch = url.pathname.match(
+    /^\/api\/v1\/jobs\/([^/]+)\/work-package\/start$/,
+  );
+  if (req.method === "POST" && workPackageStartMatch) {
+    // Start is intentionally direct/online-only. The PWA does not add this
+    // route to its offline outbox, while the device action id still makes a
+    // lost response safe to retry over the active connection.
+    return await handleFieldWorkPackageRoute(req, env, auth, workPackageStartMatch[1], "start_work");
+  }
   const jobMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)$/);
   const estimatorJobMatch = url.pathname.match(
     /^\/api\/v1\/estimator\/jobs\/([^/]+)$/,
@@ -594,6 +628,17 @@ export async function handleAuthenticatedRoute(
       );
     }
   }
+  if (req.method === "GET" && url.pathname === "/api/v1/owner/runtime") {
+    if (!officeRole(auth))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    try {
+      // This is an explicit, server-side owner/ops read. It deliberately omits
+      // raw pointers, audit entries, provider responses, and admin credentials.
+      return privateAppJson(await buildOwnerRuntimeReadModel(env));
+    } catch {
+      return privateAppJson({ error: "owner_runtime_unavailable" }, 502);
+    }
+  }
   if (req.method === "GET" && url.pathname === "/api/v1/newo/operations") {
     if (!officeRole(auth))
       return privateAppJson({ error: "office_role_required" }, 403);
@@ -627,6 +672,30 @@ export async function handleAuthenticatedRoute(
     }
   }
   return appJson({ error: "not_found" }, 404);
+}
+
+async function handleFieldWorkPackageRoute(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  encodedJobName: string | undefined,
+  kind: WorkPackageActionKind,
+): Promise<Response> {
+  if (auth.session.role !== "field") return appJson({ error: "field_role_required" }, 403);
+  if (!validAppCsrf(req, auth)) return appJson({ error: "csrf_failed" }, 403);
+  const jobName = decodedPathSegment(encodedJobName ?? "");
+  if (!jobName) return appJson({ error: "not_found" }, 404);
+  try {
+    // Do not trust a job or assignment identifier from the browser. The BFF
+    // derives an active assignment for the authenticated, paired field user;
+    // the Frappe service command repeats that scope check under its own lock.
+    const assignment = await activeAssignmentForJob(env, auth, jobName);
+    const assignmentName = typeof assignment?.name === "string" ? assignment.name : null;
+    if (!assignmentName) return appJson({ error: "not_found" }, 404);
+    return await handleWorkPackageAction(req, env, auth, jobName, assignmentName, kind);
+  } catch {
+    return appJson({ error: "upstream_unavailable" }, 502);
+  }
 }
 
 async function prepareQuoteRevisionApproval(
@@ -1573,6 +1642,10 @@ async function approveLeadTriageApproval(
     return privateAppJson({ error: "invalid_approval_decision" }, 400);
 
   const now = new Date();
+  const nowIso = now.toISOString();
+  const leaseExpiresAt = new Date(
+    now.getTime() + identity.config.executionLeaseSeconds * 1000,
+  ).toISOString();
   let claimed;
   try {
     claimed = await claimApprovalExecution(env, {
@@ -1582,16 +1655,43 @@ async function approveLeadTriageApproval(
       decisionIdempotencyKey,
       approvedByUserId: auth.session.user_id,
       approvedByFrappeUser: identity.frappeUserId,
-      now: now.toISOString(),
-      leaseExpiresAt: new Date(
-        now.getTime() + identity.config.executionLeaseSeconds * 1000,
-      ).toISOString(),
+      now: nowIso,
+      leaseExpiresAt,
     });
   } catch {
     return privateAppJson({ error: "approval_store_unavailable" }, 502);
   }
   if (claimed.kind !== "claimed")
     return approvalDecisionResultResponse(claimed);
+
+  try {
+    const dispatch = await claimGovernedTransitionOutbox(env, {
+      tenantId: auth.session.tenant_id,
+      approvalRequestId: requestId,
+      decisionIdempotencyKey,
+      now: nowIso,
+      leaseExpiresAt,
+    });
+    if (dispatch.kind !== "claimed") {
+      return privateAppJson(
+        {
+          error: dispatch.kind === "already_leased"
+            ? "approval_execution_in_progress"
+            : "approval_dispatch_unavailable",
+          approval: approvalProjection(claimed.request),
+        },
+        dispatch.kind === "already_leased" ? 202 : 502,
+      );
+    }
+  } catch {
+    return privateAppJson(
+      {
+        error: "approval_dispatch_unavailable",
+        approval: approvalProjection(claimed.request),
+      },
+      502,
+    );
+  }
 
   let outcome;
   try {
@@ -1652,11 +1752,7 @@ async function finalizeBrokerFailure(
   decisionIdempotencyKey: string,
   error: unknown,
 ): Promise<Response> {
-  const errorCode =
-    error instanceof ApprovalBrokerError &&
-    error.code === "approval_broker_unavailable"
-      ? "broker_unavailable"
-      : "broker_response_unverified";
+  const errorCode = brokerFailureCode(error);
   try {
     const finalized = await finalizeApprovalExecution(env, {
       tenantId: auth.session.tenant_id,
@@ -1688,6 +1784,75 @@ async function finalizeBrokerFailure(
   } catch {
     return privateAppJson({ error: "execution_finalization_unavailable" }, 502);
   }
+}
+
+function brokerFailureCode(
+  error: unknown,
+): "broker_unavailable" | "broker_response_unverified" {
+  return error instanceof ApprovalBrokerError &&
+      error.code === "approval_broker_unavailable"
+    ? "broker_unavailable"
+    : "broker_response_unverified";
+}
+
+/**
+ * Runs one bounded first-dispatch recovery. A pending outbox has no recorded
+ * broker call, while leased, uncertain, and terminal items remain untouched.
+ */
+export async function recoverPendingLeadTriageOutbox(env: AppEnv): Promise<void> {
+  const tenantId = env.APP_TENANT_ID?.trim() ?? "";
+  const config = approvalBrokerConfig(env);
+  if (!/^[a-z0-9-]{2,64}$/.test(tenantId) || !config) return;
+
+  const now = new Date();
+  const claimed = await claimNextPendingGovernedTransitionOutbox(env, {
+    tenantId,
+    now: now.toISOString(),
+    leaseExpiresAt: new Date(
+      now.getTime() + config.executionLeaseSeconds * 1000,
+    ).toISOString(),
+  });
+  if (claimed.kind !== "claimed") return;
+
+  const request = await getApprovalRequest(
+    env,
+    tenantId,
+    claimed.outbox.approval_request_id,
+  );
+  if (
+    !request ||
+    request.state !== "executing" ||
+    request.decision_idempotency_key !== claimed.outbox.decision_idempotency_key
+  ) {
+    return;
+  }
+
+  let outcome;
+  try {
+    outcome = await executeLeadTriageApproval(env, request);
+  } catch (error) {
+    await finalizeApprovalExecution(env, {
+      tenantId,
+      requestId: request.approval_request_id,
+      decisionIdempotencyKey: claimed.outbox.decision_idempotency_key,
+      state: "execution_uncertain",
+      hermesRunId: request.run_id,
+      errorCode: brokerFailureCode(error),
+      now: new Date().toISOString(),
+    });
+    return;
+  }
+
+  await finalizeApprovalExecution(env, {
+    tenantId,
+    requestId: request.approval_request_id,
+    decisionIdempotencyKey: claimed.outbox.decision_idempotency_key,
+    state: outcome.state,
+    hermesRunId: outcome.hermesRunId,
+    resultJson: outcome.resultJson,
+    errorCode: outcome.errorCode,
+    now: new Date().toISOString(),
+  });
 }
 
 async function rejectLeadTriageApproval(

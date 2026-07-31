@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import frappe
 
-from ironwrap_roofing.access_control import IRONWRAP_ROLES
+from ironwrap_roofing.access_control import ALL_IRONWRAP_ROLES, IRONWRAP_ROLES
 
 
 def ensure_roles() -> None:
     """Create or repair every site-local role used by DocType permissions."""
 
-    for role_name in IRONWRAP_ROLES:
+    for role_name in ALL_IRONWRAP_ROLES:
+        desk_access = int(role_name in IRONWRAP_ROLES)
         existing_role = frappe.db.exists("Role", role_name)
         if existing_role:
             frappe.db.set_value(
                 "Role",
                 existing_role,
-                {"desk_access": 1, "disabled": 0},
+                {"desk_access": desk_access, "disabled": 0},
                 update_modified=False,
             )
             continue
@@ -24,7 +25,7 @@ def ensure_roles() -> None:
             {
                 "doctype": "Role",
                 "role_name": role_name,
-                "desk_access": 1,
+                "desk_access": desk_access,
                 "disabled": 0,
             }
         ).insert(ignore_permissions=True)

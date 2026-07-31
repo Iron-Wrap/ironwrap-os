@@ -40,10 +40,14 @@ jobs:
         run: node tools/validate-tenant-config.mjs
       - name: Validate staged Newo contracts, hashes, evidence inventory, and safe defaults
         run: node tools/validate-newo-config.mjs
+      - name: Validate lead-triage shadow authority policy and adversarial corpus
+        run: node tools/validate-lead-triage-shadow-authority.mjs
       - name: Validate documentation authority, privacy, and links
         run: node tools/validate-documentation.mjs
       - name: Test Newo production gate refusal while provider evidence is pending
         run: node --test tools/validate-newo-config.test.mjs
+      - name: Test lead-triage shadow authority config validator
+        run: node --test tools/validate-lead-triage-shadow-authority.test.mjs
       - name: Test tenant runtime preflight
         run: node --test tools/validate-tenant-runtime.test.mjs
       - name: Validate IronWrap runtime tenant identity

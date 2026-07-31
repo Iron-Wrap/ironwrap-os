@@ -7,6 +7,12 @@ export const outboxStates = [
 ] as const;
 
 export type OutboxState = (typeof outboxStates)[number];
+export const outboxActionKinds = [
+  "field_checkin",
+  "work_package_acknowledgement",
+  "work_package_stop",
+] as const;
+export type OutboxActionKind = (typeof outboxActionKinds)[number];
 export type OutboxMethod = "POST" | "PUT" | "PATCH" | "DELETE";
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -53,7 +59,7 @@ export interface OutboxAction {
   deviceActionId: string;
   tenantId: string;
   userId: string;
-  kind: string;
+  kind: OutboxActionKind;
   endpoint: string;
   method: OutboxMethod;
   payload: JsonValue;
@@ -90,7 +96,7 @@ export interface SaveOutboxActionInput {
   deviceActionId?: string;
   tenantId: string;
   userId: string;
-  kind: string;
+  kind: OutboxActionKind;
   endpoint: string;
   method?: OutboxMethod;
   payload: JsonValue;

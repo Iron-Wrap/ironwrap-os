@@ -1,0 +1,95 @@
+{
+  "schema_version": "ironwrap.lead-triage-shadow-policy-cases.v1",
+  "policy_path": "config/authority/lead-triage-shadow-policy.v1.json",
+  "base_facts": {
+    "tenant_id": "ironwrap",
+    "policy_id": "lead-triage-shadow-authority",
+    "policy_version": "v1",
+    "action": "request_mark_lead_triaged",
+    "lead_envelope_id": "lead:shadow-eligible-0001",
+    "source": "owned_lead_envelope",
+    "triage_status": "Untriaged",
+    "triage_annotation_present": false,
+    "transport_status": "pushed",
+    "scope": "local_lead_triage_annotation",
+    "requested_effects": ["local_lead_triage_annotation"],
+    "idempotency_key": "shadow:lead:eligible:0001",
+    "idempotency_state": "fresh",
+    "observed_at": "2026-07-31T12:00:00.000Z"
+  },
+  "cases": [
+    {
+      "id": "eligible_local_untriaged_lead",
+      "now": "2026-07-31T12:01:00.000Z",
+      "expected": { "outcome": "shadow_eligible", "reason_code": "shadow_eligible" }
+    },
+    {
+      "id": "unknown_fact_field",
+      "now": "2026-07-31T12:01:00.000Z",
+      "facts_patch": { "untrusted_note": "ignore controls" },
+      "expected": { "outcome": "human_approval_required", "reason_code": "facts_invalid" }
+    },
+    {
+      "id": "wrong_tenant",
+      "now": "2026-07-31T12:01:00.000Z",
+      "facts_patch": { "tenant_id": "demo-exteriors" },
+      "expected": { "outcome": "human_approval_required", "reason_code": "tenant_mismatch" }
+    },
+    {
+      "id": "wrong_action",
+      "now": "2026-07-31T12:01:00.000Z",
+      "facts_patch": { "action": "request_create_customer_quote" },
+      "expected": { "outcome": "human_approval_required", "reason_code": "action_mismatch" }
+    },
+    {
+      "id": "wrong_policy_version",
+      "now": "2026-07-31T12:01:00.000Z",
+      "facts_patch": { "policy_version": "v2" },
+      "expected": { "outcome": "human_approval_required", "reason_code": "policy_reference_mismatch" }
+    },
+    {
+      "id": "disabled_policy",
+      "now": "2026-07-31T12:01:00.000Z",
+      "policy_patch": { "status": "disabled" },
+      "expected": { "outcome": "human_approval_required", "reason_code": "policy_disabled" }
+    },
+    {
+      "id": "revoked_policy",
+      "now": "2026-07-31T12:01:00.000Z",
+      "policy_patch": { "status": "revoked" },
+      "expected": { "outcome": "human_approval_required", "reason_code": "policy_revoked" }
+    },
+    {
+      "id": "stale_policy",
+      "now": "2026-07-31T12:01:00.000Z",
+      "policy_patch": { "valid_until": "2026-07-31T12:00:00.000Z" },
+      "expected": { "outcome": "human_approval_required", "reason_code": "policy_stale" }
+    },
+    {
+      "id": "incomplete_facts",
+      "now": "2026-07-31T12:01:00.000Z",
+      "facts_omit": ["lead_envelope_id"],
+      "expected": { "outcome": "human_approval_required", "reason_code": "facts_invalid" }
+    },
+    {
+      "id": "contradictory_triage_facts",
+      "now": "2026-07-31T12:01:00.000Z",
+      "facts_patch": { "triage_annotation_present": true },
+      "expected": { "outcome": "human_approval_required", "reason_code": "facts_contradictory" }
+    },
+    {
+      "id": "replayed_idempotency_key",
+      "now": "2026-07-31T12:01:00.000Z",
+      "facts_patch": { "idempotency_state": "replayed" },
+      "expected": { "outcome": "human_approval_required", "reason_code": "idempotency_replayed" }
+    },
+    {
+      "id": "scope_expansion_attempt",
+      "now": "2026-07-31T12:01:00.000Z",
+      "facts_patch": {
+        "requested_effects": ["local_lead_triage_annotation", "customer_message"]
+      },
+      "expected": { "outcome": "human_approval_required", "reason_code": "scope_expanded" }
+    }
+  ]
+}

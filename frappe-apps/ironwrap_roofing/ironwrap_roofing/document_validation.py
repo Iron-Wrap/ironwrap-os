@@ -8,6 +8,7 @@ from typing import Any
 
 import frappe
 
+from ironwrap_roofing.access_control import CUSTOMER_ACCEPTANCE_SERVICE_ROLE
 from ironwrap_roofing.domain_policy import PolicyViolation, validate_record
 from ironwrap_roofing.domain_policy import SHOP_ORDER_FINAL_STATUSES, parse_json_field
 
@@ -206,6 +207,10 @@ _TRUSTED_FIELD_EVIDENCE_ISSUANCE: ContextVar[
     "ironwrap_trusted_field_evidence_issuance",
     default=None,
 )
+_TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE: ContextVar[Any | None] = ContextVar(
+    "ironwrap_trusted_customer_contract_acceptance",
+    default=None,
+)
 _TRUSTED_WORK_PACKAGE_TRANSITION: ContextVar[
     tuple[str, tuple[tuple[str, str], ...]] | None
 ] = ContextVar(
@@ -263,6 +268,58 @@ FIELD_EVIDENCE_ISSUANCE_FIELDS = (
     "correction_reason",
     "customer_safe",
     "summary",
+)
+CUSTOMER_CONTRACT_EVIDENCE_FIELDS = (
+    "evidence_id",
+    "device_action_id",
+    "roof_job",
+    "evidence_type",
+    "proof_owner",
+    "proof_slot",
+    "source_system",
+    "r2_key",
+    "content_checksum",
+    "checksum_algorithm",
+    "content_type",
+    "content_length",
+    "capture_actor",
+    "captured_at",
+    "sync_state",
+    "verified_at",
+    "verification_source",
+    "customer_safe",
+    "summary",
+)
+CUSTOMER_CONTRACT_ACCEPTANCE_FIELDS = (
+    "acceptance_id",
+    "roof_job",
+    "customer",
+    "customer_quote",
+    "proposal_evidence_pack",
+    "change_order",
+    "contract_version",
+    "status",
+    "signer_name",
+    "signer_email",
+    "signer_ip",
+    "accepted_at",
+    "acceptance_method",
+    "evidence_item",
+    "terms_hash",
+    "terms_snapshot_json",
+    "document_checksum",
+    "source_system",
+    "provider_reference",
+    "captured_by",
+    "supersedes",
+    "correction_reason",
+    "notes",
+)
+CUSTOMER_QUOTE_ACCEPTANCE_FIELDS = (
+    "status",
+    "acceptance_evidence",
+    "contract_acceptance",
+    "accepted_at",
 )
 WORK_PACKAGE_RUNTIME_FIELDS = (
     "status",
@@ -402,6 +459,47 @@ def _field_evidence_issuance_snapshot(document: Any) -> tuple[tuple[str, str], .
             "" if document.get(field) is None else str(document.get(field)),
         )
         for field in FIELD_EVIDENCE_ISSUANCE_FIELDS
+    )
+
+
+def _customer_contract_evidence_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, CUSTOMER_CONTRACT_EVIDENCE_FIELDS)
+
+
+def _customer_contract_acceptance_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, CUSTOMER_CONTRACT_ACCEPTANCE_FIELDS)
+
+
+def _customer_quote_acceptance_snapshot(
+    document: Any,
+) -> tuple[str, tuple[tuple[str, str], ...]]:
+    return (
+        str(document.get("name") or ""),
+        _runtime_snapshot(document, CUSTOMER_QUOTE_ACCEPTANCE_FIELDS),
+    )
+
+
+def _quote_acceptance_status(
+    snapshot: tuple[str, tuple[tuple[str, str], ...]],
+) -> str:
+    return dict(snapshot[1])["status"]
+
+
+def _is_customer_acceptance_service_actor() -> bool:
+    actor = getattr(getattr(frappe, "session", None), "user", None)
+    if not isinstance(actor, str) or not actor:
+        return False
+    return CUSTOMER_ACCEPTANCE_SERVICE_ROLE in {
+        str(role) for role in frappe.get_roles(actor)
+    }
+
+
+def _reject_customer_acceptance_service_generic_write() -> None:
+    frappe.throw(
+        "Customer acceptance service users may only mutate records through the bounded customer contract command.",
+        exc=frappe.PermissionError,
     )
 
 
@@ -547,6 +645,29 @@ def field_evidence_issuance_context(document: Any):
 
 
 @contextmanager
+def customer_contract_acceptance_issuance_context(
+    evidence: Any, acceptance: Any, quote: Any
+):
+    """Authorize one exact evidence, acceptance, and quote transition.
+
+    This private state is created only by the service/HMAC-checked customer
+    contract command. Generic Desk and REST document writes cannot supply it.
+    """
+
+    token = _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.set(
+        (
+            _customer_contract_evidence_snapshot(evidence),
+            _customer_contract_acceptance_snapshot(acceptance),
+            _customer_quote_acceptance_snapshot(quote),
+        )
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.reset(token)
+
+
+@contextmanager
 def work_package_transition_context(document: Any):
     """Authorize one exact Work Package lifecycle save from a narrow command.
 
@@ -633,6 +754,15 @@ def work_package_event_issuance_context(document: Any):
 def validate_evidence_verification_mutation(document: Any) -> None:
     """Keep generic document writes from creating or promoting verified evidence."""
 
+    customer_contract_context = _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.get()
+    if _is_customer_acceptance_service_actor():
+        if (
+            customer_contract_context is not None
+            and customer_contract_context[0]
+            == _customer_contract_evidence_snapshot(document)
+        ):
+            return
+        _reject_customer_acceptance_service_generic_write()
     if document.get("sync_state") != "Verified":
         return
     previous = _previous(document)
@@ -642,10 +772,89 @@ def validate_evidence_verification_mutation(document: Any) -> None:
         document
     ):
         return
+    if (
+        customer_contract_context is not None
+        and customer_contract_context[0] == _customer_contract_evidence_snapshot(document)
+    ):
+        return
     frappe.throw(
         "Evidence Item verification can only be issued by the dedicated Worker command.",
         exc=frappe.ValidationError,
     )
+
+
+def validate_contract_acceptance_mutation(document: Any) -> None:
+    """Reject generic creation or mutation of an accepted customer contract."""
+
+    current = _customer_contract_acceptance_snapshot(document)
+    previous_document = _previous(document)
+    customer_contract_context = _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.get()
+    if _is_customer_acceptance_service_actor():
+        if (
+            previous_document is None
+            and customer_contract_context is not None
+            and customer_contract_context[1] == current
+        ):
+            return
+        _reject_customer_acceptance_service_generic_write()
+    if previous_document is not None:
+        previous = _customer_contract_acceptance_snapshot(previous_document)
+        if current == previous:
+            return
+    if document.get("status") != "Accepted":
+        return
+    if (
+        previous_document is None
+        and customer_contract_context is not None
+        and customer_contract_context[1] == current
+    ):
+        return
+    frappe.throw(
+        "Contract Acceptance can only be issued by the bounded customer contract command.",
+        exc=frappe.ValidationError,
+    )
+
+
+def validate_customer_quote_acceptance_mutation(document: Any) -> None:
+    """Keep accepted quote links and timestamps private-command owned."""
+
+    current = _customer_quote_acceptance_snapshot(document)
+    previous_document = _previous(document)
+    customer_contract_context = _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.get()
+    if _is_customer_acceptance_service_actor():
+        if previous_document is not None:
+            previous = _customer_quote_acceptance_snapshot(previous_document)
+            if (
+                _quote_acceptance_status(previous) == "Approved"
+                and customer_contract_context is not None
+                and customer_contract_context[2] == current
+            ):
+                return
+        _reject_customer_acceptance_service_generic_write()
+    if previous_document is None:
+        if document.get("status") != "Accepted" and not any(value for _, value in current[1][1:]):
+            return
+        previous = None
+    else:
+        previous = _customer_quote_acceptance_snapshot(previous_document)
+        if current == previous:
+            return
+    if (
+        previous is not None
+        and _quote_acceptance_status(previous) == "Approved"
+        and customer_contract_context is not None
+        and customer_contract_context[2] == current
+    ):
+        return
+    if (
+        document.get("status") == "Accepted"
+        or (previous is not None and _quote_acceptance_status(previous) == "Accepted")
+        or any(value for _, value in current[1][1:])
+    ):
+        frappe.throw(
+            "Customer Quote acceptance can only be issued by the bounded customer contract command.",
+            exc=frappe.ValidationError,
+        )
 
 
 def validate_work_package_runtime_mutation(document: Any) -> None:

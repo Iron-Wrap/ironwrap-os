@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 SYSTEM_MANAGER = "System Manager"
+CUSTOMER_ACCEPTANCE_SERVICE_ROLE = "IronWrap Customer Acceptance Service"
 
 IRONWRAP_ROLES = (
     "IronWrap Owner",
@@ -14,10 +15,14 @@ IRONWRAP_ROLES = (
     "IronWrap Closeout",
     "IronWrap Support",
 )
+IRONWRAP_SERVICE_ROLES = (CUSTOMER_ACCEPTANCE_SERVICE_ROLE,)
+ALL_IRONWRAP_ROLES = IRONWRAP_ROLES + IRONWRAP_SERVICE_ROLES
 
 READ = "read"
 WRITE = "write"
+WRITE_EXISTING = "write_existing"
 CREATE_OWN = "create_own"
+CREATE = "create"
 
 # Each Frappe site is one tenant.  These roles never grant cross-site access.
 DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
@@ -57,6 +62,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Estimator": WRITE,
         "IronWrap Finance": READ,
         "IronWrap Production": READ,
+        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: WRITE_EXISTING,
     },
     "Contract Acceptance": {
         "IronWrap Sales": WRITE,
@@ -65,6 +71,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Production": READ,
         "IronWrap Closeout": READ,
         "IronWrap Support": READ,
+        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: CREATE,
     },
     "Crew Profile": {
         "IronWrap Production": WRITE,
@@ -84,6 +91,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Field": CREATE_OWN,
         "IronWrap Closeout": WRITE,
         "IronWrap Support": READ,
+        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: CREATE,
     },
     "Field Check-in": {
         "IronWrap Production": WRITE,
@@ -167,6 +175,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Estimator": WRITE,
         "IronWrap Sales": WRITE,
         "IronWrap Closeout": READ,
+        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: READ,
     },
     "Review Request": {
         "IronWrap Closeout": WRITE,
@@ -190,6 +199,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Finance": READ,
         "IronWrap Closeout": WRITE,
         "IronWrap Support": READ,
+        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: READ,
     },
     "Roofing Customer": {
         "IronWrap Sales": WRITE,
@@ -198,6 +208,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Finance": READ,
         "IronWrap Closeout": READ,
         "IronWrap Support": READ,
+        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: READ,
     },
     "Roofing Property": {
         "IronWrap Sales": WRITE,
@@ -277,10 +288,14 @@ def permission_row(role: str, access: str) -> dict[str, int | str]:
     }
     if access == WRITE:
         row.update({"create": 1, "write": 1, "print": 1, "report": 1})
+    elif access == WRITE_EXISTING:
+        row.update({"write": 1})
     elif access == READ:
         row.update({"print": 1, "report": 1})
     elif access == CREATE_OWN:
         row.update({"create": 1, "write": 1, "if_owner": 1})
+    elif access == CREATE:
+        row.update({"create": 1})
     else:
         raise ValueError(f"unknown access level {access!r}")
     return row

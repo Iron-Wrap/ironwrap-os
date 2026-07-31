@@ -3,6 +3,7 @@
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
 Last verified: 2026-07-30
+Latest phase delta verified: 2026-07-31 (repository checks only)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
 ## Status vocabulary
@@ -135,7 +136,7 @@ Implemented surfaces:
 - owner, approval inbox, sales, production, Newo operations;
 - estimator workbench and quote revision;
 - production schedule approval;
-- customer portal links and resolution;
+- customer portal links and resolution, plus disabled email-bound customer contract confirmation;
 - settings.
 
 Target gaps:
@@ -171,7 +172,7 @@ Target gaps:
 - permit/regulator submission/status;
 - WCB clearance retrieval/status;
 - accounting invoice/payment/refund/payroll/tax side-effect contracts;
-- commercial e-sign or owned signing;
+- legal/commercial e-sign determination, cancellation, and business-acceptance proof;
 - machine, scanner, scale, printer, vehicle, wearable, and sensor identity/telemetry;
 - vendor failure and provider-switch continuity.
 
@@ -188,7 +189,7 @@ Target gaps:
 | Survey | measurement/roof graph/evidence | field work package, calibration, conflict resolution | real site and conflicting source test |
 | Design | scope/options/quote evidence | controlled assemblies, details, bulletins, engineer/permit | system/version conflict block |
 | Estimate | takeoff/price/quote/revision | complete shop/labour/equipment/risk costing | estimate-to-actual closed job |
-| Contract | acceptance/evidence | correct agreement selection, cancellation, e-sign, authority | residential/commercial scenarios |
+| Contract | Partial: email-bound, single-use click-to-accept evidence pinned to an approved quote, proposal pack, and canonical terms snapshot | correct agreement selection, cancellation, legal/commercial e-sign determination, authority, and live business proof | residential/commercial scenarios |
 | Preconstruction | seven gates plus current Crew/Safety/Access authority fences, including owner-attributed waivers | complete multi-domain readiness and issuer-backed freshness | stale permit/WCB/weather injection |
 | Procurement | supplier quote/order records | vendor onboarding, PO transmit/ack, substitution, three-way match | duplicate/short/backorder test |
 | Inventory | Partial: signed controlled-item approval, lot receipt/reservation, and reconciled shop yield/remnant/scrap lineage | bin/count/valuation plus physical use and reconciliation | receive-reserve-use-yield-reconcile |

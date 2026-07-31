@@ -21,6 +21,9 @@ const canonicalIronWrapRoles = [
   "IronWrap Closeout",
   "IronWrap Support",
 ];
+const canonicalServiceRoles = [
+  "IronWrap Customer Acceptance Service",
+];
 
 const specs = [
   {
@@ -748,6 +751,11 @@ assert.deepEqual(
   [...canonicalIronWrapRoles].sort(),
   "access_control.py must declare the canonical eight IronWrap roles",
 );
+assert.deepEqual(
+  [...pythonContracts.allRoles].sort(),
+  [...canonicalIronWrapRoles, ...canonicalServiceRoles].sort(),
+  "access_control.py must declare the exact canonical and service roles",
+);
 
 const docs = new Map(specs.map((spec) => [spec.name, readDoc(spec.dir)]));
 const localDoctypes = new Set(docs.keys());
@@ -840,6 +848,7 @@ domain = runpy.run_path(sys.argv[2])
 matrix = access["DOCTYPE_ROLE_MATRIX"]
 print(json.dumps({
     "roles": access["IRONWRAP_ROLES"],
+    "all_roles": access["ALL_IRONWRAP_ROLES"],
     "matrix_names": list(matrix),
     "expected_permissions": {
         name: access["expected_permissions"](name) for name in matrix
@@ -862,6 +871,7 @@ print(json.dumps({
   const parsed = JSON.parse(output);
   return {
     roles: parsed.roles,
+    allRoles: parsed.all_roles,
     matrixNames: parsed.matrix_names,
     expectedPermissions: parsed.expected_permissions,
     identityKinds: parsed.identity_kinds,
@@ -890,7 +900,11 @@ function validatePermissions(spec, doc) {
     `${spec.name} permissions diverge from access_control.py`,
   );
 
-  const allowedRoles = new Set(["System Manager", ...canonicalIronWrapRoles]);
+  const allowedRoles = new Set([
+    "System Manager",
+    ...canonicalIronWrapRoles,
+    ...canonicalServiceRoles,
+  ]);
   const roles = permissions.map((row) => row.role);
   assert.equal(new Set(roles).size, roles.length, `${spec.name} has duplicate permission roles`);
   assert.ok(roles.includes("System Manager"), `${spec.name} must retain System Manager access`);
@@ -973,10 +987,13 @@ function validateRuntimeWiring() {
   );
 
   const install = readFileSync(paths.install, "utf8");
-  assert.match(install, /from\s+ironwrap_roofing\.access_control\s+import\s+IRONWRAP_ROLES/);
+  assert.match(
+    install,
+    /from\s+ironwrap_roofing\.access_control\s+import\s+ALL_IRONWRAP_ROLES,\s+IRONWRAP_ROLES/,
+  );
   assert.match(install, /def\s+ensure_roles\s*\(\s*\)/, "install.py must expose idempotent role reconciliation");
   assert.match(install, /def\s+reconcile_site_contract\s*\(\s*\)/, "install.py must expose site-contract reconciliation");
-  assert.match(install, /for\s+role_name\s+in\s+IRONWRAP_ROLES/, "role reconciliation must cover every canonical role");
+  assert.match(install, /for\s+role_name\s+in\s+ALL_IRONWRAP_ROLES/, "role reconciliation must cover every canonical and service role");
   assert.match(install, /def\s+before_install\s*\(\s*\)/, "install.py must expose before_install");
   assert.match(install, /def\s+before_migrate\s*\(\s*\)/, "install.py must expose before_migrate");
   assert.match(install, /def\s+after_install\s*\(\s*\)/, "install.py must expose after_install");

@@ -366,6 +366,7 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "roof_job",
         "customer",
         "customer_quote",
+        "proposal_evidence_pack",
         "change_order",
         "contract_version",
         "status",
@@ -376,6 +377,7 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "acceptance_method",
         "evidence_item",
         "terms_hash",
+        "terms_snapshot_json",
         "document_checksum",
         "source_system",
         "provider_reference",
@@ -585,6 +587,7 @@ JSON_FIELDS: dict[str, tuple[str, ...]] = {
     "change_order": ("tax_policy_snapshot_json",),
     "communication_event": ("policy_reasons_json",),
     "completion_packet": ("photo_evidence_json", "evidence_summary_json"),
+    "contract_acceptance": ("terms_snapshot_json",),
     "customer_quote": (
         "quote_summary_json",
         "tax_policy_snapshot_json",
@@ -2015,6 +2018,15 @@ def _validate_contract_acceptance(record: Any, context: Mapping[str, Any]) -> No
         require_fields(record, "accepted_at")
         if method == "Click to Accept":
             require_fields(record, "signer_ip")
+        if _get(record, "source_system") == "ironwrap-customer-portal":
+            require_fields(record, "proposal_evidence_pack", "terms_snapshot_json")
+            parse_json_field(
+                record,
+                "terms_snapshot_json",
+                required=True,
+                container_types=(dict,),
+                non_empty=True,
+            )
     require_sha256(record, "terms_hash", "document_checksum")
     _validate_correction(record, context)
 
@@ -3449,6 +3461,8 @@ def _validate_customer_quote(record: Any, context: Mapping[str, Any]) -> None:
         "tax_policy_snapshot_json",
         "quote_total",
         "currency",
+        "deposit_amount",
+        "amount_due",
         "scope_summary",
         "assumptions",
         "exclusions",
@@ -3747,6 +3761,23 @@ def _validate_proposal(record: Any, context: Mapping[str, Any]) -> None:
             "customer messages require a dedicated approved delivery workflow",
             "customer_message",
         )
+    _lock_after_status(
+        record,
+        context,
+        {"Approved"},
+        "pack_id",
+        "roof_job",
+        "quotation",
+        "prepared_at",
+        "approved_by",
+        "approved_at",
+        "evidence_summary_json",
+        "assumptions",
+        "exclusions",
+        "signed_evidence",
+        "signed_at",
+        "customer_message",
+    )
 
 
 def _is_approved_proposal_publication(

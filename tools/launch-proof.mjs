@@ -183,6 +183,15 @@ export async function executeLaunchProof({
 
   const plan = createLaunchProofPlan({ stamp, randomSuffix });
   const results = {};
+  results.frappe_reader = await preflightFrappeReader({
+    lookup: plan.frappeLookup,
+    correlationId: plan.frappeCorrelation,
+    base: frappeProofConfig.base,
+    apiKey: frappeProofConfig.apiKey,
+    apiSecret: frappeProofConfig.apiSecret,
+    fetchImpl,
+    onStep,
+  });
   for (const step of plan.steps) {
     results[step.name] = await runStep(step, {
       base: normalizedBase,
@@ -270,6 +279,11 @@ export async function runLaunchProofCli({
     onStep: (name, result) => errorLog(`${name}: HTTP ${result.status}`),
   });
   log(JSON.stringify(evidence, null, 2));
+  assert.equal(
+    evidence.frappe_projection.state,
+    "matched",
+    "launch-proof gate failed: Frappe projection did not match; keep the bridge enabled and reconcile",
+  );
   return { mode: "execute", evidence };
 }
 
@@ -481,6 +495,38 @@ async function runFrappeLookup(lookup, { base, apiKey, apiSecret, fetchImpl }) {
       response.headers.get("x-correlation-id") ??
       null,
   };
+}
+
+async function preflightFrappeReader({
+  lookup,
+  correlationId,
+  base,
+  apiKey,
+  apiSecret,
+  fetchImpl,
+  onStep,
+}) {
+  let result;
+  try {
+    result = await runFrappeLookup(lookup, { base, apiKey, apiSecret, fetchImpl });
+  } catch {
+    onStep?.("frappe_reader", { status: 0 });
+    assert.fail("Frappe reader preflight failed");
+  }
+  onStep?.("frappe_reader", result);
+  assert.equal(result.status, 200, "Frappe reader preflight failed");
+  const response = result.json?.message ?? result.json;
+  assert.equal(
+    response?.correlation_id,
+    correlationId,
+    "Frappe reader preflight correlation mismatch",
+  );
+  assert.equal(
+    response?.observation,
+    "pending",
+    "Frappe reader preflight must confirm an unused synthetic correlation",
+  );
+  return result;
 }
 
 function assertReadiness(result) {

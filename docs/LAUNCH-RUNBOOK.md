@@ -498,22 +498,34 @@ separate review-gated `/public/instant-estimate` contract above.
 
 ## 10. Prove The End-To-End Intake Slice
 
+Before executing the proof, create a separate non-Desk Frappe API user with only the
+`IronWrap Launch Proof Reader` role. That role may read only `Instant Estimate Session`; do not
+assign it Lead Envelope, Roof Job, Roofing Customer, or any other IronWrap role. Pin that exact
+user in the Frappe site config key `ironwrap_launch_proof_reader_user`, and use only that user's
+API key/secret as `FRAPPE_API_KEY` and `FRAPPE_API_SECRET`. Set `FRAPPE_BASE_URL`,
+`FRAPPE_PROOF_POLL_ATTEMPTS`, and `FRAPPE_PROOF_POLL_INTERVAL_MS` from the launch-proof block in
+`deploy/env.example`; do not reuse the Worker integration credential pair.
+
 ```bash
 node tools/launch-proof.mjs
 BUS_BASE_URL=... INGEST_TOKEN=... ADMIN_TOKEN=... FRAPPE_BASE_URL=... FRAPPE_API_KEY=... FRAPPE_API_SECRET=... node tools/launch-proof.mjs --execute > launch-proof-evidence.json
 ```
 
 The dry run makes no network request. Execute mode refuses to send even a synthetic POST unless
-the bounded Frappe proof configuration is complete. It then proves `/health` and every `/ready`
-check before it creates a fixture; verifies website intake, estimator idempotency, admin read-back,
-reconciliation, and a fresh/reconciled `/admin/status`; and finally polls the GET-only synthetic
-Frappe correlation endpoint at most five times. The artifact contains only redacted evidence and
-response request ids; do not add tokens, raw Frappe responses, or document data to it.
+the bounded Frappe proof configuration is complete. Before it contacts the bus, it makes one
+GET-only lookup for its fresh correlation and requires the configured reader to return `pending`;
+a missing site-config pin, wrong API identity, missing role, or inaccessible estimate session fails
+before a synthetic POST. It then proves `/health` and every `/ready` check before it creates a
+fixture; verifies website intake, estimator idempotency, admin read-back, reconciliation, and a
+fresh/reconciled `/admin/status`; and finally polls the GET-only synthetic Frappe correlation
+endpoint at most five times. The artifact contains only redacted evidence and response request ids;
+do not add tokens, raw Frappe responses, or document data to it.
 
 A matched synthetic Frappe projection is evidence only: it does not retire JobNimbus, GHL, or any
-other bridge. A missing, mismatched, timed-out, or unavailable projection must return
-`bridge_keep_enabled=true` and `reconciliation_required=true`; reconcile it before any cutover
-decision.
+other bridge. A missing, mismatched, timed-out, or unavailable projection writes its redacted
+artifact with `bridge_keep_enabled=true` and `reconciliation_required=true`, then makes
+`node tools/launch-proof.mjs --execute` exit non-zero. Preserve that artifact for reconciliation;
+it is failed proof evidence, not a green launch gate. Reconcile it before any cutover decision.
 
 Archive `launch-proof-evidence.json` with the release commit and image digest. Verify the fixture
 in D1/R2 and in Frappe as Lead Envelope, Roofing Customer/Property, Roof Job, and seven Production

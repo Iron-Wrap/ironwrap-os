@@ -32,6 +32,7 @@ class LaunchProofApiTests(unittest.TestCase):
         configured_reader: str | None = "launch-proof@example.invalid",
         request_method: str = "GET",
         can_read: bool = True,
+        roles: list[str] | None = None,
     ):
         list_calls: list[dict] = []
 
@@ -50,6 +51,9 @@ class LaunchProofApiTests(unittest.TestCase):
         frappe_module.session = types.SimpleNamespace(user=session_user)
         frappe_module.request = types.SimpleNamespace(method=request_method)
         frappe_module.has_permission = lambda *args, **kwargs: can_read
+        frappe_module.get_roles = lambda _user: (
+            roles if roles is not None else ["IronWrap Launch Proof Reader"]
+        )
         frappe_module.get_list = get_list
         frappe_module.whitelist = lambda: lambda function: function
 
@@ -126,6 +130,7 @@ class LaunchProofApiTests(unittest.TestCase):
             ({"request_method": "POST"}, "get_required"),
             ({"session_user": "Guest"}, "auth_mismatch"),
             ({"configured_reader": None}, "reader_user"),
+            ({"roles": ["IronWrap Support"]}, "role_missing"),
             ({"can_read": False}, "permission_denied"),
         ]:
             with self.subTest(kwargs=kwargs):

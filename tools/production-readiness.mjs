@@ -78,6 +78,11 @@ const REQUIRED_ENV_NAMES = [
   "BUS_BASE_URL",
   "INGEST_TOKEN",
   "ADMIN_TOKEN",
+  "FRAPPE_BASE_URL",
+  "FRAPPE_API_KEY",
+  "FRAPPE_API_SECRET",
+  "FRAPPE_PROOF_POLL_ATTEMPTS",
+  "FRAPPE_PROOF_POLL_INTERVAL_MS",
   "FRAPPE_SITE",
   "BACKEND_CONTAINER",
   "RCLONE_CONFIG_R2_TYPE",
@@ -142,6 +147,8 @@ const SECRET_ENV_NAMES = [
   "APPROVAL_BROKER_SHARED_SECRET",
   "INGEST_TOKEN",
   "ADMIN_TOKEN",
+  "FRAPPE_API_KEY",
+  "FRAPPE_API_SECRET",
   "D1_BACKUP_API_TOKEN",
   "D1_RESTORE_API_TOKEN",
   "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
@@ -468,6 +475,13 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
     const value = envTemplate.values.get(name) ?? "";
     checks.push(check(`contract.env.secret.${name}`, /^<[^>]+>$/.test(value), `${name} is represented by a name-only placeholder`, `${name} must not contain a committed secret value`));
   }
+  checks.push(check(
+    "contract.env.launch_proof_reader",
+    envText.includes("ironwrap_launch_proof_reader_user") &&
+      envText.includes("IronWrap Launch Proof Reader"),
+    "launch-proof reader provisioning is documented",
+    "deploy/env.example must document the exact Frappe launch-proof reader config and role",
+  ));
   checks.push(check("contract.env.secret.no_generic_cloudflare", !envTemplate.values.has("CLOUDFLARE_API_TOKEN"), "environment inventory has no reusable generic Cloudflare API token", "CLOUDFLARE_API_TOKEN must be split into D1_BACKUP_API_TOKEN and ephemeral D1_RESTORE_API_TOKEN"));
   const d1SourceTemplate = {
     D1_PRODUCTION_ACCOUNT_ID: "7ee5775bc1ba46f05c5a65235b60e939",
@@ -640,10 +654,16 @@ export async function validateLiveEnv({
   }
   checks.push(check("live.pin.image", validImageDigestRef(env.IRONWRAP_OS_IMAGE), "IRONWRAP_OS_IMAGE is digest pinned", "IRONWRAP_OS_IMAGE must be a non-latest image pinned by sha256 digest"));
 
-  for (const name of ["ERPNEXT_BASE_URL", "IRONWRAP_BUS_BASE_URL", "BUS_BASE_URL"]) {
+  for (const name of ["ERPNEXT_BASE_URL", "IRONWRAP_BUS_BASE_URL", "BUS_BASE_URL", "FRAPPE_BASE_URL"]) {
     checks.push(check(`live.url.${name}`, isHttpsProductionUrl(env[name]), `${name} is a credential-free production HTTPS URL`, `${name} must be a credential-free production HTTPS URL`));
   }
   checks.push(check("live.url.bus_consistency", env.BUS_BASE_URL === env.IRONWRAP_BUS_BASE_URL, "bus URLs are consistent", "BUS_BASE_URL and IRONWRAP_BUS_BASE_URL must match"));
+  checks.push(check(
+    "live.launch_proof.base_url_consistency",
+    normalizedProductionUrl(env.FRAPPE_BASE_URL) === normalizedProductionUrl(env.ERPNEXT_BASE_URL),
+    "launch-proof Frappe URL matches the configured Frappe site",
+    "FRAPPE_BASE_URL must normalize to ERPNEXT_BASE_URL",
+  ));
   checks.push(check("live.url.site_consistency", hostnameOf(env.ERPNEXT_BASE_URL) === env.FRAPPE_SITE, "Frappe base URL matches FRAPPE_SITE", "ERPNEXT_BASE_URL hostname and FRAPPE_SITE must match"));
   const frappeApprovalPublicKeyPath = env.IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE ?? "";
   checks.push(check(
@@ -674,6 +694,8 @@ export async function validateLiveEnv({
     QB_WEBHOOK_TOKEN: 24,
     QB_RECONCILIATION_ISSUER_API_KEY: 10,
     QB_RECONCILIATION_ISSUER_API_SECRET: 16,
+    FRAPPE_API_KEY: 10,
+    FRAPPE_API_SECRET: 16,
     IRONWRAP_ADMIN_TOKEN: 24,
     HERMES_WRITE_TOKEN: 32,
     HERMES_DRY_RUN_SIGNING_KEY: 32,
@@ -698,6 +720,8 @@ export async function validateLiveEnv({
     env.QB_WEBHOOK_TOKEN,
     env.QB_RECONCILIATION_ISSUER_API_KEY,
     env.QB_RECONCILIATION_ISSUER_API_SECRET,
+    env.FRAPPE_API_KEY,
+    env.FRAPPE_API_SECRET,
     env.ADMIN_TOKEN,
     env.INGEST_TOKEN,
     env.HERMES_WRITE_TOKEN,
@@ -711,7 +735,7 @@ export async function validateLiveEnv({
       env.PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER,
     ] : []),
   ];
-  checks.push(check("live.secret.separation", purposeSecrets.every((value) => typeof value === "string") && new Set(purposeSecrets).size === purposeSecrets.length, "privileged credentials are separated by purpose", "Frappe, QuickBooks, bus, approval, D1 export, and R2 backup credentials must not be reused across purposes"));
+  checks.push(check("live.secret.separation", purposeSecrets.every((value) => typeof value === "string") && new Set(purposeSecrets).size === purposeSecrets.length, "privileged credentials are separated by purpose", "Frappe integration, QuickBooks issuer, launch-proof, bus, approval, D1 export, and R2 backup credentials must not be reused across purposes"));
   const restoreApiToken = env.D1_RESTORE_API_TOKEN;
   const restoreTokenUnset = restoreApiToken === undefined || restoreApiToken === "";
   const restoreTokenSeparated = validSecret(env, "D1_RESTORE_API_TOKEN", 24) && ![
@@ -723,6 +747,20 @@ export async function validateLiveEnv({
   checks.push(check("live.secret.d1_restore_ephemeral", restoreTokenStateSafe, restoreTokenUnset ? "D1 restore write token is not persisted in verification mode" : "remote drill token is valid and separated from backup authority", "D1_RESTORE_API_TOKEN must be unset for verify or a valid just-in-time token distinct from D1 backup and R2 credentials for remote"));
 
   checks.push(check("live.gate.integration", env.ERPNEXT_ENABLED === "true", "Frappe integration is explicitly enabled", "ERPNEXT_ENABLED must equal true for production readiness"));
+  const launchProofAttempts = env.FRAPPE_PROOF_POLL_ATTEMPTS ?? "";
+  const launchProofInterval = env.FRAPPE_PROOF_POLL_INTERVAL_MS ?? "";
+  checks.push(check(
+    "live.launch_proof.poll_attempts",
+    /^(?:[1-5])$/.test(launchProofAttempts),
+    "launch-proof Frappe poll attempts are bounded",
+    "FRAPPE_PROOF_POLL_ATTEMPTS must be an integer from 1 through 5",
+  ));
+  checks.push(check(
+    "live.launch_proof.poll_interval",
+    /^(?:0|[1-9][0-9]*)$/.test(launchProofInterval) && Number(launchProofInterval) <= 5_000,
+    "launch-proof Frappe poll interval is bounded",
+    "FRAPPE_PROOF_POLL_INTERVAL_MS must be an integer from 0 through 5000",
+  ));
   checks.push(check(
     "live.quickbooks.realm",
     /^[1-9][0-9]{0,31}$/.test(env.QB_EXPECTED_REALM_ID ?? ""),

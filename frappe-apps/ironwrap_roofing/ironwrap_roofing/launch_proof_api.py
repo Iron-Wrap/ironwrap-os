@@ -15,6 +15,8 @@ from typing import Any
 
 import frappe
 
+from ironwrap_roofing.access_control import LAUNCH_PROOF_READER_ROLE
+
 
 READER_CONFIG_KEY = "ironwrap_launch_proof_reader_user"
 MAX_IDENTIFIER_LENGTH = 140
@@ -77,6 +79,14 @@ def _assert_reader() -> str:
         _fail(
             "launch_proof_reader_auth_mismatch",
             "only the configured launch-proof reader may query this endpoint",
+            permission=True,
+        )
+    if LAUNCH_PROOF_READER_ROLE not in {
+        str(role) for role in frappe.get_roles(actor)
+    }:
+        _fail(
+            "launch_proof_reader_role_missing",
+            "the configured reader must hold the dedicated launch-proof reader role",
             permission=True,
         )
     if not frappe.has_permission("Instant Estimate Session", ptype="read", user=actor):

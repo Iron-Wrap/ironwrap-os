@@ -7,7 +7,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ironwrap_roofing.access_control import ALL_IRONWRAP_ROLES, IRONWRAP_ROLES
+from ironwrap_roofing.access_control import (
+    ALL_IRONWRAP_ROLES,
+    IRONWRAP_ROLES,
+    LAUNCH_PROOF_READER_ROLE,
+)
 
 
 INSTALL_PATH = Path(__file__).resolve().parents[1] / "ironwrap_roofing" / "install.py"
@@ -59,12 +63,14 @@ class InstallHookTests(unittest.TestCase):
             set(ALL_IRONWRAP_ROLES) - {existing},
         )
         self.assertTrue(all(ignore_permissions for _, ignore_permissions in inserted))
-        service = next(
-            item[0]
-            for item in inserted
-            if item[0]["role_name"] == "IronWrap Customer Acceptance Service"
-        )
-        self.assertEqual(service["desk_access"], 0)
+        for role_name in (
+            "IronWrap Customer Acceptance Service",
+            LAUNCH_PROOF_READER_ROLE,
+        ):
+            service = next(
+                item[0] for item in inserted if item[0]["role_name"] == role_name
+            )
+            self.assertEqual(service["desk_access"], 0)
 
     def test_before_migrate_reuses_idempotent_role_reconciliation(self) -> None:
         inserted = []

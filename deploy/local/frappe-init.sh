@@ -121,9 +121,34 @@ PYEOF
   grep -o 'CREDS:{.*}' /tmp/integration_raw.json | sed 's/^CREDS://' > "sites/$SITE/.integration_credentials"
 fi
 
-# 9. field-evidence issuer identity (field_evidence_api._assert_issuer) ----------
+# 9. dedicated customer-acceptance service identity ----------------------------
+if [ ! -s "sites/$SITE/.customer_acceptance_credentials" ] || ! grep -q '^{' "sites/$SITE/.customer_acceptance_credentials"; then
+  log "creating scoped customer-acceptance service user with API keys"
+  bench --site "$SITE" console > /tmp/customer_acceptance_raw.json <<'PYEOF'
+import frappe, json
+email = "ironwrap-customer-acceptance@ironwrap.local"
+role = "IronWrap Customer Acceptance Service"
+if not frappe.db.exists("User", email):
+    u = frappe.get_doc({"doctype": "User", "email": email, "first_name": "Customer Acceptance Service",
+                        "send_welcome_email": 0, "roles": [{"role": role}]})
+    u.insert(ignore_permissions=True)
+else:
+    u = frappe.get_doc("User", email)
+    if role not in {entry.role for entry in u.roles}:
+        u.append("roles", {"role": role})
+        u.save(ignore_permissions=True)
+frappe.core.doctype.user.user.generate_keys(email)
+u = frappe.get_doc("User", email)
+frappe.db.commit()
+print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
+PYEOF
+  grep -o 'CREDS:{.*}' /tmp/customer_acceptance_raw.json | sed 's/^CREDS://' > "sites/$SITE/.customer_acceptance_credentials"
+fi
+
+# 10. pinned service identities -------------------------------------------------
 log "pinning field-evidence issuer site config"
 bench --site "$SITE" set-config ironwrap_field_evidence_issuer_user ironwrap-bus@ironwrap.local
+bench --site "$SITE" set-config ironwrap_customer_acceptance_service_user ironwrap-customer-acceptance@ironwrap.local
 
 touch "$STAMP"
 log "DONE - site '$SITE' ready (admin: Administrator / $ADMIN_PW)"

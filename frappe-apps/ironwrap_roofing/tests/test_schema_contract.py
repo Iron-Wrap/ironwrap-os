@@ -11,6 +11,7 @@ from unittest.mock import patch
 from setuptools import find_namespace_packages
 
 from ironwrap_roofing.access_control import (
+    ALL_IRONWRAP_ROLES,
     DOCTYPE_ROLE_MATRIX,
     IRONWRAP_ROLES,
     SYSTEM_MANAGER,
@@ -223,7 +224,7 @@ NEW_BLUEPRINT_FIELDS.update(
         "Job Compliance Record": {"compliance_record_id", "roof_job", "jurisdiction", "record_type", "status", "required_before_gate", "evidence_item", "owner_user", "due_date"},
         "Communication Consent": {"consent_id", "channel", "purpose", "status", "jurisdiction", "consent_basis", "captured_at", "proof_evidence", "supersedes"},
         "Customer Decision": {"decision_id", "roof_job", "decision_type", "status", "decision_value", "decided_at", "evidence_item", "supersedes"},
-        "Contract Acceptance": {"acceptance_id", "roof_job", "contract_version", "status", "accepted_at", "evidence_item", "terms_hash", "document_checksum", "supersedes"},
+        "Contract Acceptance": {"acceptance_id", "roof_job", "contract_version", "status", "accepted_at", "evidence_item", "proposal_evidence_pack", "terms_hash", "terms_snapshot_json", "document_checksum", "supersedes"},
         "Integration Reconciliation": {"reconciliation_id", "system_name", "external_entity_id", "status", "diff_json", "source_payload_hash", "local_payload_hash", "resolution_evidence"},
         "Insurance Supplement": {"insurance_supplement_id", "roof_job", "customer_quote", "change_order", "version", "status", "carrier_name", "claim_reference", "policy_reference", "date_of_loss", "adjuster_reference", "supplement_basis", "measurement_report", "invoice_required", "invoice_exception_reason", "evidence", "evidence_manifest_json", "approved_by", "approved_at", "submitted_at", "carrier_response_at", "resolution_summary", "closed_at", "supersedes", "correction_reason"},
         "Tenant Export Run": {"export_run_id", "tenant", "status", "scope_json", "manifest_key", "manifest_checksum", "archive_key", "archive_checksum", "encryption_key_ref"},
@@ -310,11 +311,20 @@ class DocTypeContractTests(unittest.TestCase):
                 roles = {row["role"] for row in document["permissions"]}
                 self.assertIn(SYSTEM_MANAGER, roles)
                 self.assertIn("IronWrap Owner", roles)
-                self.assertTrue(roles <= {SYSTEM_MANAGER, *IRONWRAP_ROLES})
+                self.assertTrue(roles <= {SYSTEM_MANAGER, *ALL_IRONWRAP_ROLES})
                 for row in document["permissions"]:
                     self.assertNotEqual(row.get("delete"), 1)
                     if row["role"] != SYSTEM_MANAGER:
                         self.assertFalse({"export", "import", "share"} & row.keys())
+
+    def test_customer_acceptance_service_cannot_create_customer_quotes(self) -> None:
+        _, quote = self.doctypes["Customer Quote"]
+        service = next(
+            row
+            for row in quote["permissions"]
+            if row["role"] == "IronWrap Customer Acceptance Service"
+        )
+        self.assertEqual(service, {"delete": 0, "read": 1, "role": service["role"], "write": 1})
 
     def test_every_top_level_controller_uses_shared_validation(self) -> None:
         folder_kinds = set()

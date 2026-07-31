@@ -187,6 +187,35 @@ npm run db:migrate
 npm run deploy
 ```
 
+### Facet-to-Frappe Review-Projection Gate
+
+Leave `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED=false` until the `0031` D1 migration is applied in
+the named environment and all of the following are proven there:
+
+1. Create a dedicated Frappe API user with only `IronWrap Facet Design Projection Service`, pin
+   its email in `ironwrap_facet_design_projection_service_user`, and set a distinct
+   `ironwrap_facet_design_projection_hmac_key`. Give it no generic quote, contract, acceptance, or
+   Proposal Evidence Pack write permission.
+2. Store `FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY`,
+   `FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY`, and
+   `FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET` only with `wrangler secret put`. Do not
+   reuse the Facet ingress HMAC, broad Worker/Frappe API identity, or customer-acceptance identity.
+3. Submit the reviewed deployment configuration
+   `FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON` with schema version `1`. Each exact mapping
+   includes only D1 receipt anchors plus opaque `roof_job_id` and `customer_quote_id`; it contains
+   no customer names, addresses, prices, or operator-entered commercial facts. There is no mutable
+   operator association API.
+4. With a disposable existing Roof Job and its current `Approved` Customer Quote, prove the
+   scheduled projection reads an already durable D1 receipt, accepts only an exact association,
+   creates one non-customer-safe Evidence Item and one `Pending` Integration Reconciliation record,
+   and leaves the quote, Contract Acceptance, and Proposal Evidence Pack unchanged. Repeat the
+   exact event to prove deterministic replay; separately prove missing/mismatched mappings make no
+   Frappe call and an Frappe refusal creates no Worker success.
+
+Keep the flag false if any proof is missing. Repository tests, an ingress `202`, or a deployed D1
+migration are not runtime evidence for this customer-linked projection. Archive only redacted
+event/evidence/reconciliation IDs with the release evidence.
+
 Newo production uses the managed federation and full governed control plane. Store
 `NEWO_API_KEY`, `NEWO_WEBHOOK_TOKEN`, `NEWO_BOOKING_TOKEN`, and
 `NEWO_CONTROL_SIGNING_SECRET` only as Cloudflare secrets after the exact target is verified.

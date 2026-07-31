@@ -41,6 +41,7 @@ import {
   handleQuickbooksWebhook,
   recoverDueQuickBooksProjections,
 } from "./quickbooks.ts";
+import { reconcileFacetDesignFrappeProjections } from "./facet-design-projection.ts";
 import {
   handlePublicInstantEstimate,
   prunePublicEstimateRateLimits,
@@ -204,6 +205,9 @@ export default {
           ),
           reconcileCustomerContractAcceptanceAttempts(env).catch((error) =>
             log({ at: "customer_contract_acceptance_reconcile", error: String(error) }),
+          ),
+          reconcileFacetDesignFrappeProjections(env).catch((error) =>
+            log({ at: "facet_design_frappe_projection_reconcile", error: String(error) }),
           ),
           recoverLeadTriageOutboxThenExpireLeases(env),
           // Quote-revision execution has an independent ledger and broker. Its

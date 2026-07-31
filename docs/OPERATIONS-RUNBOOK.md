@@ -160,15 +160,28 @@ Never retry an audit-failed mutation under a new `run_id` until the target state
 
 ## QuickBooks Webhook Failure
 
-`POST /webhook/quickbooks` returns 401 for an invalid `intuit-signature` and 503 when
-`QB_WEBHOOK_TOKEN` is unset. The payload-hash receipt guard makes legitimate Intuit redelivery
-idempotent.
+`POST /webhook/quickbooks` returns 401 for an invalid `intuit-signature` and 503 when the
+verifier, expected realm, or bounded issuer prerequisites are unavailable. A payload-hash receipt
+is not completion: each supported expected-realm entity has a durable D1 projection-outbox row.
 
-1. Compare the configured verifier-token binding with the Intuit application without printing it.
-2. Rotate both sides together if integrity is uncertain.
-3. Confirm a valid signed event appears in `/admin/status` and a repeated payload increments replay
-   evidence without a duplicate business event.
-4. Reconcile missed invoice/payment state in QuickBooks, which remains accounting truth.
+1. Compare the configured verifier binding, `QB_EXPECTED_REALM_ID`, issuer user, Frappe site
+   config, role, and separate API pair with the intended accounts without printing secret values.
+   A valid signature from another realm is rejected; do not retarget a live Worker to make it pass.
+2. Confirm the raw object, receipt, outbox state, and audit records for the affected identity.
+   Pending means the bounded Frappe projection did not complete; it is not payment, posting,
+   amount, or reconciliation truth.
+3. Repair credential, role, route, or deployment drift, then allow the five-minute recovery sweep
+   or a legitimate Intuit redelivery to retry the leased row. Backoff begins at one minute, caps at
+   one hour, and D1 rows are never manually edited to force a retry.
+4. On the fifth failed attempt, open or continue a SEV2 Automation Incident with the receipt,
+   outbox, and redacted audit references. Only the documented immutable identity conflict is
+   terminally rejected; investigate it with a human and QuickBooks read-back.
+5. Rotate the verifier on both Intuit and Worker only in a controlled cutover. Rotate the issuer
+   by provisioning a new least-privilege user/key pair, matching the Frappe site config and Worker
+   vars/secrets, proving one live expected-realm projection, then revoking the old pair.
+
+Repository checks and local tests prove this retry protocol's shape only. A real signed event,
+Frappe Pending reconciliation, and QuickBooks read-back remain separate live evidence.
 
 ## JobNimbus Contract Failure
 
@@ -200,7 +213,7 @@ was contacted or that a lead was triaged. The operating state is separate:
 
 | Store | Role | Recovery property |
 | --- | --- | --- |
-| Cloudflare D1 | Canonical envelope/audit/dead-letter/heartbeat/dedup/replay/auth/QB receipt ledger | Daily exact-account remote SQL export, encrypted in R2; isolated SQLite plus D1 drill restore |
+| Cloudflare D1 | Canonical envelope/audit/dead-letter/heartbeat/dedup/replay/auth/QB receipt and projection-outbox ledgers | Daily exact-account remote SQL export, encrypted in R2; isolated SQLite plus D1 drill restore |
 | Cloudflare R2 raw bucket | Raw inbound payload/file source stored before downstream work | Re-derive an envelope or evidence record from its immutable key |
 | Frappe site | Deterministic business records, roles, policy gates, and audit objects | Rebuild consumer state from D1/R2 plus reconciliation; back up for faster/complete operational restore |
 | R2 backup bucket | Encrypted complete Frappe and D1 generations | Restore only exact prefixes bearing the matching Frappe or D1 completion marker; live bucket-lock proof required |
@@ -229,7 +242,7 @@ deploy/backup-to-r2.sh
 `workers-bus/node_modules/.bin/wrangler` 4.x version and an exact generated config for account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It performs `d1 export --remote`, imports the SQL into an
-isolated SQLite file, runs integrity checks, and requires all 29 production tables and 31 named
+isolated SQLite file, runs integrity checks, and requires all 34 production tables and 43 named
 trigger-to-table bindings before packaging, encrypting, uploading immutably, and remotely
 checking the generation. It prints the
 exact committed `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Do not list-and-select latest in
@@ -245,21 +258,16 @@ The D1 script applies the same commit protocol with its D1-specific marker. Rete
 expired marker first and keeps its encrypted archive/checksum for one additional hour, so a
 restore cannot observe a committed marker after its data was deleted.
 
-The D1 required-table allowlist is release state, not a static assumption: `envelopes`,
-`audit_log`, `dead_letter`, `source_counts`, `heartbeat`, `quickbooks_webhook_receipts`,
-`dedup_claims`, `replay_requests`, `field_actions`, `field_action_media`, `app_users`,
-`app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`,
-`app_action_throttles`, `app_device_pairings`, `app_devices`, `lead_ack_receipts`,
-`approval_requests`, `approval_request_events`, `quote_revision_approval_requests`,
-`quote_revision_approval_request_events`, `production_schedule_approval_requests`,
-`production_schedule_approval_request_events`, `customer_portal_links`,
-`customer_portal_access_throttles`, `measurement_intake_receipts`, and the privacy-safe
-`public_estimate_rate_limits` ledger (keyed hashes only; no raw IPs or contact data). Every migration that adds a persistent table must
-advance both scripts, manifest expectation, readiness contract, and executable tests before that
-migration can deploy.
+The D1 required-table allowlist is release state, not a static assumption. Its current 34 tables
+include the durable `quickbooks_projection_outbox` ledger, privacy-safe `public_estimate_rate_limits`, the immutable
+`governed_transitions`/outbox evidence chain, and `field_work_package_actions`; it is defined
+exactly by the two recovery scripts rather than duplicated in this prose. Every migration that
+adds a persistent table must advance both scripts, manifest expectation, readiness contract, and
+executable tests before that migration can deploy.
 
-The 31 required trigger bindings include source-count validation, immutable lead-ack receipts, and
-all three approval ledgers' transition, event-append, and immutable-evidence triggers. In particular,
+The 43 required trigger bindings include source-count validation, immutable lead-ack receipts, all
+three approval ledgers' transition/event/immutable-evidence rules, and the governed-transition
+outbox rules. In particular,
 the approval-request binding trigger must reject `UPDATE` with
 `ABORT, 'approval_request_binding_immutable'`; approval-event update/delete triggers must reject
 with `ABORT, 'approval_request_events_immutable'`. A matching name and table alone does not pass
@@ -285,7 +293,7 @@ deploy/restore-d1-from-r2.sh
 
 The script verifies ciphertext checksum before decryption, validates the exact source manifest,
 imports into isolated SQLite, checks integrity, and records a local row count for every required
-table plus the exact 31 trigger-to-table bindings. It also checks the receipt trigger SQL for
+table plus the exact 43 trigger-to-table bindings. It also checks the receipt trigger SQL for
 the required `BEFORE UPDATE` / `BEFORE DELETE` abort semantics. It deletes its plaintext
 workspace on success, failure, or signal.
 
@@ -381,7 +389,9 @@ device.
 | `HERMES_DRY_RUN_SIGNING_KEY` | Unique per Frappe tenant/runtime; rotate with a controlled preview-receipt cutover |
 | approval broker key pair / `HERMES_APPROVER_ID` | Private key stays only in authenticated owner approval broker; rotate the public key atomically in MCP and the Frappe backend's `IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE`, then verify a new receipt and fail-closed old receipt |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Mint new key, verify Drive/email, then revoke old key |
-| `QB_WEBHOOK_TOKEN` | Change Worker binding and Intuit verifier token together |
+| `QB_WEBHOOK_TOKEN` | Change Worker binding and Intuit verifier token together; prove one expected-realm signed event after cutover |
+| `QB_EXPECTED_REALM_ID` | Recheck against the intended company before cutover; a change is an owner-approved company-boundary migration, never generic configuration churn |
+| `QB_RECONCILIATION_ISSUER_USER` and issuer API pair | Provision a replacement Frappe user with only IronWrap QuickBooks Reconciliation Issuer, match Worker vars/secrets and site config, prove one live Pending reconciliation, then revoke the old pair |
 | `D1_BACKUP_API_TOKEN` | Persist only the exact production D1 read/export scope in `backup.env`; never reuse restore or R2 credentials; run a backup after rotation |
 | `D1_RESTORE_API_TOKEN` | Separate drill/write scope injected only for one approved remote drill; unset immediately afterward and keep unset for local verification |
 | R2 backup key pair | Backup-bucket-only credentials; rotate and immediately run backup plus isolated decrypt check |
@@ -394,8 +404,8 @@ files. After rotation, verify `/ready`, relevant runtime action, and audit evide
 | Severity | Definition | Examples | Response |
 | --- | --- | --- | --- |
 | SEV1 | Lead loss possible or ingest unavailable | R2/D1 write failure, all intake failing, Worker unavailable | Immediate; protect raw-first intake before other work |
-| SEV2 | Leads captured but processing/audit incomplete | Dead letters, Frappe/JobNimbus push failure, missing ack, audit-finalization failure | Same business day; approved recovery after diagnosis |
-| SEV3 | Degraded visibility or stale mirror | Reconcile gap, stale heartbeat, QB receipt/signature issue, Drive filing failure | Investigate within one business day |
+| SEV2 | Leads captured but processing/audit incomplete | Dead letters, Frappe/JobNimbus push failure, pending/escalated QuickBooks projection, missing ack, audit-finalization failure | Same business day; approved recovery after diagnosis |
+| SEV3 | Degraded visibility or stale mirror | Reconcile gap, stale heartbeat, QB receipt/signature issue without pending projection, Drive filing failure | Investigate within one business day |
 | SEV4 | Non-operational defect/debt | Placeholder config, documentation drift, cosmetic issue | Track for the next controlled maintenance window |
 
 Escalation: primary owner alert -> backup owner -> maintainer. A missing reconcile digest is SEV2
@@ -408,12 +418,15 @@ Daily:
 - Open the `IronWrap Control Center`; reconcile every red/amber item with its source record and
   use standard Frappe lists/forms if the cockpit cannot load.
 - Check reconcile digest and `/admin/status`; investigate every degraded reason.
+- Inspect pending/escalated QuickBooks projections and their audit references; no recent QuickBooks
+  receipt is not an outage by itself.
 - Confirm external monitors for `/health` and `/ready` disagree only during known dependency work.
 - Confirm both encrypted D1 and Frappe backups completed and published their distinct markers.
 
 Weekly:
 
-- Review dead letters, pending/stuck envelopes, Frappe errors, and recent audit failures.
+- Review dead letters, pending/stuck envelopes, pending/escalated QuickBooks projections, Frappe
+  errors, and recent audit failures.
 - Sample one raw R2 object through envelope and Frappe evidence linkage.
 - Review open Automation Incidents and close only with recovery evidence.
 - Review write flags; default them to false when no approved operation is active.

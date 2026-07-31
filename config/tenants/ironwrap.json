@@ -131,7 +131,9 @@
     },
     "quickbooks": {
       "role": "accounting_truth",
-      "webhook_verifier_env": "QB_WEBHOOK_TOKEN"
+      "webhook_verifier_env": "QB_WEBHOOK_TOKEN",
+      "expected_realm_id_env": "QB_EXPECTED_REALM_ID",
+      "reconciliation_issuer_user_env": "QB_RECONCILIATION_ISSUER_USER"
     },
     "google_drive": {
       "service_account_env": "GOOGLE_SERVICE_ACCOUNT_JSON",

@@ -129,4 +129,35 @@ describe("SavedWorkRecoveryPanel", () => {
       }),
     );
   });
+
+  it("labels a pending Stop Work report with its exact Work Package", async () => {
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "stop-work-review",
+      kind: "work_package_stop",
+      endpoint: "/api/v1/jobs/JOB-1042/work-package/stop-work",
+      payload: { work_package_id: "WP-1042-v3", blocker_reason: "Wind exceeds the plan limit." },
+    });
+    await queueOutboxAction("stop-work-review", 1_000);
+    await markOutboxNeedsAttention(
+      "stop-work-review",
+      {
+        error: {
+          code: "offline_timeout",
+          message: "The stop report remains saved for office review.",
+          status: 503,
+          occurredAt: 2_000,
+        },
+      },
+      2_000,
+    );
+
+    render(<SavedWorkRecoveryPanel session={session} />);
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Stop Work report · package WP-1042-v3 · job JOB-1042",
+      }),
+    ).toBeVisible();
+  });
 });

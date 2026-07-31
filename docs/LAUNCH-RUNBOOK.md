@@ -30,7 +30,7 @@ Never mark launch complete from repository checks alone.
 | Frappe hostname and DNS authority | Serves the operating core over HTTPS |
 | Offline `age` recipient and dedicated R2 backup credentials | Encrypts and stores recoverable backups |
 | Enabled website/provider/QuickBooks/Newo admin access | Proves each enabled real-source cutover |
-| Dedicated Frappe, bus, Hermes-approval, ingest, and backup credentials | Keeps privileges separated by purpose |
+| Dedicated Frappe, QuickBooks issuer, bus, Hermes-approval, ingest, and backup credentials | Keeps privileges separated by purpose |
 
 The host floor is locked at Ubuntu 22.04+, 2 CPU cores, 8 GiB RAM, 80 GiB free disk,
 Node.js 22.12.0+, and `x86_64`. The pinned upstream frappe_docker compose topology is
@@ -137,6 +137,11 @@ Create a dedicated non-interactive API user for the Worker/MCP path with the min
 roles required by its tools. Do not reuse the Administrator account. Store its API key and secret
 only in the Worker and MCP secret stores.
 
+For QuickBooks projection, create a second non-interactive Frappe user with only the IronWrap
+QuickBooks Reconciliation Issuer role and its own API key/secret. It must not hold the general
+Worker/MCP roles, a human finance role, or System Manager. Set the Frappe site config key
+ironwrap_quickbooks_reconciliation_issuer_user to that exact user.
+
 Bind the Field Companion evidence issuer to that exact Worker user before enabling the Worker
 bridge. This is a site-local allowlist, not a Worker variable; it prevents ordinary Desk/REST
 writes from creating or promoting gate-eligible `Verified` evidence:
@@ -182,6 +187,35 @@ npm run db:migrate
 npm run deploy
 ```
 
+### Facet-to-Frappe Review-Projection Gate
+
+Leave `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED=false` until the `0031` D1 migration is applied in
+the named environment and all of the following are proven there:
+
+1. Create a dedicated Frappe API user with only `IronWrap Facet Design Projection Service`, pin
+   its email in `ironwrap_facet_design_projection_service_user`, and set a distinct
+   `ironwrap_facet_design_projection_hmac_key`. Give it no generic quote, contract, acceptance, or
+   Proposal Evidence Pack write permission.
+2. Store `FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY`,
+   `FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY`, and
+   `FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET` only with `wrangler secret put`. Do not
+   reuse the Facet ingress HMAC, broad Worker/Frappe API identity, or customer-acceptance identity.
+3. Submit the reviewed deployment configuration
+   `FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON` with schema version `1`. Each exact mapping
+   includes only D1 receipt anchors plus opaque `roof_job_id` and `customer_quote_id`; it contains
+   no customer names, addresses, prices, or operator-entered commercial facts. There is no mutable
+   operator association API.
+4. With a disposable existing Roof Job and its current `Approved` Customer Quote, prove the
+   scheduled projection reads an already durable D1 receipt, accepts only an exact association,
+   creates one non-customer-safe Evidence Item and one `Pending` Integration Reconciliation record,
+   and leaves the quote, Contract Acceptance, and Proposal Evidence Pack unchanged. Repeat the
+   exact event to prove deterministic replay; separately prove missing/mismatched mappings make no
+   Frappe call and an Frappe refusal creates no Worker success.
+
+Keep the flag false if any proof is missing. Repository tests, an ingress `202`, or a deployed D1
+migration are not runtime evidence for this customer-linked projection. Archive only redacted
+event/evidence/reconciliation IDs with the release evidence.
+
 Newo production uses the managed federation and full governed control plane. Store
 `NEWO_API_KEY`, `NEWO_WEBHOOK_TOKEN`, `NEWO_BOOKING_TOKEN`, and
 `NEWO_CONTROL_SIGNING_SECRET` only as Cloudflare secrets after the exact target is verified.
@@ -196,6 +230,12 @@ secrets. Then prove both health surfaces:
 The Worker pair is a dedicated integration credential. Do not mount it in Hermes: every Hermes
 MCP process needs its own Frappe API pair issued to exactly its `HERMES_ACTOR_USER`, so the
 atomic safety acknowledgement command cannot impersonate a field actor.
+
+Before QuickBooks cutover, apply migration `0031_quickbooks_projection_outbox.sql` to the intended
+D1 database. Set `QB_EXPECTED_REALM_ID` to the one approved Intuit company realm and set
+`QB_RECONCILIATION_ISSUER_USER` to the separate Frappe user configured above. Put
+`QB_WEBHOOK_TOKEN` and the issuer API key/secret only in Worker secrets. The issuer pair must be
+distinct from `ERPNEXT_API_KEY`/`ERPNEXT_API_SECRET` and every human or MCP credential.
 
 ```bash
 curl --fail --silent --show-error "$BUS_BASE_URL/health"
@@ -217,6 +257,25 @@ operating view for heartbeat freshness, queue/dead-letter counts, Frappe
 errors, failed/stuck replay requests, audit failures, and QuickBooks receipt freshness.
 The non-secret site config lets the Control Center show the public `{ok}` result; it never
 stores or uses the Worker admin token.
+
+### QuickBooks Projection Gate
+
+The expected realm and Frappe issuer values are deployment configuration, not proof that Intuit,
+the Frappe user, or its role is live. Run the live-environment readiness check to reject missing,
+malformed, reused, or mismatched values; then prove the following against the intended accounts:
+
+1. The configured QuickBooks company sends one signed supported finance event to the intended
+   Worker URL, while a different realm is retained only as rejected audit evidence.
+2. The Worker preserves the raw payload, receipt, and one durable projection-outbox row before
+   the bounded Frappe call. A successful projection creates or reuses exactly one Pending
+   Integration Reconciliation; it does not claim a payment, amount, posting, or reconciliation
+   fact from the webhook.
+3. A temporary Frappe/issuer failure returns a retryable result and leaves the row pending.
+   Repair the deployment/configuration, then allow the five-minute recovery sweep or an Intuit
+   redelivery to acquire the leased row. Do not edit the D1 row to force completion.
+4. After five failed attempts, preserve the audit evidence and open or continue a SEV2 Automation
+   Incident. Only the documented immutable identity-conflict response is terminal; reconcile that
+   conflict with a human and QuickBooks read-back.
 
 ### Public Instant-Estimate Activation Gate
 
@@ -306,9 +365,9 @@ Field Companion deployment and must not be described as one.
 
 Before enabling the BFF in the intended Cloudflare account:
 
-1. Apply the exact D1 migration sequence remotely, including `0021_public_estimate_rate_limits.sql`, then
+1. Apply the exact D1 migration sequence remotely, including `0028_work_package_actions.sql`, then
    run the Frappe app migration so legacy Lead Envelopes become explicit `Unknown` triage rows.
-   Verify `/ready` against the intended database. The 29-table backup/restore inventory must be
+   Verify `/ready` against the intended database. The 34-table backup/restore inventory must be
    deployed with the same release.
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
@@ -343,7 +402,7 @@ The Production Runway remains a read surface until this gate closes. A local
 broker test, a Worker bundle, or a populated schedule card is not permission to
 dispatch a crew or call a production assignment live.
 
-1. Apply the remote D1 migration through `0021_public_estimate_rate_limits.sql` and
+1. Apply the remote D1 migration through `0028_work_package_actions.sql` and
    the matching Frappe migration. Confirm the Frappe document policy is installed before the
    broker receives a write-capable credential: it must lock the Roof Job, reject current
    `Needs Review`/`Shortage` supplier exceptions, and reject any initial or correction assignment
@@ -369,17 +428,24 @@ dispatch a crew or call a production assignment live.
 Remote migration, broker reachability, authenticated owner acceptance, and this live proof remain
 open until those exact checks are captured.
 
-### Customer Portal Capability Enablement Gate
+### Customer Portal and Contract-Acceptance Enablement Gate
 
-The checked-in customer portal is a disabled, read-only capability foundation. It is not a public
-estimate widget, customer session, document-download service, payment flow, or e-sign service.
-It shows only customer-safe projected summaries; raw storage keys, Drive links, field notes,
-unapproved estimates, and office session data never cross the public boundary.
+The checked-in customer portal is a disabled, read-only capability foundation. A separate,
+also-disabled, email-bound click-to-accept route may move one approved quote to `Accepted` only
+after it pins the current quote, approved proposal pack, and canonical terms snapshot. The portal
+bearer itself remains read-only and is never customer authentication or acceptance evidence.
+
+Neither route is a public estimate widget, customer session, document-download service, payment
+flow, generic commercial e-sign service, deposit collection, or delivery proof. They show only
+customer-safe projected summaries; raw storage keys, Drive links, field notes, unapproved
+estimates, and office session data never cross the public boundary.
 
 Before enabling it in the intended Cloudflare account:
 
-1. Apply the migration sequence through `0021_public_estimate_rate_limits.sql` with the same release and prove `/ready` against the
-   migrated D1 database. Keep `APP_CUSTOMER_PORTAL_ENABLED=false` until this is complete.
+1. Apply the migration sequence through `0029_customer_contract_acceptance.sql` with the same
+   release and prove `/ready` against the migrated D1 database. Keep both
+   `APP_CUSTOMER_PORTAL_ENABLED=false` and `APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED=false` until
+   their respective gates below are complete.
 2. Complete the Field Companion BFF configuration above, including the exact HTTPS
    `APP_PUBLIC_ORIGIN`, matching `APP_ALLOWED_ORIGINS`, Frappe read credentials, and the
    `APP_AUTH_PEPPER` secret. Then set `APP_CUSTOMER_PORTAL_ENABLED=true`; the portal fails closed
@@ -396,6 +462,35 @@ Before enabling it in the intended Cloudflare account:
 5. Archive only link id, job id, request id, expiry, and test result. Never archive the raw URL or
    capability token. Confirm a fresh link revokes the prior active link for that job.
 
+Do not enable `APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED=true` merely because the portal is live.
+Before this separate capability is enabled in a named environment:
+
+1. Provision a dedicated Frappe API user with only the `IronWrap Customer Acceptance Service`
+   role, pin its email in `ironwrap_customer_acceptance_service_user`, and use its API key/secret
+   only for the two customer-acceptance methods. Do not reuse the broad Worker BFF identity.
+2. Set a distinct `APP_CUSTOMER_ACCEPTANCE_HMAC_KEY` in the Worker and the matching
+   `ironwrap_customer_acceptance_hmac_key` Frappe site config. Set the dedicated
+   `APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY` and
+   `APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET` as Worker secrets. The HMAC timestamp/nonce window,
+   service user, and service role must all fail closed.
+3. Configure the approved Gmail sender and exact HTTPS `APP_PUBLIC_ORIGIN`. The email must use
+   `https://<origin>/contract-accept#token=...`; do not log, screen-capture, or place that token in
+   a query string, path, ticket, or browser recording. Provider message acceptance is not delivery
+   evidence.
+4. With a disposable linked Roof Job, approved Customer Quote, and approved Proposal Evidence
+   Pack, prove the email challenge stores only hashes in D1, rejects cookie-only and wrong-origin
+   requests, and exposes no raw email or token in the ledger or response. Change the quote terms,
+   proposal state, or customer email after challenge issuance and prove confirmation is rejected.
+5. Confirm once through the email fragment, then prove same-token and conflicting-idempotency
+   retries cannot create another acceptance. Verify R2 receipt storage precedes the one Frappe
+   transaction that creates the verified Evidence Item and Contract Acceptance and changes the
+   quote from `Approved` to `Accepted` with the exact locked anchors. Force an ambiguous Frappe
+   transport result and prove it ends `uncertain` without replaying the customer write.
+
+This proof is still open until it runs in the named Cloudflare, Frappe, R2, and Gmail environment.
+Do not call the repository slice a legal signature determination, a received-email proof, a paid
+deposit, or a preconstruction release.
+
 Do not add proof-photo/download, invoice, warranty-file, or proposal-file URLs to this route
 without a separate short-lived attachment-authorization design and browser proof. The private
 `/ingest/estimate` route remains bearer-authenticated; public estimation is limited to the
@@ -403,16 +498,34 @@ separate review-gated `/public/instant-estimate` contract above.
 
 ## 10. Prove The End-To-End Intake Slice
 
+Before executing the proof, create a separate non-Desk Frappe API user with only the
+`IronWrap Launch Proof Reader` role. That role may read only `Instant Estimate Session`; do not
+assign it Lead Envelope, Roof Job, Roofing Customer, or any other IronWrap role. Pin that exact
+user in the Frappe site config key `ironwrap_launch_proof_reader_user`, and use only that user's
+API key/secret as `FRAPPE_API_KEY` and `FRAPPE_API_SECRET`. Set `FRAPPE_BASE_URL`,
+`FRAPPE_PROOF_POLL_ATTEMPTS`, and `FRAPPE_PROOF_POLL_INTERVAL_MS` from the launch-proof block in
+`deploy/env.example`; do not reuse the Worker integration credential pair.
+
 ```bash
 node tools/launch-proof.mjs
-BUS_BASE_URL=... INGEST_TOKEN=... ADMIN_TOKEN=... node tools/launch-proof.mjs --execute > launch-proof-evidence.json
+BUS_BASE_URL=... INGEST_TOKEN=... ADMIN_TOKEN=... FRAPPE_BASE_URL=... FRAPPE_API_KEY=... FRAPPE_API_SECRET=... node tools/launch-proof.mjs --execute > launch-proof-evidence.json
 ```
 
-The dry run makes no network request. In execute mode, the runner proves `/health` and every
-`/ready` check before it creates a fixture; then it verifies website intake, estimator idempotency,
-admin read-back, reconciliation, and a fresh/reconciled `/admin/status` with no dead-letter,
-stuck, Frappe, replay, or recent-audit failure. It emits only redacted evidence and response
-request ids; do not add tokens or raw responses to the artifact.
+The dry run makes no network request. Execute mode refuses to send even a synthetic POST unless
+the bounded Frappe proof configuration is complete. Before it contacts the bus, it makes one
+GET-only lookup for its fresh correlation and requires the configured reader to return `pending`;
+a missing site-config pin, wrong API identity, missing role, or inaccessible estimate session fails
+before a synthetic POST. It then proves `/health` and every `/ready` check before it creates a
+fixture; verifies website intake, estimator idempotency, admin read-back, reconciliation, and a
+fresh/reconciled `/admin/status`; and finally polls the GET-only synthetic Frappe correlation
+endpoint at most five times. The artifact contains only redacted evidence and response request ids;
+do not add tokens, raw Frappe responses, or document data to it.
+
+A matched synthetic Frappe projection is evidence only: it does not retire JobNimbus, GHL, or any
+other bridge. A missing, mismatched, timed-out, or unavailable projection writes its redacted
+artifact with `bridge_keep_enabled=true` and `reconciliation_required=true`, then makes
+`node tools/launch-proof.mjs --execute` exit non-zero. Preserve that artifact for reconciliation;
+it is failed proof evidence, not a green launch gate. Reconcile it before any cutover decision.
 
 Archive `launch-proof-evidence.json` with the release commit and image digest. Verify the fixture
 in D1/R2 and in Frappe as Lead Envelope, Roofing Customer/Property, Roof Job, and seven Production
@@ -427,7 +540,7 @@ Gate State rows. Remove or clearly label fixture records after proof.
 | 3D estimator handoff | Repeated private `/ingest/estimate` idempotency key returns the original session and remains review-gated |
 | Jotform field intake | Device submission reaches `/ingest/photo`, Drive/R2, evidence, and check-in with photos plus one voice note |
 | RoofRuler/AppliCad | `/ingest/measurement` records one hashed receipt per provider/idempotency identity, stores raw source first, routes no-job or unresolved-job reports and retryable failures to `/admin/measurements/exceptions`, sequentially re-drives verified raw sources with bounded backoff, and keeps uncertain values review-gated |
-| QuickBooks | Valid signed webhook receipt is visible in `/admin/status`; invalid signature is rejected |
+| QuickBooks | Expected-realm signed event produces raw R2, a D1 receipt plus durable projection row, and one Pending Frappe reconciliation; invalid signatures and other realms are rejected, and provider facts remain unproven until read-back |
 | Newo receptionist | Approved real call produces `raw/newo/` R2, event receipt, distinct reception session, lead envelope when applicable, Frappe landing, downstream result, and operator status; same-caller second calls remain distinct sessions; report omission and failed transfer become owned exceptions |
 
 JobNimbus and GHL remain bridges until each replacement slice has live evidence. SMS remains
@@ -466,8 +579,8 @@ CRON_TZ=UTC
 `backup-d1-to-r2.sh` is bound to Cloudflare account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
-the SQL into isolated SQLite, checks integrity and all 28 current core/auth/operational tables,
-plus the 31 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
+the SQL into isolated SQLite, checks integrity and all 34 release-state tables,
+plus the 43 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
 locally, uploads immutably, remotely checks the objects, and publishes
 `IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
 `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Never discover or infer `latest`.
@@ -494,7 +607,7 @@ For the launch remote drill, create a fresh empty D1 database named
 `ironwrap-restore-drill-<label>` in the same committed account and record its exact UUID. The
 name and UUID must both differ from production. Bind one approval to that exact pair; the script
 generates a target-only Wrangler config, rechecks emptiness, imports, then compares the complete
-table-to-row-count map for all 28 required tables and the exact 31 trigger-to-table bindings
+table-to-row-count map for all 34 required tables and the exact 43 trigger-to-table bindings
 with the locally verified SQLite export:
 
 ```bash
@@ -511,19 +624,13 @@ export D1_RESTORE_MODE=verify
 
 Any new D1 migration that adds a persistent table must update the required-table allowlist in
 both D1 scripts and their readiness tests before deployment. Any migration that adds or changes
-an invariant trigger must update the trigger inventory too. The current 28 are `envelopes`,
-`audit_log`, `dead_letter`, `source_counts`, `heartbeat`, `quickbooks_webhook_receipts`,
-`dedup_claims`, `replay_requests`, `field_actions`, `field_action_media`, `app_users`,
-`app_magic_links`, `app_sessions`, `app_auth_throttles`, `app_auth_audit`,
-`app_action_throttles`, `app_device_pairings`, `app_devices`, `lead_ack_receipts`,
-`approval_requests`, `approval_request_events`, `quote_revision_approval_requests`,
-`quote_revision_approval_request_events`, `production_schedule_approval_requests`,
-`production_schedule_approval_request_events`, `customer_portal_links`, and
-`customer_portal_access_throttles`, and `measurement_intake_receipts`. The 31 required triggers include source-count
-validation, immutable lead-ack receipts, and all three approval ledgers' transition/event/immutability
-rules. Approval binding rewrites must raise `ABORT, 'approval_request_binding_immutable'`; approval
-event updates/deletes must raise `ABORT, 'approval_request_events_immutable'` in both local export
-verification and remote drill proof.
+an invariant trigger must update the trigger inventory too. The current 34-table inventory includes
+the QuickBooks projection outbox, approval ledgers, governed-transition/outbox tables, and the `field_work_package_actions`
+ledger; it is enforced by the two scripts rather than this prose list. The 43 required triggers
+include source-count validation, immutable lead-ack receipts, the three approval ledgers, and the
+governed-transition outbox rules. Approval binding rewrites must raise
+`ABORT, 'approval_request_binding_immutable'`; approval event updates/deletes must raise
+`ABORT, 'approval_request_events_immutable'` in both local export verification and remote drill proof.
 
 Before launch, prove R2 delete protection in the live Cloudflare account. Archive the bucket-lock
 rule identifiers, protected backup prefixes, retention durations, and a denied deletion of a

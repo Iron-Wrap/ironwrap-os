@@ -8,8 +8,12 @@ from typing import Any
 
 import frappe
 
+from ironwrap_roofing.access_control import (
+    CUSTOMER_ACCEPTANCE_SERVICE_ROLE,
+    FACET_DESIGN_PROJECTION_SERVICE_ROLE,
+)
 from ironwrap_roofing.domain_policy import PolicyViolation, validate_record
-from ironwrap_roofing.domain_policy import parse_json_field
+from ironwrap_roofing.domain_policy import SHOP_ORDER_FINAL_STATUSES, parse_json_field
 
 
 CORRECTION_TARGETS: dict[str, tuple[str, str, tuple[str, ...]]] = {
@@ -47,6 +51,7 @@ CORRECTION_TARGETS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     ),
     "safety_plan": ("supersedes", "Safety Plan", ("roof_job", "version")),
     "tenant_export_run": ("supersedes", "Tenant Export Run", ("tenant",)),
+    "work_package": ("supersedes", "Work Package", ("roof_job", "version")),
 }
 
 SAFETY_ACKNOWLEDGEMENT_FIELDS = (
@@ -119,12 +124,61 @@ JOB_ASSIGNMENT_SCHEDULE_CONTEXT_FIELDS = (
     "roof_job",
     "assignment_type",
     "status",
+    "crew_profile",
     "scheduled_start",
     "supersedes",
 )
 _JOB_ASSIGNMENT_SCHEDULE_CONTEXT_SELECT = ", ".join(
     JOB_ASSIGNMENT_SCHEDULE_CONTEXT_FIELDS
 )
+CREW_PROFILE_CONTEXT_FIELDS = (
+    "name",
+    "crew_profile_id",
+    "status",
+    "crew_type",
+    "competency_status",
+    "competency_checked_at",
+    "competency_expiry",
+    "equipment_status",
+    "equipment_checked_at",
+    "equipment_expiry",
+    "wcb_status",
+    "wcb_checked_at",
+    "wcb_expiry",
+    "active_stop",
+    "active_stop_at",
+    "active_stop_reason",
+)
+_CREW_PROFILE_CONTEXT_SELECT = ", ".join(CREW_PROFILE_CONTEXT_FIELDS)
+JOB_COMPLIANCE_CONTEXT_FIELDS = (
+    "name",
+    "compliance_record_id",
+    "roof_job",
+    "required_before_gate",
+    "status",
+    "effective_date",
+    "expiry_date",
+    "supersedes",
+)
+_JOB_COMPLIANCE_CONTEXT_SELECT = ", ".join(JOB_COMPLIANCE_CONTEXT_FIELDS)
+SAFETY_PLAN_CONTEXT_FIELDS = (
+    "name",
+    "safety_plan_id",
+    "roof_job",
+    "version",
+    "status",
+    "supersedes",
+)
+_SAFETY_PLAN_CONTEXT_SELECT = ", ".join(SAFETY_PLAN_CONTEXT_FIELDS)
+WORK_PACKAGE_CONTEXT_FIELDS = (
+    "name",
+    "work_package_id",
+    "roof_job",
+    "version",
+    "status",
+    "supersedes",
+)
+_WORK_PACKAGE_CONTEXT_SELECT = ", ".join(WORK_PACKAGE_CONTEXT_FIELDS)
 SUPPLIER_ORDER_EXCEPTION_CONTEXT_FIELDS = (
     "name",
     "supplier_order_id",
@@ -133,6 +187,19 @@ SUPPLIER_ORDER_EXCEPTION_CONTEXT_FIELDS = (
 )
 _SUPPLIER_ORDER_EXCEPTION_CONTEXT_SELECT = ", ".join(
     SUPPLIER_ORDER_EXCEPTION_CONTEXT_FIELDS
+)
+SUPPLIER_ORDER_EVIDENCE_CONTEXT_FIELDS = (
+    "name",
+    "roof_job",
+    "proof_slot",
+    "sync_state",
+    "content_checksum",
+    "checksum_algorithm",
+    "verified_at",
+    "verification_source",
+    "source_uri",
+    "r2_key",
+    "drive_file_id",
 )
 _ATOMIC_SAFETY_ACKNOWLEDGEMENT_APPEND: ContextVar[tuple[str, str] | None] = ContextVar(
     "ironwrap_atomic_safety_acknowledgement_append",
@@ -156,6 +223,44 @@ _TRUSTED_FIELD_EVIDENCE_ISSUANCE: ContextVar[
     "ironwrap_trusted_field_evidence_issuance",
     default=None,
 )
+_TRUSTED_QUICKBOOKS_RECONCILIATION_ISSUANCE: ContextVar[
+    tuple[tuple[str, str], ...] | None
+] = ContextVar(
+    "ironwrap_trusted_quickbooks_reconciliation_issuance",
+    default=None,
+)
+_TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE: ContextVar[Any | None] = ContextVar(
+    "ironwrap_trusted_customer_contract_acceptance",
+    default=None,
+)
+_TRUSTED_FACET_DESIGN_PROJECTION: ContextVar[Any | None] = ContextVar(
+    "ironwrap_trusted_facet_design_projection",
+    default=None,
+)
+_TRUSTED_WORK_PACKAGE_TRANSITION: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar(
+    "ironwrap_trusted_work_package_transition",
+    default=None,
+)
+_TRUSTED_WORK_PACKAGE_EVENT_ISSUANCE: ContextVar[
+    tuple[tuple[str, str], ...] | None
+] = ContextVar(
+    "ironwrap_trusted_work_package_event_issuance",
+    default=None,
+)
+_TRUSTED_CONTROLLED_ITEM_TRANSITION: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar("ironwrap_trusted_controlled_item_transition", default=None)
+_TRUSTED_MATERIAL_LOT_TRANSITION: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar("ironwrap_trusted_material_lot_transition", default=None)
+_TRUSTED_NONCONFORMANCE_TRANSITION: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar("ironwrap_trusted_nonconformance_transition", default=None)
+_TRUSTED_SHOP_ORDER_TRANSITION: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar("ironwrap_trusted_shop_order_transition", default=None)
 
 # A Field Companion verification is a service fact, not a value a Desk/REST
 # caller may write into an Evidence Item.  The narrow issuer command builds
@@ -190,6 +295,230 @@ FIELD_EVIDENCE_ISSUANCE_FIELDS = (
     "customer_safe",
     "summary",
 )
+QUICKBOOKS_RECONCILIATION_ISSUANCE_FIELDS = (
+    "reconciliation_id",
+    "roof_job",
+    "system_name",
+    "entity_type",
+    "external_entity_id",
+    "local_doctype",
+    "local_name",
+    "direction",
+    "status",
+    "detected_at",
+    "raw_key",
+    "source_version",
+    "source_payload_hash",
+    "local_payload_hash",
+    "attempt_count",
+    "notes",
+)
+CUSTOMER_CONTRACT_EVIDENCE_FIELDS = (
+    "evidence_id",
+    "device_action_id",
+    "roof_job",
+    "evidence_type",
+    "proof_owner",
+    "proof_slot",
+    "source_system",
+    "r2_key",
+    "content_checksum",
+    "checksum_algorithm",
+    "content_type",
+    "content_length",
+    "capture_actor",
+    "captured_at",
+    "sync_state",
+    "verified_at",
+    "verification_source",
+    "customer_safe",
+    "summary",
+)
+CUSTOMER_CONTRACT_ACCEPTANCE_FIELDS = (
+    "acceptance_id",
+    "roof_job",
+    "customer",
+    "customer_quote",
+    "proposal_evidence_pack",
+    "change_order",
+    "contract_version",
+    "status",
+    "signer_name",
+    "signer_email",
+    "signer_ip",
+    "accepted_at",
+    "acceptance_method",
+    "evidence_item",
+    "terms_hash",
+    "terms_snapshot_json",
+    "document_checksum",
+    "source_system",
+    "provider_reference",
+    "captured_by",
+    "supersedes",
+    "correction_reason",
+    "notes",
+)
+CUSTOMER_QUOTE_ACCEPTANCE_FIELDS = (
+    "status",
+    "acceptance_evidence",
+    "contract_acceptance",
+    "accepted_at",
+)
+FACET_DESIGN_PROJECTION_EVIDENCE_FIELDS = (
+    "evidence_id",
+    "device_action_id",
+    "roof_job",
+    "lead_envelope",
+    "evidence_type",
+    "proof_owner",
+    "proof_slot",
+    "source_system",
+    "source_uri",
+    "r2_key",
+    "drive_file_id",
+    "content_checksum",
+    "checksum_algorithm",
+    "content_type",
+    "content_length",
+    "capture_actor",
+    "captured_at",
+    "latitude",
+    "longitude",
+    "location_accuracy_m",
+    "sync_state",
+    "verified_at",
+    "verification_source",
+    "correction_of",
+    "correction_reason",
+    "customer_safe",
+    "summary",
+)
+FACET_DESIGN_PROJECTION_RECONCILIATION_FIELDS = (
+    "reconciliation_id",
+    "roof_job",
+    "system_name",
+    "entity_type",
+    "external_entity_id",
+    "local_doctype",
+    "local_name",
+    "direction",
+    "status",
+    "detected_at",
+    "raw_key",
+    "source_version",
+    "source_amount",
+    "local_amount",
+    "currency",
+    "source_payload_hash",
+    "local_payload_hash",
+    "last_attempt_at",
+    "attempt_count",
+    "resolution_action",
+    "resolved_by",
+    "resolved_at",
+    "resolution_evidence",
+    "automation_incident",
+    "supersedes",
+    "correction_reason",
+    "notes",
+    "diff_json",
+)
+# A projection's source/quote binding is immutable, but its reconciliation is
+# still a governed workflow.  Keep the two concerns separate so a human can
+# resolve the pending discrepancy without rewriting the evidence it is about.
+FACET_DESIGN_PROJECTION_RECONCILIATION_LIFECYCLE_FIELDS = (
+    "status",
+    "resolution_action",
+    "resolved_by",
+    "resolved_at",
+    "resolution_evidence",
+    "automation_incident",
+    "supersedes",
+    "correction_reason",
+)
+FACET_DESIGN_PROJECTION_RECONCILIATION_ANCHOR_FIELDS = tuple(
+    field
+    for field in FACET_DESIGN_PROJECTION_RECONCILIATION_FIELDS
+    if field not in FACET_DESIGN_PROJECTION_RECONCILIATION_LIFECYCLE_FIELDS
+)
+FACET_DESIGN_PROJECTION_SOURCE_SYSTEM = "ironwrap-facet-design"
+FACET_DESIGN_PROJECTION_VERIFICATION_SOURCE = "ironwrap-worker-r2-facet-design-projection"
+WORK_PACKAGE_RUNTIME_FIELDS = (
+    "status",
+    "released_by",
+    "released_at",
+    "acknowledged_by",
+    "acknowledged_at",
+    "acknowledgement_device_action_id",
+    "started_at",
+    "blocked_by",
+    "blocked_at",
+    "blocked_device_action_id",
+    "blocker_reason",
+    "completed_at",
+)
+WORK_PACKAGE_EVENT_ISSUANCE_FIELDS = (
+    "work_package_event_id",
+    "event_type",
+    "work_package",
+    "roof_job",
+    "job_assignment",
+    "work_package_version",
+    "actor_user",
+    "actor_role",
+    "device_action_id",
+    "occurred_at",
+    "payload_hash",
+    "hold_point_sequence",
+    "evidence_item",
+    "blocker_reason",
+)
+CONTROLLED_ITEM_RUNTIME_FIELDS = (
+    "status",
+    "approved_by",
+    "approved_at",
+    "approval_note",
+)
+MATERIAL_LOT_RUNTIME_FIELDS = (
+    "status",
+    "available_quantity",
+    "reserved_quantity",
+    "consumed_quantity",
+)
+NONCONFORMANCE_RUNTIME_FIELDS = (
+    "status",
+    "containment",
+    "disposition",
+    "disposition_by",
+    "disposition_at",
+    "closed_by",
+    "closed_at",
+    "closure_evidence",
+)
+SHOP_ORDER_RUNTIME_FIELDS = (
+    "status",
+    "released_by",
+    "released_at",
+    "reserved_at",
+    "setup_started_at",
+    "fabrication_started_at",
+    "quality_hold_reason",
+    "ready_at",
+    "handed_over_to",
+    "handed_over_at",
+    "handoff_evidence",
+    "invoice_payment_milestone",
+    "invoice_ready_at",
+    "closed_at",
+    "lines",
+    "material_allocations",
+    "operations",
+    "yields",
+    "inspections",
+    "bundles",
+)
+SHOP_ORDER_LIFECYCLE_FIELDS = SHOP_ORDER_RUNTIME_FIELDS[:14]
 
 
 def _as_dict(document: Any) -> Any:
@@ -254,6 +583,174 @@ def _field_evidence_issuance_snapshot(document: Any) -> tuple[tuple[str, str], .
         )
         for field in FIELD_EVIDENCE_ISSUANCE_FIELDS
     )
+
+
+def _quickbooks_reconciliation_issuance_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    """Canonicalize the exact Pending reconciliation inserted by the issuer."""
+
+    return _runtime_snapshot(document, QUICKBOOKS_RECONCILIATION_ISSUANCE_FIELDS)
+
+
+def _customer_contract_evidence_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, CUSTOMER_CONTRACT_EVIDENCE_FIELDS)
+
+
+def _customer_contract_acceptance_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, CUSTOMER_CONTRACT_ACCEPTANCE_FIELDS)
+
+
+def _customer_quote_acceptance_snapshot(
+    document: Any,
+) -> tuple[str, tuple[tuple[str, str], ...]]:
+    return (
+        str(document.get("name") or ""),
+        _runtime_snapshot(document, CUSTOMER_QUOTE_ACCEPTANCE_FIELDS),
+    )
+
+
+def _facet_design_projection_evidence_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, FACET_DESIGN_PROJECTION_EVIDENCE_FIELDS)
+
+
+def _facet_design_projection_reconciliation_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, FACET_DESIGN_PROJECTION_RECONCILIATION_FIELDS)
+
+
+def _facet_design_projection_reconciliation_anchor_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, FACET_DESIGN_PROJECTION_RECONCILIATION_ANCHOR_FIELDS)
+
+
+def _facet_design_projection_reconciliation_allows_lifecycle_transition(
+    document: Any, previous_document: Any
+) -> bool:
+    """Allow only the ordinary reconciliation resolution fields to move with state."""
+
+    current_status = str(document.get("status") or "")
+    previous_status = str(previous_document.get("status") or "")
+    if current_status == previous_status:
+        return False
+
+    mutable_fields = {"status"}
+    if current_status in {"Resolved", "Ignored"}:
+        mutable_fields.update(
+            {
+                "resolution_action",
+                "resolved_by",
+                "resolved_at",
+                "resolution_evidence",
+                "automation_incident",
+            }
+        )
+    elif current_status == "Superseded":
+        mutable_fields.update({"supersedes", "correction_reason"})
+
+    protected_fields = tuple(
+        field
+        for field in FACET_DESIGN_PROJECTION_RECONCILIATION_LIFECYCLE_FIELDS
+        if field not in mutable_fields
+    )
+    return _runtime_snapshot(document, protected_fields) == _runtime_snapshot(
+        previous_document, protected_fields
+    )
+
+
+def _quote_acceptance_status(
+    snapshot: tuple[str, tuple[tuple[str, str], ...]],
+) -> str:
+    return dict(snapshot[1])["status"]
+
+
+def _is_customer_acceptance_service_actor() -> bool:
+    actor = getattr(getattr(frappe, "session", None), "user", None)
+    if not isinstance(actor, str) or not actor:
+        return False
+    return CUSTOMER_ACCEPTANCE_SERVICE_ROLE in {
+        str(role) for role in frappe.get_roles(actor)
+    }
+
+
+def _reject_customer_acceptance_service_generic_write() -> None:
+    frappe.throw(
+        "Customer acceptance service users may only mutate records through the bounded customer contract command.",
+        exc=frappe.PermissionError,
+    )
+
+
+def _is_facet_design_projection_service_actor() -> bool:
+    actor = getattr(getattr(frappe, "session", None), "user", None)
+    if not isinstance(actor, str) or not actor:
+        return False
+    return FACET_DESIGN_PROJECTION_SERVICE_ROLE in {
+        str(role) for role in frappe.get_roles(actor)
+    }
+
+
+def _reject_facet_design_projection_service_generic_write() -> None:
+    frappe.throw(
+        "Facet design projection service users may only mutate records through the bounded projection command.",
+        exc=frappe.PermissionError,
+    )
+
+
+def _work_package_runtime_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
+    """Canonicalize lifecycle facts that only narrow commands may mutate."""
+
+    return tuple(
+        (
+            field,
+            "" if document.get(field) is None else str(document.get(field)),
+        )
+        for field in WORK_PACKAGE_RUNTIME_FIELDS
+    )
+
+
+def _work_package_event_issuance_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    """Canonicalize one immutable Work Package event for context matching."""
+
+    return tuple(
+        (
+            field,
+            "" if document.get(field) is None else str(document.get(field)),
+        )
+        for field in WORK_PACKAGE_EVENT_ISSUANCE_FIELDS
+    )
+
+
+def _runtime_snapshot(
+    document: Any, fields: tuple[str, ...]
+) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (field, "" if document.get(field) is None else str(document.get(field)))
+        for field in fields
+    )
+
+
+def _material_lot_runtime_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, MATERIAL_LOT_RUNTIME_FIELDS)
+
+
+def _controlled_item_runtime_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, CONTROLLED_ITEM_RUNTIME_FIELDS)
+
+
+def _nonconformance_runtime_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, NONCONFORMANCE_RUNTIME_FIELDS)
+
+
+def _shop_order_runtime_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, SHOP_ORDER_RUNTIME_FIELDS)
 
 
 @contextmanager
@@ -346,9 +843,174 @@ def field_evidence_issuance_context(document: Any):
         _TRUSTED_FIELD_EVIDENCE_ISSUANCE.reset(token)
 
 
+@contextmanager
+def quickbooks_reconciliation_issuance_context(document: Any):
+    """Authorize one exact Pending QuickBooks reconciliation insert.
+
+    Only the bounded issuer command opens this ContextVar after authenticating
+    the configured Worker principal. Generic Desk/REST resource creation cannot
+    manufacture this process-local authorization state.
+    """
+
+    token = _TRUSTED_QUICKBOOKS_RECONCILIATION_ISSUANCE.set(
+        _quickbooks_reconciliation_issuance_snapshot(document)
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_QUICKBOOKS_RECONCILIATION_ISSUANCE.reset(token)
+
+
+@contextmanager
+def customer_contract_acceptance_issuance_context(
+    evidence: Any, acceptance: Any, quote: Any
+):
+    """Authorize one exact evidence, acceptance, and quote transition.
+
+    This private state is created only by the service/HMAC-checked customer
+    contract command. Generic Desk and REST document writes cannot supply it.
+    """
+
+    token = _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.set(
+        (
+            _customer_contract_evidence_snapshot(evidence),
+            _customer_contract_acceptance_snapshot(acceptance),
+            _customer_quote_acceptance_snapshot(quote),
+        )
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.reset(token)
+
+
+@contextmanager
+def facet_design_projection_issuance_context(evidence: Any, reconciliation: Any):
+    """Authorize one exact, review-only Facet evidence/reconciliation insert.
+
+    The bounded Worker command creates this private context only after it has
+    authenticated the dedicated service user, verified its independent HMAC,
+    and locked the explicit Roof Job/Customer Quote association.  It grants no
+    authority to edit either commercial record or publish a proposal.
+    """
+
+    token = _TRUSTED_FACET_DESIGN_PROJECTION.set(
+        (
+            _facet_design_projection_evidence_snapshot(evidence),
+            _facet_design_projection_reconciliation_snapshot(reconciliation),
+        )
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_FACET_DESIGN_PROJECTION.reset(token)
+
+
+@contextmanager
+def work_package_transition_context(document: Any):
+    """Authorize one exact Work Package lifecycle save from a narrow command.
+
+    Work Package content stays editable while it is a Draft, but all released
+    lifecycle facts are operational evidence.  This private context is set only
+    after the API has locked the package, assignment, and actor relationship;
+    generic Desk/REST writes cannot manufacture it from request input.
+    """
+
+    token = _TRUSTED_WORK_PACKAGE_TRANSITION.set(
+        (str(document.get("name") or ""), _work_package_runtime_snapshot(document))
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_WORK_PACKAGE_TRANSITION.reset(token)
+
+
+@contextmanager
+def controlled_item_transition_context(document: Any):
+    """Authorize one exact Controlled Item approval or retirement command."""
+
+    token = _TRUSTED_CONTROLLED_ITEM_TRANSITION.set(
+        (str(document.get("name") or ""), _controlled_item_runtime_snapshot(document))
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_CONTROLLED_ITEM_TRANSITION.reset(token)
+
+
+@contextmanager
+def material_lot_transition_context(document: Any):
+    """Authorize one exact inventory-lot lifecycle mutation from a bounded command."""
+
+    token = _TRUSTED_MATERIAL_LOT_TRANSITION.set(
+        (str(document.get("name") or ""), _material_lot_runtime_snapshot(document))
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_MATERIAL_LOT_TRANSITION.reset(token)
+
+
+@contextmanager
+def nonconformance_transition_context(document: Any):
+    """Authorize one exact NCR lifecycle mutation from a bounded command."""
+
+    token = _TRUSTED_NONCONFORMANCE_TRANSITION.set(
+        (str(document.get("name") or ""), _nonconformance_runtime_snapshot(document))
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_NONCONFORMANCE_TRANSITION.reset(token)
+
+
+@contextmanager
+def shop_order_transition_context(document: Any):
+    """Authorize one exact Shop Order lifecycle mutation from a bounded command."""
+
+    token = _TRUSTED_SHOP_ORDER_TRANSITION.set(
+        (str(document.get("name") or ""), _shop_order_runtime_snapshot(document))
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_SHOP_ORDER_TRANSITION.reset(token)
+
+
+@contextmanager
+def work_package_event_issuance_context(document: Any):
+    """Authorize one append-only Work Package event issued by the bounded API."""
+
+    token = _TRUSTED_WORK_PACKAGE_EVENT_ISSUANCE.set(
+        _work_package_event_issuance_snapshot(document)
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_WORK_PACKAGE_EVENT_ISSUANCE.reset(token)
+
+
 def validate_evidence_verification_mutation(document: Any) -> None:
     """Keep generic document writes from creating or promoting verified evidence."""
 
+    customer_contract_context = _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.get()
+    facet_projection_context = _TRUSTED_FACET_DESIGN_PROJECTION.get()
+    if _is_customer_acceptance_service_actor():
+        if (
+            customer_contract_context is not None
+            and customer_contract_context[0]
+            == _customer_contract_evidence_snapshot(document)
+        ):
+            return
+        _reject_customer_acceptance_service_generic_write()
+    if _is_facet_design_projection_service_actor():
+        if (
+            facet_projection_context is not None
+            and facet_projection_context[0]
+            == _facet_design_projection_evidence_snapshot(document)
+        ):
+            return
+        _reject_facet_design_projection_service_generic_write()
     if document.get("sync_state") != "Verified":
         return
     previous = _previous(document)
@@ -358,8 +1020,307 @@ def validate_evidence_verification_mutation(document: Any) -> None:
         document
     ):
         return
+    if (
+        customer_contract_context is not None
+        and customer_contract_context[0] == _customer_contract_evidence_snapshot(document)
+    ):
+        return
     frappe.throw(
         "Evidence Item verification can only be issued by the dedicated Worker command.",
+        exc=frappe.ValidationError,
+    )
+
+
+def validate_quickbooks_reconciliation_issuance(document: Any) -> None:
+    """Keep QuickBooks reconciliation creation on the bounded Worker path."""
+
+    system_name = document.get("system_name")
+    is_quickbooks = isinstance(system_name, str) and system_name.strip().casefold() == "quickbooks"
+    if not is_quickbooks or _previous(document) is not None:
+        return
+    if _TRUSTED_QUICKBOOKS_RECONCILIATION_ISSUANCE.get() == (
+        _quickbooks_reconciliation_issuance_snapshot(document)
+    ):
+        return
+    frappe.throw(
+        "QuickBooks reconciliations can only be issued by the dedicated Worker command.",
+        exc=frappe.PermissionError,
+    )
+
+
+def validate_facet_design_projection_evidence_mutation(document: Any) -> None:
+    """Freeze a projected design revision even for non-service Frappe users."""
+
+    previous_document = _previous(document)
+    previous_is_projection = previous_document is not None and (
+        previous_document.get("source_system") == FACET_DESIGN_PROJECTION_SOURCE_SYSTEM
+        or previous_document.get("verification_source")
+        == FACET_DESIGN_PROJECTION_VERIFICATION_SOURCE
+    )
+    current_is_projection = (
+        document.get("source_system") == FACET_DESIGN_PROJECTION_SOURCE_SYSTEM
+        or document.get("verification_source") == FACET_DESIGN_PROJECTION_VERIFICATION_SOURCE
+    )
+    if not previous_is_projection and not current_is_projection:
+        return
+    current = _facet_design_projection_evidence_snapshot(document)
+    context = _TRUSTED_FACET_DESIGN_PROJECTION.get()
+    if (
+        previous_document is None
+        and context is not None
+        and context[0] == current
+    ):
+        return
+    if previous_document is not None and current == _facet_design_projection_evidence_snapshot(
+        previous_document
+    ):
+        return
+    frappe.throw(
+        "Projected Facet design evidence is immutable and can only be corrected by a new design revision.",
+        exc=frappe.ValidationError,
+    )
+
+
+def validate_facet_design_projection_reconciliation_mutation(document: Any) -> None:
+    """Freeze a Facet source binding while permitting a governed resolution transition."""
+
+    previous_document = _previous(document)
+    previous_is_projection = previous_document is not None and str(
+        previous_document.get("reconciliation_id") or ""
+    ).startswith("facet-design-projection:")
+    current_is_projection = str(document.get("reconciliation_id") or "").startswith(
+        "facet-design-projection:"
+    )
+    if not previous_is_projection and not current_is_projection:
+        return
+    current = _facet_design_projection_reconciliation_snapshot(document)
+    context = _TRUSTED_FACET_DESIGN_PROJECTION.get()
+    if (
+        previous_document is None
+        and context is not None
+        and context[1] == current
+    ):
+        return
+    if previous_document is not None:
+        if (
+            _facet_design_projection_reconciliation_anchor_snapshot(document)
+            == _facet_design_projection_reconciliation_anchor_snapshot(previous_document)
+            and _facet_design_projection_reconciliation_allows_lifecycle_transition(
+                document, previous_document
+            )
+        ):
+            return
+    frappe.throw(
+        "Projected Facet design reconciliation keeps its source binding immutable and must use a governed lifecycle transition.",
+        exc=frappe.ValidationError,
+    )
+
+
+def validate_contract_acceptance_mutation(document: Any) -> None:
+    """Reject generic creation or mutation of an accepted customer contract."""
+
+    current = _customer_contract_acceptance_snapshot(document)
+    previous_document = _previous(document)
+    customer_contract_context = _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.get()
+    if _is_customer_acceptance_service_actor():
+        if (
+            previous_document is None
+            and customer_contract_context is not None
+            and customer_contract_context[1] == current
+        ):
+            return
+        _reject_customer_acceptance_service_generic_write()
+    if previous_document is not None:
+        previous = _customer_contract_acceptance_snapshot(previous_document)
+        if current == previous:
+            return
+    if document.get("status") != "Accepted":
+        return
+    if (
+        previous_document is None
+        and customer_contract_context is not None
+        and customer_contract_context[1] == current
+    ):
+        return
+    frappe.throw(
+        "Contract Acceptance can only be issued by the bounded customer contract command.",
+        exc=frappe.ValidationError,
+    )
+
+
+def validate_customer_quote_acceptance_mutation(document: Any) -> None:
+    """Keep accepted quote links and timestamps private-command owned."""
+
+    current = _customer_quote_acceptance_snapshot(document)
+    previous_document = _previous(document)
+    customer_contract_context = _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.get()
+    if _is_customer_acceptance_service_actor():
+        if previous_document is not None:
+            previous = _customer_quote_acceptance_snapshot(previous_document)
+            if (
+                _quote_acceptance_status(previous) == "Approved"
+                and customer_contract_context is not None
+                and customer_contract_context[2] == current
+            ):
+                return
+        _reject_customer_acceptance_service_generic_write()
+    if previous_document is None:
+        if document.get("status") != "Accepted" and not any(value for _, value in current[1][1:]):
+            return
+        previous = None
+    else:
+        previous = _customer_quote_acceptance_snapshot(previous_document)
+        if current == previous:
+            return
+    if (
+        previous is not None
+        and _quote_acceptance_status(previous) == "Approved"
+        and customer_contract_context is not None
+        and customer_contract_context[2] == current
+    ):
+        return
+    if (
+        document.get("status") == "Accepted"
+        or (previous is not None and _quote_acceptance_status(previous) == "Accepted")
+        or any(value for _, value in current[1][1:])
+    ):
+        frappe.throw(
+            "Customer Quote acceptance can only be issued by the bounded customer contract command.",
+            exc=frappe.ValidationError,
+        )
+
+
+def validate_work_package_runtime_mutation(document: Any) -> None:
+    """Reject generic lifecycle writes while permitting ordinary Draft editing."""
+
+    current = _work_package_runtime_snapshot(document)
+    previous_document = _previous(document)
+    if previous_document is None:
+        # A newly created package is an authoring artifact.  Its first release
+        # must nevertheless use the same bounded command as a resume.
+        if document.get("status") != "Draft" or any(
+            value for field, value in current if field != "status"
+        ):
+            frappe.throw(
+                "Work Package lifecycle can only be changed through the bounded Work Package commands.",
+                exc=frappe.ValidationError,
+            )
+        return
+
+    previous = _work_package_runtime_snapshot(previous_document)
+    if current == previous:
+        return
+    if _TRUSTED_WORK_PACKAGE_TRANSITION.get() == (
+        str(document.get("name") or ""),
+        current,
+    ):
+        return
+    frappe.throw(
+        "Work Package lifecycle can only be changed through the bounded Work Package commands.",
+        exc=frappe.ValidationError,
+    )
+
+
+def _validate_draft_only_runtime_mutation(
+    document: Any,
+    *,
+    fields: tuple[str, ...],
+    trusted: ContextVar[tuple[str, tuple[tuple[str, str], ...]] | None],
+    label: str,
+) -> None:
+    current = _runtime_snapshot(document, fields)
+    previous_document = _previous(document)
+    if previous_document is None:
+        if document.get("status") == "Draft" and all(
+            not value for field, value in current if field != "status"
+        ):
+            return
+    elif _runtime_snapshot(previous_document, fields) == current:
+        return
+    if trusted.get() == (str(document.get("name") or ""), current):
+        return
+    frappe.throw(
+        f"{label} lifecycle can only be changed through bounded Shop commands.",
+        exc=frappe.ValidationError,
+    )
+
+
+def validate_material_lot_runtime_mutation(document: Any) -> None:
+    """Keep lot receipt, reservation, and quarantine states command-owned."""
+
+    _validate_draft_only_runtime_mutation(
+        document,
+        fields=MATERIAL_LOT_RUNTIME_FIELDS,
+        trusted=_TRUSTED_MATERIAL_LOT_TRANSITION,
+        label="Material Lot",
+    )
+
+
+def validate_controlled_item_runtime_mutation(document: Any) -> None:
+    """Keep Controlled Item approval facts command-owned after drafting."""
+
+    _validate_draft_only_runtime_mutation(
+        document,
+        fields=CONTROLLED_ITEM_RUNTIME_FIELDS,
+        trusted=_TRUSTED_CONTROLLED_ITEM_TRANSITION,
+        label="Controlled Item",
+    )
+
+
+def validate_nonconformance_runtime_mutation(document: Any) -> None:
+    """Keep NCR containment and disposition states command-owned."""
+
+    _validate_draft_only_runtime_mutation(
+        document,
+        fields=NONCONFORMANCE_RUNTIME_FIELDS,
+        trusted=_TRUSTED_NONCONFORMANCE_TRANSITION,
+        label="Nonconformance",
+    )
+
+
+def validate_shop_order_runtime_mutation(document: Any) -> None:
+    """Permit drafting, but require a private context for every released mutation."""
+
+    current = _shop_order_runtime_snapshot(document)
+    previous_document = _previous(document)
+    if previous_document is None:
+        lifecycle = _runtime_snapshot(document, SHOP_ORDER_LIFECYCLE_FIELDS)
+        if document.get("status") == "Draft" and all(
+            not value for field, value in lifecycle if field != "status"
+        ):
+            return
+    elif (
+        previous_document.get("status") == "Draft"
+        and document.get("status") == "Draft"
+    ):
+        return
+    elif _shop_order_runtime_snapshot(previous_document) == current:
+        return
+    if _TRUSTED_SHOP_ORDER_TRANSITION.get() == (
+        str(document.get("name") or ""),
+        current,
+    ):
+        return
+    frappe.throw(
+        "Shop Order lifecycle can only be changed through bounded Shop commands.",
+        exc=frappe.ValidationError,
+    )
+
+
+def validate_work_package_event_mutation(document: Any) -> None:
+    """Keep Work Package events immutable and API-issued only."""
+
+    if _previous(document) is not None:
+        frappe.throw(
+            "Work Package Events are append-only and cannot be changed.",
+            exc=frappe.ValidationError,
+        )
+    if _TRUSTED_WORK_PACKAGE_EVENT_ISSUANCE.get() == _work_package_event_issuance_snapshot(
+        document
+    ):
+        return
+    frappe.throw(
+        "Work Package Events can only be issued by the bounded Work Package commands.",
         exc=frappe.ValidationError,
     )
 
@@ -591,10 +1552,12 @@ def _locked_production_gates(
 
 
 def _locked_scheduled_production_context(
-    roof_job: Any,
+    roof_job: Any, crew_profile: Any | None = None
 ) -> tuple[
     list[dict[str, Any]],
     dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, Any]],
 ]:
@@ -628,7 +1591,153 @@ def _locked_scheduled_production_context(
             as_dict=True,
         )
     ]
-    return gates, gate_evidence, assignments, supplier_order_exceptions
+    crew_profile_names = sorted(
+        {
+            str(row.get("crew_profile"))
+            for row in assignments
+            if row.get("crew_profile")
+        }
+        | ({str(crew_profile)} if crew_profile else set())
+    )
+    crew_profiles = (
+        [
+            dict(row)
+            for row in frappe.db.sql(
+                f"""
+                SELECT {_CREW_PROFILE_CONTEXT_SELECT}
+                FROM `tabCrew Profile`
+                WHERE name IN ({", ".join("%s" for _ in crew_profile_names)})
+                FOR UPDATE
+                """,
+                tuple(crew_profile_names),
+                as_dict=True,
+            )
+        ]
+        if crew_profile_names
+        else []
+    )
+    compliance_rows = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_JOB_COMPLIANCE_CONTEXT_SELECT}
+            FROM `tabJob Compliance Record`
+            WHERE roof_job = %s
+            FOR UPDATE
+            """,
+            (roof_job,),
+            as_dict=True,
+        )
+    ]
+    return (
+        gates,
+        gate_evidence,
+        assignments,
+        supplier_order_exceptions,
+        crew_profiles,
+        compliance_rows,
+    )
+
+
+def _locked_work_package_context(
+    roof_job: Any,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    """Lock the package's job-scoped release facts in one transaction."""
+
+    gates, gate_evidence = _locked_production_gates(roof_job)
+    assignments = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_JOB_ASSIGNMENT_SCHEDULE_CONTEXT_SELECT}
+            FROM `tabJob Assignment`
+            WHERE roof_job = %s
+            FOR UPDATE
+            """,
+            (roof_job,),
+            as_dict=True,
+        )
+    ]
+    safety_plans = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_SAFETY_PLAN_CONTEXT_SELECT}
+            FROM `tabSafety Plan`
+            WHERE roof_job = %s
+            FOR UPDATE
+            """,
+            (roof_job,),
+            as_dict=True,
+        )
+    ]
+    work_packages = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_WORK_PACKAGE_CONTEXT_SELECT}
+            FROM `tabWork Package`
+            WHERE roof_job = %s
+            FOR UPDATE
+            """,
+            (roof_job,),
+            as_dict=True,
+        )
+    ]
+    crew_profile_names = sorted(
+        {
+            str(row.get("crew_profile"))
+            for row in assignments
+            if row.get("crew_profile")
+        }
+    )
+    crew_profiles = (
+        [
+            dict(row)
+            for row in frappe.db.sql(
+                f"""
+                SELECT {_CREW_PROFILE_CONTEXT_SELECT}
+                FROM `tabCrew Profile`
+                WHERE name IN ({", ".join("%s" for _ in crew_profile_names)})
+                FOR UPDATE
+                """,
+                tuple(crew_profile_names),
+                as_dict=True,
+            )
+        ]
+        if crew_profile_names
+        else []
+    )
+    compliance_rows = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_JOB_COMPLIANCE_CONTEXT_SELECT}
+            FROM `tabJob Compliance Record`
+            WHERE roof_job = %s
+            FOR UPDATE
+            """,
+            (roof_job,),
+            as_dict=True,
+        )
+    ]
+    return (
+        gates,
+        gate_evidence,
+        assignments,
+        safety_plans,
+        work_packages,
+        crew_profiles,
+        compliance_rows,
+    )
 
 
 def _assert_unique_production_gate(document: Any) -> None:
@@ -662,6 +1771,9 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
         kind == "job_assignment"
         and document.get("assignment_type") == "Production"
         and document.get("scheduled_start")
+    )
+    work_package_requires_context = (
+        kind == "work_package" and document.get("status") != "Draft"
     )
     # Supplier Order status changes and scheduled Production assignments share
     # this parent lock. Without it, a Shortage could commit after scheduling
@@ -748,6 +1860,142 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
         if kind == "supplier_order":
             context["supplier_quote_status"] = _value(
                 "Supplier Quote", document.get("source_quote"), "status"
+            )
+            evidence_ids = set()
+            acknowledgement_evidence = document.get(
+                "supplier_acknowledgement_evidence"
+            )
+            if acknowledgement_evidence:
+                evidence_ids.add(acknowledgement_evidence)
+            receipt_evidence = parse_json_field(
+                document,
+                "receipt_evidence_json",
+                container_types=(dict,),
+            )
+            if isinstance(receipt_evidence, dict):
+                receipt_ids = receipt_evidence.get("evidence_item_ids")
+                if isinstance(receipt_ids, list):
+                    evidence_ids.update(
+                        evidence_id
+                        for evidence_id in receipt_ids
+                        if isinstance(evidence_id, str) and evidence_id
+                    )
+            context["supplier_order_evidence"] = (
+                {
+                    row["name"]: row
+                    for row in frappe.get_all(
+                        "Evidence Item",
+                        filters={"name": ["in", sorted(evidence_ids)]},
+                        fields=list(SUPPLIER_ORDER_EVIDENCE_CONTEXT_FIELDS),
+                    )
+                }
+                if evidence_ids
+                else {}
+            )
+    elif kind == "material_lot":
+        context["controlled_item"] = frappe.db.get_value(
+            "Controlled Item",
+            document.get("controlled_item"),
+            ("name", "status"),
+            as_dict=True,
+        )
+        context["supplier_order"] = frappe.db.get_value(
+            "Supplier Order",
+            document.get("supplier_order"),
+            ("name", "roof_job", "status"),
+            as_dict=True,
+        )
+        if document.get("source_kind") == "Shop Remnant":
+            context["source_shop_order"] = frappe.db.get_value(
+                "Shop Order",
+                document.get("source_shop_order"),
+                ("name", "roof_job", "status"),
+                as_dict=True,
+            )
+    elif kind == "nonconformance":
+        context["shop_order"] = frappe.db.get_value(
+            "Shop Order",
+            document.get("shop_order"),
+            ("name", "shop_order_id", "roof_job", "status"),
+            as_dict=True,
+        )
+        context["material_lot"] = frappe.db.get_value(
+            "Material Lot",
+            document.get("material_lot"),
+            ("name", "material_lot_id", "roof_job", "controlled_item", "unit", "status"),
+            as_dict=True,
+        )
+        shop_order = context["shop_order"]
+        if isinstance(shop_order, dict) and shop_order.get("name"):
+            context["shop_order_allocation_lot_ids"] = {
+                str(row["material_lot"])
+                for row in frappe.get_all(
+                    "Shop Material Allocation",
+                    filters={"parent": shop_order["name"]},
+                    fields=("material_lot",),
+                )
+                if row.get("material_lot")
+            }
+    elif kind == "shop_order":
+        context["material_takeoff"] = frappe.db.get_value(
+            "Material Takeoff",
+            document.get("material_takeoff"),
+            ("name", "roof_job", "status"),
+            as_dict=True,
+        )
+        context["supplier_order"] = frappe.db.get_value(
+            "Supplier Order",
+            document.get("supplier_order"),
+            ("name", "roof_job", "status"),
+            as_dict=True,
+        )
+        context["work_package"] = frappe.db.get_value(
+            "Work Package",
+            document.get("work_package"),
+            ("name", "roof_job", "status"),
+            as_dict=True,
+        )
+        payment_milestone = document.get("invoice_payment_milestone")
+        context["invoice_payment_milestone"] = frappe.db.get_value(
+            "Payment Milestone",
+            payment_milestone,
+            ("name", "roof_job", "shop_order", "status"),
+            as_dict=True,
+        )
+        material_lot_ids = sorted(
+            {
+                str(row.get("material_lot"))
+                for row in (document.get("material_allocations") or [])
+                if row.get("material_lot")
+            }
+        )
+        context["material_lots"] = {
+            material_lot_id: frappe.db.get_value(
+                "Material Lot",
+                material_lot_id,
+                (
+                    "name",
+                    "material_lot_id",
+                    "roof_job",
+                    "controlled_item",
+                    "unit",
+                    "received_quantity",
+                    "available_quantity",
+                    "reserved_quantity",
+                    "consumed_quantity",
+                    "status",
+                ),
+                as_dict=True,
+            )
+            for material_lot_id in material_lot_ids
+        }
+        if document.get("status") in SHOP_ORDER_FINAL_STATUSES:
+            context["open_nonconformance_count"] = frappe.db.count(
+                "Nonconformance",
+                filters={
+                    "shop_order": document.get("name") or document.get("shop_order_id"),
+                    "status": ["in", ["Open", "Contained", "Dispositioned"]],
+                },
             )
     elif kind == "proposal_evidence_pack":
         publication = _APPROVED_PROPOSAL_PUBLICATION.get()
@@ -950,7 +2198,20 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
             context["gate_evidence"],
             context["job_assignment_rows"],
             context["supplier_order_exception_rows"],
-        ) = _locked_scheduled_production_context(document.get("roof_job"))
+            context["crew_profile_rows"],
+            context["job_compliance_rows"],
+        ) = _locked_scheduled_production_context(
+            document.get("roof_job"), document.get("crew_profile")
+        )
+        crew_profile = document.get("crew_profile")
+        context["scheduled_assignment_crew_profile"] = next(
+            (
+                row
+                for row in context["crew_profile_rows"]
+                if crew_profile in {row.get("name"), row.get("crew_profile_id")}
+            ),
+            None,
+        )
         target = document.get("supersedes")
         if target:
             context["superseded_record"] = next(
@@ -961,6 +2222,62 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
                 ),
                 None,
             )
+    elif work_package_requires_context:
+        (
+            context["gates"],
+            context["gate_evidence"],
+            context["job_assignment_rows"],
+            context["safety_plan_rows"],
+            context["work_package_rows"],
+            context["crew_profile_rows"],
+            context["job_compliance_rows"],
+        ) = _locked_work_package_context(document.get("roof_job"))
+        assignment = document.get("job_assignment")
+        context["work_package_assignment"] = next(
+            (
+                row
+                for row in context["job_assignment_rows"]
+                if assignment in {row.get("name"), row.get("assignment_id")}
+            ),
+            None,
+        )
+        crew_profile = (
+            context["work_package_assignment"].get("crew_profile")
+            if context.get("work_package_assignment")
+            else None
+        )
+        context["work_package_crew_profile"] = next(
+            (
+                row
+                for row in context["crew_profile_rows"]
+                if crew_profile in {row.get("name"), row.get("crew_profile_id")}
+            ),
+            None,
+        )
+        safety_plan = document.get("safety_plan")
+        context["work_package_safety_plan"] = next(
+            (
+                row
+                for row in context["safety_plan_rows"]
+                if safety_plan in {row.get("name"), row.get("safety_plan_id")}
+            ),
+            None,
+        )
+        work_package_references = {
+            value
+            for value in (document.get("name"), document.get("work_package_id"))
+            if value
+        }
+        context["superseding_work_package"] = next(
+            (
+                row
+                for row in context["work_package_rows"]
+                if row.get("supersedes") in work_package_references
+            ),
+            None,
+        )
+        if document.get("status") in {"Released", "Acknowledged", "In Progress"}:
+            context["now"] = frappe.utils.now_datetime()
     elif kind == "production_gate_state":
         # Gate creates and updates take the same per-job lock as scheduling, so
         # a validation snapshot cannot race a gate transition into a commit.
@@ -978,6 +2295,24 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
 
 
 def validate_business_document(document: Any, kind: str) -> None:
+    if kind == "integration_reconciliation":
+        validate_quickbooks_reconciliation_issuance(document)
+    if kind in {"job_compliance_record", "production_gate_state"} and document.get(
+        "status" if kind == "job_compliance_record" else "state"
+    ) == "Waived":
+        actor = getattr(getattr(frappe, "session", None), "user", None)
+        if not actor or actor == "Guest" or document.get("waived_by") != actor:
+            frappe.throw(
+                "a waiver must be attributed to the current owner-level actor",
+                exc=frappe.PermissionError,
+            )
+        if not {"IronWrap Owner", "System Manager"}.intersection(
+            frappe.get_roles(actor)
+        ):
+            frappe.throw(
+                "a waiver requires an IronWrap Owner or System Manager role",
+                exc=frappe.PermissionError,
+            )
     try:
         validate_record(
             kind,

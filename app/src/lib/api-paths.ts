@@ -7,6 +7,8 @@ export const API_PATHS = {
   magicLinkConsume: "/api/v1/auth/magic-link/consume",
   devicePairingConsume: "/api/v1/auth/device-pairing/consume",
   customerPortalResolve: "/api/v1/customer-portal/resolve",
+  customerPortalAcceptanceChallenge: "/api/v1/customer-portal/acceptance/challenge",
+  customerPortalAcceptanceConfirm: "/api/v1/customer-portal/acceptance/confirm",
   customerPortalLinks: "/api/v1/customer-portal/links",
   customerPortalLinkRevoke: (linkId: string) =>
     `/api/v1/customer-portal/links/${encodeURIComponent(linkId)}/revoke`,

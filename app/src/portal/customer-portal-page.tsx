@@ -1,10 +1,11 @@
 import { BadgeCheck, ClipboardList, FileCheck2, Hammer, ShieldCheck, Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { extractAndScrubMagicLinkToken } from "../auth/magic-link-fragment";
+import { takeMagicLinkTokenFromWindow } from "../auth/magic-link-fragment";
+import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
-import { loadCustomerPortal } from "./portal-api";
+import { loadCustomerPortal, requestCustomerContractAcceptanceChallenge } from "./portal-api";
 import type { CustomerPortalResponse } from "./portal-contracts";
 
 type PortalState =
@@ -13,7 +14,7 @@ type PortalState =
 export function CustomerPortalPage() {
   // Reuse the existing fragment scrubber: the token is never a route parameter, query key, or
   // persisted browser value. It remains only in this component while the fixed-path request runs.
-  const [token] = useState(() => extractAndScrubMagicLinkToken());
+  const [token] = useState(() => takeMagicLinkTokenFromWindow());
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<PortalState>(token ? { kind: "loading" } : { kind: "error" });
 
@@ -56,10 +57,16 @@ export function CustomerPortalPage() {
       </main>
     );
   }
-  return <CustomerPortalView model={state.model} />;
+  return <CustomerPortalView model={state.model} portalToken={token} />;
 }
 
-export function CustomerPortalView({ model }: { model: CustomerPortalResponse }) {
+export function CustomerPortalView({
+  model,
+  portalToken,
+}: {
+  model: CustomerPortalResponse;
+  portalToken?: string;
+}) {
   const quote = model.proposal?.quote;
   return (
     <main className="min-h-dvh bg-background px-4 py-8 sm:px-6 sm:py-12">
@@ -80,7 +87,7 @@ export function CustomerPortalView({ model }: { model: CustomerPortalResponse })
           </p>
         </header>
 
-        {quote || model.proposal ? <ProposalCard model={model} /> : null}
+        {quote || model.proposal ? <ProposalCard model={model} portalToken={portalToken} /> : null}
         <ScopeCard model={model} />
         <ProgressCard model={model} />
         {model.closeout || model.warranty ? <CloseoutCard model={model} /> : null}
@@ -89,7 +96,13 @@ export function CustomerPortalView({ model }: { model: CustomerPortalResponse })
   );
 }
 
-function ProposalCard({ model }: { model: CustomerPortalResponse }) {
+function ProposalCard({
+  model,
+  portalToken,
+}: {
+  model: CustomerPortalResponse;
+  portalToken?: string;
+}) {
   const quote = model.proposal?.quote;
   return (
     <Card>
@@ -124,8 +137,59 @@ function ProposalCard({ model }: { model: CustomerPortalResponse }) {
         ) : null}
         {quote?.assumptions ? <CopyBlock title="Assumptions" value={quote.assumptions} /> : null}
         {quote?.exclusions ? <CopyBlock title="Exclusions" value={quote.exclusions} /> : null}
+        {portalToken && quote?.status === "Approved" ? (
+          <ContractAcceptanceRequest portalToken={portalToken} />
+        ) : null}
       </CardContent>
     </Card>
+  );
+}
+
+function ContractAcceptanceRequest({ portalToken }: { portalToken: string }) {
+  const [state, setState] = useState<"idle" | "pending" | "sent" | "error">("idle");
+
+  async function requestChallenge() {
+    if (state === "pending" || state === "sent") return;
+    setState("pending");
+    try {
+      await requestCustomerContractAcceptanceChallenge(portalToken);
+      setState("sent");
+    } catch {
+      setState("error");
+    }
+  }
+
+  return (
+    <section className="border-t border-border pt-5" aria-labelledby="contract-acceptance-title">
+      <h2 id="contract-acceptance-title" className="font-bold">
+        Ready to accept these terms?
+      </h2>
+      <p className="mt-1 text-sm leading-6 text-muted">
+        We will send a one-time confirmation link to the customer email address on file. Opening
+        this project link alone does not accept a contract.
+      </p>
+      {state === "sent" ? (
+        <p className="mt-3 text-sm font-semibold text-success" role="status">
+          Confirmation link sent. Check the customer email address on file.
+        </p>
+      ) : (
+        <>
+          <Button
+            className="mt-4"
+            type="button"
+            disabled={state === "pending"}
+            onClick={requestChallenge}
+          >
+            {state === "pending" ? "Sending confirmation…" : "Email me a confirmation link"}
+          </Button>
+          {state === "error" ? (
+            <p className="mt-3 text-sm font-semibold text-danger" role="alert">
+              We could not send a confirmation link. Please try again or contact IronWrap.
+            </p>
+          ) : null}
+        </>
+      )}
+    </section>
   );
 }
 

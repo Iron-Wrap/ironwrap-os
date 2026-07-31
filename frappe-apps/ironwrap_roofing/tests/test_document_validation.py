@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from ironwrap_roofing.access_control import CUSTOMER_ACCEPTANCE_SERVICE_ROLE
+
 
 ADAPTER_PATH = (
     Path(__file__).resolve().parents[1] / "ironwrap_roofing" / "document_validation.py"
@@ -35,6 +37,22 @@ EVIDENCE_ITEM_CONTROLLER_PATH = (
     / "doctype"
     / "evidence_item"
     / "evidence_item.py"
+)
+CUSTOMER_QUOTE_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "customer_quote"
+    / "customer_quote.py"
+)
+CONTRACT_ACCEPTANCE_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "contract_acceptance"
+    / "contract_acceptance.py"
 )
 PROPOSAL_EVIDENCE_PACK_CONTROLLER_PATH = (
     Path(__file__).resolve().parents[1]
@@ -382,6 +400,207 @@ class DocumentValidationAdapterTests(unittest.TestCase):
 
         controller = EVIDENCE_ITEM_CONTROLLER_PATH.read_text(encoding="utf-8")
         self.assertIn("validate_evidence_verification_mutation(self)", controller)
+
+    def test_customer_contract_acceptance_requires_the_private_command_context(self) -> None:
+        adapter, _ = self.load_adapter()
+        evidence = FakeDocument(
+            {
+                "evidence_id": "contract-receipt:accept-1",
+                "device_action_id": "accept-1",
+                "roof_job": "job-1",
+                "evidence_type": "Signed Document",
+                "proof_slot": "Contract",
+                "source_system": "ironwrap-customer-portal",
+                "r2_key": "customer-contract-acceptance/v1/job-1/accept-1.json",
+                "content_checksum": "a" * 64,
+                "checksum_algorithm": "SHA-256",
+                "content_type": "application/json",
+                "content_length": 512,
+                "capture_actor": "customer-acceptance@example.com",
+                "captured_at": "2026-07-31T10:00:00Z",
+                "sync_state": "Verified",
+                "verified_at": "2026-07-31 10:01:00",
+                "verification_source": "ironwrap-worker-r2-customer-contract-acceptance",
+                "customer_safe": 0,
+            }
+        )
+        acceptance = FakeDocument(
+            {
+                "acceptance_id": "accept-1",
+                "roof_job": "job-1",
+                "customer": "customer-1",
+                "customer_quote": "cq-1",
+                "proposal_evidence_pack": "proposal:cq-1",
+                "contract_version": "cq-1:v1",
+                "status": "Accepted",
+                "signer_name": "Alex Customer",
+                "signer_email": "alex@example.com",
+                "signer_ip": "203.0.113.10",
+                "accepted_at": "2026-07-31T10:00:00Z",
+                "acceptance_method": "Click to Accept",
+                "evidence_item": "contract-receipt:accept-1",
+                "terms_hash": "b" * 64,
+                "terms_snapshot_json": "{\"anchor\":{\"quote_id\":\"cq-1\"}}",
+                "document_checksum": "a" * 64,
+                "source_system": "ironwrap-customer-portal",
+                "provider_reference": "challenge-1",
+                "captured_by": "customer-acceptance@example.com",
+            }
+        )
+        quote = FakeDocument(
+            {
+                "name": "cq-1",
+                "status": "Accepted",
+                "acceptance_evidence": "contract-receipt:accept-1",
+                "contract_acceptance": "accept-1",
+                "accepted_at": "2026-07-31T10:00:00Z",
+            },
+            previous={
+                "name": "cq-1",
+                "status": "Approved",
+                "acceptance_evidence": "",
+                "contract_acceptance": "",
+                "accepted_at": "",
+            },
+        )
+        with self.assertRaisesRegex(FakeValidationError, "bounded customer contract"):
+            adapter.validate_contract_acceptance_mutation(acceptance)
+        with self.assertRaisesRegex(FakeValidationError, "bounded customer contract"):
+            adapter.validate_customer_quote_acceptance_mutation(quote)
+        with adapter.customer_contract_acceptance_issuance_context(
+            evidence, acceptance, quote
+        ):
+            adapter.validate_evidence_verification_mutation(evidence)
+            adapter.validate_contract_acceptance_mutation(acceptance)
+            adapter.validate_customer_quote_acceptance_mutation(quote)
+
+        quote_controller = CUSTOMER_QUOTE_CONTROLLER_PATH.read_text(encoding="utf-8")
+        acceptance_controller = CONTRACT_ACCEPTANCE_CONTROLLER_PATH.read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("validate_customer_quote_acceptance_mutation(self)", quote_controller)
+        self.assertIn("validate_contract_acceptance_mutation(self)", acceptance_controller)
+
+    def test_customer_acceptance_service_has_no_generic_document_write_path(self) -> None:
+        adapter, _ = self.load_adapter(
+            session_user="customer-acceptance@example.com",
+            roles=[CUSTOMER_ACCEPTANCE_SERVICE_ROLE],
+        )
+        generic_documents = (
+            (
+                "evidence",
+                adapter.validate_evidence_verification_mutation,
+                FakeDocument(
+                    {
+                        "evidence_id": "contract-receipt:forged",
+                        "sync_state": "Local",
+                    }
+                ),
+            ),
+            (
+                "acceptance",
+                adapter.validate_contract_acceptance_mutation,
+                FakeDocument(
+                    {
+                        "acceptance_id": "accept-forged",
+                        "status": "Declined",
+                    }
+                ),
+            ),
+            (
+                "quote",
+                adapter.validate_customer_quote_acceptance_mutation,
+                FakeDocument(
+                    {
+                        "name": "cq-1",
+                        "status": "Draft",
+                        "acceptance_evidence": "",
+                        "contract_acceptance": "",
+                        "accepted_at": "",
+                    },
+                    previous={
+                        "name": "cq-1",
+                        "status": "Draft",
+                        "acceptance_evidence": "",
+                        "contract_acceptance": "",
+                        "accepted_at": "",
+                    },
+                ),
+            ),
+        )
+        for name, validator, document in generic_documents:
+            with self.subTest(path=name):
+                with self.assertRaisesRegex(
+                    FakePermissionError, "Customer acceptance service users"
+                ):
+                    validator(document)
+
+        evidence = FakeDocument(
+            {
+                "evidence_id": "contract-receipt:accept-1",
+                "device_action_id": "accept-1",
+                "roof_job": "job-1",
+                "evidence_type": "Signed Document",
+                "proof_slot": "Contract",
+                "source_system": "ironwrap-customer-portal",
+                "r2_key": "customer-contract-acceptance/v1/job-1/accept-1.json",
+                "content_checksum": "a" * 64,
+                "checksum_algorithm": "SHA-256",
+                "content_type": "application/json",
+                "content_length": 512,
+                "capture_actor": "customer-acceptance@example.com",
+                "captured_at": "2026-07-31T10:00:00Z",
+                "sync_state": "Verified",
+                "verified_at": "2026-07-31 10:01:00",
+                "verification_source": "ironwrap-worker-r2-customer-contract-acceptance",
+                "customer_safe": 0,
+            }
+        )
+        acceptance = FakeDocument(
+            {
+                "acceptance_id": "accept-1",
+                "roof_job": "job-1",
+                "customer": "customer-1",
+                "customer_quote": "cq-1",
+                "proposal_evidence_pack": "proposal:cq-1",
+                "contract_version": "cq-1:v1",
+                "status": "Accepted",
+                "signer_name": "Alex Customer",
+                "signer_email": "alex@example.com",
+                "signer_ip": "203.0.113.10",
+                "accepted_at": "2026-07-31T10:00:00Z",
+                "acceptance_method": "Click to Accept",
+                "evidence_item": "contract-receipt:accept-1",
+                "terms_hash": "b" * 64,
+                "terms_snapshot_json": "{\"anchor\":{\"quote_id\":\"cq-1\"}}",
+                "document_checksum": "a" * 64,
+                "source_system": "ironwrap-customer-portal",
+                "provider_reference": "challenge-1",
+                "captured_by": "customer-acceptance@example.com",
+            }
+        )
+        quote = FakeDocument(
+            {
+                "name": "cq-1",
+                "status": "Accepted",
+                "acceptance_evidence": "contract-receipt:accept-1",
+                "contract_acceptance": "accept-1",
+                "accepted_at": "2026-07-31T10:00:00Z",
+            },
+            previous={
+                "name": "cq-1",
+                "status": "Approved",
+                "acceptance_evidence": "",
+                "contract_acceptance": "",
+                "accepted_at": "",
+            },
+        )
+        with adapter.customer_contract_acceptance_issuance_context(
+            evidence, acceptance, quote
+        ):
+            adapter.validate_evidence_verification_mutation(evidence)
+            adapter.validate_contract_acceptance_mutation(acceptance)
+            adapter.validate_customer_quote_acceptance_mutation(quote)
 
     def test_work_package_lifecycle_and_events_require_private_command_contexts(
         self,

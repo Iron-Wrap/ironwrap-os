@@ -55,6 +55,9 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
 
   assert.equal(config.env.local.vars.NEWO_PRODUCTION_REQUIRED, "false");
   assert.equal(config.env.staging.vars.NEWO_PRODUCTION_REQUIRED, "true");
+  assert.equal(config.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED, "false");
+  assert.equal(config.env.local.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED, "false");
+  assert.equal(config.env.staging.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED, "false");
   assert.deepEqual(
     config.env.staging.queues.producers.find((queue: { binding: string }) => queue.binding === "NEWO_QUEUE"),
     { binding: "NEWO_QUEUE", queue: "ironwrap-staging-newo-events" },
@@ -212,6 +215,42 @@ test("0028 keeps work-package commands bounded and independently recoverable", a
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
+test("0029 keeps customer contract acceptance hash-addressed and append-only", async () => {
+  const sql = await readFile(new URL("../migrations/0029_customer_contract_acceptance.sql", import.meta.url), "utf8");
+  for (const table of [
+    "customer_portal_acceptance_challenges",
+    "customer_portal_acceptance_intents",
+    "customer_portal_acceptance_events",
+  ]) {
+    assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+  }
+  for (const index of [
+    "idx_customer_portal_acceptance_one_active_challenge",
+    "idx_customer_portal_acceptance_challenges_expiry",
+    "idx_customer_portal_acceptance_intents_state_lease",
+    "idx_customer_portal_acceptance_events_created",
+  ]) {
+    assert.match(sql, new RegExp(`CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ${index}\\b`));
+  }
+  for (const trigger of [
+    "customer_portal_acceptance_challenge_immutable",
+    "customer_portal_acceptance_challenges_append_only_delete",
+    "customer_portal_acceptance_immutable_intent",
+    "customer_portal_acceptance_intents_append_only_delete",
+    "customer_portal_acceptance_events_append_only_update",
+    "customer_portal_acceptance_events_append_only_delete",
+  ]) {
+    assert.match(sql, new RegExp(`CREATE TRIGGER IF NOT EXISTS ${trigger}\\b`));
+  }
+  assert.match(sql, /token_hash TEXT NOT NULL UNIQUE/);
+  assert.match(sql, /email_hash TEXT NOT NULL/);
+  assert.match(sql, /idempotency_key_hash TEXT NOT NULL UNIQUE/);
+  assert.match(sql, /provider_message_id TEXT/);
+  assert.match(sql, /receipt_key TEXT NOT NULL UNIQUE/);
+  assert.doesNotMatch(sql, /raw_token|challenge_token|customer_email|idempotency_key TEXT/i);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
 test("the complete D1 migration chain applies cleanly and carries every schedule-ledger invariant", async () => {
   const db = new DatabaseSync(":memory:");
   try {
@@ -219,9 +258,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     const migrations = (await readdir(new URL("../migrations/", import.meta.url)))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 28);
+    assert.equal(migrations.length, 29);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0028_work_package_actions.sql");
+    assert.equal(migrations.at(-1), "0029_customer_contract_acceptance.sql");
     for (const migration of migrations) {
       db.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -238,7 +277,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
          SUM(type = 'trigger') AS triggers
        FROM sqlite_master`,
     ).get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 39, indexes: 66, triggers: 43 });
+    assert.deepEqual({ ...counts }, { tables: 42, indexes: 70, triggers: 53 });
 
     const newoTables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'newo_%' ORDER BY name",

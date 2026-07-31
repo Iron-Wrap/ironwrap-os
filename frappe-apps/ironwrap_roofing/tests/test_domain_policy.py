@@ -2309,6 +2309,51 @@ class DomainPolicyTests(unittest.TestCase):
                 "captured_by": "sales@example.com",
             },
         )
+        portal_acceptance = {
+            "acceptance_id": "accept-portal-1",
+            "roof_job": "job-1",
+            "customer": "customer-1",
+            "customer_quote": "cq-1",
+            "proposal_evidence_pack": "proposal:cq-1",
+            "contract_version": "cq-1:v1",
+            "status": "Accepted",
+            "signer_name": "Alex Customer",
+            "signer_email": "alex@example.com",
+            "signer_ip": "203.0.113.10",
+            "accepted_at": "2026-07-10 10:00:00",
+            "acceptance_method": "Click to Accept",
+            "evidence_item": "ev-contract-portal-1",
+            "terms_hash": "a" * 64,
+            "terms_snapshot_json": '{"anchor":{"quote_id":"cq-1"}}',
+            "document_checksum": "b" * 64,
+            "source_system": "ironwrap-customer-portal",
+            "provider_reference": "challenge-1",
+            "captured_by": "customer-acceptance@example.com",
+        }
+        validate_record("contract_acceptance", portal_acceptance)
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "contract_acceptance",
+            {
+                key: value
+                for key, value in portal_acceptance.items()
+                if key != "terms_snapshot_json"
+            },
+        )
+        self.assert_policy(
+            "empty_json_contract",
+            validate_record,
+            "contract_acceptance",
+            {**portal_acceptance, "terms_snapshot_json": "{}"},
+        )
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "contract_acceptance",
+            {**portal_acceptance, "terms_snapshot_json": '{"anchor":{"quote_id":"cq-2"}}'},
+            previous=portal_acceptance,
+        )
         self.assert_policy(
             "invalid_acceptance_method",
             validate_record,

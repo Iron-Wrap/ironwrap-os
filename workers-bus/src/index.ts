@@ -50,6 +50,11 @@ import {
 } from "./app-api.ts";
 import { pruneAuthRecords } from "./app-auth-store.ts";
 import { handleCustomerPortalResolve } from "./customer-portal.ts";
+import {
+  handleCustomerPortalAcceptanceChallenge,
+  handleCustomerPortalAcceptanceConfirm,
+  reconcileCustomerContractAcceptanceAttempts,
+} from "./customer-contract-acceptance.ts";
 import { pruneCustomerPortalRecords } from "./customer-portal-store.ts";
 import {
   listMeasurementIntakeExceptions,
@@ -188,6 +193,9 @@ export default {
           retryEstimateErpNextSyncs(env).catch((error) =>
             log({ at: "estimate_erpnext_retry", error: String(error) }),
           ),
+          reconcileCustomerContractAcceptanceAttempts(env).catch((error) =>
+            log({ at: "customer_contract_acceptance_reconcile", error: String(error) }),
+          ),
           recoverLeadTriageOutboxThenExpireLeases(env),
           // Quote-revision execution has an independent ledger and broker. Its
           // lease therefore becomes explicit reconciliation work independently of
@@ -248,6 +256,18 @@ async function routeRequest(
   // signed link; it never accepts a token path/query as authority.
   if (url.pathname === "/api/v1/customer-portal/resolve") {
     return await handleCustomerPortalResolve(
+      req,
+      env as import("./app-types.ts").AppEnv,
+    );
+  }
+  if (url.pathname === "/api/v1/customer-portal/acceptance/challenge") {
+    return await handleCustomerPortalAcceptanceChallenge(
+      req,
+      env as import("./app-types.ts").AppEnv,
+    );
+  }
+  if (url.pathname === "/api/v1/customer-portal/acceptance/confirm") {
+    return await handleCustomerPortalAcceptanceConfirm(
       req,
       env as import("./app-types.ts").AppEnv,
     );

@@ -280,6 +280,24 @@ test("0030 keeps Facet design ingress immutable, hash-addressed, and commerciall
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
+test("0031 makes QuickBooks projection recovery leased, due-scheduled, and non-terminal by default", async () => {
+  const sql = await readFile(new URL("../migrations/0031_quickbooks_projection_outbox.sql", import.meta.url), "utf8");
+  const schema = sql.replace(/^--.*$/gm, "");
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS quickbooks_projection_outbox\b/);
+  assert.match(sql, /PRIMARY KEY \(payload_hash, event_index\)/);
+  assert.match(sql, /projection_status TEXT NOT NULL CHECK \(projection_status IN \('pending', 'projected', 'rejected'\)\)/);
+  assert.match(sql, /attempt_count INTEGER NOT NULL DEFAULT 0 CHECK \(attempt_count >= 0\)/);
+  assert.match(sql, /next_attempt_at TEXT NOT NULL/);
+  assert.match(sql, /escalated_at TEXT/);
+  assert.match(sql, /lease_token TEXT/);
+  assert.match(sql, /lease_expires_at TEXT/);
+  assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_qb_projection_outbox_pending\b/);
+  assert.match(sql, /projection_status, next_attempt_at, lease_expires_at, updated_at/);
+  assert.match(sql, /FOREIGN KEY \(payload_hash\) REFERENCES quickbooks_webhook_receipts\(payload_hash\) ON DELETE RESTRICT/);
+  assert.doesNotMatch(schema, /raw_payload|provider_amount|payment_status|customer_email/i);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
 test("the complete D1 migration chain applies cleanly and carries every schedule-ledger invariant", async () => {
   const db = new DatabaseSync(":memory:");
   try {
@@ -287,9 +305,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     const migrations = (await readdir(new URL("../migrations/", import.meta.url)))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 30);
+    assert.equal(migrations.length, 31);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0030_facet_design_ingest.sql");
+    assert.equal(migrations.at(-1), "0031_quickbooks_projection_outbox.sql");
     for (const migration of migrations) {
       db.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -306,7 +324,24 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
          SUM(type = 'trigger') AS triggers
        FROM sqlite_master`,
     ).get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 44, indexes: 71, triggers: 57 });
+    assert.deepEqual({ ...counts }, { tables: 45, indexes: 72, triggers: 57 });
+
+    const quickBooksOutboxColumns = db.prepare(
+      "PRAGMA table_info(quickbooks_projection_outbox)",
+    ).all() as Array<{ name: string; pk: number }>;
+    for (const name of [
+      "payload_hash", "event_index", "realm_id", "entity_type", "entity_id", "operation",
+      "projection_status", "attempt_count", "next_attempt_at", "escalated_at",
+      "lease_token", "lease_expires_at", "projected_at",
+    ]) {
+      assert.equal(quickBooksOutboxColumns.some((column) => column.name === name), true, `missing ${name}`);
+    }
+    assert.equal(quickBooksOutboxColumns.find(({ name }) => name === "payload_hash")?.pk, 1);
+    assert.equal(quickBooksOutboxColumns.find(({ name }) => name === "event_index")?.pk, 2);
+    assert.equal(
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_qb_projection_outbox_pending'").get() !== undefined,
+      true,
+    );
 
     const newoTables = db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'newo_%' ORDER BY name",

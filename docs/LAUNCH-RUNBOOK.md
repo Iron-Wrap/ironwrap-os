@@ -30,7 +30,7 @@ Never mark launch complete from repository checks alone.
 | Frappe hostname and DNS authority | Serves the operating core over HTTPS |
 | Offline `age` recipient and dedicated R2 backup credentials | Encrypts and stores recoverable backups |
 | Enabled website/provider/QuickBooks/Newo admin access | Proves each enabled real-source cutover |
-| Dedicated Frappe, bus, Hermes-approval, ingest, and backup credentials | Keeps privileges separated by purpose |
+| Dedicated Frappe, QuickBooks issuer, bus, Hermes-approval, ingest, and backup credentials | Keeps privileges separated by purpose |
 
 The host floor is locked at Ubuntu 22.04+, 2 CPU cores, 8 GiB RAM, 80 GiB free disk,
 Node.js 22.12.0+, and `x86_64`. The pinned upstream frappe_docker compose topology is
@@ -137,6 +137,11 @@ Create a dedicated non-interactive API user for the Worker/MCP path with the min
 roles required by its tools. Do not reuse the Administrator account. Store its API key and secret
 only in the Worker and MCP secret stores.
 
+For QuickBooks projection, create a second non-interactive Frappe user with only the IronWrap
+QuickBooks Reconciliation Issuer role and its own API key/secret. It must not hold the general
+Worker/MCP roles, a human finance role, or System Manager. Set the Frappe site config key
+ironwrap_quickbooks_reconciliation_issuer_user to that exact user.
+
 Bind the Field Companion evidence issuer to that exact Worker user before enabling the Worker
 bridge. This is a site-local allowlist, not a Worker variable; it prevents ordinary Desk/REST
 writes from creating or promoting gate-eligible `Verified` evidence:
@@ -197,6 +202,12 @@ The Worker pair is a dedicated integration credential. Do not mount it in Hermes
 MCP process needs its own Frappe API pair issued to exactly its `HERMES_ACTOR_USER`, so the
 atomic safety acknowledgement command cannot impersonate a field actor.
 
+Before QuickBooks cutover, apply migration `0031_quickbooks_projection_outbox.sql` to the intended
+D1 database. Set `QB_EXPECTED_REALM_ID` to the one approved Intuit company realm and set
+`QB_RECONCILIATION_ISSUER_USER` to the separate Frappe user configured above. Put
+`QB_WEBHOOK_TOKEN` and the issuer API key/secret only in Worker secrets. The issuer pair must be
+distinct from `ERPNEXT_API_KEY`/`ERPNEXT_API_SECRET` and every human or MCP credential.
+
 ```bash
 curl --fail --silent --show-error "$BUS_BASE_URL/health"
 curl --fail --silent --show-error \
@@ -217,6 +228,25 @@ operating view for heartbeat freshness, queue/dead-letter counts, Frappe
 errors, failed/stuck replay requests, audit failures, and QuickBooks receipt freshness.
 The non-secret site config lets the Control Center show the public `{ok}` result; it never
 stores or uses the Worker admin token.
+
+### QuickBooks Projection Gate
+
+The expected realm and Frappe issuer values are deployment configuration, not proof that Intuit,
+the Frappe user, or its role is live. Run the live-environment readiness check to reject missing,
+malformed, reused, or mismatched values; then prove the following against the intended accounts:
+
+1. The configured QuickBooks company sends one signed supported finance event to the intended
+   Worker URL, while a different realm is retained only as rejected audit evidence.
+2. The Worker preserves the raw payload, receipt, and one durable projection-outbox row before
+   the bounded Frappe call. A successful projection creates or reuses exactly one Pending
+   Integration Reconciliation; it does not claim a payment, amount, posting, or reconciliation
+   fact from the webhook.
+3. A temporary Frappe/issuer failure returns a retryable result and leaves the row pending.
+   Repair the deployment/configuration, then allow the five-minute recovery sweep or an Intuit
+   redelivery to acquire the leased row. Do not edit the D1 row to force completion.
+4. After five failed attempts, preserve the audit evidence and open or continue a SEV2 Automation
+   Incident. Only the documented immutable identity-conflict response is terminal; reconcile that
+   conflict with a human and QuickBooks read-back.
 
 ### Public Instant-Estimate Activation Gate
 
@@ -308,7 +338,7 @@ Before enabling the BFF in the intended Cloudflare account:
 
 1. Apply the exact D1 migration sequence remotely, including `0028_work_package_actions.sql`, then
    run the Frappe app migration so legacy Lead Envelopes become explicit `Unknown` triage rows.
-   Verify `/ready` against the intended database. The 33-table backup/restore inventory must be
+   Verify `/ready` against the intended database. The 34-table backup/restore inventory must be
    deployed with the same release.
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
@@ -463,7 +493,7 @@ Gate State rows. Remove or clearly label fixture records after proof.
 | 3D estimator handoff | Repeated private `/ingest/estimate` idempotency key returns the original session and remains review-gated |
 | Jotform field intake | Device submission reaches `/ingest/photo`, Drive/R2, evidence, and check-in with photos plus one voice note |
 | RoofRuler/AppliCad | `/ingest/measurement` records one hashed receipt per provider/idempotency identity, stores raw source first, routes no-job or unresolved-job reports and retryable failures to `/admin/measurements/exceptions`, sequentially re-drives verified raw sources with bounded backoff, and keeps uncertain values review-gated |
-| QuickBooks | Valid signed webhook receipt is visible in `/admin/status`; invalid signature is rejected |
+| QuickBooks | Expected-realm signed event produces raw R2, a D1 receipt plus durable projection row, and one Pending Frappe reconciliation; invalid signatures and other realms are rejected, and provider facts remain unproven until read-back |
 | Newo receptionist | Approved real call produces `raw/newo/` R2, event receipt, distinct reception session, lead envelope when applicable, Frappe landing, downstream result, and operator status; same-caller second calls remain distinct sessions; report omission and failed transfer become owned exceptions |
 
 JobNimbus and GHL remain bridges until each replacement slice has live evidence. SMS remains
@@ -502,8 +532,8 @@ CRON_TZ=UTC
 `backup-d1-to-r2.sh` is bound to Cloudflare account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
-the SQL into isolated SQLite, checks integrity and all 28 current core/auth/operational tables,
-plus the 31 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
+the SQL into isolated SQLite, checks integrity and all 34 release-state tables,
+plus the 43 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
 locally, uploads immutably, remotely checks the objects, and publishes
 `IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
 `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Never discover or infer `latest`.
@@ -530,7 +560,7 @@ For the launch remote drill, create a fresh empty D1 database named
 `ironwrap-restore-drill-<label>` in the same committed account and record its exact UUID. The
 name and UUID must both differ from production. Bind one approval to that exact pair; the script
 generates a target-only Wrangler config, rechecks emptiness, imports, then compares the complete
-table-to-row-count map for all 28 required tables and the exact 31 trigger-to-table bindings
+table-to-row-count map for all 34 required tables and the exact 43 trigger-to-table bindings
 with the locally verified SQLite export:
 
 ```bash
@@ -547,8 +577,8 @@ export D1_RESTORE_MODE=verify
 
 Any new D1 migration that adds a persistent table must update the required-table allowlist in
 both D1 scripts and their readiness tests before deployment. Any migration that adds or changes
-an invariant trigger must update the trigger inventory too. The current 33-table inventory includes
-the approval ledgers, the governed-transition/outbox tables, and the `field_work_package_actions`
+an invariant trigger must update the trigger inventory too. The current 34-table inventory includes
+the QuickBooks projection outbox, approval ledgers, governed-transition/outbox tables, and the `field_work_package_actions`
 ledger; it is enforced by the two scripts rather than this prose list. The 43 required triggers
 include source-count validation, immutable lead-ack receipts, the three approval ledgers, and the
 governed-transition outbox rules. Approval binding rewrites must raise

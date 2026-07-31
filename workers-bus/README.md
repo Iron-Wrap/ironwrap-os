@@ -124,6 +124,8 @@ npx wrangler secret put NEWO_WEBHOOK_TOKEN --env=""  # only when Newo phone inta
 npx wrangler secret put JOBNIMBUS_API_KEY --env=""
 npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON --env=""
 npx wrangler secret put QB_WEBHOOK_TOKEN --env=""  # when the QuickBooks webhook is connected
+npx wrangler secret put QB_RECONCILIATION_ISSUER_API_KEY --env=""
+npx wrangler secret put QB_RECONCILIATION_ISSUER_API_SECRET --env=""
 npx wrangler secret put ERPNEXT_API_KEY --env=""  # when the Frappe bridge is enabled
 npx wrangler secret put ERPNEXT_API_SECRET --env=""
 npx wrangler secret put PUBLIC_ESTIMATE_TURNSTILE_SECRET --env=""
@@ -137,6 +139,12 @@ npm run typecheck            # tsc --noEmit
 (cd ../app && npm ci && npm run build)  # creates the static-assets directory
 npx wrangler deploy --env=""
 ```
+
+QuickBooks projection also needs the non-secret Worker vars `QB_EXPECTED_REALM_ID` and
+`QB_RECONCILIATION_ISSUER_USER`. The user must be a separate Frappe service principal with only
+the IronWrap QuickBooks Reconciliation Issuer role, using the two issuer secrets above, and must
+match the Frappe site config `ironwrap_quickbooks_reconciliation_issuer_user`. Do not reuse the
+general Worker, Hermes MCP, Administrator, or human-finance credentials.
 
 ## Endpoints
 
@@ -160,7 +168,7 @@ npx wrangler deploy --env=""
 | GET | `/admin/dead-letter?limit=50` | `Bearer ADMIN_TOKEN` | read unrecovered dead-letter rows |
 | GET | `/admin/measurements/exceptions?limit=50` | `Bearer ADMIN_TOKEN` | read unmatched or retryable measurement receipts without idempotency/payload hash fields or lease tokens; opaque receipt ids and raw pointers remain available for review. Retryable and expired-lease receipts re-drive sequentially from verified R2 raw sources with bounded backoff |
 | POST | `/admin/app-users` | `Bearer ADMIN_TOKEN` | provision/update/deactivate one user on this deployment's configured tenant |
-| POST | `/webhook/quickbooks` | `intuit-signature` | capture signed QuickBooks invoice/payment events with payload-hash replay protection |
+| POST | `/webhook/quickbooks` | `intuit-signature` | accept expected-realm signed finance identities, persist receipt plus durable projection row, and issue only Pending Frappe reconciliation work |
 | POST | `/api/v1/auth/magic-link/request` | exact allowed `Origin` | request a link; active/unknown/inactive/throttled identities receive the same `202` body |
 | POST | `/api/v1/auth/magic-link/consume` | exact allowed `Origin` | atomically consume a one-time token and set the fixed-TTL `__Host-ironwrap_session` cookie; GET is not supported |
 | GET | `/api/v1/session` | cookie optional | exact authenticated/unauthenticated bootstrap envelope; always `200`, `private, no-store` |
@@ -530,10 +538,12 @@ the ledger attempt failed, so the same exact request can CAS the ledger into a n
    mailbox authority, folder permissions, and retention against the target tenant.
 3. **SMS / carrier registration** — the Worker does not send prospect SMS. Any external SMS
    bridge requires current carrier/consent evidence and separate delivery reconciliation.
-4. **QuickBooks webhook** — the receiver captures signed events, records a
-   payload-hash receipt to block replay side effects, and can mirror Invoice/Payment
-   webhook events into Frappe Payment Milestone rows. This is not full accounting authority;
-   posted values require authenticated read-back and reconciliation.
+4. **QuickBooks webhook** — the receiver accepts only the configured company realm, anchors a
+   signed raw receipt plus one durable outbox row per supported identity, and projects bounded
+   Pending reconciliation work through a distinct least-privilege Frappe issuer. Frappe failures
+   remain leased/retryable with capped backoff and escalate after five attempts; only the documented
+   immutable identity conflict is terminal. This is not accounting authority: amounts, payment,
+   posting, and reconciliation facts require authenticated QuickBooks read-back.
 5. **ERPNext bridge** — disabled by default. Before setting `ERPNEXT_ENABLED=true`, apply
    migrations and install the `frappe-apps/ironwrap_roofing` app so the Lead Envelope,
    Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Measurement Value,
@@ -551,8 +561,8 @@ the ledger attempt failed, so the same exact request can CAS the ledger into a n
    correct Roof Job instead of accepting a false match. Photo sync creates one photo Evidence
    Item per submitted Jotform photo, links Drive file ids/URLs when available, and
    creates a Field Check-in summary row for the submission. QuickBooks webhook
-   sync creates Payment Milestone event rows and links invoice events to Roof Job
-   when `qb_invoice_ref` matches.
+   sync creates only Pending reconciliation work and may create immutable Payment Milestone
+   event rows when `qb_invoice_ref` matches; it never asserts provider accounting truth.
    Roof Job sync also creates missing initial production gate rows without resetting
    existing gate state. ERPNext is still a consumer, not the raw intake source.
 

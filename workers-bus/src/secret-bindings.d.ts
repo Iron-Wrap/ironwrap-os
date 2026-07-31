@@ -15,6 +15,12 @@ interface Env {
   JOBNIMBUS_API_KEY: string;
   GOOGLE_SERVICE_ACCOUNT_JSON: string;
   QB_WEBHOOK_TOKEN: string;
+  /** Non-secret tenant configuration: exact QuickBooks company realm. */
+  QB_EXPECTED_REALM_ID: string;
+  /** Non-secret expected Frappe principal for the bounded QuickBooks issuer. */
+  QB_RECONCILIATION_ISSUER_USER: string;
+  QB_RECONCILIATION_ISSUER_API_KEY: string;
+  QB_RECONCILIATION_ISSUER_API_SECRET: string;
   ERPNEXT_API_KEY: string;
   ERPNEXT_API_SECRET: string;
   PUBLIC_ESTIMATE_TURNSTILE_SECRET: string;
@@ -41,6 +47,10 @@ declare namespace Cloudflare {
     JOBNIMBUS_API_KEY: string;
     GOOGLE_SERVICE_ACCOUNT_JSON: string;
     QB_WEBHOOK_TOKEN: string;
+    QB_EXPECTED_REALM_ID: string;
+    QB_RECONCILIATION_ISSUER_USER: string;
+    QB_RECONCILIATION_ISSUER_API_KEY: string;
+    QB_RECONCILIATION_ISSUER_API_SECRET: string;
     ERPNEXT_API_KEY: string;
     ERPNEXT_API_SECRET: string;
     PUBLIC_ESTIMATE_TURNSTILE_SECRET: string;

@@ -14,6 +14,7 @@ from ironwrap_roofing.access_control import (
     ALL_IRONWRAP_ROLES,
     DOCTYPE_ROLE_MATRIX,
     IRONWRAP_ROLES,
+    LAUNCH_PROOF_READER_ROLE,
     SYSTEM_MANAGER,
     expected_permissions,
 )
@@ -326,6 +327,29 @@ class DocTypeContractTests(unittest.TestCase):
             if row["role"] == "IronWrap Customer Acceptance Service"
         )
         self.assertEqual(service, {"delete": 0, "read": 1, "role": service["role"], "write": 1})
+
+    def test_launch_proof_reader_can_only_read_instant_estimate_sessions(self) -> None:
+        grants = [
+            (name, row)
+            for name, (_, document) in self.doctypes.items()
+            for row in document.get("permissions", [])
+            if row["role"] == LAUNCH_PROOF_READER_ROLE
+        ]
+        self.assertEqual(
+            grants,
+            [
+                (
+                    "Instant Estimate Session",
+                    {
+                        "delete": 0,
+                        "print": 1,
+                        "read": 1,
+                        "report": 1,
+                        "role": LAUNCH_PROOF_READER_ROLE,
+                    },
+                )
+            ],
+        )
 
     def test_every_top_level_controller_uses_shared_validation(self) -> None:
         folder_kinds = set()

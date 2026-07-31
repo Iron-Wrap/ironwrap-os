@@ -23,6 +23,7 @@ const REQUEST_TO_DRY_RUN = Object.freeze({
   request_create_material_takeoff: "dry_run_material_takeoff",
   request_update_material_takeoff_status: "dry_run_update_material_takeoff_status",
   request_create_supplier_order: "dry_run_supplier_order",
+  request_transition_supplier_order: "dry_run_supplier_order_transition",
   request_create_supplier_quote: "dry_run_supplier_quote",
   request_create_quote_revision: "dry_run_quote_revision",
   request_bind_quote_price_rules: "dry_run_bind_quote_price_rules",
@@ -155,12 +156,20 @@ const SUPPLIER_ORDER_FIELDS = [
   "supplier_order_id",
   "roof_job",
   "material_takeoff",
+  "source_quote",
   "supplier",
   "status",
   "prepared_at",
   "approved_by",
   "approved_at",
+  "internal_transmission_id",
+  "internal_transmitted_at",
+  "supplier_acknowledgement_id",
+  "supplier_acknowledged_at",
+  "supplier_acknowledgement_evidence",
   "requested_delivery_date",
+  "received_at",
+  "receipt_evidence_json",
   "modified",
 ];
 
@@ -1110,6 +1119,282 @@ export function buildSupplierOrderDraft({
   };
 }
 
+const SUPPLIER_ORDER_TRANSITION_GRAPH = Object.freeze({
+  Approved: ["Ordered", "Cancelled"],
+  Ordered: ["Ordered", "Partially Received", "Received", "Shortage", "Cancelled"],
+  "Partially Received": ["Partially Received", "Received", "Shortage"],
+});
+const SUPPLIER_ORDER_RECEIPT_STATUSES = new Set([
+  "Partially Received",
+  "Received",
+  "Shortage",
+]);
+
+function supplierOrderIdentifier(value, errorCode) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized || normalized.length > 140) throw new Error(errorCode);
+  return normalized;
+}
+
+function supplierOrderDecimal(value, errorCode) {
+  if (typeof value === "boolean" || value === null || value === undefined) {
+    throw new Error(errorCode);
+  }
+  const raw = String(value).trim();
+  if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(raw)) throw new Error(errorCode);
+  const [rawWhole, rawFraction = ""] = raw.split(".");
+  const whole = rawWhole.replace(/^0+(?=\d)/, "");
+  const fraction = rawFraction.replace(/0+$/, "");
+  return {
+    significand: BigInt(`${whole}${fraction}`),
+    scale: fraction.length,
+    text: fraction ? `${whole}.${fraction}` : whole,
+  };
+}
+
+function supplierOrderDecimalAtScale(value, scale) {
+  return value.significand * (10n ** BigInt(scale - value.scale));
+}
+
+function supplierOrderDecimalCompare(left, right) {
+  const scale = Math.max(left.scale, right.scale);
+  return supplierOrderDecimalAtScale(left, scale) - supplierOrderDecimalAtScale(right, scale);
+}
+
+function supplierOrderDecimalAdd(left, right) {
+  const scale = Math.max(left.scale, right.scale);
+  const significand = supplierOrderDecimalAtScale(left, scale) + supplierOrderDecimalAtScale(right, scale);
+  const digits = significand.toString();
+  const text = scale === 0
+    ? digits
+    : digits.length <= scale
+      ? `0.${"0".repeat(scale - digits.length)}${digits}`
+      : `${digits.slice(0, -scale)}.${digits.slice(-scale)}`;
+  const normalized = scale === 0 ? text : text.replace(/0+$/, "").replace(/\.$/, "");
+  return supplierOrderDecimal(normalized, "supplier_order_quantity_invalid");
+}
+
+function supplierOrderReceiptEvidenceIds(before) {
+  const raw = before?.receipt_evidence_json;
+  if (!raw) return [];
+  let contract;
+  try {
+    contract = typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch {
+    throw new Error("supplier_order_receipt_evidence_invalid");
+  }
+  const ids = contract?.evidence_item_ids;
+  if (!contract || Array.isArray(contract) || Object.keys(contract).length !== 1
+    || !Array.isArray(ids) || !ids.length) {
+    throw new Error("supplier_order_receipt_evidence_invalid");
+  }
+  const normalized = ids.map((id) => supplierOrderIdentifier(id, "supplier_order_receipt_evidence_invalid"));
+  if (new Set(normalized).size !== normalized.length) {
+    throw new Error("supplier_order_receipt_evidence_invalid");
+  }
+  return normalized;
+}
+
+function supplierOrderReceiptRows(beforeItems, itemReceipts) {
+  const items = Array.isArray(beforeItems) ? beforeItems : [];
+  if (!items.length || !Array.isArray(itemReceipts) || itemReceipts.length !== items.length) {
+    throw new Error("supplier_order_receipt_items_incomplete");
+  }
+  const rowsByIndex = new Map();
+  for (const row of itemReceipts) {
+    const index = Number(row?.item_index);
+    if (!Number.isInteger(index) || index < 1 || index > items.length || rowsByIndex.has(index)) {
+      throw new Error("supplier_order_receipt_item_index_invalid");
+    }
+    rowsByIndex.set(index, row);
+  }
+
+  return items.map((item, offset) => {
+    const requested = rowsByIndex.get(offset + 1);
+    const ordered = supplierOrderDecimal(item?.quantity, "supplier_order_quantity_invalid");
+    if (ordered.significand <= 0n) throw new Error("supplier_order_quantity_invalid");
+    const previousReceived = supplierOrderDecimal(item?.received_qty ?? 0, "supplier_order_receipt_quantity_invalid");
+    const previousShortage = supplierOrderDecimal(item?.shortage_qty ?? 0, "supplier_order_receipt_quantity_invalid");
+    const received = supplierOrderDecimal(requested.received_qty, "supplier_order_receipt_quantity_invalid");
+    const shortage = supplierOrderDecimal(requested.shortage_qty, "supplier_order_receipt_quantity_invalid");
+    if (supplierOrderDecimalCompare(received, previousReceived) < 0n
+      || supplierOrderDecimalCompare(shortage, previousShortage) < 0n) {
+      throw new Error("supplier_order_receipt_not_monotonic");
+    }
+    if (supplierOrderDecimalCompare(supplierOrderDecimalAdd(received, shortage), ordered) > 0n) {
+      throw new Error("supplier_order_quantity_overage");
+    }
+    return {
+      ...item,
+      received_qty: received.text,
+      shortage_qty: shortage.text,
+      status: shortage.significand > 0n
+        ? "Shortage"
+        : supplierOrderDecimalCompare(received, ordered) === 0n
+          ? "Received"
+          : "Ordered",
+    };
+  });
+}
+
+function assertSupplierOrderReceiptStatus(items, nextStatus) {
+  let totalReceived = supplierOrderDecimal("0", "supplier_order_receipt_quantity_invalid");
+  let totalShortage = supplierOrderDecimal("0", "supplier_order_receipt_quantity_invalid");
+  let allAccountedFor = true;
+  for (const item of items) {
+    const ordered = supplierOrderDecimal(item.quantity, "supplier_order_quantity_invalid");
+    const received = supplierOrderDecimal(item.received_qty, "supplier_order_receipt_quantity_invalid");
+    const shortage = supplierOrderDecimal(item.shortage_qty, "supplier_order_receipt_quantity_invalid");
+    totalReceived = supplierOrderDecimalAdd(totalReceived, received);
+    totalShortage = supplierOrderDecimalAdd(totalShortage, shortage);
+    allAccountedFor = allAccountedFor
+      && supplierOrderDecimalCompare(supplierOrderDecimalAdd(received, shortage), ordered) === 0n;
+  }
+  if (nextStatus === "Partially Received" && (
+    totalReceived.significand <= 0n || allAccountedFor
+  )) {
+    throw new Error("supplier_order_partial_receipt_invalid");
+  }
+  if (nextStatus === "Received" && (
+    !allAccountedFor || totalShortage.significand !== 0n
+  )) {
+    throw new Error("supplier_order_received_quantity_mismatch");
+  }
+  if (nextStatus === "Shortage" && (
+    !allAccountedFor || totalShortage.significand <= 0n
+  )) {
+    throw new Error("supplier_order_shortage_quantity_mismatch");
+  }
+}
+
+/**
+ * Produce the only Supplier Order lifecycle patch this MCP may write.  This
+ * command is deliberately internal: Ordered records a locally audited handoff
+ * fact, while acknowledgement and receipt facts reference already-verified
+ * Evidence Items.  It has no supplier transport, credential, or provider call.
+ */
+export function buildSupplierOrderTransitionPatch(before = {}, args = {}, nowIso) {
+  const current = before?.status;
+  const nextStatus = args.next_status;
+  if (!SUPPLIER_ORDER_TRANSITION_GRAPH[current]?.includes(nextStatus)) {
+    throw new Error(`supplier_order_transition_invalid:${current ?? "missing"}->${nextStatus ?? "missing"}`);
+  }
+  const transmissionId = args.internal_transmission_id === undefined
+    ? ""
+    : supplierOrderIdentifier(args.internal_transmission_id, "supplier_order_transmission_id_invalid");
+  const acknowledgementId = args.supplier_acknowledgement_id === undefined
+    ? ""
+    : supplierOrderIdentifier(args.supplier_acknowledgement_id, "supplier_order_acknowledgement_id_invalid");
+  const acknowledgementEvidenceId = args.supplier_acknowledgement_evidence_item_id === undefined
+    ? ""
+    : supplierOrderIdentifier(args.supplier_acknowledgement_evidence_item_id, "supplier_order_acknowledgement_evidence_invalid");
+  const hasAcknowledgement = Boolean(acknowledgementId || acknowledgementEvidenceId);
+  if (hasAcknowledgement && (!acknowledgementId || !acknowledgementEvidenceId)) {
+    throw new Error("supplier_order_acknowledgement_fields_required");
+  }
+  const hasReceiptInputs = args.receipt_evidence_item_ids !== undefined || args.item_receipts !== undefined;
+  const recordedAt = nowIso ?? "Frappe server time at execution";
+
+  if (nextStatus === "Cancelled") {
+    if (transmissionId || hasAcknowledgement || hasReceiptInputs) {
+      throw new Error("supplier_order_cancelled_transition_has_facts");
+    }
+    return { patch: { status: "Cancelled" }, idempotent: false, evidenceItemIds: [] };
+  }
+
+  if (current === "Approved") {
+    if (nextStatus !== "Ordered" || !transmissionId) {
+      throw new Error("supplier_order_internal_transmission_required");
+    }
+    if (hasAcknowledgement || hasReceiptInputs) {
+      throw new Error("supplier_order_transmission_must_precede_acknowledgement_and_receipt");
+    }
+    return {
+      patch: {
+        status: "Ordered",
+        internal_transmission_id: transmissionId,
+        internal_transmitted_at: recordedAt,
+        items: (Array.isArray(before.items) ? before.items : []).map((item) => ({
+          ...item,
+          status: "Ordered",
+        })),
+      },
+      idempotent: false,
+      evidenceItemIds: [],
+    };
+  }
+
+  const recordedTransmissionId = supplierOrderIdentifier(
+    before.internal_transmission_id,
+    "supplier_order_internal_transmission_missing",
+  );
+  if (!before.internal_transmitted_at) throw new Error("supplier_order_internal_transmission_missing");
+
+  if (nextStatus === "Ordered") {
+    if (hasReceiptInputs) throw new Error("supplier_order_receipt_requires_receiving_status");
+    if (!transmissionId && !hasAcknowledgement) throw new Error("supplier_order_transition_noop");
+    if (transmissionId && transmissionId !== recordedTransmissionId) {
+      throw new Error("supplier_order_transmission_conflict");
+    }
+    if (!hasAcknowledgement) {
+      return { patch: {}, idempotent: true, evidenceItemIds: [] };
+    }
+    const existingAcknowledgementId = before.supplier_acknowledgement_id ?? "";
+    const existingAcknowledgementEvidence = before.supplier_acknowledgement_evidence ?? "";
+    if (existingAcknowledgementId || existingAcknowledgementEvidence || before.supplier_acknowledged_at) {
+      if (existingAcknowledgementId === acknowledgementId
+        && existingAcknowledgementEvidence === acknowledgementEvidenceId
+        && before.supplier_acknowledged_at) {
+        return {
+          patch: {},
+          idempotent: true,
+          evidenceItemIds: [acknowledgementEvidenceId],
+        };
+      }
+      throw new Error("supplier_order_acknowledgement_conflict");
+    }
+    return {
+      patch: {
+        supplier_acknowledgement_id: acknowledgementId,
+        supplier_acknowledged_at: recordedAt,
+        supplier_acknowledgement_evidence: acknowledgementEvidenceId,
+      },
+      idempotent: false,
+      evidenceItemIds: [acknowledgementEvidenceId],
+    };
+  }
+
+  if (transmissionId || hasAcknowledgement || !hasReceiptInputs
+    || !Array.isArray(args.receipt_evidence_item_ids)
+    || !Array.isArray(args.item_receipts)) {
+    throw new Error("supplier_order_receipt_facts_required");
+  }
+  const newEvidenceIds = args.receipt_evidence_item_ids.map(
+    (id) => supplierOrderIdentifier(id, "supplier_order_receipt_evidence_invalid"),
+  );
+  if (new Set(newEvidenceIds).size !== newEvidenceIds.length) {
+    throw new Error("supplier_order_receipt_evidence_duplicate");
+  }
+  const existingEvidenceIds = supplierOrderReceiptEvidenceIds(before);
+  if (newEvidenceIds.some((id) => existingEvidenceIds.includes(id))) {
+    throw new Error("supplier_order_receipt_evidence_duplicate");
+  }
+  const items = supplierOrderReceiptRows(before.items, args.item_receipts);
+  assertSupplierOrderReceiptStatus(items, nextStatus);
+  return {
+    patch: {
+      status: nextStatus,
+      ...(before.received_at ? {} : { received_at: recordedAt }),
+      receipt_evidence_json: JSON.stringify({
+        evidence_item_ids: [...existingEvidenceIds, ...newEvidenceIds],
+      }),
+      items,
+    },
+    idempotent: false,
+    evidenceItemIds: [...existingEvidenceIds, ...newEvidenceIds],
+  };
+}
+
 export function buildProposalEvidencePackDraft({
   roofJobId,
   customerQuote,
@@ -1754,6 +2039,32 @@ export const ChangeOrderTransitionInputSchema = z.object({
   next_status: z.enum(["Draft", "Needs Review", "Approved", "Presented", "Superseded"]),
   reason: z.string().min(1).max(2000).optional(),
   evidence_item_id: IdSchema.optional(),
+}).strict();
+
+const SupplierOrderQuantitySchema = z.string()
+  .trim()
+  .regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/, "supplier_order_quantity_invalid")
+  .max(40);
+const SupplierOrderReceiptItemInputSchema = z.object({
+  item_index: z.number().int().min(1).max(1000),
+  received_qty: SupplierOrderQuantitySchema,
+  shortage_qty: SupplierOrderQuantitySchema,
+}).strict();
+
+export const SupplierOrderTransitionInputSchema = z.object({
+  supplier_order_id: IdSchema,
+  next_status: z.enum([
+    "Ordered",
+    "Partially Received",
+    "Received",
+    "Shortage",
+    "Cancelled",
+  ]),
+  internal_transmission_id: IdSchema.optional(),
+  supplier_acknowledgement_id: IdSchema.optional(),
+  supplier_acknowledgement_evidence_item_id: IdSchema.optional(),
+  receipt_evidence_item_ids: z.array(IdSchema).min(1).max(50).optional(),
+  item_receipts: z.array(SupplierOrderReceiptItemInputSchema).min(1).max(1000).optional(),
 }).strict();
 
 const InsuranceSupplementEvidenceInputSchema = z.object({
@@ -3775,6 +4086,61 @@ export function buildServer(config) {
         afterSummary: summarizeSupplierOrder({ ...(before ?? {}), ...draft, name: draft.supplier_order_id }),
         execute: upsertDraftExecutor(config, "Supplier Order", draft.supplier_order_id, draft, before),
         responseExtra: { upserted: true, operation, supplier_order_id: draft.supplier_order_id },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_supplier_order_transition",
+    {
+      title: "Dry Run Supplier Order Lifecycle Transition",
+      description: "Preview a signed internal Supplier Order lifecycle fact. Ordered records internal transmission only; this tool never contacts a supplier.",
+      inputSchema: SupplierOrderTransitionInputSchema,
+    },
+    async (args) => {
+      const before = await readResource(config, "Supplier Order", args.supplier_order_id);
+      const transition = buildSupplierOrderTransitionPatch(before, args);
+      await assertSupplierOrderTransitionEvidence(config, before, transition.evidenceItemIds);
+      return text(supplierOrderTransitionPreview(before, args, transition));
+    },
+  );
+
+  server.registerTool(
+    "request_transition_supplier_order",
+    {
+      title: "Request Supplier Order Lifecycle Transition",
+      description: "Approved-write: record a signed internal Supplier Order lifecycle fact and Hermes audit row. It only writes Frappe records and never contacts a supplier.",
+      inputSchema: approvedWriteInputSchema(SupplierOrderTransitionInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const before = await readResource(config, "Supplier Order", args.supplier_order_id);
+      const transition = buildSupplierOrderTransitionPatch(before, args, now);
+      await assertSupplierOrderTransitionEvidence(config, before, transition.evidenceItemIds);
+      const dryRun = supplierOrderTransitionPreview(before, args, transition);
+      const after = { ...before, ...transition.patch };
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_transition_supplier_order",
+        target: { doctype: "Supplier Order", name: args.supplier_order_id },
+        roofJob: before.roof_job,
+        linkedEvidence: transition.evidenceItemIds[0],
+        dryRun,
+        beforeSummary: summarizeSupplierOrder(before),
+        afterSummary: summarizeSupplierOrder(after),
+        execute: () => transition.idempotent
+          ? Promise.resolve({ data: summarizeSupplierOrder(before), idempotent: true })
+          : erpPut(config, resourcePath("Supplier Order", args.supplier_order_id), transition.patch),
+        responseExtra: {
+          updated: !transition.idempotent,
+          idempotent: transition.idempotent,
+          supplier_order_id: args.supplier_order_id,
+          external_supplier_contact: false,
+        },
       }));
     },
   );
@@ -10033,7 +10399,41 @@ function summarizeSupplierOrder(order) {
     supplier: order.supplier ?? "",
     status: order.status,
     prepared_at: order.prepared_at ?? "",
+    internal_transmission_id: order.internal_transmission_id ?? "",
+    internal_transmitted_at: order.internal_transmitted_at ?? "",
+    supplier_acknowledgement_id: order.supplier_acknowledgement_id ?? "",
+    supplier_acknowledged_at: order.supplier_acknowledged_at ?? "",
+    supplier_acknowledgement_evidence: order.supplier_acknowledgement_evidence ?? "",
+    received_at: order.received_at ?? "",
   };
+}
+
+function supplierOrderTransitionPreview(before, args, transition) {
+  return {
+    would_write: !transition.idempotent,
+    required_tool: "request_transition_supplier_order",
+    target: { doctype: "Supplier Order", name: args.supplier_order_id },
+    before: summarizeSupplierOrder(before),
+    patch: transition.patch,
+    verified_evidence_item_ids: transition.evidenceItemIds,
+    semantics: {
+      ordered: "internal_transmission_only",
+      supplier_acknowledgement: "evidence_backed_recorded_fact_only",
+      external_supplier_contact: false,
+      provider_adapter_called: false,
+    },
+  };
+}
+
+async function assertSupplierOrderTransitionEvidence(config, before, evidenceItemIds) {
+  await Promise.all(evidenceItemIds.map((evidenceItemId) => assertLinkedResourceForJob(
+    config,
+    "Evidence Item",
+    evidenceItemId,
+    before.roof_job,
+    "supplier_order_transition",
+    { proofSlots: ["Materials"] },
+  )));
 }
 
 function summarizeProposalPack(pack) {

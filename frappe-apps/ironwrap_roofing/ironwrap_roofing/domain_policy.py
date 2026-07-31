@@ -25,6 +25,48 @@ RELEASABLE_WORK_PACKAGE_ASSIGNMENT_STATUSES = frozenset(
     ("Assigned", "Accepted", "In Progress")
 )
 ACTIVE_SUPPLIER_ORDER_EXCEPTION_STATUSES = frozenset(("Needs Review", "Shortage"))
+SUPPLIER_ORDER_STATUSES = frozenset(
+    (
+        "Draft",
+        "Needs Review",
+        "Approved",
+        "Ordered",
+        "Partially Received",
+        "Received",
+        "Shortage",
+        "Cancelled",
+    )
+)
+SUPPLIER_ORDER_POST_APPROVAL_STATUSES = frozenset(
+    ("Approved", "Ordered", "Partially Received", "Received", "Shortage")
+)
+SUPPLIER_ORDER_RECEIPT_STATUSES = frozenset(
+    ("Partially Received", "Received", "Shortage")
+)
+SUPPLIER_ORDER_FINAL_STATUSES = frozenset(("Received", "Shortage", "Cancelled"))
+SUPPLIER_ORDER_FROZEN_FIELDS = (
+    "roof_job",
+    "material_takeoff",
+    "source_quote",
+    "supplier",
+    "prepared_at",
+    "approved_by",
+    "approved_at",
+    "requested_delivery_date",
+    "order_summary_json",
+    "assumptions",
+    "exclusions",
+    "delivery_notes",
+)
+SUPPLIER_ORDER_ITEM_FROZEN_FIELDS = (
+    "category",
+    "item_name",
+    "quantity",
+    "unit",
+    "source_ref",
+    "substitution_notes",
+    "needs_review",
+)
 CREW_AUTHORITY_COMPLIANCE_GATES = frozenset(("Crew", "Safety", "Access"))
 CURRENT_AUTHORITY_STATUSES = frozenset(("Approved", "Passed", "Waived"))
 CURRENT_COMPLIANCE_GATE_STATES = frozenset(("Ready", "Done", "Waived"))
@@ -557,6 +599,14 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
     # A customer-visible clause is quote-owned. Once an operator associates it with a job/quote,
     # it must not be silently repointed to a later commercial revision.
     "scope_clause": ("roof_job", "customer_quote"),
+    "supplier_order": (
+        "internal_transmission_id",
+        "internal_transmitted_at",
+        "supplier_acknowledgement_id",
+        "supplier_acknowledged_at",
+        "supplier_acknowledgement_evidence",
+        "received_at",
+    ),
     "safety_plan": ("roof_job", "version", "prepared_by", "prepared_at", "supersedes"),
     "tenant_export_run": ("tenant", "requested_by", "requested_at", "scope_json", "supersedes"),
     "visual_property_model": ("provider", "provider_model_id", "model_uri", "raw_key"),
@@ -2270,26 +2320,322 @@ def _validate_supplier_quote(record: Any, context: Mapping[str, Any]) -> None:
 
 def _validate_supplier_order(record: Any, context: Mapping[str, Any]) -> None:
     status = _get(record, "status")
-    gated = {"Approved", "Ordered", "Partially Received", "Received", "Shortage"}
-    if status not in gated:
-        return
-    require_fields(record, "roof_job", "material_takeoff", "supplier", "source_quote")
-    require_approval(record)
-    if _context_status(context, "takeoff_status") != "Approved":
+    if status not in SUPPLIER_ORDER_STATUSES:
         raise PolicyViolation(
-            "unapproved_takeoff", "linked Material Takeoff must be Approved"
+            "invalid_supplier_order_status", "unsupported supplier order status", "status"
         )
-    if _context_status(context, "supplier_quote_status") != "Approved":
+
+    previous = context.get("_previous")
+    if previous is None and status not in {"Draft", "Needs Review"}:
         raise PolicyViolation(
-            "unapproved_supplier_quote", "linked Supplier Quote must be Approved"
+            "invalid_supplier_order_initial_state",
+            "a Supplier Order must begin in Draft or Needs Review",
+            "status",
         )
-    parse_json_field(record, "order_summary_json", required=True, non_empty=True)
-    rows = _require_clean_rows(record, "items", quantity_field="quantity")
-    for row in rows:
-        require_nonnegative(row, "received_qty", "shortage_qty")
-    if status in {"Received", "Shortage"}:
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Needs Review", "Cancelled"},
+            "Needs Review": {"Draft", "Approved", "Cancelled"},
+            "Approved": {"Ordered", "Cancelled"},
+            "Ordered": {"Partially Received", "Received", "Shortage", "Cancelled"},
+            "Partially Received": {"Received", "Shortage"},
+            "Received": set(),
+            "Shortage": set(),
+            "Cancelled": set(),
+        },
+    )
+
+    if status in {"Draft", "Needs Review", "Approved"} and any(
+        not _blank(_get(record, field))
+        for field in ("internal_transmission_id", "internal_transmitted_at")
+    ):
+        raise PolicyViolation(
+            "supplier_order_transmission_before_ordered",
+            "internal transmission facts require the Ordered state",
+            "internal_transmission_id",
+        )
+
+    if status in {"Draft", "Needs Review", "Approved", "Ordered", "Cancelled"} and any(
+        not _blank(_get(record, field))
+        for field in ("received_at", "receipt_evidence_json")
+    ):
+        raise PolicyViolation(
+            "supplier_order_receipt_facts_before_receiving",
+            "receipt timestamp and evidence require a receipt or shortage state",
+            "received_at",
+        )
+
+    if status in SUPPLIER_ORDER_POST_APPROVAL_STATUSES:
+        require_fields(record, "roof_job", "material_takeoff", "supplier", "source_quote")
+        require_approval(record)
+        if _context_status(context, "takeoff_status") != "Approved":
+            raise PolicyViolation(
+                "unapproved_takeoff", "linked Material Takeoff must be Approved"
+            )
+        if _context_status(context, "supplier_quote_status") != "Approved":
+            raise PolicyViolation(
+                "unapproved_supplier_quote", "linked Supplier Quote must be Approved"
+            )
+        parse_json_field(record, "order_summary_json", required=True, non_empty=True)
+
+    rows = (
+        _require_clean_rows(record, "items", quantity_field="quantity")
+        if status in SUPPLIER_ORDER_POST_APPROVAL_STATUSES
+        else _rows(record, "items")
+    )
+    _lock_after_status(
+        record,
+        context,
+        set(SUPPLIER_ORDER_POST_APPROVAL_STATUSES | SUPPLIER_ORDER_FINAL_STATUSES),
+        *SUPPLIER_ORDER_FROZEN_FIELDS,
+    )
+    _lock_supplier_order_items(record, previous)
+
+    if status in {"Draft", "Needs Review", "Approved", "Ordered"}:
+        for index, row in enumerate(rows, start=1):
+            received = _decimal(row, "received_qty", required=True)
+            shortage = _decimal(row, "shortage_qty", required=True)
+            if received != Decimal("0") or shortage != Decimal("0"):
+                raise PolicyViolation(
+                    "supplier_order_receipt_before_receiving",
+                    "receipt quantities require a receipt or shortage state",
+                    f"items[{index}]",
+                )
+
+    if status in {"Ordered", *SUPPLIER_ORDER_RECEIPT_STATUSES}:
+        require_fields(record, "internal_transmission_id", "internal_transmitted_at")
+
+    _validate_supplier_order_acknowledgement(record, context, status)
+
+    if status in SUPPLIER_ORDER_RECEIPT_STATUSES:
         require_fields(record, "received_at")
-        parse_json_field(record, "receipt_evidence_json", required=True, non_empty=True)
+        evidence_ids = _supplier_order_receipt_evidence_ids(record)
+        _require_supplier_order_evidence(
+            record,
+            context,
+            evidence_ids,
+            "receipt_evidence_json",
+        )
+        if previous is not None and _get(previous, "status") in SUPPLIER_ORDER_RECEIPT_STATUSES:
+            prior_ids = _supplier_order_receipt_evidence_ids(previous)
+            if not set(prior_ids).issubset(evidence_ids):
+                raise PolicyViolation(
+                    "supplier_order_receipt_evidence_not_append_only",
+                    "receipt evidence cannot be removed after receiving begins",
+                    "receipt_evidence_json",
+                )
+        _validate_supplier_order_receipts(rows, status)
+
+
+def _lock_supplier_order_items(record: Any, previous: Any) -> None:
+    if previous is None:
+        return
+    previous_status = _get(previous, "status")
+    if previous_status not in (
+        SUPPLIER_ORDER_POST_APPROVAL_STATUSES | SUPPLIER_ORDER_FINAL_STATUSES
+    ):
+        return
+    previous_rows = _rows(previous, "items")
+    current_rows = _rows(record, "items")
+    if len(previous_rows) != len(current_rows):
+        raise PolicyViolation(
+            "supplier_order_items_immutable",
+            "approved Supplier Order items cannot be added, removed, or reordered",
+            "items",
+        )
+    for index, (before, after) in enumerate(zip(previous_rows, current_rows), start=1):
+        try:
+            enforce_immutable(after, before, *SUPPLIER_ORDER_ITEM_FROZEN_FIELDS)
+        except PolicyViolation as exc:
+            raise PolicyViolation(
+                "supplier_order_items_immutable",
+                "approved Supplier Order source item facts cannot change",
+                f"items[{index}]",
+            ) from exc
+        if previous_status in SUPPLIER_ORDER_FINAL_STATUSES:
+            try:
+                enforce_immutable(after, before, "status", "received_qty", "shortage_qty")
+            except PolicyViolation as exc:
+                raise PolicyViolation(
+                    "supplier_order_receipts_finalized",
+                    "final Supplier Order receipt quantities cannot change",
+                    f"items[{index}]",
+                ) from exc
+
+
+def _supplier_order_receipt_evidence_ids(record: Any) -> tuple[str, ...]:
+    contract = parse_json_field(
+        record,
+        "receipt_evidence_json",
+        required=True,
+        container_types=(dict,),
+        non_empty=True,
+    )
+    if set(contract) != {"evidence_item_ids"}:
+        raise PolicyViolation(
+            "invalid_supplier_order_receipt_evidence",
+            "receipt evidence must contain exactly evidence_item_ids",
+            "receipt_evidence_json",
+        )
+    evidence_ids = contract.get("evidence_item_ids")
+    if not isinstance(evidence_ids, list) or not 1 <= len(evidence_ids) <= 50:
+        raise PolicyViolation(
+            "invalid_supplier_order_receipt_evidence",
+            "receipt evidence requires 1 to 50 Evidence Item IDs",
+            "receipt_evidence_json",
+        )
+    normalized = tuple(
+        value.strip() if isinstance(value, str) else "" for value in evidence_ids
+    )
+    if (
+        any(not value or len(value) > 140 for value in normalized)
+        or len(set(normalized)) != len(normalized)
+    ):
+        raise PolicyViolation(
+            "invalid_supplier_order_receipt_evidence",
+            "receipt Evidence Item IDs must be unique bounded values",
+            "receipt_evidence_json",
+        )
+    return normalized
+
+
+def _require_supplier_order_evidence(
+    record: Any,
+    context: Mapping[str, Any],
+    evidence_ids: tuple[str, ...],
+    field: str,
+) -> None:
+    evidence = context.get("supplier_order_evidence", {})
+    if not isinstance(evidence, Mapping):
+        evidence = {}
+    for evidence_id in evidence_ids:
+        source = evidence.get(evidence_id)
+        if not isinstance(source, Mapping) or _get(source, "roof_job") != _get(record, "roof_job"):
+            raise PolicyViolation(
+                "supplier_order_evidence_missing",
+                "supplier order evidence must resolve to the same Roof Job",
+                field,
+            )
+        if (
+            _get(source, "proof_slot") != "Materials"
+            or _get(source, "sync_state") != "Verified"
+            or _get(source, "checksum_algorithm") != "SHA-256"
+            or _blank(_get(source, "verified_at"))
+            or _blank(_get(source, "verification_source"))
+            or not any(
+                not _blank(_get(source, pointer))
+                for pointer in ("source_uri", "r2_key", "drive_file_id")
+            )
+        ):
+            raise PolicyViolation(
+                "unverified_supplier_order_evidence",
+                "supplier order evidence must be verified Materials evidence with durable provenance",
+                field,
+            )
+        require_sha256(source, "content_checksum")
+
+
+def _validate_supplier_order_acknowledgement(
+    record: Any, context: Mapping[str, Any], status: str
+) -> None:
+    acknowledgement_fields = (
+        "supplier_acknowledgement_id",
+        "supplier_acknowledged_at",
+        "supplier_acknowledgement_evidence",
+    )
+    if not any(not _blank(_get(record, field)) for field in acknowledgement_fields):
+        return
+    if status not in {"Ordered", *SUPPLIER_ORDER_RECEIPT_STATUSES}:
+        raise PolicyViolation(
+            "supplier_order_acknowledgement_before_transmission",
+            "supplier acknowledgement requires an internally transmitted order",
+            "supplier_acknowledgement_id",
+        )
+    require_fields(record, "internal_transmission_id", "internal_transmitted_at")
+    require_fields(record, *acknowledgement_fields)
+    _require_supplier_order_evidence(
+        record,
+        context,
+        (str(_get(record, "supplier_acknowledgement_evidence")),),
+        "supplier_acknowledgement_evidence",
+    )
+
+
+def _validate_supplier_order_receipts(rows: list[Any], status: str) -> None:
+    total_received = Decimal("0")
+    total_shortage = Decimal("0")
+    all_accounted_for = True
+    for index, row in enumerate(rows, start=1):
+        ordered = _decimal(row, "quantity", required=True)
+        received = _decimal(row, "received_qty", required=True)
+        shortage = _decimal(row, "shortage_qty", required=True)
+        if ordered is None or ordered <= Decimal("0"):
+            raise PolicyViolation(
+                "invalid_supplier_order_quantity",
+                "ordered quantity must be greater than zero",
+                f"items[{index}]",
+            )
+        if received is None or shortage is None:
+            raise PolicyViolation(
+                "required_number",
+                "received and shortage quantities are required",
+                f"items[{index}]",
+            )
+        if received < Decimal("0") or shortage < Decimal("0"):
+            raise PolicyViolation(
+                "negative_value",
+                "received and shortage quantities must be nonnegative",
+                f"items[{index}]",
+            )
+        accounted_for = received + shortage
+        if accounted_for > ordered:
+            raise PolicyViolation(
+                "supplier_order_quantity_overage",
+                "received plus shortage quantity cannot exceed the ordered quantity",
+                f"items[{index}]",
+            )
+        all_accounted_for = all_accounted_for and accounted_for == ordered
+        total_received += received
+        total_shortage += shortage
+        expected_item_status = (
+            "Shortage"
+            if shortage > Decimal("0")
+            else "Received"
+            if received == ordered
+            else "Ordered"
+        )
+        if _get(row, "status") != expected_item_status:
+            raise PolicyViolation(
+                "supplier_order_item_receipt_status",
+                "item status must match its received and shortage quantities",
+                f"items[{index}]",
+            )
+
+    if status == "Partially Received":
+        if total_received <= Decimal("0") or all_accounted_for:
+            raise PolicyViolation(
+                "supplier_order_partial_receipt_invalid",
+                "partial receipt needs received quantity and an outstanding item balance",
+                "status",
+            )
+    elif status == "Received":
+        if not all_accounted_for or total_shortage != Decimal("0"):
+            raise PolicyViolation(
+                "supplier_order_received_quantity_mismatch",
+                "Received requires every ordered quantity to be received with no shortage",
+                "status",
+            )
+    elif status == "Shortage" and (
+        not all_accounted_for or total_shortage <= Decimal("0")
+    ):
+        raise PolicyViolation(
+            "supplier_order_shortage_quantity_mismatch",
+            "Shortage requires every ordered quantity to be received or short with a positive shortage",
+            "status",
+        )
 
 
 def _validate_controlled_item(record: Any, context: Mapping[str, Any]) -> None:

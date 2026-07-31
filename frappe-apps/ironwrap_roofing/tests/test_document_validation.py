@@ -1613,25 +1613,12 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         order = FakeDocument(
             {
                 "supplier_order_id": "supplier-order-1",
-                "status": "Shortage",
+                "status": "Draft",
                 "roof_job": "job-1",
-                "material_takeoff": "takeoff-1",
-                "source_quote": "supplier-quote-1",
-                "supplier": "supplier-1",
-                "approved_by": "owner@example.com",
-                "approved_at": "2026-07-10 08:00:00",
-                "received_at": "2026-07-10 09:00:00",
-                "order_summary_json": '{"source":"test"}',
-                "receipt_evidence_json": '{"receipt":"test"}',
-                "items": [{"quantity": 1, "received_qty": 0, "shortage_qty": 1}],
+                "items": [],
             }
         )
-        adapter, _ = self.load_adapter(
-            values={
-                ("Material Takeoff", "takeoff-1", "status"): "Approved",
-                ("Supplier Quote", "supplier-quote-1", "status"): "Approved",
-            }
-        )
+        adapter, _ = self.load_adapter()
 
         adapter.validate_business_document(order, "supplier_order")
 
@@ -1640,6 +1627,48 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         self.assertIn("`tabRoof Job`", query)
         self.assertIn("FOR UPDATE", query)
         self.assertEqual(values, ("job-1",))
+
+    def test_supplier_order_context_resolves_acknowledgement_and_receipt_evidence(self) -> None:
+        evidence_rows = [
+            {
+                "name": evidence_id,
+                "roof_job": "job-1",
+                "proof_slot": "Materials",
+                "sync_state": "Verified",
+                "content_checksum": "a" * 64,
+                "checksum_algorithm": "SHA-256",
+                "verified_at": "2026-07-10 12:00:00",
+                "verification_source": "synthetic-test",
+                "r2_key": f"private/job-1/{evidence_id}.pdf",
+            }
+            for evidence_id in ("evidence:ack-1", "evidence:receipt-1")
+        ]
+        adapter, calls = self.load_adapter(
+            values={
+                ("Material Takeoff", "takeoff-1", "status"): "Approved",
+                ("Supplier Quote", "quote-1", "status"): "Approved",
+            },
+            rows={"Evidence Item": evidence_rows},
+        )
+        context = adapter._context(
+            FakeDocument(
+                {
+                    "roof_job": "job-1",
+                    "material_takeoff": "takeoff-1",
+                    "source_quote": "quote-1",
+                    "supplier_acknowledgement_evidence": "evidence:ack-1",
+                    "receipt_evidence_json": '{"evidence_item_ids":["evidence:receipt-1"]}',
+                }
+            ),
+            "supplier_order",
+        )
+
+        self.assertEqual(set(context["supplier_order_evidence"]), {
+            "evidence:ack-1",
+            "evidence:receipt-1",
+        })
+        evidence_call = next(call for call in calls if call[0] == "Evidence Item")
+        self.assertEqual(evidence_call[1], {"name": ["in", ["evidence:ack-1", "evidence:receipt-1"]]})
 
     def test_safety_acknowledgements_require_the_atomic_append_context(self) -> None:
         adapter, _ = self.load_adapter()

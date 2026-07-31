@@ -185,6 +185,19 @@ SUPPLIER_ORDER_EXCEPTION_CONTEXT_FIELDS = (
 _SUPPLIER_ORDER_EXCEPTION_CONTEXT_SELECT = ", ".join(
     SUPPLIER_ORDER_EXCEPTION_CONTEXT_FIELDS
 )
+SUPPLIER_ORDER_EVIDENCE_CONTEXT_FIELDS = (
+    "name",
+    "roof_job",
+    "proof_slot",
+    "sync_state",
+    "content_checksum",
+    "checksum_algorithm",
+    "verified_at",
+    "verification_source",
+    "source_uri",
+    "r2_key",
+    "drive_file_id",
+)
 _ATOMIC_SAFETY_ACKNOWLEDGEMENT_APPEND: ContextVar[tuple[str, str] | None] = ContextVar(
     "ironwrap_atomic_safety_acknowledgement_append",
     default=None,
@@ -1527,6 +1540,37 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
         if kind == "supplier_order":
             context["supplier_quote_status"] = _value(
                 "Supplier Quote", document.get("source_quote"), "status"
+            )
+            evidence_ids = set()
+            acknowledgement_evidence = document.get(
+                "supplier_acknowledgement_evidence"
+            )
+            if acknowledgement_evidence:
+                evidence_ids.add(acknowledgement_evidence)
+            receipt_evidence = parse_json_field(
+                document,
+                "receipt_evidence_json",
+                container_types=(dict,),
+            )
+            if isinstance(receipt_evidence, dict):
+                receipt_ids = receipt_evidence.get("evidence_item_ids")
+                if isinstance(receipt_ids, list):
+                    evidence_ids.update(
+                        evidence_id
+                        for evidence_id in receipt_ids
+                        if isinstance(evidence_id, str) and evidence_id
+                    )
+            context["supplier_order_evidence"] = (
+                {
+                    row["name"]: row
+                    for row in frappe.get_all(
+                        "Evidence Item",
+                        filters={"name": ["in", sorted(evidence_ids)]},
+                        fields=list(SUPPLIER_ORDER_EVIDENCE_CONTEXT_FIELDS),
+                    )
+                }
+                if evidence_ids
+                else {}
             )
     elif kind == "material_lot":
         context["controlled_item"] = frappe.db.get_value(

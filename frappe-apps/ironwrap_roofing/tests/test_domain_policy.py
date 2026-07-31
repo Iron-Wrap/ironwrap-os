@@ -173,6 +173,80 @@ def gate_evidence_context(gates: list[dict[str, object]]) -> dict[str, dict[str,
     }
 
 
+def supplier_order_evidence(evidence_id: str = "evidence:materials-1") -> dict[str, object]:
+    return {
+        "name": evidence_id,
+        "roof_job": "job-1",
+        "proof_slot": "Materials",
+        "sync_state": "Verified",
+        "content_checksum": "a" * 64,
+        "checksum_algorithm": "SHA-256",
+        "verified_at": "2026-07-10T12:00:00.000Z",
+        "verification_source": "worker-checksum",
+        "r2_key": f"private/job-1/{evidence_id}.pdf",
+    }
+
+
+def supplier_order_context(**overrides: object) -> dict[str, object]:
+    context: dict[str, object] = {
+        "takeoff_status": "Approved",
+        "supplier_quote_status": "Approved",
+        "supplier_order_evidence": {
+            "evidence:materials-1": supplier_order_evidence(),
+            "evidence:materials-2": supplier_order_evidence("evidence:materials-2"),
+        },
+    }
+    context.update(overrides)
+    return context
+
+
+def supplier_order_record(status: str = "Needs Review", **overrides: object) -> dict[str, object]:
+    record: dict[str, object] = {
+        "supplier_order_id": "so-1",
+        "status": status,
+        "roof_job": "job-1",
+        "material_takeoff": "to-1",
+        "source_quote": "sq-1",
+        "supplier": "supplier-1",
+        "prepared_at": "2026-07-10 10:00:00",
+        "approved_by": "owner@example.com",
+        "approved_at": "2026-07-10 11:00:00",
+        "requested_delivery_date": "2026-07-15",
+        "order_summary_json": '{"quote":"sq-1"}',
+        "assumptions": "Confirmed selection.",
+        "exclusions": "Freight variance.",
+        "delivery_notes": "Call before delivery.",
+        "items": [
+            {
+                "category": "Roof Surface",
+                "item_name": "Panel",
+                "quantity": "10",
+                "unit": "each",
+                "source_ref": "takeoff:1",
+                "status": "Draft",
+                "received_qty": "0",
+                "shortage_qty": "0",
+                "substitution_notes": "",
+                "needs_review": 1,
+            },
+            {
+                "category": "Trim",
+                "item_name": "Flashing",
+                "quantity": "5",
+                "unit": "each",
+                "source_ref": "takeoff:2",
+                "status": "Draft",
+                "received_qty": "0",
+                "shortage_qty": "0",
+                "substitution_notes": "",
+                "needs_review": 1,
+            },
+        ],
+    }
+    record.update(overrides)
+    return record
+
+
 def current_crew_authority(**overrides: object) -> dict[str, object]:
     crew: dict[str, object] = {
         "name": "crew-1",
@@ -517,26 +591,279 @@ class DomainPolicyTests(unittest.TestCase):
         }
         validate_record("supplier_quote", quote, context={"takeoff_status": "Approved"})
 
+        review = supplier_order_record("Needs Review")
         order = {
-            "supplier_order_id": "so-1",
+            **review,
             "status": "Approved",
-            "roof_job": "job-1",
-            "material_takeoff": "to-1",
-            "source_quote": "sq-1",
-            "supplier": "supplier-1",
-            "approved_by": "owner@example.com",
-            "approved_at": "2026-07-10 11:30:00",
-            "order_summary_json": '{"quote":"sq-1"}',
-            "items": [{"quantity": 20, "received_qty": 0, "shortage_qty": 0}],
+            "items": [{**row, "needs_review": 0} for row in review["items"]],
         }
-        context = {"takeoff_status": "Approved", "supplier_quote_status": "Approved"}
-        validate_record("supplier_order", order, context=context)
+        context = supplier_order_context()
+        validate_record("supplier_order", order, previous=review, context=context)
         self.assert_policy(
             "unapproved_supplier_quote",
             validate_record,
             "supplier_order",
             order,
+            previous=review,
             context={**context, "supplier_quote_status": "Draft"},
+        )
+
+    def test_supplier_order_lifecycle_is_explicit_and_freezes_approved_facts(self) -> None:
+        draft = supplier_order_record("Draft")
+        review = {**draft, "status": "Needs Review"}
+        approved = {
+            **review,
+            "status": "Approved",
+            "items": [{**row, "needs_review": 0} for row in review["items"]],
+        }
+        validate_record("supplier_order", draft, context=supplier_order_context())
+        validate_record(
+            "supplier_order", review, previous=draft, context=supplier_order_context()
+        )
+        validate_record(
+            "supplier_order",
+            approved,
+            previous=review,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "invalid_state_transition",
+            validate_record,
+            "supplier_order",
+            {**approved, "status": "Received"},
+            previous=approved,
+            context=supplier_order_context(),
+        )
+
+        transmitted = {
+            **approved,
+            "status": "Ordered",
+            "internal_transmission_id": "transmission:so-1",
+            "internal_transmitted_at": "2026-07-10 12:00:00",
+        }
+        validate_record(
+            "supplier_order",
+            transmitted,
+            previous=approved,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "supplier_order_items_immutable",
+            validate_record,
+            "supplier_order",
+            {
+                **transmitted,
+                "items": [
+                    {**transmitted["items"][0], "quantity": "11"},
+                    *transmitted["items"][1:],
+                ],
+            },
+            previous=transmitted,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "immutable_field",
+            validate_record,
+            "supplier_order",
+            {**transmitted, "source_quote": "sq-other"},
+            previous=transmitted,
+            context=supplier_order_context(),
+        )
+
+    def test_supplier_order_lifecycle_facts_require_their_transition_state(self) -> None:
+        draft = supplier_order_record("Draft")
+        review = {**draft, "status": "Needs Review"}
+        approved = {
+            **review,
+            "status": "Approved",
+            "items": [{**row, "needs_review": 0} for row in review["items"]],
+        }
+        context = supplier_order_context()
+        pre_transmission_states = (
+            (draft, None),
+            (review, draft),
+            (approved, review),
+        )
+        for record, previous in pre_transmission_states:
+            for field, value in (
+                ("internal_transmission_id", "transmission:so-1"),
+                ("internal_transmitted_at", "2026-07-10 12:00:00"),
+            ):
+                with self.subTest(status=record["status"], field=field):
+                    self.assert_policy(
+                        "supplier_order_transmission_before_ordered",
+                        validate_record,
+                        "supplier_order",
+                        {**record, field: value},
+                        previous=previous,
+                        context=context,
+                    )
+
+        transmitted = {
+            **approved,
+            "status": "Ordered",
+            "internal_transmission_id": "transmission:so-1",
+            "internal_transmitted_at": "2026-07-10 12:00:00",
+        }
+        cancelled = {**transmitted, "status": "Cancelled"}
+        validate_record("supplier_order", transmitted, previous=approved, context=context)
+        validate_record("supplier_order", cancelled, previous=transmitted, context=context)
+
+        for record, previous in (
+            (draft, None),
+            (review, draft),
+            (approved, review),
+            (transmitted, approved),
+            (cancelled, transmitted),
+        ):
+            for field, value in (
+                ("received_at", "2026-07-11 08:00:00"),
+                ("receipt_evidence_json", '{"evidence_item_ids":["evidence:materials-1"]}'),
+            ):
+                with self.subTest(status=record["status"], field=field):
+                    self.assert_policy(
+                        "supplier_order_receipt_facts_before_receiving",
+                        validate_record,
+                        "supplier_order",
+                        {**record, field: value},
+                        previous=previous,
+                        context=context,
+                    )
+
+    def test_supplier_order_acknowledgement_and_receipts_are_evidence_backed(self) -> None:
+        approved = supplier_order_record(
+            "Approved",
+            items=[
+                {**row, "needs_review": 0}
+                for row in supplier_order_record()["items"]
+            ],
+        )
+        transmitted = {
+            **approved,
+            "status": "Ordered",
+            "internal_transmission_id": "transmission:so-1",
+            "internal_transmitted_at": "2026-07-10 12:00:00",
+        }
+        acknowledged = {
+            **transmitted,
+            "supplier_acknowledgement_id": "ack:so-1",
+            "supplier_acknowledged_at": "2026-07-10 12:05:00",
+            "supplier_acknowledgement_evidence": "evidence:materials-1",
+        }
+        validate_record(
+            "supplier_order",
+            acknowledged,
+            previous=transmitted,
+            context=supplier_order_context(),
+        )
+        validate_record(
+            "supplier_order",
+            acknowledged,
+            previous=acknowledged,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "supplier_order",
+            {**acknowledged, "supplier_acknowledgement_id": "ack:other"},
+            previous=acknowledged,
+            context=supplier_order_context(),
+        )
+
+        partial = {
+            **acknowledged,
+            "status": "Partially Received",
+            "received_at": "2026-07-11 08:00:00",
+            "receipt_evidence_json": '{"evidence_item_ids":["evidence:materials-2"]}',
+            "items": [
+                {**acknowledged["items"][0], "status": "Ordered", "received_qty": "5"},
+                {**acknowledged["items"][1], "status": "Ordered"},
+            ],
+        }
+        validate_record(
+            "supplier_order",
+            partial,
+            previous=acknowledged,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "invalid_state_transition",
+            validate_record,
+            "supplier_order",
+            {**partial, "status": "Cancelled"},
+            previous=partial,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "supplier_order_evidence_missing",
+            validate_record,
+            "supplier_order",
+            partial,
+            previous=acknowledged,
+            context=supplier_order_context(supplier_order_evidence={}),
+        )
+        self.assert_policy(
+            "supplier_order_receipt_evidence_not_append_only",
+            validate_record,
+            "supplier_order",
+            {
+                **partial,
+                "receipt_evidence_json": '{"evidence_item_ids":["evidence:materials-1"]}',
+            },
+            previous=partial,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "supplier_order_quantity_overage",
+            validate_record,
+            "supplier_order",
+            {
+                **partial,
+                "items": [
+                    {**partial["items"][0], "received_qty": "11"},
+                    partial["items"][1],
+                ],
+            },
+            previous=partial,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "supplier_order_received_quantity_mismatch",
+            validate_record,
+            "supplier_order",
+            {**partial, "status": "Received"},
+            previous=partial,
+            context=supplier_order_context(),
+        )
+
+        shortage = {
+            **partial,
+            "status": "Shortage",
+            "items": [
+                {**partial["items"][0], "status": "Received", "received_qty": "10"},
+                {**partial["items"][1], "status": "Shortage", "shortage_qty": "5"},
+            ],
+        }
+        validate_record(
+            "supplier_order",
+            shortage,
+            previous=partial,
+            context=supplier_order_context(),
+        )
+        self.assert_policy(
+            "supplier_order_receipts_finalized",
+            validate_record,
+            "supplier_order",
+            {
+                **shortage,
+                "items": [
+                    {**shortage["items"][0], "received_qty": "9"},
+                    shortage["items"][1],
+                ],
+            },
+            previous=shortage,
+            context=supplier_order_context(),
         )
 
     def test_customer_quote_revision_is_minimal_and_cannot_replace_a_contract(self) -> None:

@@ -142,7 +142,7 @@ const specs = [
     name: "Supplier Order",
     dir: "supplier_order",
     idField: "supplier_order_id",
-    requiredFields: ["supplier_order_id", "roof_job", "material_takeoff", "supplier", "status", "prepared_at", "approved_by", "approved_at", "requested_delivery_date", "order_summary_json", "assumptions", "exclusions", "delivery_notes", "items"],
+    requiredFields: ["supplier_order_id", "roof_job", "material_takeoff", "supplier", "status", "prepared_at", "approved_by", "approved_at", "internal_transmission_id", "internal_transmitted_at", "supplier_acknowledgement_id", "supplier_acknowledged_at", "supplier_acknowledgement_evidence", "requested_delivery_date", "order_summary_json", "assumptions", "exclusions", "delivery_notes", "items"],
   },
   {
     name: "Instant Estimate Session",

@@ -127,6 +127,39 @@ export function parseSolarBuildingInsights(json: unknown): SolarModel | null {
   };
 }
 
+const SOLAR_URL = "https://solar.googleapis.com/v1/buildingInsights:findClosest";
+const SOLAR_TIMEOUT_MS = 10_000;
+
+export function solarConfigured(env: Env): boolean {
+  return !!env.GOOGLE_MAPS_API_KEY;
+}
+
+/**
+ * Fetch buildingInsights for a location. Returns the raw JSON, or null when
+ * Google has no coverage there (404). Other failures throw; callers treat the
+ * whole cross-check as best-effort and must never fail intake on it.
+ */
+export async function fetchBuildingInsights(env: Env, lat: number, lng: number): Promise<unknown | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SOLAR_TIMEOUT_MS);
+  try {
+    const url = `${SOLAR_URL}?location.latitude=${lat}&location.longitude=${lng}` +
+      `&requiredQuality=MEDIUM&key=${env.GOOGLE_MAPS_API_KEY}`;
+    const res = await fetch(url, { signal: controller.signal });
+    if (res.status === 404) {
+      await res.body?.cancel();
+      return null;
+    }
+    if (!res.ok) {
+      await res.body?.cancel();
+      throw new Error(`solar_status_${res.status}`);
+    }
+    return await res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /** Compare a primary measurement map against an independent one. Pure. */
 export function crossCheckMeasurements(
   primary: Record<string, number>,

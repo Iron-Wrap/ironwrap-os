@@ -9,9 +9,14 @@ import {
   markMeasurementIntakeRetryable,
   type MeasurementIntakeIdentity,
 } from "../src/measurement-intake-store.ts";
-import { retryMeasurementIntakeReceipts } from "../src/measurements.ts";
+import {
+  geometryFromReportBytes,
+  parseMeasurementSubmission,
+  retryMeasurementIntakeReceipts,
+} from "../src/measurements.ts";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import type { AppRole, AuthContext } from "../src/app-types.ts";
+import { makeZip } from "./zip-helper.ts";
 
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
@@ -721,4 +726,153 @@ test("measurement receipt retry sweep takes over an expired processing lease", a
     .get(identity.receiptId) as { status: string; attempts: number };
   assert.equal(receipt.status, "matched");
   assert.equal(Number(receipt.attempts), 2);
+});
+
+const SQUARE_XML = `<APPLICAD_EXPORT>
+  <POINT id="P1" data="0,0,0"/><POINT id="P2" data="10,0,0"/>
+  <POINT id="P3" data="10,10,0"/><POINT id="P4" data="0,10,0"/>
+  <LINE id="L1" path="P1,P2" type="EAVE" length="10"/>
+  <LINE id="L2" path="P2,P3" type="EAVE" length="10"/>
+  <LINE id="L3" path="P3,P4" type="EAVE" length="10"/>
+  <LINE id="L4" path="P4,P1" type="EAVE" length="10"/>
+  <POLYGON id="F1" path="L1,L2,L3,L4" size="100" type="Roof"/>
+</APPLICAD_EXPORT>`;
+
+test("measurement helpers: zip report bytes and payload coordinates parse", async () => {
+  const zip = makeZip([
+    { name: "summary.pdf", data: Buffer.from("%PDF-1.7 not xml") },
+    { name: "roof.xml", data: Buffer.from(SQUARE_XML) },
+  ]);
+  const geometry = await geometryFromReportBytes(new Uint8Array(zip));
+  assert.equal(geometry?.measurements.roof_area, 100);
+  assert.equal(geometry?.needsReview, false);
+  assert.equal(await geometryFromReportBytes(new TextEncoder().encode("%PDF-1.7")), null);
+
+  const sub = parseMeasurementSubmission({ job_number: "26-1", lat: 51.05, lng: -114.07 });
+  assert.deepEqual(sub.coords, { lat: 51.05, lng: -114.07 });
+  assert.equal(parseMeasurementSubmission({ lat: 200, lng: 10 }).coords, null);
+  assert.equal(parseMeasurementSubmission({ lat: 0, lng: 0 }).coords, null);
+  assert.equal(parseMeasurementSubmission({ job_number: "26-1" }).coords, null);
+});
+
+test("measurement intake: Solar cross-check flags divergence and passes agreement", async (t) => {
+  const db = new SqliteD1();
+  const rawWrites: Array<{ key: string; body: string }> = [];
+  const env = testEnv(db, rawWrites, {
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "erp-key",
+    ERPNEXT_API_SECRET: "erp-secret",
+    GOOGLE_MAPS_API_KEY: "solar-key",
+  });
+  const fetches: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      fetches.push({ url, init: init ?? {} });
+      if (url.startsWith("https://solar.googleapis.com/")) {
+        // Calgary address: wildly divergent roof. Edmonton address: agreeing roof.
+        const divergent = url.includes("location.latitude=51.");
+        return json({
+          imageryDate: { year: 2023, month: 5, day: 1 },
+          imageryQuality: "MEDIUM",
+          solarPotential: { wholeRoofStats: { areaMeters2: divergent ? 5 : 9.2903 } },
+        });
+      }
+      if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0007" }] });
+      if (url.includes("/api/resource/Measurement%20Report?")) return json({ data: [] });
+      if (url.endsWith("/api/resource/Measurement%20Report")) return json({ data: { name: "MR-SOLAR" } });
+      if (url.includes("/api/resource/Evidence%20Item?")) return json({ data: [] });
+      if (url.endsWith("/api/resource/Evidence%20Item")) return json({ data: { name: "EV-SOLAR" } });
+      throw new Error(`unexpected fetch ${url}`);
+    },
+  );
+
+  const divergent = await worker.fetch(
+    intakeRequest(
+      { job_number: "26-0007", lat: 51.0447, lng: -114.0719, xml: SQUARE_XML },
+      "measurement-solar-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  assert.equal(divergent.status, 200);
+  const divergentReport = JSON.parse(String(
+    fetches.find((item) => item.url.endsWith("/api/resource/Measurement%20Report"))?.init.body,
+  ));
+  assert.equal(divergentReport.review_status, "Needs Review");
+  const divergentGraph = JSON.parse(divergentReport.roof_graph_json) as {
+    needs_review: boolean;
+    checks: Array<{ check: string; ok: boolean; detail: string }>;
+  };
+  assert.equal(divergentGraph.needs_review, true);
+  const areaCheck = divergentGraph.checks.find((c) => c.check === "cross_source_roof_area");
+  assert.equal(areaCheck?.ok, false);
+  assert.match(areaCheck?.detail ?? "", /%/);
+  assert.ok(divergentGraph.checks.some((c) => c.check === "cross_source_imagery" && c.ok));
+
+  fetches.length = 0;
+  const agreeing = await worker.fetch(
+    intakeRequest(
+      { job_number: "26-0008", lat: 53.5461, lng: -113.4938, xml: SQUARE_XML },
+      "measurement-solar-0002",
+    ),
+    env as never,
+    ctx as never,
+  );
+  assert.equal(agreeing.status, 200);
+  const agreeingReport = JSON.parse(String(
+    fetches.find((item) => item.url.endsWith("/api/resource/Measurement%20Report"))?.init.body,
+  ));
+  // review_status stays "Needs Review" here for a PRE-EXISTING reason: no filed
+  // source document (no report_url in the payload). The cross-check verdict lives
+  // in the roof graph, which must be clean when the sources agree.
+  assert.equal(agreeingReport.review_status, "Needs Review");
+  const agreeingGraph = JSON.parse(agreeingReport.roof_graph_json) as {
+    needs_review: boolean;
+    checks: Array<{ check: string; ok: boolean }>;
+  };
+  assert.equal(agreeingGraph.needs_review, false);
+  assert.equal(agreeingGraph.checks.find((c) => c.check === "cross_source_roof_area")?.ok, true);
+});
+
+test("measurement intake: Solar outage never fails intake", async (t) => {
+  const db = new SqliteD1();
+  const rawWrites: Array<{ key: string; body: string }> = [];
+  const env = testEnv(db, rawWrites, {
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "erp-key",
+    ERPNEXT_API_SECRET: "erp-secret",
+    GOOGLE_MAPS_API_KEY: "solar-key",
+  });
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.startsWith("https://solar.googleapis.com/")) {
+        return new Response("upstream broken", { status: 500 });
+      }
+      if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0009" }] });
+      if (url.includes("/api/resource/Measurement%20Report?")) return json({ data: [] });
+      if (url.endsWith("/api/resource/Measurement%20Report")) return json({ data: { name: "MR-OUTAGE" } });
+      if (url.includes("/api/resource/Evidence%20Item?")) return json({ data: [] });
+      if (url.endsWith("/api/resource/Evidence%20Item")) return json({ data: { name: "EV-OUTAGE" } });
+      throw new Error(`unexpected fetch ${url}`);
+    },
+  );
+  const submitted = await worker.fetch(
+    intakeRequest(
+      { job_number: "26-0009", lat: 51.1, lng: -114.1, xml: SQUARE_XML },
+      "measurement-solar-outage-0001",
+    ),
+    env as never,
+    ctx as never,
+  );
+  assert.equal(submitted.status, 200);
+  const body = (await submitted.json()) as { status: string };
+  assert.equal(body.status, "matched");
 });

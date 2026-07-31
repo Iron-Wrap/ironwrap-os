@@ -10,6 +10,13 @@ import * as store from "./store.ts";
 import { googleConfigured, fileToJobFolder } from "./google.ts";
 import { pushMeasurementToErpNext } from "./erpnext.ts";
 import { isAppliCadXml, parseAppliCadGeometry, type GeometryModel } from "./geometry.ts";
+import { extractZipXml, isZip } from "./esx.ts";
+import {
+  crossCheckMeasurements,
+  fetchBuildingInsights,
+  parseSolarBuildingInsights,
+  solarConfigured,
+} from "./solar.ts";
 import { deriveRoofGraph, type RoofGraphV1 } from "./roof-graph.ts";
 import {
   claimMeasurementIntakeReceipt,
@@ -26,6 +33,8 @@ const JOB_KEYS = ["job_number", "jobnumber", "job", "job_no", "jn_job", "jobnimb
 const REPORT_KEYS = ["report_url", "report", "pdf", "pdf_url", "document", "document_url", "file", "url"];
 const MEASURE_KEYS = ["squares", "area_sqft", "area", "pitch", "predominant_pitch", "ridge_ft", "hip_ft",
   "valley_ft", "eave_ft", "rake_ft", "perimeter_ft", "facets", "waste_factor"];
+const LAT_KEYS = ["lat", "latitude"];
+const LNG_KEYS = ["lng", "lon", "long", "longitude"];
 const ATTACHMENT_ID_KEYS = ["report_id", "reportid", "attachment_id", "attachmentid", "file_id", "fileid"];
 const ATTACHMENT_HASH_KEYS = ["attachment_sha256", "attachment_hash", "file_sha256", "file_hash", "sha256"];
 const REQUEST_IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:/-]{7,159}$/;
@@ -42,6 +51,8 @@ export interface MeasurementSubmission {
   jobNumber: string | null;
   reportUrl: string | null;
   measurements: Record<string, number>;
+  /** Property coordinates when the provider payload carries them (Solar cross-check input). */
+  coords: { lat: number; lng: number } | null;
 }
 
 function pick(raw: Record<string, unknown>, keys: string[]): unknown {
@@ -73,7 +84,13 @@ export function parseMeasurementSubmission(raw: Record<string, unknown>): Measur
   for (const k of Object.keys(raw)) {
     if (MEASURE_KEYS.includes(k.toLowerCase())) { const n = asNumber(raw[k]); if (n != null) measurements[k.toLowerCase()] = n; }
   }
-  return { jobNumber, reportUrl, measurements };
+  const lat = asNumber(pick(raw, LAT_KEYS));
+  const lng = asNumber(pick(raw, LNG_KEYS));
+  // (0,0) is the classic null-island placeholder, never a real roof.
+  const coords = lat !== null && lng !== null && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && (lat !== 0 || lng !== 0)
+    ? { lat, lng }
+    : null;
+  return { jobNumber, reportUrl, measurements, coords };
 }
 
 /** Find AppliCad XML embedded in any string field, or as the raw body itself. Pure.
@@ -213,10 +230,11 @@ async function processClaimedMeasurementIntake(
     parsedAt: string;
   },
 ): Promise<Response> {
-  const { receipt, identity, submission: sub, geometry, parsedAt } = input;
-  const roofGraph = geometry
+  const { receipt, identity, submission: sub, parsedAt } = input;
+  let geometry = input.geometry;
+  const graphFor = (g: GeometryModel | null): RoofGraphV1 | null => g
     ? deriveRoofGraph({
-      geometry,
+      geometry: g,
       rawKey: identity.rawKey,
       rawSha256: identity.payloadHash,
       provider: identity.provider,
@@ -225,7 +243,8 @@ async function processClaimedMeasurementIntake(
     : null;
   try {
     if (!sub.jobNumber) {
-      const erp = await syncMeasurementToErpNext(env, receipt, sub, identity.rawKey, parsedAt, null, geometry, roofGraph);
+      await applySolarCrossCheck(env, geometry, sub.coords);
+      const erp = await syncMeasurementToErpNext(env, receipt, sub, identity.rawKey, parsedAt, null, geometry, graphFor(geometry));
       await store.recordAudit(env, {
         automation: "measurement",
         trigger: identity.provider.toLowerCase(),
@@ -249,6 +268,19 @@ async function processClaimedMeasurementIntake(
     }
 
     const filing = await fileMeasurementReport(env, receipt, sub);
+    // Zip-wrapped report (ESX-style): the payload carried no XML, but the fetched
+    // report file itself may be a zip around an AppliCad export. Recomputed values
+    // override upstream-AI-extracted keys, the same rule as body-level XML.
+    // ponytail: a retry after successful Drive filing short-circuits the fetch and
+    // syncs without zip geometry; re-fetch from Drive if that ever matters.
+    if (!geometry && filing.bytes) {
+      const zipGeometry = await geometryFromReportBytes(filing.bytes);
+      if (zipGeometry) {
+        geometry = zipGeometry;
+        sub.measurements = { ...sub.measurements, ...zipGeometry.measurements };
+      }
+    }
+    await applySolarCrossCheck(env, geometry, sub.coords);
     if (filing.report && filing.report !== receipt.drive_report_url) {
       await recordMeasurementDriveFiling(env, {
         receiptId: receipt.receipt_id,
@@ -259,7 +291,7 @@ async function processClaimedMeasurementIntake(
       });
     }
 
-    const erp = await syncMeasurementToErpNext(env, receipt, sub, identity.rawKey, parsedAt, filing.report, geometry, roofGraph);
+    const erp = await syncMeasurementToErpNext(env, receipt, sub, identity.rawKey, parsedAt, filing.report, geometry, graphFor(geometry));
     if (erp.error) throw new MeasurementIntakeFailure("frappe_measurement_sync_failed", erp.error);
     const unmatchedJob = erp.jobMatched === false;
     await store.recordAudit(env, {
@@ -394,11 +426,11 @@ async function fileMeasurementReport(
   env: Env,
   receipt: MeasurementIntakeReceipt,
   sub: MeasurementSubmission,
-): Promise<{ report: string | null; folder: string | null; note: string | null }> {
+): Promise<{ report: string | null; folder: string | null; note: string | null; bytes: ArrayBuffer | null }> {
   if (receipt.drive_report_url) {
-    return { report: receipt.drive_report_url, folder: receipt.drive_folder_url, note: null };
+    return { report: receipt.drive_report_url, folder: receipt.drive_folder_url, note: null, bytes: null };
   }
-  if (!sub.reportUrl) return { report: null, folder: null, note: "no_report_url" };
+  if (!sub.reportUrl) return { report: null, folder: null, note: "no_report_url", bytes: null };
   if (!googleConfigured(env)) throw new MeasurementIntakeFailure("drive_not_configured");
 
   const response = await fetchSafeReport(sub.reportUrl);
@@ -417,7 +449,48 @@ async function fileMeasurementReport(
   }]);
   const filed = batch.files[0];
   if (!filed?.webUrl) throw new MeasurementIntakeFailure("drive_upload_failed");
-  return { report: filed.webUrl, folder: batch.folderUrl, note: null };
+  return { report: filed.webUrl, folder: batch.folderUrl, note: null, bytes };
+}
+
+/** Zip-wrapped report (ESX-style): unwrap and verify any AppliCad XML payload. */
+export async function geometryFromReportBytes(bytes: ArrayBuffer | Uint8Array): Promise<GeometryModel | null> {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (!isZip(u8)) return null;
+  const extracted = await extractZipXml(u8);
+  return extracted?.appliCadXml ? parseAppliCadGeometry(extracted.appliCadXml.text) : null;
+}
+
+/**
+ * Best-effort independent verification: when the payload carries coordinates and a
+ * Solar key is configured, cross-check the parsed geometry against Google's building
+ * model. Appends checks in place; a Solar outage or gap never fails intake.
+ */
+async function applySolarCrossCheck(
+  env: Env,
+  geometry: GeometryModel | null,
+  coords: { lat: number; lng: number } | null,
+): Promise<void> {
+  if (!geometry || !coords || !solarConfigured(env)) return;
+  try {
+    const insights = await fetchBuildingInsights(env, coords.lat, coords.lng);
+    if (insights === null) {
+      geometry.checks.push({ check: "cross_source_coverage", target: "google_solar", ok: true, detail: "no Solar coverage at location" });
+      return;
+    }
+    const solar = parseSolarBuildingInsights(insights);
+    if (!solar) return;
+    const cross = crossCheckMeasurements(geometry.measurements, solar.measurements);
+    geometry.checks.push(...cross.checks);
+    geometry.checks.push({
+      check: "cross_source_imagery",
+      target: "google_solar",
+      ok: true,
+      detail: `imagery ${solar.imageryDate ?? "unknown"} quality ${solar.imageryQuality ?? "unknown"}`,
+    });
+    geometry.needsReview = geometry.needsReview || cross.needsReview;
+  } catch (error) {
+    log({ at: "measurement_solar_crosscheck", error: String(error).slice(0, 200) });
+  }
 }
 
 function completedResponse(

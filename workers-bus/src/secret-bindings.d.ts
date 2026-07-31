@@ -14,6 +14,8 @@ interface Env {
   NEWO_CONTROL_SIGNING_SECRET: string;
   JOBNIMBUS_API_KEY: string;
   GOOGLE_SERVICE_ACCOUNT_JSON: string;
+  /** Google Maps Platform key (Solar API cross-check); absence disables the check. */
+  GOOGLE_MAPS_API_KEY: string;
   QB_WEBHOOK_TOKEN: string;
   /** Non-secret tenant configuration: exact QuickBooks company realm. */
   QB_EXPECTED_REALM_ID: string;
@@ -50,6 +52,7 @@ declare namespace Cloudflare {
     NEWO_CONTROL_SIGNING_SECRET: string;
     JOBNIMBUS_API_KEY: string;
     GOOGLE_SERVICE_ACCOUNT_JSON: string;
+    GOOGLE_MAPS_API_KEY: string;
     QB_WEBHOOK_TOKEN: string;
     QB_EXPECTED_REALM_ID: string;
     QB_RECONCILIATION_ISSUER_USER: string;

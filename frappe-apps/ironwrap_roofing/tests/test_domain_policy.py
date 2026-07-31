@@ -3232,6 +3232,106 @@ class DomainPolicyTests(unittest.TestCase):
             context=ready_context,
         )
 
+        handed_over_bundle = {
+            **ready["bundles"][0],
+            "handoff_status": "Handed Over",
+            "handed_over_to": "install@example.com",
+            "handed_over_at": "2026-07-30 10:10:00",
+            "handoff_evidence": "evidence:bundle-handoff-1",
+        }
+        handed_over = {
+            **ready,
+            "status": "Handed Over",
+            "handed_over_to": "install@example.com",
+            "handed_over_at": "2026-07-30 10:10:00",
+            "handoff_evidence": "evidence:order-handoff-1",
+            "bundles": [handed_over_bundle],
+        }
+        validate_record(
+            "shop_order", handed_over, previous=ready, context=ready_context
+        )
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "shop_order",
+            {**handed_over, "handoff_evidence": None},
+            previous=ready,
+            context=ready_context,
+        )
+        self.assert_policy(
+            "unhanded_shop_bundle",
+            validate_record,
+            "shop_order",
+            {**handed_over, "bundles": [ready["bundles"][0]]},
+            previous=ready,
+            context=ready_context,
+        )
+
+        invoice_milestone = {
+            "name": "payment:shop-1:invoice-1",
+            "roof_job": "job-1",
+            "shop_order": draft["shop_order_id"],
+            "status": "Webhook Seen",
+        }
+        invoice_context = {
+            **ready_context,
+            "invoice_payment_milestone": invoice_milestone,
+        }
+        invoice_ready = {
+            **handed_over,
+            "status": "Invoice Ready",
+            "invoice_payment_milestone": invoice_milestone["name"],
+            "invoice_ready_at": "2026-07-30 10:15:00",
+        }
+        validate_record(
+            "shop_order",
+            invoice_ready,
+            previous=handed_over,
+            context=invoice_context,
+        )
+        self.assert_policy(
+            "cross_job_shop_invoice_basis",
+            validate_record,
+            "shop_order",
+            invoice_ready,
+            previous=handed_over,
+            context={
+                **invoice_context,
+                "invoice_payment_milestone": {
+                    **invoice_milestone,
+                    "roof_job": "job-other",
+                },
+            },
+        )
+        self.assert_policy(
+            "shop_invoice_basis_mismatch",
+            validate_record,
+            "shop_order",
+            invoice_ready,
+            previous=handed_over,
+            context={
+                **invoice_context,
+                "invoice_payment_milestone": {
+                    **invoice_milestone,
+                    "shop_order": "shop:job-other:001",
+                },
+            },
+        )
+        self.assert_policy(
+            "unverified_shop_invoice_basis",
+            validate_record,
+            "shop_order",
+            invoice_ready,
+            previous=handed_over,
+            context={
+                **invoice_context,
+                "invoice_payment_milestone": {
+                    **invoice_milestone,
+                    "status": "Ignored",
+                },
+            },
+        )
+
         ncr = {
             "nonconformance_id": "ncr:shop-1:1",
             "shop_order": draft["shop_order_id"],

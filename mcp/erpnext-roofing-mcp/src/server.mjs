@@ -35,6 +35,8 @@ const REQUEST_TO_DRY_RUN = Object.freeze({
   request_advance_shop_order_setup: "dry_run_advance_shop_order_setup",
   request_record_first_piece_outcome: "dry_run_record_first_piece_outcome",
   request_record_final_shop_quality: "dry_run_record_final_shop_quality",
+  request_record_shop_handover: "dry_run_record_shop_handover",
+  request_record_shop_billing_basis: "dry_run_record_shop_billing_basis",
   request_create_job_assignment: "dry_run_job_assignment",
   request_create_change_order: "dry_run_change_order",
   request_transition_change_order: "dry_run_change_order_transition",
@@ -2141,6 +2143,33 @@ const ShopOrderFinalQualityWriteInputSchema = ShopOrderFinalQualityInputSchema.e
   expected_snapshot_sha256: ShopSnapshotHashSchema,
 }).strict();
 
+const ShopOrderHandoverPayloadSchema = z.object({
+  handed_over_to: ShopFinalQualityTextSchema,
+  handoff_evidence: ShopFinalQualityIdentifierSchema,
+}).strict();
+
+const ShopOrderHandoverInputSchema = z.object({
+  shop_order_id: IdSchema,
+  handover_payload_json: z.string().trim().min(2).max(20_000),
+}).strict();
+
+const ShopOrderHandoverWriteInputSchema = ShopOrderHandoverInputSchema.extend({
+  expected_snapshot_sha256: ShopSnapshotHashSchema,
+}).strict();
+
+const ShopOrderBillingBasisPayloadSchema = z.object({
+  payment_milestone_id: ShopFinalQualityIdentifierSchema,
+}).strict();
+
+const ShopOrderBillingBasisInputSchema = z.object({
+  shop_order_id: IdSchema,
+  billing_basis_payload_json: z.string().trim().min(2).max(20_000),
+}).strict();
+
+const ShopOrderBillingBasisWriteInputSchema = ShopOrderBillingBasisInputSchema.extend({
+  expected_snapshot_sha256: ShopSnapshotHashSchema,
+}).strict();
+
 export function approvedWriteInputSchema(baseSchema) {
   const approvalShape = {
     request_text: z.string().trim().min(1).max(4000),
@@ -4150,6 +4179,128 @@ export function buildServer(config) {
           final_quality_recorded: true,
           shop_order_id: args.shop_order_id,
           final_quality_action: dryRun.final_quality.action,
+        },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_record_shop_handover",
+    {
+      title: "Dry Run Record Shop Handover",
+      description: "Preview one evidence-backed custody handover without writing.",
+      inputSchema: ShopOrderHandoverInputSchema,
+    },
+    async ({ shop_order_id, handover_payload_json }) => text(
+      await buildRecordShopHandoverPreview(config, shop_order_id, handover_payload_json),
+    ),
+  );
+
+  server.registerTool(
+    "request_record_shop_handover",
+    {
+      title: "Request Record Shop Handover",
+      description: "Approved-write: record custody evidence for every prepared bundle and transition the Shop Order to Handed Over.",
+      inputSchema: approvedWriteInputSchema(ShopOrderHandoverWriteInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const order = await readResource(config, "Shop Order", args.shop_order_id);
+      const dryRun = await buildRecordShopHandoverPreview(
+        config,
+        args.shop_order_id,
+        args.handover_payload_json,
+      );
+      assertSignedShopSnapshot(args, dryRun);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_record_shop_handover",
+        target: { doctype: "Shop Order", name: args.shop_order_id },
+        roofJob: order.roof_job,
+        dryRun,
+        beforeSummary: summarizeShopOrder(order),
+        afterSummary: (result) => (result?.message ?? result ?? {}).shop_order ?? {},
+        execute: () => erpPost(
+          config,
+          "/api/method/ironwrap_roofing.shop_fabrication_api.record_shop_handover",
+          {
+            shop_order_id: args.shop_order_id,
+            hermes_run_id: args.run_id,
+          },
+        ),
+        responseExtra: {
+          handover_recorded: true,
+          shop_order_id: args.shop_order_id,
+        },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_record_shop_billing_basis",
+    {
+      title: "Dry Run Record Shop Billing Basis",
+      description: "Preview binding one handed-over Shop Order to its existing provider invoice mirror without writing.",
+      inputSchema: ShopOrderBillingBasisInputSchema,
+    },
+    async ({ shop_order_id, billing_basis_payload_json }) => text(
+      await buildRecordShopBillingBasisPreview(
+        config,
+        shop_order_id,
+        billing_basis_payload_json,
+      ),
+    ),
+  );
+
+  server.registerTool(
+    "request_record_shop_billing_basis",
+    {
+      title: "Request Record Shop Billing Basis",
+      description: "Approved-write: bind a handed-over Shop Order to one existing QuickBooks Invoice mirror and transition it to Invoice Ready.",
+      inputSchema: approvedWriteInputSchema(ShopOrderBillingBasisWriteInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const order = await readResource(config, "Shop Order", args.shop_order_id);
+      const dryRun = await buildRecordShopBillingBasisPreview(
+        config,
+        args.shop_order_id,
+        args.billing_basis_payload_json,
+      );
+      assertSignedShopSnapshot(args, dryRun);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_record_shop_billing_basis",
+        target: { doctype: "Shop Order", name: args.shop_order_id },
+        roofJob: order.roof_job,
+        dryRun,
+        beforeSummary: summarizeShopOrder(order),
+        afterSummary: (result) => {
+          const outcome = result?.message ?? result ?? {};
+          return {
+            shop_order: outcome.shop_order ?? {},
+            payment_milestone: outcome.payment_milestone ?? {},
+          };
+        },
+        execute: () => erpPost(
+          config,
+          "/api/method/ironwrap_roofing.shop_fabrication_api.record_shop_billing_basis",
+          {
+            shop_order_id: args.shop_order_id,
+            hermes_run_id: args.run_id,
+          },
+        ),
+        responseExtra: {
+          billing_basis_recorded: true,
+          shop_order_id: args.shop_order_id,
         },
       }));
     },
@@ -7381,6 +7532,26 @@ export function assertVerifiedEvidence(evidence, label, {
   }
 }
 
+function assertShopHandoverEvidence(evidence) {
+  assertVerifiedEvidence(evidence, "shop_handover", {
+    proofSlots: ["Production"],
+    evidenceTypes: ["Photo", "Signed Document"],
+  });
+  if (evidence?.source_system !== "ironwrap-pwa" || !evidence?.device_action_id) {
+    throw new Error("shop_handover_evidence_provenance_invalid");
+  }
+  const contentLength = Number(evidence?.content_length);
+  if (
+    !evidence?.r2_key
+    || !evidence?.captured_at
+    || !evidence?.content_type
+    || !Number.isInteger(contentLength)
+    || contentLength <= 0
+  ) {
+    throw new Error("shop_handover_evidence_provenance_invalid");
+  }
+}
+
 function customerDecisionEvidencePolicy(decisionType) {
   if (decisionType === "Scope Approval") {
     return { proofSlots: ["Contract"], evidenceTypes: ["Signed Document", "Email"] };
@@ -7959,6 +8130,30 @@ function parseShopFinalQualityPayloadJson(raw) {
   return { ...result.data, inspections, yields, bundles };
 }
 
+function parseShopHandoverPayloadJson(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("shop_handover_payload_invalid");
+  }
+  const result = ShopOrderHandoverPayloadSchema.safeParse(parsed);
+  if (!result.success) throw new Error("shop_handover_payload_invalid");
+  return result.data;
+}
+
+function parseShopBillingBasisPayloadJson(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("shop_billing_basis_payload_invalid");
+  }
+  const result = ShopOrderBillingBasisPayloadSchema.safeParse(parsed);
+  if (!result.success) throw new Error("shop_billing_basis_payload_invalid");
+  return result.data;
+}
+
 function controlledItemSnapshot(item) {
   return {
     controlled_item: snapshotValues(item, ["name", "controlled_item_id", "status", "modified"]),
@@ -8207,6 +8402,68 @@ function shopOrderFinalQualitySnapshot(order, lots = [], evidence = [], sources 
   return snapshot;
 }
 
+function shopOrderHandoverSnapshot(order, evidence = [], sources = {}) {
+  const snapshot = shopOrderSnapshot(order);
+  Object.assign(snapshot.shop_order, snapshotValues(order, [
+    "ready_at",
+    "handed_over_to",
+    "handed_over_at",
+    "handoff_evidence",
+    "invoice_payment_milestone",
+    "invoice_ready_at",
+  ]));
+  snapshot.bundles = (Array.isArray(order.bundles) ? order.bundles : []).map((row) => snapshotValues(row, [
+    "bundle_id",
+    "line_no",
+    "material_lot",
+    "piece_identity",
+    "accepted_quantity",
+    "unit",
+    "label_text",
+    "handoff_status",
+    "handed_over_to",
+    "handed_over_at",
+    "handoff_evidence",
+    "condition",
+    "needs_review",
+  ]));
+  snapshot.evidence = evidence.map((item) => snapshotValues(item, [
+    "name",
+    "evidence_id",
+    "roof_job",
+    "sync_state",
+    "modified",
+  ]));
+  snapshot.source_records = Object.fromEntries(
+    Object.entries(sources).map(([name, source]) => [
+      name,
+      snapshotValues(source, ["name", "roof_job", "status", "modified"]),
+    ]),
+  );
+  return snapshot;
+}
+
+function paymentMilestoneSnapshot(paymentMilestone) {
+  return snapshotValues(paymentMilestone, [
+    "name",
+    "payment_milestone_id",
+    "roof_job",
+    "shop_order",
+    "milestone_type",
+    "status",
+    "qb_entity_type",
+    "qb_entity_id",
+    "raw_key",
+    "modified",
+  ]);
+}
+
+function shopOrderBillingBasisSnapshot(order, paymentMilestone, handoffEvidence, sources) {
+  const snapshot = shopOrderHandoverSnapshot(order, [handoffEvidence], sources);
+  snapshot.payment_milestone = paymentMilestoneSnapshot(paymentMilestone);
+  return snapshot;
+}
+
 function summarizeControlledItem(item) {
   return {
     controlled_item_id: item.controlled_item_id ?? item.name,
@@ -8310,6 +8567,58 @@ function assertShopOrderReadyForFinalQuality(order, shopOrderId) {
   }
   if (order.status !== "In Fabrication") {
     throw new Error("shop_order_not_ready_for_final_quality");
+  }
+}
+
+function assertShopOrderReadyForHandover(order, shopOrderId) {
+  if (!order || order.name !== shopOrderId || order.shop_order_id !== shopOrderId) {
+    throw new Error("shop_order_identity_mismatch");
+  }
+  if (order.status !== "Ready") throw new Error("shop_order_not_ready_for_handover");
+  const bundles = Array.isArray(order.bundles) ? order.bundles : [];
+  if (!bundles.length || bundles.some((bundle) => (
+    bundle.handoff_status !== "Prepared"
+    || bundle.handed_over_to
+    || bundle.handed_over_at
+    || bundle.handoff_evidence
+  ))) {
+    throw new Error("shop_handover_bundle_state_invalid");
+  }
+  if (order.handed_over_to || order.handed_over_at || order.handoff_evidence) {
+    throw new Error("shop_handover_already_recorded");
+  }
+}
+
+function assertShopOrderReadyForBillingBasis(order, shopOrderId) {
+  if (!order || order.name !== shopOrderId || order.shop_order_id !== shopOrderId) {
+    throw new Error("shop_order_identity_mismatch");
+  }
+  if (order.status !== "Handed Over") {
+    throw new Error("shop_order_not_ready_for_billing_basis");
+  }
+  if (order.invoice_payment_milestone || order.invoice_ready_at) {
+    throw new Error("shop_billing_basis_already_recorded");
+  }
+}
+
+function assertShopBillingBasis(order, paymentMilestone) {
+  if (
+    !paymentMilestone
+    || paymentMilestone.roof_job !== order.roof_job
+    || paymentMilestone.shop_order !== order.shop_order_id
+  ) {
+    throw new Error("shop_billing_basis_lineage_mismatch");
+  }
+  if (!["Webhook Seen", "Needs Review", "Matched"].includes(paymentMilestone.status)) {
+    throw new Error("shop_billing_basis_unverified");
+  }
+  if (
+    paymentMilestone.milestone_type !== "Invoice"
+    || paymentMilestone.qb_entity_type !== "Invoice"
+    || !paymentMilestone.qb_entity_id
+    || !paymentMilestone.raw_key
+  ) {
+    throw new Error("shop_billing_basis_unverified");
   }
 }
 
@@ -9353,6 +9662,148 @@ async function buildRecordFinalShopQualityPreview(config, shopOrderId, finalQual
       ...(payload.action === "fail_to_quality_hold"
         ? { reason: payload.reason, quality_hold_reason: payload.reason }
         : { ready_at: "Frappe server time at execution" }),
+    },
+  };
+}
+
+async function buildRecordShopHandoverPreview(config, shopOrderId, handoverPayloadJson) {
+  const payload = parseShopHandoverPayloadJson(handoverPayloadJson);
+  const order = await readResource(config, "Shop Order", shopOrderId);
+  assertShopOrderReadyForHandover(order, shopOrderId);
+  const [materialTakeoff, supplierOrder, workPackage, handoffEvidence] = await Promise.all([
+    readResource(config, "Material Takeoff", order.material_takeoff),
+    readResource(config, "Supplier Order", order.supplier_order),
+    readResource(config, "Work Package", order.work_package),
+    readResource(config, "Evidence Item", payload.handoff_evidence),
+  ]);
+  assertShopSourceRecord(materialTakeoff, {
+    doctype: "Material Takeoff",
+    name: order.material_takeoff,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Approved"]),
+  });
+  assertShopSourceRecord(supplierOrder, {
+    doctype: "Supplier Order",
+    name: order.supplier_order,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Partially Received", "Received"]),
+  });
+  assertShopSourceRecord(workPackage, {
+    doctype: "Work Package",
+    name: order.work_package,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Released", "Acknowledged", "In Progress"]),
+  });
+  if (handoffEvidence.roof_job !== order.roof_job) {
+    throw new Error("shop_handover_evidence_job_mismatch");
+  }
+  assertShopHandoverEvidence(handoffEvidence);
+  const sources = {
+    material_takeoff: materialTakeoff,
+    supplier_order: supplierOrder,
+    work_package: workPackage,
+  };
+  const expectedSnapshotSha256 = digest(
+    shopOrderHandoverSnapshot(order, [handoffEvidence], sources),
+  );
+  return {
+    would_write: false,
+    required_tool: "request_record_shop_handover",
+    target: { doctype: "Shop Order", name: shopOrderId },
+    before: summarizeShopOrder(order),
+    source_statuses: {
+      material_takeoff: materialTakeoff.status ?? "",
+      supplier_order: supplierOrder.status ?? "",
+      work_package: workPackage.status ?? "",
+    },
+    expected_snapshot_sha256: expectedSnapshotSha256,
+    next_status: "Handed Over",
+    approval_request: {
+      write_tool: "request_record_shop_handover",
+      target: { doctype: "Shop Order", name: shopOrderId },
+      expected_snapshot_sha256: expectedSnapshotSha256,
+    },
+    handover: {
+      from_status: order.status,
+      to_status: "Handed Over",
+      handed_over_to: payload.handed_over_to,
+      handoff_evidence: handoffEvidence.evidence_id ?? handoffEvidence.name,
+      bundles: order.bundles.map((bundle) => ({
+        bundle_id: bundle.bundle_id,
+        line_no: bundle.line_no,
+        accepted_quantity: snapshotText(bundle.accepted_quantity),
+        unit: bundle.unit,
+        handoff_status: "Handed Over",
+      })),
+    },
+  };
+}
+
+async function buildRecordShopBillingBasisPreview(config, shopOrderId, billingBasisPayloadJson) {
+  const payload = parseShopBillingBasisPayloadJson(billingBasisPayloadJson);
+  const order = await readResource(config, "Shop Order", shopOrderId);
+  assertShopOrderReadyForBillingBasis(order, shopOrderId);
+  const [materialTakeoff, supplierOrder, workPackage, handoffEvidence, paymentMilestone] = await Promise.all([
+    readResource(config, "Material Takeoff", order.material_takeoff),
+    readResource(config, "Supplier Order", order.supplier_order),
+    readResource(config, "Work Package", order.work_package),
+    readResource(config, "Evidence Item", order.handoff_evidence),
+    readResource(config, "Payment Milestone", payload.payment_milestone_id),
+  ]);
+  assertShopSourceRecord(materialTakeoff, {
+    doctype: "Material Takeoff",
+    name: order.material_takeoff,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Approved"]),
+  });
+  assertShopSourceRecord(supplierOrder, {
+    doctype: "Supplier Order",
+    name: order.supplier_order,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Partially Received", "Received"]),
+  });
+  assertShopSourceRecord(workPackage, {
+    doctype: "Work Package",
+    name: order.work_package,
+    roofJob: order.roof_job,
+    allowedStatuses: new Set(["Released", "Acknowledged", "In Progress"]),
+  });
+  if (handoffEvidence.roof_job !== order.roof_job) {
+    throw new Error("shop_handover_evidence_job_mismatch");
+  }
+  assertShopHandoverEvidence(handoffEvidence);
+  assertShopBillingBasis(order, paymentMilestone);
+  const sources = {
+    material_takeoff: materialTakeoff,
+    supplier_order: supplierOrder,
+    work_package: workPackage,
+  };
+  const expectedSnapshotSha256 = digest(
+    shopOrderBillingBasisSnapshot(order, paymentMilestone, handoffEvidence, sources),
+  );
+  return {
+    would_write: false,
+    required_tool: "request_record_shop_billing_basis",
+    target: { doctype: "Shop Order", name: shopOrderId },
+    before: summarizeShopOrder(order),
+    source_statuses: {
+      material_takeoff: materialTakeoff.status ?? "",
+      supplier_order: supplierOrder.status ?? "",
+      work_package: workPackage.status ?? "",
+    },
+    expected_snapshot_sha256: expectedSnapshotSha256,
+    next_status: "Invoice Ready",
+    approval_request: {
+      write_tool: "request_record_shop_billing_basis",
+      target: { doctype: "Shop Order", name: shopOrderId },
+      expected_snapshot_sha256: expectedSnapshotSha256,
+    },
+    billing_basis: {
+      from_status: order.status,
+      to_status: "Invoice Ready",
+      payment_milestone_id: paymentMilestone.payment_milestone_id ?? paymentMilestone.name,
+      qb_entity_id: paymentMilestone.qb_entity_id,
+      status: paymentMilestone.status,
     },
   };
 }

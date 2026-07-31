@@ -3,7 +3,14 @@ import { createHash, createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import {
+  handleAuthenticatedRoute,
+  recoverPendingLeadTriageOutbox,
+} from "../src/app-api.ts";
+import {
+  claimApprovalExecution,
+  getApprovalRequest,
+} from "../src/approval-store.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 
 const TENANT = "ironwrap";
@@ -18,6 +25,7 @@ class SqliteD1 {
     this.raw.exec("PRAGMA foreign_keys = ON");
     this.raw.exec(readFileSync(new URL("../migrations/0011_app_bff_auth.sql", import.meta.url), "utf8"));
     this.raw.exec(readFileSync(new URL("../migrations/0016_approval_requests.sql", import.meta.url), "utf8"));
+    this.raw.exec(readFileSync(new URL("../migrations/0027_transition_kernel.sql", import.meta.url), "utf8"));
     const now = new Date().toISOString();
     const insert = this.raw.prepare(
       `INSERT INTO app_users (
@@ -49,6 +57,7 @@ class SqliteD1 {
 function env(db = new SqliteD1()): AppEnv {
   return {
     DB: db as never,
+    APP_TENANT_ID: TENANT,
     APP_ALLOW_INSECURE_LOCAL: "true",
     APP_APPROVAL_BROKER_URL: "http://127.0.0.1:8788",
     APP_APPROVAL_BROKER_KEY_ID: KEY_ID,
@@ -470,6 +479,45 @@ test("an unverified broker execute result becomes a non-retryable uncertainty", 
     assert.equal(reconciledJson.approval.state, "execution_uncertain");
     assert.equal(reconciledJson.approval.reconciliation.outcome, "inconclusive");
     assert.match(reconciledJson.approval.reconciliation.evidence, /no second write/i);
+  } finally {
+    broker.restore();
+  }
+});
+
+test("outbox recovery performs exactly one first dispatch after an expired no-attempt lease", async () => {
+  const appEnv = env();
+  const broker = installBrokerMock();
+  try {
+    const prepared = await handleAuthenticatedRoute(
+      request("/api/v1/approvals/lead-triage", triageBody("lead:api-recovery"), "prepare-api-recovery-0001"),
+      appEnv,
+      auth("owner"),
+    );
+    const approval = await prepared.json() as { approval: { id: string; version: number } };
+    assert.equal(prepared.status, 201);
+
+    const now = new Date();
+    const claimed = await claimApprovalExecution(appEnv, {
+      tenantId: TENANT,
+      requestId: approval.approval.id,
+      expectedVersion: approval.approval.version,
+      decisionIdempotencyKey: "decision-api-recovery-0001",
+      approvedByUserId: "appu_owner_0001",
+      approvedByFrappeUser: APPROVER,
+      now: now.toISOString(),
+      leaseExpiresAt: new Date(now.getTime() - 1_000).toISOString(),
+    });
+    assert.equal(claimed.kind, "claimed");
+
+    await recoverPendingLeadTriageOutbox(appEnv);
+    const completed = await getApprovalRequest(appEnv, TENANT, approval.approval.id);
+    assert.equal(completed?.state, "executed");
+    await recoverPendingLeadTriageOutbox(appEnv);
+    assert.deepEqual(
+      broker.calls,
+      ["/v1/lead-triage/preview", "/v1/lead-triage/execute"],
+      "only a never-attempted outbox may recover a broker dispatch",
+    );
   } finally {
     broker.restore();
   }

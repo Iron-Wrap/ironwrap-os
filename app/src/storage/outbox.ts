@@ -1,7 +1,9 @@
 import { getDatabase } from "./db";
 import { notifyOutboxChanged } from "./outbox-store";
+import { outboxActionKinds } from "./outbox-types";
 import type {
   OutboxAction,
+  OutboxActionKind,
   OutboxBlobRecord,
   OutboxConflict,
   OutboxErrorDetail,
@@ -9,6 +11,16 @@ import type {
   OutboxVerification,
   SaveOutboxActionInput,
 } from "./outbox-types";
+
+// The browser outbox is intentionally limited to field evidence and durable
+// acknowledgement/stop intents. Lifecycle changes must use a fresh online read.
+const fieldActionEndpoints: Record<OutboxActionKind, RegExp> = {
+  field_checkin: /^\/api\/v1\/jobs\/[^/?#]+\/check-ins$/,
+  work_package_acknowledgement: /^\/api\/v1\/jobs\/[^/?#]+\/work-package\/acknowledgements$/,
+  work_package_stop: /^\/api\/v1\/jobs\/[^/?#]+\/work-package\/stop-work$/,
+};
+const WORK_PACKAGE_ID_MAX_LENGTH = 140;
+const STOP_WORK_REASON_MAX_LENGTH = 1_000;
 
 const allowedTransitions: Record<OutboxState, readonly OutboxState[]> = {
   saved_locally: ["queued"],
@@ -437,7 +449,9 @@ function assertOutboxInput(input: SaveOutboxActionInput): void {
   if (!input.userId.trim() || input.userId.length > 128) {
     throw new Error("Outbox user identity is required.");
   }
-  if (!input.kind.trim()) throw new Error("Outbox action kind is required.");
+  if (!outboxActionKinds.includes(input.kind)) {
+    throw new Error("This action cannot be queued for offline replay.");
+  }
   if (
     !input.endpoint.startsWith("/api/v1/") ||
     input.endpoint.startsWith("//") ||
@@ -445,10 +459,57 @@ function assertOutboxInput(input: SaveOutboxActionInput): void {
   ) {
     throw new Error("Outbox endpoints must use a same-origin /api/v1/ path.");
   }
+  if (!fieldActionEndpoints[input.kind].test(input.endpoint)) {
+    throw new Error("This action cannot be queued for offline replay.");
+  }
+  if (input.method !== undefined && input.method !== "POST") {
+    throw new Error("Offline field actions must use POST.");
+  }
+  if (input.kind !== "field_checkin" && (input.attachments?.length ?? 0) > 0) {
+    throw new Error("Work Package actions cannot include attachments.");
+  }
+  if (input.kind === "work_package_acknowledgement") {
+    assertWorkPackageAcknowledgementPayload(input.payload);
+  }
+  if (input.kind === "work_package_stop") assertWorkPackageStopPayload(input.payload);
   for (const attachment of input.attachments ?? []) {
     if (!attachment.fileName.trim()) throw new Error("Every attachment needs a file name.");
   }
   assertNoSessionSecrets(input.payload);
+}
+
+function assertWorkPackageAcknowledgementPayload(payload: unknown): void {
+  const value = objectPayload(payload);
+  if (Object.keys(value).length !== 1 || !("work_package_id" in value)) {
+    throw new Error("Work Package acknowledgement payload is invalid.");
+  }
+  assertBoundedText(value.work_package_id, "Work Package ID", WORK_PACKAGE_ID_MAX_LENGTH);
+}
+
+function assertWorkPackageStopPayload(payload: unknown): void {
+  const value = objectPayload(payload);
+  if (
+    Object.keys(value).length !== 2 ||
+    !("work_package_id" in value) ||
+    !("blocker_reason" in value)
+  ) {
+    throw new Error("Stop Work payload is invalid.");
+  }
+  assertBoundedText(value.work_package_id, "Work Package ID", WORK_PACKAGE_ID_MAX_LENGTH);
+  assertBoundedText(value.blocker_reason, "Stop Work reason", STOP_WORK_REASON_MAX_LENGTH);
+}
+
+function objectPayload(payload: unknown): Record<string, unknown> {
+  if (!payload || Array.isArray(payload) || typeof payload !== "object") {
+    throw new Error("Work Package action payload is invalid.");
+  }
+  return payload as Record<string, unknown>;
+}
+
+function assertBoundedText(value: unknown, label: string, maximumLength: number): void {
+  if (typeof value !== "string" || !value.trim() || value.length > maximumLength) {
+    throw new Error(`${label} is required.`);
+  }
 }
 
 function assertNoSessionSecrets(value: unknown, path = "payload"): void {

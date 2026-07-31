@@ -63,11 +63,13 @@ describe("apiRequest", () => {
       body: { version: 1 },
       csrfToken: "csrf-token",
       idempotencyKey: "approval:test-key-0001",
+      deviceActionId: "device-action-0001",
       fetcher,
     });
 
     const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
     expect(headers.get("Idempotency-Key")).toBe("approval:test-key-0001");
+    expect(headers.get("X-Device-Action-Id")).toBe("device-action-0001");
     expect(headers.get("X-CSRF-Token")).toBe("csrf-token");
   });
 

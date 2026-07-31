@@ -24,6 +24,7 @@ class SqliteD1 {
     this.raw.exec("PRAGMA foreign_keys = ON");
     this.raw.exec(readFileSync(new URL("../migrations/0011_app_bff_auth.sql", import.meta.url), "utf8"));
     this.raw.exec(readFileSync(new URL("../migrations/0016_approval_requests.sql", import.meta.url), "utf8"));
+    this.raw.exec(readFileSync(new URL("../migrations/0027_transition_kernel.sql", import.meta.url), "utf8"));
     this.raw.prepare(
       `INSERT INTO app_users (
         user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,

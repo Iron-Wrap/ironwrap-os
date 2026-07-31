@@ -1,0 +1,19 @@
+{
+  "schema_version": "ironwrap.lead-triage-shadow-policy.v1",
+  "policy_id": "lead-triage-shadow-authority",
+  "policy_version": "v1",
+  "tenant_id": "ironwrap",
+  "action": "request_mark_lead_triaged",
+  "mode": "shadow",
+  "status": "shadow",
+  "valid_from": "2026-07-31T00:00:00.000Z",
+  "valid_until": "2030-01-01T00:00:00.000Z",
+  "max_fact_age_seconds": 300,
+  "allowed_facts": {
+    "source": "owned_lead_envelope",
+    "triage_status": "Untriaged",
+    "scope": "local_lead_triage_annotation",
+    "requested_effects": ["local_lead_triage_annotation"],
+    "transport_statuses": ["pushed", "reconciled"]
+  }
+}

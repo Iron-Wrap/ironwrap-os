@@ -87,3 +87,24 @@ export const customerPortalResponseSchema = z
   .strict();
 
 export type CustomerPortalResponse = z.infer<typeof customerPortalResponseSchema>;
+
+export const customerContractAcceptanceChallengeResponseSchema = z
+  .object({
+    status: z.literal("challenge_sent"),
+    expires_at: z.string().min(1).max(64),
+  })
+  .strict();
+
+export const customerContractAcceptanceConfirmResponseSchema = z
+  .object({
+    status: z.union([z.literal("accepted"), z.literal("uncertain")]),
+    acceptance_id: z.string().min(8).max(140),
+  })
+  .strict();
+
+export type CustomerContractAcceptanceChallengeResponse = z.infer<
+  typeof customerContractAcceptanceChallengeResponseSchema
+>;
+export type CustomerContractAcceptanceConfirmResponse = z.infer<
+  typeof customerContractAcceptanceConfirmResponseSchema
+>;

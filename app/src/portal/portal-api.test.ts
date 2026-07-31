@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { loadCustomerPortal } from "./portal-api";
+import {
+  confirmCustomerContractAcceptance,
+  loadCustomerPortal,
+  requestCustomerContractAcceptanceChallenge,
+} from "./portal-api";
 
 const portal = {
   version: 1,
@@ -29,6 +33,52 @@ describe("customer portal API", () => {
         credentials: "omit",
         cache: "no-store",
         body: JSON.stringify({ token: "a".repeat(43) }),
+      }),
+    );
+  });
+
+  it("keeps both acceptance steps on fixed public paths with omitted credentials", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({ status: "challenge_sent", expires_at: "2026-08-01T10:15:00.000Z" }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ status: "accepted", acceptance_id: "acceptance-0001" }),
+      );
+
+    await requestCustomerContractAcceptanceChallenge("b".repeat(43), fetcher);
+    await confirmCustomerContractAcceptance(
+      {
+        token: "c".repeat(43),
+        signerName: "Customer Example",
+        idempotencyKey: "acceptance-key-0001",
+      },
+      fetcher,
+    );
+
+    expect(fetcher.mock.calls[0]?.[0]).toBe("/api/v1/customer-portal/acceptance/challenge");
+    expect(fetcher.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        credentials: "omit",
+        cache: "no-store",
+        body: JSON.stringify({ token: "b".repeat(43) }),
+      }),
+    );
+    expect(fetcher.mock.calls[1]?.[0]).toBe("/api/v1/customer-portal/acceptance/confirm");
+    const headers = new Headers(fetcher.mock.calls[1]?.[1]?.headers);
+    expect(headers.get("Idempotency-Key")).toBe("acceptance-key-0001");
+    expect(fetcher.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        credentials: "omit",
+        cache: "no-store",
+        body: JSON.stringify({
+          token: "c".repeat(43),
+          signer_name: "Customer Example",
+          accepted: true,
+        }),
       }),
     );
   });

@@ -64,6 +64,7 @@ node tools/validate-erpnext-doctypes.mjs
 node tools/validate-tenant-config.mjs
 node tools/validate-hermes-config.mjs
 node tools/validate-newo-config.mjs
+node tools/validate-lead-triage-shadow-authority.mjs
 node tools/applicad-xml-proof.mjs --check
 node tools/production-readiness.mjs contract
 (cd workers-bus && npm test && npm run typecheck)

@@ -47,7 +47,8 @@
     {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Production"},
     {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Finance"},
     {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Closeout"},
-    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support"}
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Customer Acceptance Service"}
   ],
   "sort_field": "modified",
   "sort_order": "DESC",

@@ -15,7 +15,13 @@ const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GMAIL = "https://gmail.googleapis.com/gmail/v1";
 const DRIVE = "https://www.googleapis.com/drive/v3";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3";
+const DOCS = "https://docs.googleapis.com/v1";
 const SCOPES = "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/drive";
+// Docs scope is requested ONLY by proposal generation so existing Gmail/Drive
+// flows keep minting under the already-authorized scope set. Domain-wide
+// delegation must list the documents scope before generateProposalDoc works;
+// until then its token mint fails and callers surface the error.
+const DOCS_SCOPES = "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/documents";
 
 export const JOB_SUBFOLDERS = [
   "01 Info & Notes", "02 Measurements & Reports", "03 Photos",
@@ -44,7 +50,7 @@ export function jobFolderName(jobNumber: string, customer?: string | null, brand
 }
 
 // ---------------------------------------------------------------- token (cached per isolate)
-let cached: { token: string; exp: number; sub: string } | null = null;
+const cachedTokens = new Map<string, { token: string; exp: number }>();
 
 const b64url = (data: string | Uint8Array): string => {
   const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
@@ -62,14 +68,16 @@ function pemToPkcs8(pem: string): ArrayBuffer {
 }
 
 /** Mint (or reuse) an access token impersonating `sub` via domain-wide delegation. */
-export async function googleToken(env: Env, sub: string): Promise<string> {
+export async function googleToken(env: Env, sub: string, scopes: string = SCOPES): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  if (cached && cached.sub === sub && cached.exp - 60 > now) return cached.token;
+  const cacheKey = `${sub}\n${scopes}`;
+  const cached = cachedTokens.get(cacheKey);
+  if (cached && cached.exp - 60 > now) return cached.token;
 
   const sa = JSON.parse(env.GOOGLE_SERVICE_ACCOUNT_JSON) as { client_email: string; private_key: string };
   const unsigned =
     b64url(JSON.stringify({ alg: "RS256", typ: "JWT" })) + "." +
-    b64url(JSON.stringify({ iss: sa.client_email, sub, scope: SCOPES, aud: TOKEN_URL, iat: now, exp: now + 3600 }));
+    b64url(JSON.stringify({ iss: sa.client_email, sub, scope: scopes, aud: TOKEN_URL, iat: now, exp: now + 3600 }));
   const key = await crypto.subtle.importKey(
     "pkcs8", pemToPkcs8(sa.private_key), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
   const sig = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(unsigned)));
@@ -81,7 +89,7 @@ export async function googleToken(env: Env, sub: string): Promise<string> {
   });
   const j = (await res.json()) as { access_token?: string; error?: string; error_description?: string };
   if (!j.access_token) throw new Error(`google_token: ${j.error ?? res.status} ${j.error_description ?? ""}`.slice(0, 200));
-  cached = { token: j.access_token, exp: now + 3600, sub };
+  cachedTokens.set(cacheKey, { token: j.access_token, exp: now + 3600 });
   return j.access_token;
 }
 
@@ -165,6 +173,87 @@ export async function ensureJobFolder(
   const folder = await driveCreateFolder(env, token, jobFolderName(jobNumber, customer, brand), root);
   for (const sub of JOB_SUBFOLDERS) await driveCreateFolder(env, token, sub, folder.id);
   return { id: folder.id, name: jobFolderName(jobNumber, customer, brand), created: true };
+}
+
+// ---------------------------------------------------------------- docs (proposal generation)
+//
+// Proposals are Google Docs copied from a tenant template and merged via
+// replaceAllText over {{placeholder}} tokens. The template Doc id is tenant
+// data (config/Frappe), not code. This replaces hand-built PDF generation:
+// the merged Doc lives in the job's "05 Contract & Estimates" subfolder where
+// the rest of the filing pipeline already looks.
+
+const MAX_DOC_VALUE_CHARS = 5000;
+
+/** Merge-safe scalar: control chars stripped (tab/newline kept), bounded. Pure. */
+export function sanitizeDocValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "").slice(0, MAX_DOC_VALUE_CHARS);
+}
+
+/** Docs batchUpdate requests replacing every {{key}} with its sanitized value. Pure. */
+export function docsReplaceRequests(
+  replacements: Record<string, string | number | null | undefined>,
+): Array<{ replaceAllText: { containsText: { text: string; matchCase: true }; replaceText: string } }> {
+  return Object.entries(replacements).map(([key, value]) => ({
+    replaceAllText: {
+      containsText: { text: `{{${key}}}`, matchCase: true as const },
+      replaceText: sanitizeDocValue(value),
+    },
+  }));
+}
+
+/** Proposal Doc display name: JN number first, matching job-folder convention. Pure. */
+export function proposalDocName(jobNumber: string, title?: string | null): string {
+  const base = `${safeSegment(jobNumber)} Proposal`;
+  return title ? `${base} - ${safeSegment(title)}` : base;
+}
+
+export interface ProposalDocReceipt {
+  docId: string;
+  url: string | null;
+  folderId: string;
+}
+
+/**
+ * Copy the tenant proposal template into the job's "05 Contract & Estimates"
+ * subfolder and merge {{placeholders}}. Needs the documents scope authorized
+ * for domain-wide delegation; a missing grant fails the token mint here and
+ * never disturbs Gmail/Drive flows on the standard scope set.
+ */
+export async function generateProposalDoc(env: Env, input: {
+  jobNumber: string;
+  customer?: string | null;
+  brand?: string | null;
+  templateDocId: string;
+  title?: string | null;
+  replacements: Record<string, string | number | null | undefined>;
+}): Promise<ProposalDocReceipt> {
+  const token = await googleToken(env, env.FROM_EMAIL, DOCS_SCOPES);
+  const jobFolder = await ensureJobFolder(env, input.jobNumber, input.customer, input.brand);
+  const contractFolder = await driveFind(env, token,
+    `'${jobFolder.id}' in parents and mimeType='application/vnd.google-apps.folder' and name='05 Contract & Estimates' and trashed=false`);
+  const parentId = contractFolder?.id ?? jobFolder.id;
+
+  const copyRes = await fetch(`${DRIVE}/files/${encodeURIComponent(input.templateDocId)}/copy?${driveQS}&fields=id,webViewLink`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ name: proposalDocName(input.jobNumber, input.title), parents: [parentId] }),
+  });
+  if (!copyRes.ok) throw new Error(`docs_copy_${copyRes.status}: ${(await copyRes.text()).slice(0, 200)}`);
+  const copied = (await copyRes.json()) as { id?: string; webViewLink?: string };
+  if (!copied.id) throw new Error("docs_copy_invalid_receipt");
+
+  const requests = docsReplaceRequests(input.replacements);
+  if (requests.length) {
+    const mergeRes = await fetch(`${DOCS}/documents/${encodeURIComponent(copied.id)}:batchUpdate`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ requests }),
+    });
+    if (!mergeRes.ok) throw new Error(`docs_merge_${mergeRes.status}: ${(await mergeRes.text()).slice(0, 200)}`);
+  }
+  return { docId: copied.id, url: copied.webViewLink ?? null, folderId: parentId };
 }
 
 async function ensureSubfolder(env: Env, token: string, parentId: string, name: string): Promise<string> {

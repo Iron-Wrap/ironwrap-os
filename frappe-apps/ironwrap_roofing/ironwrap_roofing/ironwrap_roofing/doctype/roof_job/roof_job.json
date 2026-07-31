@@ -62,7 +62,9 @@
     {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Field"},
     {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Finance"},
     {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Closeout", "write": 1},
-    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support"}
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Customer Acceptance Service"},
+    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Facet Design Projection Service"}
   ],
   "sort_field": "modified",
   "sort_order": "DESC",

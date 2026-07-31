@@ -11,8 +11,10 @@ from unittest.mock import patch
 from setuptools import find_namespace_packages
 
 from ironwrap_roofing.access_control import (
+    ALL_IRONWRAP_ROLES,
     DOCTYPE_ROLE_MATRIX,
     IRONWRAP_ROLES,
+    LAUNCH_PROOF_READER_ROLE,
     SYSTEM_MANAGER,
     expected_permissions,
 )
@@ -36,6 +38,7 @@ TOP_LEVEL_DOCTYPES = {
     "Communication Event",
     "Completion Packet",
     "Contract Acceptance",
+    "Controlled Item",
     "Crew Profile",
     "Customer Decision",
     "Customer Quote",
@@ -48,9 +51,11 @@ TOP_LEVEL_DOCTYPES = {
     "Job Assignment",
     "Job Compliance Record",
     "Lead Envelope",
+    "Material Lot",
     "Market Watch Item",
     "Material Takeoff",
     "Measurement Report",
+    "Nonconformance",
     "Option Package",
     "Payment Milestone",
     "Price Book Rule",
@@ -63,6 +68,7 @@ TOP_LEVEL_DOCTYPES = {
     "Roofing Customer",
     "Roofing Property",
     "Safety Plan",
+    "Shop Order",
     "Scope Clause",
     "Supplier Order",
     "Supplier Profile",
@@ -71,6 +77,8 @@ TOP_LEVEL_DOCTYPES = {
     "Visual Property Model",
     "Warranty Packet",
     "White-Label Tenant",
+    "Work Package",
+    "Work Package Event",
 }
 CHILD_DOCTYPES = {
     "Change Order Item",
@@ -81,6 +89,14 @@ CHILD_DOCTYPES = {
     "Supplier Order Item",
     "Supplier Quote Item",
     "Safety Acknowledgement",
+    "Shop Bundle",
+    "Shop Inspection",
+    "Shop Material Allocation",
+    "Shop Operation",
+    "Shop Order Line",
+    "Shop Yield",
+    "Work Package Hold Point",
+    "Work Package Step",
 }
 FRAPPE_CORE_LINK_TARGETS = {"User"}
 NEW_BLUEPRINT_FIELDS = {
@@ -202,15 +218,15 @@ NEW_BLUEPRINT_FIELDS = {
 NEW_BLUEPRINT_FIELDS.update(
     {
         "Appointment Request": {"appointment_request_id", "reception_session", "request_status", "booking_mode", "preferred_windows_json", "timezone", "requested_at", "raw_key", "payload_hash"},
-        "Crew Profile": {"crew_profile_id", "crew_name", "status", "primary_lead", "members", "home_region", "timezone"},
+        "Crew Profile": {"crew_profile_id", "crew_name", "status", "primary_lead", "members", "home_region", "timezone", "competency_status", "competency_checked_at", "competency_expiry", "equipment_status", "equipment_checked_at", "equipment_expiry", "wcb_status", "wcb_checked_at", "wcb_expiry", "active_stop", "active_stop_at", "active_stop_reason"},
         "Job Assignment": {"assignment_id", "roof_job", "status", "crew_profile", "assigned_user", "scheduled_start", "scheduled_end", "supersedes", "correction_reason"},
         "Change Order": {"change_order_id", "roof_job", "version", "status", "subtotal", "tax_amount", "total_amount", "tax_policy_snapshot_json", "items", "contract_acceptance", "supersedes", "correction_reason"},
         "Safety Plan": {"safety_plan_id", "roof_job", "version", "status", "hazard_summary", "controls", "emergency_plan", "acknowledgements", "supersedes", "correction_reason"},
         "Job Compliance Record": {"compliance_record_id", "roof_job", "jurisdiction", "record_type", "status", "required_before_gate", "evidence_item", "owner_user", "due_date"},
         "Communication Consent": {"consent_id", "channel", "purpose", "status", "jurisdiction", "consent_basis", "captured_at", "proof_evidence", "supersedes"},
         "Customer Decision": {"decision_id", "roof_job", "decision_type", "status", "decision_value", "decided_at", "evidence_item", "supersedes"},
-        "Contract Acceptance": {"acceptance_id", "roof_job", "contract_version", "status", "accepted_at", "evidence_item", "terms_hash", "document_checksum", "supersedes"},
-        "Integration Reconciliation": {"reconciliation_id", "system_name", "external_entity_id", "status", "diff_json", "source_payload_hash", "local_payload_hash", "resolution_evidence"},
+        "Contract Acceptance": {"acceptance_id", "roof_job", "contract_version", "status", "accepted_at", "evidence_item", "proposal_evidence_pack", "terms_hash", "terms_snapshot_json", "document_checksum", "supersedes"},
+        "Integration Reconciliation": {"reconciliation_id", "system_name", "external_entity_id", "status", "raw_key", "diff_json", "source_payload_hash", "local_payload_hash", "resolution_evidence"},
         "Insurance Supplement": {"insurance_supplement_id", "roof_job", "customer_quote", "change_order", "version", "status", "carrier_name", "claim_reference", "policy_reference", "date_of_loss", "adjuster_reference", "supplement_basis", "measurement_report", "invoice_required", "invoice_exception_reason", "evidence", "evidence_manifest_json", "approved_by", "approved_at", "submitted_at", "carrier_response_at", "resolution_summary", "closed_at", "supersedes", "correction_reason"},
         "Tenant Export Run": {"export_run_id", "tenant", "status", "scope_json", "manifest_key", "manifest_checksum", "archive_key", "archive_checksum", "encryption_key_ref"},
         "Evidence Item": {"evidence_id", "device_action_id", "proof_owner", "proof_slot", "content_checksum", "capture_actor", "latitude", "longitude", "sync_state", "correction_of"},
@@ -218,8 +234,15 @@ NEW_BLUEPRINT_FIELDS.update(
         "Production Gate State": {"gate_id", "owner_user", "assigned_at", "due_at"},
         "Roof Job": {"roof_job_id", "workflow_profile", "locale_policy_version", "locale_policy_snapshot_json"},
         "Customer Quote": {"customer_quote_id", "quote_version", "price_book_version", "price_rule_snapshot_json", "subtotal", "tax_amount", "tax_policy_snapshot_json", "amount_due", "amount_paid", "balance_due", "payment_truth_source", "supersedes"},
-        "Payment Milestone": {"payment_milestone_id", "milestone_version", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due", "tax_policy_snapshot_json", "truth_source", "supersedes"},
+        "Controlled Item": {"controlled_item_id", "status", "revision", "item_kind", "unit", "profile", "gauge", "coating", "colour", "dimension_spec", "tolerance", "lot_required", "certificate_required", "source_ref", "approved_by", "approved_at", "approval_note"},
+        "Supplier Order": {"supplier_order_id", "roof_job", "material_takeoff", "source_quote", "supplier", "status", "prepared_at", "approved_by", "approved_at", "internal_transmission_id", "internal_transmitted_at", "supplier_acknowledgement_id", "supplier_acknowledged_at", "supplier_acknowledgement_evidence", "requested_delivery_date", "order_summary_json", "assumptions", "exclusions", "delivery_notes", "received_at", "receipt_evidence_json", "items"},
+        "Material Lot": {"material_lot_id", "roof_job", "controlled_item", "source_kind", "supplier_order", "source_shop_order", "source_evidence", "lot_number", "certificate_reference", "condition_status", "received_quantity", "available_quantity", "reserved_quantity", "consumed_quantity", "unit", "received_at", "status"},
+        "Nonconformance": {"nonconformance_id", "shop_order", "material_lot", "status", "detected_at", "reported_by", "description", "evidence_item", "containment", "disposition", "disposition_by", "disposition_at", "closed_by", "closed_at", "closure_evidence"},
+        "Payment Milestone": {"payment_milestone_id", "shop_order", "milestone_version", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due", "tax_policy_snapshot_json", "truth_source", "raw_payload_hash", "supersedes"},
+        "Shop Order": {"shop_order_id", "roof_job", "material_takeoff", "supplier_order", "work_package", "status", "released_by", "released_at", "reserved_at", "setup_started_at", "fabrication_started_at", "quality_hold_reason", "ready_at", "handed_over_to", "handed_over_at", "handoff_evidence", "invoice_payment_milestone", "invoice_ready_at", "closed_at", "lines", "material_allocations", "operations", "yields", "inspections", "bundles"},
         "Reception Session": {"session_id", "provider", "channel", "direction", "session_status", "lead_envelope", "contact_phone", "structured_summary", "transcript_pointer", "recording_pointer", "ai_disclosed", "recording_disclosed", "raw_key", "payload_hash", "structured_json"},
+        "Work Package": {"work_package_id", "roof_job", "job_assignment", "safety_plan", "version", "status", "objective", "stop_conditions", "make_safe_procedure", "expires_at", "acknowledgement_device_action_id", "blocked_by", "blocked_device_action_id", "steps", "hold_points", "supersedes"},
+        "Work Package Event": {"work_package_event_id", "event_type", "work_package", "roof_job", "job_assignment", "work_package_version", "actor_user", "actor_role", "device_action_id", "occurred_at", "payload_hash", "hold_point_sequence", "evidence_item", "blocker_reason"},
     }
 )
 
@@ -237,9 +260,9 @@ class DocTypeContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.doctypes = load_doctypes()
 
-    def test_complete_50_doctype_blueprint(self) -> None:
+    def test_complete_64_doctype_blueprint(self) -> None:
         self.assertEqual(set(self.doctypes), TOP_LEVEL_DOCTYPES | CHILD_DOCTYPES)
-        self.assertEqual(len(self.doctypes), 50)
+        self.assertEqual(len(self.doctypes), 64)
 
         for name, (_, document) in self.doctypes.items():
             with self.subTest(doctype=name):
@@ -290,11 +313,43 @@ class DocTypeContractTests(unittest.TestCase):
                 roles = {row["role"] for row in document["permissions"]}
                 self.assertIn(SYSTEM_MANAGER, roles)
                 self.assertIn("IronWrap Owner", roles)
-                self.assertTrue(roles <= {SYSTEM_MANAGER, *IRONWRAP_ROLES})
+                self.assertTrue(roles <= {SYSTEM_MANAGER, *ALL_IRONWRAP_ROLES})
                 for row in document["permissions"]:
                     self.assertNotEqual(row.get("delete"), 1)
                     if row["role"] != SYSTEM_MANAGER:
                         self.assertFalse({"export", "import", "share"} & row.keys())
+
+    def test_customer_acceptance_service_cannot_create_customer_quotes(self) -> None:
+        _, quote = self.doctypes["Customer Quote"]
+        service = next(
+            row
+            for row in quote["permissions"]
+            if row["role"] == "IronWrap Customer Acceptance Service"
+        )
+        self.assertEqual(service, {"delete": 0, "read": 1, "role": service["role"], "write": 1})
+
+    def test_launch_proof_reader_can_only_read_instant_estimate_sessions(self) -> None:
+        grants = [
+            (name, row)
+            for name, (_, document) in self.doctypes.items()
+            for row in document.get("permissions", [])
+            if row["role"] == LAUNCH_PROOF_READER_ROLE
+        ]
+        self.assertEqual(
+            grants,
+            [
+                (
+                    "Instant Estimate Session",
+                    {
+                        "delete": 0,
+                        "print": 1,
+                        "read": 1,
+                        "report": 1,
+                        "role": LAUNCH_PROOF_READER_ROLE,
+                    },
+                )
+            ],
+        )
 
     def test_every_top_level_controller_uses_shared_validation(self) -> None:
         folder_kinds = set()

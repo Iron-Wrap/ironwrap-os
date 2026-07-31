@@ -21,6 +21,12 @@ const canonicalIronWrapRoles = [
   "IronWrap Closeout",
   "IronWrap Support",
 ];
+const canonicalServiceRoles = [
+  "IronWrap Customer Acceptance Service",
+  "IronWrap QuickBooks Reconciliation Issuer",
+  "IronWrap Facet Design Projection Service",
+  "IronWrap Launch Proof Reader",
+];
 
 const specs = [
   {
@@ -139,7 +145,7 @@ const specs = [
     name: "Supplier Order",
     dir: "supplier_order",
     idField: "supplier_order_id",
-    requiredFields: ["supplier_order_id", "roof_job", "material_takeoff", "supplier", "status", "prepared_at", "approved_by", "approved_at", "requested_delivery_date", "order_summary_json", "assumptions", "exclusions", "delivery_notes", "items"],
+    requiredFields: ["supplier_order_id", "roof_job", "material_takeoff", "supplier", "status", "prepared_at", "approved_by", "approved_at", "internal_transmission_id", "internal_transmitted_at", "supplier_acknowledgement_id", "supplier_acknowledged_at", "supplier_acknowledgement_evidence", "requested_delivery_date", "order_summary_json", "assumptions", "exclusions", "delivery_notes", "items"],
   },
   {
     name: "Instant Estimate Session",
@@ -189,7 +195,7 @@ const specs = [
     name: "Payment Milestone",
     dir: "payment_milestone",
     idField: "payment_milestone_id",
-    requiredFields: ["payment_milestone_id", "roof_job", "milestone_type", "status", "qb_entity_type", "qb_entity_id", "qb_operation", "realm_id", "event_ts", "raw_key", "notes"],
+    requiredFields: ["payment_milestone_id", "roof_job", "shop_order", "milestone_type", "status", "qb_entity_type", "qb_entity_id", "qb_operation", "realm_id", "event_ts", "raw_key", "raw_payload_hash", "notes"],
   },
   {
     name: "Production Gate State",
@@ -638,6 +644,22 @@ specs.push(
     requiredFields: ["safety_plan_id", "roof_job", "version", "status", "effective_date", "prepared_by", "prepared_at", "hazard_summary", "controls", "emergency_plan", "ppe_requirements", "weather_limits", "evidence_item", "acknowledgements", "approved_by", "approved_at", "supersedes", "correction_reason", "notes"],
   },
   {
+    name: "Work Package Step", dir: "work_package_step", child: true,
+    requiredFields: ["sequence", "instruction", "required_evidence", "acceptance_criteria"],
+  },
+  {
+    name: "Work Package Hold Point", dir: "work_package_hold_point", child: true,
+    requiredFields: ["sequence", "hold_point", "release_authority", "required_evidence", "acceptance_criteria"],
+  },
+  {
+    name: "Work Package", dir: "work_package", idField: "work_package_id",
+    requiredFields: ["work_package_id", "roof_job", "job_assignment", "safety_plan", "version", "status", "title", "objective", "boundaries", "prerequisites", "expected_result", "stop_conditions", "make_safe_procedure", "issued_at", "expires_at", "released_by", "released_at", "acknowledged_by", "acknowledged_at", "acknowledgement_device_action_id", "started_at", "blocked_by", "blocked_at", "blocked_device_action_id", "blocker_reason", "completed_at", "steps", "hold_points", "supersedes", "correction_reason"],
+  },
+  {
+    name: "Work Package Event", dir: "work_package_event", idField: "work_package_event_id",
+    requiredFields: ["work_package_event_id", "event_type", "work_package", "roof_job", "job_assignment", "work_package_version", "actor_user", "actor_role", "device_action_id", "occurred_at", "payload_hash", "hold_point_sequence", "evidence_item", "blocker_reason"],
+  },
+  {
     name: "Job Compliance Record", dir: "job_compliance_record", idField: "compliance_record_id",
     requiredFields: ["compliance_record_id", "roof_job", "jurisdiction", "record_type", "authority_name", "external_reference", "status", "required_before_gate", "applied_at", "effective_date", "expiry_date", "inspected_at", "evidence_item", "owner_user", "due_date", "waived_by", "waived_at", "waiver_reason", "supersedes", "correction_reason", "notes"],
   },
@@ -655,7 +677,7 @@ specs.push(
   },
   {
     name: "Integration Reconciliation", dir: "integration_reconciliation", idField: "reconciliation_id",
-    requiredFields: ["reconciliation_id", "roof_job", "system_name", "entity_type", "external_entity_id", "local_doctype", "local_name", "direction", "status", "detected_at", "source_version", "source_amount", "local_amount", "currency", "diff_json", "source_payload_hash", "local_payload_hash", "last_attempt_at", "attempt_count", "resolution_action", "resolved_by", "resolved_at", "resolution_evidence", "automation_incident", "supersedes", "correction_reason", "notes"],
+    requiredFields: ["reconciliation_id", "roof_job", "system_name", "entity_type", "external_entity_id", "local_doctype", "local_name", "direction", "status", "detected_at", "raw_key", "source_version", "source_amount", "local_amount", "currency", "diff_json", "source_payload_hash", "local_payload_hash", "last_attempt_at", "attempt_count", "resolution_action", "resolved_by", "resolved_at", "resolution_evidence", "automation_incident", "supersedes", "correction_reason", "notes"],
     fieldContracts: { diff_json: { fieldtype: "Code", options: "JSON" } },
   },
   {
@@ -668,6 +690,46 @@ specs.push(
       encryption_key_ref: { fieldtype: "Data", read_only: 1 },
     },
   },
+  {
+    name: "Controlled Item", dir: "controlled_item", idField: "controlled_item_id",
+    requiredFields: ["controlled_item_id", "status", "revision", "item_kind", "unit", "profile", "gauge", "coating", "colour", "dimension_spec", "tolerance", "lot_required", "certificate_required", "source_ref", "approved_by", "approved_at", "approval_note"],
+  },
+  {
+    name: "Material Lot", dir: "material_lot", idField: "material_lot_id",
+    requiredFields: ["material_lot_id", "roof_job", "controlled_item", "source_kind", "supplier_order", "source_shop_order", "source_evidence", "lot_number", "certificate_reference", "condition_status", "received_quantity", "available_quantity", "reserved_quantity", "consumed_quantity", "unit", "received_at", "status"],
+  },
+  {
+    name: "Nonconformance", dir: "nonconformance", idField: "nonconformance_id",
+    requiredFields: ["nonconformance_id", "shop_order", "material_lot", "status", "detected_at", "reported_by", "description", "evidence_item", "containment", "disposition", "disposition_by", "disposition_at", "closed_by", "closed_at", "closure_evidence"],
+  },
+  {
+    name: "Shop Order Line", dir: "shop_order_line", child: true,
+    requiredFields: ["line_no", "controlled_item", "requested_quantity", "accepted_quantity", "billable_quantity", "unit", "dimensions", "tolerance", "orientation", "invoice_basis", "needs_review"],
+  },
+  {
+    name: "Shop Material Allocation", dir: "shop_material_allocation", child: true,
+    requiredFields: ["allocation_id", "line_no", "material_lot", "reserved_quantity", "issued_quantity", "unit", "status", "needs_review"],
+  },
+  {
+    name: "Shop Operation", dir: "shop_operation", child: true,
+    requiredFields: ["sequence", "operation", "machine_tooling", "operator", "status", "started_at", "completed_at", "notes"],
+  },
+  {
+    name: "Shop Yield", dir: "shop_yield", child: true,
+    requiredFields: ["allocation_id", "operation_sequence", "input_quantity", "finished_quantity", "remnant_quantity", "remnant_lot", "scrap_quantity", "scrap_disposition", "evidence_item"],
+  },
+  {
+    name: "Shop Inspection", dir: "shop_inspection", child: true,
+    requiredFields: ["inspection_type", "line_no", "allocation_id", "operation_sequence", "result", "measured_result", "inspected_by", "inspected_at", "evidence_item", "needs_review"],
+  },
+  {
+    name: "Shop Bundle", dir: "shop_bundle", child: true,
+    requiredFields: ["bundle_id", "line_no", "material_lot", "piece_identity", "accepted_quantity", "unit", "label_text", "handoff_status", "handed_over_to", "handed_over_at", "handoff_evidence", "condition", "needs_review"],
+  },
+  {
+    name: "Shop Order", dir: "shop_order", idField: "shop_order_id",
+    requiredFields: ["shop_order_id", "roof_job", "material_takeoff", "supplier_order", "work_package", "status", "released_by", "released_at", "reserved_at", "setup_started_at", "fabrication_started_at", "quality_hold_reason", "ready_at", "handed_over_to", "handed_over_at", "handoff_evidence", "invoice_payment_milestone", "invoice_ready_at", "closed_at", "lines", "material_allocations", "operations", "yields", "inspections", "bundles"],
+  },
 );
 
 const appRoot = "frappe-apps/ironwrap_roofing/ironwrap_roofing";
@@ -679,18 +741,23 @@ const discoveredDirs = readdirSync(doctypePath, { withFileTypes: true })
   .filter((dir) => existsSync(join(doctypePath, dir, `${dir}.json`)))
   .sort();
 
-assert.equal(specs.length, 50, "the product contract must contain exactly 50 DocTypes");
-assert.equal(specs.filter((spec) => spec.child).length, 8, "expected eight child-table DocTypes");
-assert.equal(specs.filter((spec) => !spec.child).length, 42, "expected 42 top-level DocTypes");
+assert.equal(specs.length, 64, "the product contract must contain exactly 64 DocTypes");
+assert.equal(specs.filter((spec) => spec.child).length, 16, "expected sixteen child-table DocTypes");
+assert.equal(specs.filter((spec) => !spec.child).length, 48, "expected 48 top-level DocTypes");
 assert.equal(new Set(specs.map((spec) => spec.name)).size, specs.length, "duplicate DocType name in validator");
 assert.equal(new Set(expectedDirs).size, specs.length, "duplicate DocType directory in validator");
-assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 50-type product contract");
+assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 64-type product contract");
 
 const pythonContracts = readPythonContracts();
 assert.deepEqual(
   [...pythonContracts.roles].sort(),
   [...canonicalIronWrapRoles].sort(),
   "access_control.py must declare the canonical eight IronWrap roles",
+);
+assert.deepEqual(
+  [...pythonContracts.allRoles].sort(),
+  [...canonicalIronWrapRoles, ...canonicalServiceRoles].sort(),
+  "access_control.py must declare the exact canonical and service roles",
 );
 
 const docs = new Map(specs.map((spec) => [spec.name, readDoc(spec.dir)]));
@@ -784,6 +851,7 @@ domain = runpy.run_path(sys.argv[2])
 matrix = access["DOCTYPE_ROLE_MATRIX"]
 print(json.dumps({
     "roles": access["IRONWRAP_ROLES"],
+    "all_roles": access["ALL_IRONWRAP_ROLES"],
     "matrix_names": list(matrix),
     "expected_permissions": {
         name: access["expected_permissions"](name) for name in matrix
@@ -806,6 +874,7 @@ print(json.dumps({
   const parsed = JSON.parse(output);
   return {
     roles: parsed.roles,
+    allRoles: parsed.all_roles,
     matrixNames: parsed.matrix_names,
     expectedPermissions: parsed.expected_permissions,
     identityKinds: parsed.identity_kinds,
@@ -834,7 +903,11 @@ function validatePermissions(spec, doc) {
     `${spec.name} permissions diverge from access_control.py`,
   );
 
-  const allowedRoles = new Set(["System Manager", ...canonicalIronWrapRoles]);
+  const allowedRoles = new Set([
+    "System Manager",
+    ...canonicalIronWrapRoles,
+    ...canonicalServiceRoles,
+  ]);
   const roles = permissions.map((row) => row.role);
   assert.equal(new Set(roles).size, roles.length, `${spec.name} has duplicate permission roles`);
   assert.ok(roles.includes("System Manager"), `${spec.name} must retain System Manager access`);
@@ -917,10 +990,13 @@ function validateRuntimeWiring() {
   );
 
   const install = readFileSync(paths.install, "utf8");
-  assert.match(install, /from\s+ironwrap_roofing\.access_control\s+import\s+IRONWRAP_ROLES/);
+  assert.match(
+    install,
+    /from\s+ironwrap_roofing\.access_control\s+import\s+ALL_IRONWRAP_ROLES,\s+IRONWRAP_ROLES/,
+  );
   assert.match(install, /def\s+ensure_roles\s*\(\s*\)/, "install.py must expose idempotent role reconciliation");
   assert.match(install, /def\s+reconcile_site_contract\s*\(\s*\)/, "install.py must expose site-contract reconciliation");
-  assert.match(install, /for\s+role_name\s+in\s+IRONWRAP_ROLES/, "role reconciliation must cover every canonical role");
+  assert.match(install, /for\s+role_name\s+in\s+ALL_IRONWRAP_ROLES/, "role reconciliation must cover every canonical and service role");
   assert.match(install, /def\s+before_install\s*\(\s*\)/, "install.py must expose before_install");
   assert.match(install, /def\s+before_migrate\s*\(\s*\)/, "install.py must expose before_migrate");
   assert.match(install, /def\s+after_install\s*\(\s*\)/, "install.py must expose after_install");
@@ -937,4 +1013,4 @@ function validateRuntimeWiring() {
   assert.match(adapter, /def\s+deny_business_document_delete\s*\(/, "append-only delete guard is missing");
 }
 
-console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (42 top-level + 8 child)`);
+console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (48 top-level + 16 child)`);

@@ -113,6 +113,15 @@ for (const { file, doc } of tenants) {
   assert.equal(instant.review_required, true, `${file} instant_estimate.review_required must be true`);
   assert.ok(typeof instant.disclaimer === "string" && instant.disclaimer.length > 0, `${file} instant_estimate.disclaimer must be non-empty`);
 
+  const quickBooks = doc.integrations?.quickbooks;
+  assert.ok(quickBooks, `${file} missing integrations.quickbooks`);
+  assert.equal(quickBooks.role, "accounting_truth", `${file} QuickBooks must remain accounting truth`);
+  assert.match(quickBooks.webhook_verifier_env, /^[A-Z][A-Z0-9_]+$/, `${file} QuickBooks verifier must be an environment variable name`);
+  assert.match(quickBooks.expected_realm_id_env, /^[A-Z][A-Z0-9_]+$/, `${file} QuickBooks expected realm must be an environment variable name`);
+  assert.match(quickBooks.reconciliation_issuer_user_env, /^[A-Z][A-Z0-9_]+$/, `${file} QuickBooks issuer must be an environment variable name`);
+  assert.notEqual(quickBooks.webhook_verifier_env, quickBooks.expected_realm_id_env, `${file} QuickBooks verifier and expected realm bindings must be distinct`);
+  assert.notEqual(quickBooks.reconciliation_issuer_user_env, quickBooks.webhook_verifier_env, `${file} QuickBooks issuer and verifier bindings must be distinct`);
+
   const gates = doc.production?.gates;
   assert.ok(Array.isArray(gates), `${file} production.gates must be an array`);
   for (const gate of knownGates) {

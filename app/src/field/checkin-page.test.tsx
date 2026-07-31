@@ -99,6 +99,7 @@ function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
       change_orders: [],
       safety_plan: null,
       contact: null,
+      work_package: null,
     },
     proof_stream: [],
     proof_page: { next_cursor: null, page_size: 100 },

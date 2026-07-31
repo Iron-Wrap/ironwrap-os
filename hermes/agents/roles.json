@@ -57,7 +57,8 @@
       "dry_run": [
         "dry_run_replay", "dry_run_newo_control_action",
         "dry_run_update_gate", "dry_run_material_takeoff", "dry_run_update_material_takeoff_status",
-        "dry_run_supplier_order", "dry_run_supplier_quote", "dry_run_quote_revision", "dry_run_bind_quote_price_rules", "dry_run_proposal_evidence_pack", "dry_run_publish_proposal_evidence_pack",
+        "dry_run_supplier_order", "dry_run_supplier_order_transition", "dry_run_approve_controlled_item", "dry_run_receive_material_lot", "dry_run_release_shop_order", "dry_run_reserve_shop_order_materials", "dry_run_advance_shop_order_setup", "dry_run_record_first_piece_outcome", "dry_run_record_final_shop_quality", "dry_run_record_shop_handover", "dry_run_record_shop_billing_basis",
+        "dry_run_supplier_quote", "dry_run_quote_revision", "dry_run_bind_quote_price_rules", "dry_run_proposal_evidence_pack", "dry_run_publish_proposal_evidence_pack",
         "dry_run_job_assignment", "dry_run_change_order", "dry_run_change_order_transition",
         "dry_run_insurance_supplement", "dry_run_set_insurance_supplement_evidence", "dry_run_insurance_supplement_transition",
         "dry_run_safety_plan", "dry_run_safety_acknowledgement", "dry_run_job_compliance_record",
@@ -69,7 +70,8 @@
       "approved_write": [
         "request_replay", "request_newo_control_approval", "request_newo_control_action",
         "request_update_gate", "request_create_material_takeoff", "request_update_material_takeoff_status",
-        "request_create_supplier_order", "request_create_supplier_quote", "request_create_quote_revision", "request_bind_quote_price_rules", "request_create_proposal_evidence_pack", "request_publish_proposal_evidence_pack",
+        "request_create_supplier_order", "request_transition_supplier_order", "request_approve_controlled_item", "request_receive_material_lot", "request_release_shop_order", "request_reserve_shop_order_materials", "request_advance_shop_order_setup", "request_record_first_piece_outcome", "request_record_final_shop_quality", "request_record_shop_handover", "request_record_shop_billing_basis",
+        "request_create_supplier_quote", "request_create_quote_revision", "request_bind_quote_price_rules", "request_create_proposal_evidence_pack", "request_publish_proposal_evidence_pack",
         "request_create_job_assignment", "request_create_change_order", "request_transition_change_order",
         "request_create_insurance_supplement", "request_set_insurance_supplement_evidence", "request_transition_insurance_supplement",
         "request_create_safety_plan", "request_record_safety_acknowledgement", "request_record_job_compliance",
@@ -163,11 +165,11 @@
         "get_scope_clause", "list_scope_clauses_for_job"
       ],
       "dry_run": [
-        "dry_run_update_gate", "dry_run_supplier_order", "dry_run_job_assignment",
+        "dry_run_update_gate", "dry_run_supplier_order", "dry_run_supplier_order_transition", "dry_run_receive_material_lot", "dry_run_release_shop_order", "dry_run_reserve_shop_order_materials", "dry_run_advance_shop_order_setup", "dry_run_record_first_piece_outcome", "dry_run_record_final_shop_quality", "dry_run_record_shop_handover", "dry_run_record_shop_billing_basis", "dry_run_job_assignment",
         "dry_run_safety_plan", "dry_run_safety_acknowledgement", "dry_run_job_compliance_record"
       ],
       "approved_write": [
-        "request_update_gate", "request_create_supplier_order", "request_create_job_assignment",
+        "request_update_gate", "request_create_supplier_order", "request_transition_supplier_order", "request_receive_material_lot", "request_release_shop_order", "request_reserve_shop_order_materials", "request_advance_shop_order_setup", "request_record_first_piece_outcome", "request_record_final_shop_quality", "request_record_shop_handover", "request_record_shop_billing_basis", "request_create_job_assignment",
         "request_create_safety_plan", "request_record_safety_acknowledgement", "request_record_job_compliance"
       ],
       "forbidden": [

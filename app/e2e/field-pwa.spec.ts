@@ -78,6 +78,36 @@ test.describe("Field Companion PWA acceptance", () => {
       .toBe(true);
   });
 
+  test("keeps a cached Work Package readable offline without a client-side start or hold release", async ({
+    context,
+    page,
+  }) => {
+    await seedPairedFieldDevice(page);
+    await page.goto("/jobs/JOB-ACCEPTANCE");
+    await expect(page.getByRole("heading", { name: "North slope replacement" })).toBeVisible();
+    await expect(page.getByText("v3 · Released")).toBeVisible();
+    await expect(
+      page.getByText(/Pending independent release by Production manager/i),
+    ).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => navigator.serviceWorker.getRegistration().then(Boolean)))
+      .toBe(true);
+    await page.evaluate(async () => await navigator.serviceWorker.ready);
+
+    await context.setOffline(true);
+    await page.reload({ waitUntil: "domcontentloaded" });
+
+    await expect(
+      page.getByText(/This is a saved package copy. It may be expired or superseded/i),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Acknowledge this package" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Start work from current packet" })).toHaveCount(
+      0,
+    );
+    await expect(page.getByText(/this app cannot release the hold point/i)).toBeVisible();
+  });
+
   test("uses one proof-bound bootstrap read for an already paired field device", async ({
     page,
   }) => {

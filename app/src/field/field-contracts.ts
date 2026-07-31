@@ -1,6 +1,43 @@
 import { z } from "zod";
 
 const nullableText = z.string().nullable();
+const workPackageSchema = z.object({
+  id: z.string().min(1),
+  version: z.number().int().positive(),
+  status: z.enum(["Released", "Acknowledged", "In Progress"]),
+  title: z.string().min(1),
+  objective: z.string().min(1),
+  boundaries: z.string().min(1),
+  prerequisites: z.string().min(1),
+  expected_result: z.string().min(1),
+  stop_conditions: z.string().min(1),
+  make_safe_procedure: z.string().min(1),
+  issued_at: z.string().min(1),
+  expires_at: z.string().min(1),
+  released_at: z.string().min(1),
+  acknowledgement: z.object({
+    current_user_acknowledged: z.boolean(),
+    acknowledged_at: nullableText,
+  }),
+  steps: z.array(
+    z.object({
+      sequence: z.number().int().positive(),
+      instruction: z.string().min(1),
+      required_evidence: z.string().min(1),
+      acceptance_criteria: z.string().min(1),
+    }),
+  ),
+  hold_points: z.array(
+    z.object({
+      sequence: z.number().int().positive(),
+      hold_point: z.string().min(1),
+      release_authority: z.string().min(1),
+      required_evidence: z.string().min(1),
+      acceptance_criteria: z.string().min(1),
+      released: z.boolean(),
+    }),
+  ),
+});
 const envelopeSchema = z.object({
   version: z.literal(1),
   source_updated_at: nullableText,
@@ -134,6 +171,9 @@ export const jobResponseSchema = envelopeSchema.extend({
         access_instructions: nullableText,
       })
       .nullable(),
+    // Older packets remain readable from IndexedDB after an app upgrade. A missing
+    // package is never treated as a release or permission to start work.
+    work_package: workPackageSchema.nullish().transform((value) => value ?? null),
   }),
   proof_stream: z.array(proofStreamItemSchema),
   proof_page: z.object({ next_cursor: nullableText, page_size: z.number().int().positive() }),

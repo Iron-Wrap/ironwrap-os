@@ -16,6 +16,9 @@ export type AppEnv = Env & {
   // A customer portal is a separately activated, read-only capability surface. It never
   // inherits an office BFF session or the office read-model allowlists.
   APP_CUSTOMER_PORTAL_ENABLED?: string;
+  // Customer contract signing is a distinct, false-by-default capability. It requires its own
+  // enablement in addition to a portal, email transport, Frappe service auth, and HMAC secret.
+  APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED?: string;
   APP_TENANT_ID?: string;
   APP_TENANT_NAME?: string;
   APP_TENANT_BRAND?: string;
@@ -29,6 +32,13 @@ export type AppEnv = Env & {
   // This is intentionally separate from browser CORS origins; unset means previews stay hidden.
   APP_VISUAL_PREVIEW_ALLOWED_ORIGINS?: string;
   APP_AUTH_PEPPER?: string;
+  // Dedicated shared secret for the narrow customer-contract preparation/commit methods.
+  // It must never be reused for browser sessions, portal links, or approval brokers.
+  APP_CUSTOMER_ACCEPTANCE_HMAC_KEY?: string;
+  // Dedicated Frappe service credentials for customer-contract preparation/commit only. These
+  // must not fall back to the broad ERPNEXT_API_KEY/ERPNEXT_API_SECRET used by the app BFF.
+  APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY?: string;
+  APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET?: string;
   APP_FRAPPE_REQUEST_TIMEOUT_MS?: string;
   // Exact Frappe identities authorized to see restricted insurance-proof state in the app BFF.
   // This is deliberately separate from broad `ops` access and defaults to no estimator access.

@@ -191,7 +191,11 @@ export async function pruneCustomerPortalRecords(
   await Promise.all([
     env.DB.prepare(
       `DELETE FROM customer_portal_links
-       WHERE expires_at <= ? AND (revoked_at IS NULL OR revoked_at <= ?)`,
+       WHERE expires_at <= ? AND (revoked_at IS NULL OR revoked_at <= ?)
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_portal_acceptance_challenges AS challenge
+           WHERE challenge.portal_link_id = customer_portal_links.link_id
+         )`,
     )
       .bind(retentionCutoff, retentionCutoff)
       .run(),

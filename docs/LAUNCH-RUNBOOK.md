@@ -369,17 +369,24 @@ dispatch a crew or call a production assignment live.
 Remote migration, broker reachability, authenticated owner acceptance, and this live proof remain
 open until those exact checks are captured.
 
-### Customer Portal Capability Enablement Gate
+### Customer Portal and Contract-Acceptance Enablement Gate
 
-The checked-in customer portal is a disabled, read-only capability foundation. It is not a public
-estimate widget, customer session, document-download service, payment flow, or e-sign service.
-It shows only customer-safe projected summaries; raw storage keys, Drive links, field notes,
-unapproved estimates, and office session data never cross the public boundary.
+The checked-in customer portal is a disabled, read-only capability foundation. A separate,
+also-disabled, email-bound click-to-accept route may move one approved quote to `Accepted` only
+after it pins the current quote, approved proposal pack, and canonical terms snapshot. The portal
+bearer itself remains read-only and is never customer authentication or acceptance evidence.
+
+Neither route is a public estimate widget, customer session, document-download service, payment
+flow, generic commercial e-sign service, deposit collection, or delivery proof. They show only
+customer-safe projected summaries; raw storage keys, Drive links, field notes, unapproved
+estimates, and office session data never cross the public boundary.
 
 Before enabling it in the intended Cloudflare account:
 
-1. Apply the migration sequence through `0021_public_estimate_rate_limits.sql` with the same release and prove `/ready` against the
-   migrated D1 database. Keep `APP_CUSTOMER_PORTAL_ENABLED=false` until this is complete.
+1. Apply the migration sequence through `0029_customer_contract_acceptance.sql` with the same
+   release and prove `/ready` against the migrated D1 database. Keep both
+   `APP_CUSTOMER_PORTAL_ENABLED=false` and `APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED=false` until
+   their respective gates below are complete.
 2. Complete the Field Companion BFF configuration above, including the exact HTTPS
    `APP_PUBLIC_ORIGIN`, matching `APP_ALLOWED_ORIGINS`, Frappe read credentials, and the
    `APP_AUTH_PEPPER` secret. Then set `APP_CUSTOMER_PORTAL_ENABLED=true`; the portal fails closed
@@ -395,6 +402,35 @@ Before enabling it in the intended Cloudflare account:
    no-referrer` and a restrictive CSP before sending any link.
 5. Archive only link id, job id, request id, expiry, and test result. Never archive the raw URL or
    capability token. Confirm a fresh link revokes the prior active link for that job.
+
+Do not enable `APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED=true` merely because the portal is live.
+Before this separate capability is enabled in a named environment:
+
+1. Provision a dedicated Frappe API user with only the `IronWrap Customer Acceptance Service`
+   role, pin its email in `ironwrap_customer_acceptance_service_user`, and use its API key/secret
+   only for the two customer-acceptance methods. Do not reuse the broad Worker BFF identity.
+2. Set a distinct `APP_CUSTOMER_ACCEPTANCE_HMAC_KEY` in the Worker and the matching
+   `ironwrap_customer_acceptance_hmac_key` Frappe site config. Set the dedicated
+   `APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY` and
+   `APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET` as Worker secrets. The HMAC timestamp/nonce window,
+   service user, and service role must all fail closed.
+3. Configure the approved Gmail sender and exact HTTPS `APP_PUBLIC_ORIGIN`. The email must use
+   `https://<origin>/contract-accept#token=...`; do not log, screen-capture, or place that token in
+   a query string, path, ticket, or browser recording. Provider message acceptance is not delivery
+   evidence.
+4. With a disposable linked Roof Job, approved Customer Quote, and approved Proposal Evidence
+   Pack, prove the email challenge stores only hashes in D1, rejects cookie-only and wrong-origin
+   requests, and exposes no raw email or token in the ledger or response. Change the quote terms,
+   proposal state, or customer email after challenge issuance and prove confirmation is rejected.
+5. Confirm once through the email fragment, then prove same-token and conflicting-idempotency
+   retries cannot create another acceptance. Verify R2 receipt storage precedes the one Frappe
+   transaction that creates the verified Evidence Item and Contract Acceptance and changes the
+   quote from `Approved` to `Accepted` with the exact locked anchors. Force an ambiguous Frappe
+   transport result and prove it ends `uncertain` without replaying the customer write.
+
+This proof is still open until it runs in the named Cloudflare, Frappe, R2, and Gmail environment.
+Do not call the repository slice a legal signature determination, a received-email proof, a paid
+deposit, or a preconstruction release.
 
 Do not add proof-photo/download, invoice, warranty-file, or proposal-file URLs to this route
 without a separate short-lived attachment-authorization design and browser proof. The private

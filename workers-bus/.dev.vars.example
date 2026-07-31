@@ -24,6 +24,12 @@ QB_WEBHOOK_TOKEN=""
 ERPNEXT_API_KEY=""
 ERPNEXT_API_SECRET=""
 
+# Dedicated customer-contract acceptance channel. These credentials must belong to the
+# `IronWrap Customer Acceptance Service` role, never the broad Worker BFF identity.
+APP_CUSTOMER_ACCEPTANCE_HMAC_KEY="replace-with-a-separate-32-byte-secret"
+APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY=""
+APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET=""
+
 # Public instant estimate (disabled until the non-secret vars in wrangler.jsonc
 # are configured with exact origins, rate limits, and a validated JSON rule set).
 PUBLIC_ESTIMATE_TURNSTILE_SECRET=""
@@ -41,6 +47,7 @@ PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER="replace-with-at-least-32-random-characters"
 # APP_PUBLIC_ORIGIN="http://localhost:5173"
 # APP_ALLOWED_ORIGINS="http://localhost:5173"
 # APP_ALLOW_INSECURE_LOCAL="true"
+# APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED="false"
 # APP_INSURANCE_ESTIMATOR_FRAPPE_USERS="estimator@your-site.example"
 # PUBLIC_ESTIMATE_ENABLED="true"
 # PUBLIC_ESTIMATE_ALLOWED_ORIGINS="http://localhost:5173"

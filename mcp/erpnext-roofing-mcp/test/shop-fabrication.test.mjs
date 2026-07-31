@@ -137,6 +137,67 @@ function finalQualityOrderFixture(overrides = {}) {
   });
 }
 
+function handoverReadyOrderFixture(overrides = {}) {
+  return shopOrderFixture({
+    status: "Ready",
+    ready_at: "2026-07-30 10:20:00",
+    handed_over_to: "",
+    handed_over_at: "",
+    handoff_evidence: "",
+    invoice_payment_milestone: "",
+    invoice_ready_at: "",
+    bundles: [{
+      bundle_id: "bundle-1",
+      line_no: 1,
+      material_lot: "lot-a",
+      piece_identity: "JOB-1:panel-1..8",
+      accepted_quantity: "8",
+      unit: "each",
+      label_text: "JOB-1 / panel 1-8",
+      handoff_status: "Prepared",
+      handed_over_to: "",
+      handed_over_at: "",
+      handoff_evidence: "",
+      condition: "No visible damage",
+      needs_review: 0,
+    }],
+    ...overrides,
+  });
+}
+
+function handedOverOrderFixture(overrides = {}) {
+  return handoverReadyOrderFixture({
+    status: "Handed Over",
+    handed_over_to: "delivery@example.com",
+    handed_over_at: "2026-07-30 10:25:00",
+    handoff_evidence: "evidence-handover-1",
+    bundles: [{
+      ...handoverReadyOrderFixture().bundles[0],
+      handoff_status: "Handed Over",
+      handed_over_to: "delivery@example.com",
+      handed_over_at: "2026-07-30 10:25:00",
+      handoff_evidence: "evidence-handover-1",
+    }],
+    ...overrides,
+  });
+}
+
+function invoicePaymentMilestoneFixture(overrides = {}) {
+  return {
+    name: "payment-1",
+    payment_milestone_id: "payment-1",
+    roof_job: "JOB-1",
+    shop_order: "shop-1",
+    milestone_type: "Invoice",
+    status: "Matched",
+    qb_entity_type: "Invoice",
+    qb_entity_id: "quickbooks-invoice-1",
+    raw_key: "raw/JOB-1/quickbooks-invoice-1.json",
+    modified: "2026-07-30 10:26:00",
+    ...overrides,
+  };
+}
+
 function finalQualityLotFixture(overrides = {}) {
   return materialLotFixture({
     status: "Reserved",
@@ -940,6 +1001,458 @@ test("final shop quality pass signs its snapshot and calls only the bounded Frap
     /shop_command_stale_snapshot/,
   );
   assert.equal(hermesRunCreates, 1, "a stale signed snapshot must fail before another Hermes Run");
+});
+
+test("shop handover signs its custody snapshot and calls only the bounded Frappe method", async (t) => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const actorUser = "production@example.com";
+  const handoverPayloadJson = JSON.stringify({
+    handed_over_to: "delivery@example.com",
+    handoff_evidence: "evidence-handover-1",
+  });
+  const order = handoverReadyOrderFixture();
+  const takeoff = { name: "takeoff-1", roof_job: "JOB-1", status: "Approved" };
+  const supplierOrder = { name: "supplier-1", roof_job: "JOB-1", status: "Received" };
+  const workPackage = { name: "package-1", roof_job: "JOB-1", status: "Released" };
+  const handoffEvidence = verifiedEvidenceFixture({
+    name: "evidence-handover-1",
+    evidence_id: "evidence-handover-1",
+    r2_key: "evidence/JOB-1/evidence-handover-1.jpg",
+    device_action_id: "device-action-handover-1",
+  });
+  const requests = [];
+  const handoverMethodBodies = [];
+  let hermesRunInsert = null;
+  let hermesRunCreates = 0;
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: true,
+    agentRole: "production-controller",
+    actorUser,
+    approverId: "owner@example.com",
+    dryRunSigningKey: "p".repeat(32),
+    approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_record_shop_handover", "request_record_shop_handover"],
+  });
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const target = String(url);
+    const method = init.method ?? "GET";
+    requests.push({ method, target, body: init.body });
+    if (method === "GET" && target.includes("Shop%20Order/shop-1")) return Response.json({ data: order });
+    if (method === "GET" && target.includes("Material%20Takeoff/takeoff-1")) return Response.json({ data: takeoff });
+    if (method === "GET" && target.includes("Supplier%20Order/supplier-1")) return Response.json({ data: supplierOrder });
+    if (method === "GET" && target.includes("Work%20Package/package-1")) return Response.json({ data: workPackage });
+    if (method === "GET" && target.includes("Evidence%20Item/evidence-handover-1")) {
+      return Response.json({ data: handoffEvidence });
+    }
+    if (method === "GET" && target.includes("Hermes%20Run/run-shop-handover-0001")) {
+      return new Response("missing", { status: 404 });
+    }
+    if (method === "POST" && target.endsWith("/api/resource/Hermes%20Run")) {
+      hermesRunCreates += 1;
+      hermesRunInsert = JSON.parse(init.body);
+      return Response.json({ data: { name: "run-shop-handover-0001" } });
+    }
+    if (method === "POST" && target.endsWith("/api/method/ironwrap_roofing.shop_fabrication_api.record_shop_handover")) {
+      handoverMethodBodies.push(JSON.parse(init.body));
+      return Response.json({
+        message: {
+          shop_order: { shop_order_id: "shop-1", status: "Handed Over" },
+          hermes_run_id: "run-shop-handover-0001",
+        },
+      });
+    }
+    if (method === "PUT" && target.includes("Hermes%20Run/run-shop-handover-0001")) {
+      return Response.json({ data: { ok: true } });
+    }
+    throw new Error(`unexpected request ${method} ${target}`);
+  });
+
+  const dryRun = parseToolPayload(
+    await server._registeredTools.dry_run_record_shop_handover.handler({
+      shop_order_id: "shop-1",
+      handover_payload_json: handoverPayloadJson,
+    }),
+  );
+  assert.equal(dryRun.required_tool, "request_record_shop_handover");
+  assert.equal(dryRun.next_status, "Handed Over");
+  assert.deepEqual(dryRun.handover, {
+    from_status: "Ready",
+    to_status: "Handed Over",
+    handed_over_to: "delivery@example.com",
+    handoff_evidence: "evidence-handover-1",
+    bundles: [{
+      bundle_id: "bundle-1",
+      line_no: 1,
+      accepted_quantity: "8",
+      unit: "each",
+      handoff_status: "Handed Over",
+    }],
+  });
+
+  const args = approvalArgs({
+    privateKey,
+    dryRun,
+    runId: "run-shop-handover-0001",
+    args: { shop_order_id: "shop-1", handover_payload_json: handoverPayloadJson },
+    agentRole: "production-controller",
+    actorUser,
+  });
+  const result = parseToolPayload(
+    await server._registeredTools.request_record_shop_handover.handler(args),
+  );
+
+  assert.equal(result.handover_recorded, true);
+  assert.equal(result.result.message.shop_order.status, "Handed Over");
+  assert.equal(hermesRunInsert.tool_name, "request_record_shop_handover");
+  assert.equal(JSON.parse(hermesRunInsert.tool_args_json).handover_payload_json, handoverPayloadJson);
+  assert.equal(
+    JSON.parse(hermesRunInsert.tool_args_json).expected_snapshot_sha256,
+    dryRun.expected_snapshot_sha256,
+  );
+  assert.deepEqual(handoverMethodBodies, [{
+    shop_order_id: "shop-1",
+    hermes_run_id: "run-shop-handover-0001",
+  }]);
+  assert.equal(
+    requests.some(({ method, target }) => (
+      ["POST", "PUT", "PATCH", "DELETE"].includes(method)
+      && target.includes("/api/resource/Shop%20Order")
+    )),
+    false,
+  );
+
+  const staleArgs = approvalArgs({
+    privateKey,
+    dryRun,
+    runId: "run-shop-handover-stale-0001",
+    args: { shop_order_id: "shop-1", handover_payload_json: handoverPayloadJson },
+    agentRole: "production-controller",
+    actorUser,
+    expectedSnapshotSha256: "0".repeat(64),
+  });
+  await assert.rejects(
+    async () => await server._registeredTools.request_record_shop_handover.handler(staleArgs),
+    /shop_command_stale_snapshot/,
+  );
+  assert.equal(hermesRunCreates, 1, "a stale signed snapshot must fail before another Hermes Run");
+});
+
+test("shop billing basis signs an Invoice mirror and calls only the bounded Frappe method", async (t) => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const actorUser = "production@example.com";
+  const billingBasisPayloadJson = JSON.stringify({ payment_milestone_id: "payment-1" });
+  const order = handedOverOrderFixture();
+  const takeoff = { name: "takeoff-1", roof_job: "JOB-1", status: "Approved" };
+  const supplierOrder = { name: "supplier-1", roof_job: "JOB-1", status: "Received" };
+  const workPackage = { name: "package-1", roof_job: "JOB-1", status: "Released" };
+  const handoffEvidence = verifiedEvidenceFixture({
+    name: "evidence-handover-1",
+    evidence_id: "evidence-handover-1",
+    r2_key: "evidence/JOB-1/evidence-handover-1.jpg",
+    device_action_id: "device-action-handover-1",
+  });
+  const paymentMilestone = invoicePaymentMilestoneFixture();
+  const requests = [];
+  const billingMethodBodies = [];
+  let hermesRunInsert = null;
+  let hermesRunCreates = 0;
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: true,
+    agentRole: "production-controller",
+    actorUser,
+    approverId: "owner@example.com",
+    dryRunSigningKey: "p".repeat(32),
+    approvalPublicKey: publicKey.export({ type: "spki", format: "pem" }),
+    allowedTools: ["dry_run_record_shop_billing_basis", "request_record_shop_billing_basis"],
+  });
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const target = String(url);
+    const method = init.method ?? "GET";
+    requests.push({ method, target, body: init.body });
+    if (method === "GET" && target.includes("Shop%20Order/shop-1")) return Response.json({ data: order });
+    if (method === "GET" && target.includes("Material%20Takeoff/takeoff-1")) return Response.json({ data: takeoff });
+    if (method === "GET" && target.includes("Supplier%20Order/supplier-1")) return Response.json({ data: supplierOrder });
+    if (method === "GET" && target.includes("Work%20Package/package-1")) return Response.json({ data: workPackage });
+    if (method === "GET" && target.includes("Evidence%20Item/evidence-handover-1")) {
+      return Response.json({ data: handoffEvidence });
+    }
+    if (method === "GET" && target.includes("Payment%20Milestone/payment-1")) {
+      return Response.json({ data: paymentMilestone });
+    }
+    if (method === "GET" && target.includes("Hermes%20Run/run-shop-billing-0001")) {
+      return new Response("missing", { status: 404 });
+    }
+    if (method === "POST" && target.endsWith("/api/resource/Hermes%20Run")) {
+      hermesRunCreates += 1;
+      hermesRunInsert = JSON.parse(init.body);
+      return Response.json({ data: { name: "run-shop-billing-0001" } });
+    }
+    if (method === "POST" && target.endsWith("/api/method/ironwrap_roofing.shop_fabrication_api.record_shop_billing_basis")) {
+      billingMethodBodies.push(JSON.parse(init.body));
+      return Response.json({
+        message: {
+          shop_order: { shop_order_id: "shop-1", status: "Invoice Ready" },
+          payment_milestone: { payment_milestone_id: "payment-1", status: "Matched" },
+          hermes_run_id: "run-shop-billing-0001",
+        },
+      });
+    }
+    if (method === "PUT" && target.includes("Hermes%20Run/run-shop-billing-0001")) {
+      return Response.json({ data: { ok: true } });
+    }
+    throw new Error(`unexpected request ${method} ${target}`);
+  });
+
+  const dryRun = parseToolPayload(
+    await server._registeredTools.dry_run_record_shop_billing_basis.handler({
+      shop_order_id: "shop-1",
+      billing_basis_payload_json: billingBasisPayloadJson,
+    }),
+  );
+  assert.equal(dryRun.required_tool, "request_record_shop_billing_basis");
+  assert.equal(dryRun.next_status, "Invoice Ready");
+  assert.deepEqual(dryRun.billing_basis, {
+    from_status: "Handed Over",
+    to_status: "Invoice Ready",
+    payment_milestone_id: "payment-1",
+    qb_entity_id: "quickbooks-invoice-1",
+    status: "Matched",
+  });
+
+  const args = approvalArgs({
+    privateKey,
+    dryRun,
+    runId: "run-shop-billing-0001",
+    args: { shop_order_id: "shop-1", billing_basis_payload_json: billingBasisPayloadJson },
+    agentRole: "production-controller",
+    actorUser,
+  });
+  const result = parseToolPayload(
+    await server._registeredTools.request_record_shop_billing_basis.handler(args),
+  );
+
+  assert.equal(result.billing_basis_recorded, true);
+  assert.equal(result.result.message.shop_order.status, "Invoice Ready");
+  assert.equal(hermesRunInsert.tool_name, "request_record_shop_billing_basis");
+  assert.equal(JSON.parse(hermesRunInsert.tool_args_json).billing_basis_payload_json, billingBasisPayloadJson);
+  assert.equal(
+    JSON.parse(hermesRunInsert.tool_args_json).expected_snapshot_sha256,
+    dryRun.expected_snapshot_sha256,
+  );
+  assert.deepEqual(billingMethodBodies, [{
+    shop_order_id: "shop-1",
+    hermes_run_id: "run-shop-billing-0001",
+  }]);
+  assert.equal(
+    requests.some(({ method, target }) => (
+      ["POST", "PUT", "PATCH", "DELETE"].includes(method)
+      && target.includes("/api/resource/Shop%20Order")
+    )),
+    false,
+  );
+
+  const staleArgs = approvalArgs({
+    privateKey,
+    dryRun,
+    runId: "run-shop-billing-stale-0001",
+    args: { shop_order_id: "shop-1", billing_basis_payload_json: billingBasisPayloadJson },
+    agentRole: "production-controller",
+    actorUser,
+    expectedSnapshotSha256: "0".repeat(64),
+  });
+  await assert.rejects(
+    async () => await server._registeredTools.request_record_shop_billing_basis.handler(staleArgs),
+    /shop_command_stale_snapshot/,
+  );
+  assert.equal(hermesRunCreates, 1, "a stale signed snapshot must fail before another Hermes Run");
+});
+
+test("shop custody payloads reject malformed input before reading Frappe", async (t) => {
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: false,
+    agentRole: "production-controller",
+    actorUser: "production@example.com",
+    dryRunSigningKey: "p".repeat(32),
+    allowedTools: ["dry_run_record_shop_handover", "dry_run_record_shop_billing_basis"],
+  });
+  let reads = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    reads += 1;
+    throw new Error("malformed custody payload must fail before reading Frappe");
+  });
+
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_shop_handover.handler({
+      shop_order_id: "shop-1",
+      handover_payload_json: "{",
+    }),
+    /shop_handover_payload_invalid/,
+  );
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_shop_billing_basis.handler({
+      shop_order_id: "shop-1",
+      billing_basis_payload_json: "{",
+    }),
+    /shop_billing_basis_payload_invalid/,
+  );
+  assert.equal(reads, 0);
+});
+
+test("shop custody previews require purpose-bound handoff evidence", async (t) => {
+  const handoverPayloadJson = JSON.stringify({
+    handed_over_to: "delivery@example.com",
+    handoff_evidence: "evidence-handover-1",
+  });
+  const billingBasisPayloadJson = JSON.stringify({ payment_milestone_id: "payment-1" });
+  const takeoff = { name: "takeoff-1", roof_job: "JOB-1", status: "Approved" };
+  const supplierOrder = { name: "supplier-1", roof_job: "JOB-1", status: "Received" };
+  const workPackage = { name: "package-1", roof_job: "JOB-1", status: "Released" };
+  const paymentMilestone = invoicePaymentMilestoneFixture();
+  let order = handoverReadyOrderFixture();
+  let handoffEvidence = verifiedEvidenceFixture({
+    name: "evidence-handover-1",
+    evidence_id: "evidence-handover-1",
+    r2_key: "evidence/JOB-1/evidence-handover-1.jpg",
+    device_action_id: "device-action-handover-1",
+  });
+  const previews = [
+    {
+      order: handoverReadyOrderFixture(),
+      tool: "dry_run_record_shop_handover",
+      args: { shop_order_id: "shop-1", handover_payload_json: handoverPayloadJson },
+      nextStatus: "Handed Over",
+    },
+    {
+      order: handedOverOrderFixture(),
+      tool: "dry_run_record_shop_billing_basis",
+      args: { shop_order_id: "shop-1", billing_basis_payload_json: billingBasisPayloadJson },
+      nextStatus: "Invoice Ready",
+    },
+  ];
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: false,
+    agentRole: "production-controller",
+    actorUser: "production@example.com",
+    dryRunSigningKey: "p".repeat(32),
+    allowedTools: ["dry_run_record_shop_handover", "dry_run_record_shop_billing_basis"],
+  });
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const target = String(url);
+    const method = init.method ?? "GET";
+    if (method === "GET" && target.includes("Shop%20Order/shop-1")) return Response.json({ data: order });
+    if (method === "GET" && target.includes("Material%20Takeoff/takeoff-1")) return Response.json({ data: takeoff });
+    if (method === "GET" && target.includes("Supplier%20Order/supplier-1")) return Response.json({ data: supplierOrder });
+    if (method === "GET" && target.includes("Work%20Package/package-1")) return Response.json({ data: workPackage });
+    if (method === "GET" && target.includes("Evidence%20Item/evidence-handover-1")) {
+      return Response.json({ data: handoffEvidence });
+    }
+    if (method === "GET" && target.includes("Payment%20Milestone/payment-1")) {
+      return Response.json({ data: paymentMilestone });
+    }
+    throw new Error(`unexpected request ${method} ${target}`);
+  });
+
+  for (const preview of previews) {
+    order = preview.order;
+    assert.equal(
+      parseToolPayload(await server._registeredTools[preview.tool].handler(preview.args)).next_status,
+      preview.nextStatus,
+    );
+  }
+
+  for (const { overrides, error } of [
+    { overrides: { proof_slot: "Quality" }, error: /shop_handover_evidence_proof_slot_invalid/ },
+    { overrides: { evidence_type: "Email" }, error: /shop_handover_evidence_type_invalid/ },
+    { overrides: { source_system: "imported-evidence" }, error: /shop_handover_evidence_provenance_invalid/ },
+    { overrides: { device_action_id: "" }, error: /shop_handover_evidence_provenance_invalid/ },
+  ]) {
+    handoffEvidence = verifiedEvidenceFixture({
+      name: "evidence-handover-1",
+      evidence_id: "evidence-handover-1",
+      r2_key: "evidence/JOB-1/evidence-handover-1.jpg",
+      device_action_id: "device-action-handover-1",
+      ...overrides,
+    });
+    for (const preview of previews) {
+      order = preview.order;
+      await assert.rejects(
+        async () => await server._registeredTools[preview.tool].handler(preview.args),
+        error,
+      );
+    }
+  }
+});
+
+test("shop billing basis rejects unlinked and non-Invoice provider mirrors", async (t) => {
+  const order = handedOverOrderFixture();
+  const takeoff = { name: "takeoff-1", roof_job: "JOB-1", status: "Approved" };
+  const supplierOrder = { name: "supplier-1", roof_job: "JOB-1", status: "Received" };
+  const workPackage = { name: "package-1", roof_job: "JOB-1", status: "Released" };
+  const handoffEvidence = verifiedEvidenceFixture({
+    name: "evidence-handover-1",
+    evidence_id: "evidence-handover-1",
+    r2_key: "evidence/JOB-1/evidence-handover-1.jpg",
+    device_action_id: "device-action-handover-1",
+  });
+  let paymentMilestone = invoicePaymentMilestoneFixture();
+  const requests = [];
+  const server = buildServer({
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    writeEnabled: false,
+    agentRole: "production-controller",
+    actorUser: "production@example.com",
+    dryRunSigningKey: "p".repeat(32),
+    allowedTools: ["dry_run_record_shop_billing_basis"],
+  });
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const target = String(url);
+    const method = init.method ?? "GET";
+    requests.push({ method, target });
+    if (method === "GET" && target.includes("Shop%20Order/shop-1")) return Response.json({ data: order });
+    if (method === "GET" && target.includes("Material%20Takeoff/takeoff-1")) return Response.json({ data: takeoff });
+    if (method === "GET" && target.includes("Supplier%20Order/supplier-1")) return Response.json({ data: supplierOrder });
+    if (method === "GET" && target.includes("Work%20Package/package-1")) return Response.json({ data: workPackage });
+    if (method === "GET" && target.includes("Evidence%20Item/evidence-handover-1")) {
+      return Response.json({ data: handoffEvidence });
+    }
+    if (method === "GET" && target.includes("Payment%20Milestone/payment-1")) {
+      return Response.json({ data: paymentMilestone });
+    }
+    throw new Error(`unexpected request ${method} ${target}`);
+  });
+
+  paymentMilestone = invoicePaymentMilestoneFixture({ shop_order: "shop-other" });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_shop_billing_basis.handler({
+      shop_order_id: "shop-1",
+      billing_basis_payload_json: JSON.stringify({ payment_milestone_id: "payment-1" }),
+    }),
+    /shop_billing_basis_lineage_mismatch/,
+  );
+
+  paymentMilestone = invoicePaymentMilestoneFixture({ qb_entity_type: "Payment" });
+  await assert.rejects(
+    async () => await server._registeredTools.dry_run_record_shop_billing_basis.handler({
+      shop_order_id: "shop-1",
+      billing_basis_payload_json: JSON.stringify({ payment_milestone_id: "payment-1" }),
+    }),
+    /shop_billing_basis_unverified/,
+  );
+  assert.ok(requests.every(({ method }) => method === "GET"));
 });
 
 test("final shop quality rejects malformed payloads before reading Frappe", async (t) => {

@@ -49,6 +49,7 @@ FIRST_PIECE_TOLERANCE_RE = re.compile(
     r"^(?:±|\+/-) (?P<tolerance>[0-9]+(?:\.[0-9]+)?) (?P<unit>[A-Za-z][A-Za-z0-9/_-]{0,31})$"
 )
 FIRST_PIECE_EVIDENCE_TYPES = frozenset({"Photo", "Measurement Report"})
+HANDOVER_EVIDENCE_TYPES = frozenset({"Photo", "Signed Document"})
 
 APPROVE_CONTROLLED_ITEM_TOOL = "request_approve_controlled_item"
 RECEIVE_MATERIAL_LOT_TOOL = "request_receive_material_lot"
@@ -57,6 +58,8 @@ RESERVE_SHOP_ORDER_TOOL = "request_reserve_shop_order_materials"
 ADVANCE_SHOP_ORDER_SETUP_TOOL = "request_advance_shop_order_setup"
 RECORD_FIRST_PIECE_OUTCOME_TOOL = "request_record_first_piece_outcome"
 RECORD_FINAL_SHOP_QUALITY_TOOL = "request_record_final_shop_quality"
+RECORD_SHOP_HANDOVER_TOOL = "request_record_shop_handover"
+RECORD_SHOP_BILLING_BASIS_TOOL = "request_record_shop_billing_basis"
 
 OWNER_ROLES = frozenset({"System Manager", "IronWrap Owner"})
 SHOP_ROLES = OWNER_ROLES | {"IronWrap Production"}
@@ -75,6 +78,10 @@ SHOP_TOOL_AGENT_ROLES = {
         {"Owner Operator", "Production Controller"}
     ),
     RECORD_FINAL_SHOP_QUALITY_TOOL: frozenset(
+        {"Owner Operator", "Production Controller"}
+    ),
+    RECORD_SHOP_HANDOVER_TOOL: frozenset({"Owner Operator", "Production Controller"}),
+    RECORD_SHOP_BILLING_BASIS_TOOL: frozenset(
         {"Owner Operator", "Production Controller"}
     ),
 }
@@ -177,6 +184,8 @@ def _parse_approved_arguments(
             "setup_payload_json",
             "first_piece_payload_json",
             "final_quality_payload_json",
+            "handover_payload_json",
+            "billing_basis_payload_json",
         }:
             value = parsed.get(field)
             if not isinstance(value, str) or not value:
@@ -933,6 +942,40 @@ def _parse_final_quality_payload(
     raise AssertionError("frappe.throw must raise")  # pragma: no cover
 
 
+def _parse_handover_payload(raw: str) -> dict[str, str]:
+    payload = _parse_json(raw, field="handover_payload_json")
+    if not isinstance(payload, Mapping) or set(payload) != {
+        "handed_over_to",
+        "handoff_evidence",
+    }:
+        _fail(
+            "shop_command_invalid_approval_args",
+            "handover_payload_json must contain only handed_over_to and handoff_evidence",
+        )
+    return {
+        "handed_over_to": _clean_request_text(
+            payload.get("handed_over_to"), field="handed_over_to"
+        ),
+        "handoff_evidence": _clean_identifier(
+            payload.get("handoff_evidence"), "handoff_evidence"
+        ),
+    }
+
+
+def _parse_billing_basis_payload(raw: str) -> dict[str, str]:
+    payload = _parse_json(raw, field="billing_basis_payload_json")
+    if not isinstance(payload, Mapping) or set(payload) != {"payment_milestone_id"}:
+        _fail(
+            "shop_command_invalid_approval_args",
+            "billing_basis_payload_json must contain only payment_milestone_id",
+        )
+    return {
+        "payment_milestone_id": _clean_identifier(
+            payload.get("payment_milestone_id"), "payment_milestone_id"
+        )
+    }
+
+
 def _lock_evidence(evidence_id: str, *, roof_job: str) -> dict[str, Any]:
     evidence = _lock_row(
         "Evidence Item",
@@ -944,6 +987,75 @@ def _lock_evidence(evidence_id: str, *, roof_job: str) -> dict[str, Any]:
         _fail(
             "shop_command_evidence_unverified",
             "shop evidence must be verified and belong to the same Roof Job",
+        )
+    return evidence
+
+
+def _lock_handover_evidence(evidence_id: str, *, roof_job: str) -> dict[str, Any]:
+    evidence = _lock_row(
+        "Evidence Item",
+        evidence_id,
+        fields=(
+            "name, evidence_id, roof_job, evidence_type, proof_slot, source_system, "
+            "r2_key, content_checksum, checksum_algorithm, content_type, content_length, "
+            "captured_at, sync_state, verified_at, verification_source, device_action_id, modified"
+        ),
+        not_found_code="shop_command_evidence_not_found",
+    )
+    if evidence.get("roof_job") != roof_job:
+        _fail(
+            "shop_command_handover_evidence_job_mismatch",
+            "handover evidence must belong to the same Roof Job",
+        )
+    if (
+        evidence.get("proof_slot") != "Production"
+        or evidence.get("evidence_type") not in HANDOVER_EVIDENCE_TYPES
+    ):
+        _fail(
+            "shop_command_handover_evidence_semantic_invalid",
+            "handover evidence must be a Production Photo or Signed Document",
+        )
+    if evidence.get("sync_state") != "Verified":
+        _fail(
+            "shop_command_handover_evidence_unverified",
+            "handover evidence must be verified",
+        )
+    if evidence.get("source_system") != "ironwrap-pwa" or not evidence.get(
+        "device_action_id"
+    ):
+        _fail(
+            "shop_command_handover_evidence_provenance_invalid",
+            "handover evidence must originate from an identified IronWrap PWA action",
+        )
+    if not all(
+        evidence.get(field)
+        for field in (
+            "r2_key",
+            "captured_at",
+            "verified_at",
+            "verification_source",
+            "content_type",
+        )
+    ):
+        _fail(
+            "shop_command_handover_evidence_provenance_invalid",
+            "handover evidence is missing immutable capture or verification provenance",
+        )
+    if evidence.get("checksum_algorithm") != "SHA-256" or not re.fullmatch(
+        r"[0-9a-f]{64}", str(evidence.get("content_checksum") or "")
+    ):
+        _fail(
+            "shop_command_handover_evidence_provenance_invalid",
+            "handover evidence must retain a SHA-256 checksum",
+        )
+    try:
+        content_length = int(evidence.get("content_length"))
+    except (TypeError, ValueError):
+        content_length = 0
+    if content_length <= 0:
+        _fail(
+            "shop_command_handover_evidence_provenance_invalid",
+            "handover evidence content length must be positive",
         )
     return evidence
 
@@ -1083,6 +1195,25 @@ def _lock_shop_order(shop_order_id: str) -> Any:
         id_field="shop_order_id",
         record_id=shop_order_id,
         label="Shop Order",
+    )
+    return document
+
+
+def _lock_payment_milestone(payment_milestone_id: str) -> Any:
+    document = _lock_document(
+        "Payment Milestone",
+        payment_milestone_id,
+        fields=(
+            "name, payment_milestone_id, roof_job, shop_order, milestone_type, status, "
+            "qb_entity_type, qb_entity_id, raw_key, modified"
+        ),
+        not_found_code="shop_command_payment_milestone_not_found",
+    )
+    _assert_record_identity(
+        document,
+        id_field="payment_milestone_id",
+        record_id=payment_milestone_id,
+        label="Payment Milestone",
     )
     return document
 
@@ -1570,6 +1701,89 @@ def _shop_order_final_quality_snapshot(
         )
         for row in order.get("bundles") or []
     ]
+    return snapshot
+
+
+def _shop_order_handover_snapshot(
+    order: Any,
+    evidence: list[Mapping[str, Any]],
+    sources: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    snapshot = _shop_order_snapshot(order)
+    snapshot["shop_order"].update(
+        _snapshot_values(
+            order,
+            (
+                "ready_at",
+                "handed_over_to",
+                "handed_over_at",
+                "handoff_evidence",
+                "invoice_payment_milestone",
+                "invoice_ready_at",
+            ),
+        )
+    )
+    snapshot["bundles"] = [
+        _snapshot_values(
+            row,
+            (
+                "bundle_id",
+                "line_no",
+                "material_lot",
+                "piece_identity",
+                "accepted_quantity",
+                "unit",
+                "label_text",
+                "handoff_status",
+                "handed_over_to",
+                "handed_over_at",
+                "handoff_evidence",
+                "condition",
+                "needs_review",
+            ),
+        )
+        for row in order.get("bundles") or []
+    ]
+    snapshot["evidence"] = [
+        _snapshot_values(
+            item,
+            ("name", "evidence_id", "roof_job", "sync_state", "modified"),
+        )
+        for item in evidence
+    ]
+    snapshot["source_records"] = {
+        field: _snapshot_values(source, ("name", "roof_job", "status", "modified"))
+        for field, source in sources.items()
+    }
+    return snapshot
+
+
+def _payment_milestone_snapshot(payment_milestone: Mapping[str, Any]) -> dict[str, Any]:
+    return _snapshot_values(
+        payment_milestone,
+        (
+            "name",
+            "payment_milestone_id",
+            "roof_job",
+            "shop_order",
+            "milestone_type",
+            "status",
+            "qb_entity_type",
+            "qb_entity_id",
+            "raw_key",
+            "modified",
+        ),
+    )
+
+
+def _shop_order_billing_basis_snapshot(
+    order: Any,
+    payment_milestone: Mapping[str, Any],
+    handoff_evidence: Mapping[str, Any],
+    sources: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    snapshot = _shop_order_handover_snapshot(order, [handoff_evidence], sources)
+    snapshot["payment_milestone"] = _payment_milestone_snapshot(payment_milestone)
     return snapshot
 
 
@@ -2315,6 +2529,191 @@ def record_first_piece_outcome(
             "evidence_item": nonconformance.get("evidence_item"),
         }
     return response
+
+
+@frappe.whitelist()
+def record_shop_handover(
+    shop_order_id: str,
+    hermes_run_id: str,
+) -> dict[str, Any]:
+    """Record one evidence-backed custody handover for every prepared bundle."""
+
+    authenticated_user = _assert_post_and_permissions(
+        doctype="Shop Order", allowed_roles=SHOP_ROLES
+    )
+    shop_order_id = _clean_identifier(shop_order_id, "shop_order_id")
+    hermes_run_id = _clean_identifier(hermes_run_id, "hermes_run_id")
+    run = _lock_hermes_run(hermes_run_id)
+    args = _assert_approved_run(
+        run,
+        hermes_run_id=hermes_run_id,
+        authenticated_user=authenticated_user,
+        tool_name=RECORD_SHOP_HANDOVER_TOOL,
+        target_doctype="Shop Order",
+        target_name=shop_order_id,
+        target_field="shop_order_id",
+        extra_fields=frozenset({"handover_payload_json"}),
+    )
+    order = _lock_shop_order(shop_order_id)
+    _assert_run_roof_job(run, order)
+    payload = _parse_handover_payload(args["handover_payload_json"])
+    if order.get("status") != "Ready":
+        _fail(
+            "shop_command_order_not_ready_for_handover",
+            "Shop Order must be Ready before custody handover",
+        )
+    bundles = list(order.get("bundles") or [])
+    if not bundles or any(
+        bundle.get("handoff_status") != "Prepared"
+        or any(
+            bundle.get(field)
+            for field in ("handed_over_to", "handed_over_at", "handoff_evidence")
+        )
+        for bundle in bundles
+    ):
+        _fail(
+            "shop_command_handover_bundle_state_invalid",
+            "every shop bundle must be prepared and unhanded before handover",
+        )
+    if any(
+        order.get(field)
+        for field in ("handed_over_to", "handed_over_at", "handoff_evidence")
+    ):
+        _fail(
+            "shop_command_handover_already_recorded",
+            "Shop Order already has custody handover metadata",
+        )
+    sources = _lock_shop_sources(order)
+    handoff_evidence = _lock_handover_evidence(
+        payload["handoff_evidence"], roof_job=order.get("roof_job")
+    )
+    _assert_current_snapshot(
+        args["expected_snapshot_sha256"],
+        _shop_order_handover_snapshot(order, [handoff_evidence], sources),
+    )
+    handed_over_at = str(frappe.utils.now_datetime())
+    order.status = "Handed Over"
+    order.handed_over_to = payload["handed_over_to"]
+    order.handed_over_at = handed_over_at
+    order.handoff_evidence = handoff_evidence["name"]
+    for bundle in bundles:
+        bundle["handoff_status"] = "Handed Over"
+        bundle["handed_over_to"] = payload["handed_over_to"]
+        bundle["handed_over_at"] = handed_over_at
+        bundle["handoff_evidence"] = handoff_evidence["name"]
+    with shop_order_transition_context(order):
+        order.save()
+    return {
+        "shop_order": {
+            "name": order.get("name"),
+            "shop_order_id": order.get("shop_order_id"),
+            "roof_job": order.get("roof_job"),
+            "status": order.get("status"),
+            "handed_over_to": order.get("handed_over_to"),
+            "handed_over_at": str(order.get("handed_over_at")),
+            "handoff_evidence": order.get("handoff_evidence"),
+            "bundle_count": len(bundles),
+        },
+        "hermes_run_id": hermes_run_id,
+    }
+
+
+@frappe.whitelist()
+def record_shop_billing_basis(
+    shop_order_id: str,
+    hermes_run_id: str,
+) -> dict[str, Any]:
+    """Bind a handed-over Shop Order to one existing QuickBooks Invoice mirror."""
+
+    authenticated_user = _assert_post_and_permissions(
+        doctype="Shop Order", allowed_roles=SHOP_ROLES
+    )
+    shop_order_id = _clean_identifier(shop_order_id, "shop_order_id")
+    hermes_run_id = _clean_identifier(hermes_run_id, "hermes_run_id")
+    run = _lock_hermes_run(hermes_run_id)
+    args = _assert_approved_run(
+        run,
+        hermes_run_id=hermes_run_id,
+        authenticated_user=authenticated_user,
+        tool_name=RECORD_SHOP_BILLING_BASIS_TOOL,
+        target_doctype="Shop Order",
+        target_name=shop_order_id,
+        target_field="shop_order_id",
+        extra_fields=frozenset({"billing_basis_payload_json"}),
+    )
+    order = _lock_shop_order(shop_order_id)
+    _assert_run_roof_job(run, order)
+    payload = _parse_billing_basis_payload(args["billing_basis_payload_json"])
+    if order.get("status") != "Handed Over":
+        _fail(
+            "shop_command_order_not_ready_for_billing_basis",
+            "Shop Order must be Handed Over before billing readiness",
+        )
+    if order.get("invoice_payment_milestone") or order.get("invoice_ready_at"):
+        _fail(
+            "shop_command_billing_basis_already_recorded",
+            "Shop Order already has a billing basis",
+        )
+    sources = _lock_shop_sources(order)
+    handoff_evidence = _lock_handover_evidence(
+        _clean_identifier(order.get("handoff_evidence"), "handoff_evidence"),
+        roof_job=order.get("roof_job"),
+    )
+    payment_milestone = _lock_payment_milestone(payload["payment_milestone_id"])
+    if payment_milestone.get("roof_job") != order.get("roof_job") or str(
+        payment_milestone.get("shop_order")
+    ) != str(order.get("shop_order_id")):
+        _fail(
+            "shop_command_billing_basis_lineage_mismatch",
+            "Payment Milestone must be pre-linked to this Shop Order and Roof Job",
+        )
+    if payment_milestone.get("status") not in {
+        "Webhook Seen",
+        "Needs Review",
+        "Matched",
+    }:
+        _fail(
+            "shop_command_billing_basis_unverified",
+            "Payment Milestone must be a current provider mirror",
+        )
+    if (
+        payment_milestone.get("milestone_type") != "Invoice"
+        or payment_milestone.get("qb_entity_type") != "Invoice"
+        or not payment_milestone.get("qb_entity_id")
+        or not payment_milestone.get("raw_key")
+    ):
+        _fail(
+            "shop_command_billing_basis_unverified",
+            "billing readiness requires a raw-backed QuickBooks Invoice mirror",
+        )
+    _assert_current_snapshot(
+        args["expected_snapshot_sha256"],
+        _shop_order_billing_basis_snapshot(
+            order, payment_milestone, handoff_evidence, sources
+        ),
+    )
+    order.status = "Invoice Ready"
+    order.invoice_payment_milestone = payment_milestone.get("name")
+    order.invoice_ready_at = str(frappe.utils.now_datetime())
+    with shop_order_transition_context(order):
+        order.save()
+    return {
+        "shop_order": {
+            "name": order.get("name"),
+            "shop_order_id": order.get("shop_order_id"),
+            "roof_job": order.get("roof_job"),
+            "status": order.get("status"),
+            "invoice_payment_milestone": order.get("invoice_payment_milestone"),
+            "invoice_ready_at": str(order.get("invoice_ready_at")),
+        },
+        "payment_milestone": {
+            "name": payment_milestone.get("name"),
+            "payment_milestone_id": payment_milestone.get("payment_milestone_id"),
+            "qb_entity_id": payment_milestone.get("qb_entity_id"),
+            "status": payment_milestone.get("status"),
+        },
+        "hermes_run_id": hermes_run_id,
+    }
 
 
 @frappe.whitelist()

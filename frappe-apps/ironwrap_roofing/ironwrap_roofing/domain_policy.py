@@ -2096,6 +2096,24 @@ def _validate_contract_acceptance(record: Any, context: Mapping[str, Any]) -> No
 def _validate_reconciliation(record: Any, context: Mapping[str, Any]) -> None:
     require_nonnegative(record, "attempt_count")
     status = _get(record, "status")
+    system_name = _get(record, "system_name")
+    quickbooks = isinstance(system_name, str) and system_name.strip().casefold() == "quickbooks"
+    previous = context.get("_previous")
+    # A webhook is only a provider identity signal. It may open Pending work,
+    # but cannot assert that provider and local accounting truth are matched or
+    # resolved until a future authenticated provider-side resolver exists.
+    if quickbooks and previous is None and status != "Pending":
+        raise PolicyViolation(
+            "quickbooks_initial_status_must_be_pending",
+            "QuickBooks reconciliation must begin Pending",
+            "status",
+        )
+    if quickbooks and status in {"Matched", "Resolved"}:
+        raise PolicyViolation(
+            "quickbooks_provider_truth_unavailable",
+            "QuickBooks Matched and Resolved states require an authenticated provider-side resolver",
+            "status",
+        )
     _enforce_state_transition(
         record,
         context,
@@ -2122,7 +2140,7 @@ def _validate_reconciliation(record: Any, context: Mapping[str, Any]) -> None:
             raise PolicyViolation("unmatched_amount", "matched monetary values must agree")
     if status in {"Resolved", "Ignored"}:
         require_fields(record, "resolution_action", "resolved_by", "resolved_at", "resolution_evidence")
-    if _get(record, "system_name") == "QuickBooks":
+    if quickbooks:
         require_fields(
             record,
             "entity_type",

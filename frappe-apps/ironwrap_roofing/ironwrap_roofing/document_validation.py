@@ -220,6 +220,12 @@ _TRUSTED_FIELD_EVIDENCE_ISSUANCE: ContextVar[
     "ironwrap_trusted_field_evidence_issuance",
     default=None,
 )
+_TRUSTED_QUICKBOOKS_RECONCILIATION_ISSUANCE: ContextVar[
+    tuple[tuple[str, str], ...] | None
+] = ContextVar(
+    "ironwrap_trusted_quickbooks_reconciliation_issuance",
+    default=None,
+)
 _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE: ContextVar[Any | None] = ContextVar(
     "ironwrap_trusted_customer_contract_acceptance",
     default=None,
@@ -281,6 +287,24 @@ FIELD_EVIDENCE_ISSUANCE_FIELDS = (
     "correction_reason",
     "customer_safe",
     "summary",
+)
+QUICKBOOKS_RECONCILIATION_ISSUANCE_FIELDS = (
+    "reconciliation_id",
+    "roof_job",
+    "system_name",
+    "entity_type",
+    "external_entity_id",
+    "local_doctype",
+    "local_name",
+    "direction",
+    "status",
+    "detected_at",
+    "raw_key",
+    "source_version",
+    "source_payload_hash",
+    "local_payload_hash",
+    "attempt_count",
+    "notes",
 )
 CUSTOMER_CONTRACT_EVIDENCE_FIELDS = (
     "evidence_id",
@@ -475,6 +499,14 @@ def _field_evidence_issuance_snapshot(document: Any) -> tuple[tuple[str, str], .
     )
 
 
+def _quickbooks_reconciliation_issuance_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    """Canonicalize the exact Pending reconciliation inserted by the issuer."""
+
+    return _runtime_snapshot(document, QUICKBOOKS_RECONCILIATION_ISSUANCE_FIELDS)
+
+
 def _customer_contract_evidence_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
     return _runtime_snapshot(document, CUSTOMER_CONTRACT_EVIDENCE_FIELDS)
 
@@ -658,6 +690,24 @@ def field_evidence_issuance_context(document: Any):
 
 
 @contextmanager
+def quickbooks_reconciliation_issuance_context(document: Any):
+    """Authorize one exact Pending QuickBooks reconciliation insert.
+
+    Only the bounded issuer command opens this ContextVar after authenticating
+    the configured Worker principal. Generic Desk/REST resource creation cannot
+    manufacture this process-local authorization state.
+    """
+
+    token = _TRUSTED_QUICKBOOKS_RECONCILIATION_ISSUANCE.set(
+        _quickbooks_reconciliation_issuance_snapshot(document)
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_QUICKBOOKS_RECONCILIATION_ISSUANCE.reset(token)
+
+
+@contextmanager
 def customer_contract_acceptance_issuance_context(
     evidence: Any, acceptance: Any, quote: Any
 ):
@@ -793,6 +843,23 @@ def validate_evidence_verification_mutation(document: Any) -> None:
     frappe.throw(
         "Evidence Item verification can only be issued by the dedicated Worker command.",
         exc=frappe.ValidationError,
+    )
+
+
+def validate_quickbooks_reconciliation_issuance(document: Any) -> None:
+    """Keep QuickBooks reconciliation creation on the bounded Worker path."""
+
+    system_name = document.get("system_name")
+    is_quickbooks = isinstance(system_name, str) and system_name.strip().casefold() == "quickbooks"
+    if not is_quickbooks or _previous(document) is not None:
+        return
+    if _TRUSTED_QUICKBOOKS_RECONCILIATION_ISSUANCE.get() == (
+        _quickbooks_reconciliation_issuance_snapshot(document)
+    ):
+        return
+    frappe.throw(
+        "QuickBooks reconciliations can only be issued by the dedicated Worker command.",
+        exc=frappe.PermissionError,
     )
 
 
@@ -1975,6 +2042,8 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
 
 
 def validate_business_document(document: Any, kind: str) -> None:
+    if kind == "integration_reconciliation":
+        validate_quickbooks_reconciliation_issuance(document)
     if kind in {"job_compliance_record", "production_gate_state"} and document.get(
         "status" if kind == "job_compliance_record" else "state"
     ) == "Waived":

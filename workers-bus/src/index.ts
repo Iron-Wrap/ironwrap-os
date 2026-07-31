@@ -37,7 +37,10 @@ import {
 } from "./measurements.ts";
 import { handleEstimateIngest, retryEstimateErpNextSyncs } from "./estimates.ts";
 import { handleFacetDesignIngest } from "./facet-design-ingest.ts";
-import { handleQuickbooksWebhook } from "./quickbooks.ts";
+import {
+  handleQuickbooksWebhook,
+  recoverDueQuickBooksProjections,
+} from "./quickbooks.ts";
 import {
   handlePublicInstantEstimate,
   prunePublicEstimateRateLimits,
@@ -193,6 +196,11 @@ export default {
           ),
           retryEstimateErpNextSyncs(env).catch((error) =>
             log({ at: "estimate_erpnext_retry", error: String(error) }),
+          ),
+          recoverDueQuickBooksProjections(env).then((result) => {
+            if (result.due > 0) log({ at: "quickbooks_projection_recovery", ...result });
+          }).catch((error) =>
+            log({ at: "quickbooks_projection_recovery", error: String(error) }),
           ),
           reconcileCustomerContractAcceptanceAttempts(env).catch((error) =>
             log({ at: "customer_contract_acceptance_reconcile", error: String(error) }),

@@ -1,9 +1,8 @@
 // quickbooks.ts — QuickBooks Online webhook receiver (Phase 3, spec 04 §WF4).
 //
-// Verifies Intuit's HMAC signature, then records each invoice/payment change so nothing is lost.
-// Mirroring the status onto the JobNimbus job needs QB OAuth to fetch entity detail — that's a
-// credential-gated FOLLOW-UP; this receiver captures + audits the events now. Credential-gated on
-// QB_WEBHOOK_TOKEN (the Intuit "verifier token"). Raw is stored FIRST.
+// Verifies Intuit's HMAC signature, records a raw receipt first, and opens bounded
+// reconciliation work for supported finance identities. A webhook is not provider
+// detail: it must never be used to infer paid, posted, reconciled, or amount facts.
 
 import { newEnvelopeId } from "./core.ts";
 import { pushQuickBooksEventToErpNext } from "./erpnext.ts";
@@ -11,16 +10,25 @@ import * as store from "./store.ts";
 
 export interface QbEntityEvent { realmId: string; type: string; id: string; operation: string }
 
+const FINANCE_ENTITY_TYPES = new Set(["Invoice", "Payment", "CreditMemo", "RefundReceipt"]);
+const FINANCE_OPERATIONS = new Set(["Create", "Update", "Delete", "Void"]);
+const QBO_ID = /^[1-9][0-9]{0,31}$/;
+
 /** Pull the flat list of entity changes out of an Intuit webhook payload. Pure. */
 export function parseQbEvents(raw: unknown): QbEntityEvent[] {
   const out: QbEntityEvent[] = [];
   const notes = (raw as { eventNotifications?: unknown[] })?.eventNotifications;
   for (const n of Array.isArray(notes) ? notes : []) {
-    const realmId = String((n as { realmId?: unknown })?.realmId ?? "");
+    const realmId = String((n as { realmId?: unknown })?.realmId ?? "").trim();
     const entities = (n as { dataChangeEvent?: { entities?: unknown[] } })?.dataChangeEvent?.entities;
     for (const e of Array.isArray(entities) ? entities : []) {
       const ent = e as { name?: unknown; id?: unknown; operation?: unknown };
-      out.push({ realmId, type: String(ent.name ?? ""), id: String(ent.id ?? ""), operation: String(ent.operation ?? "") });
+      const type = String(ent.name ?? "").trim();
+      const id = String(ent.id ?? "").trim();
+      const operation = String(ent.operation ?? "").trim();
+      if (QBO_ID.test(realmId) && QBO_ID.test(id) && FINANCE_ENTITY_TYPES.has(type) && FINANCE_OPERATIONS.has(operation)) {
+        out.push({ realmId, type, id, operation });
+      }
     }
   }
   return out;
@@ -79,17 +87,29 @@ export async function handleQuickbooksWebhook(env: Env, rawText: string, signatu
   }
 
   const erpnextPaymentMilestoneIds: string[] = [];
+  const erpnextReconciliationIds: string[] = [];
+  const unresolvedReconciliationIds: string[] = [];
   let erpnextError: string | null = null;
-  for (const e of events) {
-    const erp = await syncQuickBooksEventToErpNext(env, id, e, rawKey, now);
-    if (erp.name) erpnextPaymentMilestoneIds.push(erp.name);
+  for (const [eventIndex, e] of events.entries()) {
+    const erp = await syncQuickBooksEventToErpNext(env, id, e, rawKey, now, payloadHash, eventIndex);
+    if (erp.paymentMilestoneName) erpnextPaymentMilestoneIds.push(erp.paymentMilestoneName);
+    if (erp.reconciliationName) erpnextReconciliationIds.push(erp.reconciliationName);
+    if (erp.unresolved && erp.reconciliationName) unresolvedReconciliationIds.push(erp.reconciliationName);
     if (erp.error) erpnextError = erp.error;
     await store.recordAudit(env, { automation: "quickbooks", trigger: "webhook", envelope_id: id,
-      source_ids: `${e.type}:${e.id}`, target_ids: erp.name ? `payment_milestone:${erp.name}` : undefined,
+      source_ids: `${e.type}:${e.id}`, target_ids: erp.reconciliationName ? `integration_reconciliation:${erp.reconciliationName}` : undefined,
       action: `qb_${e.operation}`.toLowerCase(),
-      result: "ok", error: "jn_sync_pending_oauth" }); // JobNimbus status mirror waits for QB OAuth detail reads.
+      result: erp.error ? "error" : "ok" });
   }
-  return jsonResp({ ok: true, events: events.length, erpnext_payment_milestone_ids: erpnextPaymentMilestoneIds, erpnext_error: erpnextError });
+  return jsonResp({
+    ok: true,
+    events: events.length,
+    provider_truth_reconciled: false,
+    erpnext_payment_milestone_ids: erpnextPaymentMilestoneIds,
+    erpnext_reconciliation_ids: erpnextReconciliationIds,
+    unresolved_reconciliation_ids: unresolvedReconciliationIds,
+    erpnext_error: erpnextError,
+  });
 }
 
 function jsonResp(body: unknown, status = 200): Response {
@@ -111,6 +131,7 @@ async function replayResponse(env: Env, receipt: store.QuickBooksWebhookReceipt)
     replay: true,
     envelope_id: receipt.envelope_id,
     events: receipt.events_count,
+    provider_truth_reconciled: false,
   });
 }
 
@@ -129,7 +150,9 @@ async function syncQuickBooksEventToErpNext(
   event: QbEntityEvent,
   rawKey: string,
   eventTs: string,
-): Promise<{ name: string | null; error: string | null }> {
+  payloadHash: string,
+  eventIndex: number,
+): Promise<{ paymentMilestoneName: string | null; reconciliationName: string | null; unresolved: boolean; error: string | null }> {
   try {
     const erp = await pushQuickBooksEventToErpNext(env, {
       realmId: event.realmId,
@@ -138,18 +161,25 @@ async function syncQuickBooksEventToErpNext(
       operation: event.operation,
       rawKey,
       eventTs,
+      payloadHash,
+      eventIndex,
     });
     if (erp) {
       await store.recordAudit(env, { automation: "erpnext_quickbooks", trigger: "webhook",
         envelope_id: envelopeId, source_ids: `${event.type}:${event.id}`,
-        target_ids: `payment_milestone:${erp.name}`,
-        action: erp.reused ? "upsert_existing" : "create", result: "ok" });
+        target_ids: `integration_reconciliation:${erp.reconciliationName}`,
+        action: erp.reused ? "reuse_pending_reconciliation" : "create_pending_reconciliation", result: "ok" });
     }
-    return { name: erp?.name ?? null, error: null };
+    return {
+      paymentMilestoneName: erp?.paymentMilestoneName ?? null,
+      reconciliationName: erp?.reconciliationName ?? null,
+      unresolved: erp?.unresolved ?? false,
+      error: null,
+    };
   } catch (err) {
     const error = `erpnext_quickbooks: ${String(err)}`;
     await store.recordAudit(env, { automation: "erpnext_quickbooks", trigger: "webhook",
       envelope_id: envelopeId, source_ids: `${event.type}:${event.id}`, action: "sync", result: "error", error });
-    return { name: null, error };
+    return { paymentMilestoneName: null, reconciliationName: null, unresolved: true, error };
   }
 }

@@ -21,6 +21,7 @@ export function takePairingTokenFromWindow(): string | undefined {
 }
 
 export function clearPendingPairingToken(): void {
+  fragmentRead = false;
   pendingToken = undefined;
 }
 

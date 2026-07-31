@@ -38,6 +38,13 @@ estimator/configurator
 [3] ERPNext Lead Envelope + Roof Job + Instant Estimate Session when enabled
 [4] response returns ERPNext ids/errors to the estimator frontend; retries return the original ids
 
+Facet approved design
+  │  POST /ingest/facet-design  (dedicated HMAC; never INGEST_TOKEN)
+  ▼
+[1] signed raw event + source→local allowlist → immutable R2 ........... FIRST
+[2] design receipt + hashed nonce → D1 ........ no quote/contract/Frappe mutation
+[3] later projection consumes the anchored receipt, not a caller retry
+
 IronWrap PWA
   │  passwordless session cookie + exact-origin CORS + CSRF on authenticated mutations
   ▼
@@ -65,6 +72,7 @@ IronWrap PWA
 | Intent → owner queue routing | `core.ts:classifyIntent` |
 | Frappe consumer | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
 | Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: retry-safe project/idempotency key + raw R2 + D1 envelope + Frappe Instant Estimate Session without JobNimbus/GHL dependency |
+| Facet approved-design receipt | `facet-design-ingest.ts` verifies a dedicated raw-body HMAC plus source-tenant allowlist, stores immutable R2 evidence first, then local-tenant D1 event/nonce anchors; it is distinct from estimate, quote, contract, and customer acceptance |
 | Passwordless app auth | `app-auth.ts` + D1 migration `0011`; one-time hashed links, hashed fixed-TTL sessions, exact-origin CORS, CSRF, throttles, and audit |
 | Permission-shaped PWA reads | `app-read-models.ts` + `frappe-read.ts`; hard-coded DocType/field/filter allowlists and fail-closed field assignment |
 
@@ -76,6 +84,7 @@ src/store.ts       D1 + R2 adapters (the owned store)
 src/jobnimbus.ts   Config-gated JobNimbus push adapter
 src/erpnext.ts     Optional ERPNext/Frappe consumer for lead, property, job, estimate, measurement, evidence, field check-in, and payment milestone rows
 src/estimates.ts   Owned estimator/configurator intake; idempotent by project/key; no JobNimbus/GHL queue
+src/facet-design-ingest.ts Signed Facet approved-design evidence receipt; no Frappe projection or commercial mutation
 src/measurement-intake-store.ts Durable, hashed measurement receipt/lease ledger and exception query
 src/google.ts      Gmail send + Google Drive Shared Drive filing
 src/notify.ts      Gmail instant-ack/alerts/digest; no prospect-SMS implementation
@@ -121,6 +130,7 @@ npx wrangler secret put PUBLIC_ESTIMATE_TURNSTILE_SECRET --env=""
 npx wrangler secret put PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER --env=""  # 32+ random characters
 npx wrangler secret put APP_AUTH_PEPPER --env=""  # 32+ random characters; required before APP_BFF_ENABLED=true
 npx wrangler secret put APPROVAL_BROKER_SHARED_SECRET --env=""  # only when the governed approval broker is enabled
+npx wrangler secret put FACET_DESIGN_INGEST_HMAC_KEY --env=""  # separate Facet event authority
 
 npm test                     # pure-logic self-test
 npm run typecheck            # tsc --noEmit
@@ -135,6 +145,7 @@ npx wrangler deploy --env=""
 | POST | `/ingest/:source` | `Bearer INGEST_TOKEN` | ingest a lead (`source` ∈ website,phone,gbp,ad,referral,manual) |
 | POST | `/webhook/newo` | `Bearer NEWO_WEBHOOK_TOKEN` | receive an authenticated Newo Custom Tool handoff as canonical `phone` intake; raw provider body is retained first and duplicate retries do not repeat acknowledgement/queue work. See [`docs/NEWO-INTEGRATION.md`](../docs/NEWO-INTEGRATION.md). |
 | POST | `/ingest/estimate` | `Bearer INGEST_TOKEN` | ingest public estimator/configurator payloads into owned R2/D1 and ERPNext without a JobNimbus/GHL queue dependency; accepts stable project ids or `Idempotency-Key`/`X-Idempotency-Key` for retry-safe replay |
+| POST | `/ingest/facet-design` | dedicated HMAC + exact source-tenant map | receive only `facet.design.approved.v1` design-decision evidence; raw R2 first, immutable local-tenant D1 receipt/nonce second, no quote/contract/Frappe side effect |
 | GET | `/public/instant-estimate/config` | exact configured `Origin` when supplied | public Turnstile/site availability envelope; an Origin-less same-origin GET is allowed without CORS headers |
 | POST | `/public/instant-estimate` | exact configured `Origin` + Turnstile | public estimate qualification; raw canonical consent is stored first, client/IP rate keys are HMAC hashes only, and a non-binding CAD range is returned only from an enabled server rule |
 | POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos, file them to Google Drive, and optionally sync ERPNext Evidence Items |
@@ -464,6 +475,34 @@ explicitly `private, no-store`), content/type/frame/referrer/permissions/HSTS ha
 `X-Request-Id` / `X-Correlation-Id` headers. Static PWA assets are served separately by Cloudflare's
 asset binding and remain cacheable. A safe caller-supplied correlation id is preserved; otherwise
 the Worker generates one.
+
+### Facet design-event receipt contract
+
+Leave `FACET_DESIGN_INGEST_ENABLED=false` until `FACET_DESIGN_INGEST_HMAC_KEY` and an exact
+`FACET_DESIGN_INGEST_TENANT_MAP_JSON` source-to-local allowlist (for example,
+`{"facet-production":"ironwrap"}`) are independently configured. HMAC proves the Facet deployment;
+it does not authorize arbitrary Facet tenants. The sender posts UTF-8 JSON with exactly
+`event_id`, `event_type`, `schema_version`, `occurred_at`, `tenant_id`, `facet_project_id`,
+`design_revision` (`id`, lowercase `sha256`), and a non-empty object `frozen_evidence`.
+`event_type` is exactly `facet.design.approved.v1`; `schema_version` is exactly `1`.
+`frozen_evidence.design` is a non-empty object, and `design_revision` must be exactly
+`{id:"facet-json-v1:${sha256(canonicalJson(frozen_evidence.design))}",sha256:"…"}` with the
+same lowercase SHA-256 value in both places.
+
+The headers are `X-IronWrap-Event-Id`, `X-IronWrap-Event-Timestamp` (13-digit Unix milliseconds,
+within five minutes), `X-IronWrap-Event-Nonce` (32–128 base64url characters), and
+`X-IronWrap-Event-Signature` (unpadded base64url HMAC-SHA256). Sign exactly
+`${timestamp}.${nonce}.${sha256(rawBody)}`; the header event id must equal the JSON event id.
+The JSON `tenant_id` is a Facet source tenant: it must be an exact map key whose configured value
+equals `APP_TENANT_ID`. Missing, malformed, unknown, or mismatched mappings fail before R2/D1;
+the D1 receipt persists only the mapped local tenant. The Worker records only hashes and anchors in
+D1 after immutable R2 storage. A first `202` and fresh-nonce idempotent `200` return the durable
+`accepted`, `event_id`, `status:"received"`, `raw_sha256`, `frozen_evidence_sha256`, and
+`design_revision:{id,sha256}` anchors (the latter also has `idempotent_replay:true`). Reusing a
+nonce is rejected. This event is a customer design decision, not a quote, contract acceptance, or
+Frappe write. A future projection must map the anchored local `tenant_id`, `facet_project_id`,
+design revision id/hash, frozen-evidence hash, and R2 raw key into an explicitly governed Frappe
+design record.
 
 Replay mutation bodies are strict and require `run_id` (3–128 safe identifier characters),
 `approved_by` (3–128 characters), and `reason` (10–500 characters). Targeted example:

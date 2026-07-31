@@ -8,7 +8,10 @@ from typing import Any
 
 import frappe
 
-from ironwrap_roofing.access_control import CUSTOMER_ACCEPTANCE_SERVICE_ROLE
+from ironwrap_roofing.access_control import (
+    CUSTOMER_ACCEPTANCE_SERVICE_ROLE,
+    FACET_DESIGN_PROJECTION_SERVICE_ROLE,
+)
 from ironwrap_roofing.domain_policy import PolicyViolation, validate_record
 from ironwrap_roofing.domain_policy import SHOP_ORDER_FINAL_STATUSES, parse_json_field
 
@@ -230,6 +233,10 @@ _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE: ContextVar[Any | None] = ContextVar(
     "ironwrap_trusted_customer_contract_acceptance",
     default=None,
 )
+_TRUSTED_FACET_DESIGN_PROJECTION: ContextVar[Any | None] = ContextVar(
+    "ironwrap_trusted_facet_design_projection",
+    default=None,
+)
 _TRUSTED_WORK_PACKAGE_TRANSITION: ContextVar[
     tuple[str, tuple[tuple[str, str], ...]] | None
 ] = ContextVar(
@@ -358,6 +365,85 @@ CUSTOMER_QUOTE_ACCEPTANCE_FIELDS = (
     "contract_acceptance",
     "accepted_at",
 )
+FACET_DESIGN_PROJECTION_EVIDENCE_FIELDS = (
+    "evidence_id",
+    "device_action_id",
+    "roof_job",
+    "lead_envelope",
+    "evidence_type",
+    "proof_owner",
+    "proof_slot",
+    "source_system",
+    "source_uri",
+    "r2_key",
+    "drive_file_id",
+    "content_checksum",
+    "checksum_algorithm",
+    "content_type",
+    "content_length",
+    "capture_actor",
+    "captured_at",
+    "latitude",
+    "longitude",
+    "location_accuracy_m",
+    "sync_state",
+    "verified_at",
+    "verification_source",
+    "correction_of",
+    "correction_reason",
+    "customer_safe",
+    "summary",
+)
+FACET_DESIGN_PROJECTION_RECONCILIATION_FIELDS = (
+    "reconciliation_id",
+    "roof_job",
+    "system_name",
+    "entity_type",
+    "external_entity_id",
+    "local_doctype",
+    "local_name",
+    "direction",
+    "status",
+    "detected_at",
+    "raw_key",
+    "source_version",
+    "source_amount",
+    "local_amount",
+    "currency",
+    "source_payload_hash",
+    "local_payload_hash",
+    "last_attempt_at",
+    "attempt_count",
+    "resolution_action",
+    "resolved_by",
+    "resolved_at",
+    "resolution_evidence",
+    "automation_incident",
+    "supersedes",
+    "correction_reason",
+    "notes",
+    "diff_json",
+)
+# A projection's source/quote binding is immutable, but its reconciliation is
+# still a governed workflow.  Keep the two concerns separate so a human can
+# resolve the pending discrepancy without rewriting the evidence it is about.
+FACET_DESIGN_PROJECTION_RECONCILIATION_LIFECYCLE_FIELDS = (
+    "status",
+    "resolution_action",
+    "resolved_by",
+    "resolved_at",
+    "resolution_evidence",
+    "automation_incident",
+    "supersedes",
+    "correction_reason",
+)
+FACET_DESIGN_PROJECTION_RECONCILIATION_ANCHOR_FIELDS = tuple(
+    field
+    for field in FACET_DESIGN_PROJECTION_RECONCILIATION_FIELDS
+    if field not in FACET_DESIGN_PROJECTION_RECONCILIATION_LIFECYCLE_FIELDS
+)
+FACET_DESIGN_PROJECTION_SOURCE_SYSTEM = "ironwrap-facet-design"
+FACET_DESIGN_PROJECTION_VERIFICATION_SOURCE = "ironwrap-worker-r2-facet-design-projection"
 WORK_PACKAGE_RUNTIME_FIELDS = (
     "status",
     "released_by",
@@ -526,6 +612,58 @@ def _customer_quote_acceptance_snapshot(
     )
 
 
+def _facet_design_projection_evidence_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, FACET_DESIGN_PROJECTION_EVIDENCE_FIELDS)
+
+
+def _facet_design_projection_reconciliation_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, FACET_DESIGN_PROJECTION_RECONCILIATION_FIELDS)
+
+
+def _facet_design_projection_reconciliation_anchor_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, FACET_DESIGN_PROJECTION_RECONCILIATION_ANCHOR_FIELDS)
+
+
+def _facet_design_projection_reconciliation_allows_lifecycle_transition(
+    document: Any, previous_document: Any
+) -> bool:
+    """Allow only the ordinary reconciliation resolution fields to move with state."""
+
+    current_status = str(document.get("status") or "")
+    previous_status = str(previous_document.get("status") or "")
+    if current_status == previous_status:
+        return False
+
+    mutable_fields = {"status"}
+    if current_status in {"Resolved", "Ignored"}:
+        mutable_fields.update(
+            {
+                "resolution_action",
+                "resolved_by",
+                "resolved_at",
+                "resolution_evidence",
+                "automation_incident",
+            }
+        )
+    elif current_status == "Superseded":
+        mutable_fields.update({"supersedes", "correction_reason"})
+
+    protected_fields = tuple(
+        field
+        for field in FACET_DESIGN_PROJECTION_RECONCILIATION_LIFECYCLE_FIELDS
+        if field not in mutable_fields
+    )
+    return _runtime_snapshot(document, protected_fields) == _runtime_snapshot(
+        previous_document, protected_fields
+    )
+
+
 def _quote_acceptance_status(
     snapshot: tuple[str, tuple[tuple[str, str], ...]],
 ) -> str:
@@ -544,6 +682,22 @@ def _is_customer_acceptance_service_actor() -> bool:
 def _reject_customer_acceptance_service_generic_write() -> None:
     frappe.throw(
         "Customer acceptance service users may only mutate records through the bounded customer contract command.",
+        exc=frappe.PermissionError,
+    )
+
+
+def _is_facet_design_projection_service_actor() -> bool:
+    actor = getattr(getattr(frappe, "session", None), "user", None)
+    if not isinstance(actor, str) or not actor:
+        return False
+    return FACET_DESIGN_PROJECTION_SERVICE_ROLE in {
+        str(role) for role in frappe.get_roles(actor)
+    }
+
+
+def _reject_facet_design_projection_service_generic_write() -> None:
+    frappe.throw(
+        "Facet design projection service users may only mutate records through the bounded projection command.",
         exc=frappe.PermissionError,
     )
 
@@ -731,6 +885,28 @@ def customer_contract_acceptance_issuance_context(
 
 
 @contextmanager
+def facet_design_projection_issuance_context(evidence: Any, reconciliation: Any):
+    """Authorize one exact, review-only Facet evidence/reconciliation insert.
+
+    The bounded Worker command creates this private context only after it has
+    authenticated the dedicated service user, verified its independent HMAC,
+    and locked the explicit Roof Job/Customer Quote association.  It grants no
+    authority to edit either commercial record or publish a proposal.
+    """
+
+    token = _TRUSTED_FACET_DESIGN_PROJECTION.set(
+        (
+            _facet_design_projection_evidence_snapshot(evidence),
+            _facet_design_projection_reconciliation_snapshot(reconciliation),
+        )
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_FACET_DESIGN_PROJECTION.reset(token)
+
+
+@contextmanager
 def work_package_transition_context(document: Any):
     """Authorize one exact Work Package lifecycle save from a narrow command.
 
@@ -818,6 +994,7 @@ def validate_evidence_verification_mutation(document: Any) -> None:
     """Keep generic document writes from creating or promoting verified evidence."""
 
     customer_contract_context = _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.get()
+    facet_projection_context = _TRUSTED_FACET_DESIGN_PROJECTION.get()
     if _is_customer_acceptance_service_actor():
         if (
             customer_contract_context is not None
@@ -826,6 +1003,14 @@ def validate_evidence_verification_mutation(document: Any) -> None:
         ):
             return
         _reject_customer_acceptance_service_generic_write()
+    if _is_facet_design_projection_service_actor():
+        if (
+            facet_projection_context is not None
+            and facet_projection_context[0]
+            == _facet_design_projection_evidence_snapshot(document)
+        ):
+            return
+        _reject_facet_design_projection_service_generic_write()
     if document.get("sync_state") != "Verified":
         return
     previous = _previous(document)
@@ -860,6 +1045,74 @@ def validate_quickbooks_reconciliation_issuance(document: Any) -> None:
     frappe.throw(
         "QuickBooks reconciliations can only be issued by the dedicated Worker command.",
         exc=frappe.PermissionError,
+    )
+
+
+def validate_facet_design_projection_evidence_mutation(document: Any) -> None:
+    """Freeze a projected design revision even for non-service Frappe users."""
+
+    previous_document = _previous(document)
+    previous_is_projection = previous_document is not None and (
+        previous_document.get("source_system") == FACET_DESIGN_PROJECTION_SOURCE_SYSTEM
+        or previous_document.get("verification_source")
+        == FACET_DESIGN_PROJECTION_VERIFICATION_SOURCE
+    )
+    current_is_projection = (
+        document.get("source_system") == FACET_DESIGN_PROJECTION_SOURCE_SYSTEM
+        or document.get("verification_source") == FACET_DESIGN_PROJECTION_VERIFICATION_SOURCE
+    )
+    if not previous_is_projection and not current_is_projection:
+        return
+    current = _facet_design_projection_evidence_snapshot(document)
+    context = _TRUSTED_FACET_DESIGN_PROJECTION.get()
+    if (
+        previous_document is None
+        and context is not None
+        and context[0] == current
+    ):
+        return
+    if previous_document is not None and current == _facet_design_projection_evidence_snapshot(
+        previous_document
+    ):
+        return
+    frappe.throw(
+        "Projected Facet design evidence is immutable and can only be corrected by a new design revision.",
+        exc=frappe.ValidationError,
+    )
+
+
+def validate_facet_design_projection_reconciliation_mutation(document: Any) -> None:
+    """Freeze a Facet source binding while permitting a governed resolution transition."""
+
+    previous_document = _previous(document)
+    previous_is_projection = previous_document is not None and str(
+        previous_document.get("reconciliation_id") or ""
+    ).startswith("facet-design-projection:")
+    current_is_projection = str(document.get("reconciliation_id") or "").startswith(
+        "facet-design-projection:"
+    )
+    if not previous_is_projection and not current_is_projection:
+        return
+    current = _facet_design_projection_reconciliation_snapshot(document)
+    context = _TRUSTED_FACET_DESIGN_PROJECTION.get()
+    if (
+        previous_document is None
+        and context is not None
+        and context[1] == current
+    ):
+        return
+    if previous_document is not None:
+        if (
+            _facet_design_projection_reconciliation_anchor_snapshot(document)
+            == _facet_design_projection_reconciliation_anchor_snapshot(previous_document)
+            and _facet_design_projection_reconciliation_allows_lifecycle_transition(
+                document, previous_document
+            )
+        ):
+            return
+    frappe.throw(
+        "Projected Facet design reconciliation keeps its source binding immutable and must use a governed lifecycle transition.",
+        exc=frappe.ValidationError,
     )
 
 

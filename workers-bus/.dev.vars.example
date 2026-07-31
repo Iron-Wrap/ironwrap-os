@@ -35,6 +35,15 @@ FACET_DESIGN_INGEST_HMAC_KEY="replace-with-a-separate-32-byte-secret"
 # Exact Facet source tenant -> local IronWrap tenant allowlist; required before enabling ingress.
 FACET_DESIGN_INGEST_TENANT_MAP_JSON='{"facet-production":"ironwrap"}'
 
+# Dedicated Worker-to-Frappe Facet evidence projection. These must belong to the
+# `IronWrap Facet Design Projection Service` role and never reuse the Facet ingress HMAC,
+# broad ERP token, or customer-contract service identity.
+FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY="replace-with-a-different-32-byte-secret"
+FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY=""
+FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET=""
+# Deployment-controlled opaque exact-anchor mappings only; no names, addresses, prices, or user input.
+FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON='{"schema_version":1,"associations":[]}'
+
 # Public instant estimate (disabled until the non-secret vars in wrangler.jsonc
 # are configured with exact origins, rate limits, and a validated JSON rule set).
 PUBLIC_ESTIMATE_TURNSTILE_SECRET=""
@@ -54,6 +63,7 @@ PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER="replace-with-at-least-32-random-characters"
 # APP_ALLOW_INSECURE_LOCAL="true"
 # APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED="false"
 # FACET_DESIGN_INGEST_ENABLED="false"
+# FACET_DESIGN_FRAPPE_PROJECTION_ENABLED="false"
 # APP_INSURANCE_ESTIMATOR_FRAPPE_USERS="estimator@your-site.example"
 # PUBLIC_ESTIMATE_ENABLED="true"
 # PUBLIC_ESTIMATE_ALLOWED_ORIGINS="http://localhost:5173"

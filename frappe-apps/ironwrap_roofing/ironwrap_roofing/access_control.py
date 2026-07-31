@@ -7,6 +7,7 @@ CUSTOMER_ACCEPTANCE_SERVICE_ROLE = "IronWrap Customer Acceptance Service"
 QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE = (
     "IronWrap QuickBooks Reconciliation Issuer"
 )
+FACET_DESIGN_PROJECTION_SERVICE_ROLE = "IronWrap Facet Design Projection Service"
 
 IRONWRAP_ROLES = (
     "IronWrap Owner",
@@ -21,6 +22,7 @@ IRONWRAP_ROLES = (
 IRONWRAP_SERVICE_ROLES = (
     CUSTOMER_ACCEPTANCE_SERVICE_ROLE,
     QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE,
+    FACET_DESIGN_PROJECTION_SERVICE_ROLE,
 )
 ALL_IRONWRAP_ROLES = IRONWRAP_ROLES + IRONWRAP_SERVICE_ROLES
 
@@ -69,6 +71,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Finance": READ,
         "IronWrap Production": READ,
         CUSTOMER_ACCEPTANCE_SERVICE_ROLE: WRITE_EXISTING,
+        FACET_DESIGN_PROJECTION_SERVICE_ROLE: READ,
     },
     "Contract Acceptance": {
         "IronWrap Sales": WRITE,
@@ -98,6 +101,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Closeout": WRITE,
         "IronWrap Support": READ,
         CUSTOMER_ACCEPTANCE_SERVICE_ROLE: CREATE,
+        FACET_DESIGN_PROJECTION_SERVICE_ROLE: CREATE,
     },
     "Field Check-in": {
         "IronWrap Production": WRITE,
@@ -118,6 +122,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         # private issuer context; this create-only role exists solely so the
         # bounded command can insert one Pending record.
         QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE: CREATE,
+        FACET_DESIGN_PROJECTION_SERVICE_ROLE: CREATE,
     },
     "Insurance Supplement": {"IronWrap Estimator": WRITE},
     "Job Assignment": {
@@ -210,6 +215,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Closeout": WRITE,
         "IronWrap Support": READ,
         CUSTOMER_ACCEPTANCE_SERVICE_ROLE: READ,
+        FACET_DESIGN_PROJECTION_SERVICE_ROLE: READ,
     },
     "Roofing Customer": {
         "IronWrap Sales": WRITE,

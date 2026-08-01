@@ -26,6 +26,7 @@ class SqliteD1 {
       "0001_init.sql",
       "0009_replay_approval_audit.sql",
       "0019_measurement_intake_receipts.sql",
+      "0033_measurement_deltas.sql",
     ]) {
       this.raw.exec(
         readFileSync(
@@ -836,6 +837,37 @@ test("measurement intake: Solar cross-check flags divergence and passes agreemen
   };
   assert.equal(agreeingGraph.needs_review, false);
   assert.equal(agreeingGraph.checks.find((c) => c.check === "cross_source_roof_area")?.ok, true);
+
+  // Every comparison landed in the calibration ledger with structured numbers.
+  const ledger = db.raw
+    .prepare("SELECT check_name, metric, ok, primary_value, independent_value, rel_diff FROM measurement_deltas ORDER BY id")
+    .all() as Array<{ check_name: string; metric: string; ok: number; primary_value: number | null; independent_value: number | null; rel_diff: number | null }>;
+  const areaRows = ledger.filter((r) => r.check_name === "cross_source_roof_area");
+  assert.equal(areaRows.length, 2); // divergent + agreeing submissions
+  assert.equal(areaRows[0].ok, 0);
+  assert.equal(areaRows[0].primary_value, 100);
+  assert.ok((areaRows[0].rel_diff ?? 0) > 0.4);
+  assert.equal(areaRows[1].ok, 1);
+  assert.ok((areaRows[1].rel_diff ?? 1) < 0.001);
+  assert.ok(ledger.some((r) => r.check_name === "cross_source_imagery" && r.metric === ""));
+
+  // The admin surface exposes rows + measured-accuracy aggregates.
+  const adminRes = await worker.fetch(
+    new Request("https://bus.example/admin/measurements/deltas", {
+      headers: { authorization: "Bearer admin-token" },
+    }),
+    env as never,
+    ctx as never,
+  );
+  assert.equal(adminRes.status, 200);
+  const adminBody = (await adminRes.json()) as {
+    deltas: Array<{ check_name: string }>;
+    aggregates: Array<{ source: string; metric: string; total: number; ok_count: number }>;
+  };
+  assert.ok(adminBody.deltas.length >= 4);
+  const areaAgg = adminBody.aggregates.find((a) => a.source === "google_solar" && a.metric === "roof_area")!;
+  assert.equal(areaAgg.total, 2);
+  assert.equal(Number(areaAgg.ok_count), 1);
 });
 
 test("measurement intake: Solar outage never fails intake", async (t) => {

@@ -17,6 +17,7 @@ import {
   parseSolarBuildingInsights,
   solarConfigured,
 } from "./solar.ts";
+import { recordMeasurementDeltas, type MeasurementDeltaRow } from "./measurement-deltas-store.ts";
 import { deriveRoofGraph, type RoofGraphV1 } from "./roof-graph.ts";
 import {
   claimMeasurementIntakeReceipt,
@@ -243,7 +244,7 @@ async function processClaimedMeasurementIntake(
     : null;
   try {
     if (!sub.jobNumber) {
-      await applySolarCrossCheck(env, geometry, sub.coords);
+      await applySolarCrossCheck(env, geometry, sub.coords, receipt);
       const erp = await syncMeasurementToErpNext(env, receipt, sub, identity.rawKey, parsedAt, null, geometry, graphFor(geometry));
       await store.recordAudit(env, {
         automation: "measurement",
@@ -280,7 +281,7 @@ async function processClaimedMeasurementIntake(
         sub.measurements = { ...sub.measurements, ...zipGeometry.measurements };
       }
     }
-    await applySolarCrossCheck(env, geometry, sub.coords);
+    await applySolarCrossCheck(env, geometry, sub.coords, receipt);
     if (filing.report && filing.report !== receipt.drive_report_url) {
       await recordMeasurementDriveFiling(env, {
         receiptId: receipt.receipt_id,
@@ -463,33 +464,59 @@ export async function geometryFromReportBytes(bytes: ArrayBuffer | Uint8Array): 
 /**
  * Best-effort independent verification: when the payload carries coordinates and a
  * Solar key is configured, cross-check the parsed geometry against Google's building
- * model. Appends checks in place; a Solar outage or gap never fails intake.
+ * model. Appends checks in place AND persists every comparison to the delta ledger
+ * (calibration data). A Solar outage, coverage gap, or pre-0033 database never
+ * fails intake.
  */
 async function applySolarCrossCheck(
   env: Env,
   geometry: GeometryModel | null,
   coords: { lat: number; lng: number } | null,
+  receipt: MeasurementIntakeReceipt,
 ): Promise<void> {
   if (!geometry || !coords || !solarConfigured(env)) return;
+  const ledger: MeasurementDeltaRow[] = [];
+  const base = {
+    receipt_id: receipt.receipt_id,
+    measurement_id: receipt.measurement_id,
+    job_number: receipt.job_number,
+    provider: receipt.provider,
+    source: "google_solar",
+  };
   try {
     const insights = await fetchBuildingInsights(env, coords.lat, coords.lng);
     if (insights === null) {
-      geometry.checks.push({ check: "cross_source_coverage", target: "google_solar", ok: true, detail: "no Solar coverage at location" });
+      const detail = "no Solar coverage at location";
+      geometry.checks.push({ check: "cross_source_coverage", target: "google_solar", ok: true, detail });
+      ledger.push({ ...base, check_name: "cross_source_coverage", metric: "", ok: true,
+        primary_value: null, independent_value: null, rel_diff: null, abs_diff: null, detail });
       return;
     }
     const solar = parseSolarBuildingInsights(insights);
     if (!solar) return;
     const cross = crossCheckMeasurements(geometry.measurements, solar.measurements);
     geometry.checks.push(...cross.checks);
-    geometry.checks.push({
-      check: "cross_source_imagery",
-      target: "google_solar",
-      ok: true,
-      detail: `imagery ${solar.imageryDate ?? "unknown"} quality ${solar.imageryQuality ?? "unknown"}`,
-    });
+    const imageryDetail = `imagery ${solar.imageryDate ?? "unknown"} quality ${solar.imageryQuality ?? "unknown"}`;
+    geometry.checks.push({ check: "cross_source_imagery", target: "google_solar", ok: true, detail: imageryDetail });
     geometry.needsReview = geometry.needsReview || cross.needsReview;
+    for (const c of cross.comparisons) {
+      ledger.push({ ...base, check_name: `cross_source_${c.metric}`, metric: c.metric, ok: c.ok,
+        primary_value: c.primary, independent_value: c.independent,
+        rel_diff: c.relDiff, abs_diff: c.absDiff,
+        detail: cross.checks.find((chk) => chk.check === `cross_source_${c.metric}`)?.detail ?? "" });
+    }
+    ledger.push({ ...base, check_name: "cross_source_imagery", metric: "", ok: true,
+      primary_value: null, independent_value: null, rel_diff: null, abs_diff: null, detail: imageryDetail });
   } catch (error) {
     log({ at: "measurement_solar_crosscheck", error: String(error).slice(0, 200) });
+  } finally {
+    if (ledger.length) {
+      try {
+        await recordMeasurementDeltas(env, ledger);
+      } catch (error) {
+        log({ at: "measurement_delta_ledger", error: String(error).slice(0, 200) });
+      }
+    }
   }
 }
 

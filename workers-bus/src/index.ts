@@ -67,6 +67,7 @@ import {
   projectMeasurementIntakeAdminException,
   type MeasurementIntakeAdminException,
 } from "./measurement-intake-store.ts";
+import { aggregateMeasurementDeltas, listMeasurementDeltas } from "./measurement-deltas-store.ts";
 import { markExpiredExecutionLeases } from "./approval-store.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 import { markExpiredProductionScheduleApprovalExecutionLeases } from "./production-schedule-approval-store.ts";
@@ -354,6 +355,15 @@ async function routeRequest(
       url.pathname === "/admin/measurements/exceptions"
     ) {
       return json(await handleListMeasurementExceptions(env, url));
+    }
+    // Calibration ledger: recent verification comparisons + measured accuracy
+    // aggregates per (source, metric). Read-only; rows are written at intake.
+    if (req.method === "GET" && url.pathname === "/admin/measurements/deltas") {
+      const limit = clampLimit(url.searchParams.get("limit"), 50, 200);
+      return json({
+        deltas: await listMeasurementDeltas(env, limit),
+        aggregates: await aggregateMeasurementDeltas(env),
+      });
     }
     if (req.method === "GET" && url.pathname === "/admin/status") {
       return json(

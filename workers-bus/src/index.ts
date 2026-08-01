@@ -25,6 +25,7 @@ import {
   getOperationalStatus,
   getNewoOpenIncidentCount,
   getReadiness,
+  runOwnerWatchdog,
   validateReplayApprovalContext,
 } from "./operations.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
@@ -169,6 +170,9 @@ export default {
       ctx.waitUntil(
         Promise.all([
           runReconcile(env),
+          runOwnerWatchdog(env).catch((error) =>
+            log({ at: "owner_watchdog", error: String(error) })
+          ),
           runNewoDailyReconcile(env).catch((error) =>
             log({ at: "newo_daily_reconcile", error: String(error) })
           ),
@@ -252,12 +256,16 @@ async function routeRequest(
     return methodAwareJson(req, { ok: true });
   if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/ready") {
     const readiness = await getReadiness(env);
+    // ?scope=core reports only the owned intake spine so a deliberate launch
+    // gate (Newo) cannot hide a core regression from monitoring. The full
+    // verdict remains the default.
+    const verdict = url.searchParams.get("scope") === "core" ? readiness.core_ok : readiness.ok;
     // Keep public monitoring useful without advertising the state of every
     // downstream rail to an unauthenticated caller. Operators can use the
     // existing admin bearer token for the diagnostic check map.
     if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN))
-      return methodAwareJson(req, { ok: readiness.ok }, readiness.ok ? 200 : 503);
-    return methodAwareJson(req, readiness, readiness.ok ? 200 : 503);
+      return methodAwareJson(req, { ok: verdict }, verdict ? 200 : 503);
+    return methodAwareJson(req, readiness, verdict ? 200 : 503);
   }
   // Public estimator traffic is browser-origin constrained and has independent
   // Turnstile/rate controls. It never accepts the private ingest bearer token.

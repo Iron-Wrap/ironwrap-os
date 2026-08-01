@@ -9,6 +9,9 @@ import { publicEstimateConfigured, type PublicEstimatorEnv } from "./public-esti
 import type { AppEnv } from "./app-types.ts";
 import { NewoApiClient, newoClientConfigFromEnv, type NewoJson } from "./newo-client.ts";
 import { countOpenNewoDeadLetters, newoOperationalCounts } from "./newo-store.ts";
+import { listMeasurementIntakeExceptions } from "./measurement-intake-store.ts";
+import { countFailedDeltasSince } from "./measurement-deltas-store.ts";
+import { gmailConfigured, sendGmail } from "./google.ts";
 
 export const BULK_REPLAY_CONFIRMATION = "REPLAY_ALL_OPEN_DEAD_LETTERS";
 const HEARTBEAT_FRESHNESS_HOURS = 36;
@@ -63,6 +66,8 @@ export type ReplayApprovalValidation =
 
 export interface ReadinessReport {
   ok: boolean;
+  /** Owned intake spine only; the deliberate Newo launch gate is excluded. */
+  core_ok: boolean;
   status: "ready" | "not_ready";
   checks: {
     d1: boolean;
@@ -261,9 +266,107 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
   checks.newo_jobnimbus_bridge = !newo.required || newo.jobnimbus_bridge_ready;
   checks.newo_booking_mode = !newo.required || newo.booking_mode_ready;
 
-  const ok = Object.values(checks).every(Boolean);
-  return { ok, status: ok ? "ready" : "not_ready", checks, newo };
+  const verdicts = readinessVerdicts(checks);
+  return { ...verdicts, status: verdicts.ok ? "ready" : "not_ready", checks, newo };
 }
+
+/**
+ * Core = the owned intake spine (D1, R2, queue, auth, notification, Frappe/BFF
+ * configuration). Newo checks stay in the FULL verdict because voice is a
+ * deliberate launch gate, but they must not be able to hide a core regression:
+ * a red that is red by design trains everyone to ignore red.
+ */
+export function readinessVerdicts(
+  checks: ReadinessReport["checks"],
+): { ok: boolean; core_ok: boolean } {
+  const entries = Object.entries(checks);
+  return {
+    ok: entries.every(([, value]) => value),
+    core_ok: entries
+      .filter(([name]) => !name.startsWith("newo_"))
+      .every(([, value]) => value),
+  };
+}
+
+const WATCHDOG_EXCEPTION_THRESHOLD = 5;
+
+/** Pure alert policy: what is worth an owner email. */
+export function watchdogFindings(input: {
+  coreOk: boolean;
+  failedCoreChecks: string[];
+  exceptionCount: number;
+  deltaFailures24h: number;
+}): string[] {
+  const findings: string[] = [];
+  if (!input.coreOk) {
+    findings.push(
+      `core readiness failing: ${input.failedCoreChecks.join(", ") || "unknown check"}`,
+    );
+  }
+  if (input.exceptionCount >= WATCHDOG_EXCEPTION_THRESHOLD)
+    findings.push(`measurement exception backlog at ${input.exceptionCount}`);
+  if (input.deltaFailures24h > 0)
+    findings.push(`${input.deltaFailures24h} failed cross-source comparison(s) in the last 24h`);
+  return findings;
+}
+
+/**
+ * Daily self-observation: compute the signals the system already produces and
+ * email the owner ONLY when something needs attention (alert, not newsletter).
+ * Every failure path degrades to logging; the watchdog itself must never throw
+ * into the cron tick.
+ */
+export async function runOwnerWatchdog(
+  env: Env,
+  now = new Date(),
+): Promise<{ alerted: boolean; findings: string[] }> {
+  const readiness = await getReadiness(env);
+  const failedCoreChecks = Object.entries(readiness.checks)
+    .filter(([name, value]) => !value && !name.startsWith("newo_"))
+    .map(([name]) => name);
+  let exceptionCount = 0;
+  try {
+    exceptionCount = (await listMeasurementIntakeExceptions(env, 50)).length;
+  } catch (error) {
+    opsLog({ at: "owner_watchdog_exceptions", error: String(error).slice(0, 200) });
+  }
+  let deltaFailures24h = 0;
+  try {
+    deltaFailures24h = await countFailedDeltasSince(
+      env,
+      new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
+    );
+  } catch (error) {
+    opsLog({ at: "owner_watchdog_deltas", error: String(error).slice(0, 200) });
+  }
+  const findings = watchdogFindings({
+    coreOk: readiness.core_ok,
+    failedCoreChecks,
+    exceptionCount,
+    deltaFailures24h,
+  });
+  if (!findings.length) return { alerted: false, findings };
+  opsLog({ at: "owner_watchdog", findings });
+
+  const ownerEmail = ((env as { OWNER_ALERT_EMAIL?: string }).OWNER_ALERT_EMAIL ?? "").trim();
+  if (!ownerEmail || !gmailConfigured(env)) return { alerted: false, findings };
+  try {
+    const items = findings.map((finding) => `<li>${finding}</li>`).join("");
+    await sendGmail(
+      env,
+      ownerEmail,
+      "IronWrap bus watchdog: attention required",
+      `<p>The daily self-check found:</p><ul>${items}</ul>` +
+        `<p>Diagnostics: /ready and /admin/measurements/exceptions and /admin/measurements/deltas (admin token).</p>`,
+    );
+    return { alerted: true, findings };
+  } catch (error) {
+    opsLog({ at: "owner_watchdog_email", error: String(error).slice(0, 200) });
+    return { alerted: false, findings };
+  }
+}
+
+const opsLog = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
 
 export async function buildOwnerRuntimeReadModel(
   env: Env,

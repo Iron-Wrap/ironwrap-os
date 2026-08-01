@@ -314,9 +314,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     const migrations = (await readdir(new URL("../migrations/", import.meta.url)))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 32);
+    assert.equal(migrations.length, 33);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0032_facet_design_frappe_projection.sql");
+    assert.equal(migrations.at(-1), "0033_measurement_deltas.sql");
     for (const migration of migrations) {
       db.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -333,7 +333,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
          SUM(type = 'trigger') AS triggers
        FROM sqlite_master`,
     ).get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 46, indexes: 76, triggers: 59 });
+    assert.deepEqual({ ...counts }, { tables: 47, indexes: 79, triggers: 59 });
 
     const quickBooksOutboxColumns = db.prepare(
       "PRAGMA table_info(quickbooks_projection_outbox)",

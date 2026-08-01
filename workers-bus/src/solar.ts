@@ -44,7 +44,23 @@ export interface SolarModel {
   sourceRefs: Record<string, string>;
 }
 
-export interface CrossCheckResult { checks: GeoCheck[]; needsReview: boolean }
+export interface CrossCheckComparison {
+  metric: string;
+  primary: number;
+  independent: number;
+  /** Relative difference for area-like metrics; null when absolute is the unit. */
+  relDiff: number | null;
+  /** Absolute difference for pitch-like metrics; null when relative is the unit. */
+  absDiff: number | null;
+  ok: boolean;
+}
+
+export interface CrossCheckResult {
+  checks: GeoCheck[];
+  needsReview: boolean;
+  /** Structured rows for the measurement-delta ledger (same facts as checks). */
+  comparisons: CrossCheckComparison[];
+}
 
 export interface CrossCheckOptions {
   /** Relative roof-area tolerance (default 10%: catches wrong building, not drift). */
@@ -170,24 +186,43 @@ export function crossCheckMeasurements(
   const pitchTolerance = opts.pitchTolerance ?? 1;
   const label = opts.providerLabel ?? "google_solar";
   const checks: GeoCheck[] = [];
+  const comparisons: CrossCheckComparison[] = [];
 
   if (primary.roof_area !== undefined && independent.roof_area !== undefined && primary.roof_area > 0) {
     const rel = Math.abs(primary.roof_area - independent.roof_area) / primary.roof_area;
+    const ok = rel <= areaTolerance;
     checks.push({
       check: "cross_source_roof_area",
       target: label,
-      ok: rel <= areaTolerance,
+      ok,
       detail: `primary ${primary.roof_area} sf vs ${label} ${independent.roof_area} sf (${(rel * 100).toFixed(1)}%)`,
+    });
+    comparisons.push({
+      metric: "roof_area",
+      primary: primary.roof_area,
+      independent: independent.roof_area,
+      relDiff: round(rel, 6),
+      absDiff: null,
+      ok,
     });
   }
   if (primary.pitch !== undefined && independent.pitch !== undefined) {
     const diff = Math.abs(primary.pitch - independent.pitch);
+    const ok = diff <= pitchTolerance;
     checks.push({
       check: "cross_source_pitch",
       target: label,
-      ok: diff <= pitchTolerance,
+      ok,
       detail: `primary ${primary.pitch}/12 vs ${label} ${independent.pitch}/12 (diff ${round(diff, 2)})`,
     });
+    comparisons.push({
+      metric: "pitch",
+      primary: primary.pitch,
+      independent: independent.pitch,
+      relDiff: null,
+      absDiff: round(diff, 4),
+      ok,
+    });
   }
-  return { checks, needsReview: checks.some((c) => !c.ok) };
+  return { checks, needsReview: checks.some((c) => !c.ok), comparisons };
 }

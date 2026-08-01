@@ -19,6 +19,9 @@ import {
 } from "./frappe-read.ts";
 import { parseBody } from "./core.ts";
 import { extractGeometry } from "./measurements.ts";
+import type { GeometryModel } from "./geometry.ts";
+import { takeoffFromGeometry, type TakeoffModel } from "./takeoff.ts";
+import { priceTakeoff, type PriceList } from "./pricing.ts";
 import { listLeadMctbEvidence, type LeadAckReceipt } from "./store.ts";
 import {
   fieldWorkPackageForAssignment,
@@ -42,6 +45,8 @@ const MAX_ESTIMATOR_CHECKS = 80;
 const MAX_ESTIMATOR_FACETS = 120;
 const MAX_ESTIMATOR_METRICS = 120;
 const MAX_ESTIMATOR_TAKEOFF_ITEMS = 250;
+const MAX_ESTIMATOR_COMPUTED_TRIMS = 40;
+const MAX_ESTIMATOR_ESTIMATE_LINES = 60;
 const MAX_ESTIMATOR_GEOMETRY_LABEL = 240;
 const MAX_ESTIMATOR_GEOMETRY_DETAIL = 600;
 const MAX_ESTIMATOR_ROOF_GRAPH_JSON_LENGTH = 768 * 1024;
@@ -519,6 +524,8 @@ export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
       metrics_truncated: boolean;
       geometry: EstimatorGeometryProjection;
       roof_graph: EstimatorRoofGraphProjection | null;
+      computed_takeoff: EstimatorComputedTakeoffProjection;
+      computed_estimate: EstimatorComputedEstimateProjection;
     } | null;
   };
   visual_model: {
@@ -2161,14 +2168,19 @@ export async function buildEstimatorWorkbenchReadModel(
     takeoffRead.unavailable_reason ??
     (takeoffRead.row && !takeoffDetail ? "takeoff_detail_mismatch" : null);
 
+  const geometryCapture: { model?: GeometryModel } = {};
   const geometry = measurementDetail
-    ? await estimatorGeometryFromRaw(env, text(measurementDetail.raw_key))
+    ? await estimatorGeometryFromRaw(env, text(measurementDetail.raw_key), geometryCapture)
     : unavailableEstimatorGeometry(
         selectedMeasurementRow
           ? (measurementDetailIssue ?? "measurement_detail_unavailable")
           : "no_measurement_report",
       );
   const roofGraph = estimatorRoofGraphProjection(measurementDetail);
+  // Measurement-to-money projection: recomputed takeoff over the same verified
+  // model, priced only when the tenant supplies a price list.
+  const computedTakeoff = estimatorComputedTakeoff(geometryCapture.model ?? null);
+  const computedEstimate = estimatorComputedEstimate(env, computedTakeoff.takeoff);
   const staleFields: string[] = [];
   if (selectedMeasurementRow && !measurementDetail)
     staleFields.push("measurements.selected_detail");
@@ -2267,6 +2279,8 @@ export async function buildEstimatorWorkbenchReadModel(
         measurementDetail,
         geometry,
         roofGraph,
+        computedTakeoff.projection,
+        computedEstimate,
       ),
     },
     visual_model: estimatorVisualModel(
@@ -3211,11 +3225,166 @@ function visualConfidence(value: unknown): number | null | undefined {
   return result !== null && result >= 0 && result <= 100 ? result : undefined;
 }
 
+// ---- computed takeoff + estimate: the measurement-to-money projection ----
+//
+// Both are pure recomputations over the verified geometry the workbench already
+// loads: no Frappe writes, no stored state, bounded like every other estimator
+// projection. Pricing activates only when the tenant configures
+// ESTIMATOR_PRICE_LIST_JSON; rates never live in code.
+
+export interface EstimatorComputedTakeoffProjection {
+  state: "computed" | "unavailable";
+  reason: string | null;
+  needs_review: boolean | null;
+  panel_count: number | null;
+  panel_ft: number | null;
+  panel_area_sqft: number | null;
+  roof_area_computed_sqft: number | null;
+  overage: number | null;
+  skipped_facets: number | null;
+  nest: { mode: string; stock_ft: number; cut_ft: number; waste_pct: number; reused_cuts: number } | null;
+  trims: Array<{ profile: string; total_ft: number; sticks: number }>;
+  trims_truncated: boolean;
+  fasteners: { clips: number; clip_screws: number; trim_screws: number } | null;
+  failed_check_count: number | null;
+}
+
+export interface EstimatorComputedEstimateProjection {
+  state: "priced" | "unconfigured" | "invalid_price_list" | "unavailable";
+  currency: string | null;
+  lines: Array<{ kind: string; sku: string; description: string; qty: number; unit: string; rate: number; amount: number }>;
+  lines_truncated: boolean;
+  subtotal: number | null;
+  markup: number | null;
+  tax: number | null;
+  total: number | null;
+  unpriced_profiles: string[];
+  needs_review: boolean | null;
+}
+
+function unavailableComputedTakeoff(reason: string): EstimatorComputedTakeoffProjection {
+  return {
+    state: "unavailable", reason, needs_review: null, panel_count: null, panel_ft: null,
+    panel_area_sqft: null, roof_area_computed_sqft: null, overage: null, skipped_facets: null,
+    nest: null, trims: [], trims_truncated: false, fasteners: null, failed_check_count: null,
+  };
+}
+
+function estimatorComputedTakeoff(
+  model: GeometryModel | null,
+): { projection: EstimatorComputedTakeoffProjection; takeoff: TakeoffModel | null } {
+  if (!model) return { projection: unavailableComputedTakeoff("geometry_unavailable"), takeoff: null };
+  try {
+    const takeoff = takeoffFromGeometry(model);
+    return {
+      takeoff,
+      projection: {
+        state: "computed",
+        reason: null,
+        needs_review: takeoff.needsReview,
+        panel_count: takeoff.totals.panelCount,
+        panel_ft: takeoff.totals.panelFt,
+        panel_area_sqft: takeoff.totals.panelAreaSqft,
+        roof_area_computed_sqft: takeoff.totals.roofAreaComputedSqft,
+        overage: takeoff.totals.overage,
+        skipped_facets: takeoff.totals.skippedFacets,
+        nest: {
+          mode: takeoff.panelNest.mode,
+          stock_ft: takeoff.panelNest.stockFt,
+          cut_ft: takeoff.panelNest.cutFt,
+          waste_pct: takeoff.panelNest.wastePct,
+          reused_cuts: takeoff.panelNest.reusedCuts,
+        },
+        trims: takeoff.trims.slice(0, MAX_ESTIMATOR_COMPUTED_TRIMS).map((trim) => ({
+          profile: boundedGeometryText(trim.profile, MAX_ESTIMATOR_GEOMETRY_LABEL),
+          total_ft: trim.totalFt,
+          sticks: trim.sticks,
+        })),
+        trims_truncated: takeoff.trims.length > MAX_ESTIMATOR_COMPUTED_TRIMS,
+        fasteners: {
+          clips: takeoff.fasteners.clips,
+          clip_screws: takeoff.fasteners.clipScrews,
+          trim_screws: takeoff.fasteners.trimScrews,
+        },
+        failed_check_count: takeoff.checks.filter((check) => !check.ok).length,
+      },
+    };
+  } catch {
+    return { projection: unavailableComputedTakeoff("takeoff_failed"), takeoff: null };
+  }
+}
+
+function estimatorPriceList(env: AppEnv): { state: "unconfigured" | "invalid" | "ok"; list?: PriceList } {
+  const raw = (env as { ESTIMATOR_PRICE_LIST_JSON?: string }).ESTIMATOR_PRICE_LIST_JSON;
+  if (!raw || !raw.trim()) return { state: "unconfigured" };
+  try {
+    const parsed = JSON.parse(raw) as PriceList;
+    const valid = !!parsed && typeof parsed === "object" &&
+      typeof parsed.currency === "string" && !!parsed.currency.trim() &&
+      !!parsed.panel && typeof parsed.panel.sku === "string" &&
+      (parsed.panel.unit === "lf" || parsed.panel.unit === "sqft") &&
+      typeof parsed.panel.rate === "number" && Number.isFinite(parsed.panel.rate) &&
+      !!parsed.trims && typeof parsed.trims === "object";
+    return valid ? { state: "ok", list: parsed } : { state: "invalid" };
+  } catch {
+    return { state: "invalid" };
+  }
+}
+
+function emptyComputedEstimate(
+  state: EstimatorComputedEstimateProjection["state"],
+): EstimatorComputedEstimateProjection {
+  return {
+    state, currency: null, lines: [], lines_truncated: false,
+    subtotal: null, markup: null, tax: null, total: null,
+    unpriced_profiles: [], needs_review: null,
+  };
+}
+
+function estimatorComputedEstimate(
+  env: AppEnv,
+  takeoff: TakeoffModel | null,
+): EstimatorComputedEstimateProjection {
+  if (!takeoff) return emptyComputedEstimate("unavailable");
+  const priceList = estimatorPriceList(env);
+  if (priceList.state === "unconfigured") return emptyComputedEstimate("unconfigured");
+  if (priceList.state === "invalid") return emptyComputedEstimate("invalid_price_list");
+  try {
+    const estimate = priceTakeoff(takeoff, priceList.list!);
+    return {
+      state: "priced",
+      currency: estimate.currency,
+      lines: estimate.lines.slice(0, MAX_ESTIMATOR_ESTIMATE_LINES).map((line) => ({
+        kind: line.kind,
+        sku: boundedGeometryText(line.sku, MAX_ESTIMATOR_GEOMETRY_LABEL),
+        description: boundedGeometryText(line.description, MAX_ESTIMATOR_GEOMETRY_LABEL),
+        qty: line.qty,
+        unit: line.unit,
+        rate: line.rate,
+        amount: line.amount,
+      })),
+      lines_truncated: estimate.lines.length > MAX_ESTIMATOR_ESTIMATE_LINES,
+      subtotal: estimate.subtotal,
+      markup: estimate.markup,
+      tax: estimate.tax,
+      total: estimate.total,
+      unpriced_profiles: estimate.unpricedProfiles.map((profile) =>
+        boundedGeometryText(profile, MAX_ESTIMATOR_GEOMETRY_LABEL),
+      ),
+      needs_review: estimate.needsReview,
+    };
+  } catch {
+    return emptyComputedEstimate("invalid_price_list");
+  }
+}
+
 function estimatorMeasurementSelection(
   row: FrappeRow | null,
   detail: FrappeRow | null,
   geometry: EstimatorGeometryProjection,
   roofGraph: EstimatorRoofGraphProjection | null,
+  computedTakeoff: EstimatorComputedTakeoffProjection,
+  computedEstimate: EstimatorComputedEstimateProjection,
 ): EstimatorWorkbenchReadModel["measurements"]["selected"] {
   if (!row) return null;
   const [summary] = estimatorMeasurementSummary(row);
@@ -3243,6 +3412,8 @@ function estimatorMeasurementSelection(
       booleanValue(detail?.__ironwrap_truncated_measurements) === true,
     geometry,
     roof_graph: roofGraph,
+    computed_takeoff: computedTakeoff,
+    computed_estimate: computedEstimate,
   };
 }
 
@@ -3999,6 +4170,7 @@ function roofGraphFacetPointIds(
 async function estimatorGeometryFromRaw(
   env: AppEnv,
   rawKey: string | null,
+  capture?: { model?: GeometryModel },
 ): Promise<EstimatorGeometryProjection> {
   if (!rawKey) return unavailableEstimatorGeometry("raw_source_not_recorded");
   if (!validMeasurementRawKey(rawKey))
@@ -4015,6 +4187,7 @@ async function estimatorGeometryFromRaw(
     );
     if (!geometry)
       return unavailableEstimatorGeometry("raw_source_not_recomputable");
+    if (capture) capture.model = geometry;
     const failedChecks = geometry.checks.filter((check) => !check.ok);
     return {
       state: geometry.needsReview ? "needs_review" : "recomputed",

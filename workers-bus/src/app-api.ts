@@ -97,6 +97,7 @@ import { handleCustomerPortalLinks } from "./customer-portal.ts";
 import { APP_API_VERSION, type AppEnv, type AuthContext } from "./app-types.ts";
 import { handleFieldAction } from "./field-actions.ts";
 import { handleWorkPackageAction, type WorkPackageActionKind } from "./work-package-actions.ts";
+import { handleProposalDocAction } from "./proposal-doc-action.ts";
 import {
   listMeasurementIntakeExceptions,
   projectMeasurementIntakeOwnerException,
@@ -256,6 +257,10 @@ export async function handleAuthenticatedRoute(
     url.pathname === "/api/v1/quote-revision-approvals"
   ) {
     return await prepareQuoteRevisionApproval(req, env, auth);
+  }
+  // Human-triggered proposal Doc generation into the job's Drive folder.
+  if (req.method === "POST" && url.pathname === "/api/v1/estimator/proposal-doc") {
+    return await handleProposalDocAction(req, env, auth);
   }
   const quoteRevisionDecisionMatch = url.pathname.match(
     /^\/api\/v1\/quote-revision-approvals\/([^/]+)\/(approve|reject|reconcile)$/,

@@ -25,6 +25,7 @@ import {
   getOperationalStatus,
   getNewoOpenIncidentCount,
   getReadiness,
+  runOwnerWatchdog,
   validateReplayApprovalContext,
 } from "./operations.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
@@ -67,6 +68,7 @@ import {
   projectMeasurementIntakeAdminException,
   type MeasurementIntakeAdminException,
 } from "./measurement-intake-store.ts";
+import { aggregateMeasurementDeltas, listMeasurementDeltas } from "./measurement-deltas-store.ts";
 import { markExpiredExecutionLeases } from "./approval-store.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 import { markExpiredProductionScheduleApprovalExecutionLeases } from "./production-schedule-approval-store.ts";
@@ -168,6 +170,9 @@ export default {
       ctx.waitUntil(
         Promise.all([
           runReconcile(env),
+          runOwnerWatchdog(env).catch((error) =>
+            log({ at: "owner_watchdog", error: String(error) })
+          ),
           runNewoDailyReconcile(env).catch((error) =>
             log({ at: "newo_daily_reconcile", error: String(error) })
           ),
@@ -251,12 +256,16 @@ async function routeRequest(
     return methodAwareJson(req, { ok: true });
   if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/ready") {
     const readiness = await getReadiness(env);
+    // ?scope=core reports only the owned intake spine so a deliberate launch
+    // gate (Newo) cannot hide a core regression from monitoring. The full
+    // verdict remains the default.
+    const verdict = url.searchParams.get("scope") === "core" ? readiness.core_ok : readiness.ok;
     // Keep public monitoring useful without advertising the state of every
     // downstream rail to an unauthenticated caller. Operators can use the
     // existing admin bearer token for the diagnostic check map.
     if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN))
-      return methodAwareJson(req, { ok: readiness.ok }, readiness.ok ? 200 : 503);
-    return methodAwareJson(req, readiness, readiness.ok ? 200 : 503);
+      return methodAwareJson(req, { ok: verdict }, verdict ? 200 : 503);
+    return methodAwareJson(req, readiness, verdict ? 200 : 503);
   }
   // Public estimator traffic is browser-origin constrained and has independent
   // Turnstile/rate controls. It never accepts the private ingest bearer token.
@@ -354,6 +363,15 @@ async function routeRequest(
       url.pathname === "/admin/measurements/exceptions"
     ) {
       return json(await handleListMeasurementExceptions(env, url));
+    }
+    // Calibration ledger: recent verification comparisons + measured accuracy
+    // aggregates per (source, metric). Read-only; rows are written at intake.
+    if (req.method === "GET" && url.pathname === "/admin/measurements/deltas") {
+      const limit = clampLimit(url.searchParams.get("limit"), 50, 200);
+      return json({
+        deltas: await listMeasurementDeltas(env, limit),
+        aggregates: await aggregateMeasurementDeltas(env),
+      });
     }
     if (req.method === "GET" && url.pathname === "/admin/status") {
       return json(

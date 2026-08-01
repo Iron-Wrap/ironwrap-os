@@ -1145,3 +1145,58 @@ test("estimator workbench is office-only and the HTTP route is private before it
     mock.restore();
   }
 });
+
+test("estimator workbench projects a computed takeoff and prices it only when the tenant configures rates", async () => {
+  const mock = installFrappeMock();
+  try {
+    // Without a price list: takeoff is computed from verified geometry, pricing stays off.
+    const model = await buildEstimatorWorkbenchReadModel(env(), auth("ops"), "JOB-A");
+    const takeoff = model?.measurements.selected?.computed_takeoff;
+    assert.equal(takeoff?.state, "computed");
+    // 10x10 flat facet, 16in coverage: ceil(10/1.3333) = 8 seams of 10ft.
+    assert.equal(takeoff?.panel_count, 8);
+    assert.equal(takeoff?.panel_ft, 80);
+    assert.equal(takeoff?.roof_area_computed_sqft, 100);
+    assert.equal(takeoff?.needs_review, true); // L4 declared 12 vs computed 10
+    const profiles = Object.fromEntries((takeoff?.trims ?? []).map((t) => [t.profile, t]));
+    assert.equal(profiles.eave_drip?.total_ft, 30); // computed lengths, not declared
+    assert.equal(profiles.eave_drip?.sticks, 3);
+    assert.equal(profiles.ridge_cap?.sticks, 1);
+    assert.equal(model?.measurements.selected?.computed_estimate.state, "unconfigured");
+
+    // With a tenant price list: exact, source-derived money.
+    const priced = await buildEstimatorWorkbenchReadModel(
+      {
+        ...env(),
+        ESTIMATOR_PRICE_LIST_JSON: JSON.stringify({
+          currency: "CAD",
+          panel: { sku: "PNL-26G", unit: "lf", rate: 5 },
+          trims: {
+            eave_drip: { sku: "TRM-EAVE", rate: 20 },
+            ridge_cap: { sku: "TRM-RIDGE", rate: 30 },
+          },
+        }),
+      } as never,
+      auth("ops"),
+      "JOB-A",
+    );
+    const estimate = priced?.measurements.selected?.computed_estimate;
+    assert.equal(estimate?.state, "priced");
+    assert.equal(estimate?.currency, "CAD");
+    // panels 80 lf x 5 = 400; eave 3 sticks x 20 = 60; ridge 1 x 30 = 30.
+    assert.equal(estimate?.subtotal, 490);
+    assert.equal(estimate?.total, 490);
+    assert.deepEqual(estimate?.unpriced_profiles, []);
+    assert.equal(estimate?.needs_review, true); // takeoff review state propagates
+
+    // Broken tenant JSON is reported, never thrown.
+    const invalid = await buildEstimatorWorkbenchReadModel(
+      { ...env(), ESTIMATOR_PRICE_LIST_JSON: "{not json" } as never,
+      auth("ops"),
+      "JOB-A",
+    );
+    assert.equal(invalid?.measurements.selected?.computed_estimate.state, "invalid_price_list");
+  } finally {
+    mock.restore();
+  }
+});

@@ -1,7 +1,9 @@
 name: Deploy
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
 
 permissions:
@@ -13,10 +15,21 @@ concurrency:
 
 jobs:
   deploy:
+    # Deploy only a commit whose CI run passed. The event check keeps a fork
+    # pull request from reaching production: its CI run reports head_branch
+    # from the fork, which can itself be named main.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # workflow_run checks out the default branch tip by default, which would
+      # deploy a commit CI never validated. Pin the validated commit.
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: actions/setup-node@v6
         with:
           node-version: 22

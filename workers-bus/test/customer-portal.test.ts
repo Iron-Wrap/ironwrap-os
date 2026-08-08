@@ -142,7 +142,14 @@ function owner(): AuthContext {
   };
 }
 
-function issueRequest(expiresAt = "2026-08-01T10:00:00.000Z"): Request {
+// The issue route validates expires_at against the real wall clock (a window of
+// PORTAL_MIN_TTL_MS..PORTAL_MAX_TTL_MS from now), so this must stay relative to
+// now. An absolute instant here silently rots into a 400 invalid_expiry.
+const ISSUE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function issueRequest(
+  expiresAt = new Date(Date.now() + ISSUE_TTL_MS).toISOString(),
+): Request {
   return new Request("https://app.example.com/api/v1/customer-portal/links", {
     method: "POST",
     headers: {

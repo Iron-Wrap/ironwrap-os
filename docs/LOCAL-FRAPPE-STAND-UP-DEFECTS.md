@@ -88,6 +88,44 @@ manual step locally. Local provisioning recipe (bench console, same shape as the
 `generate_keys`, then `bench --site ironwrap.localhost set-config ironwrap_launch_proof_reader_user
 <email>`.
 
+## Predecessor comparison — ironwrap-ops PR #17 (frozen repo, extract-only)
+
+The earlier product iteration `ironwrap/ironwrap-ops` carries open PR #17
+(`feat/local-e2e-runtime`, single commit, last pushed 2026-07-21), which first proved this same
+local runtime end-to-end and fixed nine integration bugs found by running the real path. Audit
+result against the current tree — everything of value was already absorbed here:
+
+**Reused (verified present in this repository, by signature):**
+
+- `deploy/local/docker-compose.yml` and `start-local-runtime.sh` are byte-identical descendants;
+  `frappe-init.sh` (130→180 lines) and `predev.mjs` (135→190) are extended descendants (added
+  customer-acceptance and QuickBooks-issuer identities plus the acceptance HMAC pin);
+  `seed.sh`/`README.md` are evolved descendants. The dev magic-link outbox
+  (`0022_dev_outbox.sql`) and the `local` wrangler env also originate there.
+- All nine #17 integration fixes are in place: `redirect: "manual"` at the workerd fetch call
+  sites (`approval-broker-client.ts`, `frappe-field.ts`, `frappe-read.ts`, and the two newer
+  clients); `meta.changes >= 1` with the trigger-augmented-count comment in all three approval
+  stores; explicit empty Frappe Select values (`result_status: ""` in the MCP audit draft,
+  `blocker_category: ""` in `erpnext.ts`); `frappeDatetimeIso()` MariaDB datetime conversion in
+  the MCP server; normalized-text `enforce_write_once` comparison in `domain_policy.py`; the
+  `FieldCheckin` controller class name; `parentDoctype` permission context in child-table reads;
+  the broker GET/HEAD undici guard; and `ERPNEXT_ALLOW_INSECURE_LOCAL` in the broker→MCP child
+  env allowlists.
+
+**Not carried over (correctly):** #17's `DELIVERY-PLAN.md` and `output/` audit artifacts (the
+documentation contract prohibits both), its editor/agent-dir housekeeping, and its first-cut
+`wrangler.jsonc` local env (superseded by the richer committed `env.local`). The predecessor
+proved broker/QR-pairing/check-in/replay journeys live; in this repository those paths carry the
+absorbed fixes and unit suites, but the only slice re-proven live here is the launch-proof one in
+[`BUS-FRAPPE-SEAM-PROOF.md`](./BUS-FRAPPE-SEAM-PROOF.md) — do not read this log as live proof of
+the broker journeys.
+
+Related naming trap, same era: the standalone `ironwrap/ironwrap_roofing` GitHub repository is a
+superseded 2026-07-09 snapshot — the canonical Frappe app is the embedded
+`frappe-apps/ironwrap_roofing` tree here. The `ERPNEXT_*` Worker vars are legacy names addressing
+the Frappe-only core; the ERPNext dependency itself was removed in July 2026
+([`LAUNCH-RUNBOOK.md`](./LAUNCH-RUNBOOK.md) §7).
+
 ## Accepted-by-design residuals (recorded, not defects to fix)
 
 - `deploy/local/docker-compose.yml` uses unpinned `frappe/bench:latest` (currently ships Python

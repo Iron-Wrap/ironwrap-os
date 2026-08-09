@@ -86,6 +86,11 @@
       ]
     },
     {
+      "path": "docs/LOCAL-FRAPPE-STAND-UP-DEFECTS.md",
+      "class": "runbook",
+      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+    },
+    {
       "path": "docs/NEWO-INTEGRATION.md",
       "class": "runbook",
       "authority": [

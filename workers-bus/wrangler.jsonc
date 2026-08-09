@@ -97,7 +97,7 @@
     "BACKUP_ALERT_EMAIL": "sales@ironwrapexteriors.com",
     "FROM_EMAIL": "sales@ironwrapexteriors.com",
     "JOBNIMBUS_ENABLED": "true",
-    "NEWO_PRODUCTION_REQUIRED": "true",
+    "NEWO_PRODUCTION_REQUIRED": "false",
     "NEWO_ENABLED": "false",
     "NEWO_CONTROL_WRITE_ENABLED": "false",
     "NEWO_BOOKING_MODE": "request_only",

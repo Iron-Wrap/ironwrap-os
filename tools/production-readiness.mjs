@@ -60,6 +60,19 @@ const REQUIRED_ENV_NAMES = [
   "PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX",
   "PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX",
   "PUBLIC_ESTIMATE_RANGE_RULES_JSON",
+  "FACET_DESIGN_INGEST_ENABLED",
+  "FACET_DESIGN_INGEST_TENANT_MAP_JSON",
+  "FACET_DESIGN_INGEST_HMAC_KEY",
+  "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED",
+  "FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY",
+  "FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY",
+  "FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET",
+  "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED",
+  "APP_QUOTE_REVISION_BROKER_URL",
+  "APP_QUOTE_REVISION_BROKER_KEY_ID",
+  "APP_QUOTE_REVISION_BROKER_TIMEOUT_MS",
+  "APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS",
+  "QUOTE_REVISION_BROKER_SHARED_SECRET",
   "IRONWRAP_BUS_BASE_URL",
   "IRONWRAP_ADMIN_TOKEN",
   "IRONWRAP_BUS_WRITE_ENABLED",
@@ -128,9 +141,23 @@ const PUBLIC_ESTIMATE_ENABLE_TIME_ENV_NAMES = new Set([
   "PUBLIC_ESTIMATE_RANGE_RULES_JSON",
 ]);
 
+const FACET_ENABLE_TIME_ENV_NAMES = new Set([
+  "FACET_DESIGN_INGEST_TENANT_MAP_JSON",
+  "FACET_DESIGN_INGEST_HMAC_KEY",
+  "FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY",
+  "FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY",
+  "FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET",
+  "APP_QUOTE_REVISION_BROKER_URL",
+  "APP_QUOTE_REVISION_BROKER_KEY_ID",
+  "APP_QUOTE_REVISION_BROKER_TIMEOUT_MS",
+  "APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS",
+  "QUOTE_REVISION_BROKER_SHARED_SECRET",
+]);
+
 const LIVE_REQUIRED_ENV_NAMES = REQUIRED_ENV_NAMES.filter(
   (name) => name !== "RESTORE_CONFIRMATION" && name !== "D1_RESTORE_CONFIRMATION" &&
-    name !== "D1_RESTORE_API_TOKEN" && !PUBLIC_ESTIMATE_ENABLE_TIME_ENV_NAMES.has(name),
+    name !== "D1_RESTORE_API_TOKEN" && !PUBLIC_ESTIMATE_ENABLE_TIME_ENV_NAMES.has(name) &&
+    !FACET_ENABLE_TIME_ENV_NAMES.has(name),
 );
 
 const SECRET_ENV_NAMES = [
@@ -141,6 +168,11 @@ const SECRET_ENV_NAMES = [
   "QB_RECONCILIATION_ISSUER_API_SECRET",
   "PUBLIC_ESTIMATE_TURNSTILE_SECRET",
   "PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER",
+  "FACET_DESIGN_INGEST_HMAC_KEY",
+  "FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY",
+  "FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY",
+  "FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET",
+  "QUOTE_REVISION_BROKER_SHARED_SECRET",
   "IRONWRAP_ADMIN_TOKEN",
   "HERMES_WRITE_TOKEN",
   "HERMES_DRY_RUN_SIGNING_KEY",
@@ -369,6 +401,28 @@ function validPublicEstimateRules(value, allowedBrands) {
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
+    });
+  } catch {
+    return false;
+  }
+}
+
+function validFacetTenantMap(value) {
+  try {
+    const bindings = JSON.parse(value);
+    if (!bindings || typeof bindings !== "object" || Array.isArray(bindings)) return false;
+    const entries = Object.entries(bindings);
+    const allowedBrands = new Set(["ironwrap", "iroof"]);
+    return entries.length > 0 && entries.every(([sourceTenantId, binding]) => {
+      if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(sourceTenantId) || !binding ||
+          typeof binding !== "object" || Array.isArray(binding)) return false;
+      const keys = Object.keys(binding).sort();
+      if (keys.length !== 2 || keys[0] !== "brand_ids" || keys[1] !== "tenant_id" ||
+          binding.tenant_id !== "ironwrap" || !Array.isArray(binding.brand_ids) ||
+          binding.brand_ids.length < 1 || binding.brand_ids.length > allowedBrands.size) return false;
+      const brandIds = new Set(binding.brand_ids);
+      return brandIds.size === binding.brand_ids.length &&
+        [...brandIds].every((brandId) => typeof brandId === "string" && allowedBrands.has(brandId));
     });
   } catch {
     return false;
@@ -745,6 +799,9 @@ export async function validateLiveEnv({
   ));
 
   const publicEstimateEnabled = env.PUBLIC_ESTIMATE_ENABLED === "true";
+  const facetDesignIngestEnabled = env.FACET_DESIGN_INGEST_ENABLED === "true";
+  const facetProjectionEnabled = env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED === "true";
+  const facetQuoteRevisionEnabled = env.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED === "true";
   const secretMinimums = {
     ERPNEXT_API_KEY: 10,
     ERPNEXT_API_SECRET: 16,
@@ -762,6 +819,17 @@ export async function validateLiveEnv({
     D1_BACKUP_API_TOKEN: 24,
     RCLONE_CONFIG_R2_ACCESS_KEY_ID: 16,
     RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: 32,
+    ...(facetDesignIngestEnabled ? {
+      FACET_DESIGN_INGEST_HMAC_KEY: 32,
+    } : {}),
+    ...(facetProjectionEnabled ? {
+      FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY: 32,
+      FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY: 10,
+      FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET: 16,
+    } : {}),
+    ...(facetQuoteRevisionEnabled ? {
+      QUOTE_REVISION_BROKER_SHARED_SECRET: 32,
+    } : {}),
     ...(publicEstimateEnabled ? {
       PUBLIC_ESTIMATE_TURNSTILE_SECRET: 20,
       PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER: 32,
@@ -787,12 +855,23 @@ export async function validateLiveEnv({
     env.D1_BACKUP_API_TOKEN,
     env.RCLONE_CONFIG_R2_ACCESS_KEY_ID,
     env.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+    ...(facetDesignIngestEnabled ? [
+      env.FACET_DESIGN_INGEST_HMAC_KEY,
+    ] : []),
+    ...(facetProjectionEnabled ? [
+      env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY,
+      env.FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY,
+      env.FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET,
+    ] : []),
+    ...(facetQuoteRevisionEnabled ? [
+      env.QUOTE_REVISION_BROKER_SHARED_SECRET,
+    ] : []),
     ...(publicEstimateEnabled ? [
       env.PUBLIC_ESTIMATE_TURNSTILE_SECRET,
       env.PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER,
     ] : []),
   ];
-  checks.push(check("live.secret.separation", purposeSecrets.every((value) => typeof value === "string") && new Set(purposeSecrets).size === purposeSecrets.length, "privileged credentials are separated by purpose", "Frappe integration, QuickBooks issuer, launch-proof, bus, approval, D1 export, and R2 backup credentials must not be reused across purposes"));
+  checks.push(check("live.secret.separation", purposeSecrets.every((value) => typeof value === "string") && new Set(purposeSecrets).size === purposeSecrets.length, "privileged credentials are separated by purpose", "Frappe integration, QuickBooks issuer, launch-proof, bus, approval, Facet, D1 export, and R2 backup credentials must not be reused across purposes"));
   const restoreApiToken = env.D1_RESTORE_API_TOKEN;
   const restoreTokenUnset = restoreApiToken === undefined || restoreApiToken === "";
   const restoreTokenSeparated = validSecret(env, "D1_RESTORE_API_TOKEN", 24) && ![
@@ -804,6 +883,53 @@ export async function validateLiveEnv({
   checks.push(check("live.secret.d1_restore_ephemeral", restoreTokenStateSafe, restoreTokenUnset ? "D1 restore write token is not persisted in verification mode" : "remote drill token is valid and separated from backup authority", "D1_RESTORE_API_TOKEN must be unset for verify or a valid just-in-time token distinct from D1 backup and R2 credentials for remote"));
 
   checks.push(check("live.gate.integration", env.ERPNEXT_ENABLED === "true", "Frappe integration is explicitly enabled", "ERPNEXT_ENABLED must equal true for production readiness"));
+  checks.push(check(
+    "live.gate.facet_ingest",
+    facetDesignIngestEnabled || env.FACET_DESIGN_INGEST_ENABLED === "false",
+    facetDesignIngestEnabled ? "Facet design ingest is explicitly enabled" : "Facet design ingest is explicitly disabled",
+    "FACET_DESIGN_INGEST_ENABLED must equal true or false",
+  ));
+  checks.push(check(
+    "live.gate.facet_projection",
+    facetProjectionEnabled || env.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED === "false",
+    facetProjectionEnabled ? "Facet-to-Frappe projection is explicitly enabled" : "Facet-to-Frappe projection is explicitly disabled",
+    "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED must equal true or false",
+  ));
+  checks.push(check(
+    "live.gate.facet_quote_revision",
+    facetQuoteRevisionEnabled || env.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED === "false",
+    facetQuoteRevisionEnabled ? "Facet quote-revision preparation is explicitly enabled" : "Facet quote-revision preparation is explicitly disabled",
+    "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED must equal true or false",
+  ));
+  if (facetDesignIngestEnabled) {
+    checks.push(check(
+      "live.facet.ingest_tenant_map",
+      validFacetTenantMap(env.FACET_DESIGN_INGEST_TENANT_MAP_JSON),
+      "Facet ingest maps reviewed source tenants to the local IronWrap brand allowlist",
+      "FACET_DESIGN_INGEST_TENANT_MAP_JSON must contain exact v2 tenant and IronWrap/iRoof brand bindings",
+    ));
+  }
+  if (facetQuoteRevisionEnabled) {
+    checks.push(check(
+      "live.facet.quote_revision_broker_url",
+      exactHttpsOrigin(env.APP_QUOTE_REVISION_BROKER_URL) !== null,
+      "Facet quote-revision broker uses an exact production HTTPS origin",
+      "APP_QUOTE_REVISION_BROKER_URL must be one credential-free production HTTPS origin",
+    ));
+    checks.push(check(
+      "live.facet.quote_revision_broker_key",
+      /^[A-Za-z0-9._-]{1,64}$/.test(env.APP_QUOTE_REVISION_BROKER_KEY_ID ?? ""),
+      "Facet quote-revision broker key id is bounded",
+      "APP_QUOTE_REVISION_BROKER_KEY_ID must be 1-64 safe identifier characters",
+    ));
+    checks.push(check(
+      "live.facet.quote_revision_broker_bounds",
+      validPositiveInteger(env.APP_QUOTE_REVISION_BROKER_TIMEOUT_MS, 1_000, 30_000) &&
+        validPositiveInteger(env.APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS, 15, 120),
+      "Facet quote-revision broker timeout and execution lease are bounded",
+      "Facet quote-revision timeout must be 1000-30000 ms and its execution lease 15-120 seconds",
+    ));
+  }
   const launchProofAttempts = env.FRAPPE_PROOF_POLL_ATTEMPTS ?? "";
   const launchProofInterval = env.FRAPPE_PROOF_POLL_INTERVAL_MS ?? "";
   checks.push(check(

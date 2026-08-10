@@ -904,6 +904,9 @@ function validLiveEnv() {
     PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX: "12",
     PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX: "3",
     PUBLIC_ESTIMATE_RANGE_RULES_JSON: "[]",
+    FACET_DESIGN_INGEST_ENABLED: "false",
+    FACET_DESIGN_FRAPPE_PROJECTION_ENABLED: "false",
+    APP_FACET_QUOTE_REVISION_PREPARE_ENABLED: "false",
     IRONWRAP_BUS_BASE_URL: "https://bus.ironwrapexteriors.com",
     IRONWRAP_ADMIN_TOKEN: adminToken,
     IRONWRAP_BUS_WRITE_ENABLED: "false",
@@ -1125,6 +1128,45 @@ test("live-env mode accepts an explicitly disabled public estimator without its 
   assert.equal(result.ok, true, renderHuman(result));
   assert.equal(result.checks.find((item) => item.id === "live.gate.public_estimate")?.status, "pass");
   assert.equal(result.checks.find((item) => item.id === "live.secret.PUBLIC_ESTIMATE_TURNSTILE_SECRET"), undefined);
+});
+
+test("live-env mode validates every enabled Facet integration rail", async () => {
+  const env = validLiveEnv();
+  Object.assign(env, {
+    FACET_DESIGN_INGEST_ENABLED: "true",
+    FACET_DESIGN_INGEST_TENANT_MAP_JSON: JSON.stringify({
+      "facet-production": { tenant_id: "ironwrap", brand_ids: ["ironwrap", "iroof"] },
+    }),
+    FACET_DESIGN_INGEST_HMAC_KEY: "facet_ingest_hmac_4c1b9e2f8a7d6c5b4a392817",
+    FACET_DESIGN_FRAPPE_PROJECTION_ENABLED: "true",
+    FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY: "facet_projection_hmac_7d6c5b4a3928171615141312",
+    FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY: "facet_projection_key_8c921",
+    FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET: "facet_projection_secret_d1a9f80c42",
+    APP_FACET_QUOTE_REVISION_PREPARE_ENABLED: "true",
+    APP_QUOTE_REVISION_BROKER_URL: "https://quote-revision-broker.ironwrapexteriors.com",
+    APP_QUOTE_REVISION_BROKER_KEY_ID: "quote-revision-v1",
+    APP_QUOTE_REVISION_BROKER_TIMEOUT_MS: "15000",
+    APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS: "45",
+    QUOTE_REVISION_BROKER_SHARED_SECRET: "quote_revision_broker_9f1a4c27d8e6b5a493827161",
+  });
+
+  const enabled = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
+  assert.equal(enabled.ok, true, renderHuman(enabled));
+
+  env.FACET_DESIGN_INGEST_TENANT_MAP_JSON = JSON.stringify({ "facet-production": "ironwrap" });
+  env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = env.FACET_DESIGN_INGEST_HMAC_KEY;
+  env.APP_QUOTE_REVISION_BROKER_URL = "http://quote-revision-broker.ironwrapexteriors.com";
+  env.APP_QUOTE_REVISION_BROKER_TIMEOUT_MS = "999";
+  const invalid = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
+  assert.equal(invalid.ok, false);
+  for (const id of [
+    "live.facet.ingest_tenant_map",
+    "live.secret.separation",
+    "live.facet.quote_revision_broker_url",
+    "live.facet.quote_revision_broker_bounds",
+  ]) {
+    assert.equal(invalid.checks.find((item) => item.id === id)?.status, "fail", id);
+  }
 });
 
 test("live-env mode fails closed when public-estimator controls drift from the tenant contract", async () => {

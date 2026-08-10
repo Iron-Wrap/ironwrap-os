@@ -8,7 +8,8 @@ import {
 
 const portal = {
   version: 1,
-  brand: "IronWrap",
+  brand: "IronWrap Exteriors",
+  contract_acceptance_available: false,
   source_updated_at: "2026-07-16T10:00:00.000Z",
   read_model_generated_at: "2026-07-16T10:01:00.000Z",
   job: { job_number: "IW-100", service_type: "Roofing", status: "In Production" },

@@ -58,6 +58,9 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
   assert.equal(config.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED, "false");
   assert.equal(config.env.local.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED, "false");
   assert.equal(config.env.staging.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED, "false");
+  assert.equal(config.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "false");
+  assert.equal(config.env.local.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "true");
+  assert.equal(config.env.staging.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "false");
   assert.equal(config.vars.FACET_DESIGN_INGEST_ENABLED, "false");
   assert.equal(config.env.local.vars.FACET_DESIGN_INGEST_ENABLED, "false");
   assert.equal(config.env.staging.vars.FACET_DESIGN_INGEST_ENABLED, "false");
@@ -67,11 +70,11 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
   assert.equal(config.vars.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED, "false");
   assert.equal(config.env.local.vars.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED, "false");
   assert.equal(config.env.staging.vars.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED, "false");
+  assert.equal(config.vars.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED, "false");
+  assert.equal(config.env.local.vars.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED, "false");
+  assert.equal(config.env.staging.vars.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED, "false");
   for (const environment of [config.vars, config.env.local.vars, config.env.staging.vars]) {
-    assert.deepEqual(JSON.parse(environment.FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON), {
-      schema_version: 1,
-      associations: [],
-    });
+    assert.equal("FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON" in environment, false);
   }
   assert.deepEqual(
     config.env.staging.queues.producers.find((queue: { binding: string }) => queue.binding === "NEWO_QUEUE"),
@@ -289,6 +292,79 @@ test("0030 keeps Facet design ingress immutable, hash-addressed, and commerciall
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
+test("0034 keeps Facet customer approvals provenance-bearing, append-only, and non-commercial", async () => {
+  const sql = await readFile(
+    new URL("../migrations/0034_facet_customer_approval_ingest.sql", import.meta.url),
+    "utf8",
+  );
+  const schema = sql.replace(/^--.*$/gm, "");
+  for (const table of [
+    "facet_customer_approval_events",
+    "facet_design_event_identity_registry",
+    "facet_design_ingest_nonce_registry",
+  ]) assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+  for (const trigger of [
+    "facet_customer_approval_events_append_only_update",
+    "facet_customer_approval_events_append_only_delete",
+    "facet_design_events_register_identity",
+    "facet_customer_approval_events_register_identity",
+    "facet_design_event_identity_registry_append_only_update",
+    "facet_design_event_identity_registry_append_only_delete",
+    "facet_design_ingest_nonce_registry_append_only_update",
+    "facet_design_ingest_nonce_registry_append_only_delete",
+  ]) assert.match(sql, new RegExp(`CREATE TRIGGER IF NOT EXISTS ${trigger}\\b`));
+  assert.match(sql, /event_type = 'facet\.design\.customer_approved\.v2'/);
+  assert.match(sql, /schema_version = 2/);
+  assert.match(sql, /approval_actor_type = 'customer_capability'/);
+  assert.match(sql, /identity_assurance = 'bearer_capability_only'/);
+  assert.match(sql, /capability_fingerprint TEXT NOT NULL/);
+  assert.match(sql, /INSERT OR IGNORE INTO facet_design_ingest_nonce_registry/);
+  assert.match(sql, /INSERT OR IGNORE INTO facet_design_event_identity_registry/);
+  assert.doesNotMatch(schema, /customer_name|customer_email|customer_phone|address|price|amount|estimate|payload_json/i);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
+test("0035 keeps Facet evidence associations operator-authored, immutable, and v2-bound", async () => {
+  const sql = await readFile(
+    new URL("../migrations/0035_facet_design_evidence_associations.sql", import.meta.url),
+    "utf8",
+  );
+  const schema = sql.replace(/^--.*$/gm, "");
+  for (const table of [
+    "facet_design_evidence_associations",
+    "facet_customer_approval_projection_attempts",
+  ]) assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+  for (const trigger of [
+    "facet_design_evidence_associations_validate_insert",
+    "facet_design_evidence_associations_append_only_update",
+    "facet_design_evidence_associations_append_only_delete",
+    "facet_customer_approval_projection_attempts_append_only_update",
+    "facet_customer_approval_projection_attempts_append_only_delete",
+  ]) assert.match(sql, new RegExp(`CREATE TRIGGER IF NOT EXISTS ${trigger}\\b`));
+  for (const anchor of [
+    "event_id",
+    "tenant_id",
+    "brand_id",
+    "facet_project_id",
+    "design_revision_id",
+    "design_revision_sha256",
+    "frozen_evidence_sha256",
+    "association_anchor_sha256",
+  ]) assert.match(sql, new RegExp(`${anchor}\\s+TEXT`));
+  assert.match(sql, /REFERENCES facet_customer_approval_events\(event_id\) ON DELETE RESTRICT/g);
+  assert.match(sql, /REFERENCES app_users\(user_id, tenant_id\) ON DELETE RESTRICT/);
+  assert.match(sql, /idempotency_key_sha256 TEXT NOT NULL UNIQUE/);
+  assert.match(sql, /association_intent_sha256 TEXT NOT NULL/);
+  assert.match(sql, /approval_actor_type = 'customer_capability'/);
+  assert.match(sql, /identity_assurance = 'bearer_capability_only'/);
+  assert.match(sql, /actor\.role IN \('owner', 'ops'\)/);
+  assert.doesNotMatch(
+    schema,
+    /capability_fingerprint|raw_sha256 TEXT NOT NULL UNIQUE|customer_name|customer_email|customer_phone|address|price|amount|quote_total|payload_json/i,
+  );
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
 test("0031 makes QuickBooks projection recovery leased, due-scheduled, and non-terminal by default", async () => {
   const sql = await readFile(new URL("../migrations/0031_quickbooks_projection_outbox.sql", import.meta.url), "utf8");
   const schema = sql.replace(/^--.*$/gm, "");
@@ -314,9 +390,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     const migrations = (await readdir(new URL("../migrations/", import.meta.url)))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 33);
+    assert.equal(migrations.length, 35);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0033_measurement_deltas.sql");
+    assert.equal(migrations.at(-1), "0035_facet_design_evidence_associations.sql");
     for (const migration of migrations) {
       db.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -333,7 +409,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
          SUM(type = 'trigger') AS triggers
        FROM sqlite_master`,
     ).get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 47, indexes: 79, triggers: 59 });
+    assert.deepEqual({ ...counts }, { tables: 52, indexes: 85, triggers: 72 });
 
     const quickBooksOutboxColumns = db.prepare(
       "PRAGMA table_info(quickbooks_projection_outbox)",

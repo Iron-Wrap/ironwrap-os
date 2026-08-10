@@ -119,12 +119,26 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
             "customer_quote_id": "customer-quote-0001",
         }
 
+    @classmethod
+    def customer_approval_claim(cls) -> dict:
+        return {
+            **cls.fixture_claim(),
+            "event_type": "facet.design.customer_approved.v2",
+            "schema_version": 2,
+            "brand_id": "ironwrap",
+            "approval_actor_type": "customer_capability",
+            "capability_fingerprint": "d" * 64,
+            "identity_assurance": "bearer_capability_only",
+            "raw_key": "facet-design/v2/facet-event-0001.json",
+        }
+
     @staticmethod
     def fixtures() -> dict:
         return {
             "job": {
                 "name": "JOB-001",
                 "roof_job_id": "roof-job-0001",
+                "brand": "ironwrap",
                 "quotation": "QUOTE-001",
             },
             "quote": {
@@ -148,6 +162,7 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
         has_permission: bool = True,
         request_method: str = "POST",
         configured_user: str | None = SERVICE_USER,
+        configured_hmac_key: str = HMAC_KEY,
     ):
         fixtures = fixtures or self.fixtures()
         db = FakeDb(fixtures)
@@ -170,7 +185,7 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
         frappe_module.cache = lambda: cache
         frappe_module.conf = {
             "ironwrap_facet_design_projection_service_user": configured_user,
-            "ironwrap_facet_design_projection_hmac_key": HMAC_KEY,
+            "ironwrap_facet_design_projection_hmac_key": configured_hmac_key,
         }
         frappe_module.session = types.SimpleNamespace(user=session_user)
         frappe_module.request = types.SimpleNamespace(method=request_method, headers={})
@@ -235,6 +250,41 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
         }
         return api.record_facet_design_proposal_evidence(raw_claim)
 
+    def assert_signed_receipt(
+        self,
+        api,
+        response: dict,
+        claim: dict,
+        *,
+        idempotent_replay: bool,
+    ) -> None:
+        receipt_json = self.canonical(response["receipt"])
+        receipt_sha256 = hashlib.sha256(receipt_json.encode("utf-8")).hexdigest()
+        expected_signature = base64.urlsafe_b64encode(
+            hmac.new(
+                HMAC_KEY.encode("utf-8"),
+                f"{api.RECEIPT_SIGNATURE_CONTEXT}\n{receipt_sha256}".encode("utf-8"),
+                hashlib.sha256,
+            ).digest()
+        ).rstrip(b"=").decode("ascii")
+        self.assertEqual(response["receipt_sha256"], receipt_sha256)
+        self.assertEqual(response["receipt_signature_algorithm"], "HMAC-SHA256")
+        self.assertEqual(response["receipt_signature"], expected_signature)
+        receipt = response["receipt"]
+        self.assertEqual(receipt["event_id"], claim["event_id"])
+        self.assertEqual(receipt["roof_job_id"], claim["roof_job_id"])
+        self.assertEqual(receipt["customer_quote_id"], claim["customer_quote_id"])
+        self.assertEqual(receipt["raw_sha256"], claim["raw_sha256"])
+        self.assertEqual(
+            receipt["frozen_evidence_sha256"], claim["frozen_evidence_sha256"]
+        )
+        self.assertEqual(
+            receipt["claim_sha256"],
+            hashlib.sha256(self.canonical(claim).encode("utf-8")).hexdigest(),
+        )
+        self.assertEqual(receipt["idempotent_replay"], idempotent_replay)
+        self.assertEqual(receipt["commercial_state"], "none")
+
     def test_projection_locks_exact_job_quote_creates_review_evidence_and_replays(self) -> None:
         api, fixtures, db, issuance_calls, frappe_module = self.load_api()
         before_quote = deepcopy(fixtures["quote"])
@@ -243,7 +293,15 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
 
         event_hash = hashlib.sha256(b"facet-event-0001").hexdigest()
         self.assertEqual(
-            first,
+            {
+                key: first[key]
+                for key in (
+                    "event_id",
+                    "evidence_id",
+                    "reconciliation_id",
+                    "idempotent_replay",
+                )
+            },
             {
                 "event_id": "facet-event-0001",
                 "evidence_id": f"facet-design:{event_hash}",
@@ -251,6 +309,13 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
                 "idempotent_replay": False,
             },
         )
+        self.assert_signed_receipt(
+            api,
+            first,
+            self.fixture_claim(),
+            idempotent_replay=False,
+        )
+        self.assertEqual(first["receipt"]["provenance"], {"status": "provenance_unknown"})
         self.assertEqual(fixtures["quote"], before_quote, "projection must not mutate the quote")
         self.assertEqual(len(fixtures["evidence"]), 1)
         self.assertEqual(len(fixtures["reconciliations"]), 1)
@@ -293,6 +358,7 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
                 f"pending projection reconciliation must leave {field} empty",
             )
         self.assertIn('"commercial_state":"none"', reconciliation["diff_json"])
+        self.assertNotIn('"provenance"', reconciliation["diff_json"])
         self.assertEqual(len(issuance_calls), 1)
         self.assertTrue(all("FOR UPDATE" in query for query in db.lock_queries))
         self.assertNotIn("price_book_version", " ".join(db.lock_queries))
@@ -310,9 +376,134 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
         frappe_module.utils.now_datetime = lambda: "2026-07-31 12:07:00"
         replay = self.call(api, frappe_module, nonce="b" * 32)
         self.assertEqual(replay["idempotent_replay"], True)
+        self.assert_signed_receipt(
+            api,
+            replay,
+            self.fixture_claim(),
+            idempotent_replay=True,
+        )
         self.assertEqual(len(fixtures["evidence"]), 1)
         self.assertEqual(len(fixtures["reconciliations"]), 1)
         self.assertEqual(len(issuance_calls), 1)
+
+    def test_customer_approval_v2_persists_provenance_and_exact_brand_anchor(self) -> None:
+        api, fixtures, _, issuance_calls, frappe_module = self.load_api()
+
+        result = self.call(
+            api,
+            frappe_module,
+            self.customer_approval_claim(),
+            nonce="m" * 32,
+        )
+
+        self.assertEqual(result["event_id"], "facet-event-0001")
+        self.assert_signed_receipt(
+            api,
+            result,
+            self.customer_approval_claim(),
+            idempotent_replay=False,
+        )
+        self.assertEqual(
+            result["receipt"]["provenance"],
+            {
+                "status": "customer_approved",
+                "brand_id": "ironwrap",
+                "approval_actor_type": "customer_capability",
+                "capability_fingerprint": "d" * 64,
+                "identity_assurance": "bearer_capability_only",
+            },
+        )
+        self.assertEqual(len(fixtures["evidence"]), 1)
+        self.assertEqual(len(fixtures["reconciliations"]), 1)
+        self.assertEqual(len(issuance_calls), 1)
+        evidence = fixtures["evidence"][0]
+        reconciliation = fixtures["reconciliations"][0]
+        self.assertEqual(evidence["r2_key"], "facet-design/v2/facet-event-0001.json")
+        self.assertEqual(evidence["customer_safe"], 0)
+        self.assertIn("commercial use", evidence["summary"])
+        diff = json.loads(reconciliation["diff_json"])
+        self.assertEqual(diff["schema"], "ironwrap.facet-design-projection.v2")
+        self.assertEqual(
+            diff["source_event"],
+            {
+                "event_type": "facet.design.customer_approved.v2",
+                "schema_version": 2,
+            },
+        )
+        self.assertEqual(
+            diff["provenance"],
+            {
+                "status": "customer_approved",
+                "brand_id": "ironwrap",
+                "approval_actor_type": "customer_capability",
+                "capability_fingerprint": "d" * 64,
+                "identity_assurance": "bearer_capability_only",
+            },
+        )
+        self.assertEqual(diff["commercial_state"], "none")
+
+        tampered = {
+            **self.customer_approval_claim(),
+            "capability_fingerprint": "e" * 64,
+        }
+        with self.assertRaisesRegex(FakeValidationError, "facet_design_projection_conflict"):
+            self.call(api, frappe_module, tampered, nonce="t" * 32)
+        self.assertEqual(len(fixtures["evidence"]), 1)
+        self.assertEqual(len(fixtures["reconciliations"]), 1)
+        self.assertEqual(len(issuance_calls), 1)
+
+    def test_customer_approval_v2_rejects_contract_and_brand_mismatches(self) -> None:
+        fixtures = self.fixtures()
+        fixtures["job"]["brand"] = "iroof"
+        api, fixtures, _, _, frappe_module = self.load_api(fixtures)
+        with self.assertRaisesRegex(FakeValidationError, "brand_mismatch"):
+            self.call(
+                api,
+                frappe_module,
+                self.customer_approval_claim(),
+                nonce="n" * 32,
+            )
+        self.assertEqual(fixtures["evidence"], [])
+
+        invalid_claims = (
+            (
+                {**self.customer_approval_claim(), "schema_version": 1},
+                "event_version_mismatch",
+            ),
+            (
+                {
+                    **self.customer_approval_claim(),
+                    "event_type": "facet.design.approved.v1",
+                },
+                "event_version_mismatch",
+            ),
+            (
+                {
+                    **self.customer_approval_claim(),
+                    "raw_key": "facet-design/v1/facet-event-0001.json",
+                },
+                "raw_key_mismatch",
+            ),
+            (
+                {**self.customer_approval_claim(), "capability_fingerprint": "not-a-hash"},
+                "invalid_claim",
+            ),
+            (
+                {**self.customer_approval_claim(), "identity_assurance": "verified_identity"},
+                "identity_assurance_mismatch",
+            ),
+        )
+        for index, (claim, expected_code) in enumerate(invalid_claims):
+            with self.subTest(expected_code=expected_code):
+                api, fixtures, _, _, frappe_module = self.load_api()
+                with self.assertRaisesRegex(FakeValidationError, expected_code):
+                    self.call(
+                        api,
+                        frappe_module,
+                        claim,
+                        nonce=chr(ord("o") + index) * 32,
+                    )
+                self.assertEqual(fixtures["evidence"], [])
 
     def test_projection_rejects_wrong_service_principal_role_permission_and_hmac(self) -> None:
         api, fixtures, _, _, frappe_module = self.load_api(session_user="owner@example.invalid")
@@ -333,6 +524,11 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
         api, fixtures, _, _, frappe_module = self.load_api(request_method="GET")
         with self.assertRaisesRegex(FakePermissionError, "post_required"):
             self.call(api, frappe_module, nonce="f" * 32)
+        self.assertEqual(fixtures["evidence"], [])
+
+        api, fixtures, _, _, frappe_module = self.load_api(configured_hmac_key="short")
+        with self.assertRaisesRegex(FakePermissionError, "hmac_key_invalid"):
+            self.call(api, frappe_module, nonce="s" * 32)
         self.assertEqual(fixtures["evidence"], [])
 
         api, fixtures, _, _, frappe_module = self.load_api()

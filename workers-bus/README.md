@@ -312,6 +312,7 @@ APP_QUOTE_REVISION_BROKER_URL=https://<private-quote-revision-broker-origin>
 APP_QUOTE_REVISION_BROKER_KEY_ID=quote-revision-v1
 APP_QUOTE_REVISION_BROKER_TIMEOUT_MS=15000
 APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS=45
+APP_FACET_QUOTE_REVISION_PREPARE_ENABLED=false
 QUOTE_REVISION_BROKER_SHARED_SECRET=<different 32+-byte Worker-to-broker secret>
 ```
 
@@ -493,15 +494,22 @@ the Worker generates one.
 ### Facet design-event receipt contract
 
 Leave `FACET_DESIGN_INGEST_ENABLED=false` until `FACET_DESIGN_INGEST_HMAC_KEY` and an exact
-`FACET_DESIGN_INGEST_TENANT_MAP_JSON` source-to-local allowlist (for example,
-`{"facet-production":"ironwrap"}`) are independently configured. HMAC proves the Facet deployment;
-it does not authorize arbitrary Facet tenants. The sender posts UTF-8 JSON with exactly
-`event_id`, `event_type`, `schema_version`, `occurred_at`, `tenant_id`, `facet_project_id`,
-`design_revision` (`id`, lowercase `sha256`), and a non-empty object `frozen_evidence`.
-`event_type` is exactly `facet.design.approved.v1`; `schema_version` is exactly `1`.
-`frozen_evidence.design` is a non-empty object, and `design_revision` must be exactly
-`{id:"facet-json-v1:${sha256(canonicalJson(frozen_evidence.design))}",sha256:"…"}` with the
-same lowercase SHA-256 value in both places.
+`FACET_DESIGN_INGEST_TENANT_MAP_JSON` source-to-local allowlist are independently configured.
+V2 bindings must also list the allowed local brands, for example
+`{"facet-production":{"tenant_id":"ironwrap","brand_ids":["ironwrap","iroof"]}}`. HMAC proves
+the Facet deployment; it does not authorize arbitrary Facet tenants or brands.
+
+The governed producer sends `facet.design.customer_approved.v2` / schema `2` with the base fields
+`event_id`, `occurred_at`, `tenant_id`, `facet_project_id`, `design_revision`, and
+`frozen_evidence`, plus exact `brand_id`, `approval_actor_type:"customer_capability"`, a lowercase
+SHA-256 `capability_fingerprint`, and `identity_assurance:"bearer_capability_only"`.
+`frozen_evidence` contains only `design` and `approval`; approval contains only `approved_at`
+(equal to `occurred_at`) and nullable `client_revision`. Customer identity, address, contact,
+pricing, share tokens, and commercial terms are rejected. `design.brandId` must equal `brand_id`,
+and `design_revision` must be exactly
+`{id:"facet-json-v1:${sha256(canonicalJson(frozen_evidence.design))}",sha256:"…"}`. The legacy
+`facet.design.approved.v1` / schema `1` shape remains evidence-only with
+`provenance.status:"provenance_unknown"`; it cannot enter the v2 association ledger.
 
 The headers are `X-IronWrap-Event-Id`, `X-IronWrap-Event-Timestamp` (13-digit Unix milliseconds,
 within five minutes), `X-IronWrap-Event-Nonce` (32–128 base64url characters), and
@@ -512,9 +520,10 @@ equals `APP_TENANT_ID`. Missing, malformed, unknown, or mismatched mappings fail
 the D1 receipt persists only the mapped local tenant. The Worker records only hashes and anchors in
 D1 after immutable R2 storage. A first `202` and fresh-nonce idempotent `200` return the durable
 `accepted`, `event_id`, `status:"received"`, `raw_sha256`, `frozen_evidence_sha256`, and
-`design_revision:{id,sha256}` anchors (the latter also has `idempotent_replay:true`). Reusing a
-nonce is rejected. This event is a customer design decision, not a quote, contract acceptance, or
-Frappe write.
+`design_revision:{id,sha256}` anchors plus explicit provenance (the latter also has
+`idempotent_replay:true`). Reusing a nonce is rejected. V2 proves only exercise of the bearer
+capability; it is not proof of distinct customer identity, informed consent, contract acceptance,
+or commercial authority.
 
 ### Facet-to-Frappe review projection
 
@@ -537,7 +546,10 @@ For an exact approved current quote belonging to the locked Roof Job, the schedu
 creates one deterministic, non-customer-safe Evidence Item and one Pending Integration
 Reconciliation record. It does not read R2 on this path and does not create or update a quote,
 price, contract, acceptance, or Proposal Evidence Pack. An estimator must reconcile the evidence
-before any commercial use. Before enabling the flag, run a disposable live proof for success,
+before any commercial use. Frappe returns an HMAC-signed receipt binding the exact request,
+locked job/brand/current quote, provenance, immutable hashes, and deterministic record IDs. The
+Worker treats any unsigned, malformed, or mismatched `200` as uncertain, never projected. Before
+enabling the flag, run a disposable live proof for success,
 missing/mismatched association, exact replay, and Frappe refusal, then retain only redacted IDs and
 release evidence.
 

@@ -1,6 +1,6 @@
 """Bounded Worker projection of an already-durable Facet design receipt.
 
-The Worker may submit only D1/R2 anchors and an explicit deployment-controlled
+The Worker may submit only D1/R2 anchors and an operator-authored durable
 job/quote association.  This command independently authenticates the service
 principal, validates a separate HMAC, locks both local records, and creates
 review-only evidence.  It never creates or mutates a quote, price, contract,
@@ -611,7 +611,7 @@ def _reconciliation_diff(claim: Mapping[str, Any]) -> str:
 def _evidence_summary(claim: Mapping[str, Any]) -> str:
     if claim["schema_version"] == CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION:
         return (
-            "Facet customer-approved design evidence; estimator reconciliation "
+            "Facet bearer-capability design evidence; estimator reconciliation "
             "required before any commercial use."
         )
     return "Facet design revision evidence; estimator reconciliation required before commercial use."

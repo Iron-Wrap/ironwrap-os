@@ -172,12 +172,13 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | GET | `/admin/envelope/:id` | `Bearer ADMIN_TOKEN` | read one canonical bus envelope |
 | GET | `/admin/dead-letter?limit=50` | `Bearer ADMIN_TOKEN` | read unrecovered dead-letter rows |
 | GET | `/admin/measurements/exceptions?limit=50` | `Bearer ADMIN_TOKEN` | read unmatched or retryable measurement receipts without idempotency/payload hash fields or lease tokens; opaque receipt ids and raw pointers remain available for review. Retryable and expired-lease receipts re-drive sequentially from verified R2 raw sources with bounded backoff |
-| POST | `/admin/app-users` | `Bearer ADMIN_TOKEN` | provision/update/deactivate one user on this deployment's configured tenant |
+| POST | `/admin/app-users/bootstrap` | `Bearer ADMIN_TOKEN` + `APP_FIRST_OWNER_BOOTSTRAP_ENABLED=true` | one-time bootstrap that creates the first owner only when this tenant has zero app users |
 | POST | `/webhook/quickbooks` | `intuit-signature` | accept expected-realm signed finance identities, persist receipt plus durable projection row, and issue only Pending Frappe reconciliation work |
 | POST | `/api/v1/auth/magic-link/request` | exact allowed `Origin` | request a link; active/unknown/inactive/throttled identities receive the same `202` body |
 | POST | `/api/v1/auth/magic-link/consume` | exact allowed `Origin` | atomically consume a one-time token and set the fixed-TTL `__Host-ironwrap_session` cookie; GET is not supported |
 | GET | `/api/v1/session` | cookie optional | exact authenticated/unauthenticated bootstrap envelope; always `200`, `private, no-store` |
 | POST | `/api/v1/auth/logout` | session cookie + `X-CSRF-Token` + exact allowed `Origin` | revoke the current hashed session and expire its cookie |
+| POST | `/api/v1/admin/app-users` | office session + `X-CSRF-Token` | steady-state provision/update/deactivate one user on this deployment's configured tenant |
 | GET | `/api/v1/today` | session cookie | assigned active jobs for field; broader active jobs for owner/ops |
 | GET | `/api/v1/jobs/:id` | session cookie | job, gate locks, and proof stream; an unassigned field lookup is indistinguishable from missing |
 | GET | `/api/v1/owner/now` | owner/ops session | exception-first blocked gate, incident, finance, lead, and material read model |
@@ -221,25 +222,25 @@ APP_PUBLIC_ORIGIN=https://<the deployed app origin>
 APP_ALLOWED_ORIGINS=https://<the deployed app origin>
 ```
 
-Provision with `POST /admin/app-users` and the admin bearer token:
+Bootstrap only the first owner with `POST /admin/app-users/bootstrap` when
+`APP_FIRST_OWNER_BOOTSTRAP_ENABLED=true` and this tenant has zero app users:
 
 ```json
 {
   "tenant_id": "ironwrap",
-  "email": "crew@example.com",
-  "display_name": "Crew Member",
-  "role": "field",
-  "frappe_user_id": "crew@example.com",
-  "active": true,
-  "provisioned_by": "owner@example.com"
+  "email": "owner@example.com",
+  "display_name": "Office Owner"
 }
 ```
 
-`role` is exactly `owner`, `ops`, or `field`; field users require a Frappe user id for exact
-assignment checks. Re-send the record with `active:false` to revoke that user's sessions
-and open link. Keep `APP_BFF_ENABLED=false` until migration `0011`, the app build, Frappe read
-credentials, Gmail delegation, `APP_AUTH_PEPPER`, and the origin metadata are present; `/ready`
-fails closed when any enabled-BFF dependency is missing or malformed.
+Every later provisioning change uses `POST /api/v1/admin/app-users` from an authenticated
+office session with `X-CSRF-Token`. That steady-state body accepts `role`, `frappe_user_id`,
+and `active`; field users still require a Frappe user id for exact assignment checks. Re-send
+the record with `active:false` to revoke that user's sessions and open link. The bearer bootstrap
+route never upserts, never accepts a client actor field, and returns a stable denial after the
+first tenant user exists. Keep `APP_BFF_ENABLED=false` until migration `0011`, the app build,
+Frappe read credentials, Gmail delegation, `APP_AUTH_PEPPER`, and the origin metadata are
+present; `/ready` fails closed when any enabled-BFF dependency is missing or malformed.
 
 `APP_AUTH_PEPPER` is a Worker secret with at least 32 random characters. Production accepts only
 HTTPS origins. `APP_ALLOW_INSECURE_LOCAL=true` permits explicit localhost HTTP origins for local

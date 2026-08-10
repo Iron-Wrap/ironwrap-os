@@ -4,7 +4,9 @@ import {
   consumeDevicePairing,
   consumeMagicLink,
   expiredSessionCookie,
+  parseFirstOwnerBootstrap,
   logoutAppSession,
+  bootstrapFirstOwner,
   issueDevicePairing,
   listDevicePairings,
   listFieldPairingUsers,
@@ -193,6 +195,37 @@ export async function handleAdminAppUserProvision(
     ...validated.value,
     provisioned_by: auth.session.email_normalized,
   }, req);
+  return appJson({
+    user: {
+      user_id: user.user_id,
+      tenant_id: user.tenant_id,
+      email: user.email_normalized,
+      display_name: user.display_name,
+      role: user.role,
+      frappe_user_id: user.frappe_user_id,
+      active: user.active === 1,
+      updated_at: user.updated_at,
+    },
+  });
+}
+
+export async function handleAdminFirstOwnerBootstrap(
+  req: Request,
+  env: Env,
+): Promise<Response> {
+  const appEnv = env as AppEnv;
+  if (String(appEnv.APP_FIRST_OWNER_BOOTSTRAP_ENABLED) !== "true") {
+    return appJson({ error: "first_owner_bootstrap_disabled" }, 403);
+  }
+  if (String(appEnv.APP_BFF_ENABLED) !== "true") {
+    return appJson({ error: "app_bff_disabled" }, 503);
+  }
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return appJson({ error: parsed.error }, parsed.status);
+  const validated = parseFirstOwnerBootstrap(parsed.value, appEnv);
+  if (!validated.ok) return appJson({ error: validated.error }, 400);
+  const user = await bootstrapFirstOwner(appEnv, validated.value, req);
+  if (!user) return appJson({ error: "first_owner_bootstrap_completed" }, 409);
   return appJson({
     user: {
       user_id: user.user_id,

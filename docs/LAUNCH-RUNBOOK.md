@@ -547,6 +547,11 @@ separate review-gated `/public/instant-estimate` contract above.
 
 ## 10. Prove The End-To-End Intake Slice
 
+Before using `--execute`, read the
+[launch-proof side-effect inventory](./LAUNCH-PROOF-SIDE-EFFECTS.md) and obtain owner authorization
+for its enumerated email, JobNimbus, Drive, D1/R2, queue, and Frappe effects. The command has no
+partial production mode, and several effects are irreversible or only soft-reversible.
+
 Before executing the proof, create a separate non-Desk Frappe API user with only the
 `IronWrap Launch Proof Reader` role. That role may read only `Instant Estimate Session`; do not
 assign it Lead Envelope, Roof Job, Roofing Customer, or any other IronWrap role. Pin that exact

@@ -24,6 +24,7 @@ import {
   type FrappeRow,
 } from "./frappe-read.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
+import { customerAcceptanceBackendConfigured } from "./customer-acceptance-config.ts";
 
 const MAX_PORTAL_BODY_BYTES = 1024;
 const PORTAL_ACCESS_WINDOW_MS = 15 * 60 * 1000;
@@ -34,6 +35,7 @@ const PORTAL_MAX_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export interface CustomerPortalReadModel {
   version: 1;
   brand: string;
+  contract_acceptance_available: boolean;
   source_updated_at: string | null;
   read_model_generated_at: string;
   job: {
@@ -465,7 +467,8 @@ export async function buildCustomerPortalReadModel(
 
   return {
     version: 1,
-    brand: publicTenant(env)?.brand ?? "IronWrap",
+    brand: customerPortalBrand(job, env),
+    contract_acceptance_available: customerContractAcceptanceAvailable(env),
     source_updated_at: latestModified(rowsUsed),
     read_model_generated_at: new Date().toISOString(),
     job: {
@@ -536,6 +539,19 @@ async function customerJobBinding(
   return name === roofJobId && customer
     ? { roofJobId: name, customerId: customer }
     : null;
+}
+
+function customerPortalBrand(job: FrappeRow, env: AppEnv): string {
+  const brand = text(job.brand, 80)?.toLowerCase();
+  if (brand === "ironwrap") return "IronWrap Exteriors";
+  if (brand === "iroof") return "iRoof Alberta";
+  return publicTenant(env)?.brand ?? "IronWrap";
+}
+
+function customerContractAcceptanceAvailable(env: AppEnv): boolean {
+  return customerPortalEnabled(env) &&
+    customerPortalConfigured(env) &&
+    customerAcceptanceBackendConfigured(env);
 }
 
 function publicLink(link: CustomerPortalLinkRecord): Record<string, unknown> {

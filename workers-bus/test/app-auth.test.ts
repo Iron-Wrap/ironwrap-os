@@ -184,6 +184,26 @@ class AuthMemoryDb {
 
   private run(sql: string, args: unknown[]): { success: true; meta: { changes: number } } {
     if (sql.includes("INSERT INTO app_users")) {
+      if (sql.includes("WHERE NOT EXISTS")) {
+        const [candidateId, tenant, email, displayName, role, frappeUser, active, createdBy, createdAt, updatedAt] = args;
+        if ([...this.users.values()].some((user) => user.tenant_id === String(tenant))) {
+          return changed(0);
+        }
+        const user: AppUserRecord = {
+          user_id: String(candidateId),
+          tenant_id: String(tenant),
+          email_normalized: String(email),
+          display_name: String(displayName),
+          role: String(role) as AppRole,
+          frappe_user_id: frappeUser === null ? null : String(frappeUser),
+          active: Number(active),
+          created_by: String(createdBy),
+          created_at: String(createdAt),
+          updated_at: String(updatedAt),
+        };
+        this.users.set(user.user_id, user);
+        return changed(1);
+      }
       const [candidateId, tenant, email, displayName, role, frappeUser, active, createdBy, createdAt, updatedAt] = args;
       const existing = this.userByTenantEmail(String(tenant), String(email));
       const user: AppUserRecord = existing ? {
@@ -383,6 +403,7 @@ function baseEnv(db = new AuthMemoryDb()): AppEnv {
     APP_PUBLIC_ORIGIN: "https://app.example.com",
     APP_ALLOWED_ORIGINS: "https://app.example.com",
     APP_ALLOW_INSECURE_LOCAL: "false",
+    APP_FIRST_OWNER_BOOTSTRAP_ENABLED: "false",
     APP_AUTH_PEPPER: "test-only-pepper-which-is-longer-than-thirty-two-characters",
     ERPNEXT_BASE_URL: "https://frappe.example.com",
     ERPNEXT_API_KEY: "frappe-key",
@@ -732,9 +753,71 @@ test("auth mutations reject missing/unlisted origins and never emit wildcard COR
   assert.notEqual(evil.headers.get("access-control-allow-origin"), "*");
 });
 
-test("admin-token provisioning is tenant-bound, strict, and requires a Frappe assignee for field users", async () => {
+test("first-owner bootstrap is default-off, zero-user-only, and server-attributed", async () => {
   const db = new AuthMemoryDb();
   const env = baseEnv(db);
+  const payload = {
+    tenant_id: "ironwrap",
+    email: "owner@example.com",
+    display_name: "Office Owner",
+  };
+
+  const disabled = await worker.fetch(jsonRequest("/admin/app-users/bootstrap", payload, {
+    authorization: "Bearer admin-token",
+  }), env, waitContext().ctx as never);
+  assert.equal(disabled.status, 403);
+  assert.deepEqual(await disabled.json(), { error: "first_owner_bootstrap_disabled" });
+
+  env.APP_FIRST_OWNER_BOOTSTRAP_ENABLED = "true";
+  const unauthorized = await worker.fetch(jsonRequest("/admin/app-users/bootstrap", payload), env, waitContext().ctx as never);
+  assert.equal(unauthorized.status, 401);
+
+  const strictBody = await worker.fetch(jsonRequest("/admin/app-users/bootstrap", {
+    ...payload,
+    role: "owner",
+  }, {
+    authorization: "Bearer admin-token",
+  }), env, waitContext().ctx as never);
+  assert.equal(strictBody.status, 400);
+  assert.deepEqual(await strictBody.json(), { error: "unexpected_field" });
+
+  const created = await worker.fetch(jsonRequest("/admin/app-users/bootstrap", payload, {
+    authorization: "Bearer admin-token",
+  }), env, waitContext().ctx as never);
+  assert.equal(created.status, 200);
+  const body = await created.json() as {
+    user: { role: string; active: boolean; frappe_user_id: string | null };
+  };
+  assert.deepEqual(body.user, {
+    ...body.user,
+    role: "owner",
+    active: true,
+    frappe_user_id: null,
+  });
+  assert.equal(db.users.size, 1);
+  const owner = [...db.users.values()][0];
+  assert.equal(owner.created_by, "system:first_owner_bootstrap");
+  let audit = db.audits.at(-1)?.args as unknown[] | undefined;
+  assert.equal(audit?.[3], "user_bootstrap");
+  assert.equal(audit?.[4], "created");
+  assert.equal(audit?.[7], "owner:first_owner_bootstrap");
+
+  const replay = await worker.fetch(jsonRequest("/admin/app-users/bootstrap", payload, {
+    authorization: "Bearer admin-token",
+  }), env, waitContext().ctx as never);
+  assert.equal(replay.status, 409);
+  assert.deepEqual(await replay.json(), { error: "first_owner_bootstrap_completed" });
+  assert.equal(db.users.size, 1);
+  audit = db.audits.at(-1)?.args as unknown[] | undefined;
+  assert.equal(audit?.[3], "user_bootstrap");
+  assert.equal(audit?.[4], "denied");
+  assert.equal(audit?.[7], "first_owner_bootstrap_completed");
+});
+
+test("app-session provisioning is tenant-bound, strict, CSRF-gated, and server-attributed", async () => {
+  const db = new AuthMemoryDb();
+  const env = baseEnv(db);
+  const office = await signInOffice(env);
   const payload = {
     tenant_id: "ironwrap",
     email: "crew@example.com",
@@ -742,32 +825,65 @@ test("admin-token provisioning is tenant-bound, strict, and requires a Frappe as
     role: "field",
     frappe_user_id: "crew@example.com",
     active: true,
-    provisioned_by: "owner@example.com",
   };
-  const provisioned = await worker.fetch(jsonRequest("/admin/app-users", payload, {
+
+  const bearerRoute = await worker.fetch(jsonRequest("/admin/app-users", payload, {
     authorization: "Bearer admin-token",
+  }), env, waitContext().ctx as never);
+  assert.equal(bearerRoute.status, 404);
+
+  const missingCsrf = await worker.fetch(jsonRequest("/api/v1/admin/app-users", payload, {
+    cookie: office.cookiePair,
+  }), env, waitContext().ctx as never);
+  assert.equal(missingCsrf.status, 403);
+  assert.deepEqual(await missingCsrf.json(), { error: "csrf_failed" });
+
+  const forgedActor = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
+    ...payload,
+    provisioned_by: "forged@example.com",
+  }, {
+    cookie: office.cookiePair,
+    "x-csrf-token": office.csrfToken,
+  }), env, waitContext().ctx as never);
+  assert.equal(forgedActor.status, 400);
+  assert.deepEqual(await forgedActor.json(), { error: "unexpected_field" });
+
+  const provisioned = await worker.fetch(jsonRequest("/api/v1/admin/app-users", payload, {
+    cookie: office.cookiePair,
+    "x-csrf-token": office.csrfToken,
   }), env, waitContext().ctx as never);
   assert.equal(provisioned.status, 200);
   const result = await provisioned.json() as { user: { role: string; active: boolean } };
   assert.deepEqual(result.user, { ...result.user, role: "field", active: true });
-  assert.equal(db.users.size, 1);
+  assert.equal(db.users.size, 2);
+  const crew = [...db.users.values()].find((user) => user.email_normalized === "crew@example.com");
+  assert.equal(crew?.created_by, "owner@example.com");
+  const provisionAudit = db.audits.at(-1)?.args as unknown[] | undefined;
+  assert.equal(provisionAudit?.[3], "user_provision");
+  assert.equal(provisionAudit?.[7], "field:owner@example.com");
 
-  const noAssignee = await worker.fetch(jsonRequest("/admin/app-users", {
+  const noAssignee = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
     ...payload,
     email: "other@example.com",
     frappe_user_id: null,
-  }, { authorization: "Bearer admin-token" }), env, waitContext().ctx as never);
+  }, {
+    cookie: office.cookiePair,
+    "x-csrf-token": office.csrfToken,
+  }), env, waitContext().ctx as never);
   assert.equal(noAssignee.status, 400);
   assert.deepEqual(await noAssignee.json(), { error: "field_requires_frappe_user_id" });
 
-  const otherTenant = await worker.fetch(jsonRequest("/admin/app-users", {
+  const otherTenant = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
     ...payload,
     tenant_id: "another-tenant",
-  }, { authorization: "Bearer admin-token" }), env, waitContext().ctx as never);
+  }, {
+    cookie: office.cookiePair,
+    "x-csrf-token": office.csrfToken,
+  }), env, waitContext().ctx as never);
   assert.equal(otherTenant.status, 400);
   assert.deepEqual(await otherTenant.json(), { error: "invalid_tenant" });
 
-  const unauthorized = await worker.fetch(jsonRequest("/admin/app-users", payload), env, waitContext().ctx as never);
+  const unauthorized = await worker.fetch(jsonRequest("/api/v1/admin/app-users", payload), env, waitContext().ctx as never);
   assert.equal(unauthorized.status, 401);
 });
 
@@ -800,15 +916,17 @@ test("admin deactivation revokes existing sessions and consumes open links", asy
   await secondWaiter.flush();
   assert.equal([...db.magic.values()][0].consumed_at, null);
 
-  const deactivated = await worker.fetch(jsonRequest("/admin/app-users", {
+  const deactivated = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
     tenant_id: "ironwrap",
     email: "owner@example.com",
     display_name: "Office Owner",
     role: "owner",
     frappe_user_id: null,
     active: false,
-    provisioned_by: "owner@example.com",
-  }, { authorization: "Bearer admin-token" }), env, secondWaiter.ctx as never);
+  }, {
+    cookie: cookiePair,
+    "x-csrf-token": (await consumed.json() as { csrf_token: string }).csrf_token,
+  }), env, secondWaiter.ctx as never);
   assert.equal(deactivated.status, 200);
   assert.equal([...db.sessions.values()][0].revoked_at !== null, true);
   assert.equal([...db.magic.values()][0].consumed_at !== null, true);

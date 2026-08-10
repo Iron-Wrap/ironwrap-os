@@ -4,7 +4,9 @@ import {
   consumeDevicePairing,
   consumeMagicLink,
   expiredSessionCookie,
+  parseFirstOwnerBootstrap,
   logoutAppSession,
+  bootstrapFirstOwner,
   issueDevicePairing,
   listDevicePairings,
   listFieldPairingUsers,
@@ -104,6 +106,12 @@ import {
 } from "./measurement-intake-store.ts";
 import { buildNewoOperationsReadModel } from "./newo-operations-read-model.ts";
 import { buildOwnerRuntimeReadModel } from "./operations.ts";
+import {
+  createFacetDesignAssociation,
+  listFacetDesignEvidenceRequiringAssociation,
+  parseFacetDesignAssociationInput,
+  resolveFacetDesignAssociation,
+} from "./facet-design-association.ts";
 
 const MAX_ADMIN_BODY_BYTES = 8 * 1024;
 
@@ -174,7 +182,12 @@ export async function handleAppApi(
 export async function handleAdminAppUserProvision(
   req: Request,
   env: Env,
+  auth: AuthContext,
 ): Promise<Response> {
+  if (!officeRole(auth))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
   const appEnv = env as AppEnv;
   if (String(appEnv.APP_BFF_ENABLED) !== "true")
     return appJson({ error: "app_bff_disabled" }, 503);
@@ -184,7 +197,41 @@ export async function handleAdminAppUserProvision(
   if (!parsed.ok) return appJson({ error: parsed.error }, parsed.status);
   const validated = parseProvisionAppUser(parsed.value, appEnv);
   if (!validated.ok) return appJson({ error: validated.error }, 400);
-  const user = await provisionAppUser(appEnv, validated.value, req);
+  const user = await provisionAppUser(appEnv, {
+    ...validated.value,
+    provisioned_by: auth.session.email_normalized,
+  }, req);
+  return appJson({
+    user: {
+      user_id: user.user_id,
+      tenant_id: user.tenant_id,
+      email: user.email_normalized,
+      display_name: user.display_name,
+      role: user.role,
+      frappe_user_id: user.frappe_user_id,
+      active: user.active === 1,
+      updated_at: user.updated_at,
+    },
+  });
+}
+
+export async function handleAdminFirstOwnerBootstrap(
+  req: Request,
+  env: Env,
+): Promise<Response> {
+  const appEnv = env as AppEnv;
+  if (String(appEnv.APP_FIRST_OWNER_BOOTSTRAP_ENABLED) !== "true") {
+    return appJson({ error: "first_owner_bootstrap_disabled" }, 403);
+  }
+  if (String(appEnv.APP_BFF_ENABLED) !== "true") {
+    return appJson({ error: "app_bff_disabled" }, 503);
+  }
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return appJson({ error: parsed.error }, parsed.status);
+  const validated = parseFirstOwnerBootstrap(parsed.value, appEnv);
+  if (!validated.ok) return appJson({ error: validated.error }, 400);
+  const user = await bootstrapFirstOwner(appEnv, validated.value, req);
+  if (!user) return appJson({ error: "first_owner_bootstrap_completed" }, 409);
   return appJson({
     user: {
       user_id: user.user_id,
@@ -205,6 +252,9 @@ export async function handleAuthenticatedRoute(
   auth: AuthContext,
 ): Promise<Response> {
   const url = new URL(req.url);
+  if (req.method === "POST" && url.pathname === "/api/v1/admin/app-users") {
+    return await handleAdminAppUserProvision(req, env, auth);
+  }
   if (req.method === "GET" && url.pathname === "/api/v1/session") {
     const response = appJson(sessionPayload(auth, env));
     response.headers.set("cache-control", "private, no-store");
@@ -226,6 +276,42 @@ export async function handleAuthenticatedRoute(
   }
   if (url.pathname.startsWith("/api/v1/customer-portal/links")) {
     return await handleCustomerPortalLinks(req, env, auth);
+  }
+  if (
+    req.method === "GET" &&
+    url.pathname === "/api/v1/facet-design-evidence/association-ready"
+  ) {
+    if (!officeRole(auth))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    try {
+      return privateAppJson({
+        evidence: await listFacetDesignEvidenceRequiringAssociation(
+          env,
+          auth.session.tenant_id,
+          parsedListLimit(url.searchParams.get("limit")),
+        ),
+      });
+    } catch {
+      return privateAppJson(
+        { error: "facet_design_association_store_unavailable" },
+        502,
+      );
+    }
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/facet-design-evidence/associations"
+  ) {
+    return await handleFacetDesignAssociation(req, env, auth);
+  }
+  const facetQuoteRevisionMatch = url.pathname.match(
+    /^\/api\/v1\/facet-design-evidence\/associations\/([^/]+)\/quote-revision-approvals$/,
+  );
+  if (req.method === "POST" && facetQuoteRevisionMatch) {
+    const eventId = decodedPathSegment(facetQuoteRevisionMatch[1] ?? "");
+    return eventId
+      ? await prepareFacetQuoteRevisionApproval(req, env, auth, eventId)
+      : privateAppJson({ error: "not_found" }, 404);
   }
   if (
     req.method === "GET" &&
@@ -679,6 +765,114 @@ export async function handleAuthenticatedRoute(
   return appJson({ error: "not_found" }, 404);
 }
 
+async function handleFacetDesignAssociation(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!officeRole(auth))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const requestIdempotencyKey = idempotencyKey(req);
+  if (!requestIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const input = parseFacetDesignAssociationInput(parsed.value);
+  if (!input)
+    return privateAppJson({ error: "invalid_facet_design_association" }, 400);
+  try {
+    const result = await createFacetDesignAssociation(env, {
+      ...input,
+      tenantId: auth.session.tenant_id,
+      actorUserId: auth.session.user_id,
+      idempotencyKey: requestIdempotencyKey,
+      associatedAt: new Date().toISOString(),
+    });
+    if (result.kind === "rejected") {
+      return privateAppJson({ error: result.code }, result.status);
+    }
+    return privateAppJson(
+      {
+        association: result.association,
+        ...(result.kind === "replayed" ? { replayed: true } : {}),
+      },
+      result.kind === "created" ? 201 : 200,
+    );
+  } catch {
+    return privateAppJson(
+      { error: "facet_design_association_store_unavailable" },
+      502,
+    );
+  }
+}
+
+async function prepareFacetQuoteRevisionApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  eventId: string,
+): Promise<Response> {
+  if (!officeRole(auth))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  if (String(env.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED) !== "true") {
+    return privateAppJson(
+      { error: "facet_quote_revision_prepare_disabled" },
+      403,
+    );
+  }
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const requested = parseFacetQuoteRevisionApprovalPreparation(parsed.value);
+  if (!requested) {
+    return privateAppJson(
+      { error: "invalid_facet_quote_revision_approval_request" },
+      400,
+    );
+  }
+
+  let resolved;
+  try {
+    resolved = await resolveFacetDesignAssociation(
+      env,
+      auth.session.tenant_id,
+      eventId,
+    );
+  } catch {
+    return privateAppJson(
+      { error: "facet_design_association_store_unavailable" },
+      502,
+    );
+  }
+  if (resolved.kind === "missing")
+    return privateAppJson({ error: "not_found" }, 404);
+  if (resolved.kind === "invalid") {
+    return privateAppJson(
+      { error: "facet_design_association_anchor_mismatch" },
+      409,
+    );
+  }
+
+  const association = resolved.association;
+  return await prepareQuoteRevisionApprovalRequest(
+    env,
+    auth,
+    `facet-quote-revision:${association.association_anchor_sha256}`,
+    {
+      roofJobId: association.roof_job_id,
+      customerQuoteId: association.customer_quote_id,
+      correctionReason: facetQuoteRevisionCorrectionReason(
+        association.event_id,
+        association.association_anchor_sha256,
+        requested.correctionReason,
+      ),
+    },
+  );
+}
+
 async function handleFieldWorkPackageRoute(
   req: Request,
   env: AppEnv,
@@ -723,6 +917,20 @@ async function prepareQuoteRevisionApproval(
       { error: "invalid_quote_revision_approval_request" },
       400,
     );
+  return await prepareQuoteRevisionApprovalRequest(
+    env,
+    auth,
+    prepareIdempotencyKey,
+    input,
+  );
+}
+
+async function prepareQuoteRevisionApprovalRequest(
+  env: AppEnv,
+  auth: AuthContext,
+  prepareIdempotencyKey: string,
+  input: NonNullable<ReturnType<typeof parseQuoteRevisionApprovalPreparation>>,
+): Promise<Response> {
   const requestedByFrappeUser = auth.session.frappe_user_id?.trim() ?? "";
   if (!requestedByFrappeUser)
     return privateAppJson({ error: "frappe_identity_required" }, 403);
@@ -2435,6 +2643,23 @@ function parseQuoteRevisionApprovalPreparation(value: unknown): {
 
 function quoteRevisionRequestText(correctionReason: string): string {
   return `Prepare an append-only Draft Customer Quote revision shell after human review. Reason: ${correctionReason}`;
+}
+
+function parseFacetQuoteRevisionApprovalPreparation(value: unknown): {
+  correctionReason: string;
+} | null {
+  if (!isRecord(value) || !onlyKeys(value, ["correction_reason"]))
+    return null;
+  const correctionReason = boundedText(value.correction_reason, 8, 1_600);
+  return correctionReason ? { correctionReason } : null;
+}
+
+function facetQuoteRevisionCorrectionReason(
+  eventId: string,
+  associationSha256: string,
+  operatorReason: string,
+): string {
+  return `Facet bearer-capability design event ${eventId} is bound by association ${associationSha256}. ${operatorReason}`;
 }
 
 function parseProductionScheduleApprovalPreparation(value: unknown): {

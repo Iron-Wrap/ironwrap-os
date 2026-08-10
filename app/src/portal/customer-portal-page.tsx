@@ -44,7 +44,7 @@ export function CustomerPortalPage() {
       <main className="grid min-h-dvh place-items-center p-4">
         <ErrorState
           title="This project link is no longer available"
-          message="Ask your IronWrap contact for a fresh private project link."
+          message="Ask your project team for a fresh private project link."
           onRetry={token ? retry : undefined}
         />
       </main>
@@ -137,15 +137,15 @@ function ProposalCard({
         ) : null}
         {quote?.assumptions ? <CopyBlock title="Assumptions" value={quote.assumptions} /> : null}
         {quote?.exclusions ? <CopyBlock title="Exclusions" value={quote.exclusions} /> : null}
-        {portalToken && quote?.status === "Approved" ? (
-          <ContractAcceptanceRequest portalToken={portalToken} />
+        {portalToken && quote?.status === "Approved" && model.contract_acceptance_available ? (
+          <ContractAcceptanceRequest brand={model.brand} portalToken={portalToken} />
         ) : null}
       </CardContent>
     </Card>
   );
 }
 
-function ContractAcceptanceRequest({ portalToken }: { portalToken: string }) {
+function ContractAcceptanceRequest({ brand, portalToken }: { brand: string; portalToken: string }) {
   const [state, setState] = useState<"idle" | "pending" | "sent" | "error">("idle");
 
   async function requestChallenge() {
@@ -184,7 +184,7 @@ function ContractAcceptanceRequest({ portalToken }: { portalToken: string }) {
           </Button>
           {state === "error" ? (
             <p className="mt-3 text-sm font-semibold text-danger" role="alert">
-              We could not send a confirmation link. Please try again or contact IronWrap.
+              We could not send a confirmation link. Please try again or contact {brand}.
             </p>
           ) : null}
         </>

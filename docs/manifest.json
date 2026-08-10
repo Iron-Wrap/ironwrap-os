@@ -58,6 +58,11 @@
       "authority": []
     },
     {
+      "path": "docs/BUS-FRAPPE-SEAM-PROOF.md",
+      "class": "runbook",
+      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+    },
+    {
       "path": "docs/CAPABILITY-MATRIX.md",
       "class": "canonical",
       "authority": []
@@ -73,12 +78,22 @@
       "authority": []
     },
     {
+      "path": "docs/LAUNCH-PROOF-SIDE-EFFECTS.md",
+      "class": "runbook",
+      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
+    },
+    {
       "path": "docs/LAUNCH-RUNBOOK.md",
       "class": "runbook",
       "authority": [
         "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
         "docs/COMPLIANCE-REGISTER.md"
       ]
+    },
+    {
+      "path": "docs/LOCAL-FRAPPE-STAND-UP-DEFECTS.md",
+      "class": "runbook",
+      "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
     },
     {
       "path": "docs/NEWO-INTEGRATION.md",

@@ -11,12 +11,19 @@ import {
   customerPortalEnabled,
 } from "./customer-portal.ts";
 import {
+  customerAcceptanceBackendConfigured,
+  customerAcceptanceBackendEnabled,
+  customerAcceptanceFrappeApiKey,
+  customerAcceptanceFrappeApiSecret,
+  customerAcceptanceHmacKey,
+} from "./customer-acceptance-config.ts";
+import {
   findActiveCustomerPortalLink,
   type CustomerPortalLinkRecord,
 } from "./customer-portal-store.ts";
 import { r2ObjectStore } from "./field-actions.ts";
 import { frappeBaseUrl, frappeRequestTimeout } from "./frappe-read.ts";
-import { gmailConfigured, sendGmail } from "./google.ts";
+import { sendGmail } from "./google.ts";
 import type { AppEnv, AuthRequestContext } from "./app-types.ts";
 
 const MAX_BODY_BYTES = 2_048;
@@ -379,14 +386,11 @@ async function settleAcceptanceIntent(
 }
 
 function customerAcceptanceConfigured(env: AppEnv): boolean {
-  return customerAcceptanceEnabled(env) && customerPortalConfigured(env) && !!acceptanceHmacKey(env) &&
-    !!acceptanceFrappeApiKey(env) && !!acceptanceFrappeApiSecret(env) &&
-    gmailConfigured(env);
+  return customerPortalConfigured(env) && customerAcceptanceBackendConfigured(env);
 }
 
 function customerAcceptanceEnabled(env: AppEnv): boolean {
-  return customerPortalEnabled(env) &&
-    String(env.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED) === "true";
+  return customerPortalEnabled(env) && customerAcceptanceBackendEnabled(env);
 }
 
 function trustedPortalOrigin(req: Request, env: AppEnv): boolean {
@@ -480,9 +484,9 @@ async function frappeCustomerAcceptanceCall(
   method: string,
   claim: Record<string, unknown>,
 ): Promise<unknown> {
-  const secret = acceptanceHmacKey(env);
-  const frappeApiKey = acceptanceFrappeApiKey(env);
-  const frappeApiSecret = acceptanceFrappeApiSecret(env);
+  const secret = customerAcceptanceHmacKey(env);
+  const frappeApiKey = customerAcceptanceFrappeApiKey(env);
+  const frappeApiSecret = customerAcceptanceFrappeApiSecret(env);
   if (!secret || !frappeApiKey || !frappeApiSecret) {
     throw new FrappeAcceptanceTransportError("frappe_acceptance_not_configured");
   }
@@ -556,7 +560,7 @@ async function sendChallengeEmail(
   return await sendGmail(
     env,
     prepared.email,
-    "Confirm your IronWrap contract acceptance",
+    "Confirm your contract acceptance",
     `<p>Hello ${greeting},</p><p><a href="${escapeHtml(href)}">Review and confirm your contract acceptance</a>.</p><p>This single-use link expires ${expiry}.</p>`,
   );
 }
@@ -875,19 +879,6 @@ async function parseExactJson(
   } catch {
     return null;
   }
-}
-
-function acceptanceHmacKey(env: AppEnv): string | null {
-  const value = env.APP_CUSTOMER_ACCEPTANCE_HMAC_KEY?.trim() ?? "";
-  return value.length >= 32 ? value : null;
-}
-
-function acceptanceFrappeApiKey(env: AppEnv): string | null {
-  return env.APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY?.trim() || null;
-}
-
-function acceptanceFrappeApiSecret(env: AppEnv): string | null {
-  return env.APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET?.trim() || null;
 }
 
 async function hmacBase64Url(secret: string, value: string): Promise<string> {

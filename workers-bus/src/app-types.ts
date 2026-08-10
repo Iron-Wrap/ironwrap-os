@@ -28,6 +28,7 @@ export type AppEnv = Env & {
   APP_PUBLIC_ORIGIN?: string;
   APP_ALLOWED_ORIGINS?: string;
   APP_ALLOW_INSECURE_LOCAL?: string;
+  APP_FIRST_OWNER_BOOTSTRAP_ENABLED?: string;
   // Exact comma-separated HTTPS origins allowed to supply office-only visual-model previews.
   // This is intentionally separate from browser CORS origins; unset means previews stay hidden.
   APP_VISUAL_PREVIEW_ALLOWED_ORIGINS?: string;
@@ -57,6 +58,9 @@ export type AppEnv = Env & {
   APP_QUOTE_REVISION_BROKER_TIMEOUT_MS?: string;
   APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS?: string;
   QUOTE_REVISION_BROKER_SHARED_SECRET?: string;
+  // A durable Facet association may prepare the existing quote-revision approval rail only
+  // after this separate, false-by-default capability is explicitly enabled.
+  APP_FACET_QUOTE_REVISION_PREPARE_ENABLED?: string;
   // Production scheduling is a separate high-consequence authority from lead
   // triage and commercial quote revisions. Its broker identity, approver, and
   // recent-session limit must never inherit another mutation rail by default.

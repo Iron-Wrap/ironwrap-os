@@ -189,7 +189,7 @@ npm run deploy
 
 ### Facet-to-Frappe Review-Projection Gate
 
-Leave `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED=false` until the `0031` D1 migration is applied in
+Leave `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED=false` until the `0035` D1 migration is applied in
 the named environment and all of the following are proven there:
 
 1. Create a dedicated Frappe API user with only `IronWrap Facet Design Projection Service`, pin
@@ -200,21 +200,57 @@ the named environment and all of the following are proven there:
    `FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY`, and
    `FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET` only with `wrangler secret put`. Do not
    reuse the Facet ingress HMAC, broad Worker/Frappe API identity, or customer-acceptance identity.
-3. Submit the reviewed deployment configuration
-   `FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON` with schema version `1`. Each exact mapping
-   includes only D1 receipt anchors plus opaque `roof_job_id` and `customer_quote_id`; it contains
-   no customer names, addresses, prices, or operator-entered commercial facts. There is no mutable
-   operator association API.
+3. From an authenticated owner/ops office session, list v2 evidence at
+   `GET /api/v1/facet-design-evidence/association-ready`, then create an exact binding through
+   `POST /api/v1/facet-design-evidence/associations` with CSRF and an `Idempotency-Key`. Submit the
+   returned event/design/brand anchors, opaque `roof_job_id` and `customer_quote_id`, and a bounded
+   reason. Tenant and actor come only from the session. The Worker must read back the Roof Job,
+   brand, linked current `Approved` quote, and approval timestamp before appending the association.
+   There is no deployment JSON association authority.
 4. With a disposable existing Roof Job and its current `Approved` Customer Quote, prove the
    scheduled projection reads an already durable D1 receipt, accepts only an exact association,
    creates one non-customer-safe Evidence Item and one `Pending` Integration Reconciliation record,
-   and leaves the quote, Contract Acceptance, and Proposal Evidence Pack unchanged. Repeat the
-   exact event to prove deterministic replay; separately prove missing/mismatched mappings make no
-   Frappe call and an Frappe refusal creates no Worker success.
+   returns a valid signed receipt binding every request and locked-record anchor, and leaves the
+   quote, Contract Acceptance, and Proposal Evidence Pack unchanged. Repeat the exact event to
+   prove deterministic replay; separately prove missing/mismatched mappings make no Frappe call,
+   an unsigned or tampered `200` remains `uncertain`, and an Frappe refusal creates no Worker success.
 
 Keep the flag false if any proof is missing. Repository tests, an ingress `202`, or a deployed D1
 migration are not runtime evidence for this customer-linked projection. Archive only redacted
 event/evidence/reconciliation IDs with the release evidence.
+
+### Facet Release Order And Default-Off Gates
+
+Treat Facet as a consumer-first rollout with separate, default-off release gates. Do not collapse
+receipt capture, commercial association, Frappe projection, or quote revision into one "Facet is
+live" claim.
+
+1. Enable only `FACET_DESIGN_INGEST_ENABLED=true` first, with
+   `FACET_DESIGN_INGEST_SOURCE_TENANT_ID` set to the reviewed Facet producer owner/tenant id, a v2
+   map containing exactly that source key, and migration state in the intended environment. The
+   accepted artifact is still immutable evidence only: it is not a quote, proposal, contract,
+   payment, or accounting mutation.
+2. Capture live v2 receipt proof in the named Worker, D1, and R2 environment before discussing any
+   downstream cutover. A staging payload, repository fixture, or attachment transcript is not
+   runtime proof.
+3. Keep the append-only, office-authored association ledger separate from ingest proof. An
+   association may bind only exact v2 receipt anchors to an existing same-brand Roof Job and its
+   current `Approved` quote after Frappe read-back; it never copies or changes commercial terms.
+4. Keep `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED=false` until the projection gate above is closed in
+   that same environment. Projection remains bounded evidence plus reconciliation only; it does not
+   directly mutate a quote, proposal pack, contract acceptance, accounting record, or customer
+   commitment.
+5. Keep `APP_FACET_QUOTE_REVISION_PREPARE_ENABLED=false` until the private quote-revision broker,
+   configured human approver, resolved v2 association, dry-run, approval, create-only blank Draft,
+   audit, and uncertainty paths are proven in that environment. Do not treat a projected Facet
+   receipt as permission to revise commercial terms.
+6. Enable any Facet-side producer or automation flag only after IronWrap v2 ingest, exact
+   associations, and live receipt proof are already demonstrated. Legacy v1 events remain
+   `provenance_unknown` evidence and cannot be commercially associated with IronWrap or iRoof.
+
+The v2 `customer_capability` provenance and `bearer_capability_only` identity assurance prove only
+possession and exercise of the issued link. They do not establish a distinct natural person,
+informed consent, contract acceptance, or commercial authority.
 
 Newo production uses the managed federation and full governed control plane. Store
 `NEWO_API_KEY`, `NEWO_WEBHOOK_TOKEN`, `NEWO_BOOKING_TOKEN`, and
@@ -367,8 +403,8 @@ Before enabling the BFF in the intended Cloudflare account:
 
 1. Apply the exact D1 migration sequence remotely, including `0028_work_package_actions.sql`, then
    run the Frappe app migration so legacy Lead Envelopes become explicit `Unknown` triage rows.
-   Verify `/ready` against the intended database. The 34-table backup/restore inventory must be
-   deployed with the same release.
+   Verify `/ready` against the intended database. The migration-derived 52-table/72-trigger
+   backup-and-restore inventory must be deployed with the same release.
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
    `APP_ALLOWED_ORIGINS` to that exact origin (or an explicit, reviewed comma-separated set).
@@ -380,16 +416,23 @@ Before enabling the BFF in the intended Cloudflare account:
 3. Store a new high-entropy `APP_AUTH_PEPPER` only with `wrangler secret put`; it is a Worker
    secret, never a `vars` value or a browser value. Configure the dedicated Gmail sender and any
    Frappe read credentials separately. Keep Hermes write flags false for this gate.
-4. Provision one owner/ops user and one assigned field user through the guarded app-user admin
-   route. Confirm office magic-link delivery, QR issue, fragment-only consume, one field read with
-   `X-IronWrap-Device-Proof`, and the refusal of the same request without that proof.
-5. Run the lost-device procedure in `OPERATIONS-RUNBOOK.md`: revoke the paired device, prove its
+4. If the tenant has zero `app_users`, use the one-time bootstrap ceremony first: keep
+   `APP_FIRST_OWNER_BOOTSTRAP_ENABLED=false` by default, enable it only long enough for one
+   `POST /admin/app-users/bootstrap` request, and prove the route accepts only an owner body,
+   derives its audit actor server-side, inserts only while the tenant still has zero users, and
+   returns a stable denial on replay. After that first owner exists, turn the flag back off.
+5. Provision any steady-state owner, ops, and field users only through the authenticated office
+   session + CSRF app API route. `ADMIN_TOKEN` alone is not authority to create another active
+   owner or ops identity. Confirm office magic-link delivery, QR issue, fragment-only consume, one
+   field read with `X-IronWrap-Device-Proof`, and the refusal of the same request without that
+   proof.
+6. Run the lost-device procedure in `OPERATIONS-RUNBOOK.md`: revoke the paired device, prove its
    old cookie/proof fails, then pair a replacement with a fresh QR. Archive request ids, device
    ids, and timestamps only; never archive QR URLs, tokens, or device proofs.
-6. Capture real iOS and Android install/camera/share/clipboard/weak-signal evidence before any
+7. Capture real iOS and Android install/camera/share/clipboard/weak-signal evidence before any
    field-launch wording. A local build, static QR image, or a browser emulator does not close this
    gate.
-7. Run one consented lead through the production sender. Archive the canonical envelope id, D1
+8. Run one consented lead through the production sender. Archive the canonical envelope id, D1
    `lead_ack_receipts` row, provider message id, and observed timestamp; prove Owner Now labels it
    only as provider acceptance within/after 60 seconds. Do not call this delivery proof. Repeat
    with no eligible email to prove the queue shows a no-channel exception rather than a false
@@ -440,6 +483,11 @@ flow, generic commercial e-sign service, deposit collection, or delivery proof. 
 customer-safe projected summaries; raw storage keys, Drive links, field notes, unapproved
 estimates, and office session data never cross the public boundary.
 
+The visible customer-portal brand comes from the linked Roof Job's bounded `brand` field and
+falls back to the tenant presentation brand only when that job record lacks a recognized brand.
+Do not treat the marketing hostname, attachment notes, or a global deployment label as the
+customer-facing portal brand source of truth.
+
 Before enabling it in the intended Cloudflare account:
 
 1. Apply the migration sequence through `0029_customer_contract_acceptance.sql` with the same
@@ -473,6 +521,9 @@ Before this separate capability is enabled in a named environment:
    `APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY` and
    `APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET` as Worker secrets. The HMAC timestamp/nonce window,
    service user, and service role must all fail closed.
+   The acceptance CTA belongs only to this dedicated backend path: keep it absent until the
+   customer portal resolves `contract_acceptance_available=true` from live configuration, not from
+   a mock proposal state or static frontend assumption.
 3. Configure the approved Gmail sender and exact HTTPS `APP_PUBLIC_ORIGIN`. The email must use
    `https://<origin>/contract-accept#token=...`; do not log, screen-capture, or place that token in
    a query string, path, ticket, or browser recording. Provider message acceptance is not delivery
@@ -497,6 +548,11 @@ without a separate short-lived attachment-authorization design and browser proof
 separate review-gated `/public/instant-estimate` contract above.
 
 ## 10. Prove The End-To-End Intake Slice
+
+Before using `--execute`, read the
+[launch-proof side-effect inventory](./LAUNCH-PROOF-SIDE-EFFECTS.md) and obtain owner authorization
+for its enumerated email, JobNimbus, Drive, D1/R2, queue, and Frappe effects. The command has no
+partial production mode, and several effects are irreversible or only soft-reversible.
 
 Before executing the proof, create a separate non-Desk Frappe API user with only the
 `IronWrap Launch Proof Reader` role. That role may read only `Instant Estimate Session`; do not
@@ -531,6 +587,9 @@ Archive `launch-proof-evidence.json` with the release commit and image digest. V
 in D1/R2 and in Frappe as Lead Envelope, Roofing Customer/Property, Roof Job, and seven Production
 Gate State rows. Remove or clearly label fixture records after proof.
 
+Keep launch-proof artifacts private and redacted. They are release evidence, not canonical docs,
+not Git fixtures, and not proof that a later deployment still runs the same exact head.
+
 ## 11. Cut Over Real Sources
 
 | Source | Runtime proof |
@@ -554,6 +613,9 @@ deployed image digest and `BACKUP_AGE_RECIPIENT` must be an offline public recip
 `D1_BACKUP_API_TOKEN` is the persisted read/export-only authority; keep it distinct from the
 backup-only R2 access/secret key pair. Never store `D1_RESTORE_API_TOKEN` in that file: inject
 its separate drill/write authority just-in-time for one remote restore and unset it afterward.
+Discover the real backend container name from the deployed compose project before any backup or
+restore run; the sample `BACKEND_CONTAINER` in `deploy/env.example` is illustrative only and is
+not live-environment proof.
 Install the Worker lock before scheduling; both D1
 scripts refuse any Wrangler other than the exact 4.x version in that lock:
 
@@ -579,8 +641,8 @@ CRON_TZ=UTC
 `backup-d1-to-r2.sh` is bound to Cloudflare account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
-the SQL into isolated SQLite, checks integrity and all 34 release-state tables,
-plus the 43 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
+the SQL into isolated SQLite, checks integrity and all 52 release-state tables,
+plus the 72 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
 locally, uploads immutably, remotely checks the objects, and publishes
 `IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
 `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Never discover or infer `latest`.
@@ -607,7 +669,7 @@ For the launch remote drill, create a fresh empty D1 database named
 `ironwrap-restore-drill-<label>` in the same committed account and record its exact UUID. The
 name and UUID must both differ from production. Bind one approval to that exact pair; the script
 generates a target-only Wrangler config, rechecks emptiness, imports, then compares the complete
-table-to-row-count map for all 34 required tables and the exact 43 trigger-to-table bindings
+table-to-row-count map for all 52 required tables and the exact 72 trigger-to-table bindings
 with the locally verified SQLite export:
 
 ```bash
@@ -623,12 +685,10 @@ export D1_RESTORE_MODE=verify
 ```
 
 Any new D1 migration that adds a persistent table must update the required-table allowlist in
-both D1 scripts and their readiness tests before deployment. Any migration that adds or changes
-an invariant trigger must update the trigger inventory too. The current 34-table inventory includes
-the QuickBooks projection outbox, approval ledgers, governed-transition/outbox tables, and the `field_work_package_actions`
-ledger; it is enforced by the two scripts rather than this prose list. The 43 required triggers
-include source-count validation, immutable lead-ack receipts, the three approval ledgers, and the
-governed-transition outbox rules. Approval binding rewrites must raise
+both D1 scripts and their recovery tests before deployment; the readiness checker derives all
+52 tables and 72 trigger bindings from the migration chain and rejects any drift. The inventory
+includes QuickBooks, customer acceptance, Newo, measurement, Facet evidence/association, approval,
+governed-transition, and field Work Package ledgers. Approval binding rewrites must raise
 `ABORT, 'approval_request_binding_immutable'`; approval event updates/deletes must raise
 `ABORT, 'approval_request_events_immutable'` in both local export verification and remote drill proof.
 
@@ -651,12 +711,14 @@ artifact checksums. A successful upload without this restore drill is not backup
 | Gate | Repository evidence | Required live evidence |
 | --- | --- | --- |
 | Intake spine | Worker tests, typecheck, dry-run bundle | Real source reaches R2, D1, Frappe, ack, bridge, reconcile |
-| Operating core | 50 DocTypes (42 top-level + 8 child), policy/RBAC tests, Workspace/Control Center package proof | App installed on plain Frappe; fixture, per-role cockpit, empty/error/readiness, and source-navigation checks pass |
+| Operating core | 64 DocTypes (48 top-level + 16 child), policy/RBAC tests, Workspace/Control Center package proof | App installed on plain Frappe; fixture, per-role cockpit, empty/error/readiness, and source-navigation checks pass |
 | Read-only Hermes | Role/manifest and MCP tests | Owner query uses live truth with zero writes |
 | Approved write | Dry-run/request contracts and idempotency tests | One human-approved mutation and complete `Hermes Run` audit |
 | Recovery | Readiness/status/replay plus encrypted Frappe/D1 backup tests | Targeted replay, alerts, exact-prefix local verification, isolated Frappe and D1 restores, table row-count, trigger-inventory, and receipt-semantics parity, and live R2 denied-delete proof |
 | Real sources | Intake contracts | Website, estimator, field, measurement, QB, and every enabled voice/provider-source admin proof |
 
 Record commit, image digest, Worker deployment version, migration state, Frappe site/app versions,
-Hermes version, proof outputs, approver, and any failed/skipped checks. Launch is blocked while a
-required live artifact is absent.
+Hermes version, proof outputs, approver, rollback evidence, and any failed/skipped checks. Record
+the exact deployed source head and rerun live proof after every production-affecting secret,
+config, migration, image, or Worker-version change. Launch is blocked while a required live
+artifact is absent.

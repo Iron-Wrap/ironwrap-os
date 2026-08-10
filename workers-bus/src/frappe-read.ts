@@ -412,6 +412,7 @@ export const OFFICE_ESTIMATOR_READ_FIELDS = {
     "service_type",
     "job_status",
     "workflow_profile",
+    "quotation",
     "modified",
   ],
   "Measurement Report": [
@@ -933,7 +934,7 @@ const OFFICE_SALES_FILTER_FIELDS: Readonly<
 const OFFICE_ESTIMATOR_FILTER_FIELDS: Readonly<
   Record<OfficeEstimatorDocType, ReadonlySet<string>>
 > = {
-  "Roof Job": new Set(["name"]),
+  "Roof Job": new Set(["name", "roof_job_id"]),
   "Measurement Report": new Set(["roof_job", "review_status"]),
   "Visual Property Model": new Set(["roof_job", "status"]),
   "Roof Area": new Set([

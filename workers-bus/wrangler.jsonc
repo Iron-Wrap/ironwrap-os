@@ -97,7 +97,7 @@
     "BACKUP_ALERT_EMAIL": "sales@ironwrapexteriors.com",
     "FROM_EMAIL": "sales@ironwrapexteriors.com",
     "JOBNIMBUS_ENABLED": "true",
-    "NEWO_PRODUCTION_REQUIRED": "true",
+    "NEWO_PRODUCTION_REQUIRED": "false",
     "NEWO_ENABLED": "false",
     "NEWO_CONTROL_WRITE_ENABLED": "false",
     "NEWO_BOOKING_MODE": "request_only",
@@ -133,11 +133,16 @@
     "JN_CONTACT_STATUS": "New",
     "JN_JOB_RECORD_TYPE": "Retail",
     "JN_JOB_STATUS": "Lead",
-    "ERPNEXT_ENABLED": "false",
-    "ERPNEXT_BASE_URL": "",
+    // Frappe operating core. ERPNEXT_BASE_URL must resolve BEFORE this is deployed:
+    // with the flag on and the host unreachable, /ready goes red (fail-closed) and every
+    // lead push retries into the dead-letter queue.
+    "ERPNEXT_ENABLED": "true",
+    "ERPNEXT_BASE_URL": "https://os.ironwrapexteriors.com",
     "QB_EXPECTED_REALM_ID": "",
     "QB_RECONCILIATION_ISSUER_USER": "",
     "ERPNEXT_LEAD_ENVELOPE_DOCTYPE": "Lead Envelope",
+    // Out of scope for the lead path: only the public-estimator consent mirror requires it,
+    // and PUBLIC_ESTIMATE_ENABLED stays false. Other writers fall back to "Administrator".
     "ERPNEXT_INTEGRATION_USER": "",
     "PUBLIC_ESTIMATE_ENABLED": "false",
     "PUBLIC_ESTIMATE_ALLOWED_ORIGINS": "",
@@ -149,13 +154,17 @@
     "PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX": "",
     "PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX": "",
     "PUBLIC_ESTIMATE_RANGE_RULES_JSON": "",
-    "APP_BFF_ENABLED": "false",
+    // Authenticated PWA surfaces. Turning this on adds three hard readiness requirements:
+    // APP_PUBLIC_ORIGIN, a matching APP_ALLOWED_ORIGINS entry, and an APP_AUTH_PEPPER
+    // secret of at least 32 characters. Magic-link email goes through Gmail in production
+    // (the dev_outbox capture is localhost-only).
+    "APP_BFF_ENABLED": "true",
     "APP_CUSTOMER_PORTAL_ENABLED": "false",
     "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "false",
     "FACET_DESIGN_INGEST_ENABLED": "false",
     "FACET_DESIGN_INGEST_TENANT_MAP_JSON": "{}",
     "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED": "false",
-    "FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON": "{\"schema_version\":1,\"associations\":[]}",
+    "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED": "false",
     // Tenant pricing for the estimator's computed estimate; empty disables pricing.
     "ESTIMATOR_PRICE_LIST_JSON": "",
     // Google Doc template id for proposal generation; empty disables the action.
@@ -166,9 +175,13 @@
     "APP_LOCALE": "en-CA",
     "APP_TIME_ZONE": "America/Edmonton",
     "APP_CURRENCY": "CAD",
-    "APP_PUBLIC_ORIGIN": "",
-    "APP_ALLOWED_ORIGINS": "",
+    // Required by APP_BFF_ENABLED: appPublicOrigin() returns null unless APP_PUBLIC_ORIGIN
+    // is non-empty AND listed in APP_ALLOWED_ORIGINS. Replace both if the Worker moves off
+    // workers.dev onto a custom hostname.
+    "APP_PUBLIC_ORIGIN": "https://ironwrap-bus.yellow-rain-7498.workers.dev",
+    "APP_ALLOWED_ORIGINS": "https://ironwrap-bus.yellow-rain-7498.workers.dev",
     "APP_ALLOW_INSECURE_LOCAL": "false",
+    "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "false",
     "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
     "APP_INSURANCE_ESTIMATOR_FRAPPE_USERS": "",
     "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
@@ -294,7 +307,7 @@
         "FACET_DESIGN_INGEST_ENABLED": "false",
         "FACET_DESIGN_INGEST_TENANT_MAP_JSON": "{}",
         "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED": "false",
-        "FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON": "{\"schema_version\":1,\"associations\":[]}",
+        "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED": "false",
         "APP_TENANT_ID": "ironwrap",
         "APP_TENANT_NAME": "IronWrap OS — Local",
         "APP_TENANT_BRAND": "IronWrap",
@@ -304,6 +317,7 @@
         "APP_PUBLIC_ORIGIN": "http://localhost:7100",
         "APP_ALLOWED_ORIGINS": "http://localhost:7100",
         "APP_ALLOW_INSECURE_LOCAL": "true",
+        "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "true",
         "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
         "APP_INSURANCE_ESTIMATOR_FRAPPE_USERS": "",
         "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",
@@ -431,7 +445,7 @@
         "FACET_DESIGN_INGEST_ENABLED": "false",
         "FACET_DESIGN_INGEST_TENANT_MAP_JSON": "{}",
         "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED": "false",
-        "FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON": "{\"schema_version\":1,\"associations\":[]}",
+        "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED": "false",
         "APP_TENANT_ID": "ironwrap",
         "APP_TENANT_NAME": "IronWrap OS — Owner Test",
         "APP_TENANT_BRAND": "IronWrap",
@@ -441,6 +455,7 @@
         "APP_PUBLIC_ORIGIN": "https://ironwrap-bus-staging.yellow-rain-7498.workers.dev",
         "APP_ALLOWED_ORIGINS": "https://ironwrap-bus-staging.yellow-rain-7498.workers.dev",
         "APP_ALLOW_INSECURE_LOCAL": "false",
+        "APP_FIRST_OWNER_BOOTSTRAP_ENABLED": "false",
         "APP_FRAPPE_REQUEST_TIMEOUT_MS": "8000",
         "APP_INSURANCE_ESTIMATOR_FRAPPE_USERS": "",
         "APP_VISUAL_PREVIEW_ALLOWED_ORIGINS": "",

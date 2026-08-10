@@ -174,7 +174,12 @@ export async function handleAppApi(
 export async function handleAdminAppUserProvision(
   req: Request,
   env: Env,
+  auth: AuthContext,
 ): Promise<Response> {
+  if (!officeRole(auth))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
   const appEnv = env as AppEnv;
   if (String(appEnv.APP_BFF_ENABLED) !== "true")
     return appJson({ error: "app_bff_disabled" }, 503);
@@ -184,7 +189,10 @@ export async function handleAdminAppUserProvision(
   if (!parsed.ok) return appJson({ error: parsed.error }, parsed.status);
   const validated = parseProvisionAppUser(parsed.value, appEnv);
   if (!validated.ok) return appJson({ error: validated.error }, 400);
-  const user = await provisionAppUser(appEnv, validated.value, req);
+  const user = await provisionAppUser(appEnv, {
+    ...validated.value,
+    provisioned_by: auth.session.email_normalized,
+  }, req);
   return appJson({
     user: {
       user_id: user.user_id,
@@ -205,6 +213,9 @@ export async function handleAuthenticatedRoute(
   auth: AuthContext,
 ): Promise<Response> {
   const url = new URL(req.url);
+  if (req.method === "POST" && url.pathname === "/api/v1/admin/app-users") {
+    return await handleAdminAppUserProvision(req, env, auth);
+  }
   if (req.method === "GET" && url.pathname === "/api/v1/session") {
     const response = appJson(sessionPayload(auth, env));
     response.headers.set("cache-control", "private, no-store");

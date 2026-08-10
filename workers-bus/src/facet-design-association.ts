@@ -45,6 +45,11 @@ export interface FacetDesignAssociationProjection extends FacetDesignAssociation
   associated_at: string;
 }
 
+export type ResolvedFacetDesignAssociation =
+  | { kind: "resolved"; association: FacetDesignAssociationProjection }
+  | { kind: "missing" }
+  | { kind: "invalid" };
+
 interface StoredFacetCustomerApprovalEvent {
   event_id: string;
   tenant_id: string;
@@ -262,6 +267,24 @@ export async function createFacetDesignAssociation(
   return rejected("facet_design_event_already_associated", 409);
 }
 
+export async function resolveFacetDesignAssociation(
+  env: AppEnv,
+  tenantId: string,
+  eventId: string,
+): Promise<ResolvedFacetDesignAssociation> {
+  if (!validEventId(eventId)) return { kind: "missing" };
+  const stored = await associationByEvent(env, eventId);
+  if (!stored || stored.tenant_id !== tenantId) return { kind: "missing" };
+  const event = await customerApprovalEvent(env, eventId);
+  const association = associationProjection(stored);
+  if (
+    !event || !associationMatchesEvent(association, event) ||
+    await facetDesignAssociationAnchorSha256(association) !==
+      stored.association_anchor_sha256
+  ) return { kind: "invalid" };
+  return { kind: "resolved", association };
+}
+
 export async function facetDesignAssociationAnchorSha256(
   anchor: FacetDesignAssociationAnchor,
 ): Promise<string> {
@@ -421,6 +444,19 @@ function eventMatchesInput(
     event.design_revision_id === input.designRevisionId &&
     event.design_revision_sha256 === input.designRevisionSha256 &&
     event.frozen_evidence_sha256 === input.frozenEvidenceSha256;
+}
+
+function associationMatchesEvent(
+  association: FacetDesignAssociationProjection,
+  event: StoredFacetCustomerApprovalEvent,
+): boolean {
+  return association.event_id === event.event_id &&
+    association.tenant_id === event.tenant_id &&
+    association.brand_id === event.brand_id &&
+    association.facet_project_id === event.facet_project_id &&
+    association.design_revision_id === event.design_revision_id &&
+    association.design_revision_sha256 === event.design_revision_sha256 &&
+    association.frozen_evidence_sha256 === event.frozen_evidence_sha256;
 }
 
 function rejected(

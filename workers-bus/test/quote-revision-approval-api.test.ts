@@ -16,8 +16,15 @@ class SqliteD1 {
 
   constructor() {
     this.raw.exec("PRAGMA foreign_keys = ON");
-    this.raw.exec(readFileSync(new URL("../migrations/0011_app_bff_auth.sql", import.meta.url), "utf8"));
-    this.raw.exec(readFileSync(new URL("../migrations/0017_quote_revision_approval_requests.sql", import.meta.url), "utf8"));
+    for (const migration of [
+      "0011_app_bff_auth.sql",
+      "0017_quote_revision_approval_requests.sql",
+      "0030_facet_design_ingest.sql",
+      "0034_facet_customer_approval_ingest.sql",
+      "0035_facet_design_evidence_associations.sql",
+    ]) {
+      this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
+    }
     const now = new Date().toISOString();
     const insert = this.raw.prepare(
       `INSERT INTO app_users (
@@ -89,8 +96,14 @@ function auth(role: AppRole): AuthContext {
   };
 }
 
-function request(path: string, body?: Record<string, unknown>, idempotency?: string): Request {
-  const headers = new Headers({ "x-csrf-token": "csrf" });
+function request(
+  path: string,
+  body?: Record<string, unknown>,
+  idempotency?: string,
+  csrf = true,
+): Request {
+  const headers = new Headers();
+  if (csrf) headers.set("x-csrf-token", "csrf");
   if (body) headers.set("content-type", "application/json");
   if (idempotency) headers.set("idempotency-key", idempotency);
   return new Request(`https://app.example.com${path}`, {
@@ -106,6 +119,73 @@ function preparationBody(): Record<string, unknown> {
     customer_quote_id: "customer-quote:api-1",
     correction_reason: "Field evidence and supplier confirmation changed after the earlier review.",
   };
+}
+
+const FACET_EVENT_ID = "facet-event-v2-quote-revision-api-0001";
+const FACET_PROJECT_ID = "facet-project-quote-revision-api-0001";
+const FACET_DESIGN_SHA256 = "e".repeat(64);
+const FACET_FROZEN_SHA256 = "f".repeat(64);
+const FACET_DESIGN_REVISION_ID = `facet-json-v1:${FACET_DESIGN_SHA256}`;
+
+function seedFacetAssociation(
+  db: SqliteD1,
+  storedAssociationSha256?: string,
+): string {
+  db.raw.prepare(
+    `INSERT INTO facet_customer_approval_events
+       (event_id, event_type, schema_version, occurred_at, tenant_id, brand_id,
+        facet_project_id, design_revision_id, design_revision_sha256,
+        frozen_evidence_sha256, approval_actor_type, capability_fingerprint,
+        raw_key, raw_sha256, raw_content_length, received_at)
+     VALUES (?, 'facet.design.customer_approved.v2', 2, ?, ?, 'ironwrap', ?, ?, ?, ?,
+             'customer_capability', ?, ?, ?, 512, ?)`,
+  ).run(
+    FACET_EVENT_ID,
+    "2026-08-10T12:00:00.000Z",
+    TENANT,
+    FACET_PROJECT_ID,
+    FACET_DESIGN_REVISION_ID,
+    FACET_DESIGN_SHA256,
+    FACET_FROZEN_SHA256,
+    "1".repeat(64),
+    `facet-design/v2/${FACET_EVENT_ID}.json`,
+    "2".repeat(64),
+    "2026-08-10T12:01:00.000Z",
+  );
+  const anchor = {
+    brand_id: "ironwrap",
+    customer_quote_id: "customer-quote:api-1",
+    design_revision_id: FACET_DESIGN_REVISION_ID,
+    design_revision_sha256: FACET_DESIGN_SHA256,
+    event_id: FACET_EVENT_ID,
+    facet_project_id: FACET_PROJECT_ID,
+    frozen_evidence_sha256: FACET_FROZEN_SHA256,
+    roof_job_id: "job:api-1",
+    tenant_id: TENANT,
+  };
+  const associationSha256 = sha256(JSON.stringify(anchor));
+  db.raw.prepare(
+    `INSERT INTO facet_design_evidence_associations
+       (event_id, tenant_id, brand_id, facet_project_id, design_revision_id,
+        design_revision_sha256, frozen_evidence_sha256, roof_job_id, customer_quote_id,
+        associated_by_user_id, reason, idempotency_key_sha256, association_intent_sha256,
+        association_anchor_sha256, associated_at)
+     VALUES (?, ?, 'ironwrap', ?, ?, ?, ?, 'job:api-1', 'customer-quote:api-1',
+             'appu_ops_0001', ?, ?, ?, ?, ?)`,
+  ).run(
+    FACET_EVENT_ID,
+    TENANT,
+    FACET_PROJECT_ID,
+    FACET_DESIGN_REVISION_ID,
+    FACET_DESIGN_SHA256,
+    FACET_FROZEN_SHA256,
+    "Operator matched the approved quote and Roof Job before this integration test.",
+    "3".repeat(64),
+    "4".repeat(64),
+    storedAssociationSha256 ?? associationSha256,
+    "2026-08-10T12:02:00.000Z",
+  );
+  return associationSha256;
 }
 
 function containsCapability(value: unknown): boolean {
@@ -365,6 +445,145 @@ test("quote revision API keeps the commercial boundary opaque and approval autho
     assert.equal(executeReplay.status, 200);
     assert.equal((await executeReplay.json() as { replayed: boolean }).replayed, true);
     assert.deepEqual(broker.calls, ["/v1/quote-revision/preview", "/v1/quote-revision/execute"], "approval replay must never write twice");
+  } finally {
+    broker.restore();
+  }
+});
+
+test("a resolved Facet v2 association prepares only the existing blank quote-revision approval rail", async () => {
+  const db = new SqliteD1();
+  const associationSha256 = seedFacetAssociation(db);
+  const appEnv = env(db);
+  const path = `/api/v1/facet-design-evidence/associations/${FACET_EVENT_ID}/quote-revision-approvals`;
+  const body = {
+    correction_reason: "Customer-approved design evidence requires a separately reviewed quote revision.",
+  };
+  const broker = installBrokerMock();
+  try {
+    const disabled = await handleAuthenticatedRoute(
+      request(path, body),
+      appEnv,
+      auth("ops"),
+    );
+    assert.equal(disabled.status, 403);
+    assert.deepEqual(await disabled.json(), {
+      error: "facet_quote_revision_prepare_disabled",
+    });
+    assert.deepEqual(broker.calls, []);
+
+    appEnv.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED = "true";
+    const field = await handleAuthenticatedRoute(
+      request(path, body),
+      appEnv,
+      auth("field"),
+    );
+    assert.equal(field.status, 403);
+    const missingCsrf = await handleAuthenticatedRoute(
+      request(path, body, undefined, false),
+      appEnv,
+      auth("ops"),
+    );
+    assert.equal(missingCsrf.status, 403);
+    assert.deepEqual(await missingCsrf.json(), { error: "csrf_failed" });
+    const callerSuppliedTarget = await handleAuthenticatedRoute(
+      request(path, { ...body, roof_job_id: "job:caller-controlled" }),
+      appEnv,
+      auth("ops"),
+    );
+    assert.equal(callerSuppliedTarget.status, 400);
+    const missing = await handleAuthenticatedRoute(
+      request(
+        "/api/v1/facet-design-evidence/associations/facet-event-v2-missing/quote-revision-approvals",
+        body,
+      ),
+      appEnv,
+      auth("ops"),
+    );
+    assert.equal(missing.status, 404);
+    assert.deepEqual(broker.calls, []);
+
+    const invalidDb = new SqliteD1();
+    seedFacetAssociation(invalidDb, "9".repeat(64));
+    const invalidEnv = env(invalidDb);
+    invalidEnv.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED = "true";
+    const invalid = await handleAuthenticatedRoute(
+      request(path, body),
+      invalidEnv,
+      auth("ops"),
+    );
+    assert.equal(invalid.status, 409);
+    assert.deepEqual(await invalid.json(), {
+      error: "facet_design_association_anchor_mismatch",
+    });
+    assert.deepEqual(broker.calls, []);
+
+    const prepared = await handleAuthenticatedRoute(
+      request(path, body),
+      appEnv,
+      auth("ops"),
+    );
+    assert.equal(prepared.status, 201);
+    const preparedJson = await prepared.json() as {
+      approval: {
+        state: string;
+        roof_job_id: string;
+        source: { customer_quote_id: string };
+        correction_reason: string;
+        preview: { effects: Record<string, boolean> };
+      };
+    };
+    assert.equal(preparedJson.approval.state, "pending");
+    assert.equal(preparedJson.approval.roof_job_id, "job:api-1");
+    assert.equal(
+      preparedJson.approval.source.customer_quote_id,
+      "customer-quote:api-1",
+    );
+    assert.match(preparedJson.approval.correction_reason, new RegExp(FACET_EVENT_ID));
+    assert.match(preparedJson.approval.correction_reason, new RegExp(associationSha256));
+    assert.deepEqual(preparedJson.approval.preview.effects, {
+      customer_notified: false,
+      commercial_terms_copied: false,
+      proposal_sent: false,
+      accounting_mutated: false,
+    });
+    assert.equal(containsCapability(preparedJson), false);
+    assert.deepEqual(broker.calls, ["/v1/quote-revision/preview"]);
+
+    const stored = db.raw.prepare(
+      `SELECT prepare_idempotency_key, roof_job_id, source_customer_quote_id,
+              correction_reason, state
+       FROM quote_revision_approval_requests`,
+    ).get() as Record<string, unknown>;
+    assert.equal(
+      stored.prepare_idempotency_key,
+      `facet-quote-revision:${associationSha256}`,
+    );
+    assert.equal(stored.roof_job_id, "job:api-1");
+    assert.equal(stored.source_customer_quote_id, "customer-quote:api-1");
+    assert.equal(stored.state, "pending");
+
+    const replay = await handleAuthenticatedRoute(
+      request(path, body),
+      appEnv,
+      auth("ops"),
+    );
+    assert.equal(replay.status, 200);
+    assert.equal((await replay.json() as { replayed: boolean }).replayed, true);
+    const changedIntent = await handleAuthenticatedRoute(
+      request(path, {
+        correction_reason: "A different operator reason cannot reuse the same Facet association.",
+      }),
+      appEnv,
+      auth("ops"),
+    );
+    assert.equal(changedIntent.status, 409);
+    assert.deepEqual(broker.calls, ["/v1/quote-revision/preview"]);
+    assert.equal(
+      Number((db.raw.prepare(
+        "SELECT COUNT(*) AS count FROM quote_revision_approval_requests",
+      ).get() as { count: number }).count),
+      1,
+    );
   } finally {
     broker.restore();
   }

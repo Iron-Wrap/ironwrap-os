@@ -30,6 +30,16 @@ SERVICE_USER_CONFIG_KEY = "ironwrap_facet_design_projection_service_user"
 HMAC_CONFIG_KEY = "ironwrap_facet_design_projection_hmac_key"
 SOURCE_SYSTEM = "ironwrap-facet-design"
 VERIFICATION_SOURCE = "ironwrap-worker-r2-facet-design-projection"
+LEGACY_EVENT_TYPE = "facet.design.approved.v1"
+LEGACY_EVENT_SCHEMA_VERSION = 1
+CUSTOMER_APPROVAL_EVENT_TYPE = "facet.design.customer_approved.v2"
+CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION = 2
+CUSTOMER_APPROVAL_ACTOR_TYPE = "customer_capability"
+CUSTOMER_APPROVAL_IDENTITY_ASSURANCE = "bearer_capability_only"
+RECEIPT_SCHEMA = "ironwrap.facet-design-projection-receipt.v1"
+# Receipt signature input is exactly:
+#   ironwrap.facet-design-projection.receipt.v1\n<sha256(canonical receipt JSON)>
+RECEIPT_SIGNATURE_CONTEXT = "ironwrap.facet-design-projection.receipt.v1"
 COMMAND_PATH = (
     "/api/method/ironwrap_roofing.facet_design_projection_api."
     "record_facet_design_proposal_evidence"
@@ -48,7 +58,7 @@ NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{16,140}$")
 SIGNATURE_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 TIMESTAMP_RE = re.compile(r"^[0-9]{10,12}$")
 
-CLAIM_FIELDS = frozenset(
+LEGACY_CLAIM_FIELDS = frozenset(
     {
         "event_id",
         "tenant_id",
@@ -65,6 +75,14 @@ CLAIM_FIELDS = frozenset(
         "customer_quote_id",
     }
 )
+CUSTOMER_APPROVAL_CLAIM_FIELDS = LEGACY_CLAIM_FIELDS | {
+    "event_type",
+    "schema_version",
+    "brand_id",
+    "approval_actor_type",
+    "capability_fingerprint",
+    "identity_assurance",
+}
 REQUIRED_PERMISSIONS = (
     ("Roof Job", "read"),
     ("Customer Quote", "read"),
@@ -124,6 +142,13 @@ def _tenant_id(value: Any, field: str) -> str:
     cleaned = _text(value, field, maximum=64)
     if not TENANT_RE.fullmatch(cleaned):
         _fail("facet_design_projection_invalid_claim", f"{field} is not a local tenant identifier")
+    return cleaned
+
+
+def _brand_id(value: Any) -> str:
+    cleaned = _text(value, "brand_id", maximum=32)
+    if not TENANT_RE.fullmatch(cleaned):
+        _fail("facet_design_projection_invalid_claim", "brand_id is invalid")
     return cleaned
 
 
@@ -191,11 +216,31 @@ def _parse_claim(facet_claim_json: Any) -> dict[str, Any]:
         )
     except (TypeError, ValueError, json.JSONDecodeError):
         _fail("facet_design_projection_invalid_claim", "facet_claim_json must be one object")
-    if not isinstance(claim, dict) or set(claim) != CLAIM_FIELDS:
+    if not isinstance(claim, dict):
+        _fail("facet_design_projection_invalid_claim", "claim fields are unsupported")
+    claim_fields = set(claim)
+    if claim_fields == LEGACY_CLAIM_FIELDS:
+        event_type = LEGACY_EVENT_TYPE
+        schema_version = LEGACY_EVENT_SCHEMA_VERSION
+    elif claim_fields == CUSTOMER_APPROVAL_CLAIM_FIELDS:
+        event_type = _text(claim["event_type"], "event_type")
+        schema_version = claim["schema_version"]
+        if (
+            event_type != CUSTOMER_APPROVAL_EVENT_TYPE
+            or isinstance(schema_version, bool)
+            or schema_version != CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION
+        ):
+            _fail(
+                "facet_design_projection_event_version_mismatch",
+                "customer approval event type and schema version are not paired",
+            )
+    else:
         _fail("facet_design_projection_invalid_claim", "claim fields are unsupported")
     if _canonical_json(claim) != facet_claim_json:
         _fail("facet_design_projection_invalid_claim", "facet_claim_json must be canonical")
     result = {
+        "event_type": event_type,
+        "schema_version": schema_version,
         "event_id": _opaque_id(claim["event_id"], "event_id"),
         "tenant_id": _tenant_id(claim["tenant_id"], "tenant_id"),
         "facet_project_id": _opaque_id(claim["facet_project_id"], "facet_project_id"),
@@ -217,13 +262,44 @@ def _parse_claim(facet_claim_json: Any) -> dict[str, Any]:
         "customer_quote_id": _opaque_id(
             claim["customer_quote_id"], "customer_quote_id", maximum=140
         ),
+        "brand_id": None,
+        "approval_actor_type": None,
+        "capability_fingerprint": None,
+        "identity_assurance": None,
     }
+    if schema_version == CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION:
+        result.update(
+            {
+                "brand_id": _brand_id(claim["brand_id"]),
+                "approval_actor_type": _text(
+                    claim["approval_actor_type"], "approval_actor_type"
+                ),
+                "capability_fingerprint": _sha256(
+                    claim["capability_fingerprint"], "capability_fingerprint"
+                ),
+                "identity_assurance": _text(
+                    claim["identity_assurance"], "identity_assurance"
+                ),
+            }
+        )
+        if result["approval_actor_type"] != CUSTOMER_APPROVAL_ACTOR_TYPE:
+            _fail(
+                "facet_design_projection_invalid_claim",
+                "approval_actor_type is unsupported",
+            )
+        if result["identity_assurance"] != CUSTOMER_APPROVAL_IDENTITY_ASSURANCE:
+            _fail(
+                "facet_design_projection_identity_assurance_mismatch",
+                "customer capability possession is the only supported identity assurance",
+            )
     if result["design_revision_id"] != f"facet-json-v1:{result['design_revision_sha256']}":
         _fail(
             "facet_design_projection_revision_mismatch",
             "design_revision_id is not bound to design_revision_sha256",
         )
-    if result["raw_key"] != f"facet-design/v1/{result['event_id']}.json":
+    if result["raw_key"] != (
+        f"facet-design/v{result['schema_version']}/{result['event_id']}.json"
+    ):
         _fail("facet_design_projection_raw_key_mismatch", "raw_key is not bound to event_id")
     return result
 
@@ -268,7 +344,7 @@ def _consume_nonce(path: str, nonce: str, *, expires_in_seconds: int) -> None:
         )
 
 
-def _assert_service_claim(facet_claim_json: str) -> str:
+def _assert_service_claim(facet_claim_json: str) -> tuple[str, str]:
     request = getattr(frappe, "request", None)
     if getattr(request, "method", "").upper() != "POST":
         _fail("facet_design_projection_post_required", "this command accepts POST only", permission=True)
@@ -299,6 +375,12 @@ def _assert_service_claim(facet_claim_json: str) -> str:
                 permission=True,
             )
     key = _text(_site_config(HMAC_CONFIG_KEY), HMAC_CONFIG_KEY, maximum=4096)
+    if len(key.encode("utf-8")) < 32:
+        _fail(
+            "facet_design_projection_hmac_key_invalid",
+            "the projection HMAC key must be at least 32 bytes",
+            permission=True,
+        )
     timestamp = _request_header("X-IronWrap-Facet-Projection-Timestamp")
     nonce = _request_header("X-IronWrap-Facet-Projection-Nonce")
     signature = _request_header("X-IronWrap-Facet-Projection-Signature")
@@ -324,7 +406,7 @@ def _assert_service_claim(facet_claim_json: str) -> str:
         nonce,
         expires_in_seconds=max(1, math.ceil(signed_at + MAX_SIGNATURE_AGE_SECONDS - now)),
     )
-    return actor
+    return actor, key
 
 
 def _one_locked(rows: list[Mapping[str, Any]], code: str) -> dict[str, Any]:
@@ -337,7 +419,7 @@ def _locked_anchors(claim: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     job = _one_locked(
         frappe.db.sql(
             """
-            SELECT name, roof_job_id, quotation
+            SELECT name, roof_job_id, brand, quotation
             FROM `tabRoof Job`
             WHERE roof_job_id = %s
             FOR UPDATE
@@ -369,6 +451,14 @@ def _locked_anchors(claim: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         _fail(
             "facet_design_projection_quote_not_current",
             "Customer Quote is not the Roof Job's current quote",
+        )
+    if (
+        claim["schema_version"] == CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION
+        and job.get("brand") != claim["brand_id"]
+    ):
+        _fail(
+            "facet_design_projection_brand_mismatch",
+            "customer approval brand is not the Roof Job brand",
         )
     if quote.get("status") != "Approved":
         _fail(
@@ -450,7 +540,11 @@ def _projection_ids(event_id: str) -> tuple[str, str, str]:
 
 def _local_payload_hash(claim: Mapping[str, Any], anchors: Mapping[str, Mapping[str, Any]]) -> str:
     payload = {
-        "schema": "ironwrap.facet-design-projection.v1",
+        "schema": (
+            "ironwrap.facet-design-projection.v2"
+            if claim["schema_version"] == CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION
+            else "ironwrap.facet-design-projection.v1"
+        ),
         "event_id": claim["event_id"],
         "tenant_id": claim["tenant_id"],
         "facet_project_id": claim["facet_project_id"],
@@ -464,33 +558,145 @@ def _local_payload_hash(claim: Mapping[str, Any], anchors: Mapping[str, Mapping[
         "roof_job": anchors["job"]["name"],
         "customer_quote": anchors["quote"]["name"],
     }
+    if claim["schema_version"] == CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION:
+        payload.update(
+            {
+                "event_type": claim["event_type"],
+                "schema_version": claim["schema_version"],
+                "brand_id": claim["brand_id"],
+                "approval_actor_type": claim["approval_actor_type"],
+                "capability_fingerprint": claim["capability_fingerprint"],
+                "identity_assurance": claim["identity_assurance"],
+                "roof_job_brand": anchors["job"]["brand"],
+            }
+        )
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
 def _reconciliation_diff(claim: Mapping[str, Any]) -> str:
-    return _canonical_json(
+    diff = {
+        "schema": "ironwrap.facet-design-projection.v1",
+        "state": "pending_estimator_reconciliation",
+        "customer_safe": False,
+        "commercial_state": "none",
+        "event_id": claim["event_id"],
+        "tenant_id": claim["tenant_id"],
+        "facet_project_id": claim["facet_project_id"],
+        "design_revision_id": claim["design_revision_id"],
+        "design_revision_sha256": claim["design_revision_sha256"],
+        "frozen_evidence_sha256": claim["frozen_evidence_sha256"],
+        "raw_key": claim["raw_key"],
+        "raw_sha256": claim["raw_sha256"],
+    }
+    if claim["schema_version"] == CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION:
+        diff.update(
+            {
+                "schema": "ironwrap.facet-design-projection.v2",
+                "source_event": {
+                    "event_type": claim["event_type"],
+                    "schema_version": claim["schema_version"],
+                },
+                "provenance": {
+                    "status": "customer_approved",
+                    "brand_id": claim["brand_id"],
+                    "approval_actor_type": claim["approval_actor_type"],
+                    "capability_fingerprint": claim["capability_fingerprint"],
+                    "identity_assurance": claim["identity_assurance"],
+                },
+            }
+        )
+    return _canonical_json(diff)
+
+
+def _evidence_summary(claim: Mapping[str, Any]) -> str:
+    if claim["schema_version"] == CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION:
+        return (
+            "Facet customer-approved design evidence; estimator reconciliation "
+            "required before any commercial use."
+        )
+    return "Facet design revision evidence; estimator reconciliation required before commercial use."
+
+
+def _projection_response(
+    *,
+    claim_json: str,
+    claim: Mapping[str, Any],
+    anchors: Mapping[str, Mapping[str, Any]],
+    evidence_id: str,
+    reconciliation_id: str,
+    local_payload_hash: str,
+    idempotent_replay: bool,
+    hmac_key: str,
+) -> dict[str, Any]:
+    provenance = (
         {
-            "schema": "ironwrap.facet-design-projection.v1",
-            "state": "pending_estimator_reconciliation",
-            "customer_safe": False,
-            "commercial_state": "none",
-            "event_id": claim["event_id"],
-            "tenant_id": claim["tenant_id"],
-            "facet_project_id": claim["facet_project_id"],
-            "design_revision_id": claim["design_revision_id"],
-            "design_revision_sha256": claim["design_revision_sha256"],
-            "frozen_evidence_sha256": claim["frozen_evidence_sha256"],
-            "raw_key": claim["raw_key"],
-            "raw_sha256": claim["raw_sha256"],
+            "status": "customer_approved",
+            "brand_id": claim["brand_id"],
+            "approval_actor_type": claim["approval_actor_type"],
+            "capability_fingerprint": claim["capability_fingerprint"],
+            "identity_assurance": claim["identity_assurance"],
         }
+        if claim["schema_version"] == CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION
+        else {"status": "provenance_unknown"}
     )
+    receipt = {
+        "schema": RECEIPT_SCHEMA,
+        "claim_sha256": hashlib.sha256(claim_json.encode("utf-8")).hexdigest(),
+        "event_id": claim["event_id"],
+        "event_type": claim["event_type"],
+        "schema_version": claim["schema_version"],
+        "tenant_id": claim["tenant_id"],
+        "facet_project_id": claim["facet_project_id"],
+        "design_revision_id": claim["design_revision_id"],
+        "design_revision_sha256": claim["design_revision_sha256"],
+        "frozen_evidence_sha256": claim["frozen_evidence_sha256"],
+        "raw_key": claim["raw_key"],
+        "raw_sha256": claim["raw_sha256"],
+        "raw_content_length": claim["raw_content_length"],
+        "occurred_at": claim["occurred_at"],
+        "received_at": claim["received_at"],
+        "roof_job_id": claim["roof_job_id"],
+        "customer_quote_id": claim["customer_quote_id"],
+        "roof_job": anchors["job"]["name"],
+        "roof_job_brand": anchors["job"].get("brand"),
+        "roof_job_current_quote": anchors["job"]["quotation"],
+        "customer_quote": anchors["quote"]["name"],
+        "customer_quote_status": anchors["quote"]["status"],
+        "evidence_id": evidence_id,
+        "reconciliation_id": reconciliation_id,
+        "local_payload_hash": local_payload_hash,
+        "provenance": provenance,
+        "commercial_state": "none",
+        "customer_safe": False,
+        "idempotent_replay": idempotent_replay,
+    }
+    receipt_sha256 = hashlib.sha256(
+        _canonical_json(receipt).encode("utf-8")
+    ).hexdigest()
+    receipt_signature = base64.urlsafe_b64encode(
+        hmac.new(
+            hmac_key.encode("utf-8"),
+            f"{RECEIPT_SIGNATURE_CONTEXT}\n{receipt_sha256}".encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+    ).rstrip(b"=").decode("ascii")
+    return {
+        "event_id": claim["event_id"],
+        "evidence_id": evidence_id,
+        "reconciliation_id": reconciliation_id,
+        "idempotent_replay": idempotent_replay,
+        "receipt": receipt,
+        "receipt_sha256": receipt_sha256,
+        "receipt_signature_algorithm": "HMAC-SHA256",
+        "receipt_signature": receipt_signature,
+    }
 
 
 @frappe.whitelist()
 def record_facet_design_proposal_evidence(facet_claim_json: str) -> dict[str, Any]:
     """Create only replay-safe, review-only Facet evidence for one locked quote association."""
 
-    actor = _assert_service_claim(facet_claim_json)
+    actor, receipt_hmac_key = _assert_service_claim(facet_claim_json)
     claim = _parse_claim(facet_claim_json)
     anchors = _locked_anchors(claim)
     evidence_id, reconciliation_id, external_entity_id = _projection_ids(claim["event_id"])
@@ -523,7 +729,7 @@ def record_facet_design_proposal_evidence(facet_claim_json: str) -> dict[str, An
         "correction_of": None,
         "correction_reason": None,
         "customer_safe": 0,
-        "summary": "Facet design revision evidence; estimator reconciliation required before commercial use.",
+        "summary": _evidence_summary(claim),
     }
     reconciliation = {
         "doctype": "Integration Reconciliation",
@@ -580,20 +786,28 @@ def record_facet_design_proposal_evidence(facet_claim_json: str) -> dict[str, An
             reconciliation,
             "facet_design_projection_conflict",
         )
-        return {
-            "event_id": claim["event_id"],
-            "evidence_id": evidence_id,
-            "reconciliation_id": reconciliation_id,
-            "idempotent_replay": True,
-        }
+        return _projection_response(
+            claim_json=facet_claim_json,
+            claim=claim,
+            anchors=anchors,
+            evidence_id=evidence_id,
+            reconciliation_id=reconciliation_id,
+            local_payload_hash=reconciliation["local_payload_hash"],
+            idempotent_replay=True,
+            hmac_key=receipt_hmac_key,
+        )
     evidence_document = frappe.get_doc(evidence)
     reconciliation_document = frappe.get_doc(reconciliation)
     with facet_design_projection_issuance_context(evidence_document, reconciliation_document):
         evidence_document.insert()
         reconciliation_document.insert()
-    return {
-        "event_id": claim["event_id"],
-        "evidence_id": evidence_id,
-        "reconciliation_id": reconciliation_id,
-        "idempotent_replay": False,
-    }
+    return _projection_response(
+        claim_json=facet_claim_json,
+        claim=claim,
+        anchors=anchors,
+        evidence_id=evidence_id,
+        reconciliation_id=reconciliation_id,
+        local_payload_hash=reconciliation["local_payload_hash"],
+        idempotent_replay=False,
+        hmac_key=receipt_hmac_key,
+    )

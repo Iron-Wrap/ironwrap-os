@@ -73,7 +73,7 @@ IronWrap PWA
 | Frappe consumer | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
 | Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: retry-safe project/idempotency key + raw R2 + D1 envelope + Frappe Instant Estimate Session without JobNimbus/GHL dependency |
 | Facet approved-design receipt | `facet-design-ingest.ts` verifies a dedicated raw-body HMAC plus source-tenant allowlist, stores immutable R2 evidence first, then local-tenant D1 event/nonce anchors; it is distinct from estimate, quote, contract, and customer acceptance |
-| Facet review projection | `facet-design-projection.ts` reads only immutable D1 anchors, requires an exact deployment-controlled job/quote association, and creates non-customer-safe Evidence Item plus Pending Integration Reconciliation records; it never changes a quote, contract, acceptance, or Proposal Evidence Pack |
+| Facet review projection | `facet-design-projection.ts` reads only v2 receipts with an exact append-only, office-authored job/quote association, and creates non-customer-safe Evidence Item plus Pending Integration Reconciliation records; it never changes a quote, contract, acceptance, or Proposal Evidence Pack |
 | Passwordless app auth | `app-auth.ts` + D1 migration `0011`; one-time hashed links, hashed fixed-TTL sessions, exact-origin CORS, CSRF, throttles, and audit |
 | Permission-shaped PWA reads | `app-read-models.ts` + `frappe-read.ts`; hard-coded DocType/field/filter allowlists and fail-closed field assignment |
 
@@ -172,12 +172,13 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | GET | `/admin/envelope/:id` | `Bearer ADMIN_TOKEN` | read one canonical bus envelope |
 | GET | `/admin/dead-letter?limit=50` | `Bearer ADMIN_TOKEN` | read unrecovered dead-letter rows |
 | GET | `/admin/measurements/exceptions?limit=50` | `Bearer ADMIN_TOKEN` | read unmatched or retryable measurement receipts without idempotency/payload hash fields or lease tokens; opaque receipt ids and raw pointers remain available for review. Retryable and expired-lease receipts re-drive sequentially from verified R2 raw sources with bounded backoff |
-| POST | `/admin/app-users` | `Bearer ADMIN_TOKEN` | provision/update/deactivate one user on this deployment's configured tenant |
+| POST | `/admin/app-users/bootstrap` | `Bearer ADMIN_TOKEN` + `APP_FIRST_OWNER_BOOTSTRAP_ENABLED=true` | one-time bootstrap that creates the first owner only when this tenant has zero app users |
 | POST | `/webhook/quickbooks` | `intuit-signature` | accept expected-realm signed finance identities, persist receipt plus durable projection row, and issue only Pending Frappe reconciliation work |
 | POST | `/api/v1/auth/magic-link/request` | exact allowed `Origin` | request a link; active/unknown/inactive/throttled identities receive the same `202` body |
 | POST | `/api/v1/auth/magic-link/consume` | exact allowed `Origin` | atomically consume a one-time token and set the fixed-TTL `__Host-ironwrap_session` cookie; GET is not supported |
 | GET | `/api/v1/session` | cookie optional | exact authenticated/unauthenticated bootstrap envelope; always `200`, `private, no-store` |
 | POST | `/api/v1/auth/logout` | session cookie + `X-CSRF-Token` + exact allowed `Origin` | revoke the current hashed session and expire its cookie |
+| POST | `/api/v1/admin/app-users` | office session + `X-CSRF-Token` | steady-state provision/update/deactivate one user on this deployment's configured tenant |
 | GET | `/api/v1/today` | session cookie | assigned active jobs for field; broader active jobs for owner/ops |
 | GET | `/api/v1/jobs/:id` | session cookie | job, gate locks, and proof stream; an unassigned field lookup is indistinguishable from missing |
 | GET | `/api/v1/owner/now` | owner/ops session | exception-first blocked gate, incident, finance, lead, and material read model |
@@ -221,25 +222,25 @@ APP_PUBLIC_ORIGIN=https://<the deployed app origin>
 APP_ALLOWED_ORIGINS=https://<the deployed app origin>
 ```
 
-Provision with `POST /admin/app-users` and the admin bearer token:
+Bootstrap only the first owner with `POST /admin/app-users/bootstrap` when
+`APP_FIRST_OWNER_BOOTSTRAP_ENABLED=true` and this tenant has zero app users:
 
 ```json
 {
   "tenant_id": "ironwrap",
-  "email": "crew@example.com",
-  "display_name": "Crew Member",
-  "role": "field",
-  "frappe_user_id": "crew@example.com",
-  "active": true,
-  "provisioned_by": "owner@example.com"
+  "email": "owner@example.com",
+  "display_name": "Office Owner"
 }
 ```
 
-`role` is exactly `owner`, `ops`, or `field`; field users require a Frappe user id for exact
-assignment checks. Re-send the record with `active:false` to revoke that user's sessions
-and open link. Keep `APP_BFF_ENABLED=false` until migration `0011`, the app build, Frappe read
-credentials, Gmail delegation, `APP_AUTH_PEPPER`, and the origin metadata are present; `/ready`
-fails closed when any enabled-BFF dependency is missing or malformed.
+Every later provisioning change uses `POST /api/v1/admin/app-users` from an authenticated
+office session with `X-CSRF-Token`. That steady-state body accepts `role`, `frappe_user_id`,
+and `active`; field users still require a Frappe user id for exact assignment checks. Re-send
+the record with `active:false` to revoke that user's sessions and open link. The bearer bootstrap
+route never upserts, never accepts a client actor field, and returns a stable denial after the
+first tenant user exists. Keep `APP_BFF_ENABLED=false` until migration `0011`, the app build,
+Frappe read credentials, Gmail delegation, `APP_AUTH_PEPPER`, and the origin metadata are
+present; `/ready` fails closed when any enabled-BFF dependency is missing or malformed.
 
 `APP_AUTH_PEPPER` is a Worker secret with at least 32 random characters. Production accepts only
 HTTPS origins. `APP_ALLOW_INSECURE_LOCAL=true` permits explicit localhost HTTP origins for local
@@ -311,6 +312,7 @@ APP_QUOTE_REVISION_BROKER_URL=https://<private-quote-revision-broker-origin>
 APP_QUOTE_REVISION_BROKER_KEY_ID=quote-revision-v1
 APP_QUOTE_REVISION_BROKER_TIMEOUT_MS=15000
 APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS=45
+APP_FACET_QUOTE_REVISION_PREPARE_ENABLED=false
 QUOTE_REVISION_BROKER_SHARED_SECRET=<different 32+-byte Worker-to-broker secret>
 ```
 
@@ -492,15 +494,22 @@ the Worker generates one.
 ### Facet design-event receipt contract
 
 Leave `FACET_DESIGN_INGEST_ENABLED=false` until `FACET_DESIGN_INGEST_HMAC_KEY` and an exact
-`FACET_DESIGN_INGEST_TENANT_MAP_JSON` source-to-local allowlist (for example,
-`{"facet-production":"ironwrap"}`) are independently configured. HMAC proves the Facet deployment;
-it does not authorize arbitrary Facet tenants. The sender posts UTF-8 JSON with exactly
-`event_id`, `event_type`, `schema_version`, `occurred_at`, `tenant_id`, `facet_project_id`,
-`design_revision` (`id`, lowercase `sha256`), and a non-empty object `frozen_evidence`.
-`event_type` is exactly `facet.design.approved.v1`; `schema_version` is exactly `1`.
-`frozen_evidence.design` is a non-empty object, and `design_revision` must be exactly
-`{id:"facet-json-v1:${sha256(canonicalJson(frozen_evidence.design))}",sha256:"…"}` with the
-same lowercase SHA-256 value in both places.
+`FACET_DESIGN_INGEST_TENANT_MAP_JSON` source-to-local allowlist are independently configured.
+V2 bindings must also list the allowed local brands, for example
+`{"facet-production":{"tenant_id":"ironwrap","brand_ids":["ironwrap","iroof"]}}`. HMAC proves
+the Facet deployment; it does not authorize arbitrary Facet tenants or brands.
+
+The governed producer sends `facet.design.customer_approved.v2` / schema `2` with the base fields
+`event_id`, `occurred_at`, `tenant_id`, `facet_project_id`, `design_revision`, and
+`frozen_evidence`, plus exact `brand_id`, `approval_actor_type:"customer_capability"`, a lowercase
+SHA-256 `capability_fingerprint`, and `identity_assurance:"bearer_capability_only"`.
+`frozen_evidence` contains only `design` and `approval`; approval contains only `approved_at`
+(equal to `occurred_at`) and nullable `client_revision`. Customer identity, address, contact,
+pricing, share tokens, and commercial terms are rejected. `design.brandId` must equal `brand_id`,
+and `design_revision` must be exactly
+`{id:"facet-json-v1:${sha256(canonicalJson(frozen_evidence.design))}",sha256:"…"}`. The legacy
+`facet.design.approved.v1` / schema `1` shape remains evidence-only with
+`provenance.status:"provenance_unknown"`; it cannot enter the v2 association ledger.
 
 The headers are `X-IronWrap-Event-Id`, `X-IronWrap-Event-Timestamp` (13-digit Unix milliseconds,
 within five minutes), `X-IronWrap-Event-Nonce` (32–128 base64url characters), and
@@ -511,9 +520,10 @@ equals `APP_TENANT_ID`. Missing, malformed, unknown, or mismatched mappings fail
 the D1 receipt persists only the mapped local tenant. The Worker records only hashes and anchors in
 D1 after immutable R2 storage. A first `202` and fresh-nonce idempotent `200` return the durable
 `accepted`, `event_id`, `status:"received"`, `raw_sha256`, `frozen_evidence_sha256`, and
-`design_revision:{id,sha256}` anchors (the latter also has `idempotent_replay:true`). Reusing a
-nonce is rejected. This event is a customer design decision, not a quote, contract acceptance, or
-Frappe write.
+`design_revision:{id,sha256}` anchors plus explicit provenance (the latter also has
+`idempotent_replay:true`). Reusing a nonce is rejected. V2 proves only exercise of the bearer
+capability; it is not proof of distinct customer identity, informed consent, contract acceptance,
+or commercial authority.
 
 ### Facet-to-Frappe review projection
 
@@ -522,19 +532,24 @@ Frappe write.
 in the Frappe site, and its distinct API key, API secret, and HMAC are stored as Worker secrets.
 Never reuse the ingress HMAC, broad ERP identity, or customer-acceptance identity.
 
-The non-secret `FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON` is a reviewed deployment setting
-with exactly `{"schema_version":1,"associations":[...]}`. Each association contains only opaque
-`event_id`, `tenant_id`, `facet_project_id`, design revision id/hash, frozen-evidence hash,
-`roof_job_id`, and `customer_quote_id`; do not put names, addresses, prices, or free-form operator
-input in it. Every source anchor must exactly equal the immutable D1 receipt. A missing association
-is held and an anchor mismatch is rejected in the append-only
-`facet_design_projection_attempts` ledger; neither condition calls Frappe.
+An authenticated owner/ops office session lists unassociated v2 receipts at
+`GET /api/v1/facet-design-evidence/association-ready` and creates one binding through
+`POST /api/v1/facet-design-evidence/associations` with CSRF and an `Idempotency-Key`. The body
+contains exact event/design/brand anchors, opaque `roof_job_id` and `customer_quote_id`, and a
+bounded reason; tenant and actor are server-derived. The Worker verifies the existing same-brand
+Roof Job and its linked current `Approved` quote before appending the binding. A missing association
+is held and an anchor mismatch is rejected in the separate append-only v2 projection-attempt
+ledger; neither condition calls the projection command. Deployment JSON is not association
+authority.
 
 For an exact approved current quote belonging to the locked Roof Job, the scheduled Worker command
 creates one deterministic, non-customer-safe Evidence Item and one Pending Integration
 Reconciliation record. It does not read R2 on this path and does not create or update a quote,
 price, contract, acceptance, or Proposal Evidence Pack. An estimator must reconcile the evidence
-before any commercial use. Before enabling the flag, run a disposable live proof for success,
+before any commercial use. Frappe returns an HMAC-signed receipt binding the exact request,
+locked job/brand/current quote, provenance, immutable hashes, and deterministic record IDs. The
+Worker treats any unsigned, malformed, or mismatched `200` as uncertain, never projected. Before
+enabling the flag, run a disposable live proof for success,
 missing/mismatched association, exact replay, and Frappe refusal, then retain only redacted IDs and
 release evidence.
 

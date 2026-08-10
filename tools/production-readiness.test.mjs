@@ -337,63 +337,98 @@ async function stageD1Script(root, source) {
 }
 
 const REQUIRED_D1_TABLES = [
-  "envelopes", "audit_log", "dead_letter", "source_counts", "heartbeat",
-  "quickbooks_webhook_receipts", "quickbooks_projection_outbox", "dedup_claims", "replay_requests",
-  "field_actions", "field_action_media",
-  "app_users", "app_magic_links", "app_sessions", "app_auth_throttles", "app_auth_audit",
-  "app_action_throttles", "app_device_pairings", "app_devices", "lead_ack_receipts",
-  "approval_requests", "approval_request_events",
-  "quote_revision_approval_requests", "quote_revision_approval_request_events",
-  "customer_portal_links", "customer_portal_access_throttles", "measurement_intake_receipts",
-  "production_schedule_approval_requests", "production_schedule_approval_request_events",
-  "public_estimate_rate_limits", "governed_transitions", "governed_transition_outbox",
-  "governed_transition_outbox_events", "field_work_package_actions",
+  "app_action_throttles", "app_auth_audit", "app_auth_throttles", "app_device_pairings",
+  "app_devices", "app_magic_links", "app_sessions", "app_users", "approval_request_events",
+  "approval_requests", "audit_log", "customer_portal_acceptance_challenges",
+  "customer_portal_acceptance_events", "customer_portal_acceptance_intents",
+  "customer_portal_access_throttles", "customer_portal_links", "dead_letter", "dedup_claims",
+  "dev_outbox", "envelopes", "facet_customer_approval_events",
+  "facet_customer_approval_projection_attempts", "facet_design_event_identity_registry",
+  "facet_design_events", "facet_design_evidence_associations", "facet_design_ingest_nonce_registry",
+  "facet_design_ingest_nonces", "facet_design_projection_attempts", "field_action_media",
+  "field_actions", "field_work_package_actions", "governed_transition_outbox",
+  "governed_transition_outbox_events", "governed_transitions", "heartbeat", "lead_ack_receipts",
+  "measurement_deltas", "measurement_intake_receipts", "newo_control_actions",
+  "newo_event_receipts", "newo_reconciliation_runs", "newo_sessions", "newo_slot_reservations",
+  "production_schedule_approval_request_events", "production_schedule_approval_requests",
+  "public_estimate_rate_limits", "quickbooks_projection_outbox", "quickbooks_webhook_receipts",
+  "quote_revision_approval_request_events", "quote_revision_approval_requests", "replay_requests",
+  "source_counts",
 ];
 
 const REQUIRED_D1_TRIGGER_BINDINGS = [
-  ["validate_source_count_insert", "source_counts"],
-  ["validate_source_count_update", "source_counts"],
-  ["prevent_lead_ack_receipts_update", "lead_ack_receipts"],
-  ["prevent_lead_ack_receipts_delete", "lead_ack_receipts"],
-  ["prevent_approval_request_binding_rewrite", "approval_requests"],
-  ["enforce_approval_request_transition", "approval_requests"],
-  ["enforce_approval_request_reconciliation", "approval_requests"],
   ["append_approval_request_created_event", "approval_requests"],
-  ["append_approval_request_transition_event", "approval_requests"],
   ["append_approval_request_reconciliation_event", "approval_requests"],
-  ["prevent_approval_request_event_update", "approval_request_events"],
-  ["prevent_approval_request_event_delete", "approval_request_events"],
-  ["prevent_approval_request_delete", "approval_requests"],
-  ["prevent_quote_revision_approval_binding_rewrite", "quote_revision_approval_requests"],
-  ["enforce_quote_revision_approval_transition", "quote_revision_approval_requests"],
-  ["enforce_quote_revision_approval_reconciliation", "quote_revision_approval_requests"],
-  ["append_quote_revision_approval_created_event", "quote_revision_approval_requests"],
-  ["append_quote_revision_approval_transition_event", "quote_revision_approval_requests"],
-  ["append_quote_revision_approval_reconciliation_event", "quote_revision_approval_requests"],
-  ["prevent_quote_revision_approval_event_update", "quote_revision_approval_request_events"],
-  ["prevent_quote_revision_approval_event_delete", "quote_revision_approval_request_events"],
-  ["prevent_quote_revision_approval_delete", "quote_revision_approval_requests"],
-  ["prevent_production_schedule_approval_binding_rewrite", "production_schedule_approval_requests"],
-  ["enforce_production_schedule_approval_transition", "production_schedule_approval_requests"],
-  ["enforce_production_schedule_approval_reconciliation", "production_schedule_approval_requests"],
-  ["append_production_schedule_approval_created_event", "production_schedule_approval_requests"],
-  ["append_production_schedule_approval_transition_event", "production_schedule_approval_requests"],
-  ["append_production_schedule_approval_reconciliation_event", "production_schedule_approval_requests"],
-  ["prevent_production_schedule_approval_event_update", "production_schedule_approval_request_events"],
-  ["prevent_production_schedule_approval_event_delete", "production_schedule_approval_request_events"],
-  ["prevent_production_schedule_approval_delete", "production_schedule_approval_requests"],
-  ["prevent_governed_transition_update", "governed_transitions"],
-  ["prevent_governed_transition_delete", "governed_transitions"],
-  ["enforce_governed_transition_outbox_update", "governed_transition_outbox"],
-  ["prevent_governed_transition_outbox_delete", "governed_transition_outbox"],
+  ["append_approval_request_transition_event", "approval_requests"],
   ["append_governed_transition_outbox_intent_event", "governed_transition_outbox"],
   ["append_governed_transition_outbox_state_event", "governed_transition_outbox"],
-  ["prevent_governed_transition_outbox_event_update", "governed_transition_outbox_events"],
-  ["prevent_governed_transition_outbox_event_delete", "governed_transition_outbox_events"],
+  ["append_production_schedule_approval_created_event", "production_schedule_approval_requests"],
+  ["append_production_schedule_approval_reconciliation_event", "production_schedule_approval_requests"],
+  ["append_production_schedule_approval_transition_event", "production_schedule_approval_requests"],
+  ["append_quote_revision_approval_created_event", "quote_revision_approval_requests"],
+  ["append_quote_revision_approval_reconciliation_event", "quote_revision_approval_requests"],
+  ["append_quote_revision_approval_transition_event", "quote_revision_approval_requests"],
+  ["customer_portal_acceptance_challenge_immutable", "customer_portal_acceptance_challenges"],
+  ["customer_portal_acceptance_challenges_append_only_delete", "customer_portal_acceptance_challenges"],
+  ["customer_portal_acceptance_consume_challenge", "customer_portal_acceptance_intents"],
+  ["customer_portal_acceptance_events_append_only_delete", "customer_portal_acceptance_events"],
+  ["customer_portal_acceptance_events_append_only_update", "customer_portal_acceptance_events"],
+  ["customer_portal_acceptance_immutable_intent", "customer_portal_acceptance_intents"],
+  ["customer_portal_acceptance_intents_append_only_delete", "customer_portal_acceptance_intents"],
+  ["customer_portal_acceptance_record_frappe_attempt", "customer_portal_acceptance_intents"],
+  ["customer_portal_acceptance_record_state_event", "customer_portal_acceptance_intents"],
+  ["customer_portal_acceptance_valid_transition", "customer_portal_acceptance_intents"],
+  ["enforce_approval_request_reconciliation", "approval_requests"],
+  ["enforce_approval_request_transition", "approval_requests"],
+  ["enforce_governed_transition_outbox_update", "governed_transition_outbox"],
+  ["enforce_production_schedule_approval_reconciliation", "production_schedule_approval_requests"],
+  ["enforce_production_schedule_approval_transition", "production_schedule_approval_requests"],
+  ["enforce_quote_revision_approval_reconciliation", "quote_revision_approval_requests"],
+  ["enforce_quote_revision_approval_transition", "quote_revision_approval_requests"],
   ["enqueue_governed_transition_from_approval_claim", "approval_requests"],
-  ["project_governed_transition_outbox_terminal", "approval_requests"],
+  ["facet_customer_approval_events_append_only_delete", "facet_customer_approval_events"],
+  ["facet_customer_approval_events_append_only_update", "facet_customer_approval_events"],
+  ["facet_customer_approval_events_register_identity", "facet_customer_approval_events"],
+  ["facet_customer_approval_projection_attempts_append_only_delete", "facet_customer_approval_projection_attempts"],
+  ["facet_customer_approval_projection_attempts_append_only_update", "facet_customer_approval_projection_attempts"],
+  ["facet_design_event_identity_registry_append_only_delete", "facet_design_event_identity_registry"],
+  ["facet_design_event_identity_registry_append_only_update", "facet_design_event_identity_registry"],
+  ["facet_design_events_append_only_delete", "facet_design_events"],
+  ["facet_design_events_append_only_update", "facet_design_events"],
+  ["facet_design_events_register_identity", "facet_design_events"],
+  ["facet_design_evidence_associations_append_only_delete", "facet_design_evidence_associations"],
+  ["facet_design_evidence_associations_append_only_update", "facet_design_evidence_associations"],
+  ["facet_design_evidence_associations_validate_insert", "facet_design_evidence_associations"],
+  ["facet_design_ingest_nonce_registry_append_only_delete", "facet_design_ingest_nonce_registry"],
+  ["facet_design_ingest_nonce_registry_append_only_update", "facet_design_ingest_nonce_registry"],
+  ["facet_design_ingest_nonces_append_only_delete", "facet_design_ingest_nonces"],
+  ["facet_design_ingest_nonces_append_only_update", "facet_design_ingest_nonces"],
+  ["facet_design_projection_attempts_append_only_delete", "facet_design_projection_attempts"],
+  ["facet_design_projection_attempts_append_only_update", "facet_design_projection_attempts"],
+  ["prevent_approval_request_binding_rewrite", "approval_requests"],
+  ["prevent_approval_request_delete", "approval_requests"],
+  ["prevent_approval_request_event_delete", "approval_request_events"],
+  ["prevent_approval_request_event_update", "approval_request_events"],
+  ["prevent_governed_transition_delete", "governed_transitions"],
+  ["prevent_governed_transition_outbox_delete", "governed_transition_outbox"],
+  ["prevent_governed_transition_outbox_event_delete", "governed_transition_outbox_events"],
+  ["prevent_governed_transition_outbox_event_update", "governed_transition_outbox_events"],
+  ["prevent_governed_transition_update", "governed_transitions"],
+  ["prevent_lead_ack_receipts_delete", "lead_ack_receipts"],
+  ["prevent_lead_ack_receipts_update", "lead_ack_receipts"],
+  ["prevent_production_schedule_approval_binding_rewrite", "production_schedule_approval_requests"],
+  ["prevent_production_schedule_approval_delete", "production_schedule_approval_requests"],
+  ["prevent_production_schedule_approval_event_delete", "production_schedule_approval_request_events"],
+  ["prevent_production_schedule_approval_event_update", "production_schedule_approval_request_events"],
+  ["prevent_quote_revision_approval_binding_rewrite", "quote_revision_approval_requests"],
+  ["prevent_quote_revision_approval_delete", "quote_revision_approval_requests"],
+  ["prevent_quote_revision_approval_event_delete", "quote_revision_approval_request_events"],
+  ["prevent_quote_revision_approval_event_update", "quote_revision_approval_request_events"],
   ["project_governed_transition_outbox_reconciliation", "approval_requests"],
+  ["project_governed_transition_outbox_terminal", "approval_requests"],
   ["renew_approval_execution_lease_from_governed_outbox_claim", "governed_transition_outbox"],
+  ["validate_source_count_insert", "source_counts"],
+  ["validate_source_count_update", "source_counts"],
 ];
 
 function d1TriggerSql(name, table, {
@@ -869,6 +904,9 @@ function validLiveEnv() {
     PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX: "12",
     PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX: "3",
     PUBLIC_ESTIMATE_RANGE_RULES_JSON: "[]",
+    FACET_DESIGN_INGEST_ENABLED: "false",
+    FACET_DESIGN_FRAPPE_PROJECTION_ENABLED: "false",
+    APP_FACET_QUOTE_REVISION_PREPARE_ENABLED: "false",
     IRONWRAP_BUS_BASE_URL: "https://bus.ironwrapexteriors.com",
     IRONWRAP_ADMIN_TOKEN: adminToken,
     IRONWRAP_BUS_WRITE_ENABLED: "false",
@@ -928,6 +966,33 @@ test("repository deployment contract is complete and Frappe-only", async () => {
   const result = await validateContract();
   assert.equal(result.ok, true, renderHuman(result));
   assert.equal(result.summary.failed, 0);
+});
+
+test("contract mode rejects a self-consistent D1 allowlist that omits a migration table", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), {
+    recursive: true,
+    preserveTimestamps: true,
+  });
+  await mkdir(path.join(root, "workers-bus"), { recursive: true });
+  await cp(
+    path.join(DEFAULT_REPO_ROOT, "workers-bus/migrations"),
+    path.join(root, "workers-bus/migrations"),
+    { recursive: true, preserveTimestamps: true },
+  );
+  const backupPath = path.join(root, "deploy/backup-d1-to-r2.sh");
+  const backup = await readFile(backupPath, "utf8");
+  await writeFile(
+    backupPath,
+    backup
+      .replace(",facet_design_evidence_associations", "")
+      .replace("REQUIRED_TABLE_COUNT=52", "REQUIRED_TABLE_COUNT=51"),
+  );
+
+  const result = await validateContract({ repoRoot: root });
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.find((item) => item.id === "contract.d1.schema_inventory")?.status, "fail");
 });
 
 test("contract mode rejects a floating runtime reference", async (t) => {
@@ -1063,6 +1128,48 @@ test("live-env mode accepts an explicitly disabled public estimator without its 
   assert.equal(result.ok, true, renderHuman(result));
   assert.equal(result.checks.find((item) => item.id === "live.gate.public_estimate")?.status, "pass");
   assert.equal(result.checks.find((item) => item.id === "live.secret.PUBLIC_ESTIMATE_TURNSTILE_SECRET"), undefined);
+});
+
+test("live-env mode validates every enabled Facet integration rail", async () => {
+  const env = validLiveEnv();
+  Object.assign(env, {
+    FACET_DESIGN_INGEST_ENABLED: "true",
+    FACET_DESIGN_INGEST_SOURCE_TENANT_ID: "facet-production",
+    FACET_DESIGN_INGEST_TENANT_MAP_JSON: JSON.stringify({
+      "facet-production": { tenant_id: "ironwrap", brand_ids: ["ironwrap", "iroof"] },
+    }),
+    FACET_DESIGN_INGEST_HMAC_KEY: "facet_ingest_hmac_4c1b9e2f8a7d6c5b4a392817",
+    FACET_DESIGN_FRAPPE_PROJECTION_ENABLED: "true",
+    FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY: "facet_projection_hmac_7d6c5b4a3928171615141312",
+    FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY: "facet_projection_key_8c921",
+    FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET: "facet_projection_secret_d1a9f80c42",
+    APP_FACET_QUOTE_REVISION_PREPARE_ENABLED: "true",
+    APP_QUOTE_REVISION_BROKER_URL: "https://quote-revision-broker.ironwrapexteriors.com",
+    APP_QUOTE_REVISION_BROKER_KEY_ID: "quote-revision-v1",
+    APP_QUOTE_REVISION_BROKER_TIMEOUT_MS: "15000",
+    APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS: "45",
+    QUOTE_REVISION_BROKER_SHARED_SECRET: "quote_revision_broker_9f1a4c27d8e6b5a493827161",
+  });
+
+  const enabled = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
+  assert.equal(enabled.ok, true, renderHuman(enabled));
+
+  env.FACET_DESIGN_INGEST_TENANT_MAP_JSON = JSON.stringify({
+    "facet-staging": { tenant_id: "ironwrap", brand_ids: ["ironwrap"] },
+  });
+  env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = env.FACET_DESIGN_INGEST_HMAC_KEY;
+  env.APP_QUOTE_REVISION_BROKER_URL = "http://quote-revision-broker.ironwrapexteriors.com";
+  env.APP_QUOTE_REVISION_BROKER_TIMEOUT_MS = "999";
+  const invalid = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
+  assert.equal(invalid.ok, false);
+  for (const id of [
+    "live.facet.ingest_tenant_map",
+    "live.secret.separation",
+    "live.facet.quote_revision_broker_url",
+    "live.facet.quote_revision_broker_bounds",
+  ]) {
+    assert.equal(invalid.checks.find((item) => item.id === id)?.status, "fail", id);
+  }
 });
 
 test("live-env mode fails closed when public-estimator controls drift from the tenant contract", async () => {

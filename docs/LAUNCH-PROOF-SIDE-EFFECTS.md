@@ -201,10 +201,6 @@ authority to retire the JobNimbus bridge.
 
 A production run is **not** dry-runnable: dry-run exercises nothing. The lowest-side-effect real
 rehearsal is to point `BUS_BASE_URL` at a non-production Worker whose `JOBNIMBUS_ENABLED=false`,
-whose `GOOGLE_SERVICE_ACCOUNT_JSON` is a non-empty placeholder that fails `JSON.parse` before any
-network call (readiness requires it non-empty — a truly unset value turns
-`notification_configuration` red and aborts the run at its own `/ready` gate; the parse failure is
-caught and recorded as `attempt_failed` ack receipts), and whose Frappe is a throwaway site — that
-removes every email, every CRM write, and every Drive write while still exercising D1, R2, the
-queue, the estimate path, and the Frappe projection seam. One such rehearsal is recorded in
-[`BUS-FRAPPE-SEAM-PROOF.md`](./BUS-FRAPPE-SEAM-PROOF.md).
+whose `GOOGLE_SERVICE_ACCOUNT_JSON` is unset, and whose Frappe is a throwaway site — that removes
+every email, every CRM write, and every Drive write while still exercising D1, R2, the queue, the
+estimate path, and the Frappe projection seam.

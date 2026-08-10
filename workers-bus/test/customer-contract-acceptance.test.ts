@@ -448,6 +448,21 @@ test("customer acceptance is false by default and never falls back to broad ERP 
   }
 });
 
+
+test("customer acceptance rejects a too-short dedicated HMAC secret", async () => {
+  const h = setup();
+  try {
+    const portalToken = await seedPortalLink(h.db);
+    h.env.APP_CUSTOMER_ACCEPTANCE_HMAC_KEY = "short-hmac-secret";
+    const response = await issueChallenge(h.env, portalToken);
+    assert.equal(response.response.status, 503);
+    assert.deepEqual(await response.response.json(), { error: "portal_unavailable" });
+    assert.equal(h.prepareClaims.length, 0);
+  } finally {
+    h.restore();
+  }
+});
+
 test("customer acceptance verifies Frappe's normalized email hash before delivery", async () => {
   const h = setup();
   try {

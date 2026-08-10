@@ -34,6 +34,7 @@ const PORTAL_MAX_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export interface CustomerPortalReadModel {
   version: 1;
   brand: string;
+  contract_acceptance_available: boolean;
   source_updated_at: string | null;
   read_model_generated_at: string;
   job: {
@@ -465,7 +466,8 @@ export async function buildCustomerPortalReadModel(
 
   return {
     version: 1,
-    brand: publicTenant(env)?.brand ?? "IronWrap",
+    brand: customerPortalBrand(job, env),
+    contract_acceptance_available: customerContractAcceptanceAvailable(env),
     source_updated_at: latestModified(rowsUsed),
     read_model_generated_at: new Date().toISOString(),
     job: {
@@ -536,6 +538,23 @@ async function customerJobBinding(
   return name === roofJobId && customer
     ? { roofJobId: name, customerId: customer }
     : null;
+}
+
+function customerPortalBrand(job: FrappeRow, env: AppEnv): string {
+  const brand = text(job.brand, 80)?.toLowerCase();
+  if (brand === "ironwrap") return "IronWrap Exteriors";
+  if (brand === "iroof") return "iRoof Alberta";
+  return publicTenant(env)?.brand ?? "IronWrap";
+}
+
+function customerContractAcceptanceAvailable(env: AppEnv): boolean {
+  return customerPortalEnabled(env) &&
+    String(env.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED) === "true" &&
+    customerPortalConfigured(env) &&
+    !!env.CUSTOMER_CONTRACT_ACCEPTANCE_HMAC_KEY?.trim() &&
+    !!env.CUSTOMER_CONTRACT_ACCEPTANCE_FRAPPE_API_KEY?.trim() &&
+    !!env.CUSTOMER_CONTRACT_ACCEPTANCE_FRAPPE_API_SECRET?.trim() &&
+    !!env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim() && !!env.FROM_EMAIL?.trim();
 }
 
 function publicLink(link: CustomerPortalLinkRecord): Record<string, unknown> {

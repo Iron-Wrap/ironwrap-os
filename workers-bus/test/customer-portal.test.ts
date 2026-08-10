@@ -116,9 +116,9 @@ function env(db: SqliteD1): AppEnv {
     ERPNEXT_API_KEY: "frappe-read-key",
     ERPNEXT_API_SECRET: "frappe-read-secret",
     APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED: "true",
-    CUSTOMER_CONTRACT_ACCEPTANCE_HMAC_KEY: "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
-    CUSTOMER_CONTRACT_ACCEPTANCE_FRAPPE_API_KEY: "acceptance-frappe-key",
-    CUSTOMER_CONTRACT_ACCEPTANCE_FRAPPE_API_SECRET: "acceptance-frappe-secret",
+    APP_CUSTOMER_ACCEPTANCE_HMAC_KEY: "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
+    APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY: "acceptance-frappe-key",
+    APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET: "acceptance-frappe-secret",
   } as AppEnv;
 }
 
@@ -751,7 +751,29 @@ test("customer portal withholds contract acceptance when the backend flow is mis
   const db = new SqliteD1();
   const appEnv = {
     ...env(db),
-    CUSTOMER_CONTRACT_ACCEPTANCE_HMAC_KEY: "",
+    APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY: "",
+  } as AppEnv;
+  const frappe = installFrappeMock();
+  try {
+    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
+    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
+    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
+
+    const resolved = await worker.fetch(resolveRequest(token), appEnv as never, {} as never);
+    assert.equal(resolved.status, 200);
+    const model = (await resolved.json()) as Record<string, unknown>;
+    assert.equal(model.contract_acceptance_available, false);
+  } finally {
+    frappe.restore();
+  }
+});
+
+
+test("customer portal withholds contract acceptance when the HMAC secret is too short", async () => {
+  const db = new SqliteD1();
+  const appEnv = {
+    ...env(db),
+    APP_CUSTOMER_ACCEPTANCE_HMAC_KEY: "short-hmac-secret",
   } as AppEnv;
   const frappe = installFrappeMock();
   try {

@@ -24,6 +24,7 @@ import {
   type FrappeRow,
 } from "./frappe-read.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
+import { customerAcceptanceBackendConfigured } from "./customer-acceptance-config.ts";
 
 const MAX_PORTAL_BODY_BYTES = 1024;
 const PORTAL_ACCESS_WINDOW_MS = 15 * 60 * 1000;
@@ -549,12 +550,8 @@ function customerPortalBrand(job: FrappeRow, env: AppEnv): string {
 
 function customerContractAcceptanceAvailable(env: AppEnv): boolean {
   return customerPortalEnabled(env) &&
-    String(env.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED) === "true" &&
     customerPortalConfigured(env) &&
-    !!env.CUSTOMER_CONTRACT_ACCEPTANCE_HMAC_KEY?.trim() &&
-    !!env.CUSTOMER_CONTRACT_ACCEPTANCE_FRAPPE_API_KEY?.trim() &&
-    !!env.CUSTOMER_CONTRACT_ACCEPTANCE_FRAPPE_API_SECRET?.trim() &&
-    !!env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim() && !!env.FROM_EMAIL?.trim();
+    customerAcceptanceBackendConfigured(env);
 }
 
 function publicLink(link: CustomerPortalLinkRecord): Record<string, unknown> {

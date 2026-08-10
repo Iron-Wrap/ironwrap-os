@@ -210,9 +210,10 @@ the named environment and all of the following are proven there:
 4. With a disposable existing Roof Job and its current `Approved` Customer Quote, prove the
    scheduled projection reads an already durable D1 receipt, accepts only an exact association,
    creates one non-customer-safe Evidence Item and one `Pending` Integration Reconciliation record,
-   and leaves the quote, Contract Acceptance, and Proposal Evidence Pack unchanged. Repeat the
-   exact event to prove deterministic replay; separately prove missing/mismatched mappings make no
-   Frappe call and an Frappe refusal creates no Worker success.
+   returns a valid signed receipt binding every request and locked-record anchor, and leaves the
+   quote, Contract Acceptance, and Proposal Evidence Pack unchanged. Repeat the exact event to
+   prove deterministic replay; separately prove missing/mismatched mappings make no Frappe call,
+   an unsigned or tampered `200` remains `uncertain`, and an Frappe refusal creates no Worker success.
 
 Keep the flag false if any proof is missing. Repository tests, an ingress `202`, or a deployed D1
 migration are not runtime evidence for this customer-linked projection. Archive only redacted
@@ -237,11 +238,17 @@ live" claim.
    that same environment. Projection remains bounded evidence plus reconciliation only; it does not
    directly mutate a quote, proposal pack, contract acceptance, accounting record, or customer
    commitment.
-5. Keep any later Facet-triggered quote-revision proposal behind its own distinct approval gate and
-   live proof. Do not treat a projected Facet receipt as permission to revise commercial terms.
+5. Keep `APP_FACET_QUOTE_REVISION_PREPARE_ENABLED=false` until the private quote-revision broker,
+   configured human approver, resolved v2 association, dry-run, approval, create-only blank Draft,
+   audit, and uncertainty paths are proven in that environment. Do not treat a projected Facet
+   receipt as permission to revise commercial terms.
 6. Enable any Facet-side producer or automation flag only after IronWrap v2 ingest, exact
    associations, and live receipt proof are already demonstrated. Legacy v1 events remain
    `provenance_unknown` evidence and cannot be commercially associated with IronWrap or iRoof.
+
+The v2 `customer_capability` provenance and `bearer_capability_only` identity assurance prove only
+possession and exercise of the issued link. They do not establish a distinct natural person,
+informed consent, contract acceptance, or commercial authority.
 
 Newo production uses the managed federation and full governed control plane. Store
 `NEWO_API_KEY`, `NEWO_WEBHOOK_TOKEN`, `NEWO_BOOKING_TOKEN`, and

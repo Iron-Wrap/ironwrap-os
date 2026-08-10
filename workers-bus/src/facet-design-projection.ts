@@ -11,11 +11,76 @@ const PROJECTION_BATCH_SIZE = 25;
 const PROJECTION_METHOD =
   "ironwrap_roofing.facet_design_projection_api.record_facet_design_proposal_evidence";
 const PROJECTION_PATH = `/api/method/${PROJECTION_METHOD}`;
+const RECEIPT_SCHEMA = "ironwrap.facet-design-projection-receipt.v1";
+const RECEIPT_SIGNATURE_CONTEXT = "ironwrap.facet-design-projection.receipt.v1";
+const PROJECTION_RESPONSE_KEYS = [
+  "event_id",
+  "evidence_id",
+  "idempotent_replay",
+  "receipt",
+  "receipt_sha256",
+  "receipt_signature",
+  "receipt_signature_algorithm",
+  "reconciliation_id",
+] as const;
+const PROJECTION_RECEIPT_KEYS = [
+  "claim_sha256",
+  "commercial_state",
+  "customer_quote",
+  "customer_quote_id",
+  "customer_quote_status",
+  "customer_safe",
+  "design_revision_id",
+  "design_revision_sha256",
+  "event_id",
+  "event_type",
+  "evidence_id",
+  "facet_project_id",
+  "frozen_evidence_sha256",
+  "idempotent_replay",
+  "local_payload_hash",
+  "occurred_at",
+  "provenance",
+  "raw_content_length",
+  "raw_key",
+  "raw_sha256",
+  "received_at",
+  "reconciliation_id",
+  "roof_job",
+  "roof_job_brand",
+  "roof_job_current_quote",
+  "roof_job_id",
+  "schema",
+  "schema_version",
+  "tenant_id",
+] as const;
+const RECEIPT_CLAIM_ANCHOR_KEYS = [
+  "customer_quote_id",
+  "design_revision_id",
+  "design_revision_sha256",
+  "event_id",
+  "event_type",
+  "facet_project_id",
+  "frozen_evidence_sha256",
+  "occurred_at",
+  "raw_content_length",
+  "raw_key",
+  "raw_sha256",
+  "received_at",
+  "roof_job_id",
+  "schema_version",
+  "tenant_id",
+] as const;
 
 interface StoredFacetDesignEvent {
   event_id: string;
+  event_type: "facet.design.customer_approved.v2";
+  schema_version: 2;
   tenant_id: string;
   brand_id: string;
+  approval_actor_type: "customer_capability";
+  capability_fingerprint: string;
+  identity_assurance: "bearer_capability_only";
   facet_project_id: string;
   design_revision_id: string;
   design_revision_sha256: string;
@@ -43,6 +108,28 @@ interface ProjectionSettings {
   hmacKey: string;
   frappeApiKey: string;
   frappeApiSecret: string;
+}
+
+interface FacetProjectionClaim {
+  approval_actor_type: "customer_capability";
+  brand_id: string;
+  capability_fingerprint: string;
+  customer_quote_id: string;
+  design_revision_id: string;
+  design_revision_sha256: string;
+  event_id: string;
+  event_type: "facet.design.customer_approved.v2";
+  facet_project_id: string;
+  frozen_evidence_sha256: string;
+  identity_assurance: "bearer_capability_only";
+  occurred_at: string;
+  raw_content_length: number;
+  raw_key: string;
+  raw_sha256: string;
+  received_at: string;
+  roof_job_id: string;
+  schema_version: 2;
+  tenant_id: string;
 }
 
 type ProjectionOutcome =
@@ -154,7 +241,9 @@ async function listProjectionCandidates(
        WHERE outcome = 'uncertain'
        GROUP BY event_id
      )
-     SELECT event.event_id, event.tenant_id, event.brand_id, event.facet_project_id,
+     SELECT event.event_id, event.event_type, event.schema_version, event.tenant_id,
+            event.brand_id, event.approval_actor_type, event.capability_fingerprint,
+            event.identity_assurance, event.facet_project_id,
             event.design_revision_id, event.design_revision_sha256,
             event.frozen_evidence_sha256, event.raw_key, event.raw_sha256,
             event.raw_content_length, event.occurred_at, event.received_at,
@@ -278,20 +367,26 @@ async function projectToFrappe(
   association: FacetProjectionAssociation,
   event: StoredFacetDesignEvent,
 ): Promise<{ evidenceId: string; reconciliationId: string }> {
-  const claim = {
-    event_id: event.event_id,
-    tenant_id: event.tenant_id,
-    facet_project_id: event.facet_project_id,
+  const claim: FacetProjectionClaim = {
+    approval_actor_type: event.approval_actor_type,
+    brand_id: event.brand_id,
+    capability_fingerprint: event.capability_fingerprint,
+    customer_quote_id: association.customer_quote_id,
     design_revision_id: event.design_revision_id,
     design_revision_sha256: event.design_revision_sha256,
+    event_id: event.event_id,
+    event_type: event.event_type,
+    facet_project_id: event.facet_project_id,
     frozen_evidence_sha256: event.frozen_evidence_sha256,
+    identity_assurance: event.identity_assurance,
+    occurred_at: event.occurred_at,
+    raw_content_length: Number(event.raw_content_length),
     raw_key: event.raw_key,
     raw_sha256: event.raw_sha256,
-    raw_content_length: Number(event.raw_content_length),
-    occurred_at: event.occurred_at,
     received_at: event.received_at,
     roof_job_id: association.roof_job_id,
-    customer_quote_id: association.customer_quote_id,
+    schema_version: event.schema_version,
+    tenant_id: event.tenant_id,
   };
   const claimJson = canonicalJson(claim);
   const timestamp = String(Math.floor(Date.now() / 1_000));
@@ -336,7 +431,12 @@ async function projectToFrappe(
     } catch {
       throw new FrappeProjectionTransportError("frappe_projection_response_invalid_json");
     }
-    return await validatedProjectionResponse(decoded, event.event_id);
+    return await validatedProjectionResponse(
+      decoded,
+      claim,
+      claimJson,
+      settings.hmacKey,
+    );
   } catch (error) {
     if (error instanceof FrappeProjectionHttpError || error instanceof FrappeProjectionTransportError) {
       throw error;
@@ -352,21 +452,89 @@ async function projectToFrappe(
 
 async function validatedProjectionResponse(
   response: unknown,
-  eventId: string,
+  claim: FacetProjectionClaim,
+  claimJson: string,
+  hmacKey: string,
 ): Promise<{ evidenceId: string; reconciliationId: string }> {
-  if (!isRecord(response) || !isRecord(response.message) || response.message.event_id !== eventId) {
+  if (
+    !isRecord(response) || !isRecord(response.message) ||
+    !sameKeys(response.message, PROJECTION_RESPONSE_KEYS)
+  ) {
     throw new FrappeProjectionTransportError("frappe_projection_response_invalid_shape");
   }
-  const evidenceId = validOpaqueId(response.message.evidence_id) ? response.message.evidence_id : null;
+  const message = response.message;
+  const evidenceId = validOpaqueId(message.evidence_id) ? message.evidence_id : null;
   const reconciliationId = validOpaqueId(response.message.reconciliation_id)
     ? response.message.reconciliation_id
     : null;
-  const expectedHash = await sha256Hex(eventId);
+  const expectedHash = await sha256Hex(claim.event_id);
   if (
+    message.event_id !== claim.event_id ||
     evidenceId !== `facet-design:${expectedHash}` ||
     reconciliationId !== `facet-design-projection:${expectedHash}`
   ) {
     throw new FrappeProjectionTransportError("frappe_projection_response_anchor_mismatch");
+  }
+  if (
+    typeof message.idempotent_replay !== "boolean" ||
+    message.receipt_signature_algorithm !== "HMAC-SHA256" ||
+    !validSha256(message.receipt_sha256) ||
+    !validSignature(message.receipt_signature) ||
+    !isRecord(message.receipt) ||
+    !sameKeys(message.receipt, PROJECTION_RECEIPT_KEYS)
+  ) {
+    throw new FrappeProjectionTransportError("frappe_projection_response_invalid_receipt");
+  }
+  const receipt = message.receipt;
+  const receiptSha256 = await sha256Hex(canonicalJson(receipt));
+  const expectedSignature = await hmacBase64Url(
+    hmacKey,
+    `${RECEIPT_SIGNATURE_CONTEXT}\n${receiptSha256}`,
+  );
+  if (
+    !constantTimeEqual(message.receipt_sha256, receiptSha256) ||
+    !constantTimeEqual(message.receipt_signature, expectedSignature)
+  ) {
+    throw new FrappeProjectionTransportError("frappe_projection_response_signature_mismatch");
+  }
+  if (
+    receipt.schema !== RECEIPT_SCHEMA ||
+    receipt.claim_sha256 !== await sha256Hex(claimJson) ||
+    receipt.evidence_id !== evidenceId ||
+    receipt.reconciliation_id !== reconciliationId ||
+    receipt.idempotent_replay !== message.idempotent_replay ||
+    receipt.commercial_state !== "none" ||
+    receipt.customer_safe !== false ||
+    !validOpaqueId(receipt.roof_job) ||
+    !validOpaqueId(receipt.customer_quote) ||
+    receipt.roof_job_brand !== claim.brand_id ||
+    receipt.roof_job_current_quote !== receipt.customer_quote ||
+    receipt.customer_quote_status !== "Approved" ||
+    !validSha256(receipt.local_payload_hash)
+  ) {
+    throw new FrappeProjectionTransportError("frappe_projection_response_receipt_mismatch");
+  }
+  for (const key of RECEIPT_CLAIM_ANCHOR_KEYS) {
+    if (receipt[key] !== claim[key]) {
+      throw new FrappeProjectionTransportError("frappe_projection_response_receipt_mismatch");
+    }
+  }
+  if (
+    !isRecord(receipt.provenance) ||
+    !sameKeys(receipt.provenance, [
+      "approval_actor_type",
+      "brand_id",
+      "capability_fingerprint",
+      "identity_assurance",
+      "status",
+    ]) ||
+    receipt.provenance.status !== "customer_approved" ||
+    receipt.provenance.brand_id !== claim.brand_id ||
+    receipt.provenance.approval_actor_type !== claim.approval_actor_type ||
+    receipt.provenance.capability_fingerprint !== claim.capability_fingerprint ||
+    receipt.provenance.identity_assurance !== claim.identity_assurance
+  ) {
+    throw new FrappeProjectionTransportError("frappe_projection_response_provenance_mismatch");
   }
   return { evidenceId, reconciliationId };
 }
@@ -452,8 +620,31 @@ function validOpaqueId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{2,139}$/.test(value);
 }
 
+function validSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+function validSignature(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function sameKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  const a = new TextEncoder().encode(left);
+  const b = new TextEncoder().encode(right);
+  if (a.length !== b.length) return false;
+  let difference = 0;
+  for (let index = 0; index < a.length; index += 1) difference |= a[index]! ^ b[index]!;
+  return difference === 0;
 }
 
 function canonicalJson(value: unknown): string {

@@ -1,0 +1,210 @@
+# Launch-proof `--execute` side-effect inventory
+
+Authorization sheet for `tools/launch-proof.mjs --execute`. It exists so a human can decide, from
+one page, exactly what a real run touches before approving it. Derived by reading the tool and
+every handler it reaches; it is a code inventory, not a claim that a run has happened.
+
+Source of truth for behaviour: `tools/launch-proof.mjs`, `workers-bus/src/index.ts`,
+`workers-bus/src/estimates.ts`, `workers-bus/src/store.ts`, `workers-bus/src/notify.ts`,
+`workers-bus/src/google.ts`, `workers-bus/src/jobnimbus.ts`, `workers-bus/src/erpnext.ts`,
+`workers-bus/src/operations.ts`,
+`frappe-apps/ironwrap_roofing/ironwrap_roofing/launch_proof_api.py`.
+
+## 1. Modes
+
+`node tools/launch-proof.mjs` **without** `--execute` performs **no I/O at all**. It builds the
+plan, prints one `curl` template per step with `$BUS_BASE_URL` / `$INGEST_TOKEN` / `$ADMIN_TOKEN` /
+`$FRAPPE_*` left unexpanded, and returns `{ mode: "dry_run", plan }`. It does not read env vars, does
+not resolve DNS, and cannot detect any defect in the system under test.
+
+`--execute` sends every request below against whatever `BUS_BASE_URL` names. The tool has no
+production guard: the only thing separating a staging run from a production run is the value of
+`BUS_BASE_URL`.
+
+## 2. Required inputs
+
+| Variable | Required | Used for |
+|---|---|---|
+| `BUS_BASE_URL` | yes | Worker origin; trailing slashes stripped. Empty ⇒ assertion failure before any request. |
+| `INGEST_TOKEN` | yes | `Authorization: Bearer` on both `/ingest/*` steps. Must equal the Worker's `INGEST_TOKEN` secret. |
+| `ADMIN_TOKEN` | yes | `Authorization: Bearer` on `/ready`, `/admin/envelopes`, `/admin/reconcile`, `/admin/status`. Must equal the Worker's `ADMIN_TOKEN` secret. |
+| `FRAPPE_BASE_URL` | yes | Frappe origin for the projection lookup. Validated **before** the first HTTP call. |
+| `FRAPPE_API_KEY` / `FRAPPE_API_SECRET` | yes | `Authorization: token key:secret` for the projection lookup. **Not** the Worker's `ERPNEXT_API_KEY`/`ERPNEXT_API_SECRET` — this is the separate least-privilege launch-proof reader identity. |
+| `FRAPPE_PROOF_POLL_ATTEMPTS` | no | 1–5, default 3. |
+| `FRAPPE_PROOF_POLL_INTERVAL_MS` | no | 0–5000, default 1000. |
+
+All five required values are validated up front. A missing Frappe credential aborts the run before
+any synthetic POST — by design, so nothing is written that cannot afterwards be verified.
+
+Not passed to the tool but required **on the Worker** for the run to pass: `ERPNEXT_ENABLED=true`
+plus `ERPNEXT_BASE_URL`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`, and a `/ready` verdict of green.
+
+Not passed to the tool but required **on the Frappe site**: site config key
+`ironwrap_launch_proof_reader_user` set to the exact reader user; that user holds the
+`IronWrap Launch Proof Reader` role and can read `Instant Estimate Session`; the API key/secret pair
+belongs to that same user. The role is created by the app's install hook; the **user, its role
+assignment, its API pair, and the site-config key are not provisioned by any script in this repo.**
+
+## 3. Fixtures
+
+Both fixtures are synthetic and carry an execution-unique id `<13-digit ms>-<32 hex>`:
+
+- lead: name `Launch Proof`, phone `587555<last 4 of stamp>`, email
+  `launch-proof+<execution-id>@example.invalid`, service `metal roofing`, brand `ironwrap`.
+- estimate: `project_id` / `job_number` `LP-<execution-id>`, customer `Launch Proof`,
+  address `Edmonton, AB`, total `$1.00`.
+
+The phone is a **real, dialable NANP-shaped number** in the 587 (Alberta) area code, normalized to
+`+1587555NNNN`. It is not a reserved test range.
+
+## 4. Ordered wire calls
+
+| # | Call | Auth |
+|---|---|---|
+| 0 | `GET {FRAPPE_BASE_URL}/api/method/ironwrap_roofing.launch_proof_api.lookup_synthetic_correlation?correlation_id=…` | Frappe reader |
+| 1 | `GET {BUS}/health` | none |
+| 2 | `GET {BUS}/ready` | admin |
+| 3 | `POST {BUS}/ingest/website` | ingest |
+| 4 | `POST {BUS}/ingest/estimate` (`Idempotency-Key: lp-<execution-id>`) | ingest |
+| 5 | `POST {BUS}/ingest/estimate` — replay, same key | ingest |
+| 6 | `GET {BUS}/admin/envelopes?limit=10` | admin |
+| 7 | `POST {BUS}/admin/reconcile` | admin |
+| 8 | `GET {BUS}/admin/status?audit_limit=20` | admin |
+| 9 | repeat of #0, polled up to `attempts` times | Frappe reader |
+
+Step 0 is a **preflight** that must return `observation: "pending"`; it proves the reader works and
+the correlation is unused. Steps 1 and 2 are asserted inline, so a red `/ready` stops the run
+before step 3 — no synthetic record is written.
+
+## 5. Side effects, by step
+
+### Step 3 — `POST /ingest/website` (the only step that reaches outbound rails)
+
+| Effect | Store | Detail |
+|---|---|---|
+| Raw body object | **R2 `RAW`** | key `raw/<YYYY-MM-DD>/ow_<uuid>.json`. Written **first**, before anything else. |
+| Dedup claim | **D1 `dedup_claims`** | key `p:+1587555NNNN`. Insert or window-expiry update. |
+| Envelope row | **D1 `envelopes`** | status `pending_jn_push`, `intent_queue` = `residential_sales` (the fixture's `metal roofing` matches the residential route). |
+| Audit row | **D1 `audit_log`** | `automation=ingest`, `action=received`. |
+| Prospect ack email | **Gmail** | `sendInstantAck` → `sendGmail` as `FROM_EMAIL` to `launch-proof+…@example.invalid`. A **real outbound message to an undeliverable address** — it will hard-bounce against the sending domain. |
+| Owner alert email | **Gmail** | to `OWNER_ALERT_EMAIL` (production value `info@ironwrapexteriors.com`) — a **real message to a real human inbox**, subject `New lead (website) — residential_sales`. |
+| Ack receipt row | **D1 `lead_ack_receipts`** | one row per leg outcome. |
+| Queue message | **Queue `JN_QUEUE`** | `{ envelope_id }` onto `ironwrap-jn-push`. Fires because the fixture is valid and not a duplicate. |
+
+Both emails are attempted whenever `GOOGLE_SERVICE_ACCOUNT_JSON` **and** `FROM_EMAIL` are set. They
+run under `ctx.waitUntil` and their failure does not fail the proof — so a run can succeed while
+having sent mail, and can send mail while otherwise failing.
+
+### Queue consumer, triggered asynchronously by step 3
+
+The consumer (`handlePush`) runs after the tool has already moved on. Its effects are **not**
+asserted by launch-proof and **not** captured in the evidence artifact.
+
+| Effect | Store | Gate |
+|---|---|---|
+| Frappe `Lead Envelope` (+ `Roofing Property`, `Roof Job`, production gates) | **Frappe** | `ERPNEXT_ENABLED=true` |
+| `envelopes.erpnext_*` columns; `audit_log` `erpnext_push` | D1 | as above |
+| **JobNimbus contact** — `POST /api1/contacts`, record type `Customer`, status `New`, tagged `ironwrap-bus`, `bus:<envelope>`, `source:website`, `brand:ironwrap`, `queue:residential_sales` | **JobNimbus (live CRM)** | `JOBNIMBUS_ENABLED=true` — **currently true in production** |
+| **JobNimbus job** — `POST /api1/jobs`, record type `Retail`, status `Lead`, related to the contact | **JobNimbus (live CRM)** | as above; fires because the intent is routable |
+| Preceding JobNimbus **reads** — `GET /api1/contacts` and `/api1/jobs` filtered by tag/email/phone | JobNimbus | as above |
+| **Google Drive job folder** + the six `01…06` subfolders under `SHARED_DRIVE_ID_JOBS` | **Google Drive** | fresh JN job number **and** `GOOGLE_SERVICE_ACCOUNT_JSON` + `SHARED_DRIVE_ID_JOBS` set — both true in production |
+| `audit_log` `jn_push`; `envelopes.status='pushed'` | D1 | |
+| On failure: `dead_letter` row after retry exhaustion, DLQ message on `ironwrap-jn-dlq` | D1 / Queue | |
+
+JobNimbus `api1` has **no DELETE**; cleanup is a soft archive via `PUT {is_archived:true}`. A
+synthetic contact and job created here are permanent CRM records for practical purposes.
+
+### Steps 4 and 5 — `POST /ingest/estimate` ×2
+
+| Effect | Store | Detail |
+|---|---|---|
+| Raw body object ×1 | **R2 `RAW`** | `raw/estimates/<YYYY-MM-DD>/ow_<uuid>.json` (first call only; the replay short-circuits). |
+| Envelope row ×1 | **D1 `envelopes`** | `estimate_submission_key = estimate:project:lp-<execution-id>`. |
+| Audit rows ×2 | **D1 `audit_log`** | `received`, then `idempotent_replay`. |
+| Frappe `Lead Envelope` + `Instant Estimate Session` (`estimate_session_id = estimate:LP-<execution-id>`) | **Frappe** | only when `ERPNEXT_ENABLED=true`; this record is what step 9 looks for. |
+| `envelopes.erpnext_*`; `audit_log` `erpnext_estimate` | D1 | |
+
+No queue message, no email, no JobNimbus, no Drive on this path.
+
+### Step 7 — `POST /admin/reconcile`
+
+| Effect | Store | Detail |
+|---|---|---|
+| Heartbeat upsert | **D1 `heartbeat`** | `INSERT … ON CONFLICT(day) DO UPDATE` — **overwrites today's row**, including `ran_at`. |
+| Daily digest email | **Gmail** | to `OWNER_ALERT_EMAIL` **and** `BACKUP_ALERT_EMAIL` (production `info@` and `sales@ironwrapexteriors.com`). The digest text asserts of itself that its arrival *is* the heartbeat, so an out-of-band copy is misleading to the recipient. |
+
+Steps 1, 2, 6, 8 and 0/9 are read-only. Step 9's Frappe endpoint is `@frappe.whitelist()` read-only,
+`GET`-only, and returns only `{correlation_id, observation}` — no customer, contact, job, or
+document data.
+
+### Totals for one production `--execute`
+
+- **up to 4 real emails**: prospect ack (bounces), owner alert, digest to owner, digest to backup;
+- **1 live JobNimbus contact + 1 live JobNimbus job**, plus lookup reads;
+- **1 Google Drive job folder with 6 subfolders** on the jobs shared drive;
+- **2 R2 objects**;
+- **1 queue message** (plus DLQ traffic on failure);
+- **D1 writes** across `envelopes` (2 rows), `dedup_claims`, `audit_log` (≥5 rows),
+  `lead_ack_receipts`, `heartbeat` (day row overwritten);
+- **Frappe records**: `Lead Envelope` ×2, `Roofing Property`, `Roof Job`, production gates,
+  `Instant Estimate Session` — when the Frappe rail is on.
+
+## 6. Success criteria
+
+Hard assertions, any of which aborts the run:
+
+1. Frappe reader preflight: HTTP 200, matching `correlation_id`, `observation == "pending"`.
+2. `/health` HTTP 200.
+3. `/ready` HTTP 200 **and** `ok == true` **and** `status == "ready"` **and every entry in `checks`
+   truthy** — including the `newo_*` checks whenever `NEWO_PRODUCTION_REQUIRED=true` or
+   `NEWO_ENABLED=true`.
+4. `/ingest/website` HTTP 200 with a non-empty `envelope_id`.
+5. Both `/ingest/estimate` calls HTTP **200** — note a Frappe-mirror failure returns **202**, which
+   fails this assertion — and both returning the **same** `envelope_id`.
+6. `/admin/envelopes` HTTP 200 and the lead envelope id present in the first 10 rows.
+7. `/admin/reconcile` HTTP 200.
+8. `/admin/status`: `status == "ok"`; heartbeat present, `fresh`, `reconciled`; each of
+   `open_dead_letters`, `stuck`, `frappe_errors`, `replay_failed`, `replay_stuck` == 0; zero recent
+   audit failures.
+9. Final CLI gate: `evidence.frappe_projection.state == "matched"`.
+
+The projection poll resolves to `matched`, `mismatch`, `timeout`, or `unavailable`. Only `matched`
+passes; every other state leaves `reconciliation_required: true`.
+
+The Frappe projection observed by step 9 is written by the **estimate** path (synchronously, in
+step 4). The **lead** path's Frappe and JobNimbus effects happen in the queue consumer and are
+**never asserted** — a green launch-proof therefore does not prove the lead reached JobNimbus,
+Frappe, or Drive.
+
+## 7. Evidence produced
+
+`--execute` prints one redacted JSON object to stdout (`proof: "ironwrap-launch-proof-v3"`) holding
+the envelope id, project id, per-step HTTP status and request id, the readiness check map,
+reconciliation day/gap counts, operational status, and the projection state. No payloads, tokens,
+contact fields, or Frappe document names. Nothing is written to disk — archiving it is the
+operator's step. `bridge_keep_enabled` is hard-coded `true`: a green proof is release evidence, not
+authority to retire the JobNimbus bridge.
+
+## 8. Reversal
+
+| Effect | Reversible? |
+|---|---|
+| D1 rows | Yes, by id — except the `heartbeat` day row, whose prior `ran_at` is lost. |
+| R2 objects | Yes, by key. |
+| Queue message | No; already consumed. |
+| Emails | **No.** |
+| JobNimbus contact/job | Soft archive only (`PUT {is_archived:true}`); no delete on `api1`. |
+| Drive folder tree | Yes, manually. |
+| Frappe records | Yes, by operator with sufficient rights. |
+
+## 9. Reading this before authorizing
+
+A production run is **not** dry-runnable: dry-run exercises nothing. The lowest-side-effect real
+rehearsal is to point `BUS_BASE_URL` at a non-production Worker whose `JOBNIMBUS_ENABLED=false`,
+whose `GOOGLE_SERVICE_ACCOUNT_JSON` is a non-empty placeholder that fails `JSON.parse` before any
+network call (readiness requires it non-empty — a truly unset value turns
+`notification_configuration` red and aborts the run at its own `/ready` gate; the parse failure is
+caught and recorded as `attempt_failed` ack receipts), and whose Frappe is a throwaway site — that
+removes every email, every CRM write, and every Drive write while still exercising D1, R2, the
+queue, the estimate path, and the Frappe projection seam. One such rehearsal is recorded in
+[`BUS-FRAPPE-SEAM-PROOF.md`](./BUS-FRAPPE-SEAM-PROOF.md).

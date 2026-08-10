@@ -155,7 +155,6 @@
     "FACET_DESIGN_INGEST_ENABLED": "false",
     "FACET_DESIGN_INGEST_TENANT_MAP_JSON": "{}",
     "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED": "false",
-    "FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON": "{\"schema_version\":1,\"associations\":[]}",
     // Tenant pricing for the estimator's computed estimate; empty disables pricing.
     "ESTIMATOR_PRICE_LIST_JSON": "",
     // Google Doc template id for proposal generation; empty disables the action.
@@ -295,7 +294,6 @@
         "FACET_DESIGN_INGEST_ENABLED": "false",
         "FACET_DESIGN_INGEST_TENANT_MAP_JSON": "{}",
         "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED": "false",
-        "FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON": "{\"schema_version\":1,\"associations\":[]}",
         "APP_TENANT_ID": "ironwrap",
         "APP_TENANT_NAME": "IronWrap OS — Local",
         "APP_TENANT_BRAND": "IronWrap",
@@ -433,7 +431,6 @@
         "FACET_DESIGN_INGEST_ENABLED": "false",
         "FACET_DESIGN_INGEST_TENANT_MAP_JSON": "{}",
         "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED": "false",
-        "FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON": "{\"schema_version\":1,\"associations\":[]}",
         "APP_TENANT_ID": "ironwrap",
         "APP_TENANT_NAME": "IronWrap OS — Owner Test",
         "APP_TENANT_BRAND": "IronWrap",

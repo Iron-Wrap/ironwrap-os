@@ -732,9 +732,10 @@ test("auth mutations reject missing/unlisted origins and never emit wildcard COR
   assert.notEqual(evil.headers.get("access-control-allow-origin"), "*");
 });
 
-test("admin-token provisioning is tenant-bound, strict, and requires a Frappe assignee for field users", async () => {
+test("app-session provisioning is tenant-bound, strict, CSRF-gated, and server-attributed", async () => {
   const db = new AuthMemoryDb();
   const env = baseEnv(db);
+  const office = await signInOffice(env);
   const payload = {
     tenant_id: "ironwrap",
     email: "crew@example.com",
@@ -742,32 +743,65 @@ test("admin-token provisioning is tenant-bound, strict, and requires a Frappe as
     role: "field",
     frappe_user_id: "crew@example.com",
     active: true,
-    provisioned_by: "owner@example.com",
   };
-  const provisioned = await worker.fetch(jsonRequest("/admin/app-users", payload, {
+
+  const bearerRoute = await worker.fetch(jsonRequest("/admin/app-users", payload, {
     authorization: "Bearer admin-token",
+  }), env, waitContext().ctx as never);
+  assert.equal(bearerRoute.status, 404);
+
+  const missingCsrf = await worker.fetch(jsonRequest("/api/v1/admin/app-users", payload, {
+    cookie: office.cookiePair,
+  }), env, waitContext().ctx as never);
+  assert.equal(missingCsrf.status, 403);
+  assert.deepEqual(await missingCsrf.json(), { error: "csrf_failed" });
+
+  const forgedActor = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
+    ...payload,
+    provisioned_by: "forged@example.com",
+  }, {
+    cookie: office.cookiePair,
+    "x-csrf-token": office.csrfToken,
+  }), env, waitContext().ctx as never);
+  assert.equal(forgedActor.status, 400);
+  assert.deepEqual(await forgedActor.json(), { error: "unexpected_field" });
+
+  const provisioned = await worker.fetch(jsonRequest("/api/v1/admin/app-users", payload, {
+    cookie: office.cookiePair,
+    "x-csrf-token": office.csrfToken,
   }), env, waitContext().ctx as never);
   assert.equal(provisioned.status, 200);
   const result = await provisioned.json() as { user: { role: string; active: boolean } };
   assert.deepEqual(result.user, { ...result.user, role: "field", active: true });
-  assert.equal(db.users.size, 1);
+  assert.equal(db.users.size, 2);
+  const crew = [...db.users.values()].find((user) => user.email_normalized === "crew@example.com");
+  assert.equal(crew?.created_by, "owner@example.com");
+  const provisionAudit = db.audits.at(-1)?.args as unknown[] | undefined;
+  assert.equal(provisionAudit?.[3], "user_provision");
+  assert.equal(provisionAudit?.[7], "field:owner@example.com");
 
-  const noAssignee = await worker.fetch(jsonRequest("/admin/app-users", {
+  const noAssignee = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
     ...payload,
     email: "other@example.com",
     frappe_user_id: null,
-  }, { authorization: "Bearer admin-token" }), env, waitContext().ctx as never);
+  }, {
+    cookie: office.cookiePair,
+    "x-csrf-token": office.csrfToken,
+  }), env, waitContext().ctx as never);
   assert.equal(noAssignee.status, 400);
   assert.deepEqual(await noAssignee.json(), { error: "field_requires_frappe_user_id" });
 
-  const otherTenant = await worker.fetch(jsonRequest("/admin/app-users", {
+  const otherTenant = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
     ...payload,
     tenant_id: "another-tenant",
-  }, { authorization: "Bearer admin-token" }), env, waitContext().ctx as never);
+  }, {
+    cookie: office.cookiePair,
+    "x-csrf-token": office.csrfToken,
+  }), env, waitContext().ctx as never);
   assert.equal(otherTenant.status, 400);
   assert.deepEqual(await otherTenant.json(), { error: "invalid_tenant" });
 
-  const unauthorized = await worker.fetch(jsonRequest("/admin/app-users", payload), env, waitContext().ctx as never);
+  const unauthorized = await worker.fetch(jsonRequest("/api/v1/admin/app-users", payload), env, waitContext().ctx as never);
   assert.equal(unauthorized.status, 401);
 });
 
@@ -800,15 +834,17 @@ test("admin deactivation revokes existing sessions and consumes open links", asy
   await secondWaiter.flush();
   assert.equal([...db.magic.values()][0].consumed_at, null);
 
-  const deactivated = await worker.fetch(jsonRequest("/admin/app-users", {
+  const deactivated = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
     tenant_id: "ironwrap",
     email: "owner@example.com",
     display_name: "Office Owner",
     role: "owner",
     frappe_user_id: null,
     active: false,
-    provisioned_by: "owner@example.com",
-  }, { authorization: "Bearer admin-token" }), env, secondWaiter.ctx as never);
+  }, {
+    cookie: cookiePair,
+    "x-csrf-token": (await consumed.json() as { csrf_token: string }).csrf_token,
+  }), env, secondWaiter.ctx as never);
   assert.equal(deactivated.status, 200);
   assert.equal([...db.sessions.values()][0].revoked_at !== null, true);
   assert.equal([...db.magic.values()][0].consumed_at !== null, true);

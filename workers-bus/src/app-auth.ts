@@ -108,10 +108,13 @@ export function validateAppOrigin(
 export function parseProvisionAppUser(
   value: unknown,
   env: AppEnv,
-): { ok: true; value: ProvisionAppUserInput } | { ok: false; error: string } {
+): {
+  ok: true;
+  value: Omit<ProvisionAppUserInput, "provisioned_by">;
+} | { ok: false; error: string } {
   if (!isRecord(value)) return { ok: false, error: "invalid_body" };
   const allowed = new Set([
-    "tenant_id", "email", "display_name", "role", "frappe_user_id", "active", "provisioned_by",
+    "tenant_id", "email", "display_name", "role", "frappe_user_id", "active",
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return { ok: false, error: "unexpected_field" };
 
@@ -121,7 +124,6 @@ export function parseProvisionAppUser(
   const displayName = cleanText(value.display_name, 1, 120);
   const role = value.role;
   const active = value.active;
-  const provisionedBy = cleanText(value.provisioned_by, 3, 128);
   const frappeUserId = value.frappe_user_id === null || value.frappe_user_id === undefined
     ? null
     : cleanText(value.frappe_user_id, 3, 140);
@@ -131,7 +133,6 @@ export function parseProvisionAppUser(
   if (!displayName) return { ok: false, error: "invalid_display_name" };
   if (role !== "owner" && role !== "ops" && role !== "field") return { ok: false, error: "invalid_role" };
   if (typeof active !== "boolean") return { ok: false, error: "invalid_active" };
-  if (!provisionedBy) return { ok: false, error: "invalid_provisioned_by" };
   if (value.frappe_user_id !== null && value.frappe_user_id !== undefined && !frappeUserId) {
     return { ok: false, error: "invalid_frappe_user_id" };
   }
@@ -146,7 +147,6 @@ export function parseProvisionAppUser(
       role,
       frappe_user_id: frappeUserId,
       active,
-      provisioned_by: provisionedBy,
     },
   };
 }

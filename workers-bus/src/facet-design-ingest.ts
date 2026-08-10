@@ -562,7 +562,10 @@ async function parseFacetDesignEvent(raw: string): Promise<FacetDesignEvent | nu
     const capabilityFingerprint = customerApproval && validSha256(value.capability_fingerprint)
       ? value.capability_fingerprint
       : null;
-    if (customerApproval && (!brandId || !approvalActorType || !capabilityFingerprint)) return null;
+    if (
+      customerApproval &&
+      (!brandId || design.brandId !== brandId || !approvalActorType || !capabilityFingerprint)
+    ) return null;
     return {
       kind: customerApproval ? "customer_approval" : "legacy",
       eventId,

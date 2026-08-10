@@ -71,10 +71,7 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
   assert.equal(config.env.local.vars.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED, "false");
   assert.equal(config.env.staging.vars.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED, "false");
   for (const environment of [config.vars, config.env.local.vars, config.env.staging.vars]) {
-    assert.deepEqual(JSON.parse(environment.FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON), {
-      schema_version: 1,
-      associations: [],
-    });
+    assert.equal("FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON" in environment, false);
   }
   assert.deepEqual(
     config.env.staging.queues.producers.find((queue: { binding: string }) => queue.binding === "NEWO_QUEUE"),

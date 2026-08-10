@@ -73,7 +73,7 @@ IronWrap PWA
 | Frappe consumer | `erpnext.ts` creates/updates Lead Envelope, Roofing Property, Roof Job, Instant Estimate Session, Measurement Report, Evidence Item, Field Check-in, and Payment Milestone rows when enabled |
 | Owned estimator handoff | `estimates.ts` implements `/ingest/estimate`: retry-safe project/idempotency key + raw R2 + D1 envelope + Frappe Instant Estimate Session without JobNimbus/GHL dependency |
 | Facet approved-design receipt | `facet-design-ingest.ts` verifies a dedicated raw-body HMAC plus source-tenant allowlist, stores immutable R2 evidence first, then local-tenant D1 event/nonce anchors; it is distinct from estimate, quote, contract, and customer acceptance |
-| Facet review projection | `facet-design-projection.ts` reads only immutable D1 anchors, requires an exact deployment-controlled job/quote association, and creates non-customer-safe Evidence Item plus Pending Integration Reconciliation records; it never changes a quote, contract, acceptance, or Proposal Evidence Pack |
+| Facet review projection | `facet-design-projection.ts` reads only v2 receipts with an exact append-only, office-authored job/quote association, and creates non-customer-safe Evidence Item plus Pending Integration Reconciliation records; it never changes a quote, contract, acceptance, or Proposal Evidence Pack |
 | Passwordless app auth | `app-auth.ts` + D1 migration `0011`; one-time hashed links, hashed fixed-TTL sessions, exact-origin CORS, CSRF, throttles, and audit |
 | Permission-shaped PWA reads | `app-read-models.ts` + `frappe-read.ts`; hard-coded DocType/field/filter allowlists and fail-closed field assignment |
 
@@ -523,13 +523,15 @@ Frappe write.
 in the Frappe site, and its distinct API key, API secret, and HMAC are stored as Worker secrets.
 Never reuse the ingress HMAC, broad ERP identity, or customer-acceptance identity.
 
-The non-secret `FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON` is a reviewed deployment setting
-with exactly `{"schema_version":1,"associations":[...]}`. Each association contains only opaque
-`event_id`, `tenant_id`, `facet_project_id`, design revision id/hash, frozen-evidence hash,
-`roof_job_id`, and `customer_quote_id`; do not put names, addresses, prices, or free-form operator
-input in it. Every source anchor must exactly equal the immutable D1 receipt. A missing association
-is held and an anchor mismatch is rejected in the append-only
-`facet_design_projection_attempts` ledger; neither condition calls Frappe.
+An authenticated owner/ops office session lists unassociated v2 receipts at
+`GET /api/v1/facet-design-evidence/association-ready` and creates one binding through
+`POST /api/v1/facet-design-evidence/associations` with CSRF and an `Idempotency-Key`. The body
+contains exact event/design/brand anchors, opaque `roof_job_id` and `customer_quote_id`, and a
+bounded reason; tenant and actor are server-derived. The Worker verifies the existing same-brand
+Roof Job and its linked current `Approved` quote before appending the binding. A missing association
+is held and an anchor mismatch is rejected in the separate append-only v2 projection-attempt
+ledger; neither condition calls the projection command. Deployment JSON is not association
+authority.
 
 For an exact approved current quote belonging to the locked Roof Job, the scheduled Worker command
 creates one deterministic, non-customer-safe Evidence Item and one Pending Integration

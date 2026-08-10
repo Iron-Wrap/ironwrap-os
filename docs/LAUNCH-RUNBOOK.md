@@ -189,7 +189,7 @@ npm run deploy
 
 ### Facet-to-Frappe Review-Projection Gate
 
-Leave `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED=false` until the `0031` D1 migration is applied in
+Leave `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED=false` until the `0035` D1 migration is applied in
 the named environment and all of the following are proven there:
 
 1. Create a dedicated Frappe API user with only `IronWrap Facet Design Projection Service`, pin
@@ -200,11 +200,13 @@ the named environment and all of the following are proven there:
    `FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY`, and
    `FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET` only with `wrangler secret put`. Do not
    reuse the Facet ingress HMAC, broad Worker/Frappe API identity, or customer-acceptance identity.
-3. Submit the reviewed deployment configuration
-   `FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON` with schema version `1`. Each exact mapping
-   includes only D1 receipt anchors plus opaque `roof_job_id` and `customer_quote_id`; it contains
-   no customer names, addresses, prices, or operator-entered commercial facts. There is no mutable
-   operator association API.
+3. From an authenticated owner/ops office session, list v2 evidence at
+   `GET /api/v1/facet-design-evidence/association-ready`, then create an exact binding through
+   `POST /api/v1/facet-design-evidence/associations` with CSRF and an `Idempotency-Key`. Submit the
+   returned event/design/brand anchors, opaque `roof_job_id` and `customer_quote_id`, and a bounded
+   reason. Tenant and actor come only from the session. The Worker must read back the Roof Job,
+   brand, linked current `Approved` quote, and approval timestamp before appending the association.
+   There is no deployment JSON association authority.
 4. With a disposable existing Roof Job and its current `Approved` Customer Quote, prove the
    scheduled projection reads an already durable D1 receipt, accepts only an exact association,
    creates one non-customer-safe Evidence Item and one `Pending` Integration Reconciliation record,
@@ -228,8 +230,9 @@ live" claim.
 2. Capture live v2 receipt proof in the named Worker, D1, and R2 environment before discussing any
    downstream cutover. A staging payload, repository fixture, or attachment transcript is not
    runtime proof.
-3. Keep the deployment-controlled association allowlist separate from ingest proof. No operator or
-   caller may create a mutable commercial association API from Facet payloads alone.
+3. Keep the append-only, office-authored association ledger separate from ingest proof. An
+   association may bind only exact v2 receipt anchors to an existing same-brand Roof Job and its
+   current `Approved` quote after Frappe read-back; it never copies or changes commercial terms.
 4. Keep `FACET_DESIGN_FRAPPE_PROJECTION_ENABLED=false` until the projection gate above is closed in
    that same environment. Projection remains bounded evidence plus reconciliation only; it does not
    directly mutate a quote, proposal pack, contract acceptance, accounting record, or customer

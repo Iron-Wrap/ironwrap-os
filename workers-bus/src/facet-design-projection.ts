@@ -1,12 +1,13 @@
 import { randomToken, sha256Hex } from "./app-auth.ts";
 import type { AppEnv } from "./app-types.ts";
+import {
+  facetDesignAssociationAnchorSha256,
+  type FacetDesignAssociationAnchor,
+} from "./facet-design-association.ts";
 import { frappeBaseUrl, frappeRequestTimeout } from "./frappe-read.ts";
 
 const MAX_FRAPPE_RESPONSE_BYTES = 64 * 1024;
 const PROJECTION_BATCH_SIZE = 25;
-// ponytail: D1 allows 100 bindings/query; this CTE uses two per association plus retry clock and
-// LIMIT, so keep this config ceiling at 49 (exactly 100 bindings). Chunk only if needed later.
-const MAX_PROJECTION_ASSOCIATIONS = 49;
 const PROJECTION_METHOD =
   "ironwrap_roofing.facet_design_projection_api.record_facet_design_proposal_evidence";
 const PROJECTION_PATH = `/api/method/${PROJECTION_METHOD}`;
@@ -14,6 +15,7 @@ const PROJECTION_PATH = `/api/method/${PROJECTION_METHOD}`;
 interface StoredFacetDesignEvent {
   event_id: string;
   tenant_id: string;
+  brand_id: string;
   facet_project_id: string;
   design_revision_id: string;
   design_revision_sha256: string;
@@ -23,25 +25,24 @@ interface StoredFacetDesignEvent {
   raw_content_length: number;
   occurred_at: string;
   received_at: string;
+  association_event_id: string | null;
+  association_tenant_id: string | null;
+  association_brand_id: string | null;
+  association_facet_project_id: string | null;
+  association_design_revision_id: string | null;
+  association_design_revision_sha256: string | null;
+  association_frozen_evidence_sha256: string | null;
+  roof_job_id: string | null;
+  customer_quote_id: string | null;
+  association_anchor_sha256: string | null;
 }
 
-interface FacetProjectionAssociation {
-  event_id: string;
-  tenant_id: string;
-  facet_project_id: string;
-  design_revision_id: string;
-  design_revision_sha256: string;
-  frozen_evidence_sha256: string;
-  roof_job_id: string;
-  customer_quote_id: string;
-}
+type FacetProjectionAssociation = FacetDesignAssociationAnchor;
 
 interface ProjectionSettings {
   hmacKey: string;
   frappeApiKey: string;
   frappeApiSecret: string;
-  associations: Map<string, FacetProjectionAssociation>;
-  associationSha256: Map<string, string>;
 }
 
 type ProjectionOutcome =
@@ -70,10 +71,9 @@ class FrappeProjectionTransportError extends Error {
 }
 
 /**
- * Sweep only immutable D1 receipts.  The deployment-controlled association allowlist must bind
- * every Facet anchor to one already-existing Frappe Roof Job and Customer Quote; this function
- * never consumes an inbound body, infers identity, creates a quote, changes a price, or publishes
- * a Proposal Evidence Pack.
+ * Sweep only provenance-bearing customer approvals and their immutable D1 operator associations.
+ * This function never consumes an inbound body, infers identity, creates a quote, changes a price,
+ * or publishes a Proposal Evidence Pack.
  */
 export async function reconcileFacetDesignFrappeProjections(
   env: Env,
@@ -83,7 +83,7 @@ export async function reconcileFacetDesignFrappeProjections(
   const settings = await projectionSettings(env);
   if (!settings) throw new Error("facet_design_projection_not_configured");
 
-  const events = await listProjectionCandidates(env, settings, now);
+  const events = await listProjectionCandidates(env, now);
   for (const event of events) {
     await reconcileOneProjection(env, settings, event, now);
   }
@@ -95,7 +95,7 @@ async function reconcileOneProjection(
   event: StoredFacetDesignEvent,
   now: Date,
 ): Promise<void> {
-  const association = settings.associations.get(event.event_id);
+  const association = associationForEvent(event);
   if (!association) {
     await appendOutcome(env, event, {
       associationSha256: "",
@@ -105,9 +105,12 @@ async function reconcileOneProjection(
     return;
   }
 
-  const associationSha256 = settings.associationSha256.get(event.event_id);
+  const associationSha256 = event.association_anchor_sha256;
   if (!associationSha256) throw new Error("facet_design_projection_association_hash_missing");
-  if (!associationMatchesEvent(association, event)) {
+  if (
+    !associationMatchesEvent(association, event) ||
+    await facetDesignAssociationAnchorSha256(association) !== associationSha256
+  ) {
     await appendOutcome(env, event, {
       association,
       associationSha256,
@@ -141,58 +144,61 @@ async function reconcileOneProjection(
 
 async function listProjectionCandidates(
   env: Env,
-  settings: ProjectionSettings,
   now: Date,
 ): Promise<StoredFacetDesignEvent[]> {
-  const fingerprints = [...settings.associationSha256.entries()];
-  const associationRows = fingerprints.length
-    ? `VALUES ${fingerprints.map(() => "(?, ?)").join(", ")}`
-    : "SELECT NULL, NULL WHERE 0";
-  const bindings = fingerprints.flatMap(([eventId, associationSha256]) => [eventId, associationSha256]);
   const result = await env.DB.prepare(
-    `WITH configured_associations(event_id, association_sha256) AS (${associationRows}),
-     retry_clock(now) AS (VALUES (?)),
+    `WITH retry_clock(now) AS (VALUES (?)),
      uncertain_attempts AS (
        SELECT event_id, COUNT(*) AS attempt_count, MAX(attempted_at) AS last_attempted_at
-       FROM facet_design_projection_attempts
+       FROM facet_customer_approval_projection_attempts
        WHERE outcome = 'uncertain'
        GROUP BY event_id
      )
-     SELECT event.event_id, event.tenant_id, event.facet_project_id, event.design_revision_id,
-            event.design_revision_sha256,
-            frozen_evidence_sha256, raw_key, raw_sha256, raw_content_length, occurred_at, received_at
-       FROM facet_design_events AS event
-       LEFT JOIN configured_associations AS configured
-         ON configured.event_id = event.event_id
+     SELECT event.event_id, event.tenant_id, event.brand_id, event.facet_project_id,
+            event.design_revision_id, event.design_revision_sha256,
+            event.frozen_evidence_sha256, event.raw_key, event.raw_sha256,
+            event.raw_content_length, event.occurred_at, event.received_at,
+            association.event_id AS association_event_id,
+            association.tenant_id AS association_tenant_id,
+            association.brand_id AS association_brand_id,
+            association.facet_project_id AS association_facet_project_id,
+            association.design_revision_id AS association_design_revision_id,
+            association.design_revision_sha256 AS association_design_revision_sha256,
+            association.frozen_evidence_sha256 AS association_frozen_evidence_sha256,
+            association.roof_job_id, association.customer_quote_id,
+            association.association_anchor_sha256
+       FROM facet_customer_approval_events AS event
+       LEFT JOIN facet_design_evidence_associations AS association
+         ON association.event_id = event.event_id
        LEFT JOIN uncertain_attempts AS uncertainty
          ON uncertainty.event_id = event.event_id
        WHERE NOT EXISTS (
          SELECT 1
-         FROM facet_design_projection_attempts AS attempt
+         FROM facet_customer_approval_projection_attempts AS attempt
          WHERE attempt.event_id = event.event_id AND attempt.outcome = 'projected'
        )
        AND NOT EXISTS (
          SELECT 1
-         FROM facet_design_projection_attempts AS attempt
+         FROM facet_customer_approval_projection_attempts AS attempt
          WHERE attempt.event_id = event.event_id AND attempt.outcome = 'rejected_frappe'
        )
        AND NOT (
-         configured.event_id IS NULL
+         association.event_id IS NULL
          AND EXISTS (
            SELECT 1
-           FROM facet_design_projection_attempts AS attempt
+           FROM facet_customer_approval_projection_attempts AS attempt
            WHERE attempt.event_id = event.event_id
              AND attempt.outcome = 'held_missing_association'
          )
        )
        AND NOT (
-         configured.event_id IS NOT NULL
+         association.event_id IS NOT NULL
          AND EXISTS (
            SELECT 1
-           FROM facet_design_projection_attempts AS attempt
+           FROM facet_customer_approval_projection_attempts AS attempt
            WHERE attempt.event_id = event.event_id
              AND attempt.outcome = 'rejected_association_mismatch'
-             AND attempt.association_sha256 = configured.association_sha256
+             AND attempt.association_sha256 = association.association_anchor_sha256
          )
        )
        AND (
@@ -209,7 +215,7 @@ async function listProjectionCandidates(
        ORDER BY CASE WHEN uncertainty.event_id IS NULL THEN 0 ELSE 1 END,
                 event.occurred_at ASC, event.event_id ASC
        LIMIT ?`,
-  ).bind(...bindings, now.toISOString(), PROJECTION_BATCH_SIZE).all<StoredFacetDesignEvent>();
+  ).bind(now.toISOString(), PROJECTION_BATCH_SIZE).all<StoredFacetDesignEvent>();
   return result.results ?? [];
 }
 
@@ -235,16 +241,17 @@ async function appendOutcome(
   },
 ): Promise<void> {
   await env.DB.prepare(
-    `INSERT OR IGNORE INTO facet_design_projection_attempts
-       (attempt_id, event_id, tenant_id, facet_project_id, design_revision_id,
+    `INSERT OR IGNORE INTO facet_customer_approval_projection_attempts
+       (attempt_id, event_id, tenant_id, brand_id, facet_project_id, design_revision_id,
         design_revision_sha256, frozen_evidence_sha256, raw_key, raw_sha256,
         raw_content_length, occurred_at, received_at, association_sha256, roof_job_id,
         customer_quote_id, outcome, evidence_id, reconciliation_id, error_code, attempted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(
     `facet-projection-attempt:${crypto.randomUUID()}`,
     event.event_id,
     event.tenant_id,
+    event.brand_id,
     event.facet_project_id,
     event.design_revision_id,
     event.design_revision_sha256,
@@ -368,81 +375,13 @@ async function projectionSettings(env: Env): Promise<ProjectionSettings | null> 
   const hmacKey = env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY?.trim() ?? "";
   const frappeApiKey = env.FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY?.trim() ?? "";
   const frappeApiSecret = env.FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET?.trim() ?? "";
-  const associations = configuredAssociations(env);
-  if (hmacKey.length < 32 || !frappeApiKey || !frappeApiSecret || !associations) return null;
+  if (hmacKey.length < 32 || !frappeApiKey || !frappeApiSecret) return null;
   try {
     frappeBaseUrl(env as AppEnv);
   } catch {
     return null;
   }
-  const associationSha256 = new Map<string, string>();
-  for (const association of associations.values()) {
-    associationSha256.set(association.event_id, await sha256Hex(canonicalJson(association)));
-  }
-  return { hmacKey, frappeApiKey, frappeApiSecret, associations, associationSha256 };
-}
-
-function configuredAssociations(env: Env): Map<string, FacetProjectionAssociation> | null {
-  const raw = String(env.FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON ?? "").trim();
-  if (!raw) return null;
-  try {
-    const value = JSON.parse(raw) as unknown;
-    if (!isRecord(value) || !sameKeys(value, ["schema_version", "associations"])) return null;
-    if (
-      value.schema_version !== 1 || !Array.isArray(value.associations) ||
-      value.associations.length > MAX_PROJECTION_ASSOCIATIONS
-    ) return null;
-    const associations = new Map<string, FacetProjectionAssociation>();
-    for (const candidate of value.associations) {
-      const association = parseAssociation(candidate);
-      if (!association || associations.has(association.event_id)) return null;
-      associations.set(association.event_id, association);
-    }
-    return associations;
-  } catch {
-    return null;
-  }
-}
-
-function parseAssociation(value: unknown): FacetProjectionAssociation | null {
-  const keys = [
-    "event_id",
-    "tenant_id",
-    "facet_project_id",
-    "design_revision_id",
-    "design_revision_sha256",
-    "frozen_evidence_sha256",
-    "roof_job_id",
-    "customer_quote_id",
-  ] as const;
-  if (!isRecord(value) || !sameKeys(value, keys)) return null;
-  const eventId = validEventId(value.event_id) ? value.event_id : null;
-  const tenantId = validTenantId(value.tenant_id) ? value.tenant_id : null;
-  const facetProjectId = validEventId(value.facet_project_id) ? value.facet_project_id : null;
-  const designRevisionId = validEventId(value.design_revision_id) ? value.design_revision_id : null;
-  const designRevisionSha256 = validSha256(value.design_revision_sha256)
-    ? value.design_revision_sha256
-    : null;
-  const frozenEvidenceSha256 = validSha256(value.frozen_evidence_sha256)
-    ? value.frozen_evidence_sha256
-    : null;
-  const roofJobId = validOpaqueId(value.roof_job_id) ? value.roof_job_id : null;
-  const customerQuoteId = validOpaqueId(value.customer_quote_id) ? value.customer_quote_id : null;
-  if (
-    !eventId || !tenantId || !facetProjectId || !designRevisionId || !designRevisionSha256 ||
-    !frozenEvidenceSha256 || !roofJobId || !customerQuoteId ||
-    designRevisionId !== `facet-json-v1:${designRevisionSha256}`
-  ) return null;
-  return {
-    event_id: eventId,
-    tenant_id: tenantId,
-    facet_project_id: facetProjectId,
-    design_revision_id: designRevisionId,
-    design_revision_sha256: designRevisionSha256,
-    frozen_evidence_sha256: frozenEvidenceSha256,
-    roof_job_id: roofJobId,
-    customer_quote_id: customerQuoteId,
-  };
+  return { hmacKey, frappeApiKey, frappeApiSecret };
 }
 
 function associationMatchesEvent(
@@ -451,10 +390,35 @@ function associationMatchesEvent(
 ): boolean {
   return association.event_id === event.event_id &&
     association.tenant_id === event.tenant_id &&
+    association.brand_id === event.brand_id &&
     association.facet_project_id === event.facet_project_id &&
     association.design_revision_id === event.design_revision_id &&
     association.design_revision_sha256 === event.design_revision_sha256 &&
     association.frozen_evidence_sha256 === event.frozen_evidence_sha256;
+}
+
+function associationForEvent(
+  event: StoredFacetDesignEvent,
+): FacetProjectionAssociation | null {
+  if (
+    !event.association_event_id || !event.association_tenant_id ||
+    !event.association_brand_id || !event.association_facet_project_id ||
+    !event.association_design_revision_id ||
+    !event.association_design_revision_sha256 ||
+    !event.association_frozen_evidence_sha256 || !event.roof_job_id ||
+    !event.customer_quote_id
+  ) return null;
+  return {
+    event_id: event.association_event_id,
+    tenant_id: event.association_tenant_id,
+    brand_id: event.association_brand_id,
+    facet_project_id: event.association_facet_project_id,
+    design_revision_id: event.association_design_revision_id,
+    design_revision_sha256: event.association_design_revision_sha256,
+    frozen_evidence_sha256: event.association_frozen_evidence_sha256,
+    roof_job_id: event.roof_job_id,
+    customer_quote_id: event.customer_quote_id,
+  };
 }
 
 async function hmacBase64Url(secret: string, value: string): Promise<string> {
@@ -484,30 +448,12 @@ function errorCode(error: unknown): string {
   return "facet_design_projection_unexpected_error";
 }
 
-function validEventId(value: unknown): value is string {
-  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/.test(value);
-}
-
 function validOpaqueId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{2,139}$/.test(value);
 }
 
-function validTenantId(value: unknown): value is string {
-  return typeof value === "string" && /^[a-z0-9][a-z0-9-]{1,63}$/.test(value);
-}
-
-function validSha256(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function sameKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
 function canonicalJson(value: unknown): string {

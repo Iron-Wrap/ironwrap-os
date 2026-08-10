@@ -106,6 +106,11 @@ import {
 } from "./measurement-intake-store.ts";
 import { buildNewoOperationsReadModel } from "./newo-operations-read-model.ts";
 import { buildOwnerRuntimeReadModel } from "./operations.ts";
+import {
+  createFacetDesignAssociation,
+  listFacetDesignEvidenceRequiringAssociation,
+  parseFacetDesignAssociationInput,
+} from "./facet-design-association.ts";
 
 const MAX_ADMIN_BODY_BYTES = 8 * 1024;
 
@@ -270,6 +275,33 @@ export async function handleAuthenticatedRoute(
   }
   if (url.pathname.startsWith("/api/v1/customer-portal/links")) {
     return await handleCustomerPortalLinks(req, env, auth);
+  }
+  if (
+    req.method === "GET" &&
+    url.pathname === "/api/v1/facet-design-evidence/association-ready"
+  ) {
+    if (!officeRole(auth))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    try {
+      return privateAppJson({
+        evidence: await listFacetDesignEvidenceRequiringAssociation(
+          env,
+          auth.session.tenant_id,
+          parsedListLimit(url.searchParams.get("limit")),
+        ),
+      });
+    } catch {
+      return privateAppJson(
+        { error: "facet_design_association_store_unavailable" },
+        502,
+      );
+    }
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/facet-design-evidence/associations"
+  ) {
+    return await handleFacetDesignAssociation(req, env, auth);
   }
   if (
     req.method === "GET" &&
@@ -721,6 +753,49 @@ export async function handleAuthenticatedRoute(
     }
   }
   return appJson({ error: "not_found" }, 404);
+}
+
+async function handleFacetDesignAssociation(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!officeRole(auth))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const requestIdempotencyKey = idempotencyKey(req);
+  if (!requestIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const input = parseFacetDesignAssociationInput(parsed.value);
+  if (!input)
+    return privateAppJson({ error: "invalid_facet_design_association" }, 400);
+  try {
+    const result = await createFacetDesignAssociation(env, {
+      ...input,
+      tenantId: auth.session.tenant_id,
+      actorUserId: auth.session.user_id,
+      idempotencyKey: requestIdempotencyKey,
+      associatedAt: new Date().toISOString(),
+    });
+    if (result.kind === "rejected") {
+      return privateAppJson({ error: result.code }, result.status);
+    }
+    return privateAppJson(
+      {
+        association: result.association,
+        ...(result.kind === "replayed" ? { replayed: true } : {}),
+      },
+      result.kind === "created" ? 201 : 200,
+    );
+  } catch {
+    return privateAppJson(
+      { error: "facet_design_association_store_unavailable" },
+      502,
+    );
+  }
 }
 
 async function handleFieldWorkPackageRoute(

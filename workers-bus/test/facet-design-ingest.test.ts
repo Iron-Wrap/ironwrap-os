@@ -34,12 +34,32 @@ const EVENT = {
     estimate_outputs_sha256: "d".repeat(64),
   },
 };
+const CUSTOMER_APPROVAL_EVENT = {
+  event_id: "facet-event-v2-0001",
+  event_type: "facet.design.customer_approved.v2",
+  schema_version: 2,
+  occurred_at: "2026-07-31T12:00:00.000Z",
+  tenant_id: "facet-production",
+  brand_id: "ironwrap",
+  facet_project_id: "facet-project-0001",
+  design_revision: EVENT.design_revision,
+  approval_actor_type: "customer_capability",
+  capability_fingerprint: "e".repeat(64),
+  frozen_evidence: {
+    design: FROZEN_DESIGN,
+    approval: {
+      approved_at: "2026-07-31T12:00:00.000Z",
+      client_revision: { roofColorId: "charcoal" },
+    },
+  },
+};
 
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
 
   constructor() {
     this.raw.exec(readFileSync(new URL("../migrations/0030_facet_design_ingest.sql", import.meta.url), "utf8"));
+    this.raw.exec(readFileSync(new URL("../migrations/0034_facet_customer_approval_ingest.sql", import.meta.url), "utf8"));
   }
 
   prepare(sql: string): SqliteStatement {
@@ -168,14 +188,33 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function expectedReceipt(idempotentReplay = false): Record<string, unknown> {
+function expectedReceipt(
+  idempotentReplay = false,
+  event: {
+    event_id: string;
+    event_type: string;
+    frozen_evidence: unknown;
+    design_revision: { id: string; sha256: string };
+    brand_id?: string;
+    capability_fingerprint?: string;
+  } = EVENT,
+): Record<string, unknown> {
+  const customerApproval = event.event_type === "facet.design.customer_approved.v2";
   return {
     accepted: true,
-    event_id: EVENT.event_id,
+    event_id: event.event_id,
     status: "received",
-    raw_sha256: sha256(JSON.stringify(EVENT)),
-    frozen_evidence_sha256: sha256(canonicalJson(EVENT.frozen_evidence)),
-    design_revision: EVENT.design_revision,
+    raw_sha256: sha256(JSON.stringify(event)),
+    frozen_evidence_sha256: sha256(canonicalJson(event.frozen_evidence)),
+    design_revision: event.design_revision,
+    provenance: customerApproval
+      ? {
+        status: "customer_approved",
+        brand_id: event.brand_id,
+        approval_actor_type: "customer_capability",
+        capability_fingerprint: event.capability_fingerprint,
+      }
+      : { status: "provenance_unknown" },
     ...(idempotentReplay ? { idempotent_replay: true } : {}),
   };
 }
@@ -204,7 +243,7 @@ test("Facet design receipt is HMAC-authenticated, R2-first, idempotent, and nonc
     assert.deepEqual(await first.json(), expectedReceipt());
     assert.equal(raw.objects.size, 1);
     assert.equal(count(db, "facet_design_events"), 1);
-    assert.equal(count(db, "facet_design_ingest_nonces"), 1);
+    assert.equal(count(db, "facet_design_ingest_nonce_registry"), 1);
     assert.equal(fetchCalls, 0);
     const stored = db.raw.prepare("SELECT * FROM facet_design_events").get() as Record<string, unknown>;
     assert.equal(stored.event_type, EVENT.event_type);
@@ -221,17 +260,145 @@ test("Facet design receipt is HMAC-authenticated, R2-first, idempotent, and nonc
     assert.equal(exactRetry.status, 200);
     assert.deepEqual(await exactRetry.json(), expectedReceipt(true));
     assert.equal(count(db, "facet_design_events"), 1);
-    assert.equal(count(db, "facet_design_ingest_nonces"), 2);
+    assert.equal(count(db, "facet_design_ingest_nonce_registry"), 2);
     assert.equal(raw.putCalls, 1);
 
     const replay = await worker.fetch(signedRequest(EVENT, { nonce, timestamp }), env, {} as never);
     assert.equal(replay.status, 409);
     assert.deepEqual(await replay.json(), { error: "event_replay" });
     assert.equal(count(db, "facet_design_events"), 1);
-    assert.equal(count(db, "facet_design_ingest_nonces"), 2);
+    assert.equal(count(db, "facet_design_ingest_nonce_registry"), 2);
     assert.equal(fetchCalls, 0);
   } finally {
     globalThis.fetch = originalFetch;
+    db.raw.close();
+  }
+});
+
+test("Facet customer approval v2 stores explicit customer-capability provenance without commercial side effects", async () => {
+  const db = new SqliteD1();
+  const raw = new MemoryR2();
+  const env = testEnv(db, raw);
+  env.FACET_DESIGN_INGEST_TENANT_MAP_JSON = JSON.stringify({
+    "facet-production": { tenant_id: "ironwrap", brand_ids: ["ironwrap", "iroof"] },
+  });
+  try {
+    const nonce = randomBytes(32).toString("base64url");
+    const timestamp = String(Date.now());
+    const first = await worker.fetch(
+      signedRequest(CUSTOMER_APPROVAL_EVENT, { nonce, timestamp }),
+      env,
+      {} as never,
+    );
+    assert.equal(first.status, 202);
+    assert.deepEqual(await first.json(), expectedReceipt(false, CUSTOMER_APPROVAL_EVENT));
+    assert.equal(count(db, "facet_design_events"), 0);
+    assert.equal(count(db, "facet_customer_approval_events"), 1);
+    assert.equal(count(db, "facet_design_ingest_nonce_registry"), 1);
+    const stored = db.raw.prepare(
+      "SELECT * FROM facet_customer_approval_events",
+    ).get() as Record<string, unknown>;
+    assert.equal(stored.event_type, CUSTOMER_APPROVAL_EVENT.event_type);
+    assert.equal(stored.schema_version, 2);
+    assert.equal(stored.brand_id, "ironwrap");
+    assert.equal(stored.approval_actor_type, "customer_capability");
+    assert.equal(stored.capability_fingerprint, CUSTOMER_APPROVAL_EVENT.capability_fingerprint);
+    assert.match(String(stored.raw_key), /^facet-design\/v2\/facet-event-v2-0001\.json$/);
+
+    const exactRetry = await worker.fetch(
+      signedRequest(CUSTOMER_APPROVAL_EVENT),
+      env,
+      {} as never,
+    );
+    assert.equal(exactRetry.status, 200);
+    assert.deepEqual(await exactRetry.json(), expectedReceipt(true, CUSTOMER_APPROVAL_EVENT));
+    assert.equal(count(db, "facet_customer_approval_events"), 1);
+    assert.equal(count(db, "facet_design_ingest_nonce_registry"), 2);
+
+    const crossVersionId = await worker.fetch(
+      signedRequest({ ...EVENT, event_id: CUSTOMER_APPROVAL_EVENT.event_id }),
+      env,
+      {} as never,
+    );
+    assert.equal(crossVersionId.status, 409);
+    assert.deepEqual(await crossVersionId.json(), { error: "event_id_conflict" });
+    assert.equal(count(db, "facet_design_events"), 0);
+
+    const crossVersionReplay = await worker.fetch(
+      signedRequest(EVENT, { nonce, timestamp }),
+      env,
+      {} as never,
+    );
+    assert.equal(crossVersionReplay.status, 409);
+    assert.deepEqual(await crossVersionReplay.json(), { error: "event_replay" });
+    assert.equal(count(db, "facet_design_events"), 0);
+  } finally {
+    db.raw.close();
+  }
+});
+
+test("Facet customer approval v2 rejects downgrade, non-customer actors, PII, totals, and untrusted brands", async () => {
+  const db = new SqliteD1();
+  const raw = new MemoryR2();
+  const env = testEnv(db, raw);
+  env.FACET_DESIGN_INGEST_TENANT_MAP_JSON = JSON.stringify({
+    "facet-production": { tenant_id: "ironwrap", brand_ids: ["ironwrap"] },
+  });
+  try {
+    const { approval_actor_type: _ignoredActor, ...missingActor } = CUSTOMER_APPROVAL_EVENT;
+    const cases = [
+      missingActor,
+      { ...CUSTOMER_APPROVAL_EVENT, approval_actor_type: "owner_session" },
+      { ...CUSTOMER_APPROVAL_EVENT, capability_fingerprint: "short" },
+      {
+        ...CUSTOMER_APPROVAL_EVENT,
+        frozen_evidence: {
+          ...CUSTOMER_APPROVAL_EVENT.frozen_evidence,
+          customer_email: "customer@example.invalid",
+        },
+      },
+      {
+        ...CUSTOMER_APPROVAL_EVENT,
+        frozen_evidence: {
+          ...CUSTOMER_APPROVAL_EVENT.frozen_evidence,
+          estimate: { total: 1 },
+        },
+      },
+      {
+        ...CUSTOMER_APPROVAL_EVENT,
+        occurred_at: "2026-07-31T12:00:01.000Z",
+      },
+    ];
+    void _ignoredActor;
+    for (const candidate of cases) {
+      const response = await worker.fetch(signedRequest(candidate), env, {} as never);
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), { error: "invalid_event_body" });
+    }
+
+    const unknownBrand = await worker.fetch(
+      signedRequest({ ...CUSTOMER_APPROVAL_EVENT, brand_id: "unknown-brand" }),
+      env,
+      {} as never,
+    );
+    assert.equal(unknownBrand.status, 403);
+    assert.deepEqual(await unknownBrand.json(), { error: "event_brand_untrusted" });
+
+    env.FACET_DESIGN_INGEST_TENANT_MAP_JSON = JSON.stringify({
+      "facet-production": "ironwrap",
+    });
+    const legacyOnlyBinding = await worker.fetch(
+      signedRequest(CUSTOMER_APPROVAL_EVENT),
+      env,
+      {} as never,
+    );
+    assert.equal(legacyOnlyBinding.status, 403);
+    assert.deepEqual(await legacyOnlyBinding.json(), { error: "event_brand_untrusted" });
+
+    assert.equal(raw.objects.size, 0);
+    assert.equal(count(db, "facet_customer_approval_events"), 0);
+    assert.equal(count(db, "facet_design_ingest_nonce_registry"), 0);
+  } finally {
     db.raw.close();
   }
 });
@@ -271,7 +438,7 @@ test("Facet tenant mapping authorizes only explicit source-to-local pairs before
 
     assert.equal(raw.objects.size, 0);
     assert.equal(count(db, "facet_design_events"), 0);
-    assert.equal(count(db, "facet_design_ingest_nonces"), 0);
+    assert.equal(count(db, "facet_design_ingest_nonce_registry"), 0);
   } finally {
     db.raw.close();
   }
@@ -342,7 +509,7 @@ test("Facet design ingress rejects malformed, stale, bad-signature, and cross-he
 
     assert.equal(raw.objects.size, 0);
     assert.equal(count(db, "facet_design_events"), 0);
-    assert.equal(count(db, "facet_design_ingest_nonces"), 0);
+    assert.equal(count(db, "facet_design_ingest_nonce_registry"), 0);
   } finally {
     db.raw.close();
   }
@@ -359,7 +526,7 @@ test("Facet design ingress leaves D1 untouched when immutable R2 evidence storag
     assert.deepEqual(await response.json(), { error: "facet_design_ingest_unavailable" });
     assert.equal(raw.objects.size, 0);
     assert.equal(count(db, "facet_design_events"), 0);
-    assert.equal(count(db, "facet_design_ingest_nonces"), 0);
+    assert.equal(count(db, "facet_design_ingest_nonce_registry"), 0);
   } finally {
     db.raw.close();
   }
@@ -382,7 +549,7 @@ test("Facet design ingress is disabled by default and fails closed without its d
     assert.deepEqual(await unconfigured.json(), { error: "facet_design_ingest_unavailable" });
     assert.equal(raw.objects.size, 0);
     assert.equal(count(db, "facet_design_events"), 0);
-    assert.equal(count(db, "facet_design_ingest_nonces"), 0);
+    assert.equal(count(db, "facet_design_ingest_nonce_registry"), 0);
   } finally {
     db.raw.close();
   }

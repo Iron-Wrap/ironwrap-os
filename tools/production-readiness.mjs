@@ -61,6 +61,7 @@ const REQUIRED_ENV_NAMES = [
   "PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX",
   "PUBLIC_ESTIMATE_RANGE_RULES_JSON",
   "FACET_DESIGN_INGEST_ENABLED",
+  "FACET_DESIGN_INGEST_SOURCE_TENANT_ID",
   "FACET_DESIGN_INGEST_TENANT_MAP_JSON",
   "FACET_DESIGN_INGEST_HMAC_KEY",
   "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED",
@@ -142,6 +143,7 @@ const PUBLIC_ESTIMATE_ENABLE_TIME_ENV_NAMES = new Set([
 ]);
 
 const FACET_ENABLE_TIME_ENV_NAMES = new Set([
+  "FACET_DESIGN_INGEST_SOURCE_TENANT_ID",
   "FACET_DESIGN_INGEST_TENANT_MAP_JSON",
   "FACET_DESIGN_INGEST_HMAC_KEY",
   "FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY",
@@ -407,14 +409,15 @@ function validPublicEstimateRules(value, allowedBrands) {
   }
 }
 
-function validFacetTenantMap(value) {
+function validFacetTenantMap(value, expectedSourceTenantId) {
   try {
+    if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(expectedSourceTenantId)) return false;
     const bindings = JSON.parse(value);
     if (!bindings || typeof bindings !== "object" || Array.isArray(bindings)) return false;
     const entries = Object.entries(bindings);
     const allowedBrands = new Set(["ironwrap", "iroof"]);
-    return entries.length > 0 && entries.every(([sourceTenantId, binding]) => {
-      if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(sourceTenantId) || !binding ||
+    return entries.length === 1 && entries.every(([sourceTenantId, binding]) => {
+      if (sourceTenantId !== expectedSourceTenantId || !binding ||
           typeof binding !== "object" || Array.isArray(binding)) return false;
       const keys = Object.keys(binding).sort();
       if (keys.length !== 2 || keys[0] !== "brand_ids" || keys[1] !== "tenant_id" ||
@@ -904,9 +907,12 @@ export async function validateLiveEnv({
   if (facetDesignIngestEnabled) {
     checks.push(check(
       "live.facet.ingest_tenant_map",
-      validFacetTenantMap(env.FACET_DESIGN_INGEST_TENANT_MAP_JSON),
+      validFacetTenantMap(
+        env.FACET_DESIGN_INGEST_TENANT_MAP_JSON,
+        env.FACET_DESIGN_INGEST_SOURCE_TENANT_ID,
+      ),
       "Facet ingest maps reviewed source tenants to the local IronWrap brand allowlist",
-      "FACET_DESIGN_INGEST_TENANT_MAP_JSON must contain exact v2 tenant and IronWrap/iRoof brand bindings",
+      "Facet ingest must contain exactly the reviewed source tenant and its v2 IronWrap/iRoof brand binding",
     ));
   }
   if (facetQuoteRevisionEnabled) {

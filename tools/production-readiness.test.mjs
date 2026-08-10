@@ -1134,6 +1134,7 @@ test("live-env mode validates every enabled Facet integration rail", async () =>
   const env = validLiveEnv();
   Object.assign(env, {
     FACET_DESIGN_INGEST_ENABLED: "true",
+    FACET_DESIGN_INGEST_SOURCE_TENANT_ID: "facet-production",
     FACET_DESIGN_INGEST_TENANT_MAP_JSON: JSON.stringify({
       "facet-production": { tenant_id: "ironwrap", brand_ids: ["ironwrap", "iroof"] },
     }),
@@ -1153,7 +1154,9 @@ test("live-env mode validates every enabled Facet integration rail", async () =>
   const enabled = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
   assert.equal(enabled.ok, true, renderHuman(enabled));
 
-  env.FACET_DESIGN_INGEST_TENANT_MAP_JSON = JSON.stringify({ "facet-production": "ironwrap" });
+  env.FACET_DESIGN_INGEST_TENANT_MAP_JSON = JSON.stringify({
+    "facet-staging": { tenant_id: "ironwrap", brand_ids: ["ironwrap"] },
+  });
   env.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY = env.FACET_DESIGN_INGEST_HMAC_KEY;
   env.APP_QUOTE_REVISION_BROKER_URL = "http://quote-revision-broker.ironwrapexteriors.com";
   env.APP_QUOTE_REVISION_BROKER_TIMEOUT_MS = "999";

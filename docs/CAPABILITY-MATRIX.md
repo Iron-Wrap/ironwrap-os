@@ -24,12 +24,12 @@ Fresh checks on 2026-08-10 against this remediation branch established:
 
 | Contract | Result |
 |---|---|
-| Documentation | 43 registered documents; authority, privacy paths, review metadata, and internal links validated |
+| Documentation | 44 registered documents; authority, privacy paths, review metadata, and internal links validated |
 | Frappe model | 64 DocTypes: 48 top-level and 16 child |
 | Hermes policy | 8 roles validated against 179 implemented MCP tools |
 | Tenant isolation config | 2 tenant configs validated |
 | Newo release config | 5 staged tools, 31 operations, 20 production blockers represented |
-| Deployment contract | 234 checks passed, 0 failed |
+| Deployment contract | 235 checks passed, 0 failed |
 | D1 backup/restore contract | All 52 migration-defined production tables and 72 trigger bindings validated by the deployment verifier |
 | D1 migration chain | 35 migrations applied to an isolated local database |
 | PWA | 216 unit tests; typecheck, lint, build, and distribution checks passed |
@@ -37,7 +37,7 @@ Fresh checks on 2026-08-10 against this remediation branch established:
 | Worker | 339 tests and typecheck passed |
 | MCP | 121 tests across Frappe, bus, and Newo servers passed |
 | Frappe | 161 unit tests, Ruff, compileall, and wheel build passed |
-| Deployment/recovery tools | 73 tests passed |
+| Deployment/recovery tools | 74 tests passed |
 | Production Node dependencies | `npm audit --omit=dev` reported zero known vulnerabilities for app, Worker, and all three MCP packages |
 
 These are branch-local repository facts, not exact-commit CI, deployed, runtime, business-accepted,

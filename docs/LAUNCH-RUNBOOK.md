@@ -225,9 +225,11 @@ Treat Facet as a consumer-first rollout with separate, default-off release gates
 receipt capture, commercial association, Frappe projection, or quote revision into one "Facet is
 live" claim.
 
-1. Enable only `FACET_DESIGN_INGEST_ENABLED=true` first, with the reviewed v2 tenant/brand map and
-   migration state in the intended environment. The accepted artifact is still immutable evidence
-   only: it is not a quote, proposal, contract, payment, or accounting mutation.
+1. Enable only `FACET_DESIGN_INGEST_ENABLED=true` first, with
+   `FACET_DESIGN_INGEST_SOURCE_TENANT_ID` set to the reviewed Facet producer owner/tenant id, a v2
+   map containing exactly that source key, and migration state in the intended environment. The
+   accepted artifact is still immutable evidence only: it is not a quote, proposal, contract,
+   payment, or accounting mutation.
 2. Capture live v2 receipt proof in the named Worker, D1, and R2 environment before discussing any
    downstream cutover. A staging payload, repository fixture, or attachment transcript is not
    runtime proof.

@@ -58,6 +58,9 @@ export type AppEnv = Env & {
   APP_QUOTE_REVISION_BROKER_TIMEOUT_MS?: string;
   APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS?: string;
   QUOTE_REVISION_BROKER_SHARED_SECRET?: string;
+  // A durable Facet association may prepare the existing quote-revision approval rail only
+  // after this separate, false-by-default capability is explicitly enabled.
+  APP_FACET_QUOTE_REVISION_PREPARE_ENABLED?: string;
   // Production scheduling is a separate high-consequence authority from lead
   // triage and commercial quote revisions. Its broker identity, approver, and
   // recent-session limit must never inherit another mutation rail by default.

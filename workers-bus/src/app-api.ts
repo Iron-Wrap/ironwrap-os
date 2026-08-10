@@ -2659,7 +2659,7 @@ function facetQuoteRevisionCorrectionReason(
   associationSha256: string,
   operatorReason: string,
 ): string {
-  return `Facet customer-approved design event ${eventId} is bound by association ${associationSha256}. ${operatorReason}`;
+  return `Facet bearer-capability design event ${eventId} is bound by association ${associationSha256}. ${operatorReason}`;
 }
 
 function parseProductionScheduleApprovalPreparation(value: unknown): {

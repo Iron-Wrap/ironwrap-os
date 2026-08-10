@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS facet_customer_approval_events (
     AND frozen_evidence_sha256 NOT GLOB '*[^0-9a-f]*'
   ),
   approval_actor_type TEXT NOT NULL CHECK (approval_actor_type = 'customer_capability'),
+  identity_assurance TEXT NOT NULL CHECK (identity_assurance = 'bearer_capability_only'),
   capability_fingerprint TEXT NOT NULL CHECK (
     length(capability_fingerprint) = 64
     AND capability_fingerprint NOT GLOB '*[^0-9a-f]*'

@@ -37,6 +37,7 @@ export interface AssociationReadyFacetEvidence {
   occurred_at: string;
   received_at: string;
   provenance: "customer_approved";
+  identity_assurance: "bearer_capability_only";
   association_state: "required";
 }
 
@@ -60,6 +61,7 @@ interface StoredFacetCustomerApprovalEvent {
   frozen_evidence_sha256: string;
   occurred_at: string;
   received_at: string;
+  identity_assurance: "bearer_capability_only";
 }
 
 interface StoredFacetDesignAssociation extends FacetDesignAssociationAnchor {
@@ -151,7 +153,8 @@ export async function listFacetDesignEvidenceRequiringAssociation(
   const result = await env.DB.prepare(
     `SELECT event.event_id, event.tenant_id, event.brand_id, event.facet_project_id,
             event.design_revision_id, event.design_revision_sha256,
-            event.frozen_evidence_sha256, event.occurred_at, event.received_at
+            event.frozen_evidence_sha256, event.occurred_at, event.received_at,
+            event.identity_assurance
        FROM facet_customer_approval_events AS event
        LEFT JOIN facet_design_evidence_associations AS association
          ON association.event_id = event.event_id
@@ -159,6 +162,7 @@ export async function listFacetDesignEvidenceRequiringAssociation(
          AND event.event_type = 'facet.design.customer_approved.v2'
          AND event.schema_version = 2
          AND event.approval_actor_type = 'customer_capability'
+         AND event.identity_assurance = 'bearer_capability_only'
          AND association.event_id IS NULL
        ORDER BY event.occurred_at ASC, event.event_id ASC
        LIMIT ?`,
@@ -166,6 +170,7 @@ export async function listFacetDesignEvidenceRequiringAssociation(
   return (result.results ?? []).map((event) => ({
     ...event,
     provenance: "customer_approved",
+    identity_assurance: "bearer_capability_only",
     association_state: "required",
   }));
 }
@@ -367,12 +372,14 @@ async function customerApprovalEvent(
 ): Promise<StoredFacetCustomerApprovalEvent | null> {
   return await env.DB.prepare(
     `SELECT event_id, tenant_id, brand_id, facet_project_id, design_revision_id,
-            design_revision_sha256, frozen_evidence_sha256, occurred_at, received_at
+            design_revision_sha256, frozen_evidence_sha256, occurred_at, received_at,
+            identity_assurance
        FROM facet_customer_approval_events
        WHERE event_id = ?
          AND event_type = 'facet.design.customer_approved.v2'
          AND schema_version = 2
          AND approval_actor_type = 'customer_capability'
+         AND identity_assurance = 'bearer_capability_only'
        LIMIT 1`,
   ).bind(eventId).first<StoredFacetCustomerApprovalEvent>();
 }

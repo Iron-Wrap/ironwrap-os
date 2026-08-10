@@ -45,6 +45,7 @@ const CUSTOMER_APPROVAL_EVENT = {
   facet_project_id: "facet-project-0001",
   design_revision: EVENT.design_revision,
   approval_actor_type: "customer_capability",
+  identity_assurance: "bearer_capability_only",
   capability_fingerprint: "e".repeat(64),
   frozen_evidence: {
     design: FROZEN_DESIGN,
@@ -198,6 +199,7 @@ function expectedReceipt(
     design_revision: { id: string; sha256: string };
     brand_id?: string;
     capability_fingerprint?: string;
+    identity_assurance?: string;
   } = EVENT,
 ): Record<string, unknown> {
   const customerApproval = event.event_type === "facet.design.customer_approved.v2";
@@ -214,6 +216,7 @@ function expectedReceipt(
         brand_id: event.brand_id,
         approval_actor_type: "customer_capability",
         capability_fingerprint: event.capability_fingerprint,
+        identity_assurance: event.identity_assurance,
       }
       : { status: "provenance_unknown" },
     ...(idempotentReplay ? { idempotent_replay: true } : {}),
@@ -303,6 +306,7 @@ test("Facet customer approval v2 stores explicit customer-capability provenance 
     assert.equal(stored.schema_version, 2);
     assert.equal(stored.brand_id, "ironwrap");
     assert.equal(stored.approval_actor_type, "customer_capability");
+    assert.equal(stored.identity_assurance, "bearer_capability_only");
     assert.equal(stored.capability_fingerprint, CUSTOMER_APPROVAL_EVENT.capability_fingerprint);
     assert.match(String(stored.raw_key), /^facet-design\/v2\/facet-event-v2-0001\.json$/);
 
@@ -347,9 +351,12 @@ test("Facet customer approval v2 rejects downgrade, non-customer actors, PII, to
   });
   try {
     const { approval_actor_type: _ignoredActor, ...missingActor } = CUSTOMER_APPROVAL_EVENT;
+    const { identity_assurance: _ignoredAssurance, ...missingAssurance } = CUSTOMER_APPROVAL_EVENT;
     const cases = [
       missingActor,
+      missingAssurance,
       { ...CUSTOMER_APPROVAL_EVENT, approval_actor_type: "owner_session" },
+      { ...CUSTOMER_APPROVAL_EVENT, identity_assurance: "identity_verified" },
       { ...CUSTOMER_APPROVAL_EVENT, capability_fingerprint: "short" },
       {
         ...CUSTOMER_APPROVAL_EVENT,

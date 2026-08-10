@@ -38,6 +38,26 @@ Source-vs-landed reconciliation needs independent source counts. Authorized sour
 daily `{day, channel, count}` facts to `POST /admin/source-count`; do not synthesize counts from
 the same D1 envelopes being checked.
 
+## App Identity And Portal Control Plane
+
+`ADMIN_TOKEN` is not steady-state authority to mint office users. Keep app identity control split
+between first-owner bootstrap and authenticated office administration:
+
+1. `POST /admin/app-users/bootstrap` is a one-time, default-off ceremony for the first owner only.
+   It requires both the existing admin bearer and `APP_FIRST_OWNER_BOOTSTRAP_ENABLED=true`,
+   accepts only the strict owner bootstrap body, derives audit attribution server-side, inserts
+   only while the tenant still has zero `app_users`, and must return a stable denial on replay.
+   Turn the flag back off immediately after that first successful insert.
+2. Every later owner, ops, or field identity must be issued from an authenticated owner/ops office
+   session through the app API with CSRF protection. Admin bearer requests alone must fail for this
+   path.
+3. Customer portal links stay revocable only while the BFF, exact `APP_PUBLIC_ORIGIN`,
+   matching `APP_ALLOWED_ORIGINS`, and office session path remain healthy. A wrong origin or
+   disabled BFF must fail closed rather than silently widening acceptance.
+4. Contract-acceptance email is a separate backend gate. The portal must not advertise an
+   acceptance CTA unless the live configuration resolves the dedicated acceptance service/HMAC/API
+   pair as available.
+
 ## Incident Triage
 
 1. Record UTC start time, affected source/tenant, release commit, Worker deployment, image digest,

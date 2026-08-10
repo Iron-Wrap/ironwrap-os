@@ -135,10 +135,10 @@ function seedFacetAssociation(
     `INSERT INTO facet_customer_approval_events
        (event_id, event_type, schema_version, occurred_at, tenant_id, brand_id,
         facet_project_id, design_revision_id, design_revision_sha256,
-        frozen_evidence_sha256, approval_actor_type, capability_fingerprint,
+        frozen_evidence_sha256, approval_actor_type, capability_fingerprint, identity_assurance,
         raw_key, raw_sha256, raw_content_length, received_at)
      VALUES (?, 'facet.design.customer_approved.v2', 2, ?, ?, 'ironwrap', ?, ?, ?, ?,
-             'customer_capability', ?, ?, ?, 512, ?)`,
+             'customer_capability', ?, 'bearer_capability_only', ?, ?, 512, ?)`,
   ).run(
     FACET_EVENT_ID,
     "2026-08-10T12:00:00.000Z",

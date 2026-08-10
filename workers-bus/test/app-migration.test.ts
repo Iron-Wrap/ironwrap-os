@@ -313,6 +313,7 @@ test("0034 keeps Facet customer approvals provenance-bearing, append-only, and n
   assert.match(sql, /event_type = 'facet\.design\.customer_approved\.v2'/);
   assert.match(sql, /schema_version = 2/);
   assert.match(sql, /approval_actor_type = 'customer_capability'/);
+  assert.match(sql, /identity_assurance = 'bearer_capability_only'/);
   assert.match(sql, /capability_fingerprint TEXT NOT NULL/);
   assert.match(sql, /INSERT OR IGNORE INTO facet_design_ingest_nonce_registry/);
   assert.match(sql, /INSERT OR IGNORE INTO facet_design_event_identity_registry/);
@@ -352,6 +353,7 @@ test("0035 keeps Facet evidence associations operator-authored, immutable, and v
   assert.match(sql, /idempotency_key_sha256 TEXT NOT NULL UNIQUE/);
   assert.match(sql, /association_intent_sha256 TEXT NOT NULL/);
   assert.match(sql, /approval_actor_type = 'customer_capability'/);
+  assert.match(sql, /identity_assurance = 'bearer_capability_only'/);
   assert.match(sql, /actor\.role IN \('owner', 'ops'\)/);
   assert.doesNotMatch(
     schema,

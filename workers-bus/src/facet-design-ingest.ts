@@ -23,6 +23,7 @@ const CUSTOMER_APPROVAL_EVENT_KEYS = [
   "approval_actor_type",
   "brand_id",
   "capability_fingerprint",
+  "identity_assurance",
 ] as const;
 const CUSTOMER_APPROVAL_EVIDENCE_KEYS = ["approval", "design"] as const;
 const CUSTOMER_APPROVAL_KEYS = ["approved_at", "client_revision"] as const;
@@ -65,6 +66,7 @@ interface FacetDesignEvent {
   brandId: string | null;
   approvalActorType: "customer_capability" | null;
   capabilityFingerprint: string | null;
+  identityAssurance: "bearer_capability_only" | null;
 }
 
 interface FacetDesignReceipt extends Omit<FacetDesignEvent, "sourceTenantId"> {
@@ -99,6 +101,7 @@ interface StoredFacetCustomerApprovalEvent extends StoredFacetDesignEvent {
   brand_id: string;
   approval_actor_type: "customer_capability";
   capability_fingerprint: string;
+  identity_assurance: "bearer_capability_only";
 }
 
 interface FacetDesignAcceptance {
@@ -118,6 +121,7 @@ interface FacetDesignAcceptance {
       brand_id: string;
       approval_actor_type: "customer_capability";
       capability_fingerprint: string;
+      identity_assurance: "bearer_capability_only";
     };
   idempotent_replay?: true;
 }
@@ -179,6 +183,7 @@ export async function handleFacetDesignIngest(req: Request, env: Env): Promise<R
     brandId: event.brandId,
     approvalActorType: event.approvalActorType,
     capabilityFingerprint: event.capabilityFingerprint,
+    identityAssurance: event.identityAssurance,
     rawKey: `facet-design/v${event.schemaVersion}/${event.eventId}.json`,
     rawSha256,
     rawContentLength: raw.bytes,
@@ -297,9 +302,9 @@ async function claimCustomerApprovalReceipt(
         `INSERT INTO facet_customer_approval_events
            (event_id, event_type, schema_version, occurred_at, tenant_id, brand_id,
             facet_project_id, design_revision_id, design_revision_sha256,
-            frozen_evidence_sha256, approval_actor_type, capability_fingerprint, raw_key,
-            raw_sha256, raw_content_length, received_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            frozen_evidence_sha256, approval_actor_type, capability_fingerprint,
+            identity_assurance, raw_key, raw_sha256, raw_content_length, received_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(event_id) DO NOTHING`,
       ).bind(
         receipt.eventId,
@@ -314,6 +319,7 @@ async function claimCustomerApprovalReceipt(
         receipt.frozenEvidenceSha256,
         receipt.approvalActorType,
         receipt.capabilityFingerprint,
+        receipt.identityAssurance,
         receipt.rawKey,
         receipt.rawSha256,
         receipt.rawContentLength,
@@ -381,8 +387,8 @@ async function getCustomerApprovalReceipt(
   return await env.DB.prepare(
     `SELECT event_id, event_type, schema_version, occurred_at, tenant_id, brand_id,
             facet_project_id, design_revision_id, design_revision_sha256,
-            frozen_evidence_sha256, approval_actor_type, capability_fingerprint, raw_key,
-            raw_sha256, raw_content_length
+            frozen_evidence_sha256, approval_actor_type, capability_fingerprint,
+            identity_assurance, raw_key, raw_sha256, raw_content_length
        FROM facet_customer_approval_events WHERE event_id = ? LIMIT 1`,
   ).bind(eventId).first<StoredFacetCustomerApprovalEvent>();
 }
@@ -419,6 +425,7 @@ async function durableAcceptance(
           brand_id: (stored as StoredFacetCustomerApprovalEvent).brand_id,
           approval_actor_type: (stored as StoredFacetCustomerApprovalEvent).approval_actor_type,
           capability_fingerprint: (stored as StoredFacetCustomerApprovalEvent).capability_fingerprint,
+          identity_assurance: (stored as StoredFacetCustomerApprovalEvent).identity_assurance,
         }
         : { status: "provenance_unknown" },
       ...(idempotentReplay ? { idempotent_replay: true } : {}),
@@ -459,6 +466,7 @@ function sameCustomerApprovalReceipt(
     stored.frozen_evidence_sha256 === receipt.frozenEvidenceSha256 &&
     stored.approval_actor_type === receipt.approvalActorType &&
     stored.capability_fingerprint === receipt.capabilityFingerprint &&
+    stored.identity_assurance === receipt.identityAssurance &&
     stored.raw_key === receipt.rawKey &&
     stored.raw_sha256 === receipt.rawSha256 &&
     Number(stored.raw_content_length) === receipt.rawContentLength;
@@ -562,9 +570,15 @@ async function parseFacetDesignEvent(raw: string): Promise<FacetDesignEvent | nu
     const capabilityFingerprint = customerApproval && validSha256(value.capability_fingerprint)
       ? value.capability_fingerprint
       : null;
+    const identityAssurance = customerApproval && value.identity_assurance === "bearer_capability_only"
+      ? value.identity_assurance
+      : null;
     if (
       customerApproval &&
-      (!brandId || design.brandId !== brandId || !approvalActorType || !capabilityFingerprint)
+      (
+        !brandId || design.brandId !== brandId || !approvalActorType ||
+        !capabilityFingerprint || !identityAssurance
+      )
     ) return null;
     return {
       kind: customerApproval ? "customer_approval" : "legacy",
@@ -582,6 +596,7 @@ async function parseFacetDesignEvent(raw: string): Promise<FacetDesignEvent | nu
       brandId,
       approvalActorType,
       capabilityFingerprint,
+      identityAssurance,
     };
   } catch {
     return null;

@@ -83,6 +83,7 @@ BEGIN
       AND event.event_type = 'facet.design.customer_approved.v2'
       AND event.schema_version = 2
       AND event.approval_actor_type = 'customer_capability'
+      AND event.identity_assurance = 'bearer_capability_only'
       AND event.tenant_id = NEW.tenant_id
       AND event.brand_id = NEW.brand_id
       AND event.facet_project_id = NEW.facet_project_id

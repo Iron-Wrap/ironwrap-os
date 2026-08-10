@@ -556,7 +556,7 @@ async function sendChallengeEmail(
   return await sendGmail(
     env,
     prepared.email,
-    "Confirm your IronWrap contract acceptance",
+    "Confirm your contract acceptance",
     `<p>Hello ${greeting},</p><p><a href="${escapeHtml(href)}">Review and confirm your contract acceptance</a>.</p><p>This single-use link expires ${expiry}.</p>`,
   );
 }

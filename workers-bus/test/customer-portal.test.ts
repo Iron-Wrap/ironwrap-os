@@ -115,6 +115,10 @@ function env(db: SqliteD1): AppEnv {
     ERPNEXT_BASE_URL: "https://frappe.example.com",
     ERPNEXT_API_KEY: "frappe-read-key",
     ERPNEXT_API_SECRET: "frappe-read-secret",
+    APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED: "true",
+    CUSTOMER_CONTRACT_ACCEPTANCE_HMAC_KEY: "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
+    CUSTOMER_CONTRACT_ACCEPTANCE_FRAPPE_API_KEY: "acceptance-frappe-key",
+    CUSTOMER_CONTRACT_ACCEPTANCE_FRAPPE_API_SECRET: "acceptance-frappe-secret",
   } as AppEnv;
 }
 
@@ -450,6 +454,8 @@ test("customer portal is fragment-only, revocable, and projects no internal fiel
       (model.warranty as { coverage_years: number }).coverage_years,
       25,
     );
+    assert.equal(model.brand, "IronWrap Exteriors");
+    assert.equal(model.contract_acceptance_available, true);
     const serialised = JSON.stringify(model);
     for (const forbidden of [
       "raw/private-photo",
@@ -690,6 +696,73 @@ test("customer portal fails closed when its revocation control plane is unavaila
       {} as never,
     );
     assert.equal(misconfigured.status, 503);
+  } finally {
+    frappe.restore();
+  }
+});
+
+
+test("customer portal projects iRoof branding from the job record", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  const frappe = installFrappeMock();
+  frappe.rows["Roof Job"][0] = {
+    ...frappe.rows["Roof Job"][0],
+    brand: "iroof",
+    job_number: "IR-2026-100",
+  };
+  try {
+    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
+    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
+    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
+
+    const resolved = await worker.fetch(resolveRequest(token), appEnv as never, {} as never);
+    assert.equal(resolved.status, 200);
+    const model = (await resolved.json()) as Record<string, unknown>;
+    assert.equal(model.brand, "iRoof Alberta");
+  } finally {
+    frappe.restore();
+  }
+});
+
+test("customer portal withholds contract acceptance when the backend flow is disabled", async () => {
+  const db = new SqliteD1();
+  const appEnv = {
+    ...env(db),
+    APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED: "false",
+  } as AppEnv;
+  const frappe = installFrappeMock();
+  try {
+    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
+    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
+    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
+
+    const resolved = await worker.fetch(resolveRequest(token), appEnv as never, {} as never);
+    assert.equal(resolved.status, 200);
+    const model = (await resolved.json()) as Record<string, unknown>;
+    assert.equal(model.contract_acceptance_available, false);
+  } finally {
+    frappe.restore();
+  }
+});
+
+
+test("customer portal withholds contract acceptance when the backend flow is misconfigured", async () => {
+  const db = new SqliteD1();
+  const appEnv = {
+    ...env(db),
+    CUSTOMER_CONTRACT_ACCEPTANCE_HMAC_KEY: "",
+  } as AppEnv;
+  const frappe = installFrappeMock();
+  try {
+    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
+    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
+    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
+
+    const resolved = await worker.fetch(resolveRequest(token), appEnv as never, {} as never);
+    assert.equal(resolved.status, 200);
+    const model = (await resolved.json()) as Record<string, unknown>;
+    assert.equal(model.contract_acceptance_available, false);
   } finally {
     frappe.restore();
   }

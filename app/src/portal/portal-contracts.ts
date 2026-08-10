@@ -7,6 +7,7 @@ export const customerPortalResponseSchema = z
   .object({
     version: z.literal(1),
     brand: z.string(),
+    contract_acceptance_available: z.boolean(),
     source_updated_at: nullableText,
     read_model_generated_at: z.string(),
     job: z

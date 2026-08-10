@@ -59,12 +59,12 @@ export function CustomerContractAcceptancePage() {
         <CardContent>
           {state === "accepted" ? (
             <p className="text-sm font-semibold text-success" role="status">
-              Your acceptance was recorded. IronWrap will retain the verified receipt with your
-              project record.
+              Your acceptance was recorded. We will retain the verified receipt with your project
+              record.
             </p>
           ) : state === "uncertain" ? (
             <p className="text-sm font-semibold text-warning" role="status">
-              Your confirmation needs reconciliation. Please do not submit it again; IronWrap will
+              Your confirmation needs reconciliation. Please do not submit it again; we will
               verify the recorded result.
             </p>
           ) : (
@@ -92,7 +92,7 @@ export function CustomerContractAcceptancePage() {
                 />
                 <span>
                   I confirm that I am authorized to accept the current proposal shown in my private
-                  IronWrap project portal.
+                  project portal.
                 </span>
               </label>
               <Button
@@ -104,7 +104,7 @@ export function CustomerContractAcceptancePage() {
               {state === "error" ? (
                 <p className="text-sm font-semibold text-danger" role="alert">
                   We could not record this confirmation. If the proposal changed, request a new link
-                  from your project portal; otherwise contact IronWrap.
+                  from your project portal; otherwise contact your project team.
                 </p>
               ) : null}
             </form>

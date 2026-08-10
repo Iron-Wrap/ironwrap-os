@@ -8,6 +8,7 @@ import worker from "../src/index.ts";
 
 const HMAC_SECRET = "facet-design-ingest-test-secret-longer-than-thirty-two-characters";
 const FROZEN_DESIGN = {
+  brandId: "ironwrap",
   geometry: {
     planes: [{ id: "roof-plane-a", pitch: "6:12", area_square_meters: 143.25 }],
     perimeter_meters: 58.4,
@@ -368,6 +369,10 @@ test("Facet customer approval v2 rejects downgrade, non-customer actors, PII, to
         ...CUSTOMER_APPROVAL_EVENT,
         occurred_at: "2026-07-31T12:00:01.000Z",
       },
+      {
+        ...CUSTOMER_APPROVAL_EVENT,
+        brand_id: "iroof",
+      },
     ];
     void _ignoredActor;
     for (const candidate of cases) {
@@ -376,8 +381,21 @@ test("Facet customer approval v2 rejects downgrade, non-customer actors, PII, to
       assert.deepEqual(await response.json(), { error: "invalid_event_body" });
     }
 
+    const unknownBrandDesign = { ...FROZEN_DESIGN, brandId: "unknown-brand" };
+    const unknownBrandSha256 = sha256(canonicalJson(unknownBrandDesign));
     const unknownBrand = await worker.fetch(
-      signedRequest({ ...CUSTOMER_APPROVAL_EVENT, brand_id: "unknown-brand" }),
+      signedRequest({
+        ...CUSTOMER_APPROVAL_EVENT,
+        brand_id: "unknown-brand",
+        design_revision: {
+          id: `facet-json-v1:${unknownBrandSha256}`,
+          sha256: unknownBrandSha256,
+        },
+        frozen_evidence: {
+          ...CUSTOMER_APPROVAL_EVENT.frozen_evidence,
+          design: unknownBrandDesign,
+        },
+      }),
       env,
       {} as never,
     );

@@ -401,8 +401,8 @@ Before enabling the BFF in the intended Cloudflare account:
 
 1. Apply the exact D1 migration sequence remotely, including `0028_work_package_actions.sql`, then
    run the Frappe app migration so legacy Lead Envelopes become explicit `Unknown` triage rows.
-   Verify `/ready` against the intended database. The 34-table backup/restore inventory must be
-   deployed with the same release.
+   Verify `/ready` against the intended database. The migration-derived 52-table/72-trigger
+   backup-and-restore inventory must be deployed with the same release.
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
    `APP_ALLOWED_ORIGINS` to that exact origin (or an explicit, reviewed comma-separated set).
@@ -634,8 +634,8 @@ CRON_TZ=UTC
 `backup-d1-to-r2.sh` is bound to Cloudflare account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
-the SQL into isolated SQLite, checks integrity and all 34 release-state tables,
-plus the 43 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
+the SQL into isolated SQLite, checks integrity and all 52 release-state tables,
+plus the 72 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
 locally, uploads immutably, remotely checks the objects, and publishes
 `IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
 `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Never discover or infer `latest`.
@@ -662,7 +662,7 @@ For the launch remote drill, create a fresh empty D1 database named
 `ironwrap-restore-drill-<label>` in the same committed account and record its exact UUID. The
 name and UUID must both differ from production. Bind one approval to that exact pair; the script
 generates a target-only Wrangler config, rechecks emptiness, imports, then compares the complete
-table-to-row-count map for all 34 required tables and the exact 43 trigger-to-table bindings
+table-to-row-count map for all 52 required tables and the exact 72 trigger-to-table bindings
 with the locally verified SQLite export:
 
 ```bash
@@ -678,12 +678,10 @@ export D1_RESTORE_MODE=verify
 ```
 
 Any new D1 migration that adds a persistent table must update the required-table allowlist in
-both D1 scripts and their readiness tests before deployment. Any migration that adds or changes
-an invariant trigger must update the trigger inventory too. The current 34-table inventory includes
-the QuickBooks projection outbox, approval ledgers, governed-transition/outbox tables, and the `field_work_package_actions`
-ledger; it is enforced by the two scripts rather than this prose list. The 43 required triggers
-include source-count validation, immutable lead-ack receipts, the three approval ledgers, and the
-governed-transition outbox rules. Approval binding rewrites must raise
+both D1 scripts and their recovery tests before deployment; the readiness checker derives all
+52 tables and 72 trigger bindings from the migration chain and rejects any drift. The inventory
+includes QuickBooks, customer acceptance, Newo, measurement, Facet evidence/association, approval,
+governed-transition, and field Work Package ledgers. Approval binding rewrites must raise
 `ABORT, 'approval_request_binding_immutable'`; approval event updates/deletes must raise
 `ABORT, 'approval_request_events_immutable'` in both local export verification and remote drill proof.
 

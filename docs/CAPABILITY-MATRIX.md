@@ -20,24 +20,24 @@ the launch/readiness tooling and the named external authority.
 
 ## Repository baseline
 
-Fresh checks on 2026-07-30 against this migration branch established:
+Fresh checks on 2026-08-10 against this remediation branch established:
 
 | Contract | Result |
 |---|---|
 | Documentation | 43 registered documents; authority, privacy paths, review metadata, and internal links validated |
 | Frappe model | 64 DocTypes: 48 top-level and 16 child |
-| Hermes policy | 8 roles validated against 169 implemented MCP tools |
+| Hermes policy | 8 roles validated against 179 implemented MCP tools |
 | Tenant isolation config | 2 tenant configs validated |
 | Newo release config | 5 staged tools, 31 operations, 20 production blockers represented |
-| Deployment contract | 198 checks passed, 0 failed |
-| D1 backup/restore contract | 33 required production tables and 43 invariant-trigger bindings validated by the deployment verifier |
-| D1 migration chain | 28 migrations applied to an isolated local database |
-| PWA | 210 unit tests; typecheck, lint, format, build, and distribution checks passed |
-| PWA browser | 15 Playwright tests passed; 3 WebGL estimator cases were skipped by the configured suite |
-| Worker | 258 tests, typecheck, and explicit top-level-environment dry-run bundle passed |
-| MCP | 100 tests across Frappe, bus, and Newo servers passed |
-| Frappe | 102 unit tests passed |
-| Deployment/recovery tools | 72 tests passed |
+| Deployment contract | 216 checks passed, 0 failed |
+| D1 backup/restore contract | All 52 migration-defined production tables and 72 trigger bindings validated by the deployment verifier |
+| D1 migration chain | 35 migrations applied to an isolated local database |
+| PWA | 216 unit tests; typecheck, lint, build, and distribution checks passed |
+| PWA browser | Not rerun in this remediation; prior browser evidence is not current-head proof |
+| Worker | 339 tests and typecheck passed |
+| MCP | 121 tests across Frappe, bus, and Newo servers passed |
+| Frappe | 161 unit tests, Ruff, compileall, and wheel build passed |
+| Deployment/recovery tools | 73 tests passed |
 | Production Node dependencies | `npm audit --omit=dev` reported zero known vulnerabilities for app, Worker, and all three MCP packages |
 
 These are branch-local repository facts, not exact-commit CI, deployed, runtime, business-accepted,

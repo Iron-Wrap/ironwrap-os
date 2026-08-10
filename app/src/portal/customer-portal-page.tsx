@@ -9,9 +9,7 @@ import { loadCustomerPortal, requestCustomerContractAcceptanceChallenge } from "
 import type { CustomerPortalResponse } from "./portal-contracts";
 
 type PortalState =
-  | { kind: "loading" }
-  | { kind: "ready"; model: CustomerPortalResponse }
-  | { kind: "error" };
+  { kind: "loading" } | { kind: "ready"; model: CustomerPortalResponse } | { kind: "error" };
 
 export function CustomerPortalPage() {
   // Reuse the existing fragment scrubber: the token is never a route parameter, query key, or
@@ -147,13 +145,7 @@ function ProposalCard({
   );
 }
 
-function ContractAcceptanceRequest({
-  brand,
-  portalToken,
-}: {
-  brand: string;
-  portalToken: string;
-}) {
+function ContractAcceptanceRequest({ brand, portalToken }: { brand: string; portalToken: string }) {
   const [state, setState] = useState<"idle" | "pending" | "sent" | "error">("idle");
 
   async function requestChallenge() {

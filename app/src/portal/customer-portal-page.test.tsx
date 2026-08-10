@@ -104,6 +104,8 @@ describe("CustomerPortalView", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /email me a confirmation link/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /email me a confirmation link/i }),
+    ).toBeInTheDocument();
   });
 });

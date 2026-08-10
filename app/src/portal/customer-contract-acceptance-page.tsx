@@ -64,8 +64,8 @@ export function CustomerContractAcceptancePage() {
             </p>
           ) : state === "uncertain" ? (
             <p className="text-sm font-semibold text-warning" role="status">
-              Your confirmation needs reconciliation. Please do not submit it again; we will
-              verify the recorded result.
+              Your confirmation needs reconciliation. Please do not submit it again; we will verify
+              the recorded result.
             </p>
           ) : (
             <form className="space-y-5" onSubmit={submit}>

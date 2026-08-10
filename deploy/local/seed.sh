@@ -27,12 +27,25 @@ APP_ORIGIN="${APP_ORIGIN:-http://localhost:7100}"
 OWNER_EMAIL="owner@ironwrap.local"
 OWNER_COOKIE=""
 OWNER_CSRF=""
+BOOTSTRAP_BODY="$(mktemp)"
+CONSUME_HEADERS="$(mktemp)"
+CONSUME_BODY="$(mktemp)"
+cleanup_session_files() {
+  rm -f "$BOOTSTRAP_BODY" "$CONSUME_HEADERS" "$CONSUME_BODY"
+}
+trap cleanup_session_files EXIT
 
 # 1. bootstrap the first owner -----------------------------------------------
 step "bootstrapping the first owner"
-curl -sf -X POST "$BUS/admin/app-users/bootstrap" \
+BOOTSTRAP_STATUS="$(curl -sS -o "$BOOTSTRAP_BODY" -w '%{http_code}' \
+  -X POST "$BUS/admin/app-users/bootstrap" \
   -H "Authorization: Bearer $ADMIN_TOKEN" -H 'content-type: application/json' \
-  -d "{\"tenant_id\":\"ironwrap\",\"email\":\"$OWNER_EMAIL\",\"display_name\":\"Ilia Owner\"}" | j
+  -d "{\"tenant_id\":\"ironwrap\",\"email\":\"$OWNER_EMAIL\",\"display_name\":\"Ilia Owner\"}")"
+j < "$BOOTSTRAP_BODY"
+if [[ "$BOOTSTRAP_STATUS" != "200" && "$BOOTSTRAP_STATUS" != "409" ]]; then
+  echo "first-owner bootstrap failed with HTTP $BOOTSTRAP_STATUS" >&2
+  exit 1
+fi
 
 # 2. create a real owner session ---------------------------------------------
 step "creating an owner magic-link session from the dev outbox"
@@ -46,8 +59,6 @@ MAGIC_LINK_HREF="$(curl -sf "$BUS/admin/dev-outbox?limit=1" \
 MAGIC_LINK_TOKEN="$(python3 -c \
 'import sys, urllib.parse as u; fragment=u.urlsplit(sys.argv[1]).fragment; assert fragment.startswith("token="), "missing token fragment"; print(u.unquote(fragment.split("=",1)[1]))' \
   "$MAGIC_LINK_HREF")"
-CONSUME_HEADERS="$(mktemp)"
-CONSUME_BODY="$(mktemp)"
 curl -sfD "$CONSUME_HEADERS" -o "$CONSUME_BODY" -X POST "$BUS/api/v1/auth/magic-link/consume" \
   -H "Origin: $APP_ORIGIN" -H 'content-type: application/json' \
   -d "{\"token\":\"$MAGIC_LINK_TOKEN\"}"
@@ -56,7 +67,8 @@ OWNER_COOKIE="$(python3 -c \
   "$CONSUME_HEADERS")"
 OWNER_CSRF="$(python3 -c \
 'import json, sys; print(json.load(open(sys.argv[1]))["csrf_token"])' "$CONSUME_BODY")"
-rm -f "$CONSUME_HEADERS" "$CONSUME_BODY"
+cleanup_session_files
+trap - EXIT
 
 # 3. app users (steady-state office session) ---------------------------------
 step "provisioning ops and field users via owner session + csrf"

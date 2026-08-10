@@ -28,6 +28,7 @@ export type AppEnv = Env & {
   APP_PUBLIC_ORIGIN?: string;
   APP_ALLOWED_ORIGINS?: string;
   APP_ALLOW_INSECURE_LOCAL?: string;
+  APP_FIRST_OWNER_BOOTSTRAP_ENABLED?: string;
   // Exact comma-separated HTTPS origins allowed to supply office-only visual-model previews.
   // This is intentionally separate from browser CORS origins; unset means previews stay hidden.
   APP_VISUAL_PREVIEW_ALLOWED_ORIGINS?: string;

@@ -50,6 +50,7 @@ import {
 } from "./public-estimator.ts";
 import { ensureJobFolder, googleConfigured } from "./google.ts";
 import {
+  handleAdminFirstOwnerBootstrap,
   handleAppApi,
   recoverPendingLeadTriageOutbox,
 } from "./app-api.ts";
@@ -386,6 +387,9 @@ async function routeRequest(
       return await handleSourceCount(req, env);
     if (req.method === "POST" && url.pathname === "/admin/replay")
       return await handleReplay(req, env);
+    if (req.method === "POST" && url.pathname === "/admin/app-users/bootstrap") {
+      return await handleAdminFirstOwnerBootstrap(req, env);
+    }
     // Local-only development capture reader. 404 unless the Worker runs in explicit
     // localhost-only mode (APP_ALLOW_INSECURE_LOCAL="true"); never enabled in production.
     if (req.method === "GET" && url.pathname === "/admin/dev-outbox") {

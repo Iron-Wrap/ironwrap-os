@@ -58,6 +58,9 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
   assert.equal(config.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED, "false");
   assert.equal(config.env.local.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED, "false");
   assert.equal(config.env.staging.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED, "false");
+  assert.equal(config.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "false");
+  assert.equal(config.env.local.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "true");
+  assert.equal(config.env.staging.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "false");
   assert.equal(config.vars.FACET_DESIGN_INGEST_ENABLED, "false");
   assert.equal(config.env.local.vars.FACET_DESIGN_INGEST_ENABLED, "false");
   assert.equal(config.env.staging.vars.FACET_DESIGN_INGEST_ENABLED, "false");

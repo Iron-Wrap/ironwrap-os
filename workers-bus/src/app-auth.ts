@@ -151,6 +151,40 @@ export function parseProvisionAppUser(
   };
 }
 
+export function parseFirstOwnerBootstrap(
+  value: unknown,
+  env: AppEnv,
+): {
+  ok: true;
+  value: {
+    tenant_id: string;
+    email_normalized: string;
+    display_name: string;
+  };
+} | { ok: false; error: string } {
+  if (!isRecord(value)) return { ok: false, error: "invalid_body" };
+  const allowed = new Set(["tenant_id", "email", "display_name"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return { ok: false, error: "unexpected_field" };
+
+  const configuredTenant = configuredTenantId(env);
+  const tenantId = cleanText(value.tenant_id, 2, 64);
+  const email = normalizeEmail(value.email);
+  const displayName = cleanText(value.display_name, 1, 120);
+
+  if (!configuredTenant || tenantId !== configuredTenant) return { ok: false, error: "invalid_tenant" };
+  if (!email) return { ok: false, error: "invalid_email" };
+  if (!displayName) return { ok: false, error: "invalid_display_name" };
+
+  return {
+    ok: true,
+    value: {
+      tenant_id: tenantId,
+      email_normalized: email,
+      display_name: displayName,
+    },
+  };
+}
+
 export async function provisionAppUser(
   env: AppEnv,
   input: ProvisionAppUserInput,
@@ -165,6 +199,31 @@ export async function provisionAppUser(
     outcome: input.active ? "active" : "inactive",
     request,
     detailCode: `${input.role}:${input.provisioned_by}`,
+  });
+  return user;
+}
+
+export async function bootstrapFirstOwner(
+  env: AppEnv,
+  input: {
+    tenant_id: string;
+    email_normalized: string;
+    display_name: string;
+  },
+  req: Request,
+): Promise<AppUserRecord | null> {
+  const request = await authRequestContext(req, env);
+  const user = await authStore.bootstrapFirstOwnerAppUser(env, {
+    ...input,
+    provisioned_by: "system:first_owner_bootstrap",
+  });
+  await authStore.recordAuthAudit(env, {
+    tenantId: input.tenant_id,
+    userId: user?.user_id ?? null,
+    event: "user_bootstrap",
+    outcome: user ? "created" : "denied",
+    request,
+    detailCode: user ? "owner:first_owner_bootstrap" : "first_owner_bootstrap_completed",
   });
   return user;
 }

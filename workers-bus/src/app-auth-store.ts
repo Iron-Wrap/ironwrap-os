@@ -95,6 +95,46 @@ export async function upsertAppUser(env: Env, input: ProvisionAppUserInput): Pro
   return row;
 }
 
+export async function bootstrapFirstOwnerAppUser(
+  env: Env,
+  input: {
+    tenant_id: string;
+    email_normalized: string;
+    display_name: string;
+    provisioned_by: string;
+  },
+): Promise<AppUserRecord | null> {
+  const now = nowIso();
+  const candidateId = `appu_${crypto.randomUUID()}`;
+  const result = await env.DB.prepare(
+    `INSERT INTO app_users
+       (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id, active,
+        created_by, created_at, updated_at)
+     SELECT ?,?,?,?,?,?,?,?, ?, ?
+     WHERE NOT EXISTS (
+       SELECT 1 FROM app_users WHERE tenant_id = ? LIMIT 1
+     )`,
+  ).bind(
+    candidateId,
+    input.tenant_id,
+    input.email_normalized,
+    input.display_name,
+    "owner",
+    null,
+    1,
+    input.provisioned_by,
+    now,
+    now,
+    input.tenant_id,
+  ).run();
+  if (d1Changes(result) !== 1) return null;
+  return await env.DB.prepare(
+    `SELECT user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+            active, created_by, created_at, updated_at
+     FROM app_users WHERE tenant_id = ? AND email_normalized = ? LIMIT 1`,
+  ).bind(input.tenant_id, input.email_normalized).first<AppUserRecord>();
+}
+
 export async function replaceMagicLink(
   env: Env,
   input: {

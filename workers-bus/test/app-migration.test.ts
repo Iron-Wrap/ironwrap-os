@@ -201,6 +201,7 @@ test("0015 lead-ack receipts preserve provider-acceptance evidence without recip
 test("approval migrations avoid nested CASE statements in remote D1 trigger commands", async () => {
   const sql = await readFile(new URL("../migrations/0016_approval_requests.sql", import.meta.url), "utf8");
   const transitionKernelSql = await readFile(new URL("../migrations/0027_transition_kernel.sql", import.meta.url), "utf8");
+  const facetCustomerApprovalSql = await readFile(new URL("../migrations/0034_facet_customer_approval_ingest.sql", import.meta.url), "utf8");
   for (const migration of [
     "0016_approval_requests.sql",
     "0017_quote_revision_approval_requests.sql",
@@ -210,6 +211,7 @@ test("approval migrations avoid nested CASE statements in remote D1 trigger comm
     assert.doesNotMatch(migrationSql, /\bCASE\b/i);
     assert.match(migrationSql, /COALESCE\(NULLIF\(NEW\.state, 'executing'\), 'execution_claimed'\)/);
   }
+  assert.doesNotMatch(facetCustomerApprovalSql, /\bCASE\b/i);
   for (const code of [
     "approval_request_version_transition_required",
     "approval_request_transition_actor_required",

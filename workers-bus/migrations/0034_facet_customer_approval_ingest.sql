@@ -87,12 +87,13 @@ BEGIN
   INSERT OR IGNORE INTO facet_design_event_identity_registry
     (event_id, event_type, schema_version, registered_at)
   VALUES (NEW.event_id, NEW.event_type, NEW.schema_version, NEW.received_at);
-  SELECT CASE WHEN NOT EXISTS (
+  SELECT RAISE(ABORT, 'facet_design_event_identity_conflict')
+  WHERE NOT EXISTS (
     SELECT 1 FROM facet_design_event_identity_registry
     WHERE event_id = NEW.event_id
       AND event_type = NEW.event_type
       AND schema_version = NEW.schema_version
-  ) THEN RAISE(ABORT, 'facet_design_event_identity_conflict') END;
+  );
 END;
 
 CREATE TRIGGER IF NOT EXISTS facet_customer_approval_events_register_identity
@@ -101,12 +102,13 @@ BEGIN
   INSERT OR IGNORE INTO facet_design_event_identity_registry
     (event_id, event_type, schema_version, registered_at)
   VALUES (NEW.event_id, NEW.event_type, NEW.schema_version, NEW.received_at);
-  SELECT CASE WHEN NOT EXISTS (
+  SELECT RAISE(ABORT, 'facet_design_event_identity_conflict')
+  WHERE NOT EXISTS (
     SELECT 1 FROM facet_design_event_identity_registry
     WHERE event_id = NEW.event_id
       AND event_type = NEW.event_type
       AND schema_version = NEW.schema_version
-  ) THEN RAISE(ABORT, 'facet_design_event_identity_conflict') END;
+  );
 END;
 
 CREATE TABLE IF NOT EXISTS facet_design_ingest_nonce_registry (

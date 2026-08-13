@@ -55,13 +55,22 @@ verify_receipt_trigger_semantics() {
 verify_approval_trigger_semantics() {
   local database="$1"
   local label="$2"
-  local trigger_spec trigger_name expected_prefix expected_abort normalized_sql
+  local trigger_spec trigger_name expected_prefix expected_abort normalized_sql serialized_semantics
   local -a required_approval_trigger_semantics
 
-  IFS=',' read -r -a required_approval_trigger_semantics <<< "$REQUIRED_APPROVAL_TRIGGER_SEMANTICS"
+  serialized_semantics="${REQUIRED_APPROVAL_TRIGGER_SEMANTICS//),/);}"
+  IFS=';' read -r -a required_approval_trigger_semantics < <(printf '%s\n' "$serialized_semantics")
+  if (( ${#required_approval_trigger_semantics[@]} != 20 )); then
+    echo "error: $label approval-ledger trigger contract is internally inconsistent" >&2
+    return 1
+  fi
   for trigger_spec in "${required_approval_trigger_semantics[@]}"; do
     IFS='|' read -r trigger_name expected_prefix expected_abort <<< "$trigger_spec"
-    normalized_sql="$(sqlite3 "$database" "SELECT lower(replace(replace(replace(replace(sql, char(10), ''), char(13), ''), char(9), ''), ' ', '')) FROM sqlite_master WHERE type='trigger' AND name='$trigger_name';")"
+    if [[ -z "$trigger_name" || -z "$expected_prefix" || -z "$expected_abort" ]] || \
+        ! normalized_sql="$(sqlite3 "$database" "SELECT lower(replace(replace(replace(replace(sql, char(10), ''), char(13), ''), char(9), ''), ' ', '')) FROM sqlite_master WHERE type='trigger' AND name='$trigger_name';")"; then
+      echo "error: $label approval-ledger trigger contract is malformed: $trigger_name" >&2
+      return 1
+    fi
     if [[ "$normalized_sql" != *"$expected_prefix"* || "$normalized_sql" != *"$expected_abort"* ]]; then
       echo "error: $label does not enforce immutable approval-ledger trigger semantics: $trigger_name" >&2
       return 1
@@ -208,7 +217,7 @@ if [[ "$(sqlite3 "$verification_db" 'PRAGMA integrity_check;')" != "ok" ]]; then
   echo "error: isolated SQLite integrity check failed" >&2
   exit 1
 fi
-IFS=',' read -r -a required_tables <<< "$REQUIRED_TABLES"
+IFS=',' read -r -a required_tables < <(printf '%s\n' "$REQUIRED_TABLES")
 if (( ${#required_tables[@]} != REQUIRED_TABLE_COUNT )); then
   echo "error: D1 backup required-table contract is internally inconsistent" >&2
   exit 1
@@ -220,7 +229,7 @@ for table_name in "${required_tables[@]}"; do
     exit 1
   fi
 done
-IFS=',' read -r -a required_trigger_bindings <<< "$REQUIRED_TRIGGER_BINDINGS"
+IFS=',' read -r -a required_trigger_bindings < <(printf '%s\n' "$REQUIRED_TRIGGER_BINDINGS")
 if (( ${#required_trigger_bindings[@]} != REQUIRED_TRIGGER_COUNT )); then
   echo "error: D1 backup required-trigger contract is internally inconsistent" >&2
   exit 1

@@ -452,7 +452,7 @@ function d1TriggerSql(name, table, {
   }
   if (name === weakApprovalTrigger) {
     const timing = name.endsWith("_delete") ? "DELETE" : "UPDATE";
-    return `CREATE TRIGGER ${name} BEFORE ${timing} ON ${table} BEGIN SELECT 1; END;`;
+    return `CREATE TRIGGER ${name} BEFORE ${timing} ON ${table} BEGIN SELECT RAISE(ABORT, 'wrong_approval_ledger_abort'); END;`;
   }
   if (name === wrongTimingApprovalTrigger) {
     const [bindingAbort, eventAbort, deleteAbort] = name.startsWith("prevent_governed_transition_outbox_event_")
@@ -664,13 +664,17 @@ exit 0
 
 async function mockD1RestoreEnvironment(t, {
   badChecksum = false,
-  targetCount = 0,
+  targetObject = "",
+  preflightResponseMode = "normal",
   signalDownload = false,
   missingTable = "",
   rowMismatch = false,
+  rowResultMode = "normal",
   triggerMismatch = false,
+  triggerResultMode = "normal",
   triggerSemanticsMismatch = false,
   quoteRevisionTriggerSemanticsMismatch = false,
+  productionScheduleTriggerSemanticsMismatch = false,
   governedTransitionTriggerSemanticsMismatch = false,
   missingTrigger = "",
   weakReceiptTrigger = "",
@@ -685,6 +689,28 @@ async function mockD1RestoreEnvironment(t, {
   const remote = path.join(root, "remote");
   const packageDir = path.join(root, "package");
   await Promise.all([mkdir(bin), mkdir(state), mkdir(remote), mkdir(packageDir)]);
+  const targetDatabase = path.join(state, "target.sqlite3");
+  const targetSchema = targetObject === "wrong_type_cf_kv"
+    ? [`CREATE VIEW "_cf_KV" AS SELECT 1 AS value;`]
+    : [
+        `CREATE TABLE "_cf_KV" (key TEXT PRIMARY KEY, value BLOB);`,
+        ...(targetObject === "user_table" ? [`CREATE TABLE user_data (id INTEGER);`] : []),
+        ...(targetObject === "user_view" ? [`CREATE VIEW user_view AS SELECT 1 AS value;`] : []),
+        ...(targetObject === "user_trigger" ? [
+          `CREATE TABLE trigger_source (id INTEGER);`,
+          `CREATE TRIGGER user_trigger AFTER INSERT ON trigger_source BEGIN SELECT 1; END;`,
+        ] : []),
+        ...(targetObject === "user_index" ? [
+          `CREATE TABLE indexed_source (id INTEGER);`,
+          `CREATE INDEX user_index ON indexed_source (id);`,
+        ] : []),
+        ...(targetObject === "unexpected_cf" ? [`CREATE TABLE "_cf_OTHER" (id INTEGER);`] : []),
+      ];
+  const targetSchemaRun = spawnSync("sqlite3", ["-bail", targetDatabase], {
+    encoding: "utf8",
+    input: targetSchema.join("\n"),
+  });
+  assert.equal(targetSchemaRun.status, 0, targetSchemaRun.stderr);
   const staged = await stageD1Script(root, D1_RESTORE);
   const stamp = "20260710T120000Z";
   const sqlFile = `ironwrap-d1-ironwrap-bus-${stamp}.sql`;
@@ -730,14 +756,6 @@ async function mockD1RestoreEnvironment(t, {
   await writeFile(identity, "AGE-SECRET-KEY-MOCK\n", { mode: 0o600 });
   await chmod(identity, 0o600);
 
-  const matchingRows = JSON.stringify([{
-    results: REQUIRED_D1_TABLES.map((table_name) => ({ table_name, row_count: 1 })),
-    success: true,
-  }]);
-  const mismatchedRows = JSON.stringify([{
-    results: REQUIRED_D1_TABLES.map((table_name, index) => ({ table_name, row_count: index === 0 ? 2 : 1 })),
-    success: true,
-  }]);
   const matchingTriggers = JSON.stringify([{
     results: REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({
       trigger_name,
@@ -745,6 +763,7 @@ async function mockD1RestoreEnvironment(t, {
       trigger_sql: d1TriggerSql(trigger_name, table_name),
     })),
     success: true,
+    meta: { changes: 0, changed_db: false },
   }]);
   const mismatchedTriggers = JSON.stringify([{
     results: REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name], index) => ({
@@ -753,6 +772,7 @@ async function mockD1RestoreEnvironment(t, {
       trigger_sql: d1TriggerSql(trigger_name, table_name),
     })),
     success: true,
+    meta: { changes: 0, changed_db: false },
   }]);
   const semanticallyMismatchedTriggers = JSON.stringify([{
     results: REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({
@@ -761,6 +781,7 @@ async function mockD1RestoreEnvironment(t, {
       trigger_sql: d1TriggerSql(trigger_name, table_name, { wrongTimingReceiptTrigger: "prevent_lead_ack_receipts_update" }),
     })),
     success: true,
+    meta: { changes: 0, changed_db: false },
   }]);
   const quoteRevisionSemanticallyMismatchedTriggers = JSON.stringify([{
     results: REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({
@@ -769,6 +790,16 @@ async function mockD1RestoreEnvironment(t, {
       trigger_sql: d1TriggerSql(trigger_name, table_name, { wrongTimingApprovalTrigger: "prevent_quote_revision_approval_event_update" }),
     })),
     success: true,
+    meta: { changes: 0, changed_db: false },
+  }]);
+  const productionScheduleSemanticallyMismatchedTriggers = JSON.stringify([{
+    results: REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({
+      trigger_name,
+      table_name,
+      trigger_sql: d1TriggerSql(trigger_name, table_name, { wrongTimingApprovalTrigger: "prevent_production_schedule_approval_event_update" }),
+    })),
+    success: true,
+    meta: { changes: 0, changed_db: false },
   }]);
   const governedTransitionSemanticallyMismatchedTriggers = JSON.stringify([{
     results: REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({
@@ -777,6 +808,7 @@ async function mockD1RestoreEnvironment(t, {
       trigger_sql: d1TriggerSql(trigger_name, table_name, { wrongTimingApprovalTrigger: "prevent_governed_transition_outbox_event_update" }),
     })),
     success: true,
+    meta: { changes: 0, changed_db: false },
   }]);
 
   await writeExecutable(path.join(staged.workerBin, "wrangler"), `#!/usr/bin/env bash
@@ -784,24 +816,63 @@ set -euo pipefail
 if [[ "\${1:-}" == '--version' ]]; then printf '4.110.0\\n'; exit 0; fi
 [[ "\${CLOUDFLARE_API_TOKEN:-}" == 'cloudflare_d1_restore_write_91e6a4c8f02b735d' ]] || exit 77
 printf '%s\\n' "$*" >> "$MOCK_STATE/wrangler.log"
-file=''; config=''; json=0
+file=''; config=''; command=''; json=0
 while (( $# > 0 )); do
   case "$1" in
     --file) file="$2"; shift 2 ;;
     --config) config="$2"; shift 2 ;;
+    --command) command="$2"; shift 2 ;;
     --json) json=1; shift ;;
     *) shift ;;
   esac
 done
 if [[ -n "$config" ]]; then /bin/cp "$config" "$MOCK_STATE/target-config.json"; fi
+if [[ -n "$command" ]]; then printf '%s\\n' "\${#command}" >> "$MOCK_STATE/command-lengths.log"; fi
 if (( json == 1 )); then
-  if [[ "$file" == *target-preflight.sql ]]; then
-    printf '[{"results":[{"table_count":%s}],"success":true}]\\n' "$MOCK_TARGET_COUNT"
-  elif [[ "$file" == *target-verify.sql ]]; then
-    if [[ "$MOCK_ROW_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedRows}'; else printf '%s\\n' '${matchingRows}'; fi
-  elif [[ "$file" == *target-trigger-verify.sql ]]; then
-    if [[ "$MOCK_GOVERNED_TRANSITION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${governedTransitionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_QUOTE_REVISION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${quoteRevisionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${semanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedTriggers}'; else printf '%s\\n' '${matchingTriggers}'; fi
+  if [[ -n "$file" ]]; then
+    printf 'Checking remote upload status...\\n[{"success":true,"result":{"total_queries":1}}]\\n'
+    exit 0
   fi
+  if [[ "$command" == *cloudflare_internal_table_count* ]]; then
+    printf '%s\\n' "$command" > "$MOCK_STATE/preflight-command.sql"
+    if [[ "$MOCK_PREFLIGHT_RESPONSE_MODE" == 'progress' ]]; then
+      printf 'Checking remote query status...\\n[{"results":[],"success":true,"meta":{"changes":0,"changed_db":false}}]\\n'
+    elif [[ "$MOCK_PREFLIGHT_RESPONSE_MODE" == 'bulk' ]]; then
+      printf '[{"success":true,"result":{"total_queries":1}}]\\n'
+    else
+      results="$(sqlite3 -json "$MOCK_TARGET_DATABASE" "$command")"
+      printf '[{"results":%s,"success":true,"meta":{"changes":0,"changed_db":false}}]\\n' "$results"
+    fi
+  elif [[ "$command" == *" AS table_name, COUNT(*) AS row_count FROM "* ]]; then
+    IFS="'" read -r _ table_name _ <<< "$command"
+    result_table="$table_name"
+    row_count=1
+    success=true
+    results_mode=one
+    if [[ "$MOCK_ROW_MISMATCH" == '1' && "$table_name" == '${REQUIRED_D1_TABLES[0]}' ]]; then row_count=2; fi
+    if [[ "$MOCK_ROW_RESULT_MODE" == 'missing' && "$table_name" == '${REQUIRED_D1_TABLES.at(-1)}' ]]; then results_mode=missing; fi
+    if [[ "$MOCK_ROW_RESULT_MODE" == 'duplicate' && "$table_name" == '${REQUIRED_D1_TABLES[1]}' ]]; then result_table='${REQUIRED_D1_TABLES[0]}'; fi
+    if [[ "$MOCK_ROW_RESULT_MODE" == 'error' && "$table_name" == '${REQUIRED_D1_TABLES.at(-1)}' ]]; then success=false; fi
+    if [[ "$results_mode" == 'missing' ]]; then
+      printf '[{"results":[],"success":%s,"meta":{"changes":0,"changed_db":false}}]\\n' "$success"
+    else
+      printf '[{"results":[{"table_name":"%s","row_count":%s}],"success":%s,"meta":{"changes":0,"changed_db":false}}]\\n' "$result_table" "$row_count" "$success"
+    fi
+  elif [[ "$command" == *" AS trigger_name"* ]]; then
+    if [[ "$MOCK_TRIGGER_RESULT_MODE" == 'error' ]]; then
+      printf '[{"results":[],"success":false,"meta":{"changes":0,"changed_db":false}}]\\n'
+    elif [[ "$MOCK_TRIGGER_RESULT_MODE" == 'missing' ]]; then
+      printf '%s\\n' '${JSON.stringify([{ results: REQUIRED_D1_TRIGGER_BINDINGS.slice(1).map(([trigger_name, table_name]) => ({ trigger_name, table_name, trigger_sql: d1TriggerSql(trigger_name, table_name) })), success: true, meta: { changes: 0, changed_db: false } }])}'
+    elif [[ "$MOCK_TRIGGER_RESULT_MODE" == 'duplicate' ]]; then
+      printf '%s\\n' '${JSON.stringify([{ results: [...REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({ trigger_name, table_name, trigger_sql: d1TriggerSql(trigger_name, table_name) })), { trigger_name: REQUIRED_D1_TRIGGER_BINDINGS[0][0], table_name: REQUIRED_D1_TRIGGER_BINDINGS[0][1], trigger_sql: d1TriggerSql(...REQUIRED_D1_TRIGGER_BINDINGS[0]) }], success: true, meta: { changes: 0, changed_db: false } }])}'
+    elif [[ "$MOCK_GOVERNED_TRANSITION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${governedTransitionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_PRODUCTION_SCHEDULE_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${productionScheduleSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_QUOTE_REVISION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${quoteRevisionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${semanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedTriggers}'; else printf '%s\\n' '${matchingTriggers}'; fi
+  else
+    exit 2
+  fi
+elif [[ -n "$file" ]]; then
+  : > "$MOCK_STATE/imported"
+else
+  exit 2
 fi
 `);
   await writeExecutable(path.join(bin, "flock"), "#!/usr/bin/env bash\nexit 0\n");
@@ -843,12 +914,16 @@ esac
       TMPDIR: root,
       MOCK_STATE: state,
       MOCK_REMOTE: remote,
-      MOCK_TARGET_COUNT: String(targetCount),
+      MOCK_TARGET_DATABASE: targetDatabase,
+      MOCK_PREFLIGHT_RESPONSE_MODE: preflightResponseMode,
       MOCK_SIGNAL_DOWNLOAD: signalDownload ? "1" : "0",
       MOCK_ROW_MISMATCH: rowMismatch ? "1" : "0",
+      MOCK_ROW_RESULT_MODE: rowResultMode,
       MOCK_TRIGGER_MISMATCH: triggerMismatch ? "1" : "0",
+      MOCK_TRIGGER_RESULT_MODE: triggerResultMode,
       MOCK_TRIGGER_SEMANTICS_MISMATCH: triggerSemanticsMismatch ? "1" : "0",
       MOCK_QUOTE_REVISION_TRIGGER_SEMANTICS_MISMATCH: quoteRevisionTriggerSemanticsMismatch ? "1" : "0",
+      MOCK_PRODUCTION_SCHEDULE_TRIGGER_SEMANTICS_MISMATCH: productionScheduleTriggerSemanticsMismatch ? "1" : "0",
       MOCK_GOVERNED_TRANSITION_TRIGGER_SEMANTICS_MISMATCH: governedTransitionTriggerSemanticsMismatch ? "1" : "0",
       D1_BACKUP_API_TOKEN: "cloudflare_d1_backup_read_4c8f0b2d6a9137e5",
       D1_RESTORE_API_TOKEN: "",
@@ -1554,6 +1629,7 @@ test("D1 backup exports through locked Wrangler, validates SQL, and commits its 
   const mock = await mockD1BackupEnvironment(t);
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+  assert.equal(run.stderr, "");
   assert.match(run.stdout, /exact production D1 export validated, encrypted, committed/);
   const wrangler = await readFile(path.join(mock.state, "wrangler.log"), "utf8");
   assert.match(wrangler, /^d1 export ironwrap-bus --remote --config .* --output /m);
@@ -1675,6 +1751,7 @@ test("D1 recovery defaults to local cryptographic and SQLite verification withou
   const mock = await mockD1RestoreEnvironment(t);
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+  assert.equal(run.stderr, "");
   assert.match(run.stdout, /no remote mutation performed/);
   await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
   assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-restore.")), false);
@@ -1689,9 +1766,22 @@ test("remote D1 drill uses exact generated target config and verifies restored t
   assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
   assert.match(run.stdout, /exact confirmed non-production drill database/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, 4);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
   assert.equal(operations.every((line) => line.startsWith(`d1 execute ${mock.env.D1_RESTORE_TARGET_DATABASE_NAME} --remote`)), true);
   assert.equal(operations.join("\n").includes(mock.env.D1_RESTORE_API_TOKEN), false);
+  const readOperations = operations.filter((line) => line.includes(" --json"));
+  const importOperations = operations.filter((line) => line.includes(" --file "));
+  assert.equal(readOperations.length, REQUIRED_D1_TABLES.length + 2);
+  assert.equal(readOperations.every((line) => line.includes(" --command ") && !line.includes(" --file ")), true);
+  assert.equal(importOperations.length, 1);
+  assert.equal(importOperations[0].includes(" --json"), false);
+  const commandLengths = (await readFile(path.join(mock.state, "command-lengths.log"), "utf8"))
+    .trim()
+    .split("\n")
+    .map(Number);
+  assert.equal(commandLengths.length, REQUIRED_D1_TABLES.length + 2);
+  assert.equal(commandLengths.every((length) => Number.isSafeInteger(length) && length <= 16_384), true);
+  assert.equal((await readFile(path.join(mock.state, "imported"), "utf8")), "");
   const config = JSON.parse(await readFile(path.join(mock.state, "target-config.json"), "utf8"));
   assert.equal(config.account_id, mock.env.D1_RESTORE_TARGET_ACCOUNT_ID);
   assert.deepEqual(config.d1_databases, [{
@@ -1733,15 +1823,56 @@ test("remote D1 drill rejects production, unconfirmed, and nonempty targets befo
   assert.match(unconfirmedRun.stderr, /confirmation is not bound/);
   await assert.rejects(readFile(path.join(unconfirmed.state, "rclone.log"), "utf8"));
 
-  const nonempty = await mockD1RestoreEnvironment(t, { targetCount: 1 });
+  const nonempty = await mockD1RestoreEnvironment(t, { targetObject: "user_table" });
   nonempty.env.D1_RESTORE_MODE = "remote";
   nonempty.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
   nonempty.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${nonempty.env.D1_RESTORE_TARGET_DATABASE_NAME}@${nonempty.env.D1_RESTORE_TARGET_DATABASE_ID}`;
   const nonemptyRun = spawnSync("bash", [nonempty.script], { encoding: "utf8", env: nonempty.env });
   assert.notEqual(nonemptyRun.status, 0);
-  assert.match(nonemptyRun.stderr, /empty dedicated drill database/);
+  assert.match(nonemptyRun.stderr, /only the exact Cloudflare _cf_KV platform table/);
   const operations = (await readFile(path.join(nonempty.state, "wrangler.log"), "utf8")).trim().split("\n");
   assert.equal(operations.length, 1);
+  await assert.rejects(readFile(path.join(nonempty.state, "imported"), "utf8"));
+});
+
+test("remote D1 drill rejects user and unexpected Cloudflare sqlite objects before import", async (t) => {
+  for (const targetObject of ["user_table", "user_view", "user_trigger", "user_index", "unexpected_cf", "wrong_type_cf_kv"]) {
+    await t.test(targetObject, async (t) => {
+      const mock = await mockD1RestoreEnvironment(t, { targetObject });
+      mock.env.D1_RESTORE_MODE = "remote";
+      mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+      mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+      const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+      assert.notEqual(run.status, 0);
+      assert.match(run.stderr, /only the exact Cloudflare _cf_KV platform table/);
+      const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+      assert.equal(operations.length, 1);
+      assert.equal(operations[0].includes(" --command "), true);
+      assert.equal(operations[0].includes(" --file "), false);
+      const preflightCommand = await readFile(path.join(mock.state, "preflight-command.sql"), "utf8");
+      assert.match(preflightCommand, /type='table' AND name='_cf_KV'/);
+      assert.match(preflightCommand, /name NOT LIKE 'sqlite_%'/);
+      await assert.rejects(readFile(path.join(mock.state, "imported"), "utf8"));
+    });
+  }
+});
+
+test("remote D1 drill rejects Wrangler progress and bulk response shapes before import", async (t) => {
+  for (const preflightResponseMode of ["progress", "bulk"]) {
+    await t.test(preflightResponseMode, async (t) => {
+      const mock = await mockD1RestoreEnvironment(t, { preflightResponseMode });
+      mock.env.D1_RESTORE_MODE = "remote";
+      mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+      mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+      const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+      assert.notEqual(run.status, 0);
+      assert.match(run.stderr, /only the exact Cloudflare _cf_KV platform table/);
+      const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+      assert.equal(operations.length, 1);
+      assert.equal(operations[0].includes(" --command "), true);
+      await assert.rejects(readFile(path.join(mock.state, "imported"), "utf8"));
+    });
+  }
 });
 
 test("remote D1 drill fails when any restored production-table row count differs", async (t) => {
@@ -1753,7 +1884,25 @@ test("remote D1 drill fails when any restored production-table row count differs
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /table row counts differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 2);
+});
+
+test("remote D1 drill rejects missing, duplicate, and error table-count results", async (t) => {
+  for (const rowResultMode of ["missing", "duplicate", "error"]) {
+    await t.test(rowResultMode, async (t) => {
+      const mock = await mockD1RestoreEnvironment(t, { rowResultMode });
+      mock.env.D1_RESTORE_MODE = "remote";
+      mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+      mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+      const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+      assert.notEqual(run.status, 0);
+      assert.match(run.stderr, /table row counts differ/);
+      const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+      assert.equal(operations.length, REQUIRED_D1_TABLES.length + 2);
+      assert.equal(operations.at(-1).includes(" --command "), true);
+      assert.equal((await readFile(path.join(mock.state, "imported"), "utf8")), "");
+    });
+  }
 });
 
 test("D1 recovery rejects an export missing a required invariant trigger", async (t) => {
@@ -1845,7 +1994,25 @@ test("remote D1 drill fails when named invariant-trigger inventory differs", asy
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, 4);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+});
+
+test("remote D1 drill rejects missing, duplicate, and error trigger results", async (t) => {
+  for (const triggerResultMode of ["missing", "duplicate", "error"]) {
+    await t.test(triggerResultMode, async (t) => {
+      const mock = await mockD1RestoreEnvironment(t, { triggerResultMode });
+      mock.env.D1_RESTORE_MODE = "remote";
+      mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+      mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+      const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+      assert.notEqual(run.status, 0);
+      assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
+      const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+      assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+      assert.equal(operations.at(-1).includes(" --command "), true);
+      assert.equal((await readFile(path.join(mock.state, "imported"), "utf8")), "");
+    });
+  }
 });
 
 test("remote D1 drill rejects receipt triggers without immutable update/delete semantics", async (t) => {
@@ -1857,7 +2024,7 @@ test("remote D1 drill rejects receipt triggers without immutable update/delete s
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, 4);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
 });
 
 test("remote D1 drill rejects quote-revision ledger triggers without immutable semantics", async (t) => {
@@ -1869,7 +2036,19 @@ test("remote D1 drill rejects quote-revision ledger triggers without immutable s
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, 4);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+});
+
+test("remote D1 drill rejects production-schedule ledger triggers without immutable semantics", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { productionScheduleTriggerSemanticsMismatch: true });
+  mock.env.D1_RESTORE_MODE = "remote";
+  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
+  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
 });
 
 test("remote D1 drill rejects governed-transition outbox event triggers without immutable semantics", async (t) => {
@@ -1881,7 +2060,7 @@ test("remote D1 drill rejects governed-transition outbox event triggers without 
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, 4);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
 });
 
 test("D1 recovery rejects bad ciphertext checksums and signal-cleans decrypted workspace", async (t) => {

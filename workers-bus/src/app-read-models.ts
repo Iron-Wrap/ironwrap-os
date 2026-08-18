@@ -39,6 +39,7 @@ import {
   fieldWorkPackageProjection,
   hasWorkPackageCompletionAuthority,
 } from "./work-package.ts";
+import { safetyReadinessForScope } from "./safety-release-gate.ts";
 import { facetLaunchConfigured } from "./facet-launch.ts";
 
 const ACTIVE_JOB_STATUSES = ["Won", "In Production"] as const;
@@ -1039,6 +1040,17 @@ export async function buildUniversalWorkPackageReadModel(
         auth.session.frappe_user_id,
         auth.session.role,
       ),
+      // The device must see the same verdict the action endpoint will apply, so
+      // a blocked crew is told why instead of being refused after tapping.
+      safetyBlockers: (
+        await safetyReadinessForScope(env, {
+          tenantId: auth.session.tenant_id,
+          scope: { type: "work_package", id: workPackage.id },
+          jobId: scope.workObjectId,
+          subjectUserIds: [auth.session.user_id],
+          now: new Date().toISOString(),
+        })
+      ).blockers,
     },
   );
   const allowedActions = [...projection.allowedActions];
@@ -1598,6 +1610,17 @@ export async function buildJobReadModel(
         auth.session.frappe_user_id,
         auth.session.role,
       ),
+      safetyBlockers: workPackage
+        ? (
+            await safetyReadinessForScope(env, {
+              tenantId: auth.session.tenant_id,
+              scope: { type: "work_package", id: workPackage.id },
+              jobId: jobName,
+              subjectUserIds: [auth.session.user_id],
+              now: new Date().toISOString(),
+            })
+          ).blockers
+        : [],
     },
   );
   const stale: string[] = [];

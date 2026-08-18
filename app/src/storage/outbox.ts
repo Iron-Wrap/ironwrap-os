@@ -22,6 +22,9 @@ const fieldActionEndpoints: Record<OutboxActionKind, RegExp> = {
     /^\/api\/v1\/(?:jobs\/[^/?#]+\/work-package\/acknowledgements|work-objects\/[^/?#]+\/[^/?#]+\/physical-contexts\/[^/?#]+\/[^/?#]+\/work-package\/acknowledgements)$/,
   work_package_stop:
     /^\/api\/v1\/(?:jobs\/[^/?#]+\/work-package\/stop-work|work-objects\/[^/?#]+\/[^/?#]+\/physical-contexts\/[^/?#]+\/[^/?#]+\/work-package\/stop-work)$/,
+  // One global endpoint on purpose: the safety rail must not require a job, an
+  // assignment, or a current work package.
+  safety_action: /^\/api\/v1\/safety\/actions$/,
   fleet_pre_trip_inspection: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/pre-trip-inspections$/,
   fleet_post_trip_inspection: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/post-trip-inspections$/,
   fleet_defect_report: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/defects$/,

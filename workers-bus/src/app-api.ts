@@ -79,6 +79,7 @@ import {
   denyProductionScheduleApprovalRequest,
   finalizeProductionScheduleApprovalExecution,
   getCurrentProductionScheduleApprovalRequest,
+  getProductionScheduleApprovalRequest,
   getProductionScheduleApprovalRequestByPrepareKey,
   listProductionScheduleApprovalRequests,
   matchesProductionScheduleApprovalPreparation,
@@ -111,6 +112,8 @@ import { handleFleetAction, type FleetActionKind } from "./fleet-actions.ts";
 import { handleWorkPackageAction, type WorkPackageActionKind } from "./work-package-actions.ts";
 import { hasPhysicalAssignmentAuthority } from "./work-package.ts";
 import { handleAuthorityRecordRoute } from "./authority-record-api.ts";
+import { handleSafetyRoute } from "./safety-api.ts";
+import { safetyReleaseGate } from "./safety-release-gate.ts";
 import { handleProposalDocAction } from "./proposal-doc-action.ts";
 import {
   listMeasurementIntakeExceptions,
@@ -330,6 +333,13 @@ export async function handleAuthenticatedRoute(
   if (url.pathname.startsWith("/api/v1/authority-records")) {
     const authorityResponse = await handleAuthorityRecordRoute(req, env, auth);
     if (authorityResponse) return authorityResponse;
+  }
+  // The safety rail is intentionally reachable by every authenticated role,
+  // including a field worker with no current assignment. Authority, separation
+  // of duties, and rights are enforced inside the store, not by this router.
+  if (url.pathname.startsWith("/api/v1/safety")) {
+    const safetyResponse = await handleSafetyRoute(req, env, auth);
+    if (safetyResponse) return safetyResponse;
   }
   if (req.method === "GET" && url.pathname === "/api/v1/now") {
     if (!hasPermission(auth, "now:read"))
@@ -1985,6 +1995,36 @@ async function approveProductionScheduleApproval(
     );
 
   const now = new Date();
+  // Releasing a crew to a job is a release decision, so it consumes current
+  // safety readiness for that job before the execution lease is claimed. The
+  // verdict — including a refusal — is recorded as an immutable snapshot.
+  const scheduleRequest = await getProductionScheduleApprovalRequest(
+    env,
+    auth.session.tenant_id,
+    requestId,
+  ).catch(() => null);
+  if (scheduleRequest?.roof_job_id) {
+    const gate = await safetyReleaseGate(env, {
+      tenantId: auth.session.tenant_id,
+      scope: { type: "roof_job", id: scheduleRequest.roof_job_id },
+      jobId: scheduleRequest.roof_job_id,
+      subjectUserIds: [],
+      consumer: "schedule_release",
+      evaluatedByUserId: auth.session.user_id,
+      decisionRef: `${requestId}:${decisionIdempotencyKey}`,
+      now: now.toISOString(),
+    });
+    if (!gate.readiness.ready) {
+      return privateAppJson(
+        {
+          error: "safety_release_blocked",
+          blockers: gate.readiness.blockers,
+          snapshot_id: gate.snapshot_id,
+        },
+        409,
+      );
+    }
+  }
   let claimed;
   try {
     claimed = await claimProductionScheduleApprovalExecution(env, {

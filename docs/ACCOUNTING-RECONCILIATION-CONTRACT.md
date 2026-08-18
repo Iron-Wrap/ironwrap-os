@@ -425,19 +425,21 @@ matching the ledger's existing discipline. Raw webhook bytes stay in R2 under `r
 `main` holds `0001`–`0035`. Open PR heads declare, verified by listing
 `workers-bus/migrations/` on every open head on 2026-08-18: `0036`, `0037`, `0038`, `0039`, `0040`,
 `0041` (#43/#46/#47/#48/#49/#50/#51/#52), `0042` (#46/#48/#49/#52), `0043` (#48/#52), `0044`
-(#50/#52), `0045` (#51/#52), `0046` (#54), `0050` (#53), `0051` (#56), `0053` (#55), `0054` (#46).
-The highest number in flight anywhere is **0054**.
+(#50/#52), `0045` (#51/#52), `0046` (#54, merged 2026-08-18), `0047` (#59), `0048` (#60), `0053`
+(#55), `0054` (#46), `0055` (#56), `0056` (#53). The original 2026-08-18 listing misattributed
+`0050` to #53 and `0051` to #56; both branches actually held `0046` until the 2026-08-18 renumber.
+The highest number in flight anywhere is **0056**.
 
-IRO-52 therefore reserves **0055 through 0060**, all above every number currently in flight:
+IRO-52 therefore reserves **0057 through 0062**, all above every number currently in flight:
 
 | Number | File | Contents |
 |---|---|---|
-| 0055 | `0055_accounting_money_intents.sql` | `accounting_intents`, `accounting_intent_events`, `accounting_intent_command_receipts`, state-transition and version guards |
-| 0056 | `0056_accounting_provider_observations.sql` | `accounting_observations` (append-only), `accounting_reconciliations` |
-| 0057 | `0057_holdback_ledger.sql` | `holdback_ledger`, `holdback_events` (append-only), release-precondition guard |
-| 0058 | `0058_accounting_exceptions.sql` | `accounting_exceptions` with `UNIQUE (tenant_id, subject_ref, reason_code, status)` |
-| 0059 | `0059_tax_policy_snapshots.sql` | `tax_policy_snapshots` (immutable), `accounting_intent_tax_bindings` |
-| 0060 | `0060_payroll_posting_intents.sql` | `payroll_posting_intents`, accountant approval receipts |
+| 0057 | `0057_accounting_money_intents.sql` | `accounting_intents`, `accounting_intent_events`, `accounting_intent_command_receipts`, state-transition and version guards |
+| 0058 | `0058_accounting_provider_observations.sql` | `accounting_observations` (append-only), `accounting_reconciliations` |
+| 0059 | `0059_holdback_ledger.sql` | `holdback_ledger`, `holdback_events` (append-only), release-precondition guard |
+| 0060 | `0060_accounting_exceptions.sql` | `accounting_exceptions` with `UNIQUE (tenant_id, subject_ref, reason_code, status)` |
+| 0061 | `0061_tax_policy_snapshots.sql` | `tax_policy_snapshots` (immutable), `accounting_intent_tax_bindings` |
+| 0062 | `0062_payroll_posting_intents.sql` | `payroll_posting_intents`, accountant approval receipts |
 
 Discipline, per project rule 4 and the confirmed 0042 collision (ELEC-3 finding 1 / IRO-62):
 
@@ -556,7 +558,7 @@ Project rule 5 forbids live provider credentials. The mocked contract test is th
 
 **Harness.** Extend `workers-bus/test/effect-runtime-fixture.ts:41` — its `EffectLedgerTestD1` runs
 real migration SQL in an in-memory `node:sqlite` database behind a D1-shaped facade — into
-`workers-bus/test/accounting-fixture.ts`, loading migrations 0055–0060. Tests run under
+`workers-bus/test/accounting-fixture.ts`, loading migrations 0057–0062. Tests run under
 `node --test` (`workers-bus/package.json`), so the D1 CHECKs and triggers are executed, not mocked.
 PWA tests run under `vitest` in `app/`.
 
@@ -619,13 +621,13 @@ Dependency order. S0–S10 are provable against `main` today. Every slice ends g
 | # | Slice | Depends on | Notes |
 |---|---|---|---|
 | S0 | Effect and auth **ports** + test doubles (`accounting-effect-port.ts`, `quickbooks-auth-port.ts`, `test/accounting-port-fixture.ts`) | — | No schema. Unblocks everything. Must be reviewed hardest: the port shape is the contract with #46. |
-| S1 | Migration 0055 + intent state machine + command receipts + D1 invariant tests | S0 | The core aggregate. |
-| S2 | Migration 0059 + tax snapshot binding, staleness and drift detection | S1 | Cheap, and every other slice binds a snapshot. |
-| S3 | Migrations 0056 + 0058 + the reconciliation engine (normalizers, expected/observed hashing, verdicts, exception raising) | S1, S2 | The heart of the issue. |
+| S1 | Migration 0057 + intent state machine + command receipts + D1 invariant tests | S0 | The core aggregate. |
+| S2 | Migration 0061 + tax snapshot binding, staleness and drift detection | S1 | Cheap, and every other slice binds a snapshot. |
+| S3 | Migrations 0058 + 0060 + the reconciliation engine (normalizers, expected/observed hashing, verdicts, exception raising) | S1, S2 | The heart of the issue. |
 | S4 | Payment and deposit intents through the port + fixtures + duplicate/partial/over-payment scenarios | S3 | First end-to-end money path. |
 | S5 | Credit memo and refund intents + compensation plans + refund-race scenario + ceiling enforcement | S4 | First reversal path. |
-| S6 | Migration 0057 + holdback ledger, entitlement computation, release preconditions, refund-after-release | S5 | The domain-specific slice; largest design surface. |
-| S7 | Migration 0060 + `PayrollAccountingAdapter` implementation + payroll correction scenario | S3, **PR #55** | Gated on IRO-53 landing. Posting target per open question 2. |
+| S6 | Migration 0059 + holdback ledger, entitlement computation, release preconditions, refund-after-release | S5 | The domain-specific slice; largest design surface. |
+| S7 | Migration 0062 + `PayrollAccountingAdapter` implementation + payroll correction scenario | S3, **PR #55** | Gated on IRO-53 landing. Posting target per open question 2. |
 | S8 | Bus BFF routes + permissions + cron sweeps | S3 | Backend surface. |
 | S9 | PWA Money Desk, intent detail, exception queue | S8 | Frontend surface. |
 | S10 | PWA holdback register + release wizard + payroll review | S6, S7, S9 | Frontend surface. |

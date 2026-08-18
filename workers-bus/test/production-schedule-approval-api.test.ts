@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
@@ -19,21 +19,39 @@ class SqliteD1 {
 
   constructor() {
     this.raw.exec("PRAGMA foreign_keys = ON");
-    this.raw.exec(
-      readFileSync(
-        new URL("../migrations/0011_app_bff_auth.sql", import.meta.url),
-        "utf8",
-      ),
-    );
-    this.raw.exec(
-      readFileSync(
-        new URL(
-          "../migrations/0020_production_schedule_approval_requests.sql",
-          import.meta.url,
+    // Schedule approval now consumes safety readiness before it claims an
+    // execution lease, so this harness applies the whole chain rather than the
+    // two migrations the approval tables alone need.
+    for (const migration of readdirSync(
+      new URL("../migrations/", import.meta.url),
+    )
+      .filter((name) => /^\d{4}_.+\.sql$/.test(name))
+      .sort()) {
+      if (migration === "0038_app_access_roles.sql") {
+        this.raw
+          .prepare(
+            `INSERT INTO app_users
+              (user_id, tenant_id, email_normalized, display_name, role, active,
+               created_by, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'ops', 1, ?, ?, ?)`,
+          )
+          .run(
+            "appu_legacy_ops_0001",
+            TENANT,
+            "legacy-ops@example.invalid",
+            "Legacy Operations",
+            "seed",
+            "2026-08-13T11:59:00.000Z",
+            "2026-08-13T11:59:00.000Z",
+          );
+      }
+      this.raw.exec(
+        readFileSync(
+          new URL(`../migrations/${migration}`, import.meta.url),
+          "utf8",
         ),
-        "utf8",
-      ),
-    );
+      );
+    }
     const now = new Date().toISOString();
     const insert = this.raw.prepare(
       `INSERT INTO app_users (

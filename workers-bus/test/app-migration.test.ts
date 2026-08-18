@@ -1679,6 +1679,100 @@ test("0042 keeps external effects durable, append-only, and reconciliation-gated
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
+test("0047 keeps safety records additive, right-preserving, and separation-enforced", async () => {
+  const sql = await readFile(
+    new URL("../migrations/0047_safety_lifecycle.sql", import.meta.url),
+    "utf8",
+  );
+  const schema = sql.replace(/^--.*$/gm, "");
+  for (const table of [
+    "safety_equipment",
+    "safety_equipment_events",
+    "safety_occurrences",
+    "safety_occurrence_events",
+    "safety_notifications",
+    "safety_corrective_actions",
+    "safety_corrective_action_events",
+    "safety_readiness_snapshots",
+    "safety_device_actions",
+  ]) {
+    assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+  }
+  for (const index of [
+    "idx_safety_equipment_assignment",
+    "idx_safety_occurrences_scope_open",
+    "idx_safety_notifications_open",
+    "idx_safety_corrective_actions_open",
+    "idx_safety_readiness_snapshots_scope",
+    "idx_safety_device_actions_recovery",
+  ]) {
+    assert.match(sql, new RegExp(`CREATE INDEX IF NOT EXISTS ${index}\\b`));
+  }
+  // Every safety event stream and every readiness snapshot refuses UPDATE and
+  // DELETE: rollback may stop new automation but never erases safety evidence.
+  for (const trigger of [
+    "safety_equipment_events_append_only_update",
+    "safety_equipment_events_append_only_delete",
+    "safety_occurrence_events_append_only_update",
+    "safety_occurrence_events_append_only_delete",
+    "safety_corrective_action_events_append_only_update",
+    "safety_corrective_action_events_append_only_delete",
+    "safety_readiness_snapshots_append_only_update",
+    "safety_readiness_snapshots_append_only_delete",
+    "safety_equipment_append_only_delete",
+    "safety_occurrences_append_only_delete",
+    "safety_notifications_append_only_delete",
+    "safety_corrective_actions_append_only_delete",
+    "safety_device_actions_append_only_delete",
+  ]) {
+    assert.match(sql, new RegExp(`CREATE TRIGGER IF NOT EXISTS ${trigger}\\b`));
+  }
+  for (const trigger of [
+    "safety_equipment_identity_immutable",
+    "safety_occurrences_identity_immutable",
+    "safety_notifications_guard_update",
+    "safety_corrective_actions_guard_update",
+    "safety_device_actions_identity_immutable",
+  ]) {
+    assert.match(sql, new RegExp(`CREATE TRIGGER IF NOT EXISTS ${trigger}\\b`));
+  }
+  // Authority acts name their exact roles; reporting and make-safe never do.
+  assert.match(sql, /safety_inspection_authority_required/);
+  assert.match(sql, /safety_rescue_authority_required/);
+  assert.match(sql, /safety_release_authority_required/);
+  assert.match(sql, /safety_notification_authority_required/);
+  assert.match(sql, /safety_verification_authority_required/);
+  assert.match(sql, /safety_verification_separation_required/);
+  assert.match(sql, /safety_stop_release_not_permitted/);
+  assert.match(sql, /safety_stop_reactivation_forbidden/);
+  assert.match(sql, /safety_occurrence_severity_downgrade_forbidden/);
+  for (const kind of [
+    "reported",
+    "make_safe",
+    "rescue_dispatched",
+    "rescue_completed",
+    "investigation_opened",
+    "finding_recorded",
+    "controlled",
+    "released",
+    "closed",
+  ]) {
+    assert.ok(
+      sql.includes(`'${kind}'`),
+      `missing occurrence event kind ${kind}`,
+    );
+  }
+  assert.match(sql, /UNIQUE \(tenant_id, report_fingerprint_sha256\)/);
+  assert.match(
+    sql,
+    /action_kind IN \('report_occurrence', 'make_safe', 'equipment_defect', 'rescue_request'\)/,
+  );
+  // Physical safety events are their own aggregate; the integration incident
+  // record must never be reused for a worker injury.
+  assert.doesNotMatch(schema, /automation_incident/i);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
 test("0046 keeps offline fleet captures bounded, idempotent, and independently recoverable", async () => {
   const sql = await readFile(new URL("../migrations/0046_fleet_asset_actions.sql", import.meta.url), "utf8");
   assert.match(sql, /CREATE TABLE IF NOT EXISTS fleet_asset_actions\b/);
@@ -1707,9 +1801,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     )
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 46);
+    assert.equal(migrations.length, 47);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0046_fleet_asset_actions.sql");
+    assert.equal(migrations.at(-1), "0047_safety_lifecycle.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -1753,7 +1847,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
        FROM sqlite_master`,
       )
       .get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 88, indexes: 126, triggers: 170 });
+    assert.deepEqual({ ...counts }, { tables: 97, indexes: 139, triggers: 196 });
     assert.equal(
       (
         db

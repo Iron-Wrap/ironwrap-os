@@ -8,6 +8,7 @@ import {
   readFieldWorkPackageFrappeResource,
   type FrappeRow,
 } from "./frappe-read.ts";
+import type { SafetyBlocker } from "./safety-lifecycle.ts";
 
 const CURRENT_WORK_PACKAGE_STATUSES = FIELD_WORK_PACKAGE_CURRENT_STATUSES;
 type EvidenceFreshness = "Current" | "Stale" | "Unknown";
@@ -261,7 +262,15 @@ function rowMatchesWorkScope(
 export function fieldWorkPackageProjection(
   workPackage: FieldWorkPackage | null,
   actorUser: string | null,
-  options: { completionAuthority?: boolean } = {},
+  options: {
+    completionAuthority?: boolean;
+    /**
+     * Current safety blockers for this package's scope. Any blocker removes
+     * acknowledge, start, and complete. Stopping work is never removed: no
+     * safety state may make a stop harder to reach than it already is.
+     */
+    safetyBlockers?: SafetyBlocker[];
+  } = {},
 ): {
   work_package: {
     id: string;
@@ -333,6 +342,7 @@ export function fieldWorkPackageProjection(
       acceptance_criteria: string;
       released: boolean;
     }>;
+    safety_blockers: SafetyBlocker[];
   } | null;
   allowedActions: string[];
 } {
@@ -422,6 +432,8 @@ export function fieldWorkPackageProjection(
       acknowledged_at: acknowledgement?.occurredAt ?? null,
     };
   });
+  const safetyBlockers = options.safetyBlockers ?? [];
+  const safetyBlocked = safetyBlockers.length > 0;
   const allowedActions = [
     ...((workPackage.status === "Released" ||
       workPackage.status === "Acknowledged") &&
@@ -448,11 +460,15 @@ export function fieldWorkPackageProjection(
     preStartHoldsReleased
       ? ["work_package.start"]
       : []),
+    // Stopping work is never gated by safety state, capability, or readiness.
+    // A worker who needs to stop must always be able to.
     ...(CURRENT_WORK_PACKAGE_STATUSES.includes(workPackage.status)
       ? ["work_package.stop_work"]
       : []),
     ...(completionReady ? ["work_package.complete"] : []),
-  ];
+  ].filter(
+    (action) => !safetyBlocked || action === "work_package.stop_work",
+  );
   return {
     work_package: {
       id: workPackage.id,
@@ -525,6 +541,7 @@ export function fieldWorkPackageProjection(
         acceptance_criteria: holdPoint.acceptanceCriteria,
         released: holdPoint.released,
       })),
+      safety_blockers: safetyBlockers,
     },
     allowedActions,
   };

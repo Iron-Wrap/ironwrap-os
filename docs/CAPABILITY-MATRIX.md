@@ -3,7 +3,7 @@
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
 Last verified: 2026-08-17
-Latest phase delta verified: 2026-08-18 (IRO-54 fleet operations over the reviewed IRO-36/38/41/42/43 source assembly; repository checks only, not merged, deployed, runtime-verified, business-accepted, or production-proven)
+Latest phase delta verified: 2026-08-18 (IRO-44 safety lifecycle over the merged IRO-36/38/41/42/43/54 source assembly; repository checks only, not merged, deployed, runtime-verified, business-accepted, or production-proven)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
 ## Status vocabulary
@@ -39,12 +39,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 46,
-      "latest": "0046_fleet_asset_actions.sql"
+      "count": 47,
+      "latest": "0047_safety_lifecycle.sql"
     },
     "tests": {
-      "pwa": 369,
-      "worker": 597
+      "pwa": 376,
+      "worker": 619
     }
   },
   "proof_state_policy": {
@@ -158,6 +158,27 @@ IRO-38 branch-local side-effect substrate:
   This branch has repository tests for the remote claim/provider/readback/settle sequence, but no
   live provider, deployment, or business-acceptance proof.
 
+IRO-44 branch-local safety substrate:
+
+- Migration `0047_safety_lifecycle.sql` adds owned safety equipment, physical safety occurrence,
+  external notification, corrective action, immutable readiness snapshot, and offline safety-action
+  ledgers. Physical safety events are a separate aggregate from `Automation Incident`, which remains
+  an integration-failure record.
+- Reporting a hazard or injury, making an area safe, and condemning equipment take no authority
+  argument and are reachable by any active tenant user. Inspection, rescue command, external
+  notification, independent verification, and stop release each require the exact current role, and
+  the occurrence reporter, corrective-action owner, and evidence capturer are all refused
+  verification of that closure.
+- `/api/v1/safety/actions` is a separate D1/R2 ledger from the Work Package rail, so a report
+  survives having no current work package, no assignment, and no network. Duplicate offline reports
+  of the same physical event converge on one occurrence.
+- Work Package acknowledge/start/complete and production-schedule approval both consume current
+  safety readiness and record an immutable snapshot of what they saw, including a refusal. Stopping
+  work is never gated by that readiness.
+- This branch has repository tests, including one emergency drill covering rescue, failed PPE, a
+  duplicate offline report, a late corrective action, and independent release. It has no deployment,
+  runtime, business-acceptance, or real-device proof.
+
 Missing for autonomous target:
 
 - general event/transition envelope across every company aggregate;
@@ -191,7 +212,8 @@ Material target gaps:
 - receiving inspection, first-piece/in-process/final inspection, NCR, quarantine, disposition;
 - carrier status, collision, toll/parking, and tire/key registers (vehicle, trailer, driver, inspection, maintenance, and cargo are implemented);
 - production-proven physical evidence-slot capture and independent hold release across real devices;
-- safety incident/near miss/property event distinct from automation incidents;
+- Frappe-side projection of the D1-owned safety occurrence, equipment, notification, and corrective
+  action records;
 - controlled assembly/manufacturer document/technical bulletin/recall/claims substantiation;
 - complete jurisdiction rules and live issuer readback continuity for Authority Records;
 - invoice/holdback/refund/filing/payroll mirrors and provider reconciliation;
@@ -311,7 +333,7 @@ Target gaps:
 | Shop | Partial: signed release, reservation, setup route, independent first-piece/final QC, yield, labeled bundles, custody handover, and provider-mirror billing-basis readiness | cutting/fabrication event capture, work-centre tooling/maintenance, physical dispatch proof, and live reconciliation | physical synthetic/real shop batch including handover and billing basis |
 | Scheduling | assignment and approval ledger | complete constraint solver and autonomous reschedule | conflict/weather/material test |
 | Human field work | assignment-scoped Work Package with exact Authority Record requirements, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
-| Safety | plan/acknowledgement plus Crew Profile competence, WCB, equipment, and active-stop release fences | individual equipment/incident/rescue registers and real-world proof | stop/emergency drill |
+| Safety | plan/acknowledgement plus Crew Profile competence, WCB, and active-stop release fences; individually issued equipment with inspection/defect/quarantine/replacement, injury/near-miss/hazard/environmental/emergency occurrences, external notification, corrective action with independent verification, and readiness snapshots consumed by Work Package and schedule release | real-device capture, live regulatory submission, and real-world proof | stop/emergency drill on real devices |
 | Quality | Partial: signed independent first-piece/final inspection, Quality Hold, NCR/quarantine, and verified evidence | ITP, disposition workflow, and live proof | seeded defect containment and final-inspection regression |
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |
 | Closeout | completion/warranty/review records | inspection, as-built, registration, accounting and archive loop | real closeout and recovery |

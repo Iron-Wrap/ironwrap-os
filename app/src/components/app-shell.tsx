@@ -1,5 +1,5 @@
 import { Link, Outlet, useNavigate } from "@tanstack/react-router";
-import { LogOut, ShieldCheck } from "lucide-react";
+import { LogOut, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -11,6 +11,7 @@ import { apiCommand } from "../lib/api";
 import { API_PATHS } from "../lib/api-paths";
 import { cn } from "../lib/cn";
 import { navigationForRole, roleLabel, type NavigationItem } from "../lib/roles";
+import { SafetyActionPanel } from "../field/safety-action-panel";
 import { Button } from "./ui/button";
 import { SystemStatus } from "./system-status";
 
@@ -96,22 +97,42 @@ export function AppShell() {
         <main
           id="main-content"
           tabIndex={-1}
-          className="min-w-0 px-4 py-6 pb-32 sm:px-6 sm:py-8 lg:pb-10"
+          className="min-w-0 space-y-6 px-4 py-6 pb-44 sm:px-6 sm:py-8 lg:pb-24"
         >
           <Outlet />
         </main>
       </div>
 
-      <nav
-        className="safe-bottom fixed inset-x-0 bottom-0 z-50 border-t bg-surface/96 px-2 pt-2 shadow-[0_-8px_24px_oklch(0_0_0/0.08)] backdrop-blur-lg lg:hidden"
-        aria-label="Main navigation"
-      >
-        <div className="mx-auto grid max-w-lg auto-cols-fr grid-flow-col gap-1">
-          {items.map((item) => (
-            <MobileNavItem key={item.to} item={item} />
-          ))}
-        </div>
-      </nav>
+      {/* Mounted on every authenticated screen on purpose. Reporting a hazard,
+          making an area safe, condemning equipment, and calling for rescue must
+          never depend on having a job packet open.
+
+          It is anchored out of the document flow deliberately. In flow after
+          <Outlet /> it was pushed down the page every time a route swapped a
+          loading state for its real content: a layout shift on every
+          authenticated screen, and a rescue call the worker had to scroll a
+          whole run sheet to reach. Fixed, nothing above it can move it. */}
+      <div className="safe-bottom fixed inset-x-0 bottom-0 z-50 bg-surface/96 shadow-[0_-8px_24px_oklch(0_0_0/0.08)] backdrop-blur-lg">
+        <details className="border-t-2 border-danger/45">
+          <summary className="flex min-h-16 cursor-pointer list-none items-center gap-3 px-4 font-black [&::-webkit-details-marker]:hidden">
+            <ShieldAlert className="size-5 shrink-0 text-danger" aria-hidden="true" />
+            <span>Safety</span>
+            <span className="ml-auto truncate text-sm font-semibold text-muted">
+              Hazard, rescue, equipment
+            </span>
+          </summary>
+          <div className="max-h-[60vh] overflow-y-auto overscroll-contain">
+            <SafetyActionPanel session={session} />
+          </div>
+        </details>
+        <nav className="border-t px-2 pt-2 lg:hidden" aria-label="Main navigation">
+          <div className="mx-auto grid max-w-lg auto-cols-fr grid-flow-col gap-1">
+            {items.map((item) => (
+              <MobileNavItem key={item.to} item={item} />
+            ))}
+          </div>
+        </nav>
+      </div>
     </div>
   );
 }

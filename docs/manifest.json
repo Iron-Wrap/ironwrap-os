@@ -43,6 +43,11 @@
       ]
     },
     {
+      "path": "docs/ACCOUNTING-RECONCILIATION-CONTRACT.md",
+      "class": "canonical",
+      "authority": []
+    },
+    {
       "path": "docs/APPROVAL-BROKER-CONTRACT.md",
       "class": "runbook",
       "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]

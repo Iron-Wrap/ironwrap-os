@@ -16,7 +16,15 @@ test("documentation gate rejects a deliberately stale capability count", () => {
   const temp = mkdtempSync(join(tmpdir(), "ironwrap-capability-stale-"));
   try {
     const current = readFileSync(matrix, "utf8");
-    const stale = current.replace('"total": 78', '"total": 77');
+    // Derive the contract's own DocType total instead of hard-coding it. Every
+    // capability lane changes that number, and a hard-coded literal makes this
+    // gate fail on the lane rather than on the staleness it is meant to catch.
+    const declared = Number(/"total":\s*(\d+)/.exec(current)?.[1]);
+    assert.ok(Number.isInteger(declared) && declared > 1, "contract must declare a DocType total");
+    const stale = current.replace(
+      `"total": ${declared}`,
+      `"total": ${declared - 1}`,
+    );
     assert.notEqual(stale, current);
     const stalePath = join(temp, "CAPABILITY-MATRIX.md");
     writeFileSync(stalePath, stale);
@@ -32,7 +40,9 @@ test("documentation gate rejects a deliberately stale capability count", () => {
     assert.notEqual(result.status, 0);
     assert.match(
       result.stderr,
-      /stale Frappe DocTypes total; contract 77, repository 78/,
+      new RegExp(
+        `stale Frappe DocTypes total; contract ${declared - 1}, repository ${declared}`,
+      ),
     );
   } finally {
     rmSync(temp, { recursive: true, force: true });
@@ -45,8 +55,17 @@ test("documentation gate separates source from the tested checkout", () => {
     const appOutput = join(temp, "app.log");
     const workerOutput = join(temp, "worker.tap");
     const evidencePath = join(temp, "evidence.json");
-    writeFileSync(appOutput, "Tests 369 passed\n");
-    writeFileSync(workerOutput, "# tests 597\n# pass 597\n# fail 0\n");
+    // Same reason: read the expected suite totals out of the contract rather
+    // than restating them here, so a lane that adds tests updates one place.
+    const contract = JSON.parse(
+      /```json\n([\s\S]*?)\n```/.exec(readFileSync(matrix, "utf8"))[1],
+    );
+    const { pwa, worker } = contract.expected.tests;
+    writeFileSync(appOutput, `Tests ${pwa} passed\n`);
+    writeFileSync(
+      workerOutput,
+      `# tests ${worker}\n# pass ${worker}\n# fail 0\n`,
+    );
     const head = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: root,
       encoding: "utf8",
@@ -101,7 +120,7 @@ test("documentation gate separates source from the tested checkout", () => {
     assert.equal(evidence.identity.ci_check.run_id, "123456789");
     assert.equal(evidence.identity.ci_check.event_name, "pull_request");
     assert.equal(evidence.identity.ci_check.workflow_sha, head);
-    assert.deepEqual(evidence.tests, { pwa: 369, worker: 597 });
+    assert.deepEqual(evidence.tests, { pwa, worker });
     assert.equal(evidence.proof_states.ci, "evidence_step_passed");
     assert.equal(evidence.proof_states.deploy, false);
     assert.equal(evidence.proof_states.production_proof, false);

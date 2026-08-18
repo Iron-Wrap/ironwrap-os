@@ -2374,6 +2374,9 @@ test("field packet contains job-safe contact details and excludes email, financi
       issued_at: "2026-07-10T07:00:00.000Z",
       expires_at: "2026-07-11T07:00:00.000Z",
       released_at: "2026-07-10T07:05:00.000Z",
+      // No safety occurrence, unserviceable PPE, outstanding notification, or
+      // overdue high-risk action applies to this package.
+      safety_blockers: [],
       work_object_type: "Roof Job",
       work_object_id: "JOB-A",
       physical_context_type: "Roof Site",

@@ -15,7 +15,7 @@ const buttonVariants = cva(
           "bg-accent text-accent-foreground hover:bg-accent/88 active:bg-accent/78 shadow-[0_1px_0_oklch(0_2_0/0.18)]",
         outline: "border bg-surface text-foreground hover:bg-surface-muted active:bg-border",
         ghost: "text-foreground hover:bg-surface-muted active:bg-border",
-        danger: "bg-danger text-white hover:bg-danger/88 active:bg-danger/78",
+        danger: "bg-danger text-danger-foreground hover:bg-danger/88 active:bg-danger/78",
       },
       size: {
         default: "min-h-14",

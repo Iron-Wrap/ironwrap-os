@@ -11,6 +11,7 @@ import {
   type FrappeRow,
 } from "./frappe-read.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { safetyReleaseGate } from "./safety-release-gate.ts";
 import {
   fieldWorkPackageForAssignment,
   fieldWorkPackageProjection,
@@ -681,6 +682,26 @@ async function assertCurrentActionAllowed(
     start_work: "work_package.start",
     complete_work: "work_package.complete",
   } satisfies Record<WorkPackageActionKind, string>;
+  // Stopping work never consults safety readiness. Every other action does, and
+  // a release decision records the immutable snapshot of what it saw.
+  const safetyBlockers =
+    submission.kind === "stop_work"
+      ? []
+      : (
+          await safetyReleaseGate(env, {
+            tenantId: auth.session.tenant_id,
+            scope: {
+              type: "work_package",
+              id: submission.payload.work_package_id,
+            },
+            jobId: submission.jobId,
+            subjectUserIds: [auth.session.user_id],
+            consumer: "work_package_release",
+            evaluatedByUserId: auth.session.user_id,
+            decisionRef: `${submission.deviceActionId}:${submission.kind}`,
+            now: new Date().toISOString(),
+          })
+        ).readiness.blockers;
   if (
     !fieldWorkPackageProjection(
       workPackage,
@@ -692,13 +713,20 @@ async function assertCurrentActionAllowed(
           auth.session.frappe_user_id,
           auth.session.role,
         ),
+        safetyBlockers,
       },
     ).allowedActions.includes(capability[submission.kind])
   ) {
     throw new FieldActionError(
-      "work_package_action_not_allowed",
+      safetyBlockers.length > 0
+        ? "safety_release_blocked"
+        : "work_package_action_not_allowed",
       409,
-      "That work-package action is no longer allowed.",
+      safetyBlockers.length > 0
+        ? `Safety readiness blocks this action: ${safetyBlockers
+            .map((blocker) => blocker.code)
+            .join(", ")}.`
+        : "That work-package action is no longer allowed.",
     );
   }
 }

@@ -11,6 +11,10 @@ export const outboxActionKinds = [
   "field_checkin",
   "work_package_acknowledgement",
   "work_package_stop",
+  // Reporting a hazard, making an area safe, condemning equipment, and calling
+  // for rescue are worker rights, so they queue durably like any other field
+  // action and never depend on a live connection.
+  "safety_action",
   "fleet_pre_trip_inspection",
   "fleet_post_trip_inspection",
   "fleet_defect_report",

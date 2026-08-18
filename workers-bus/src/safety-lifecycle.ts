@@ -1,0 +1,2195 @@
+import { sha256Hex } from "./app-auth.ts";
+import type { AppEnv } from "./app-types.ts";
+
+/**
+ * Owned safety spine: individually issued equipment, physical safety
+ * occurrences, regulatory notification, corrective action, and the readiness
+ * verdict that Work Package and schedule release consume.
+ *
+ * Two rules shape every function here.
+ *
+ * Reporting a hazard, reporting an equipment defect, and making an area safe
+ * are worker rights. They take no authority argument, they are reachable with
+ * no current work package, and nothing in this module can refuse them for an
+ * active tenant user. Inspection, rescue command, regulatory notification,
+ * independent verification, and release each require the exact current role.
+ *
+ * Records are additive. State advances through explicit transitions and each
+ * transition appends an immutable event; nothing here deletes safety evidence.
+ */
+
+export const SAFETY_EQUIPMENT_KINDS = [
+  "fall_arrest_harness",
+  "lanyard",
+  "anchor",
+  "ladder",
+  "respirator",
+  "hearing_protection",
+  "eye_protection",
+  "hand_protection",
+  "head_protection",
+  "gas_detector",
+  "fire_extinguisher",
+  "first_aid_kit",
+  "rescue_kit",
+] as const;
+
+export const SAFETY_OCCURRENCE_KINDS = [
+  "injury",
+  "near_miss",
+  "hazard",
+  "environmental",
+  "emergency",
+] as const;
+
+export const SAFETY_SCOPE_TYPES = [
+  "tenant",
+  "roof_job",
+  "work_package",
+  "shop",
+  "vehicle",
+] as const;
+
+export const SAFETY_SEVERITIES = ["low", "moderate", "high", "critical"] as const;
+
+export const SAFETY_NOTIFICATION_KINDS = [
+  "regulatory",
+  "insurer",
+  "client",
+  "manufacturer",
+  "emergency_services",
+] as const;
+
+export const SAFETY_READINESS_CONSUMERS = [
+  "work_package_release",
+  "schedule_release",
+  "field_panel",
+  "audit",
+] as const;
+
+/** Roles that may inspect, quarantine, retire, or issue equipment. */
+const EQUIPMENT_AUTHORITY_ROLES = new Set(["owner", "ops", "production", "shop"]);
+/** Roles that may command a rescue, declare control, release a stop, or verify closure. */
+const RESPONSE_AUTHORITY_ROLES = new Set(["owner", "ops", "production"]);
+/** Roles that may record a regulatory or external notification. */
+const NOTIFICATION_AUTHORITY_ROLES = new Set(["owner", "ops"]);
+
+export type SafetyEquipmentKind = (typeof SAFETY_EQUIPMENT_KINDS)[number];
+export type SafetyOccurrenceKind = (typeof SAFETY_OCCURRENCE_KINDS)[number];
+export type SafetyScopeType = (typeof SAFETY_SCOPE_TYPES)[number];
+export type SafetySeverity = (typeof SAFETY_SEVERITIES)[number];
+export type SafetyNotificationKind = (typeof SAFETY_NOTIFICATION_KINDS)[number];
+export type SafetyReadinessConsumer = (typeof SAFETY_READINESS_CONSUMERS)[number];
+
+export type SafetyEquipmentStatus =
+  | "in_service"
+  | "quarantined"
+  | "defective"
+  | "replaced"
+  | "retired";
+
+export type SafetyOccurrenceState =
+  | "reported"
+  | "made_safe"
+  | "investigating"
+  | "controlled"
+  | "closed";
+
+export type SafetyCorrectiveActionState =
+  | "open"
+  | "evidence_submitted"
+  | "verified"
+  | "closed"
+  | "rejected";
+
+export type SafetyBlockerCode =
+  | "safety_stop_active"
+  | "safety_event_uncontrolled"
+  | "safety_equipment_unserviceable"
+  | "safety_notification_outstanding"
+  | "safety_corrective_action_overdue";
+
+export interface SafetyScopeRef {
+  type: SafetyScopeType;
+  id: string;
+}
+
+export interface SafetyEvidence {
+  refsJson: string;
+  sha256: string;
+}
+
+export interface SafetyEquipmentRecord {
+  equipment_id: string;
+  tenant_id: string;
+  equipment_kind: SafetyEquipmentKind;
+  serial_number: string;
+  version: number;
+  status: SafetyEquipmentStatus;
+  assigned_user_id: string | null;
+  assigned_at: string | null;
+  inspection_interval_days: number;
+  last_inspection_at: string | null;
+  last_inspection_result: "pass" | "fail" | null;
+  inspection_due_at: string | null;
+  replaced_by_equipment_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SafetyOccurrenceRecord {
+  occurrence_id: string;
+  tenant_id: string;
+  occurrence_kind: SafetyOccurrenceKind;
+  severity: SafetySeverity;
+  version: number;
+  state: SafetyOccurrenceState;
+  stop_active: number;
+  rescue_required: number;
+  rescue_completed_at: string | null;
+  scope_type: SafetyScopeType;
+  scope_id: string;
+  reported_by_user_id: string;
+  reported_at: string;
+  summary: string;
+  report_fingerprint_sha256: string;
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+}
+
+export interface SafetyNotificationRecord {
+  notification_id: string;
+  tenant_id: string;
+  occurrence_id: string;
+  authority_name: string;
+  authority_jurisdiction: string;
+  notification_kind: SafetyNotificationKind;
+  required: number;
+  state: "pending" | "submitted" | "acknowledged" | "not_required";
+  due_at: string | null;
+  submitted_at: string | null;
+  submitted_by_user_id: string | null;
+  external_reference: string | null;
+  acknowledged_at: string | null;
+  determination_reason: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SafetyCorrectiveActionRecord {
+  corrective_action_id: string;
+  tenant_id: string;
+  occurrence_id: string;
+  version: number;
+  state: SafetyCorrectiveActionState;
+  risk_level: SafetySeverity;
+  owner_user_id: string;
+  assigned_by_user_id: string;
+  due_at: string;
+  description: string;
+  recurrence_of_id: string | null;
+  evidence_refs_json: string | null;
+  evidence_sha256: string | null;
+  evidence_captured_by_user_id: string | null;
+  evidence_submitted_at: string | null;
+  verified_by_user_id: string | null;
+  verified_at: string | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SafetyBlocker {
+  code: SafetyBlockerCode;
+  subject_type: "occurrence" | "equipment" | "notification" | "corrective_action";
+  subject_id: string;
+  detail: string;
+}
+
+export interface SafetyReadiness {
+  ready: boolean;
+  blockers: SafetyBlocker[];
+  scopes: SafetyScopeRef[];
+  evaluated_at: string;
+}
+
+export class SafetyError extends Error {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(code: string, status: number, message: string) {
+    super(message);
+    this.name = "SafetyError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+const TENANT_ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
+const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,139}$/;
+const SCOPE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,139}$/;
+const USER_ID = /^[A-Za-z0-9][A-Za-z0-9._:@-]{2,139}$/;
+const SHA256 = /^[0-9a-f]{64}$/;
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
+const EVENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{11,159}$/;
+
+interface SafetyActor {
+  userId: string;
+  role: string;
+}
+
+/**
+ * Resolves the caller's effective, currently active role. `access_role` is the
+ * effective application role introduced by 0038; the legacy `role` column is a
+ * narrower authentication class and must never be read on its own.
+ */
+export async function safetyActor(
+  env: AppEnv,
+  tenantId: string,
+  userId: string,
+): Promise<SafetyActor> {
+  if (!TENANT_ID.test(tenantId) || !USER_ID.test(userId)) {
+    throw new SafetyError("safety_actor_unknown", 403, "This safety actor is not recognized.");
+  }
+  const row = await env.DB.prepare(
+    `SELECT user_id, COALESCE(access_role, role) AS effective_role
+       FROM app_users
+      WHERE tenant_id = ? AND user_id = ? AND active = 1
+      LIMIT 1`,
+  )
+    .bind(tenantId, userId)
+    .first<{ user_id: string; effective_role: string }>();
+  if (!row) {
+    throw new SafetyError("safety_actor_unknown", 403, "This safety actor is not recognized.");
+  }
+  return { userId: row.user_id, role: row.effective_role };
+}
+
+function requireRole(actor: SafetyActor, allowed: Set<string>, code: string, message: string): void {
+  if (!allowed.has(actor.role)) throw new SafetyError(code, 403, message);
+}
+
+export interface ReportSafetyOccurrenceInput {
+  occurrenceId: string;
+  tenantId: string;
+  occurrenceKind: SafetyOccurrenceKind;
+  severity: SafetySeverity;
+  scope: SafetyScopeRef;
+  reportedByUserId: string;
+  reportedAt: string;
+  summary: string;
+  rescueRequired: boolean;
+  evidence: SafetyEvidence | null;
+  capturedOffline: boolean;
+  deviceActionId: string | null;
+  now: string;
+}
+
+export type ReportSafetyOccurrenceResult =
+  | { kind: "reported"; occurrence: SafetyOccurrenceRecord }
+  | { kind: "duplicate"; occurrence: SafetyOccurrenceRecord };
+
+/**
+ * Reporting is an intrinsic worker right: this takes no authority argument and
+ * refuses only an unknown or deactivated identity. Two offline devices that
+ * describe the same physical event at the same instant converge on one
+ * occurrence instead of two.
+ */
+export async function reportSafetyOccurrence(
+  env: AppEnv,
+  input: ReportSafetyOccurrenceInput,
+): Promise<ReportSafetyOccurrenceResult> {
+  assertReportInput(input);
+  const actor = await safetyActor(env, input.tenantId, input.reportedByUserId);
+  const fingerprint = await occurrenceFingerprint(input);
+  const existing = await occurrenceByFingerprint(env, input.tenantId, fingerprint);
+  if (existing) return { kind: "duplicate", occurrence: existing };
+
+  const inserted = await env.DB.prepare(
+    `INSERT INTO safety_occurrences
+       (occurrence_id, tenant_id, occurrence_kind, severity, version, state, stop_active,
+        rescue_required, scope_type, scope_id, reported_by_user_id, reported_at, summary,
+        report_fingerprint_sha256, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 1, 'reported', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT DO NOTHING`,
+  )
+    .bind(
+      input.occurrenceId,
+      input.tenantId,
+      input.occurrenceKind,
+      input.severity,
+      input.rescueRequired ? 1 : 0,
+      input.scope.type,
+      input.scope.id,
+      input.reportedByUserId,
+      input.reportedAt,
+      input.summary,
+      fingerprint,
+      input.now,
+      input.now,
+    )
+    .run();
+
+  if (d1Changes(inserted) !== 1) {
+    const raced = await occurrenceByFingerprint(env, input.tenantId, fingerprint);
+    if (!raced) {
+      throw new SafetyError(
+        "safety_occurrence_insert_failed",
+        502,
+        "The safety report could not be made durable.",
+      );
+    }
+    return { kind: "duplicate", occurrence: raced };
+  }
+
+  await appendOccurrenceEventRow(env, {
+    eventId: derivedEventId("soe", input.occurrenceId, 1, "reported"),
+    tenantId: input.tenantId,
+    occurrenceId: input.occurrenceId,
+    occurrenceVersion: 1,
+    eventKind: "reported",
+    actorUserId: actor.userId,
+    actorRole: actor.role,
+    detail: input.summary,
+    evidence: input.evidence,
+    capturedOffline: input.capturedOffline,
+    occurredAt: input.reportedAt,
+    recordedAt: input.now,
+    deviceActionId: input.deviceActionId,
+  });
+
+  const occurrence = await occurrenceById(env, input.tenantId, input.occurrenceId);
+  if (!occurrence) {
+    throw new SafetyError(
+      "safety_occurrence_insert_failed",
+      502,
+      "The safety report could not be made durable.",
+    );
+  }
+  return { kind: "reported", occurrence };
+}
+
+export interface MakeSafeInput {
+  tenantId: string;
+  occurrenceId: string;
+  actorUserId: string;
+  detail: string;
+  evidence: SafetyEvidence | null;
+  capturedOffline: boolean;
+  deviceActionId: string | null;
+  occurredAt: string;
+  now: string;
+}
+
+/**
+ * Making an area safe is a worker right. It advances `reported -> made_safe`
+ * and never clears the stop; only an authorized release can do that.
+ */
+export async function recordMakeSafe(
+  env: AppEnv,
+  input: MakeSafeInput,
+): Promise<SafetyOccurrenceRecord> {
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  const occurrence = await requireOccurrence(env, input.tenantId, input.occurrenceId);
+  if (occurrence.state !== "reported") {
+    if (occurrence.state === "made_safe") return occurrence;
+    throw new SafetyError(
+      "safety_occurrence_state_invalid",
+      409,
+      "This occurrence is past the make-safe step.",
+    );
+  }
+  const nextVersion = occurrence.version + 1;
+  await advanceOccurrence(env, occurrence, {
+    version: nextVersion,
+    state: "made_safe",
+    stopActive: occurrence.stop_active,
+    severity: occurrence.severity,
+    rescueRequired: occurrence.rescue_required,
+    rescueCompletedAt: occurrence.rescue_completed_at,
+    closedAt: null,
+    now: input.now,
+  });
+  await appendOccurrenceEventRow(env, {
+    eventId: derivedEventId("soe", input.occurrenceId, nextVersion, "make_safe"),
+    tenantId: input.tenantId,
+    occurrenceId: input.occurrenceId,
+    occurrenceVersion: nextVersion,
+    eventKind: "make_safe",
+    actorUserId: actor.userId,
+    actorRole: actor.role,
+    detail: input.detail,
+    evidence: input.evidence,
+    capturedOffline: input.capturedOffline,
+    occurredAt: input.occurredAt,
+    recordedAt: input.now,
+    deviceActionId: input.deviceActionId,
+  });
+  return await requireOccurrence(env, input.tenantId, input.occurrenceId);
+}
+
+export type SafetyResponseCommand =
+  | "rescue_dispatched"
+  | "rescue_completed"
+  | "investigation_opened"
+  | "finding_recorded"
+  | "controlled"
+  | "released"
+  | "closed";
+
+export interface SafetyResponseInput {
+  tenantId: string;
+  occurrenceId: string;
+  actorUserId: string;
+  command: SafetyResponseCommand;
+  detail: string;
+  evidence: SafetyEvidence | null;
+  now: string;
+}
+
+/**
+ * Rescue command, investigation, control, stop release, and closure are
+ * authority acts. A stop is released only once the event is controlled and any
+ * required rescue has completed, and closure additionally requires every
+ * required notification resolved and every high-risk corrective action closed.
+ */
+export async function recordSafetyResponse(
+  env: AppEnv,
+  input: SafetyResponseInput,
+): Promise<SafetyOccurrenceRecord> {
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  requireRole(
+    actor,
+    RESPONSE_AUTHORITY_ROLES,
+    input.command === "rescue_dispatched" || input.command === "rescue_completed"
+      ? "safety_rescue_authority_required"
+      : "safety_release_authority_required",
+    "This safety command requires current production authority.",
+  );
+  const occurrence = await requireOccurrence(env, input.tenantId, input.occurrenceId);
+  const next = nextOccurrenceShape(occurrence, input.command);
+  const nextVersion = occurrence.version + 1;
+  if (input.command === "closed") {
+    await assertClosureAllowed(env, occurrence);
+  }
+  await advanceOccurrence(env, occurrence, {
+    version: nextVersion,
+    state: next.state,
+    stopActive: next.stopActive,
+    severity: occurrence.severity,
+    rescueRequired: occurrence.rescue_required,
+    rescueCompletedAt: next.rescueCompletedAt ?? occurrence.rescue_completed_at,
+    closedAt: next.state === "closed" ? input.now : null,
+    now: input.now,
+  });
+  await appendOccurrenceEventRow(env, {
+    eventId: derivedEventId("soe", input.occurrenceId, nextVersion, input.command),
+    tenantId: input.tenantId,
+    occurrenceId: input.occurrenceId,
+    occurrenceVersion: nextVersion,
+    eventKind: input.command,
+    actorUserId: actor.userId,
+    actorRole: actor.role,
+    detail: input.detail,
+    evidence: input.evidence,
+    capturedOffline: false,
+    occurredAt: input.now,
+    recordedAt: input.now,
+    deviceActionId: null,
+  });
+  return await requireOccurrence(env, input.tenantId, input.occurrenceId);
+}
+
+function nextOccurrenceShape(
+  occurrence: SafetyOccurrenceRecord,
+  command: SafetyResponseCommand,
+): { state: SafetyOccurrenceState; stopActive: number; rescueCompletedAt?: string | null } {
+  switch (command) {
+    case "rescue_dispatched":
+      if (occurrence.rescue_required !== 1) {
+        throw new SafetyError(
+          "safety_rescue_not_required",
+          409,
+          "This occurrence did not declare a rescue requirement.",
+        );
+      }
+      return { state: occurrence.state, stopActive: occurrence.stop_active };
+    case "rescue_completed":
+      if (occurrence.rescue_required !== 1) {
+        throw new SafetyError(
+          "safety_rescue_not_required",
+          409,
+          "This occurrence did not declare a rescue requirement.",
+        );
+      }
+      return {
+        state: occurrence.state,
+        stopActive: occurrence.stop_active,
+        rescueCompletedAt: new Date().toISOString(),
+      };
+    case "investigation_opened":
+      if (occurrence.state !== "made_safe") {
+        throw new SafetyError(
+          "safety_occurrence_state_invalid",
+          409,
+          "An investigation opens only after the area is made safe.",
+        );
+      }
+      return { state: "investigating", stopActive: occurrence.stop_active };
+    case "finding_recorded":
+      if (occurrence.state !== "investigating") {
+        throw new SafetyError(
+          "safety_occurrence_state_invalid",
+          409,
+          "Findings belong to an open investigation.",
+        );
+      }
+      return { state: "investigating", stopActive: occurrence.stop_active };
+    case "controlled":
+      if (occurrence.state !== "investigating") {
+        throw new SafetyError(
+          "safety_occurrence_state_invalid",
+          409,
+          "Control is declared from an open investigation.",
+        );
+      }
+      return { state: "controlled", stopActive: occurrence.stop_active };
+    case "released":
+      if (occurrence.state !== "controlled") {
+        throw new SafetyError(
+          "safety_stop_release_not_permitted",
+          409,
+          "A stop is released only after the event is controlled.",
+        );
+      }
+      if (occurrence.rescue_required === 1 && !occurrence.rescue_completed_at) {
+        throw new SafetyError(
+          "safety_stop_release_not_permitted",
+          409,
+          "A required rescue has not been recorded as completed.",
+        );
+      }
+      return { state: "controlled", stopActive: 0 };
+    case "closed":
+      if (occurrence.state !== "controlled") {
+        throw new SafetyError(
+          "safety_occurrence_state_invalid",
+          409,
+          "Only a controlled occurrence can be closed.",
+        );
+      }
+      if (occurrence.stop_active === 1) {
+        throw new SafetyError(
+          "safety_stop_active",
+          409,
+          "Release the stop before closing this occurrence.",
+        );
+      }
+      return { state: "closed", stopActive: 0 };
+  }
+}
+
+async function assertClosureAllowed(
+  env: AppEnv,
+  occurrence: SafetyOccurrenceRecord,
+): Promise<void> {
+  const outstandingNotification = await env.DB.prepare(
+    `SELECT notification_id FROM safety_notifications
+      WHERE tenant_id = ? AND occurrence_id = ? AND required = 1 AND state = 'pending'
+      LIMIT 1`,
+  )
+    .bind(occurrence.tenant_id, occurrence.occurrence_id)
+    .first<{ notification_id: string }>();
+  if (outstandingNotification) {
+    throw new SafetyError(
+      "safety_notification_outstanding",
+      409,
+      "A required notification for this occurrence is still unresolved.",
+    );
+  }
+  const openAction = await env.DB.prepare(
+    `SELECT corrective_action_id FROM safety_corrective_actions
+      WHERE tenant_id = ? AND occurrence_id = ? AND state NOT IN ('closed', 'rejected')
+      LIMIT 1`,
+  )
+    .bind(occurrence.tenant_id, occurrence.occurrence_id)
+    .first<{ corrective_action_id: string }>();
+  if (openAction) {
+    throw new SafetyError(
+      "safety_corrective_action_open",
+      409,
+      "A corrective action for this occurrence is still open.",
+    );
+  }
+}
+
+export interface IssueSafetyEquipmentInput {
+  tenantId: string;
+  equipmentId: string;
+  equipmentKind: SafetyEquipmentKind;
+  serialNumber: string;
+  assignedUserId: string | null;
+  inspectionIntervalDays: number;
+  actorUserId: string;
+  now: string;
+}
+
+export async function issueSafetyEquipment(
+  env: AppEnv,
+  input: IssueSafetyEquipmentInput,
+): Promise<SafetyEquipmentRecord> {
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  requireRole(
+    actor,
+    EQUIPMENT_AUTHORITY_ROLES,
+    "safety_inspection_authority_required",
+    "Issuing safety equipment requires current equipment authority.",
+  );
+  if (
+    !OPAQUE_ID.test(input.equipmentId) ||
+    !SAFETY_EQUIPMENT_KINDS.includes(input.equipmentKind) ||
+    !boundedText(input.serialNumber, 1, 140) ||
+    !Number.isInteger(input.inspectionIntervalDays) ||
+    input.inspectionIntervalDays < 1 ||
+    input.inspectionIntervalDays > 3650 ||
+    (input.assignedUserId !== null && !USER_ID.test(input.assignedUserId)) ||
+    !ISO_INSTANT.test(input.now)
+  ) {
+    throw new SafetyError("safety_equipment_input_invalid", 400, "Invalid safety-equipment input.");
+  }
+  const existing = await equipmentById(env, input.tenantId, input.equipmentId);
+  if (existing) return existing;
+  await env.DB.prepare(
+    `INSERT INTO safety_equipment
+       (equipment_id, tenant_id, equipment_kind, serial_number, version, status,
+        assigned_user_id, assigned_at, inspection_interval_days, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 1, 'in_service', ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      input.equipmentId,
+      input.tenantId,
+      input.equipmentKind,
+      input.serialNumber,
+      input.assignedUserId,
+      input.assignedUserId ? input.now : null,
+      input.inspectionIntervalDays,
+      input.now,
+      input.now,
+    )
+    .run();
+  await appendEquipmentEventRow(env, {
+    eventId: derivedEventId("see", input.equipmentId, 1, "issue"),
+    tenantId: input.tenantId,
+    equipmentId: input.equipmentId,
+    equipmentVersion: 1,
+    eventKind: "issue",
+    actorUserId: actor.userId,
+    actorRole: actor.role,
+    detail: input.assignedUserId
+      ? `Issued to ${input.assignedUserId}`
+      : "Added to unassigned stock",
+    evidence: null,
+    occurredAt: input.now,
+    recordedAt: input.now,
+    deviceActionId: null,
+  });
+  return await requireEquipment(env, input.tenantId, input.equipmentId);
+}
+
+export interface EquipmentInspectionInput {
+  tenantId: string;
+  equipmentId: string;
+  actorUserId: string;
+  result: "pass" | "fail";
+  detail: string;
+  evidence: SafetyEvidence | null;
+  now: string;
+}
+
+/**
+ * Inspection is competency-bound. A failed inspection quarantines the item
+ * immediately; a passing inspection is the only way a quarantined item returns
+ * to service, and it resets the next due date from the recorded interval.
+ */
+export async function recordEquipmentInspection(
+  env: AppEnv,
+  input: EquipmentInspectionInput,
+): Promise<SafetyEquipmentRecord> {
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  requireRole(
+    actor,
+    EQUIPMENT_AUTHORITY_ROLES,
+    "safety_inspection_authority_required",
+    "Inspecting safety equipment requires current equipment authority.",
+  );
+  const equipment = await requireEquipment(env, input.tenantId, input.equipmentId);
+  if (equipment.status === "retired" || equipment.status === "replaced") {
+    throw new SafetyError(
+      "safety_equipment_state_invalid",
+      409,
+      "This equipment is no longer in the fleet.",
+    );
+  }
+  const nextVersion = equipment.version + 1;
+  const dueAt = new Date(
+    Date.parse(input.now) + equipment.inspection_interval_days * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const nextStatus: SafetyEquipmentStatus = input.result === "pass" ? "in_service" : "quarantined";
+  const updated = await env.DB.prepare(
+    `UPDATE safety_equipment
+        SET version = ?, status = ?, last_inspection_at = ?, last_inspection_result = ?,
+            inspection_due_at = ?, updated_at = ?
+      WHERE tenant_id = ? AND equipment_id = ? AND version = ?`,
+  )
+    .bind(
+      nextVersion,
+      nextStatus,
+      input.now,
+      input.result,
+      dueAt,
+      input.now,
+      input.tenantId,
+      input.equipmentId,
+      equipment.version,
+    )
+    .run();
+  if (d1Changes(updated) !== 1) {
+    throw new SafetyError(
+      "safety_equipment_version_conflict",
+      409,
+      "This equipment record changed while the inspection was recorded.",
+    );
+  }
+  await appendEquipmentEventRow(env, {
+    eventId: derivedEventId(
+      "see",
+      input.equipmentId,
+      nextVersion,
+      input.result === "pass" ? "inspection_pass" : "inspection_fail",
+    ),
+    tenantId: input.tenantId,
+    equipmentId: input.equipmentId,
+    equipmentVersion: nextVersion,
+    eventKind: input.result === "pass" ? "inspection_pass" : "inspection_fail",
+    actorUserId: actor.userId,
+    actorRole: actor.role,
+    detail: input.detail,
+    evidence: input.evidence,
+    occurredAt: input.now,
+    recordedAt: input.now,
+    deviceActionId: null,
+  });
+  return await requireEquipment(env, input.tenantId, input.equipmentId);
+}
+
+export interface EquipmentDefectInput {
+  tenantId: string;
+  equipmentId: string;
+  actorUserId: string;
+  detail: string;
+  evidence: SafetyEvidence | null;
+  deviceActionId: string | null;
+  occurredAt: string;
+  now: string;
+}
+
+/**
+ * Reporting a defect is a worker right, and it takes the item out of service
+ * immediately. Nobody needs an inspector's role to say a harness is damaged.
+ */
+export async function reportEquipmentDefect(
+  env: AppEnv,
+  input: EquipmentDefectInput,
+): Promise<SafetyEquipmentRecord> {
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  const equipment = await requireEquipment(env, input.tenantId, input.equipmentId);
+  if (equipment.status === "retired" || equipment.status === "replaced") {
+    throw new SafetyError(
+      "safety_equipment_state_invalid",
+      409,
+      "This equipment is no longer in the fleet.",
+    );
+  }
+  if (equipment.status === "defective") return equipment;
+  const nextVersion = equipment.version + 1;
+  const updated = await env.DB.prepare(
+    `UPDATE safety_equipment
+        SET version = ?, status = 'defective', updated_at = ?
+      WHERE tenant_id = ? AND equipment_id = ? AND version = ?`,
+  )
+    .bind(nextVersion, input.now, input.tenantId, input.equipmentId, equipment.version)
+    .run();
+  if (d1Changes(updated) !== 1) {
+    throw new SafetyError(
+      "safety_equipment_version_conflict",
+      409,
+      "This equipment record changed while the defect was recorded.",
+    );
+  }
+  await appendEquipmentEventRow(env, {
+    eventId: derivedEventId("see", input.equipmentId, nextVersion, "defect_reported"),
+    tenantId: input.tenantId,
+    equipmentId: input.equipmentId,
+    equipmentVersion: nextVersion,
+    eventKind: "defect_reported",
+    actorUserId: actor.userId,
+    actorRole: actor.role,
+    detail: input.detail,
+    evidence: input.evidence,
+    occurredAt: input.occurredAt,
+    recordedAt: input.now,
+    deviceActionId: input.deviceActionId,
+  });
+  return await requireEquipment(env, input.tenantId, input.equipmentId);
+}
+
+export interface ReplaceEquipmentInput {
+  tenantId: string;
+  equipmentId: string;
+  replacementEquipmentId: string;
+  replacementSerialNumber: string;
+  actorUserId: string;
+  detail: string;
+  now: string;
+}
+
+export async function replaceSafetyEquipment(
+  env: AppEnv,
+  input: ReplaceEquipmentInput,
+): Promise<{ replaced: SafetyEquipmentRecord; replacement: SafetyEquipmentRecord }> {
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  requireRole(
+    actor,
+    EQUIPMENT_AUTHORITY_ROLES,
+    "safety_inspection_authority_required",
+    "Replacing safety equipment requires current equipment authority.",
+  );
+  const equipment = await requireEquipment(env, input.tenantId, input.equipmentId);
+  if (equipment.status === "retired" || equipment.status === "replaced") {
+    throw new SafetyError(
+      "safety_equipment_state_invalid",
+      409,
+      "This equipment is no longer in the fleet.",
+    );
+  }
+  const replacement = await issueSafetyEquipment(env, {
+    tenantId: input.tenantId,
+    equipmentId: input.replacementEquipmentId,
+    equipmentKind: equipment.equipment_kind,
+    serialNumber: input.replacementSerialNumber,
+    assignedUserId: equipment.assigned_user_id,
+    inspectionIntervalDays: equipment.inspection_interval_days,
+    actorUserId: input.actorUserId,
+    now: input.now,
+  });
+  const nextVersion = equipment.version + 1;
+  const updated = await env.DB.prepare(
+    `UPDATE safety_equipment
+        SET version = ?, status = 'replaced', replaced_by_equipment_id = ?,
+            assigned_user_id = NULL, assigned_at = NULL, updated_at = ?
+      WHERE tenant_id = ? AND equipment_id = ? AND version = ?`,
+  )
+    .bind(
+      nextVersion,
+      input.replacementEquipmentId,
+      input.now,
+      input.tenantId,
+      input.equipmentId,
+      equipment.version,
+    )
+    .run();
+  if (d1Changes(updated) !== 1) {
+    throw new SafetyError(
+      "safety_equipment_version_conflict",
+      409,
+      "This equipment record changed while the replacement was recorded.",
+    );
+  }
+  await appendEquipmentEventRow(env, {
+    eventId: derivedEventId("see", input.equipmentId, nextVersion, "replacement"),
+    tenantId: input.tenantId,
+    equipmentId: input.equipmentId,
+    equipmentVersion: nextVersion,
+    eventKind: "replacement",
+    actorUserId: actor.userId,
+    actorRole: actor.role,
+    detail: input.detail,
+    evidence: null,
+    occurredAt: input.now,
+    recordedAt: input.now,
+    deviceActionId: null,
+  });
+  return {
+    replaced: await requireEquipment(env, input.tenantId, input.equipmentId),
+    replacement,
+  };
+}
+
+export interface RecordSafetyNotificationInput {
+  tenantId: string;
+  notificationId: string;
+  occurrenceId: string;
+  authorityName: string;
+  authorityJurisdiction: string;
+  notificationKind: SafetyNotificationKind;
+  required: boolean;
+  dueAt: string | null;
+  determinationReason: string;
+  actorUserId: string;
+  now: string;
+}
+
+/**
+ * Declaring that an external authority must be told — and declaring that one
+ * need not be — are both authority acts with a recorded reason. A pending
+ * required notification blocks the affected scope until it is submitted.
+ */
+export async function recordSafetyNotification(
+  env: AppEnv,
+  input: RecordSafetyNotificationInput,
+): Promise<SafetyNotificationRecord> {
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  requireRole(
+    actor,
+    NOTIFICATION_AUTHORITY_ROLES,
+    "safety_notification_authority_required",
+    "Recording an external notification requires owner or operations authority.",
+  );
+  await requireOccurrence(env, input.tenantId, input.occurrenceId);
+  if (
+    !OPAQUE_ID.test(input.notificationId) ||
+    !boundedText(input.authorityName, 2, 200) ||
+    !boundedText(input.authorityJurisdiction, 2, 160) ||
+    !SAFETY_NOTIFICATION_KINDS.includes(input.notificationKind) ||
+    !boundedText(input.determinationReason, 3, 2000) ||
+    (input.dueAt !== null && !ISO_INSTANT.test(input.dueAt))
+  ) {
+    throw new SafetyError(
+      "safety_notification_input_invalid",
+      400,
+      "Invalid safety-notification input.",
+    );
+  }
+  const existing = await notificationById(env, input.tenantId, input.notificationId);
+  if (existing) return existing;
+  await env.DB.prepare(
+    `INSERT INTO safety_notifications
+       (notification_id, tenant_id, occurrence_id, authority_name, authority_jurisdiction,
+        notification_kind, required, state, due_at, determination_reason, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      input.notificationId,
+      input.tenantId,
+      input.occurrenceId,
+      input.authorityName,
+      input.authorityJurisdiction,
+      input.notificationKind,
+      input.required ? 1 : 0,
+      input.required ? "pending" : "not_required",
+      input.dueAt,
+      input.determinationReason,
+      input.now,
+      input.now,
+    )
+    .run();
+  return await requireNotification(env, input.tenantId, input.notificationId);
+}
+
+export interface SubmitSafetyNotificationInput {
+  tenantId: string;
+  notificationId: string;
+  actorUserId: string;
+  externalReference: string;
+  evidence: SafetyEvidence | null;
+  now: string;
+}
+
+export async function submitSafetyNotification(
+  env: AppEnv,
+  input: SubmitSafetyNotificationInput,
+): Promise<SafetyNotificationRecord> {
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  requireRole(
+    actor,
+    NOTIFICATION_AUTHORITY_ROLES,
+    "safety_notification_authority_required",
+    "Submitting an external notification requires owner or operations authority.",
+  );
+  const notification = await requireNotification(env, input.tenantId, input.notificationId);
+  if (notification.state !== "pending") {
+    if (notification.state === "submitted") return notification;
+    throw new SafetyError(
+      "safety_notification_state_invalid",
+      409,
+      "This notification is no longer pending.",
+    );
+  }
+  if (!boundedText(input.externalReference, 1, 240)) {
+    throw new SafetyError(
+      "safety_notification_input_invalid",
+      400,
+      "An external reference from the authority is required.",
+    );
+  }
+  const updated = await env.DB.prepare(
+    `UPDATE safety_notifications
+        SET state = 'submitted', submitted_at = ?, submitted_by_user_id = ?,
+            external_reference = ?, evidence_refs_json = ?, evidence_sha256 = ?, updated_at = ?
+      WHERE tenant_id = ? AND notification_id = ? AND state = 'pending'`,
+  )
+    .bind(
+      input.now,
+      actor.userId,
+      input.externalReference,
+      input.evidence?.refsJson ?? null,
+      input.evidence?.sha256 ?? null,
+      input.now,
+      input.tenantId,
+      input.notificationId,
+    )
+    .run();
+  if (d1Changes(updated) !== 1) {
+    throw new SafetyError(
+      "safety_notification_state_invalid",
+      409,
+      "This notification is no longer pending.",
+    );
+  }
+  return await requireNotification(env, input.tenantId, input.notificationId);
+}
+
+export interface AssignCorrectiveActionInput {
+  tenantId: string;
+  correctiveActionId: string;
+  occurrenceId: string;
+  riskLevel: SafetySeverity;
+  ownerUserId: string;
+  dueAt: string;
+  description: string;
+  recurrenceOfId: string | null;
+  actorUserId: string;
+  now: string;
+}
+
+export async function assignCorrectiveAction(
+  env: AppEnv,
+  input: AssignCorrectiveActionInput,
+): Promise<SafetyCorrectiveActionRecord> {
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  requireRole(
+    actor,
+    RESPONSE_AUTHORITY_ROLES,
+    "safety_assignment_authority_required",
+    "Assigning a corrective action requires current production authority.",
+  );
+  await requireOccurrence(env, input.tenantId, input.occurrenceId);
+  await safetyActor(env, input.tenantId, input.ownerUserId);
+  if (
+    !OPAQUE_ID.test(input.correctiveActionId) ||
+    !SAFETY_SEVERITIES.includes(input.riskLevel) ||
+    !ISO_INSTANT.test(input.dueAt) ||
+    !boundedText(input.description, 3, 4000) ||
+    (input.recurrenceOfId !== null && !OPAQUE_ID.test(input.recurrenceOfId))
+  ) {
+    throw new SafetyError(
+      "safety_corrective_action_input_invalid",
+      400,
+      "Invalid corrective-action input.",
+    );
+  }
+  const existing = await correctiveActionById(env, input.tenantId, input.correctiveActionId);
+  if (existing) return existing;
+  await env.DB.prepare(
+    `INSERT INTO safety_corrective_actions
+       (corrective_action_id, tenant_id, occurrence_id, version, state, risk_level,
+        owner_user_id, assigned_by_user_id, due_at, description, recurrence_of_id,
+        created_at, updated_at)
+     VALUES (?, ?, ?, 1, 'open', ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      input.correctiveActionId,
+      input.tenantId,
+      input.occurrenceId,
+      input.riskLevel,
+      input.ownerUserId,
+      actor.userId,
+      input.dueAt,
+      input.description,
+      input.recurrenceOfId,
+      input.now,
+      input.now,
+    )
+    .run();
+  await appendCorrectiveActionEventRow(env, {
+    eventId: derivedEventId("scae", input.correctiveActionId, 1, "assigned"),
+    tenantId: input.tenantId,
+    correctiveActionId: input.correctiveActionId,
+    correctiveActionVersion: 1,
+    eventKind: "assigned",
+    actorUserId: actor.userId,
+    actorRole: actor.role,
+    detail: input.description,
+    recordedAt: input.now,
+  });
+  return await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+}
+
+export interface SubmitCorrectiveEvidenceInput {
+  tenantId: string;
+  correctiveActionId: string;
+  actorUserId: string;
+  evidence: SafetyEvidence;
+  detail: string;
+  now: string;
+}
+
+export async function submitCorrectiveActionEvidence(
+  env: AppEnv,
+  input: SubmitCorrectiveEvidenceInput,
+): Promise<SafetyCorrectiveActionRecord> {
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  const action = await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+  if (action.state !== "open") {
+    if (action.state === "evidence_submitted") return action;
+    throw new SafetyError(
+      "safety_corrective_action_state_invalid",
+      409,
+      "This corrective action is no longer open for evidence.",
+    );
+  }
+  if (!SHA256.test(input.evidence.sha256) || !validEvidenceRefsJson(input.evidence.refsJson)) {
+    throw new SafetyError(
+      "safety_evidence_invalid",
+      400,
+      "Corrective-action evidence must carry hashed immutable references.",
+    );
+  }
+  const nextVersion = action.version + 1;
+  const updated = await env.DB.prepare(
+    `UPDATE safety_corrective_actions
+        SET version = ?, state = 'evidence_submitted', evidence_refs_json = ?, evidence_sha256 = ?,
+            evidence_captured_by_user_id = ?, evidence_submitted_at = ?, updated_at = ?
+      WHERE tenant_id = ? AND corrective_action_id = ? AND version = ? AND state = 'open'`,
+  )
+    .bind(
+      nextVersion,
+      input.evidence.refsJson,
+      input.evidence.sha256,
+      actor.userId,
+      input.now,
+      input.now,
+      input.tenantId,
+      input.correctiveActionId,
+      action.version,
+    )
+    .run();
+  if (d1Changes(updated) !== 1) {
+    throw new SafetyError(
+      "safety_corrective_action_state_invalid",
+      409,
+      "This corrective action changed while evidence was submitted.",
+    );
+  }
+  await appendCorrectiveActionEventRow(env, {
+    eventId: derivedEventId("scae", input.correctiveActionId, nextVersion, "evidence_submitted"),
+    tenantId: input.tenantId,
+    correctiveActionId: input.correctiveActionId,
+    correctiveActionVersion: nextVersion,
+    eventKind: "evidence_submitted",
+    actorUserId: actor.userId,
+    actorRole: actor.role,
+    detail: input.detail,
+    recordedAt: input.now,
+  });
+  return await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+}
+
+export interface VerifyCorrectiveActionInput {
+  tenantId: string;
+  correctiveActionId: string;
+  actorUserId: string;
+  verdict: "verified" | "rejected";
+  detail: string;
+  now: string;
+}
+
+/**
+ * Independent verification. The occurrence reporter, the action owner, and the
+ * person who captured the closure evidence are all excluded here and again by
+ * the D1 trigger, so a compromised caller cannot close its own loop.
+ */
+export async function verifyCorrectiveAction(
+  env: AppEnv,
+  input: VerifyCorrectiveActionInput,
+): Promise<SafetyCorrectiveActionRecord> {
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  requireRole(
+    actor,
+    RESPONSE_AUTHORITY_ROLES,
+    "safety_verification_authority_required",
+    "Verifying a corrective action requires current production authority.",
+  );
+  const action = await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+  if (action.state !== "evidence_submitted") {
+    throw new SafetyError(
+      "safety_corrective_action_state_invalid",
+      409,
+      "Only a corrective action with submitted evidence can be verified.",
+    );
+  }
+  const occurrence = await requireOccurrence(env, input.tenantId, action.occurrence_id);
+  if (
+    actor.userId === action.owner_user_id ||
+    actor.userId === action.evidence_captured_by_user_id ||
+    actor.userId === occurrence.reported_by_user_id
+  ) {
+    throw new SafetyError(
+      "safety_verification_separation_required",
+      403,
+      "The reporter, owner, and evidence capturer cannot verify this closure.",
+    );
+  }
+  const nextVersion = action.version + 1;
+  const updated =
+    input.verdict === "verified"
+      ? await env.DB.prepare(
+          `UPDATE safety_corrective_actions
+              SET version = ?, state = 'verified', verified_by_user_id = ?, verified_at = ?, updated_at = ?
+            WHERE tenant_id = ? AND corrective_action_id = ? AND version = ?
+              AND state = 'evidence_submitted'`,
+        )
+          .bind(
+            nextVersion,
+            actor.userId,
+            input.now,
+            input.now,
+            input.tenantId,
+            input.correctiveActionId,
+            action.version,
+          )
+          .run()
+      : await env.DB.prepare(
+          `UPDATE safety_corrective_actions
+              SET version = ?, state = 'rejected', updated_at = ?
+            WHERE tenant_id = ? AND corrective_action_id = ? AND version = ?
+              AND state = 'evidence_submitted'`,
+        )
+          .bind(
+            nextVersion,
+            input.now,
+            input.tenantId,
+            input.correctiveActionId,
+            action.version,
+          )
+          .run();
+  if (d1Changes(updated) !== 1) {
+    throw new SafetyError(
+      "safety_corrective_action_state_invalid",
+      409,
+      "This corrective action changed while it was being verified.",
+    );
+  }
+  await appendCorrectiveActionEventRow(env, {
+    eventId: derivedEventId("scae", input.correctiveActionId, nextVersion, input.verdict),
+    tenantId: input.tenantId,
+    correctiveActionId: input.correctiveActionId,
+    correctiveActionVersion: nextVersion,
+    eventKind: input.verdict,
+    actorUserId: actor.userId,
+    actorRole: actor.role,
+    detail: input.detail,
+    recordedAt: input.now,
+  });
+  return await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+}
+
+export interface CloseCorrectiveActionInput {
+  tenantId: string;
+  correctiveActionId: string;
+  actorUserId: string;
+  detail: string;
+  now: string;
+}
+
+export async function closeCorrectiveAction(
+  env: AppEnv,
+  input: CloseCorrectiveActionInput,
+): Promise<SafetyCorrectiveActionRecord> {
+  const actor = await safetyActor(env, input.tenantId, input.actorUserId);
+  requireRole(
+    actor,
+    RESPONSE_AUTHORITY_ROLES,
+    "safety_verification_authority_required",
+    "Closing a corrective action requires current production authority.",
+  );
+  const action = await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+  if (action.state !== "verified") {
+    if (action.state === "closed") return action;
+    throw new SafetyError(
+      "safety_corrective_action_state_invalid",
+      409,
+      "Only an independently verified corrective action can be closed.",
+    );
+  }
+  const nextVersion = action.version + 1;
+  const updated = await env.DB.prepare(
+    `UPDATE safety_corrective_actions
+        SET version = ?, state = 'closed', closed_at = ?, updated_at = ?
+      WHERE tenant_id = ? AND corrective_action_id = ? AND version = ? AND state = 'verified'`,
+  )
+    .bind(
+      nextVersion,
+      input.now,
+      input.now,
+      input.tenantId,
+      input.correctiveActionId,
+      action.version,
+    )
+    .run();
+  if (d1Changes(updated) !== 1) {
+    throw new SafetyError(
+      "safety_corrective_action_state_invalid",
+      409,
+      "This corrective action changed while it was being closed.",
+    );
+  }
+  await appendCorrectiveActionEventRow(env, {
+    eventId: derivedEventId("scae", input.correctiveActionId, nextVersion, "closed"),
+    tenantId: input.tenantId,
+    correctiveActionId: input.correctiveActionId,
+    correctiveActionVersion: nextVersion,
+    eventKind: "closed",
+    actorUserId: actor.userId,
+    actorRole: actor.role,
+    detail: input.detail,
+    recordedAt: input.now,
+  });
+  return await requireCorrectiveAction(env, input.tenantId, input.correctiveActionId);
+}
+
+export interface EvaluateSafetyReadinessInput {
+  tenantId: string;
+  /**
+   * The full scope chain. A work package inherits its job and the tenant, so
+   * the caller passes every level it wants enforced rather than this module
+   * guessing a hierarchy it cannot see.
+   */
+  scopes: SafetyScopeRef[];
+  /** App user ids whose individually issued PPE gates this release. */
+  subjectUserIds: string[];
+  now: string;
+}
+
+/**
+ * The single readiness verdict consumed by Work Package release, schedule
+ * release, and the field panel. It fails closed: an unreadable input is a
+ * blocker, never a pass.
+ */
+export async function evaluateSafetyReadiness(
+  env: AppEnv,
+  input: EvaluateSafetyReadinessInput,
+): Promise<SafetyReadiness> {
+  if (!TENANT_ID.test(input.tenantId) || !ISO_INSTANT.test(input.now)) {
+    throw new SafetyError("safety_readiness_input_invalid", 400, "Invalid readiness input.");
+  }
+  const scopes = input.scopes.filter(
+    (scope) => SAFETY_SCOPE_TYPES.includes(scope.type) && SCOPE_ID.test(scope.id),
+  );
+  if (scopes.length !== input.scopes.length) {
+    throw new SafetyError("safety_readiness_input_invalid", 400, "Invalid readiness scope.");
+  }
+  const subjects = input.subjectUserIds.filter((userId) => USER_ID.test(userId));
+  if (subjects.length !== input.subjectUserIds.length) {
+    throw new SafetyError("safety_readiness_input_invalid", 400, "Invalid readiness subject.");
+  }
+  const blockers: SafetyBlocker[] = [];
+
+  if (scopes.length > 0) {
+    const scopeClause = scopes.map(() => "(scope_type = ? AND scope_id = ?)").join(" OR ");
+    const scopeBindings = scopes.flatMap((scope) => [scope.type, scope.id]);
+    const occurrences = await env.DB.prepare(
+      `SELECT occurrence_id, occurrence_kind, state, stop_active, severity
+         FROM safety_occurrences
+        WHERE tenant_id = ? AND (${scopeClause})
+          AND (stop_active = 1 OR state NOT IN ('controlled', 'closed'))
+        ORDER BY reported_at DESC
+        LIMIT 200`,
+    )
+      .bind(input.tenantId, ...scopeBindings)
+      .all<{
+        occurrence_id: string;
+        occurrence_kind: SafetyOccurrenceKind;
+        state: SafetyOccurrenceState;
+        stop_active: number;
+        severity: SafetySeverity;
+      }>();
+    for (const row of occurrences.results) {
+      if (row.stop_active === 1) {
+        blockers.push({
+          code: "safety_stop_active",
+          subject_type: "occurrence",
+          subject_id: row.occurrence_id,
+          detail: `An active ${row.occurrence_kind} stop is in force (${row.state}).`,
+        });
+      } else {
+        blockers.push({
+          code: "safety_event_uncontrolled",
+          subject_type: "occurrence",
+          subject_id: row.occurrence_id,
+          detail: `A ${row.severity} ${row.occurrence_kind} is not yet controlled (${row.state}).`,
+        });
+      }
+    }
+
+    const notifications = await env.DB.prepare(
+      `SELECT notification.notification_id, notification.authority_name
+         FROM safety_notifications AS notification
+         JOIN safety_occurrences AS occurrence
+           ON occurrence.occurrence_id = notification.occurrence_id
+          AND occurrence.tenant_id = notification.tenant_id
+        WHERE notification.tenant_id = ? AND notification.required = 1
+          AND notification.state = 'pending'
+          AND (${scopeClause.replace(/scope_type/g, "occurrence.scope_type").replace(/scope_id/g, "occurrence.scope_id")})
+        LIMIT 100`,
+    )
+      .bind(input.tenantId, ...scopeBindings)
+      .all<{ notification_id: string; authority_name: string }>();
+    for (const row of notifications.results) {
+      blockers.push({
+        code: "safety_notification_outstanding",
+        subject_type: "notification",
+        subject_id: row.notification_id,
+        detail: `A required notification to ${row.authority_name} is unresolved.`,
+      });
+    }
+
+    const overdue = await env.DB.prepare(
+      `SELECT action.corrective_action_id, action.risk_level, action.due_at
+         FROM safety_corrective_actions AS action
+         JOIN safety_occurrences AS occurrence
+           ON occurrence.occurrence_id = action.occurrence_id
+          AND occurrence.tenant_id = action.tenant_id
+        WHERE action.tenant_id = ? AND action.risk_level IN ('high', 'critical')
+          AND action.state NOT IN ('closed', 'rejected') AND action.due_at < ?
+          AND (${scopeClause.replace(/scope_type/g, "occurrence.scope_type").replace(/scope_id/g, "occurrence.scope_id")})
+        LIMIT 100`,
+    )
+      .bind(input.tenantId, input.now, ...scopeBindings)
+      .all<{ corrective_action_id: string; risk_level: SafetySeverity; due_at: string }>();
+    for (const row of overdue.results) {
+      blockers.push({
+        code: "safety_corrective_action_overdue",
+        subject_type: "corrective_action",
+        subject_id: row.corrective_action_id,
+        detail: `A ${row.risk_level}-risk corrective action was due ${row.due_at}.`,
+      });
+    }
+  }
+
+  if (subjects.length > 0) {
+    const placeholders = subjects.map(() => "?").join(", ");
+    const equipment = await env.DB.prepare(
+      `SELECT equipment_id, equipment_kind, status, inspection_due_at, last_inspection_result
+         FROM safety_equipment
+        WHERE tenant_id = ? AND assigned_user_id IN (${placeholders})
+          AND status NOT IN ('replaced', 'retired')
+        LIMIT 200`,
+    )
+      .bind(input.tenantId, ...subjects)
+      .all<{
+        equipment_id: string;
+        equipment_kind: SafetyEquipmentKind;
+        status: SafetyEquipmentStatus;
+        inspection_due_at: string | null;
+        last_inspection_result: "pass" | "fail" | null;
+      }>();
+    for (const row of equipment.results) {
+      if (row.status !== "in_service") {
+        blockers.push({
+          code: "safety_equipment_unserviceable",
+          subject_type: "equipment",
+          subject_id: row.equipment_id,
+          detail: `Assigned ${row.equipment_kind} is ${row.status}.`,
+        });
+        continue;
+      }
+      // Never inspected and past-due are the same fact for a release gate:
+      // there is no current evidence that this item is safe to use.
+      if (!row.inspection_due_at || row.inspection_due_at <= input.now) {
+        blockers.push({
+          code: "safety_equipment_unserviceable",
+          subject_type: "equipment",
+          subject_id: row.equipment_id,
+          detail: row.inspection_due_at
+            ? `Assigned ${row.equipment_kind} inspection expired ${row.inspection_due_at}.`
+            : `Assigned ${row.equipment_kind} has no recorded inspection.`,
+        });
+      } else if (row.last_inspection_result === "fail") {
+        blockers.push({
+          code: "safety_equipment_unserviceable",
+          subject_type: "equipment",
+          subject_id: row.equipment_id,
+          detail: `Assigned ${row.equipment_kind} failed its last inspection.`,
+        });
+      }
+    }
+  }
+
+  return { ready: blockers.length === 0, blockers, scopes, evaluated_at: input.now };
+}
+
+export interface RecordReadinessSnapshotInput {
+  tenantId: string;
+  snapshotId: string;
+  scope: SafetyScopeRef;
+  consumer: SafetyReadinessConsumer;
+  readiness: SafetyReadiness;
+  evaluatedByUserId: string;
+  now: string;
+}
+
+/**
+ * Durably records exactly what a release gate saw. The snapshot is immutable:
+ * a later release cannot rewrite the record of an earlier refusal.
+ */
+export async function recordSafetyReadinessSnapshot(
+  env: AppEnv,
+  input: RecordReadinessSnapshotInput,
+): Promise<string> {
+  if (
+    !OPAQUE_ID.test(input.snapshotId) ||
+    !SAFETY_READINESS_CONSUMERS.includes(input.consumer) ||
+    !SAFETY_SCOPE_TYPES.includes(input.scope.type) ||
+    !SCOPE_ID.test(input.scope.id)
+  ) {
+    throw new SafetyError("safety_readiness_input_invalid", 400, "Invalid readiness snapshot.");
+  }
+  const blockersJson = JSON.stringify(input.readiness.blockers);
+  const codes = [...new Set(input.readiness.blockers.map((blocker) => blocker.code))]
+    .sort()
+    .join(",");
+  const digest = await sha256Hex(
+    JSON.stringify({
+      blockers: input.readiness.blockers,
+      consumer: input.consumer,
+      evaluated_at: input.now,
+      ready: input.readiness.ready,
+      scope_id: input.scope.id,
+      scope_type: input.scope.type,
+      tenant_id: input.tenantId,
+    }),
+  );
+  await env.DB.prepare(
+    `INSERT INTO safety_readiness_snapshots
+       (snapshot_id, tenant_id, scope_type, scope_id, consumer, ready, blocker_codes,
+        blockers_json, snapshot_sha256, evaluated_by_user_id, evaluated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT DO NOTHING`,
+  )
+    .bind(
+      input.snapshotId,
+      input.tenantId,
+      input.scope.type,
+      input.scope.id,
+      input.consumer,
+      input.readiness.ready ? 1 : 0,
+      codes,
+      blockersJson,
+      digest,
+      input.evaluatedByUserId,
+      input.now,
+    )
+    .run();
+  return digest;
+}
+
+export interface SafetyPanelProjection {
+  version: 1;
+  actor_role: string;
+  assigned_equipment: Array<{
+    equipment_id: string;
+    equipment_kind: SafetyEquipmentKind;
+    serial_number: string;
+    status: SafetyEquipmentStatus;
+    inspection_due_at: string | null;
+  }>;
+  open_occurrences: Array<{
+    occurrence_id: string;
+    occurrence_kind: SafetyOccurrenceKind;
+    severity: SafetySeverity;
+    state: SafetyOccurrenceState;
+    stop_active: boolean;
+    scope_type: SafetyScopeType;
+    scope_id: string;
+    summary: string;
+  }>;
+  my_corrective_actions: Array<{
+    corrective_action_id: string;
+    state: SafetyCorrectiveActionState;
+    risk_level: SafetySeverity;
+    due_at: string;
+    description: string;
+  }>;
+  /**
+   * Capabilities the *current* actor holds. Reporting and make-safe are always
+   * present because they are rights; the rest reflect the actor's exact role,
+   * so the device never renders a control it cannot use.
+   */
+  allowed_actions: string[];
+}
+
+/**
+ * The offline seed for the global safety panel. It is deliberately independent
+ * of any current work package or assignment: a worker on an unassigned day must
+ * still be able to open this and report.
+ */
+export async function safetyPanelProjection(
+  env: AppEnv,
+  tenantId: string,
+  userId: string,
+): Promise<SafetyPanelProjection> {
+  const actor = await safetyActor(env, tenantId, userId);
+  const equipment = await env.DB.prepare(
+    `SELECT equipment_id, equipment_kind, serial_number, status, inspection_due_at
+       FROM safety_equipment
+      WHERE tenant_id = ? AND assigned_user_id = ? AND status NOT IN ('replaced', 'retired')
+      ORDER BY equipment_kind
+      LIMIT 100`,
+  )
+    .bind(tenantId, userId)
+    .all<{
+      equipment_id: string;
+      equipment_kind: SafetyEquipmentKind;
+      serial_number: string;
+      status: SafetyEquipmentStatus;
+      inspection_due_at: string | null;
+    }>();
+  const occurrences = await env.DB.prepare(
+    `SELECT occurrence_id, occurrence_kind, severity, state, stop_active, scope_type, scope_id, summary
+       FROM safety_occurrences
+      WHERE tenant_id = ? AND state != 'closed'
+      ORDER BY reported_at DESC
+      LIMIT 50`,
+  )
+    .bind(tenantId)
+    .all<{
+      occurrence_id: string;
+      occurrence_kind: SafetyOccurrenceKind;
+      severity: SafetySeverity;
+      state: SafetyOccurrenceState;
+      stop_active: number;
+      scope_type: SafetyScopeType;
+      scope_id: string;
+      summary: string;
+    }>();
+  const actions = await env.DB.prepare(
+    `SELECT corrective_action_id, state, risk_level, due_at, description
+       FROM safety_corrective_actions
+      WHERE tenant_id = ? AND owner_user_id = ? AND state NOT IN ('closed', 'rejected')
+      ORDER BY due_at
+      LIMIT 50`,
+  )
+    .bind(tenantId, userId)
+    .all<{
+      corrective_action_id: string;
+      state: SafetyCorrectiveActionState;
+      risk_level: SafetySeverity;
+      due_at: string;
+      description: string;
+    }>();
+  return {
+    version: 1,
+    actor_role: actor.role,
+    assigned_equipment: equipment.results,
+    open_occurrences: occurrences.results.map((row) => ({
+      ...row,
+      stop_active: row.stop_active === 1,
+    })),
+    my_corrective_actions: actions.results,
+    allowed_actions: [
+      "safety.report_occurrence",
+      "safety.make_safe",
+      "safety.equipment_defect",
+      "safety.rescue_request",
+      ...(EQUIPMENT_AUTHORITY_ROLES.has(actor.role) ? ["safety.equipment_inspect"] : []),
+      ...(RESPONSE_AUTHORITY_ROLES.has(actor.role)
+        ? ["safety.rescue_command", "safety.release", "safety.verify_corrective_action"]
+        : []),
+      ...(NOTIFICATION_AUTHORITY_ROLES.has(actor.role) ? ["safety.notify_authority"] : []),
+    ],
+  };
+}
+
+export async function listSafetyOccurrenceEvents(
+  env: AppEnv,
+  tenantId: string,
+  occurrenceId: string,
+  limit = 50,
+): Promise<
+  Array<{
+    event_id: string;
+    occurrence_version: number;
+    event_kind: string;
+    actor_user_id: string;
+    actor_role: string;
+    detail: string;
+    captured_offline: number;
+    occurred_at: string;
+    recorded_at: string;
+  }>
+> {
+  if (!TENANT_ID.test(tenantId) || !OPAQUE_ID.test(occurrenceId)) return [];
+  const bounded = Number.isInteger(limit) ? Math.max(1, Math.min(200, limit)) : 50;
+  const rows = await env.DB.prepare(
+    `SELECT event_id, occurrence_version, event_kind, actor_user_id, actor_role, detail,
+            captured_offline, occurred_at, recorded_at
+       FROM safety_occurrence_events
+      WHERE tenant_id = ? AND occurrence_id = ?
+      ORDER BY occurrence_version DESC, recorded_at DESC
+      LIMIT ?`,
+  )
+    .bind(tenantId, occurrenceId, bounded)
+    .all<{
+      event_id: string;
+      occurrence_version: number;
+      event_kind: string;
+      actor_user_id: string;
+      actor_role: string;
+      detail: string;
+      captured_offline: number;
+      occurred_at: string;
+      recorded_at: string;
+    }>();
+  return rows.results;
+}
+
+export async function getSafetyOccurrence(
+  env: AppEnv,
+  tenantId: string,
+  occurrenceId: string,
+): Promise<SafetyOccurrenceRecord | null> {
+  if (!TENANT_ID.test(tenantId) || !OPAQUE_ID.test(occurrenceId)) return null;
+  return await occurrenceById(env, tenantId, occurrenceId);
+}
+
+export async function getSafetyEquipment(
+  env: AppEnv,
+  tenantId: string,
+  equipmentId: string,
+): Promise<SafetyEquipmentRecord | null> {
+  if (!TENANT_ID.test(tenantId) || !OPAQUE_ID.test(equipmentId)) return null;
+  return await equipmentById(env, tenantId, equipmentId);
+}
+
+export async function getSafetyCorrectiveAction(
+  env: AppEnv,
+  tenantId: string,
+  correctiveActionId: string,
+): Promise<SafetyCorrectiveActionRecord | null> {
+  if (!TENANT_ID.test(tenantId) || !OPAQUE_ID.test(correctiveActionId)) return null;
+  return await correctiveActionById(env, tenantId, correctiveActionId);
+}
+
+/**
+ * Stable identity for a physical event, so a duplicate offline report of the
+ * same hazard by the same person at the same instant converges rather than
+ * inflating the incident count.
+ */
+export async function occurrenceFingerprint(input: {
+  tenantId: string;
+  occurrenceKind: SafetyOccurrenceKind;
+  scope: SafetyScopeRef;
+  reportedByUserId: string;
+  reportedAt: string;
+  summary: string;
+}): Promise<string> {
+  return await sha256Hex(
+    JSON.stringify({
+      occurrence_kind: input.occurrenceKind,
+      reported_at: input.reportedAt,
+      reported_by_user_id: input.reportedByUserId,
+      scope_id: input.scope.id,
+      scope_type: input.scope.type,
+      summary: input.summary.trim(),
+      tenant_id: input.tenantId,
+    }),
+  );
+}
+
+interface AdvanceOccurrenceInput {
+  version: number;
+  state: SafetyOccurrenceState;
+  stopActive: number;
+  severity: SafetySeverity;
+  rescueRequired: number;
+  rescueCompletedAt: string | null;
+  closedAt: string | null;
+  now: string;
+}
+
+async function advanceOccurrence(
+  env: AppEnv,
+  occurrence: SafetyOccurrenceRecord,
+  next: AdvanceOccurrenceInput,
+): Promise<void> {
+  const updated = await env.DB.prepare(
+    `UPDATE safety_occurrences
+        SET version = ?, state = ?, stop_active = ?, severity = ?, rescue_required = ?,
+            rescue_completed_at = ?, closed_at = ?, updated_at = ?
+      WHERE tenant_id = ? AND occurrence_id = ? AND version = ?`,
+  )
+    .bind(
+      next.version,
+      next.state,
+      next.stopActive,
+      next.severity,
+      next.rescueRequired,
+      next.rescueCompletedAt,
+      next.closedAt,
+      next.now,
+      occurrence.tenant_id,
+      occurrence.occurrence_id,
+      occurrence.version,
+    )
+    .run();
+  if (d1Changes(updated) !== 1) {
+    throw new SafetyError(
+      "safety_occurrence_version_conflict",
+      409,
+      "This occurrence changed while the command was applied.",
+    );
+  }
+}
+
+interface OccurrenceEventRow {
+  eventId: string;
+  tenantId: string;
+  occurrenceId: string;
+  occurrenceVersion: number;
+  eventKind: string;
+  actorUserId: string;
+  actorRole: string;
+  detail: string;
+  evidence: SafetyEvidence | null;
+  capturedOffline: boolean;
+  occurredAt: string;
+  recordedAt: string;
+  deviceActionId: string | null;
+}
+
+async function appendOccurrenceEventRow(env: AppEnv, row: OccurrenceEventRow): Promise<void> {
+  assertEvidence(row.evidence);
+  await env.DB.prepare(
+    `INSERT INTO safety_occurrence_events
+       (event_id, tenant_id, occurrence_id, occurrence_version, event_kind, actor_user_id,
+        actor_role, detail, evidence_refs_json, evidence_sha256, captured_offline,
+        occurred_at, recorded_at, device_action_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT DO NOTHING`,
+  )
+    .bind(
+      row.eventId,
+      row.tenantId,
+      row.occurrenceId,
+      row.occurrenceVersion,
+      row.eventKind,
+      row.actorUserId,
+      row.actorRole,
+      row.detail,
+      row.evidence?.refsJson ?? null,
+      row.evidence?.sha256 ?? null,
+      row.capturedOffline ? 1 : 0,
+      row.occurredAt,
+      row.recordedAt,
+      row.deviceActionId,
+    )
+    .run();
+}
+
+interface EquipmentEventRow {
+  eventId: string;
+  tenantId: string;
+  equipmentId: string;
+  equipmentVersion: number;
+  eventKind: string;
+  actorUserId: string;
+  actorRole: string;
+  detail: string;
+  evidence: SafetyEvidence | null;
+  occurredAt: string;
+  recordedAt: string;
+  deviceActionId: string | null;
+}
+
+async function appendEquipmentEventRow(env: AppEnv, row: EquipmentEventRow): Promise<void> {
+  assertEvidence(row.evidence);
+  await env.DB.prepare(
+    `INSERT INTO safety_equipment_events
+       (event_id, tenant_id, equipment_id, equipment_version, event_kind, actor_user_id,
+        actor_role, detail, evidence_refs_json, evidence_sha256, occurred_at, recorded_at,
+        device_action_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT DO NOTHING`,
+  )
+    .bind(
+      row.eventId,
+      row.tenantId,
+      row.equipmentId,
+      row.equipmentVersion,
+      row.eventKind,
+      row.actorUserId,
+      row.actorRole,
+      row.detail,
+      row.evidence?.refsJson ?? null,
+      row.evidence?.sha256 ?? null,
+      row.occurredAt,
+      row.recordedAt,
+      row.deviceActionId,
+    )
+    .run();
+}
+
+interface CorrectiveActionEventRow {
+  eventId: string;
+  tenantId: string;
+  correctiveActionId: string;
+  correctiveActionVersion: number;
+  eventKind: string;
+  actorUserId: string;
+  actorRole: string;
+  detail: string;
+  recordedAt: string;
+}
+
+async function appendCorrectiveActionEventRow(
+  env: AppEnv,
+  row: CorrectiveActionEventRow,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO safety_corrective_action_events
+       (event_id, tenant_id, corrective_action_id, corrective_action_version, event_kind,
+        actor_user_id, actor_role, detail, recorded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT DO NOTHING`,
+  )
+    .bind(
+      row.eventId,
+      row.tenantId,
+      row.correctiveActionId,
+      row.correctiveActionVersion,
+      row.eventKind,
+      row.actorUserId,
+      row.actorRole,
+      row.detail,
+      row.recordedAt,
+    )
+    .run();
+}
+
+function assertEvidence(evidence: SafetyEvidence | null): void {
+  if (!evidence) return;
+  if (!SHA256.test(evidence.sha256) || !validEvidenceRefsJson(evidence.refsJson)) {
+    throw new SafetyError(
+      "safety_evidence_invalid",
+      400,
+      "Safety evidence must carry hashed immutable references.",
+    );
+  }
+}
+
+function validEvidenceRefsJson(value: string): boolean {
+  if (typeof value !== "string" || value.length < 2 || value.length > 20_000) return false;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > 100) return false;
+    return parsed.every((entry) => {
+      if (!isRecord(entry)) return false;
+      const ref = entry.ref;
+      const sha256 = entry.sha256;
+      if (typeof ref !== "string" || typeof sha256 !== "string" || !SHA256.test(sha256)) {
+        return false;
+      }
+      return ref.trim().length >= 3 && ref.trim().length <= 512 && !/[\u0000-\u001f]/.test(ref);
+    });
+  } catch {
+    return false;
+  }
+}
+
+function assertReportInput(input: ReportSafetyOccurrenceInput): void {
+  if (
+    !TENANT_ID.test(input.tenantId) ||
+    !OPAQUE_ID.test(input.occurrenceId) ||
+    !SAFETY_OCCURRENCE_KINDS.includes(input.occurrenceKind) ||
+    !SAFETY_SEVERITIES.includes(input.severity) ||
+    !SAFETY_SCOPE_TYPES.includes(input.scope.type) ||
+    !SCOPE_ID.test(input.scope.id) ||
+    !USER_ID.test(input.reportedByUserId) ||
+    !ISO_INSTANT.test(input.reportedAt) ||
+    !ISO_INSTANT.test(input.now) ||
+    !boundedText(input.summary, 3, 4000) ||
+    (input.deviceActionId !== null && !OPAQUE_ID.test(input.deviceActionId))
+  ) {
+    throw new SafetyError(
+      "safety_occurrence_input_invalid",
+      400,
+      "Invalid safety-occurrence report.",
+    );
+  }
+  assertEvidence(input.evidence);
+}
+
+async function occurrenceById(
+  env: AppEnv,
+  tenantId: string,
+  occurrenceId: string,
+): Promise<SafetyOccurrenceRecord | null> {
+  return await env.DB.prepare(
+    `SELECT * FROM safety_occurrences WHERE tenant_id = ? AND occurrence_id = ? LIMIT 1`,
+  )
+    .bind(tenantId, occurrenceId)
+    .first<SafetyOccurrenceRecord>();
+}
+
+async function occurrenceByFingerprint(
+  env: AppEnv,
+  tenantId: string,
+  fingerprint: string,
+): Promise<SafetyOccurrenceRecord | null> {
+  return await env.DB.prepare(
+    `SELECT * FROM safety_occurrences
+      WHERE tenant_id = ? AND report_fingerprint_sha256 = ? LIMIT 1`,
+  )
+    .bind(tenantId, fingerprint)
+    .first<SafetyOccurrenceRecord>();
+}
+
+async function requireOccurrence(
+  env: AppEnv,
+  tenantId: string,
+  occurrenceId: string,
+): Promise<SafetyOccurrenceRecord> {
+  const occurrence = await occurrenceById(env, tenantId, occurrenceId);
+  if (!occurrence) {
+    throw new SafetyError("safety_occurrence_not_found", 404, "That safety occurrence is unknown.");
+  }
+  return occurrence;
+}
+
+async function equipmentById(
+  env: AppEnv,
+  tenantId: string,
+  equipmentId: string,
+): Promise<SafetyEquipmentRecord | null> {
+  return await env.DB.prepare(
+    `SELECT * FROM safety_equipment WHERE tenant_id = ? AND equipment_id = ? LIMIT 1`,
+  )
+    .bind(tenantId, equipmentId)
+    .first<SafetyEquipmentRecord>();
+}
+
+async function requireEquipment(
+  env: AppEnv,
+  tenantId: string,
+  equipmentId: string,
+): Promise<SafetyEquipmentRecord> {
+  const equipment = await equipmentById(env, tenantId, equipmentId);
+  if (!equipment) {
+    throw new SafetyError("safety_equipment_not_found", 404, "That safety equipment is unknown.");
+  }
+  return equipment;
+}
+
+async function notificationById(
+  env: AppEnv,
+  tenantId: string,
+  notificationId: string,
+): Promise<SafetyNotificationRecord | null> {
+  return await env.DB.prepare(
+    `SELECT * FROM safety_notifications WHERE tenant_id = ? AND notification_id = ? LIMIT 1`,
+  )
+    .bind(tenantId, notificationId)
+    .first<SafetyNotificationRecord>();
+}
+
+async function requireNotification(
+  env: AppEnv,
+  tenantId: string,
+  notificationId: string,
+): Promise<SafetyNotificationRecord> {
+  const notification = await notificationById(env, tenantId, notificationId);
+  if (!notification) {
+    throw new SafetyError(
+      "safety_notification_not_found",
+      404,
+      "That safety notification is unknown.",
+    );
+  }
+  return notification;
+}
+
+async function correctiveActionById(
+  env: AppEnv,
+  tenantId: string,
+  correctiveActionId: string,
+): Promise<SafetyCorrectiveActionRecord | null> {
+  return await env.DB.prepare(
+    `SELECT * FROM safety_corrective_actions
+      WHERE tenant_id = ? AND corrective_action_id = ? LIMIT 1`,
+  )
+    .bind(tenantId, correctiveActionId)
+    .first<SafetyCorrectiveActionRecord>();
+}
+
+async function requireCorrectiveAction(
+  env: AppEnv,
+  tenantId: string,
+  correctiveActionId: string,
+): Promise<SafetyCorrectiveActionRecord> {
+  const action = await correctiveActionById(env, tenantId, correctiveActionId);
+  if (!action) {
+    throw new SafetyError(
+      "safety_corrective_action_not_found",
+      404,
+      "That corrective action is unknown.",
+    );
+  }
+  return action;
+}
+
+/**
+ * Event ids are derived, not random, so a retried command re-inserts the same
+ * row instead of appending a second copy of the same fact.
+ */
+function derivedEventId(
+  prefix: string,
+  aggregateId: string,
+  version: number,
+  kind: string,
+): string {
+  const slug = `${prefix}_${aggregateId}_${version}_${kind}`.replace(/[^A-Za-z0-9._:-]/g, "-");
+  const id = slug.length > 160 ? slug.slice(0, 160) : slug;
+  if (!EVENT_ID.test(id)) {
+    throw new SafetyError("safety_event_identity_invalid", 400, "Invalid safety event identity.");
+  }
+  return id;
+}
+
+function boundedText(value: unknown, min: number, max: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length >= min &&
+    value.trim().length <= max &&
+    !/[\u0000-\u001f]/.test(value)
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function d1Changes(result: { meta?: { changes?: number } }): number {
+  return Number(result.meta?.changes ?? 0);
+}

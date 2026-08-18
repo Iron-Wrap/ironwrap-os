@@ -43,7 +43,7 @@ const laneCopy: Record<
     description: "A gate, crew assignment, or material exception needs human resolution.",
     icon: AlertTriangle,
     tone: "border-danger/30 bg-danger-soft",
-    iconTone: "bg-danger text-white",
+    iconTone: "bg-danger text-danger-foreground",
   },
   scheduled: {
     title: "Scheduled",

@@ -129,9 +129,28 @@ function repositoryCapabilityFacts() {
   const prefixes = migrations.map((name) =>
     Number.parseInt(name.slice(0, 4), 10),
   );
-  if (prefixes.some((prefix, index) => prefix !== index + 1)) {
+  // Numbers must start at 0001, be unique, and increase. They deliberately do
+  // NOT have to be contiguous: the project's migration rule requires every new
+  // migration to take a number above every other open PR head, so a lane whose
+  // sibling is abandoned or merged out of order legitimately leaves a gap.
+  // Demanding contiguity forces every parallel lane onto the same next number,
+  // which is the filename collision the rule exists to prevent. D1 applies
+  // migrations in sorted filename order and records them by name, so a gap is
+  // inert.
+  if (prefixes[0] !== 1) {
+    fail("workers-bus/migrations: numbered SQL migrations must start at 0001");
+  }
+  const duplicate = prefixes.find(
+    (prefix, index) => index > 0 && prefix === prefixes[index - 1],
+  );
+  if (duplicate !== undefined) {
     fail(
-      "workers-bus/migrations: numbered SQL migrations must be contiguous from 0001",
+      `workers-bus/migrations: duplicate migration number ${String(duplicate).padStart(4, "0")}`,
+    );
+  }
+  if (prefixes.some((prefix, index) => index > 0 && prefix < prefixes[index - 1])) {
+    fail(
+      "workers-bus/migrations: numbered SQL migrations must increase with filename order",
     );
   }
 

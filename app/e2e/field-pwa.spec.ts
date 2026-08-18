@@ -37,6 +37,11 @@ test.describe("Field Companion PWA acceptance", () => {
     expect(bounds?.height).toBeGreaterThanOrEqual(44);
     expect(bounds?.width).toBeGreaterThanOrEqual(44);
 
+    // Open the safety rail before auditing. Its controls are the highest-contrast
+    // risk on the shell, and a closed <details> would hide them from axe entirely.
+    await page.locator("summary", { hasText: "Safety" }).click();
+    await expect(page.getByRole("button", { name: "Call for rescue" })).toBeVisible();
+
     const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
     expect(results.violations).toEqual([]);
   });

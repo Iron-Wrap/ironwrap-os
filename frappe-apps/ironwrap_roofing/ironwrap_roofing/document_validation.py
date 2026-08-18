@@ -17,6 +17,7 @@ from ironwrap_roofing.access_control import (
 from ironwrap_roofing.domain_policy import PolicyViolation, validate_record
 from ironwrap_roofing.domain_policy import (
     ACTIVE_SCHEDULED_PRODUCTION_ASSIGNMENT_STATUSES,
+    CARGO_LOAD_RELEASE_FENCE_STATUSES,
     JOB_COST_EVENT_SOURCE_DOCTYPES,
     SHOP_ORDER_FINAL_STATUSES,
     parse_json_field,
@@ -24,6 +25,10 @@ from ironwrap_roofing.domain_policy import (
 
 
 CORRECTION_TARGETS: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "asset_custody_event": ("supersedes", "Asset Custody Event", ("fleet_asset",)),
+    "asset_inspection": ("supersedes", "Asset Inspection", ("fleet_asset", "roof_job")),
+    "asset_usage_log": ("supersedes", "Asset Usage Log", ("fleet_asset", "roof_job")),
+    "cargo_load": ("supersedes", "Cargo Load", ("roof_job", "version")),
     "change_order": ("supersedes", "Change Order", ("roof_job", "version")),
     "communication_consent": ("supersedes", "Communication Consent", ("roof_job",)),
     "contract_acceptance": ("supersedes", "Contract Acceptance", ("roof_job",)),
@@ -33,7 +38,9 @@ CORRECTION_TARGETS: dict[str, tuple[str, str, tuple[str, ...]]] = {
         "Customer Quote",
         ("roof_job", "customer", "quote_version", "status", "contract_acceptance", "accepted_at"),
     ),
+    "driver_authority": ("supersedes", "Driver Authority", ("driver_user", "version")),
     "evidence_item": ("correction_of", "Evidence Item", ("roof_job",)),
+    "fleet_asset": ("supersedes", "Fleet Asset", ("asset_kind", "version")),
     "field_check_in": ("correction_of", "Field Check-in", ("roof_job",)),
     "integration_reconciliation": (
         "supersedes",
@@ -253,6 +260,93 @@ SUPPLIER_ORDER_EXCEPTION_CONTEXT_FIELDS = (
 _SUPPLIER_ORDER_EXCEPTION_CONTEXT_SELECT = ", ".join(
     SUPPLIER_ORDER_EXCEPTION_CONTEXT_FIELDS
 )
+FLEET_ASSET_CONTEXT_FIELDS = (
+    "name",
+    "fleet_asset_id",
+    "asset_kind",
+    "status",
+    "required_licence_class",
+    "payload_capacity_kg",
+    "gvwr_kg",
+    "meter_kind",
+    "inspection_authority_source",
+    "next_inspection_due",
+    "next_service_due_date",
+    "calibration_required",
+    "next_calibration_due",
+    "registration_expiry",
+    "insurance_expiry",
+    "custody_holder_type",
+    "custody_crew_profile",
+    "custody_user",
+)
+_FLEET_ASSET_CONTEXT_SELECT = ", ".join(FLEET_ASSET_CONTEXT_FIELDS)
+DRIVER_AUTHORITY_CONTEXT_FIELDS = (
+    "name",
+    "driver_authority_id",
+    "driver_user",
+    "status",
+    "authority_source",
+    "licence_class",
+    "licence_expiry",
+    "medical_expiry",
+)
+_DRIVER_AUTHORITY_CONTEXT_SELECT = ", ".join(DRIVER_AUTHORITY_CONTEXT_FIELDS)
+CARGO_LOAD_CONTEXT_FIELDS = (
+    "name",
+    "cargo_load_id",
+    "roof_job",
+    "fleet_asset",
+    "trailer_asset",
+    "job_assignment",
+    "driver_authority",
+    "driver_user",
+    "status",
+    "loaded_weight_kg",
+    "custody_holder_type",
+    "custody_crew_profile",
+    "custody_user",
+)
+_CARGO_LOAD_CONTEXT_SELECT = ", ".join(CARGO_LOAD_CONTEXT_FIELDS)
+_CARGO_LOAD_FENCE_STATUSES = tuple(sorted(CARGO_LOAD_RELEASE_FENCE_STATUSES))
+_CARGO_LOAD_FENCE_STATUS_PLACEHOLDERS = ", ".join(
+    "%s" for _ in _CARGO_LOAD_FENCE_STATUSES
+)
+# An out-of-service defect stops the asset until repair work closes it out.
+_OPEN_OUT_OF_SERVICE_DEFECT_STATUSES = ("Open", "Contained", "Scheduled")
+ASSET_INSPECTION_CONTEXT_FIELDS = (
+    "name",
+    "asset_inspection_id",
+    "fleet_asset",
+    "inspection_type",
+    "status",
+    "result",
+    "performed_at",
+)
+ASSET_INSPECTION_RUNTIME_FIELDS = (
+    "status",
+    "result",
+    "performed_by",
+    "performed_at",
+    "defect_count",
+    "sync_state",
+    "verified_at",
+    "evidence_item",
+)
+CARGO_LOAD_RUNTIME_FIELDS = (
+    "status",
+    "loaded_by",
+    "loaded_at",
+    "loaded_weight_kg",
+    "departed_at",
+    "delivered_at",
+    "delivery_evidence",
+    "returned_at",
+    "return_evidence",
+    "reconciled_by",
+    "reconciled_at",
+    "lines",
+)
 SUPPLIER_ORDER_EVIDENCE_CONTEXT_FIELDS = (
     "name",
     "roof_job",
@@ -329,6 +423,12 @@ _TRUSTED_MATERIAL_LOT_TRANSITION: ContextVar[
 _TRUSTED_NONCONFORMANCE_TRANSITION: ContextVar[
     tuple[str, tuple[tuple[str, str], ...]] | None
 ] = ContextVar("ironwrap_trusted_nonconformance_transition", default=None)
+_TRUSTED_ASSET_INSPECTION_TRANSITION: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar("ironwrap_trusted_asset_inspection_transition", default=None)
+_TRUSTED_CARGO_LOAD_TRANSITION: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar("ironwrap_trusted_cargo_load_transition", default=None)
 _TRUSTED_SHOP_ORDER_TRANSITION: ContextVar[
     tuple[str, tuple[tuple[str, str], ...]] | None
 ] = ContextVar("ironwrap_trusted_shop_order_transition", default=None)
@@ -1308,6 +1408,38 @@ def nonconformance_transition_context(document: Any):
 
 
 @contextmanager
+def asset_inspection_transition_context(document: Any):
+    """Authorize one exact inspection submit or verification from a bounded command."""
+
+    token = _TRUSTED_ASSET_INSPECTION_TRANSITION.set(
+        (
+            str(document.get("name") or ""),
+            _runtime_snapshot(document, ASSET_INSPECTION_RUNTIME_FIELDS),
+        )
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_ASSET_INSPECTION_TRANSITION.reset(token)
+
+
+@contextmanager
+def cargo_load_transition_context(document: Any):
+    """Authorize one exact cargo loading, delivery, or reconciliation mutation."""
+
+    token = _TRUSTED_CARGO_LOAD_TRANSITION.set(
+        (
+            str(document.get("name") or ""),
+            _runtime_snapshot(document, CARGO_LOAD_RUNTIME_FIELDS),
+        )
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_CARGO_LOAD_TRANSITION.reset(token)
+
+
+@contextmanager
 def shop_order_transition_context(document: Any):
     """Authorize one exact Shop Order lifecycle mutation from a bounded command."""
 
@@ -1670,6 +1802,34 @@ def _validate_draft_only_runtime_mutation(
     frappe.throw(
         f"{label} lifecycle can only be changed through bounded Shop commands.",
         exc=frappe.ValidationError,
+    )
+
+
+def validate_asset_inspection_runtime_mutation(document: Any) -> None:
+    """Keep submitted and verified inspection facts command-owned.
+
+    A pre/post-trip inspection is a physical safety observation that gates
+    scheduling and release.  Drafting stays open to the Desk, but every
+    submitted or verified fact must arrive through the bounded field command
+    that authenticated the inspector and stored the evidence.
+    """
+
+    _validate_draft_only_runtime_mutation(
+        document,
+        fields=ASSET_INSPECTION_RUNTIME_FIELDS,
+        trusted=_TRUSTED_ASSET_INSPECTION_TRANSITION,
+        label="Asset Inspection",
+    )
+
+
+def validate_cargo_load_runtime_mutation(document: Any) -> None:
+    """Keep loading, delivery, return, and reconciliation facts command-owned."""
+
+    _validate_draft_only_runtime_mutation(
+        document,
+        fields=CARGO_LOAD_RUNTIME_FIELDS,
+        trusted=_TRUSTED_CARGO_LOAD_TRANSITION,
+        label="Cargo Load",
     )
 
 
@@ -2339,6 +2499,102 @@ def _locked_generic_work_package_context(
     return ([], {}, assignments, [], work_packages, [], [])
 
 
+def _locked_fleet_release_context(
+    roof_job: Any,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, int],
+]:
+    """Lock the job's open cargo custody and its asset/driver authority facts.
+
+    The rows are read under the same Roof Job lock as the schedule or release
+    write, so an inspection, defect, or custody change cannot commit between
+    the readiness snapshot and the write it authorized.  The out-of-service
+    defect rows are locked here too, so a Desk-created defect -- which takes no
+    Fleet Asset lock of its own -- cannot commit between the count and the
+    release it would have blocked.
+    """
+
+    loads = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_CARGO_LOAD_CONTEXT_SELECT}
+            FROM `tabCargo Load`
+            WHERE roof_job = %s
+              AND status IN ({_CARGO_LOAD_FENCE_STATUS_PLACEHOLDERS})
+            FOR UPDATE
+            """,
+            (roof_job, *_CARGO_LOAD_FENCE_STATUSES),
+            as_dict=True,
+        )
+    ]
+    asset_names = sorted(
+        {str(row.get("fleet_asset")) for row in loads if row.get("fleet_asset")}
+        | {str(row.get("trailer_asset")) for row in loads if row.get("trailer_asset")}
+    )
+    driver_names = sorted(
+        {str(row.get("driver_authority")) for row in loads if row.get("driver_authority")}
+    )
+    assets = (
+        {
+            str(row["name"]): dict(row)
+            for row in frappe.db.sql(
+                f"""
+                SELECT {_FLEET_ASSET_CONTEXT_SELECT}
+                FROM `tabFleet Asset`
+                WHERE name IN ({", ".join("%s" for _ in asset_names)})
+                FOR UPDATE
+                """,
+                tuple(asset_names),
+                as_dict=True,
+            )
+        }
+        if asset_names
+        else {}
+    )
+    drivers = (
+        {
+            str(row["name"]): dict(row)
+            for row in frappe.db.sql(
+                f"""
+                SELECT {_DRIVER_AUTHORITY_CONTEXT_SELECT}
+                FROM `tabDriver Authority`
+                WHERE name IN ({", ".join("%s" for _ in driver_names)})
+                FOR UPDATE
+                """,
+                tuple(driver_names),
+                as_dict=True,
+            )
+        }
+        if driver_names
+        else {}
+    )
+    defect_counts: dict[str, int] = {name: 0 for name in asset_names}
+    if asset_names:
+        # Counted from rows locked in this transaction rather than through an
+        # unlocked frappe.db.count: a Desk-created Asset Defect takes no Fleet
+        # Asset lock, so an unlocked count could miss one committing right now.
+        for row in frappe.db.sql(
+            f"""
+            SELECT fleet_asset
+            FROM `tabAsset Defect`
+            WHERE fleet_asset IN ({", ".join("%s" for _ in asset_names)})
+              AND out_of_service = 1
+              AND status IN ({", ".join("%s" for _ in _OPEN_OUT_OF_SERVICE_DEFECT_STATUSES)})
+            FOR UPDATE
+            """,
+            (*asset_names, *_OPEN_OUT_OF_SERVICE_DEFECT_STATUSES),
+            as_dict=True,
+        ):
+            name = str(row.get("fleet_asset") or "")
+            if name:
+                defect_counts[name] = defect_counts.get(name, 0) + 1
+    return loads, assets, drivers, defect_counts
+
+
 def _assert_unique_production_gate(document: Any) -> None:
     """Keep one current gate record per Roof Job/gate pair under the parent lock."""
 
@@ -2687,6 +2943,112 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
                 if evidence_ids
                 else {}
             )
+    elif kind == "fleet_asset":
+        context["now"] = frappe.utils.now_datetime()
+    elif kind == "asset_inspection":
+        context["inspection_fleet_asset"] = frappe.db.get_value(
+            "Fleet Asset",
+            document.get("fleet_asset"),
+            ("name", "fleet_asset_id", "asset_kind", "status", "meter_kind"),
+            as_dict=True,
+        )
+    elif kind == "asset_defect":
+        context["defect_maintenance_order"] = (
+            frappe.db.get_value(
+                "Maintenance Order",
+                document.get("maintenance_order"),
+                ("name", "fleet_asset", "order_kind", "status"),
+                as_dict=True,
+            )
+            if document.get("maintenance_order")
+            else None
+        )
+        context["defect_return_to_service_inspection"] = (
+            frappe.db.get_value(
+                "Asset Inspection",
+                document.get("return_to_service_inspection"),
+                list(ASSET_INSPECTION_CONTEXT_FIELDS),
+                as_dict=True,
+            )
+            if document.get("return_to_service_inspection")
+            else None
+        )
+    elif kind == "maintenance_order":
+        context["maintenance_asset_defect"] = (
+            frappe.db.get_value(
+                "Asset Defect",
+                document.get("asset_defect"),
+                ("name", "fleet_asset", "severity", "out_of_service", "status"),
+                as_dict=True,
+            )
+            if document.get("asset_defect")
+            else None
+        )
+    elif kind == "asset_usage_log":
+        context["usage_fleet_asset"] = frappe.db.get_value(
+            "Fleet Asset",
+            document.get("fleet_asset"),
+            ("name", "fleet_asset_id", "asset_kind", "status", "meter_kind"),
+            as_dict=True,
+        )
+    elif kind == "asset_custody_event":
+        context["custody_fleet_asset"] = frappe.db.get_value(
+            "Fleet Asset",
+            document.get("fleet_asset"),
+            list(FLEET_ASSET_CONTEXT_FIELDS),
+            as_dict=True,
+        )
+    elif kind == "cargo_load":
+        # The carrier, trailer, driver, and trip inspections are locked in one
+        # statement each so a concurrent out-of-service or licence change
+        # cannot land between this snapshot and the load write it authorizes.
+        context["now"] = frappe.utils.now_datetime()
+        context["cargo_carrier_asset"] = frappe.db.get_value(
+            "Fleet Asset",
+            document.get("fleet_asset"),
+            list(FLEET_ASSET_CONTEXT_FIELDS),
+            as_dict=True,
+        )
+        context["cargo_trailer_asset"] = (
+            frappe.db.get_value(
+                "Fleet Asset",
+                document.get("trailer_asset"),
+                list(FLEET_ASSET_CONTEXT_FIELDS),
+                as_dict=True,
+            )
+            if document.get("trailer_asset")
+            else None
+        )
+        context["cargo_driver_authority"] = (
+            frappe.db.get_value(
+                "Driver Authority",
+                document.get("driver_authority"),
+                list(DRIVER_AUTHORITY_CONTEXT_FIELDS),
+                as_dict=True,
+            )
+            if document.get("driver_authority")
+            else None
+        )
+        context["cargo_pre_trip_inspection"] = (
+            frappe.db.get_value(
+                "Asset Inspection",
+                document.get("pre_trip_inspection"),
+                list(ASSET_INSPECTION_CONTEXT_FIELDS),
+                as_dict=True,
+            )
+            if document.get("pre_trip_inspection")
+            else None
+        )
+        context["cargo_post_trip_inspection"] = (
+            frappe.db.get_value(
+                "Asset Inspection",
+                document.get("post_trip_inspection"),
+                list(ASSET_INSPECTION_CONTEXT_FIELDS),
+                as_dict=True,
+            )
+            if document.get("post_trip_inspection")
+            else None
+        )
     elif kind == "material_lot":
         context["controlled_item"] = frappe.db.get_value(
             "Controlled Item",
@@ -3024,6 +3386,12 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
                 ),
                 None,
             )
+        (
+            context["fleet_cargo_load_rows"],
+            context["fleet_asset_rows"],
+            context["driver_authority_rows"],
+            context["fleet_out_of_service_defect_counts"],
+        ) = _locked_fleet_release_context(document.get("roof_job"))
     elif work_package_requires_context:
         (
             context["gates"],
@@ -3093,6 +3461,12 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
             ),
             None,
         )
+        (
+            context["fleet_cargo_load_rows"],
+            context["fleet_asset_rows"],
+            context["driver_authority_rows"],
+            context["fleet_out_of_service_defect_counts"],
+        ) = _locked_fleet_release_context(document.get("roof_job"))
         if document.get("status") in {"Released", "Acknowledged", "In Progress"}:
             context["now"] = frappe.utils.now_datetime()
     elif kind == "production_gate_state":

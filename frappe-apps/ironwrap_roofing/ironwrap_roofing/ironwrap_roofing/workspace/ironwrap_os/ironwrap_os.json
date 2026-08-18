@@ -49,6 +49,16 @@
     {"hidden": 0, "is_query_report": 0, "label": "Review Requests", "link_count": 0, "link_to": "Review Request", "link_type": "DocType", "onboard": 0, "type": "Link"},
     {"hidden": 0, "is_query_report": 0, "label": "Market Watch Items", "link_count": 0, "link_to": "Market Watch Item", "link_type": "DocType", "onboard": 0, "type": "Link"},
 
+    {"hidden": 0, "is_query_report": 0, "label": "Fleet & Equipment", "link_count": 8, "onboard": 0, "type": "Card Break"},
+    {"hidden": 0, "is_query_report": 0, "label": "Fleet Assets", "link_count": 0, "link_to": "Fleet Asset", "link_type": "DocType", "onboard": 0, "type": "Link"},
+    {"hidden": 0, "is_query_report": 0, "label": "Driver Authorities", "link_count": 0, "link_to": "Driver Authority", "link_type": "DocType", "onboard": 0, "type": "Link"},
+    {"hidden": 0, "is_query_report": 0, "label": "Asset Inspections", "link_count": 0, "link_to": "Asset Inspection", "link_type": "DocType", "onboard": 0, "type": "Link"},
+    {"hidden": 0, "is_query_report": 0, "label": "Asset Defects", "link_count": 0, "link_to": "Asset Defect", "link_type": "DocType", "onboard": 0, "type": "Link"},
+    {"hidden": 0, "is_query_report": 0, "label": "Maintenance Orders", "link_count": 0, "link_to": "Maintenance Order", "link_type": "DocType", "onboard": 0, "type": "Link"},
+    {"hidden": 0, "is_query_report": 0, "label": "Asset Usage Logs", "link_count": 0, "link_to": "Asset Usage Log", "link_type": "DocType", "onboard": 0, "type": "Link"},
+    {"hidden": 0, "is_query_report": 0, "label": "Cargo Loads", "link_count": 0, "link_to": "Cargo Load", "link_type": "DocType", "onboard": 0, "type": "Link"},
+    {"hidden": 0, "is_query_report": 0, "label": "Asset Custody Events", "link_count": 0, "link_to": "Asset Custody Event", "link_type": "DocType", "onboard": 0, "type": "Link"},
+
     {"hidden": 0, "is_query_report": 0, "label": "Platform & Product", "link_count": 1, "onboard": 0, "type": "Card Break"},
     {"hidden": 0, "is_query_report": 0, "label": "White-Label Tenant", "link_count": 0, "link_to": "White-Label Tenant", "link_type": "DocType", "onboard": 0, "type": "Link"}
   ],

@@ -3,7 +3,7 @@
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
 Last verified: 2026-08-17
-Latest phase delta verified: 2026-08-17 (reviewed IRO-36/38/41/42/43 source assembly; repository checks only, not merged, deployed, runtime-verified, business-accepted, or production-proven)
+Latest phase delta verified: 2026-08-18 (IRO-54 fleet operations over the reviewed IRO-36/38/41/42/43 source assembly; repository checks only, not merged, deployed, runtime-verified, business-accepted, or production-proven)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
 ## Status vocabulary
@@ -34,17 +34,17 @@ implication.
   "schema": "ironwrap_capability_contract_v1",
   "expected": {
     "frappe_doctypes": {
-      "total": 68,
-      "top_level": 51,
-      "child": 17
+      "total": 78,
+      "top_level": 59,
+      "child": 19
     },
     "d1_migrations": {
-      "count": 45,
-      "latest": "0045_authority_record_actions.sql"
+      "count": 46,
+      "latest": "0046_fleet_asset_actions.sql"
     },
     "tests": {
-      "pwa": 363,
-      "worker": 579
+      "pwa": 369,
+      "worker": 597
     }
   },
   "proof_state_policy": {
@@ -101,6 +101,29 @@ The governed workflow also treats a provider command with a lost or nonzero resp
 until active-deployment readback resolves it. Failed post-deploy staging runs restore the captured
 previous revision and emit a cleanup-only receipt; production recovery attempts rollback whenever
 production promotion ran, then requires exact Worker, PWA, Frappe, health, and readiness proof.
+
+### Fleet/equipment delta (2026-08-18, IRO-54 merged over the reviewed assembly)
+
+Fresh local checks for the IRO-54 merge over the reviewed IRO-36/38/41/42/43 assembly moved these
+counts. They are branch-local repository facts only; nothing here claims a deployed, runtime,
+real-vehicle, or business-accepted fleet capability.
+
+| Contract | Before | After |
+|---|---|---|
+| Frappe model | 68 DocTypes (51 top-level + 17 child) | 78 DocTypes (59 top-level + 19 child) |
+| Frappe tests | 254 | 330 |
+| D1 migration chain | 45 migrations | 46 migrations |
+| D1 recovery inventory | 87 tables / 130 index bindings / 170 trigger bindings | 88 tables / 132 index bindings / 170 trigger bindings |
+| Worker tests | 579 | 597 |
+| PWA tests | 363 | 369 |
+
+The fleet release fence is proved by policy tests only. A real vehicle day, a controlled physical
+inspection, and provider telematics evidence remain external proof this repository cannot supply.
+
+The fence's perimeter is the Cargo Load, which is the only record that binds a Fleet Asset to a
+Roof Job. It engages from the planned (`Draft`) load onward, so scheduling is fenced before the
+truck is loaded; the driver, weight, and custody comparisons apply from `Loaded`, when those facts
+first exist. A job that binds no asset through a Cargo Load has nothing for the fence to check.
 
 ## Implemented substrate
 
@@ -166,7 +189,7 @@ Material target gaps:
 - item master, warehouse/bin, lot/coil/sheet, reservation, remnant, scrap, count, transfer;
 - work centre, machine, tooling, route/operation, calibration, maintenance, downtime;
 - receiving inspection, first-piece/in-process/final inspection, NCR, quarantine, disposition;
-- vehicle, trailer, driver, carrier status, inspection, maintenance, collision, cargo;
+- carrier status, collision, toll/parking, and tire/key registers (vehicle, trailer, driver, inspection, maintenance, and cargo are implemented);
 - production-proven physical evidence-slot capture and independent hold release across real devices;
 - safety incident/near miss/property event distinct from automation incidents;
 - controlled assembly/manufacturer document/technical bulletin/recall/claims substantiation;
@@ -236,7 +259,7 @@ Target gaps:
   capture, and independent hold release;
 - shop floor, warehouse, receiving, inventory, counter sale, and delivery;
 - employee/competency/training and subcontractor clearance;
-- fleet/equipment inspection and maintenance;
+- fleet incident/collision lifecycle and shop-machine work-centre tooling;
 - safety incident, emergency, NCR, quarantine, and corrective action;
 - customer complaint/warranty service case;
 - compliance/licence/permit/claims calendars;
@@ -295,7 +318,7 @@ Target gaps:
 | Warranty/service | warranty packet | service case, diagnosis, responsibility, remedy, recovery | callback end to end |
 | Finance | Partial: raw-backed immutable QuickBooks webhook identity ledger and Pending reconciliation work; no webhook-only provider payment, posting, or reconciliation truth | authenticated provider detail, provider-issued invoice/holdback/payment/refund/tax/payroll contracts, and accountant-approved reconciliation | provider sandbox, linked mirror, and accountant signoff |
 | Workforce | Crew Profile/Crew Member projections plus individually versioned worker/subcontractor competency, trade, WCB, permit, inspection, insurance, and manufacturer Authority Records consumed by schedule/field/shop gates | HR, apprenticeship, time, accommodation, and live issuer readback continuity | worker lifecycle |
-| Fleet/equipment | none | asset/driver/inspection/maintenance/cargo/incident | unsafe asset release blocked |
+| Fleet/equipment | Partial: versioned asset/driver/inspection/defect/maintenance/usage/cargo/custody records, offline pre/post-trip and defect capture bound to an actor who holds or drives the asset, and a release fence that blocks unsafe, overdue, unlicensed, overloaded, or wrong-custody assets carried on a job's Cargo Load | telematics/sensor identity, collision and fleet incident lifecycle, shop machine and work-centre tooling, facility assets, and real-vehicle proof | unsafe asset release blocked on a real vehicle day |
 | Facility | deployment infra only | shop/building/fire/security/environmental operations | facility inspection/drill |
 | Privacy/security | strong technical controls, consent; production dependency audit clear | complete data inventory, DSAR, breach, retention/destruction; resolve or explicitly accept dev-toolchain advisories | restore, breach, access, production-audit tests |
 | Insurance/risk | generic compliance | policy/claim/notification/recovery | claim tabletop |

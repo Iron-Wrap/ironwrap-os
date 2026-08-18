@@ -191,6 +191,72 @@ JOB_COST_EVENT_ACTOR_TYPES = frozenset(
     ("agent", "worker", "external_authority", "owner")
 )
 JOB_COST_EVENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+FLEET_ASSET_KINDS = frozenset(("Vehicle", "Trailer", "Equipment", "Tool"))
+FLEET_ROAD_ASSET_KINDS = frozenset(("Vehicle", "Trailer"))
+FLEET_ASSET_STATUSES = frozenset(("Draft", "Active", "Out of Service", "Retired"))
+FLEET_METER_KINDS = frozenset(("Odometer km", "Engine hours"))
+FLEET_DEFECT_SEVERITIES = frozenset(("Minor", "Major", "Out of Service"))
+DRIVER_AUTHORITY_STATUSES = frozenset(
+    ("Draft", "Active", "Suspended", "Expired", "Retired")
+)
+ASSET_INSPECTION_STATUSES = frozenset(("Draft", "Submitted", "Verified", "Superseded"))
+ASSET_INSPECTION_TYPES = frozenset(
+    ("Pre-Trip", "Post-Trip", "Periodic", "Return To Service")
+)
+ASSET_INSPECTION_RESULTS = frozenset(("Pass", "Pass With Defects", "Fail"))
+# A passing inspection is what keeps an asset current, and currency is what the
+# release fence reads.  The interval is policy, never a device claim: a capture
+# rail that accepted a device-supplied due date could push an unsafe asset's
+# currency out indefinitely.  Pre/post-trip checks are the daily road-going
+# currency; a periodic or return-to-service inspection carries the longer cycle.
+ASSET_INSPECTION_CURRENCY_DAYS = {
+    "Pre-Trip": 1,
+    "Post-Trip": 1,
+    "Periodic": 90,
+    "Return To Service": 90,
+}
+# A Fail is an unsafe observation; it never advances currency.
+ASSET_INSPECTION_PASSING_RESULTS = frozenset(("Pass", "Pass With Defects"))
+ASSET_DEFECT_STATUSES = frozenset(
+    ("Open", "Contained", "Scheduled", "Repaired", "Closed", "Cancelled")
+)
+ASSET_DEFECT_ACTIVE_STATUSES = frozenset(("Open", "Contained", "Scheduled"))
+MAINTENANCE_ORDER_STATUSES = frozenset(
+    ("Draft", "Scheduled", "In Progress", "Completed", "Cancelled")
+)
+MAINTENANCE_ORDER_KINDS = frozenset(("Preventive", "Corrective", "Calibration"))
+ASSET_USAGE_STATUSES = frozenset(("Draft", "Recorded", "Superseded"))
+ASSET_USAGE_ENTRY_KINDS = frozenset(("Meter", "Fuel", "Trip"))
+ASSET_USAGE_SOURCES = frozenset(("Physical", "Telematics"))
+ASSET_CUSTODY_STATUSES = frozenset(("Draft", "Recorded", "Superseded"))
+ASSET_CUSTODY_EVENT_TYPES = frozenset(
+    ("Issue", "Transfer", "Return", "Lost", "Recovered")
+)
+CARGO_LINE_KINDS = frozenset(("Material", "Tool", "Equipment"))
+CARGO_LOAD_STATUSES = frozenset(
+    ("Draft", "Loaded", "In Transit", "Delivered", "Returned", "Reconciled", "Cancelled")
+)
+# Every status at or after Loaded carries physical custody of the load, so all
+# of them re-apply the loading fences on any later save.
+CARGO_LOAD_LOADED_STATUSES = frozenset(
+    ("Loaded", "In Transit", "Delivered", "Returned", "Reconciled")
+)
+CARGO_LOAD_DELIVERED_STATUSES = frozenset(("Delivered", "Returned", "Reconciled"))
+CARGO_LOAD_RETURNED_STATUSES = frozenset(("Returned", "Reconciled"))
+# Every load that still binds an asset to a job is an open custody fact the
+# schedule and Work Package release fences must re-check.  Draft is included on
+# purpose: production scheduling normally happens days before the truck is
+# loaded, so a fence that waited for Loaded would stay silent exactly when it
+# is most useful.  A Draft load carries no driver, weight, or custody holder
+# yet, so only the asset fences apply to it (see _require_fleet_readiness).
+CARGO_LOAD_RELEASE_FENCE_STATUSES = frozenset(
+    ("Draft", "Loaded", "In Transit", "Delivered")
+)
+# The loading facts (driver authority, loaded weight, custody holder) exist only
+# once the load has actually left the yard.
+CARGO_LOAD_RELEASE_FENCE_LOADED_STATUSES = frozenset(
+    ("Loaded", "In Transit", "Delivered")
+)
 
 
 class PolicyViolation(ValueError):
@@ -441,8 +507,13 @@ def require_approval(
 
 IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "appointment_request": ("appointment_request_id",),
+    "asset_custody_event": ("asset_custody_event_id",),
+    "asset_defect": ("asset_defect_id",),
+    "asset_inspection": ("asset_inspection_id",),
+    "asset_usage_log": ("asset_usage_log_id",),
     "authority_record": ("authority_record_id",),
     "automation_incident": ("incident_id",),
+    "cargo_load": ("cargo_load_id",),
     "change_order": ("change_order_id",),
     "communication_event": ("communication_event_id",),
     "communication_consent": ("consent_id",),
@@ -452,7 +523,9 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "crew_profile": ("crew_profile_id",),
     "customer_decision": ("decision_id",),
     "customer_quote": ("customer_quote_id",),
+    "driver_authority": ("driver_authority_id",),
     "evidence_item": ("evidence_id",),
+    "fleet_asset": ("fleet_asset_id",),
     "field_check_in": ("checkin_id",),
     "hermes_run": ("run_id",),
     "instant_estimate_session": ("estimate_session_id",),
@@ -462,6 +535,7 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "job_compliance_record": ("compliance_record_id",),
     "job_cost_event": ("job_cost_event_id",),
     "lead_envelope": ("envelope_id",),
+    "maintenance_order": ("maintenance_order_id",),
     "material_lot": ("material_lot_id",),
     "market_watch_item": ("watch_id",),
     "material_takeoff": ("takeoff_id",),
@@ -504,6 +578,53 @@ QUICKBOOKS_FINANCE_OPERATIONS = frozenset({"Create", "Update", "Delete", "Void"}
 
 
 WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
+    "asset_custody_event": (
+        "fleet_asset",
+        "event_type",
+        "occurred_at",
+        "recorded_by",
+        "device_action_id",
+        "supersedes",
+    ),
+    "asset_defect": (
+        "fleet_asset",
+        "asset_inspection",
+        "detected_at",
+        "reported_by",
+        "device_action_id",
+        "raw_key",
+    ),
+    "asset_inspection": (
+        "fleet_asset",
+        "inspection_type",
+        "device_action_id",
+        "raw_key",
+        "performed_by",
+        "performed_at",
+        "capture_actor",
+        "telematics_reference",
+        "supersedes",
+    ),
+    "asset_usage_log": (
+        "fleet_asset",
+        "entry_kind",
+        "source",
+        "device_action_id",
+        "provider_reference",
+        "supersedes",
+    ),
+    "cargo_load": (
+        "roof_job",
+        "fleet_asset",
+        "device_action_id",
+        "loaded_by",
+        "loaded_at",
+        "departed_at",
+        "delivered_at",
+        "returned_at",
+        "reconciled_at",
+        "supersedes",
+    ),
     "appointment_request": (
         "reception_session",
         "lead_envelope",
@@ -582,6 +703,25 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "change_order",
         "supersedes",
         "correction_reason",
+    ),
+    "driver_authority": (
+        "driver_user",
+        "licence_reference",
+        "verified_by",
+        "verified_at",
+        "supersedes",
+    ),
+    "fleet_asset": (
+        "asset_kind",
+        "vin_or_serial",
+        "supersedes",
+    ),
+    "maintenance_order": (
+        "fleet_asset",
+        "order_kind",
+        "asset_defect",
+        "started_at",
+        "completed_at",
     ),
     "customer_quote": (
         "roof_job",
@@ -2156,6 +2296,7 @@ def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
                         else None
                     ),
                 )
+                _require_fleet_readiness(context, reference_date)
     status = _get(record, "status")
     _enforce_state_transition(
         record,
@@ -2434,6 +2575,7 @@ def _validate_work_package_release_context(
                 context.get("authority_readbacks") if canonical_authority else None
             ),
         )
+        _require_fleet_readiness(context, reference_date)
 
     safety_plan = context.get("work_package_safety_plan")
     if safety_plan is None:
@@ -7880,8 +8022,1050 @@ def _validate_tenant(record: Any, context: Mapping[str, Any]) -> None:
         )
 
 
+def _fleet_licence_classes(value: Any) -> set[str]:
+    if _blank(value):
+        return set()
+    return {part.strip() for part in str(value).split(",") if part.strip()}
+
+
+def _require_fleet_asset_ready(asset: Any, reference_date: str, field: str) -> None:
+    """Apply the physical safety, currency, and authority fences for one asset."""
+
+    if asset is None:
+        raise PolicyViolation(
+            "unverified_fleet_asset",
+            "the linked Fleet Asset could not be verified",
+            field,
+        )
+    if _get(asset, "status") != "Active":
+        raise PolicyViolation(
+            "unsafe_fleet_asset",
+            "the linked Fleet Asset must be Active before scheduling or release",
+            field,
+        )
+    if _get(asset, "inspection_authority_source") != "Physical Inspection":
+        raise PolicyViolation(
+            "telematics_cannot_authorize_asset",
+            "provider telematics never replaces the physical inspection authority for an asset",
+            field,
+        )
+    _require_future_or_present(
+        asset,
+        "next_inspection_due",
+        reference_date,
+        "overdue_fleet_inspection",
+        "the linked Fleet Asset inspection is overdue for the scheduled or released work",
+    )
+    if not _blank(_get(asset, "next_service_due_date")):
+        _require_future_or_present(
+            asset,
+            "next_service_due_date",
+            reference_date,
+            "overdue_fleet_maintenance",
+            "the linked Fleet Asset maintenance is overdue for the scheduled or released work",
+        )
+    if bool(_get(asset, "calibration_required")):
+        _require_future_or_present(
+            asset,
+            "next_calibration_due",
+            reference_date,
+            "overdue_fleet_calibration",
+            "the linked Fleet Asset calibration is overdue for the scheduled or released work",
+        )
+    if _get(asset, "asset_kind") in FLEET_ROAD_ASSET_KINDS:
+        _require_future_or_present(
+            asset,
+            "registration_expiry",
+            reference_date,
+            "expired_fleet_registration",
+            "the linked Fleet Asset registration expires before the scheduled or released work",
+        )
+        _require_future_or_present(
+            asset,
+            "insurance_expiry",
+            reference_date,
+            "expired_fleet_insurance",
+            "the linked Fleet Asset insurance expires before the scheduled or released work",
+        )
+
+
+def _require_driver_authority_ready(
+    driver: Any, asset: Any, reference_date: str, field: str
+) -> None:
+    """Require a current, physically verified driver authority for one asset."""
+
+    if driver is None:
+        raise PolicyViolation(
+            "unverified_driver_authority",
+            "the linked Driver Authority could not be verified",
+            field,
+        )
+    if _get(driver, "status") != "Active":
+        raise PolicyViolation(
+            "inactive_driver_authority",
+            "the linked Driver Authority must be Active before scheduling or release",
+            field,
+        )
+    if _get(driver, "authority_source") != "Physical Document":
+        raise PolicyViolation(
+            "telematics_cannot_authorize_driver",
+            "provider telematics never replaces the physical driver authority document",
+            field,
+        )
+    _require_future_or_present(
+        driver,
+        "licence_expiry",
+        reference_date,
+        "expired_driver_licence",
+        "the linked Driver Authority licence expires before the scheduled or released work",
+    )
+    if not _blank(_get(driver, "medical_expiry")):
+        _require_future_or_present(
+            driver,
+            "medical_expiry",
+            reference_date,
+            "expired_driver_medical",
+            "the linked Driver Authority medical expires before the scheduled or released work",
+        )
+    required_class = _get(asset, "required_licence_class") if asset is not None else None
+    if _blank(required_class):
+        return
+    if str(required_class).strip() not in _fleet_licence_classes(
+        _get(driver, "licence_class")
+    ):
+        raise PolicyViolation(
+            "unlicensed_fleet_driver",
+            "the linked Driver Authority does not hold the licence class this asset requires",
+            field,
+        )
+
+
+def _custody_holder(record: Any, prefix: str = "custody") -> tuple[str, str]:
+    holder_type = _get(record, f"{prefix}_holder_type")
+    if _blank(holder_type):
+        return ("", "")
+    if holder_type == "Crew":
+        return ("Crew", str(_get(record, f"{prefix}_crew_profile") or ""))
+    if holder_type == "User":
+        return ("User", str(_get(record, f"{prefix}_user") or ""))
+    return ("Yard", "")
+
+
+def _require_fleet_readiness(context: Mapping[str, Any], reference_date: str) -> None:
+    """Block a schedule or Work Package release behind unsafe fleet facts.
+
+    Every fence here reads the job-scoped rows the Frappe adapter locked in the
+    same transaction as the write, so a concurrent inspection, defect, or
+    custody change cannot slip past a stale snapshot.
+
+    The perimeter is the Cargo Load: it is the only record that binds a Fleet
+    Asset to a Roof Job, so a job that binds no asset has nothing to fence.
+    Planned (``Draft``) loads are in scope for the asset fences, because
+    scheduling happens before loading; the driver, weight, and custody fences
+    apply from ``Loaded`` onward, when those facts first exist.
+    """
+
+    assets = context.get("fleet_asset_rows", {})
+    drivers = context.get("driver_authority_rows", {})
+    out_of_service_defects = context.get("fleet_out_of_service_defect_counts", {})
+    for load in context.get("fleet_cargo_load_rows", ()):
+        carrier_name = str(_get(load, "fleet_asset") or "")
+        carrier = assets.get(carrier_name)
+        _require_fleet_asset_ready(carrier, reference_date, "fleet_asset")
+        trailer_name = _get(load, "trailer_asset")
+        trailer = assets.get(str(trailer_name)) if not _blank(trailer_name) else None
+        if not _blank(trailer_name):
+            _require_fleet_asset_ready(trailer, reference_date, "trailer_asset")
+        for asset_name in (carrier_name, str(trailer_name or "")):
+            if asset_name and int(out_of_service_defects.get(asset_name, 0) or 0) > 0:
+                raise PolicyViolation(
+                    "open_out_of_service_defect",
+                    "an asset with an open out-of-service defect cannot be scheduled or released",
+                    "fleet_asset",
+                )
+        if _get(load, "status") not in CARGO_LOAD_RELEASE_FENCE_LOADED_STATUSES:
+            # A planned load records no driver, weight, or custody holder yet,
+            # so there is nothing further to compare; the asset fences above
+            # have already run against it.
+            continue
+        _require_driver_authority_ready(
+            drivers.get(str(_get(load, "driver_authority") or "")),
+            carrier,
+            reference_date,
+            "driver_authority",
+        )
+        capacity = _decimal(carrier, "payload_capacity_kg")
+        loaded = _decimal(load, "loaded_weight_kg")
+        if capacity is not None and loaded is not None and loaded > capacity:
+            raise PolicyViolation(
+                "overloaded_cargo_load",
+                "a load heavier than the carrier payload capacity cannot be scheduled or released",
+                "loaded_weight_kg",
+            )
+        load_custody = _custody_holder(load)
+        if load_custody != _custody_holder(carrier):
+            raise PolicyViolation(
+                "wrong_custody_fleet_asset",
+                "the cargo custody holder must match the carrier asset custody holder",
+                "custody_holder_type",
+            )
+        # The trailer carries the same physical load, so it travels under the
+        # same custody holder; a mismatched trailer is as wrong as a mismatched
+        # carrier and must not pass the fence unchecked.
+        if trailer is not None and load_custody != _custody_holder(trailer):
+            raise PolicyViolation(
+                "wrong_custody_fleet_asset",
+                "the cargo custody holder must match the trailer asset custody holder",
+                "custody_holder_type",
+            )
+
+
+def _validate_custody_holder(record: Any, prefix: str, code: str) -> None:
+    holder_type = _get(record, f"{prefix}_holder_type")
+    crew = _get(record, f"{prefix}_crew_profile")
+    user = _get(record, f"{prefix}_user")
+    if _blank(holder_type):
+        if not _blank(crew) or not _blank(user):
+            raise PolicyViolation(
+                code, "a custody holder reference requires its holder type", f"{prefix}_holder_type"
+            )
+        return
+    if holder_type == "Crew" and (_blank(crew) or not _blank(user)):
+        raise PolicyViolation(code, "a Crew custody holder requires exactly a Crew Profile", f"{prefix}_crew_profile")
+    if holder_type == "User" and (_blank(user) or not _blank(crew)):
+        raise PolicyViolation(code, "a User custody holder requires exactly a User", f"{prefix}_user")
+    if holder_type == "Yard" and (not _blank(crew) or not _blank(user)):
+        raise PolicyViolation(code, "a Yard custody holder carries no crew or user", f"{prefix}_holder_type")
+
+
+def _validate_fleet_asset(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in FLEET_ASSET_STATUSES:
+        raise PolicyViolation("invalid_fleet_asset_status", "unsupported asset status", "status")
+    if _get(record, "asset_kind") not in FLEET_ASSET_KINDS:
+        raise PolicyViolation("invalid_fleet_asset_kind", "unsupported asset kind", "asset_kind")
+    require_fields(record, "fleet_asset_id", "asset_kind", "display_name", "status", "version")
+    version = _decimal(record, "version", required=True)
+    if version is not None and version < 1:
+        raise PolicyViolation("invalid_fleet_asset_version", "version must start at 1", "version")
+    require_nonnegative(
+        record, "current_meter", "payload_capacity_kg", "gvwr_kg", "next_service_due_meter"
+    )
+    payload = _decimal(record, "payload_capacity_kg")
+    gvwr = _decimal(record, "gvwr_kg")
+    if payload is not None and gvwr is not None and payload > gvwr:
+        raise PolicyViolation(
+            "invalid_fleet_asset_capacity",
+            "payload capacity cannot exceed the gross vehicle weight rating",
+            "payload_capacity_kg",
+        )
+    _validate_custody_holder(record, "custody", "invalid_fleet_asset_custody")
+    if _get(record, "custody_holder_type") in {"Crew", "User"}:
+        require_fields(record, "custody_since")
+    if status == "Active":
+        require_fields(record, "home_region", "inspection_authority_source", "next_inspection_due")
+        if _get(record, "inspection_authority_source") != "Physical Inspection":
+            raise PolicyViolation(
+                "telematics_cannot_authorize_asset",
+                "an Active asset requires physical inspection authority, never telematics",
+                "inspection_authority_source",
+            )
+        if _get(record, "asset_kind") in FLEET_ROAD_ASSET_KINDS:
+            require_fields(record, "vin_or_serial", "registration_expiry", "insurance_expiry")
+        if _get(record, "asset_kind") == "Vehicle":
+            require_fields(record, "required_licence_class", "payload_capacity_kg")
+        if bool(_get(record, "calibration_required")):
+            require_fields(record, "next_calibration_due")
+        if _get(record, "meter_kind") in FLEET_METER_KINDS:
+            require_fields(record, "current_meter", "current_meter_at")
+    if status == "Out of Service":
+        require_fields(record, "out_of_service_reason", "out_of_service_at")
+    elif any(
+        not _blank(_get(record, field))
+        for field in ("out_of_service_reason", "out_of_service_at")
+    ):
+        raise PolicyViolation(
+            "stale_out_of_service",
+            "out-of-service details are valid only while the asset is Out of Service",
+            "out_of_service_reason",
+        )
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Active", "Retired"},
+            "Active": {"Out of Service", "Retired"},
+            "Out of Service": {"Active", "Retired"},
+            "Retired": set(),
+        },
+    )
+    _lock_after_status(
+        record,
+        context,
+        {"Active", "Out of Service", "Retired"},
+        "asset_kind",
+        "vin_or_serial",
+    )
+    _validate_correction(record, context, version_field="version")
+
+
+def _validate_driver_authority(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in DRIVER_AUTHORITY_STATUSES:
+        raise PolicyViolation(
+            "invalid_driver_authority_status", "unsupported driver authority status", "status"
+        )
+    require_fields(record, "driver_authority_id", "driver_user", "status", "version", "authority_source")
+    version = _decimal(record, "version", required=True)
+    if version is not None and version < 1:
+        raise PolicyViolation("invalid_driver_authority_version", "version must start at 1", "version")
+    if status == "Active":
+        if _get(record, "authority_source") != "Physical Document":
+            raise PolicyViolation(
+                "telematics_cannot_authorize_driver",
+                "an Active driver authority requires a verified physical document, never telematics",
+                "authority_source",
+            )
+        require_fields(
+            record,
+            "licence_class",
+            "licence_reference",
+            "licence_expiry",
+            "abstract_checked_at",
+            "abstract_evidence",
+            "verified_by",
+            "verified_at",
+        )
+    if status == "Suspended":
+        require_fields(record, "suspended_reason", "suspended_at")
+    elif any(
+        not _blank(_get(record, field)) for field in ("suspended_reason", "suspended_at")
+    ):
+        raise PolicyViolation(
+            "stale_driver_suspension",
+            "suspension details are valid only while the authority is Suspended",
+            "suspended_reason",
+        )
+    if status == "Expired":
+        require_fields(record, "licence_expiry")
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Active", "Retired"},
+            "Active": {"Suspended", "Expired", "Retired"},
+            "Suspended": {"Active", "Expired", "Retired"},
+            "Expired": {"Active", "Retired"},
+            "Retired": set(),
+        },
+    )
+    _lock_after_status(
+        record,
+        context,
+        {"Active", "Suspended", "Expired", "Retired"},
+        "driver_user",
+        "licence_reference",
+    )
+    _validate_correction(record, context, version_field="version")
+
+
+def _asset_inspection_items(record: Any) -> list[Any]:
+    rows = _rows(record, "items")
+    for expected_sequence, row in enumerate(rows, start=1):
+        sequence = _decimal(row, "sequence", required=True)
+        if sequence != expected_sequence:
+            raise PolicyViolation(
+                "invalid_inspection_sequence",
+                "inspection item sequence must be contiguous and start at 1",
+                "items",
+            )
+        require_fields(row, "check_point", "result")
+        if _get(row, "result") not in {"Pass", "Fail", "Not Applicable"}:
+            raise PolicyViolation(
+                "invalid_inspection_item_result", "unsupported inspection item result", "items"
+            )
+        if _get(row, "result") == "Fail" and _get(row, "severity") not in FLEET_DEFECT_SEVERITIES:
+            raise PolicyViolation(
+                "missing_inspection_item_severity",
+                "a failed inspection item requires a defect severity",
+                "items",
+            )
+    return rows
+
+
+def _validate_asset_inspection(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in ASSET_INSPECTION_STATUSES:
+        raise PolicyViolation("invalid_inspection_status", "unsupported inspection status", "status")
+    if _get(record, "inspection_type") not in ASSET_INSPECTION_TYPES:
+        raise PolicyViolation("invalid_inspection_type", "unsupported inspection type", "inspection_type")
+    require_fields(record, "asset_inspection_id", "fleet_asset", "inspection_type", "status", "sync_state")
+    require_nonnegative(record, "meter_reading", "defect_count")
+    _enforce_state_transition(
+        record,
+        context,
+        "sync_state",
+        {
+            "Local": {"Queued", "Rejected", "Superseded"},
+            "Queued": {"Uploaded", "Rejected", "Superseded"},
+            "Uploaded": {"Verified", "Rejected", "Superseded"},
+            "Verified": {"Superseded"},
+            "Rejected": {"Queued", "Superseded"},
+            "Superseded": set(),
+        },
+    )
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Submitted", "Superseded"},
+            "Submitted": {"Verified", "Superseded"},
+            "Verified": {"Superseded"},
+            "Superseded": set(),
+        },
+    )
+    rows = _asset_inspection_items(record)
+    failed = [row for row in rows if _get(row, "result") == "Fail"]
+    if not _blank(_get(record, "telematics_reference")):
+        require_fields(record, "telematics_observed_at")
+        if _blank(_get(record, "performed_by")):
+            raise PolicyViolation(
+                "telematics_cannot_authorize_inspection",
+                "telematics evidence never replaces the physical inspector on an inspection",
+                "performed_by",
+            )
+    if status == "Draft":
+        return
+    require_fields(
+        record,
+        "performed_by",
+        "performed_at",
+        "result",
+        "device_action_id",
+        "capture_actor",
+        # A device capture is only auditable while it still points at the
+        # immutable manifest the Worker stored before Frappe was told anything.
+        "raw_key",
+    )
+    if not rows:
+        raise PolicyViolation(
+            "missing_inspection_items",
+            "a submitted inspection requires at least one recorded check point",
+            "items",
+        )
+    result = _get(record, "result")
+    if result not in ASSET_INSPECTION_RESULTS:
+        raise PolicyViolation("invalid_inspection_result", "unsupported inspection result", "result")
+    if (result == "Pass") != (not failed):
+        raise PolicyViolation(
+            "inspection_result_mismatch",
+            "a Pass result requires no failed check point and a defective result requires one",
+            "result",
+        )
+    if result == "Fail" and not any(
+        _get(row, "severity") in {"Major", "Out of Service"} for row in failed
+    ):
+        raise PolicyViolation(
+            "invalid_failed_inspection",
+            "a Fail result requires a Major or Out of Service check point",
+            "result",
+        )
+    declared = _decimal(record, "defect_count")
+    if declared is not None and int(declared) != len(failed):
+        raise PolicyViolation(
+            "inspection_defect_count_mismatch",
+            "the declared defect count must equal the failed check points",
+            "defect_count",
+        )
+    asset = context.get("inspection_fleet_asset")
+    if asset is None:
+        raise PolicyViolation(
+            "unverified_inspection_fleet_asset",
+            "the inspected Fleet Asset could not be verified",
+            "fleet_asset",
+        )
+    if _get(asset, "status") == "Retired":
+        raise PolicyViolation(
+            "retired_asset_inspection",
+            "a Retired Fleet Asset cannot record a new inspection",
+            "fleet_asset",
+        )
+    if status == "Verified":
+        require_fields(record, "evidence_item", "verified_at")
+        if _get(record, "sync_state") != "Verified":
+            raise PolicyViolation(
+                "unverified_inspection_evidence",
+                "a Verified inspection requires verified evidence sync state",
+                "sync_state",
+            )
+    _lock_after_status(
+        record,
+        context,
+        {"Submitted", "Verified", "Superseded"},
+        "fleet_asset",
+        "inspection_type",
+        "performed_by",
+        "performed_at",
+        "device_action_id",
+        "raw_key",
+        "result",
+        "meter_reading",
+    )
+    _validate_correction(record, context)
+
+
+def _validate_asset_defect(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in ASSET_DEFECT_STATUSES:
+        raise PolicyViolation("invalid_defect_status", "unsupported defect status", "status")
+    severity = _get(record, "severity")
+    if severity not in FLEET_DEFECT_SEVERITIES:
+        raise PolicyViolation("invalid_defect_severity", "unsupported defect severity", "severity")
+    require_fields(
+        record,
+        "asset_defect_id",
+        "fleet_asset",
+        "status",
+        "severity",
+        "detected_at",
+        "reported_by",
+        "description",
+    )
+    out_of_service = bool(_get(record, "out_of_service"))
+    if (severity == "Out of Service") != out_of_service:
+        raise PolicyViolation(
+            "out_of_service_defect_flag",
+            "an Out of Service severity and the out-of-service flag must agree",
+            "out_of_service",
+        )
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Open": {"Contained", "Scheduled", "Repaired", "Cancelled"},
+            "Contained": {"Scheduled", "Repaired", "Cancelled"},
+            "Scheduled": {"Repaired", "Cancelled"},
+            "Repaired": {"Closed", "Open"},
+            "Closed": set(),
+            "Cancelled": set(),
+        },
+    )
+    if status == "Contained":
+        require_fields(record, "containment")
+    if status == "Scheduled":
+        require_fields(record, "maintenance_order")
+    if status in {"Repaired", "Closed"}:
+        require_fields(record, "repaired_by", "repaired_at", "repair_evidence")
+    if status == "Closed":
+        require_fields(record, "closed_by", "closed_at")
+        if out_of_service:
+            require_fields(record, "return_to_service_inspection")
+            inspection = context.get("defect_return_to_service_inspection")
+            if inspection is None:
+                raise PolicyViolation(
+                    "unverified_return_to_service_inspection",
+                    "the return-to-service inspection could not be verified",
+                    "return_to_service_inspection",
+                )
+            if _get(inspection, "fleet_asset") != _get(record, "fleet_asset"):
+                raise PolicyViolation(
+                    "cross_asset_return_to_service_inspection",
+                    "the return-to-service inspection must belong to the defective asset",
+                    "return_to_service_inspection",
+                )
+            if (
+                _get(inspection, "inspection_type") != "Return To Service"
+                or _get(inspection, "status") != "Verified"
+                or _get(inspection, "result") != "Pass"
+            ):
+                raise PolicyViolation(
+                    "failed_return_to_service_inspection",
+                    "closing an out-of-service defect requires a Verified passing return-to-service inspection",
+                    "return_to_service_inspection",
+                )
+    if status == "Cancelled":
+        require_fields(record, "cancelled_reason")
+    if not _blank(_get(record, "device_action_id")):
+        require_fields(record, "raw_key")
+    if not _blank(_get(record, "maintenance_order")):
+        order = context.get("defect_maintenance_order")
+        if order is None:
+            raise PolicyViolation(
+                "unverified_defect_maintenance_order",
+                "the linked Maintenance Order could not be verified",
+                "maintenance_order",
+            )
+        if _get(order, "fleet_asset") != _get(record, "fleet_asset"):
+            raise PolicyViolation(
+                "cross_asset_defect_maintenance",
+                "the linked Maintenance Order must belong to the defective asset",
+                "maintenance_order",
+            )
+    _lock_after_status(
+        record,
+        context,
+        {"Contained", "Scheduled", "Repaired", "Closed", "Cancelled"},
+        "fleet_asset",
+        "asset_inspection",
+        "severity",
+        "detected_at",
+        "reported_by",
+        "device_action_id",
+        "raw_key",
+    )
+
+
+def _validate_maintenance_order(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in MAINTENANCE_ORDER_STATUSES:
+        raise PolicyViolation("invalid_maintenance_status", "unsupported maintenance status", "status")
+    order_kind = _get(record, "order_kind")
+    if order_kind not in MAINTENANCE_ORDER_KINDS:
+        raise PolicyViolation("invalid_maintenance_kind", "unsupported maintenance kind", "order_kind")
+    require_fields(record, "maintenance_order_id", "fleet_asset", "order_kind", "status")
+    require_nonnegative(record, "due_meter", "meter_at_completion", "next_due_meter")
+    if order_kind == "Corrective":
+        require_fields(record, "asset_defect")
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Scheduled", "In Progress", "Cancelled"},
+            "Scheduled": {"In Progress", "Cancelled"},
+            "In Progress": {"Completed", "Cancelled"},
+            "Completed": set(),
+            "Cancelled": set(),
+        },
+    )
+    if status == "Scheduled":
+        require_fields(record, "scheduled_for")
+        _require_one_of(record, "due_date", "due_meter")
+    if status in {"In Progress", "Completed"}:
+        require_fields(record, "started_at", "performed_by")
+    if status == "Completed":
+        require_fields(record, "completed_at", "work_summary", "completion_evidence")
+        if order_kind == "Calibration":
+            require_fields(record, "certificate_reference", "certificate_expiry", "next_due_date")
+        if _get(record, "provider_kind") == "External":
+            require_fields(record, "provider_name")
+    if status == "Cancelled":
+        require_fields(record, "cancelled_reason")
+    if not _blank(_get(record, "asset_defect")):
+        defect = context.get("maintenance_asset_defect")
+        if defect is None:
+            raise PolicyViolation(
+                "unverified_maintenance_defect",
+                "the linked Asset Defect could not be verified",
+                "asset_defect",
+            )
+        if _get(defect, "fleet_asset") != _get(record, "fleet_asset"):
+            raise PolicyViolation(
+                "cross_asset_maintenance_defect",
+                "the linked Asset Defect must belong to the maintained asset",
+                "asset_defect",
+            )
+        if status == "Completed" and bool(_get(defect, "out_of_service")):
+            require_fields(record, "return_to_service_inspection")
+    _lock_after_status(
+        record,
+        context,
+        {"In Progress", "Completed", "Cancelled"},
+        "fleet_asset",
+        "order_kind",
+        "asset_defect",
+    )
+
+
+def _validate_asset_usage_log(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in ASSET_USAGE_STATUSES:
+        raise PolicyViolation("invalid_usage_status", "unsupported usage log status", "status")
+    entry_kind = _get(record, "entry_kind")
+    if entry_kind not in ASSET_USAGE_ENTRY_KINDS:
+        raise PolicyViolation("invalid_usage_entry_kind", "unsupported usage entry kind", "entry_kind")
+    source = _get(record, "source")
+    if source not in ASSET_USAGE_SOURCES:
+        raise PolicyViolation("invalid_usage_source", "unsupported usage source", "source")
+    require_fields(record, "asset_usage_log_id", "fleet_asset", "entry_kind", "source", "status")
+    require_nonnegative(
+        record,
+        "meter_reading",
+        "previous_meter_reading",
+        "distance_km",
+        "duration_hours",
+        "fuel_volume_l",
+        "fuel_cost",
+    )
+    if source == "Telematics" and bool(_get(record, "authoritative")):
+        raise PolicyViolation(
+            "telematics_meter_not_authoritative",
+            "a telematics reading is supporting evidence and never authoritative meter truth",
+            "authoritative",
+        )
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Recorded", "Superseded"},
+            "Recorded": {"Superseded"},
+            "Superseded": set(),
+        },
+    )
+    if status == "Recorded":
+        require_fields(record, "recorded_at")
+        if source == "Physical":
+            require_fields(record, "recorded_by")
+        else:
+            require_fields(record, "provider_reference")
+        if entry_kind == "Meter":
+            require_fields(record, "meter_reading")
+            current = _decimal(record, "meter_reading", required=True)
+            previous = _decimal(record, "previous_meter_reading")
+            if current is not None and previous is not None and current < previous:
+                raise PolicyViolation(
+                    "non_monotonic_meter",
+                    "a meter reading cannot fall below the previous recorded reading",
+                    "meter_reading",
+                )
+            asset = context.get("usage_fleet_asset")
+            if asset is not None and _get(asset, "meter_kind") == "None":
+                raise PolicyViolation(
+                    "unmetered_asset_usage",
+                    "an asset without a meter cannot record a meter reading",
+                    "meter_reading",
+                )
+        if entry_kind == "Fuel":
+            require_fields(record, "fuel_volume_l")
+            volume = _decimal(record, "fuel_volume_l", required=True)
+            if volume is not None and volume <= 0:
+                raise PolicyViolation(
+                    "invalid_fuel_volume", "a fuel entry requires a positive volume", "fuel_volume_l"
+                )
+            if source == "Physical":
+                require_fields(record, "evidence_item")
+        if entry_kind == "Trip":
+            _require_one_of(record, "distance_km", "duration_hours")
+    _lock_after_status(
+        record,
+        context,
+        {"Recorded", "Superseded"},
+        "fleet_asset",
+        "entry_kind",
+        "source",
+        "meter_reading",
+        "recorded_at",
+        "device_action_id",
+    )
+    _validate_correction(record, context)
+
+
+def _cargo_load_lines(record: Any, status: str) -> list[Any]:
+    rows = _rows(record, "lines")
+    if not rows and status != "Draft" and status != "Cancelled":
+        raise PolicyViolation(
+            "missing_cargo_lines", "a loaded cargo record requires at least one line", "lines"
+        )
+    scans: set[str] = set()
+    for expected_line, row in enumerate(rows, start=1):
+        line_no = _decimal(row, "line_no", required=True)
+        if line_no != expected_line:
+            raise PolicyViolation(
+                "invalid_cargo_line_sequence",
+                "cargo line numbers must be contiguous and start at 1",
+                "lines",
+            )
+        line_kind = _get(row, "line_kind")
+        if line_kind not in CARGO_LINE_KINDS:
+            raise PolicyViolation("invalid_cargo_line_kind", "unsupported cargo line kind", "lines")
+        require_fields(row, "unit", "planned_quantity")
+        require_nonnegative(
+            row,
+            "planned_quantity",
+            "loaded_quantity",
+            "delivered_quantity",
+            "returned_quantity",
+            "weight_kg",
+        )
+        if line_kind == "Material":
+            require_fields(row, "controlled_item")
+        else:
+            require_fields(row, "tool_asset")
+        scan = _get(row, "scan_reference")
+        if not _blank(scan):
+            if str(scan) in scans:
+                raise PolicyViolation(
+                    "duplicate_cargo_scan",
+                    "each cargo line must carry a distinct scan reference",
+                    "lines",
+                )
+            scans.add(str(scan))
+        if status in CARGO_LOAD_LOADED_STATUSES:
+            require_fields(row, "loaded_quantity", "scan_reference")
+        if status in CARGO_LOAD_DELIVERED_STATUSES:
+            require_fields(row, "delivered_quantity")
+        if status in CARGO_LOAD_RETURNED_STATUSES:
+            require_fields(row, "returned_quantity")
+        if status == "Reconciled":
+            loaded = _decimal(row, "loaded_quantity", required=True)
+            delivered = _decimal(row, "delivered_quantity", required=True)
+            returned = _decimal(row, "returned_quantity", required=True)
+            if loaded is None or delivered is None or returned is None:
+                continue
+            if abs(loaded - (delivered + returned)) > Decimal("0.01") and not bool(
+                _get(row, "needs_review")
+            ):
+                raise PolicyViolation(
+                    "cargo_reconciliation_mismatch",
+                    "a reconciled cargo line must balance loaded against delivered plus returned quantity",
+                    "lines",
+                )
+    return rows
+
+
+def _validate_cargo_load(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in CARGO_LOAD_STATUSES:
+        raise PolicyViolation("invalid_cargo_load_status", "unsupported cargo load status", "status")
+    require_fields(record, "cargo_load_id", "roof_job", "fleet_asset", "status", "version")
+    version = _decimal(record, "version", required=True)
+    if version is not None and version < 1:
+        raise PolicyViolation("invalid_cargo_load_version", "version must start at 1", "version")
+    require_nonnegative(record, "planned_weight_kg", "loaded_weight_kg")
+    _validate_custody_holder(record, "custody", "invalid_cargo_load_custody")
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Loaded", "Cancelled"},
+            "Loaded": {"In Transit", "Returned", "Cancelled"},
+            "In Transit": {"Delivered", "Cancelled"},
+            "Delivered": {"Returned", "Reconciled"},
+            "Returned": {"Reconciled"},
+            "Reconciled": set(),
+            "Cancelled": set(),
+        },
+    )
+    rows = _cargo_load_lines(record, str(status))
+    if status == "Cancelled":
+        require_fields(record, "cancelled_reason")
+    if status == "Draft":
+        _validate_correction(record, context, version_field="version")
+        return
+    if status in CARGO_LOAD_LOADED_STATUSES:
+        require_fields(
+            record,
+            "loaded_by",
+            "loaded_at",
+            "loaded_weight_kg",
+            "driver_authority",
+            "driver_user",
+            "pre_trip_inspection",
+            "custody_holder_type",
+        )
+        if not bool(_get(record, "securement_confirmed")):
+            raise PolicyViolation(
+                "unsecured_cargo_load",
+                "a loaded cargo record requires confirmed securement",
+                "securement_confirmed",
+            )
+    if status == "In Transit":
+        require_fields(record, "departed_at")
+    if status in CARGO_LOAD_DELIVERED_STATUSES:
+        require_fields(record, "delivered_at", "delivery_evidence")
+    if status in CARGO_LOAD_RETURNED_STATUSES:
+        require_fields(record, "returned_at", "return_evidence", "post_trip_inspection")
+    if status == "Reconciled":
+        require_fields(record, "reconciled_by", "reconciled_at")
+        if any(bool(_get(row, "needs_review")) for row in rows):
+            require_fields(record, "reconciliation_note")
+    if status in CARGO_LOAD_LOADED_STATUSES:
+        reference_date = _reference_date(
+            _get(record, "loaded_at") or context.get("now")
+        )
+        carrier = context.get("cargo_carrier_asset")
+        if reference_date:
+            _require_fleet_asset_ready(carrier, reference_date, "fleet_asset")
+            _require_driver_authority_ready(
+                context.get("cargo_driver_authority"), carrier, reference_date, "driver_authority"
+            )
+            if not _blank(_get(record, "trailer_asset")):
+                _require_fleet_asset_ready(
+                    context.get("cargo_trailer_asset"), reference_date, "trailer_asset"
+                )
+        if carrier is not None and _get(carrier, "asset_kind") != "Vehicle":
+            raise PolicyViolation(
+                "invalid_cargo_carrier_asset",
+                "a cargo load must be carried by a Vehicle asset",
+                "fleet_asset",
+            )
+        trailer = context.get("cargo_trailer_asset")
+        if trailer is not None and _get(trailer, "asset_kind") != "Trailer":
+            raise PolicyViolation(
+                "invalid_cargo_trailer_asset",
+                "the linked trailer must be a Trailer asset",
+                "trailer_asset",
+            )
+        driver = context.get("cargo_driver_authority")
+        if driver is not None and _get(driver, "driver_user") != _get(record, "driver_user"):
+            raise PolicyViolation(
+                "cargo_driver_mismatch",
+                "the linked Driver Authority must belong to the recorded driver",
+                "driver_user",
+            )
+        capacity = _decimal(carrier, "payload_capacity_kg") if carrier is not None else None
+        loaded_weight = _decimal(record, "loaded_weight_kg", required=True)
+        if capacity is not None and loaded_weight is not None and loaded_weight > capacity:
+            raise PolicyViolation(
+                "overloaded_cargo_load",
+                "the loaded weight exceeds the carrier payload capacity",
+                "loaded_weight_kg",
+            )
+        if carrier is not None and _custody_holder(record) != _custody_holder(carrier):
+            raise PolicyViolation(
+                "wrong_custody_cargo_load",
+                "the cargo custody holder must match the carrier asset custody holder",
+                "custody_holder_type",
+            )
+        inspection = context.get("cargo_pre_trip_inspection")
+        if inspection is None:
+            raise PolicyViolation(
+                "unverified_cargo_pre_trip_inspection",
+                "the pre-trip inspection could not be verified",
+                "pre_trip_inspection",
+            )
+        if _get(inspection, "fleet_asset") != _get(record, "fleet_asset"):
+            raise PolicyViolation(
+                "cross_asset_cargo_pre_trip_inspection",
+                "the pre-trip inspection must belong to the carrier asset",
+                "pre_trip_inspection",
+            )
+        if (
+            _get(inspection, "inspection_type") != "Pre-Trip"
+            or _get(inspection, "status") != "Verified"
+            or _get(inspection, "result") not in {"Pass", "Pass With Defects"}
+        ):
+            raise PolicyViolation(
+                "failed_cargo_pre_trip_inspection",
+                "a load requires a Verified pre-trip inspection that did not fail",
+                "pre_trip_inspection",
+            )
+    if status in CARGO_LOAD_RETURNED_STATUSES:
+        post_trip = context.get("cargo_post_trip_inspection")
+        if post_trip is None:
+            raise PolicyViolation(
+                "unverified_cargo_post_trip_inspection",
+                "the post-trip inspection could not be verified",
+                "post_trip_inspection",
+            )
+        if (
+            _get(post_trip, "fleet_asset") != _get(record, "fleet_asset")
+            or _get(post_trip, "inspection_type") != "Post-Trip"
+            or _get(post_trip, "status") != "Verified"
+        ):
+            raise PolicyViolation(
+                "invalid_cargo_post_trip_inspection",
+                "a returned load requires a Verified post-trip inspection on the carrier asset",
+                "post_trip_inspection",
+            )
+    _lock_after_status(
+        record,
+        context,
+        CARGO_LOAD_LOADED_STATUSES | {"Cancelled"},
+        "roof_job",
+        "fleet_asset",
+        "trailer_asset",
+        "job_assignment",
+        "driver_authority",
+        "driver_user",
+        "loaded_by",
+        "loaded_at",
+        "loaded_weight_kg",
+        "pre_trip_inspection",
+        "device_action_id",
+    )
+    _validate_correction(record, context, version_field="version")
+
+
+def _validate_asset_custody_event(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in ASSET_CUSTODY_STATUSES:
+        raise PolicyViolation("invalid_custody_status", "unsupported custody event status", "status")
+    event_type = _get(record, "event_type")
+    if event_type not in ASSET_CUSTODY_EVENT_TYPES:
+        raise PolicyViolation("invalid_custody_event_type", "unsupported custody event type", "event_type")
+    require_fields(record, "asset_custody_event_id", "fleet_asset", "event_type", "status")
+    _validate_custody_holder(record, "from", "invalid_custody_source")
+    _validate_custody_holder(record, "to", "invalid_custody_target")
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Draft": {"Recorded", "Superseded"},
+            "Recorded": {"Superseded"},
+            "Superseded": set(),
+        },
+    )
+    if status == "Recorded":
+        require_fields(record, "occurred_at", "recorded_by")
+        if event_type in {"Issue", "Transfer", "Recovered"}:
+            require_fields(record, "to_holder_type")
+        if event_type in {"Transfer", "Return"}:
+            require_fields(record, "from_holder_type")
+        if event_type == "Lost":
+            require_fields(record, "notes", "evidence_item")
+            if _get(record, "condition") != "Missing":
+                raise PolicyViolation(
+                    "invalid_lost_custody_condition",
+                    "a Lost custody event requires a Missing condition",
+                    "condition",
+                )
+        if _get(record, "condition") == "Damaged":
+            require_fields(record, "evidence_item")
+        asset = context.get("custody_fleet_asset")
+        if asset is None:
+            raise PolicyViolation(
+                "unverified_custody_fleet_asset",
+                "the custody Fleet Asset could not be verified",
+                "fleet_asset",
+            )
+        if event_type in {"Transfer", "Return"} and _custody_holder(
+            record, "from"
+        ) != _custody_holder(asset):
+            raise PolicyViolation(
+                "wrong_custody_transfer",
+                "a custody transfer must start from the asset's current custody holder",
+                "from_holder_type",
+            )
+    _lock_after_status(
+        record,
+        context,
+        {"Recorded", "Superseded"},
+        "fleet_asset",
+        "event_type",
+        "occurred_at",
+        "device_action_id",
+        "to_holder_type",
+        "to_crew_profile",
+        "to_user",
+    )
+    _validate_correction(record, context)
+
+
 VALIDATORS = {
     "appointment_request": _validate_appointment_request,
+    "asset_custody_event": _validate_asset_custody_event,
+    "asset_defect": _validate_asset_defect,
+    "asset_inspection": _validate_asset_inspection,
+    "asset_usage_log": _validate_asset_usage_log,
+    "cargo_load": _validate_cargo_load,
     "change_order": _validate_change_order,
     "communication_consent": _validate_consent,
     "communication_event": _validate_communication,
@@ -7891,7 +9075,9 @@ VALIDATORS = {
     "crew_profile": _validate_crew_profile,
     "customer_decision": _validate_customer_decision,
     "customer_quote": _validate_customer_quote,
+    "driver_authority": _validate_driver_authority,
     "evidence_item": _validate_evidence,
+    "fleet_asset": _validate_fleet_asset,
     "field_check_in": _validate_field_checkin,
     "hermes_run": _validate_hermes_run,
     "instant_estimate_session": _validate_instant_estimate,
@@ -7901,6 +9087,7 @@ VALIDATORS = {
     "job_compliance_record": _validate_compliance,
     "job_cost_event": _validate_job_cost_event,
     "lead_envelope": _validate_lead_envelope,
+    "maintenance_order": _validate_maintenance_order,
     "material_lot": _validate_material_lot,
     "material_takeoff": _validate_takeoff,
     "material_takeoff_policy": _validate_takeoff_policy,

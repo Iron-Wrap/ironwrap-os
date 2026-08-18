@@ -1679,6 +1679,25 @@ test("0042 keeps external effects durable, append-only, and reconciliation-gated
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
+test("0046 keeps offline fleet captures bounded, idempotent, and independently recoverable", async () => {
+  const sql = await readFile(new URL("../migrations/0046_fleet_asset_actions.sql", import.meta.url), "utf8");
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS fleet_asset_actions\b/);
+  assert.match(sql, /device_action_id TEXT PRIMARY KEY/);
+  assert.match(
+    sql,
+    /action_kind IN \('pre_trip_inspection', 'post_trip_inspection', 'defect_report'\)/,
+  );
+  assert.match(sql, /status IN \('processing', 'r2_stored', 'verified', 'retryable_error'\)/);
+  assert.match(sql, /payload_hash TEXT NOT NULL CHECK \(\s*length\(payload_hash\) = 64/);
+  assert.match(sql, /idx_fleet_asset_actions_asset_created/);
+  assert.match(sql, /idx_fleet_asset_actions_recovery/);
+  assert.match(sql, /REFERENCES app_users\(user_id\) ON DELETE RESTRICT/);
+  // A verified receipt must always carry its response and verification time,
+  // so a replay can never be answered from a half-written row.
+  assert.match(sql, /status = 'verified' AND response_json IS NOT NULL AND verified_at IS NOT NULL/);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
 test("the complete D1 migration chain applies cleanly and carries every schedule-ledger invariant", async () => {
   const db = new DatabaseSync(":memory:");
   try {
@@ -1688,9 +1707,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     )
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 45);
+    assert.equal(migrations.length, 46);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0045_authority_record_actions.sql");
+    assert.equal(migrations.at(-1), "0046_fleet_asset_actions.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -1734,7 +1753,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
        FROM sqlite_master`,
       )
       .get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 87, indexes: 124, triggers: 170 });
+    assert.deepEqual({ ...counts }, { tables: 88, indexes: 126, triggers: 170 });
     assert.equal(
       (
         db

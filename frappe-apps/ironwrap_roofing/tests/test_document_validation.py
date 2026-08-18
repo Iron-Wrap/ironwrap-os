@@ -356,6 +356,26 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                     for row in rows.get("Supplier Order", [])
                     if row.get("roof_job") == values[0]
                 ]
+            if "`tabCargo Load`" in normalized:
+                return [
+                    dict(row)
+                    for row in rows.get("Cargo Load", [])
+                    if row.get("roof_job") == values[0]
+                ]
+            if "`tabFleet Asset`" in normalized:
+                requested_names = set(values)
+                return [
+                    dict(row)
+                    for row in rows.get("Fleet Asset", [])
+                    if row.get("name") in requested_names
+                ]
+            if "`tabDriver Authority`" in normalized:
+                requested_names = set(values)
+                return [
+                    dict(row)
+                    for row in rows.get("Driver Authority", [])
+                    if row.get("name") in requested_names
+                ]
             raise AssertionError(f"unexpected SQL: {normalized}")
 
         frappe_module.db = types.SimpleNamespace(
@@ -1982,7 +2002,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         )
         adapter.validate_business_document(document, "job_assignment")
         self.assertEqual(calls, [])
-        self.assertEqual(len(adapter._test_lock_calls), 9)
+        self.assertEqual(len(adapter._test_lock_calls), 10)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
         self.assertIn("`tabEvidence Item`", adapter._test_lock_calls[2][0])
@@ -1992,6 +2012,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[6][0])
         self.assertIn("crew_profile IN", adapter._test_lock_calls[6][0])
         self.assertIn("`tabJob Compliance Record`", adapter._test_lock_calls[7][0])
+        self.assertIn("`tabCargo Load`", adapter._test_lock_calls[9][0])
         self.assertIn("FOR UPDATE", adapter._test_lock_calls[2][0])
         self.assertTrue(
             all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
@@ -2174,7 +2195,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         )
         adapter.validate_business_document(document, "work_package")
         self.assertEqual(calls, [])
-        self.assertEqual(len(adapter._test_lock_calls), 9)
+        self.assertEqual(len(adapter._test_lock_calls), 10)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
         self.assertIn("`tabEvidence Item`", adapter._test_lock_calls[2][0])
@@ -2183,6 +2204,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         self.assertIn("`tabWork Package`", adapter._test_lock_calls[5][0])
         self.assertIn("`tabCrew Profile`", adapter._test_lock_calls[6][0])
         self.assertIn("`tabJob Compliance Record`", adapter._test_lock_calls[7][0])
+        self.assertIn("`tabCargo Load`", adapter._test_lock_calls[9][0])
         self.assertTrue(
             all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
         )
@@ -2262,7 +2284,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             },
         )
         adapter.validate_business_document(correction, "job_assignment")
-        self.assertEqual(len(adapter._test_lock_calls), 9)
+        self.assertEqual(len(adapter._test_lock_calls), 10)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[3][0])
         self.assertIn("`tabSupplier Order`", adapter._test_lock_calls[4][0])
@@ -2270,6 +2292,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[6][0])
         self.assertIn("crew_profile IN", adapter._test_lock_calls[6][0])
         self.assertIn("`tabJob Compliance Record`", adapter._test_lock_calls[7][0])
+        self.assertIn("`tabCargo Load`", adapter._test_lock_calls[9][0])
         self.assertTrue(
             all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
         )
@@ -2374,7 +2397,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(FakeValidationError, "overlapping_crew_schedule"):
             overlapping_adapter.validate_business_document(document, "job_assignment")
-        self.assertEqual(len(overlapping_adapter._test_lock_calls), 9)
+        self.assertEqual(len(overlapping_adapter._test_lock_calls), 10)
         self.assertIn("crew_profile IN", overlapping_adapter._test_lock_calls[6][0])
 
         adjacent_adapter, _ = self.load_adapter(

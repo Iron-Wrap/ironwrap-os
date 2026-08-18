@@ -11,6 +11,9 @@ export const outboxActionKinds = [
   "field_checkin",
   "work_package_acknowledgement",
   "work_package_stop",
+  "fleet_pre_trip_inspection",
+  "fleet_post_trip_inspection",
+  "fleet_defect_report",
 ] as const;
 export type OutboxActionKind = (typeof outboxActionKinds)[number];
 export type OutboxMethod = "POST" | "PUT" | "PATCH" | "DELETE";

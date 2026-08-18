@@ -33,8 +33,13 @@ DOCTYPE_ROOT = APP_ROOT / "ironwrap_roofing" / "ironwrap_roofing" / "doctype"
 
 TOP_LEVEL_DOCTYPES = {
     "Appointment Request",
+    "Asset Custody Event",
+    "Asset Defect",
+    "Asset Inspection",
+    "Asset Usage Log",
     "Authority Record",
     "Automation Incident",
+    "Cargo Load",
     "Change Order",
     "Communication Consent",
     "Communication Event",
@@ -44,8 +49,10 @@ TOP_LEVEL_DOCTYPES = {
     "Crew Profile",
     "Customer Decision",
     "Customer Quote",
+    "Driver Authority",
     "Evidence Item",
     "Field Check-in",
+    "Fleet Asset",
     "Hermes Run",
     "Instant Estimate Session",
     "Integration Reconciliation",
@@ -54,6 +61,7 @@ TOP_LEVEL_DOCTYPES = {
     "Job Assignment",
     "Job Compliance Record",
     "Lead Envelope",
+    "Maintenance Order",
     "Material Lot",
     "Market Watch Item",
     "Material Takeoff",
@@ -85,6 +93,8 @@ TOP_LEVEL_DOCTYPES = {
     "Work Package Event",
 }
 CHILD_DOCTYPES = {
+    "Asset Inspection Item",
+    "Cargo Load Line",
     "Change Order Item",
     "Insurance Supplement Evidence",
     "Crew Member",
@@ -290,6 +300,22 @@ NEW_BLUEPRINT_FIELDS.update(
 )
 
 
+NEW_BLUEPRINT_FIELDS.update(
+    {
+        "Fleet Asset": {"fleet_asset_id", "asset_kind", "status", "display_name", "version", "vin_or_serial", "licence_plate", "registration_expiry", "insurance_expiry", "required_licence_class", "meter_kind", "current_meter", "payload_capacity_kg", "gvwr_kg", "inspection_authority_source", "last_inspection", "next_inspection_due", "next_service_due_date", "next_service_due_meter", "calibration_required", "next_calibration_due", "custody_holder_type", "custody_crew_profile", "custody_user", "custody_since", "custody_event", "out_of_service_reason", "out_of_service_at", "supersedes", "correction_reason"},
+        "Driver Authority": {"driver_authority_id", "driver_user", "status", "version", "authority_source", "licence_class", "licence_reference", "licence_expiry", "medical_expiry", "endorsements", "abstract_checked_at", "abstract_evidence", "verified_by", "verified_at", "suspended_reason", "suspended_at", "supersedes", "correction_reason"},
+        "Asset Inspection": {"asset_inspection_id", "fleet_asset", "inspection_type", "status", "result", "roof_job", "job_assignment", "cargo_load", "performed_by", "performed_at", "device_action_id", "raw_key", "capture_actor", "evidence_item", "meter_reading", "telematics_reference", "telematics_observed_at", "defect_count", "items", "next_inspection_due", "sync_state", "verified_at", "supersedes", "correction_reason"},
+        "Asset Inspection Item": {"sequence", "check_point", "result", "severity", "observation", "evidence_item"},
+        "Asset Defect": {"asset_defect_id", "fleet_asset", "asset_inspection", "status", "severity", "out_of_service", "detected_at", "reported_by", "device_action_id", "raw_key", "description", "evidence_item", "containment", "maintenance_order", "repaired_by", "repaired_at", "repair_evidence", "return_to_service_inspection", "closed_by", "closed_at", "cancelled_reason"},
+        "Maintenance Order": {"maintenance_order_id", "fleet_asset", "order_kind", "status", "asset_defect", "due_date", "due_meter", "scheduled_for", "provider_kind", "provider_name", "work_summary", "started_at", "performed_by", "completed_at", "meter_at_completion", "completion_evidence", "certificate_reference", "certificate_expiry", "next_due_date", "next_due_meter", "return_to_service_inspection", "cancelled_reason"},
+        "Asset Usage Log": {"asset_usage_log_id", "fleet_asset", "entry_kind", "source", "status", "authoritative", "roof_job", "cargo_load", "recorded_by", "recorded_at", "device_action_id", "meter_reading", "previous_meter_reading", "distance_km", "duration_hours", "fuel_volume_l", "fuel_cost", "evidence_item", "provider_reference", "supersedes", "correction_reason"},
+        "Cargo Load": {"cargo_load_id", "roof_job", "fleet_asset", "trailer_asset", "job_assignment", "work_package", "driver_authority", "driver_user", "status", "version", "custody_holder_type", "custody_crew_profile", "custody_user", "planned_weight_kg", "loaded_weight_kg", "securement_confirmed", "pre_trip_inspection", "post_trip_inspection", "loaded_by", "loaded_at", "departed_at", "delivered_at", "delivery_evidence", "returned_at", "return_evidence", "reconciled_by", "reconciled_at", "reconciliation_note", "device_action_id", "lines", "cancelled_reason", "supersedes", "correction_reason"},
+        "Cargo Load Line": {"line_no", "line_kind", "controlled_item", "material_lot", "tool_asset", "shop_bundle_id", "description", "unit", "planned_quantity", "loaded_quantity", "delivered_quantity", "returned_quantity", "weight_kg", "scan_reference", "condition", "needs_review", "evidence_item"},
+        "Asset Custody Event": {"asset_custody_event_id", "fleet_asset", "event_type", "status", "occurred_at", "recorded_by", "device_action_id", "from_holder_type", "from_crew_profile", "from_user", "to_holder_type", "to_crew_profile", "to_user", "roof_job", "cargo_load", "condition", "evidence_item", "supersedes", "correction_reason"},
+    }
+)
+
+
 def load_doctypes() -> dict[str, tuple[Path, dict]]:
     result = {}
     for path in sorted(DOCTYPE_ROOT.glob("*/*.json")):
@@ -303,9 +329,9 @@ class DocTypeContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.doctypes = load_doctypes()
 
-    def test_complete_68_doctype_blueprint(self) -> None:
+    def test_complete_78_doctype_blueprint(self) -> None:
         self.assertEqual(set(self.doctypes), TOP_LEVEL_DOCTYPES | CHILD_DOCTYPES)
-        self.assertEqual(len(self.doctypes), 68)
+        self.assertEqual(len(self.doctypes), 78)
 
         for name, (_, document) in self.doctypes.items():
             with self.subTest(doctype=name):

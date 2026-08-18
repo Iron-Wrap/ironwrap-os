@@ -96,6 +96,7 @@ import {
   buildSalesReadModel,
   buildTodayReadModel,
   buildUniversalWorkPackageReadModel,
+  fleetAssetForFieldActor,
 } from "./app-read-models.ts";
 import { buildNowReadModel } from "./now-read-model.ts";
 import { handleCustomerPortalLinks } from "./customer-portal.ts";
@@ -105,7 +106,8 @@ import {
   type AuthContext,
   type WorkObjectScope,
 } from "./app-types.ts";
-import { handleFieldAction } from "./field-actions.ts";
+import { claimFieldUploadWindow, handleFieldAction } from "./field-actions.ts";
+import { handleFleetAction, type FleetActionKind } from "./fleet-actions.ts";
 import { handleWorkPackageAction, type WorkPackageActionKind } from "./work-package-actions.ts";
 import { hasPhysicalAssignmentAuthority } from "./work-package.ts";
 import { handleAuthorityRecordRoute } from "./authority-record-api.ts";
@@ -790,6 +792,24 @@ export async function handleAuthenticatedRoute(
     // lost response safe to retry over the active connection.
     return await handleFieldWorkPackageRoute(req, env, auth, workPackageStartMatch[1], "start_work");
   }
+  const fleetInspectionMatch = url.pathname.match(
+    /^\/api\/v1\/fleet\/assets\/([^/]+)\/(pre-trip|post-trip)-inspections$/,
+  );
+  if (req.method === "POST" && fleetInspectionMatch) {
+    return await handleFleetAssetRoute(
+      req,
+      env,
+      auth,
+      fleetInspectionMatch[1],
+      fleetInspectionMatch[2] === "pre-trip" ? "pre_trip_inspection" : "post_trip_inspection",
+    );
+  }
+  const fleetDefectMatch = url.pathname.match(
+    /^\/api\/v1\/fleet\/assets\/([^/]+)\/defects$/,
+  );
+  if (req.method === "POST" && fleetDefectMatch) {
+    return await handleFleetAssetRoute(req, env, auth, fleetDefectMatch[1], "defect_report");
+  }
   const workPackageCompleteMatch = url.pathname.match(
     /^\/api\/v1\/jobs\/([^/]+)\/work-package\/complete$/,
   );
@@ -1255,6 +1275,46 @@ async function handlePostizIntentCommand(
       : privateAppJson(postizIntentEnvelope(env, result.intent));
   } catch {
     return privateAppJson({ error: "postiz_store_unavailable" }, 502);
+  }
+}
+
+async function handleFleetAssetRoute(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  encodedAssetName: string | undefined,
+  kind: FleetActionKind,
+): Promise<Response> {
+  if (auth.session.role !== "field") return appJson({ error: "field_role_required" }, 403);
+  if (!validAppCsrf(req, auth)) return appJson({ error: "csrf_failed" }, 403);
+  const assetName = decodedPathSegment(encodedAssetName ?? "");
+  if (!assetName) return appJson({ error: "not_found" }, 404);
+  // Fleet captures share the field upload budget: one bounded window per field
+  // user covers every kind of evidence a device can start, so the capture rail
+  // cannot be used to escape the throttle the photo rail already applies.
+  const rateLimit = await claimFieldUploadWindow(env, auth);
+  if (!rateLimit.allowed) {
+    const limited = appJson(
+      {
+        error: "field_upload_rate_limited",
+        message: "Too many field uploads are starting at once. Saved work remains queued for retry.",
+      },
+      429,
+    );
+    limited.headers.set("retry-after", String(rateLimit.retryAfterSeconds));
+    return limited;
+  }
+  try {
+    // Do not trust a fleet asset identifier from the browser. The BFF proves
+    // the authenticated field user holds or drives this asset; the Frappe
+    // service command repeats that scope check under its own asset lock.
+    // Whether the asset is inspectable and accepts this capture stays a Frappe
+    // decision taken under that lock.
+    const asset = await fleetAssetForFieldActor(env, auth, assetName);
+    if (!asset) return appJson({ error: "not_found" }, 404);
+    return await handleFleetAction(req, env, auth, assetName, kind);
+  } catch {
+    return appJson({ error: "upstream_unavailable" }, 502);
   }
 }
 

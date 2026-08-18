@@ -33,16 +33,28 @@ import { pushToErpNext, syncLeadTransportToErpNext } from "./erpnext.ts";
 import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
 import { handlePhotoIngest } from "./photos.ts";
 import {
+  handleMeasurementDeadLetter,
   handleMeasurementIngest,
+  handleMeasurementQueueMessage,
   retryMeasurementIntakeReceipts,
 } from "./measurements.ts";
 import { handleEstimateIngest, retryEstimateErpNextSyncs } from "./estimates.ts";
-import { handleFacetDesignIngest } from "./facet-design-ingest.ts";
+import {
+  handleFacetDesignIngest,
+  reconcileFacetV2UnassociatedIntakes,
+} from "./facet-design-ingest.ts";
 import {
   handleQuickbooksWebhook,
   recoverDueQuickBooksProjections,
 } from "./quickbooks.ts";
+import {
+  handleQuickBooksOAuthCallback,
+  recoverQuickBooksFinalInvoices,
+} from "./quickbooks-final-invoice.ts";
 import { reconcileFacetDesignFrappeProjections } from "./facet-design-projection.ts";
+import {
+  recoverPostizControlPlane,
+} from "./postiz.ts";
 import {
   handlePublicInstantEstimate,
   prunePublicEstimateRateLimits,
@@ -54,6 +66,7 @@ import {
   handleAppApi,
   recoverPendingLeadTriageOutbox,
 } from "./app-api.ts";
+import { handleAuthorityRecordExecutorRoute } from "./authority-record-executor-api.ts";
 import { pruneAuthRecords } from "./app-auth-store.ts";
 import { handleCustomerPortalResolve } from "./customer-portal.ts";
 import {
@@ -68,8 +81,18 @@ import {
   projectMeasurementIntakeAdminException,
   type MeasurementIntakeAdminException,
 } from "./measurement-intake-store.ts";
-import { aggregateMeasurementDeltas, listMeasurementDeltas } from "./measurement-deltas-store.ts";
+import {
+  listMeasurementDeltas,
+  measurementCalibrationReport,
+} from "./measurement-deltas-store.ts";
 import { markExpiredExecutionLeases } from "./approval-store.ts";
+import {
+  handleExternalEffectClaim,
+  handleExternalEffectReconciliation,
+  handleExternalEffectRetry,
+  handleExternalEffectSettlement,
+} from "./effect-runtime-admin.ts";
+import { recoverExpiredExternalEffects } from "./effect-runtime.ts";
 import { markExpiredQuoteRevisionApprovalExecutionLeases } from "./quote-revision-approval-store.ts";
 import { markExpiredProductionScheduleApprovalExecutionLeases } from "./production-schedule-approval-store.ts";
 import {
@@ -84,7 +107,10 @@ import {
   recordNewoReconciliationRun,
 } from "./newo-store.ts";
 
-type BusQueueMessage = { envelope_id: string } | NewoQueueMessage;
+type BusQueueMessage =
+  | { envelope_id: string }
+  | { measurement_receipt_id: string; lease_token: string }
+  | NewoQueueMessage;
 
 const MAX_BODY_BYTES = 256 * 1024;
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
@@ -103,6 +129,11 @@ async function recoverLeadTriageOutboxThenExpireLeases(env: Env): Promise<void> 
   } catch (error) {
     log({ at: "approval_lease_sweep", error: String(error) });
   }
+}
+
+async function reconcileFacetV2ThenFrappe(env: Env): Promise<void> {
+  await reconcileFacetV2UnassociatedIntakes(env);
+  await reconcileFacetDesignFrappeProjections(env);
 }
 const escapeHtml = (value: string): string => value
   .replace(/&/g, "&amp;")
@@ -142,7 +173,36 @@ export default {
     const isDlq = batch.queue.endsWith("-dlq");
     for (const msg of batch.messages) {
       try {
-        if ("newo_event_id" in msg.body) {
+        if ("measurement_receipt_id" in msg.body) {
+          const receiptId = msg.body.measurement_receipt_id;
+          if (isDlq) {
+            const created = await handleMeasurementDeadLetter(
+              env,
+              receiptId,
+              msg.body.lease_token,
+            );
+            if (created) {
+              await sendOwnerAlert(
+                env,
+                "DEAD-LETTER: measurement processing exhausted retries",
+                `<p>Measurement receipt <b>${escapeHtml(receiptId)}</b> exhausted Queue retries.</p>
+                 <p>The durable exception is visible in IronWrap owner operations.</p>`,
+              ).catch((error) =>
+                log({
+                  at: "measurement_deadletter_alert_failed",
+                  receipt_id: receiptId,
+                  error: String(error),
+                })
+              );
+            }
+          } else {
+            await handleMeasurementQueueMessage(
+              env,
+              receiptId,
+              msg.body.lease_token,
+            );
+          }
+        } else if ("newo_event_id" in msg.body) {
           await handleNewoQueueMessage(env, msg.body.newo_event_id, isDlq);
         } else if (isDlq) await handleDead(env, msg.body.envelope_id);
         else await handlePush(env, msg.body.envelope_id);
@@ -151,9 +211,11 @@ export default {
         log({
           at: "queue",
           queue: batch.queue,
-          message_id: "newo_event_id" in msg.body
-            ? msg.body.newo_event_id
-            : msg.body.envelope_id,
+          message_id: "measurement_receipt_id" in msg.body
+            ? msg.body.measurement_receipt_id
+            : "newo_event_id" in msg.body
+              ? msg.body.newo_event_id
+              : msg.body.envelope_id,
           error: String(err),
         });
         msg.retry(); // exhausting retries on the main queue routes to the DLQ (wrangler.jsonc)
@@ -208,13 +270,27 @@ export default {
           }).catch((error) =>
             log({ at: "quickbooks_projection_recovery", error: String(error) }),
           ),
+          recoverQuickBooksFinalInvoices(
+            env as import("./app-types.ts").AppEnv,
+          ).then((result) => {
+            if (result.discovered > 0 || result.effects_processed > 0)
+              log({ at: "quickbooks_final_invoice_recovery", ...result });
+          }).catch(() =>
+            log({ at: "quickbooks_final_invoice_recovery", error: "quickbooks_recovery_failed" })
+          ),
           reconcileCustomerContractAcceptanceAttempts(env).catch((error) =>
             log({ at: "customer_contract_acceptance_reconcile", error: String(error) }),
           ),
-          reconcileFacetDesignFrappeProjections(env).catch((error) =>
+          reconcileFacetV2ThenFrappe(env).catch((error) =>
             log({ at: "facet_design_frappe_projection_reconcile", error: String(error) }),
           ),
           recoverLeadTriageOutboxThenExpireLeases(env),
+          recoverPostizControlPlane(env as import("./app-types.ts").AppEnv).then((result) => {
+            if (result.effects_processed > 0 || result.intents_reconciled > 0)
+              log({ at: "postiz_control_plane_recovery", ...result });
+          }).catch((error) =>
+            log({ at: "postiz_control_plane_recovery", error: String(error) })
+          ),
           // Quote-revision execution has an independent ledger and broker. Its
           // lease therefore becomes explicit reconciliation work independently of
           // the lead-triage authority.
@@ -238,6 +314,13 @@ export default {
               at: "production_schedule_approval_lease_sweep",
               error: String(error),
             }),
+          ),
+          recoverExpiredExternalEffects(
+            env as import("./app-types.ts").AppEnv,
+          ).then((result) => {
+            if (result.recovered > 0) log({ at: "external_effect_lease_sweep", ...result });
+          }).catch((error) =>
+            log({ at: "external_effect_lease_sweep", error: String(error) }),
           ),
         ]).then(() => {}),
       ); // the frequent cron
@@ -266,6 +349,19 @@ async function routeRequest(
     if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN))
       return methodAwareJson(req, { ok: verdict }, verdict ? 200 : 503);
     return methodAwareJson(req, readiness, verdict ? 200 : 503);
+  }
+  if (url.pathname.startsWith("/internal/v1/authority-records/")) {
+    const authorityResponse = await handleAuthorityRecordExecutorRoute(
+      req,
+      env as import("./app-types.ts").AppEnv,
+    );
+    if (authorityResponse) return authorityResponse;
+  }
+  if (url.pathname === "/oauth/quickbooks/callback") {
+    return await handleQuickBooksOAuthCallback(
+      req,
+      env as import("./app-types.ts").AppEnv,
+    );
   }
   // Public estimator traffic is browser-origin constrained and has independent
   // Turnstile/rate controls. It never accepts the private ingest bearer token.
@@ -335,9 +431,18 @@ async function routeRequest(
         req.headers.get("x-idempotency-key"),
     );
   }
-  // Facet has a separately provisioned HMAC authority. It must never fall through to the broad
-  // lead-ingest bearer token route, and this receipt has no Frappe projection in this slice.
-  if (url.pathname === "/ingest/facet-design") return await handleFacetDesignIngest(req, env);
+  // Facet v2 has separately provisioned rotating HMAC authority. It must never fall through to
+  // the broad lead-ingest bearer route; Frappe projection runs only from immutable accepted D1.
+  if (url.pathname === "/ingest/facet-design") {
+    const response = await handleFacetDesignIngest(req, env);
+    const waitUntil = (ctx as ExecutionContext & { waitUntil?: ExecutionContext["waitUntil"] }).waitUntil;
+    if (response.ok && typeof waitUntil === "function") {
+      waitUntil.call(ctx, reconcileFacetV2ThenFrappe(env).catch((error) =>
+        log({ at: "facet_design_frappe_projection_after_ingest", error: String(error) })
+      ));
+    }
+    return response;
+  }
   const ingest = url.pathname.match(/^\/ingest\/([a-z]+)$/);
   if (req.method === "POST" && ingest) {
     if (!constantTimeEqual(bearer(req), env.INGEST_TOKEN))
@@ -346,6 +451,19 @@ async function routeRequest(
   }
   if (url.pathname === "/webhook/newo" || url.pathname.startsWith("/webhook/newo/")) {
     return await handleNewoWebhook(req, env, ctx, url);
+  }
+  if (url.pathname.startsWith("/admin/effects/")) {
+    if (!constantTimeEqual(bearer(req), env.EFFECT_RUNTIME_TOKEN))
+      return json({ error: "unauthorized" }, 401);
+    if (req.method === "POST" && url.pathname === "/admin/effects/claim")
+      return await handleExternalEffectClaim(req, env as import("./app-types.ts").AppEnv);
+    if (req.method === "POST" && url.pathname === "/admin/effects/reconcile")
+      return await handleExternalEffectReconciliation(req, env as import("./app-types.ts").AppEnv);
+    if (req.method === "POST" && url.pathname === "/admin/effects/retry")
+      return await handleExternalEffectRetry(req, env as import("./app-types.ts").AppEnv);
+    if (req.method === "POST" && url.pathname === "/admin/effects/settle")
+      return await handleExternalEffectSettlement(req, env as import("./app-types.ts").AppEnv);
+    return json({ error: "not_found" }, 404);
   }
   if (url.pathname.startsWith("/admin/")) {
     if (!constantTimeEqual(bearer(req), env.ADMIN_TOKEN))
@@ -368,9 +486,18 @@ async function routeRequest(
     // aggregates per (source, metric). Read-only; rows are written at intake.
     if (req.method === "GET" && url.pathname === "/admin/measurements/deltas") {
       const limit = clampLimit(url.searchParams.get("limit"), 50, 200);
+      const asOfParam = url.searchParams.get("as_of");
+      const asOf = asOfParam === null ? new Date() : new Date(asOfParam);
+      if (
+        asOfParam !== null &&
+        (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(asOfParam) ||
+          !Number.isFinite(asOf.getTime()) || asOf.toISOString() !== asOfParam)
+      ) return json({ error: "invalid_as_of" }, 400);
+      const calibration = await measurementCalibrationReport(env, asOf);
       return json({
         deltas: await listMeasurementDeltas(env, limit),
-        aggregates: await aggregateMeasurementDeltas(env),
+        aggregates: calibration.cohorts,
+        calibration,
       });
     }
     if (req.method === "GET" && url.pathname === "/admin/status") {

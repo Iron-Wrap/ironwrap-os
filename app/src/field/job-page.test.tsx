@@ -10,13 +10,14 @@ import { apiCommand } from "../lib/api";
 import { getOutboxAction, queueOutboxAction, saveOutboxAction } from "../storage/outbox";
 import { flushOutbox } from "../storage/outbox-processor";
 import type { OutboxAction } from "../storage/outbox-types";
-import type { JobResponse } from "./field-contracts";
-import { loadJob } from "./field-cache";
-import { JobPage } from "./field-pages";
+import type { JobResponse, WorkObjectResponse } from "./field-contracts";
+import { loadJob, loadWorkObject } from "./field-cache";
+import { JobPage, WorkObjectPage } from "./field-pages";
 
 vi.mock("./field-cache", () => ({
   hasCachedJobPacket: vi.fn(),
   loadJob: vi.fn(),
+  loadWorkObject: vi.fn(),
   loadProofPage: vi.fn(),
   loadToday: vi.fn(),
   prefetchAssignedPackets: vi.fn(),
@@ -56,8 +57,10 @@ vi.mock("@tanstack/react-router", () => ({
       {children}
     </a>
   ),
-  useParams: () => ({ jobId: "JOB-1" }),
+  useParams: () => routeParams,
 }));
+
+let routeParams: Record<string, string> = { jobId: "JOB-1" };
 
 const fieldSession = {
   version: 1,
@@ -84,6 +87,34 @@ const fieldSession = {
   source_updated_at: "2026-07-10T12:00:00.000Z",
   read_model_generated_at: "2026-07-10T12:00:00.000Z",
   stale_fields: [],
+} satisfies AuthenticatedSession;
+
+const productionSession = {
+  ...fieldSession,
+  user: {
+    ...fieldSession.user,
+    id: "appu_production",
+    email: "production@example.invalid",
+    display_name: "Production",
+    role: "production",
+    frappe_user_id: null,
+  },
+  permissions: ["jobs:read:any", "production:read"],
+  allowed_actions: ["session.logout", "now.read", "production.read", "job.read"],
+} satisfies AuthenticatedSession;
+
+const ownerSession = {
+  ...fieldSession,
+  user: {
+    ...fieldSession.user,
+    id: "appu_owner",
+    email: "owner@example.com",
+    display_name: "Owner",
+    role: "owner",
+    frappe_user_id: "owner@example.com",
+  },
+  permissions: ["jobs:read:any", "now:read"],
+  allowed_actions: ["session.logout", "now.read", "job.read"],
 } satisfies AuthenticatedSession;
 
 function jobModel(overrides: Partial<JobResponse> = {}): JobResponse {
@@ -204,7 +235,26 @@ function releasedWorkPackage(): NonNullable<JobResponse["packet"]["work_package"
     issued_at: "2026-07-10T15:00:00.000Z",
     released_at: "2026-07-10T15:15:00.000Z",
     expires_at: "2026-07-10T23:00:00.000Z",
-    acknowledgement: { current_user_acknowledged: false, acknowledged_at: null },
+    work_object_type: "Roof Job",
+    work_object_id: "JOB-1",
+    physical_context_type: "Roof Site",
+    physical_context_id: "JOB-1",
+    release_attempt_id: "wpe_release_attempt_00000001",
+    supersession: null,
+    acknowledgement: {
+      current_user_acknowledged: false,
+      acknowledged_at: null,
+      workers: [
+        {
+          worker_user: "crew@example.com",
+          worker_role: "Installer",
+          required: true,
+          acknowledged: false,
+          acknowledged_at: null,
+        },
+      ],
+    },
+    evidence_slots: [],
     steps: [
       {
         sequence: 1,
@@ -217,6 +267,7 @@ function releasedWorkPackage(): NonNullable<JobResponse["packet"]["work_package"
       {
         sequence: 1,
         hold_point: "Deck condition review",
+        release_phase: "Pre-start",
         release_authority: "Production manager",
         required_evidence: "Deck condition photo.",
         acceptance_criteria: "Production manager independently releases the hold.",
@@ -256,6 +307,15 @@ function startableWorkPackageModel(): JobResponse {
         acknowledgement: {
           current_user_acknowledged: true,
           acknowledged_at: "2026-07-10T15:20:00.000Z",
+          workers: [
+            {
+              worker_user: "crew@example.com",
+              worker_role: "Installer",
+              required: true,
+              acknowledged: true,
+              acknowledged_at: "2026-07-10T15:20:00.000Z",
+            },
+          ],
         },
         hold_points: workPackage.hold_points.map((holdPoint) => ({
           ...holdPoint,
@@ -281,8 +341,16 @@ function queuedWorkPackageAction(
     method: "POST",
     payload:
       kind === "work_package_acknowledgement"
-        ? { work_package_id: "WP-1" }
-        : { work_package_id: "WP-1", blocker_reason: "Wind exceeds the plan limit." },
+        ? {
+            work_package_id: "WP-1",
+            work_package_version: 3,
+            release_attempt_id: "wpe_release_attempt_00000001",
+          }
+        : {
+            work_package_id: "WP-1",
+            work_package_version: 3,
+            blocker_reason: "Wind exceeds the plan limit.",
+          },
     attachments: [],
     state: "queued",
     attempts: 0,
@@ -293,7 +361,7 @@ function queuedWorkPackageAction(
   };
 }
 
-function renderJob(model = jobModel(), session = fieldSession) {
+function renderJob(model = jobModel(), session: AuthenticatedSession = fieldSession) {
   vi.mocked(loadJob).mockResolvedValue(model);
   return render(
     <QueryClientProvider
@@ -306,17 +374,305 @@ function renderJob(model = jobModel(), session = fieldSession) {
   );
 }
 
+function workObjectModel(): WorkObjectResponse {
+  const model = workPackageModel();
+  const workPackage = model.packet.work_package;
+  if (!workPackage) throw new Error("Expected a Work Package fixture.");
+  return {
+    version: model.version,
+    source_updated_at: model.source_updated_at,
+    read_model_generated_at: model.read_model_generated_at,
+    stale_fields: model.stale_fields,
+    permissions: model.permissions,
+    allowed_actions: [
+      "field.checkin.create",
+      "work_package.acknowledge",
+      "work_package.stop_work",
+      "work_package.start",
+      "work_package.complete",
+    ],
+    work_object: {
+      workObjectType: "Shop Order",
+      workObjectId: "SHOP-001",
+      physicalContextType: "Shop Floor",
+      physicalContextId: "SHOP-FLOOR-1",
+    },
+    assignment: model.assignment,
+    work_package: {
+      ...workPackage,
+      work_object_type: "Shop Order",
+      work_object_id: "SHOP-001",
+      physical_context_type: "Shop Floor",
+      physical_context_id: "SHOP-FLOOR-1",
+    },
+  };
+}
+
+function renderWorkObject(model = workObjectModel(), session: AuthenticatedSession = fieldSession) {
+  vi.mocked(loadWorkObject).mockResolvedValue(model);
+  return render(
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      <SessionProvider session={session}>
+        <WorkObjectPage />
+      </SessionProvider>
+    </QueryClientProvider>,
+  );
+}
+
 describe("JobPage", () => {
   const originalOnline = navigator.onLine;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    routeParams = { jobId: "JOB-1" };
     Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
     vi.mocked(getOutboxAction).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: originalOnline });
+  });
+
+  it("renders a typed Shop Order packet as an actionable field surface", async () => {
+    routeParams = {
+      workObjectType: "Shop Order",
+      workObjectId: "SHOP-001",
+      physicalContextType: "Shop Floor",
+      physicalContextId: "SHOP-FLOOR-1",
+    };
+    renderWorkObject();
+
+    expect(await screen.findByRole("heading", { name: "SHOP-001" })).toBeVisible();
+    expect(screen.getAllByText("Shop Floor · SHOP-FLOOR-1")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Acknowledge this package" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
+    expect(screen.getAllByRole("link", { name: /Capture evidence/ })[0]).toHaveAttribute(
+      "href",
+      expect.stringContaining(
+        "work_object_type=Shop+Order&work_object_id=SHOP-001&physical_context_type=Shop+Floor&physical_context_id=SHOP-FLOOR-1",
+      ),
+    );
+    expect(loadWorkObject).toHaveBeenCalledWith(fieldSession, {
+      workObjectType: "Shop Order",
+      workObjectId: "SHOP-001",
+      physicalContextType: "Shop Floor",
+      physicalContextId: "SHOP-FLOOR-1",
+    });
+  });
+
+  it("renders typed completion only when the server grants the exact capability", async () => {
+    routeParams = {
+      workObjectType: "Shop Order",
+      workObjectId: "SHOP-001",
+      physicalContextType: "Shop Floor",
+      physicalContextId: "SHOP-FLOOR-1",
+    };
+    const model = workObjectModel();
+    const workPackage = model.work_package;
+    if (!workPackage) throw new Error("Expected a Work Package fixture.");
+    renderWorkObject(
+      {
+        ...model,
+        allowed_actions: ["work_package.complete"],
+        work_package: {
+          ...workPackage,
+          status: "In Progress",
+        },
+      },
+      ownerSession,
+    );
+
+    expect(await screen.findByRole("heading", { name: "SHOP-001" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Complete work package" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Complete from current ledger" })).toBeVisible();
+
+    const user = userEvent.setup();
+    vi.mocked(apiCommand).mockResolvedValue(undefined);
+    await user.click(screen.getByRole("button", { name: "Complete from current ledger" }));
+    await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(apiCommand).mock.calls[0]?.[0]).toMatchObject({
+      path: "/api/v1/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1/work-package/complete",
+      body: {
+        payload: {
+          work_package_id: "WP-1",
+          work_package_version: 3,
+          release_attempt_id: "wpe_release_attempt_00000001",
+          work_object_type: "Shop Order",
+          work_object_id: "SHOP-001",
+          physical_context_type: "Shop Floor",
+          physical_context_id: "SHOP-FLOOR-1",
+        },
+      },
+    });
+  });
+
+  it("hides typed completion from unrelated office sessions", async () => {
+    routeParams = {
+      workObjectType: "Shop Order",
+      workObjectId: "SHOP-001",
+      physicalContextType: "Shop Floor",
+      physicalContextId: "SHOP-FLOOR-1",
+    };
+    const unrelatedSessions: AuthenticatedSession[] = [
+      ownerSession,
+      {
+        ...ownerSession,
+        user: {
+          ...ownerSession.user,
+          id: "appu_ops",
+          email: "ops@example.invalid",
+          display_name: "Operations",
+          role: "ops",
+          frappe_user_id: "ops@example.invalid",
+        },
+      },
+      {
+        ...productionSession,
+        user: {
+          ...productionSession.user,
+          frappe_user_id: "production@example.invalid",
+        },
+      },
+    ];
+    for (const session of unrelatedSessions) {
+      const model = workObjectModel();
+      const rendered = renderWorkObject({ ...model, allowed_actions: [] }, session);
+      expect(
+        await screen.findByRole("heading", {
+          name: /SHOP-001|This work belongs to another role/,
+        }),
+      ).toBeVisible();
+      expect(
+        screen.queryByRole("heading", { name: "Complete work package" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Complete from current ledger" }),
+      ).not.toBeInTheDocument();
+      rendered.unmount();
+    }
+    expect(apiCommand).not.toHaveBeenCalled();
+  });
+
+  it("binds typed acknowledgement and Stop Work outbox intents to the exact parent/context", async () => {
+    routeParams = {
+      workObjectType: "Shop Order",
+      workObjectId: "SHOP-001",
+      physicalContextType: "Shop Floor",
+      physicalContextId: "SHOP-FLOOR-1",
+    };
+    const user = userEvent.setup();
+    const acknowledgement = queuedWorkPackageAction("work_package_acknowledgement");
+    const stopWork = queuedWorkPackageAction("work_package_stop");
+    vi.mocked(saveOutboxAction)
+      .mockResolvedValueOnce(acknowledgement)
+      .mockResolvedValueOnce(stopWork);
+    vi.mocked(queueOutboxAction)
+      .mockResolvedValueOnce(acknowledgement)
+      .mockResolvedValueOnce(stopWork);
+    renderWorkObject();
+
+    await user.click(await screen.findByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "Acknowledge this package" }));
+    await waitFor(() => {
+      expect(saveOutboxAction).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          endpoint:
+            "/api/v1/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1/work-package/acknowledgements",
+          payload: {
+            work_package_id: "WP-1",
+            work_package_version: 3,
+            release_attempt_id: "wpe_release_attempt_00000001",
+            work_object_type: "Shop Order",
+            work_object_id: "SHOP-001",
+            physical_context_type: "Shop Floor",
+            physical_context_id: "SHOP-FLOOR-1",
+          },
+        }),
+      );
+    });
+
+    await user.type(
+      screen.getByLabelText("What requires work to stop?"),
+      "Machine guard is missing.",
+    );
+    await user.click(screen.getByRole("button", { name: "Stop Work and save report" }));
+    await waitFor(() => {
+      expect(saveOutboxAction).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          endpoint:
+            "/api/v1/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1/work-package/stop-work",
+          payload: {
+            work_package_id: "WP-1",
+            work_package_version: 3,
+            blocker_reason: "Machine guard is missing.",
+            work_object_type: "Shop Order",
+            work_object_id: "SHOP-001",
+            physical_context_type: "Shop Floor",
+            physical_context_id: "SHOP-FLOOR-1",
+          },
+        }),
+      );
+    });
+  });
+
+  it("binds typed Start Work to the same online parent/context", async () => {
+    routeParams = {
+      workObjectType: "Shop Order",
+      workObjectId: "SHOP-001",
+      physicalContextType: "Shop Floor",
+      physicalContextId: "SHOP-FLOOR-1",
+    };
+    const model = workObjectModel();
+    const workPackage = model.work_package;
+    if (!workPackage) throw new Error("Expected a Work Package fixture.");
+    const user = userEvent.setup();
+    vi.mocked(apiCommand).mockResolvedValue(undefined);
+    renderWorkObject(
+      {
+        ...model,
+        allowed_actions: ["work_package.start"],
+        work_package: {
+          ...workPackage,
+          status: "Acknowledged",
+          acknowledgement: {
+            ...workPackage.acknowledgement,
+            current_user_acknowledged: true,
+            acknowledged_at: "2026-07-10T15:20:00.000Z",
+            workers: workPackage.acknowledgement.workers.map((worker) => ({
+              ...worker,
+              acknowledged: true,
+              acknowledged_at: "2026-07-10T15:20:00.000Z",
+            })),
+          },
+          hold_points: workPackage.hold_points.map((holdPoint) => ({
+            ...holdPoint,
+            released: true,
+          })),
+        },
+      },
+      fieldSession,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Start work from current packet" }));
+    await waitFor(() => expect(apiCommand).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(apiCommand).mock.calls[0]?.[0]).toMatchObject({
+      path: "/api/v1/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1/work-package/start",
+      body: {
+        payload: {
+          work_package_id: "WP-1",
+          work_package_version: 3,
+          release_attempt_id: "wpe_release_attempt_00000001",
+          work_object_type: "Shop Order",
+          work_object_id: "SHOP-001",
+          physical_context_type: "Shop Floor",
+          physical_context_id: "SHOP-FLOOR-1",
+        },
+      },
+    });
   });
 
   it("turns a blocked gate into a work lock while preserving the permitted blocker-capture path", async () => {
@@ -344,6 +700,32 @@ describe("JobPage", () => {
     expect(screen.getByText(/field_checkin · Internal/i)).toBeVisible();
     expect(
       screen.queryByRole("button", { name: /acknowledge|clear work|override/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("lets production inspect a job packet without inheriting field commands", async () => {
+    renderJob(
+      workPackageModel({
+        permissions: ["jobs:read:any", "production:read"],
+        allowed_actions: ["job.read"],
+      }),
+      productionSession,
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "123 Example Avenue, Calgary, AB" }),
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: "Production" })).toHaveAttribute("href", "/production");
+    expect(screen.getByRole("heading", { name: "Read-only job packet" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: /Capture .*proof/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Acknowledge this package" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Start work from current packet" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Stop Work and save report" }),
     ).not.toBeInTheDocument();
   });
 
@@ -380,6 +762,93 @@ describe("JobPage", () => {
     expect(screen.getByText(/never resumes work itself/i)).toBeVisible();
   });
 
+  it("binds field evidence controls to the exact package version and declared slots", async () => {
+    renderJob(workPackageModel());
+
+    expect(await screen.findByRole("heading", { name: "Evidence slots" })).toBeVisible();
+    expect(
+      screen.getByText(/Awaiting acknowledgement of this exact package version/i),
+    ).toBeVisible();
+    const captureLinks = screen.getAllByRole("link", { name: /Capture evidence/ });
+    expect(captureLinks).toHaveLength(2);
+    expect(captureLinks[0]).toHaveAttribute(
+      "href",
+      expect.stringContaining(
+        "/check-in/JOB-1?work_package_id=WP-1&work_package_version=3&evidence_slot_id=step%3A1",
+      ),
+    );
+    expect(captureLinks[0]).toHaveAttribute(
+      "href",
+      expect.stringContaining("evidence_requirement=Anchor+inspection+photo."),
+    );
+  });
+
+  it("shows a correction link with both immutable prior evidence identities", async () => {
+    const model = workPackageModel();
+    const workPackage = model.packet.work_package;
+    if (!workPackage) throw new Error("Expected a Work Package fixture.");
+    renderJob({
+      ...model,
+      packet: {
+        ...model.packet,
+        work_package: {
+          ...workPackage,
+          evidence_slots: [
+            {
+              event_id: "WPE-EVIDENCE-001",
+              evidence_item: "EVIDENCE-ITEM-001",
+              slot_id: "step:1",
+              requirement: "Anchor inspection photo.",
+              source: "worker-camera",
+              actor_user: "crew@example.com",
+              device_id: "paired-device-1",
+              captured_at: "2026-07-10T09:15:00.000Z",
+              freshness: "Current",
+              conflict_state: "None",
+              correction_of: null,
+              evidence_item_correction_of: null,
+              review_reason: null,
+              verification: "Verified",
+              disposition: "Open",
+              correction_reason: null,
+              superseded: false,
+            },
+          ],
+        },
+      },
+    });
+
+    const correction = await screen.findByRole("link", { name: "Correct evidence for step 1" });
+    expect(correction).toHaveAttribute(
+      "href",
+      expect.stringContaining("evidence_correction_of=WPE-EVIDENCE-001"),
+    );
+    expect(correction).toHaveAttribute(
+      "href",
+      expect.stringContaining("evidence_item_correction_of=EVIDENCE-ITEM-001"),
+    );
+  });
+
+  it("keeps acknowledgement and capture controls closed when the release attempt is unknown", async () => {
+    const model = workPackageModel();
+    const workPackage = model.packet.work_package;
+    if (!workPackage) throw new Error("Expected a Work Package fixture.");
+    renderJob({
+      ...model,
+      packet: {
+        ...model.packet,
+        work_package: { ...workPackage, release_attempt_id: null },
+      },
+    });
+
+    expect(await screen.findByRole("heading", { name: "Evidence slots" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: /Capture evidence/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Acknowledge this package" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop Work and save report" })).toBeVisible();
+  });
+
   it("queues acknowledgement and Stop Work intents offline without a local work-state change", async () => {
     const user = userEvent.setup();
     const acknowledgement = queuedWorkPackageAction("work_package_acknowledgement");
@@ -401,7 +870,11 @@ describe("JobPage", () => {
         expect.objectContaining({
           kind: "work_package_acknowledgement",
           endpoint: "/api/v1/jobs/JOB-1/work-package/acknowledgements",
-          payload: { work_package_id: "WP-1" },
+          payload: {
+            work_package_id: "WP-1",
+            work_package_version: 3,
+            release_attempt_id: "wpe_release_attempt_00000001",
+          },
         }),
       );
     });
@@ -418,7 +891,11 @@ describe("JobPage", () => {
         expect.objectContaining({
           kind: "work_package_stop",
           endpoint: "/api/v1/jobs/JOB-1/work-package/stop-work",
-          payload: { work_package_id: "WP-1", blocker_reason: "Wind exceeds the plan limit." },
+          payload: {
+            work_package_id: "WP-1",
+            work_package_version: 3,
+            blocker_reason: "Wind exceeds the plan limit.",
+          },
         }),
       );
     });
@@ -487,7 +964,13 @@ describe("JobPage", () => {
     expect(options).toMatchObject({
       path: "/api/v1/jobs/JOB-1/work-package/start",
       csrfToken: "csrf",
-      body: { payload: { work_package_id: "WP-1" } },
+      body: {
+        payload: {
+          work_package_id: "WP-1",
+          work_package_version: 3,
+          release_attempt_id: "wpe_release_attempt_00000001",
+        },
+      },
     });
     expect(options?.deviceActionId).toEqual(expect.any(String));
     expect(options?.idempotencyKey).toBe(options?.deviceActionId);

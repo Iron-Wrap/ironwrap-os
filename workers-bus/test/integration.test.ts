@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.ts";
 import { retryEstimateErpNextSyncs } from "../src/estimates.ts";
+import { withErpReadback, withTestEffectRuntime } from "./effect-runtime-fixture.ts";
 
 function fakeEnv() {
   const r2: Array<{ key: string; body: string }> = [];
@@ -142,7 +143,7 @@ function fakeEnv() {
       },
     },
   };
-  return { env, r2, queue, db, envelopesById };
+  return { env: withTestEffectRuntime(env), r2, queue, db, envelopesById };
 }
 
 const fakeCtx = (waitUntilCalls: Promise<unknown>[] = []) => ({
@@ -209,7 +210,7 @@ test("POST /ingest/website: repeated contact claims duplicate and skips second J
 test("POST /ingest/estimate: configurator payload lands in owned store and ERPNext without JN/GHL queue", async (t) => {
   const { env, r2, queue, db } = fakeEnv();
   const erpCalls: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     erpCalls.push({ url, init: init ?? {} });
     if ((init?.method ?? "GET") === "GET") return json({ data: [] });
@@ -223,7 +224,7 @@ test("POST /ingest/estimate: configurator payload lands in owned store and ERPNe
     }
     if (url.endsWith("/api/resource/Instant%20Estimate%20Session")) return json({ data: { name: "IES-EST-1" } });
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
   Object.assign(env, {
     ERPNEXT_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://erp.example.com",
@@ -298,7 +299,7 @@ test("POST /ingest/estimate: configurator payload lands in owned store and ERPNe
 test("POST /ingest/estimate: repeated project id is idempotent and does not re-drive side effects", async (t) => {
   const { env, r2, queue, db } = fakeEnv();
   const erpCalls: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     erpCalls.push({ url, init: init ?? {} });
     if ((init?.method ?? "GET") === "GET") return json({ data: [] });
@@ -314,7 +315,7 @@ test("POST /ingest/estimate: repeated project id is idempotent and does not re-d
       return json({ data: { name: "IES-EST-IDEMPOTENT" } });
     }
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
   Object.assign(env, {
     ERPNEXT_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://erp.example.com",
@@ -383,7 +384,7 @@ test("POST /ingest/estimate: transient ERPNext failure stays accepted, then the 
   const { env, envelopesById, queue } = fakeEnv();
   let erpAvailable = false;
   const erpCalls: string[] = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     erpCalls.push(url);
     if (!erpAvailable) throw new Error("ERP temporarily unavailable");
@@ -398,7 +399,7 @@ test("POST /ingest/estimate: transient ERPNext failure stays accepted, then the 
     }
     if (url.endsWith("/api/resource/Instant%20Estimate%20Session")) return json({ data: { name: "IES-EST-RETRY" } });
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
   Object.assign(env, {
     ERPNEXT_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://erp.example.com",

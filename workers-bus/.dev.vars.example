@@ -24,6 +24,10 @@ QB_WEBHOOK_TOKEN=""
 ERPNEXT_API_KEY=""
 ERPNEXT_API_SECRET=""
 
+# Internal authority executor rail. The MCP host holds the matching secret;
+# browser/PWA sessions cannot claim terminal outcomes or issuer readbacks.
+AUTHORITY_RECORD_EXECUTOR_HMAC_KEY="replace-with-a-separate-32-byte-secret"
+
 # Dedicated customer-contract acceptance channel. These credentials must belong to the
 # `IronWrap Customer Acceptance Service` role, never the broad Worker BFF identity.
 APP_CUSTOMER_ACCEPTANCE_HMAC_KEY="replace-with-a-separate-32-byte-secret"
@@ -58,6 +62,7 @@ PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER="replace-with-at-least-32-random-characters"
 # ERPNEXT_ENABLED="false"
 # ERPNEXT_BASE_URL="https://your-site.frappe.cloud"
 # APP_BFF_ENABLED="true"
+# APP_HERMES_DESKTOP_ENABLED="false"
 # APP_PUBLIC_ORIGIN="http://localhost:5173"
 # APP_ALLOWED_ORIGINS="http://localhost:5173"
 # APP_ALLOW_INSECURE_LOCAL="true"

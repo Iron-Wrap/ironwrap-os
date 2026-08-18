@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
-import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
+import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 
 const TENANT = "ironwrap";
 const SHARED_SECRET = "production-schedule-broker-shared-secret-for-test-0001";
@@ -105,9 +105,7 @@ function auth(role: AppRole): AuthContext {
   return {
     rawSessionToken: "s".repeat(43),
     csrfToken: "csrf",
-    permissions: role === "owner"
-      ? ["session:read", "approvals:read", "approvals:decide"]
-      : ["session:read", "approvals:read", "approvals:prepare"],
+    permissions: permissionsForRole(role),
     session: {
       session_hash: "a".repeat(64),
       session_created_at: new Date(now.getTime() - 60_000).toISOString(),

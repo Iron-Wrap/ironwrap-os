@@ -1227,12 +1227,31 @@ def _lock_shop_sources(order: Any) -> dict[str, dict[str, Any]]:
     sources: dict[str, dict[str, Any]] = {}
     for doctype, field, allowed_statuses in source_specs:
         source_id = _clean_identifier(order.get(field), field)
-        source = _lock_row(
-            doctype,
-            source_id,
-            fields="name, roof_job, status, modified",
-            not_found_code="shop_command_source_not_found",
-        )
+        if doctype == "Work Package":
+            package = _lock_document(
+                doctype,
+                source_id,
+                fields="*",
+                not_found_code="shop_command_source_not_found",
+            )
+            # A shop release is also a field/work-package release consumer.
+            # Re-evaluate the full package under its own locked authority,
+            # assignment, compliance, safety, and gate context instead of
+            # trusting the status projection on the Shop Order.
+            validate_business_document(package, "work_package")
+            source = {
+                "name": package.get("name"),
+                "roof_job": package.get("roof_job"),
+                "status": package.get("status"),
+                "modified": package.get("modified"),
+            }
+        else:
+            source = _lock_row(
+                doctype,
+                source_id,
+                fields="name, roof_job, status, modified",
+                not_found_code="shop_command_source_not_found",
+            )
         if (
             source.get("roof_job") != order.get("roof_job")
             or source.get("status") not in allowed_statuses
@@ -1263,10 +1282,7 @@ def _lock_first_piece_inspector_authority(
     package = _lock_document(
         "Work Package",
         _clean_identifier(order.get("work_package"), "work_package"),
-        fields=(
-            "name, work_package_id, roof_job, job_assignment, safety_plan, version, status, "
-            "expires_at, acknowledged_by, acknowledged_at, started_at, modified"
-        ),
+        fields="*",
         not_found_code="shop_command_work_package_not_found",
     )
     if package.get("name") != order.get("work_package") or package.get(

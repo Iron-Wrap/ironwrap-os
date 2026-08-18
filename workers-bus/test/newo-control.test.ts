@@ -25,6 +25,7 @@ class SqliteD1 {
       "0009_replay_approval_audit.sql",
       "0023_newo_reception.sql",
       "0025_newo_control_evidence.sql",
+      "0042_external_effect_runtime.sql",
     ]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -67,6 +68,7 @@ class SqliteStatement {
 function env(db = new SqliteD1(), overrides: Record<string, unknown> = {}) {
   return {
     DB: db as never,
+    EFFECT_RUNTIME_ENABLED: "true",
     OWNER_ALERT_EMAIL: "owner@example.com",
     NEWO_ENABLED: "true",
     NEWO_CONTROL_WRITE_ENABLED: "true",
@@ -149,6 +151,9 @@ test("exact-argument preview, approval, and execution consume one receipt once",
       return json({ access_token: "access", refresh_token: "refresh", token_type: "Bearer", expires_in: 900 });
     }
     assert.equal(url, "https://api.newo.example/api/v1/sessions/session-1");
+    if ((init?.method ?? "GET") === "GET") {
+      return json({ id: "session-1", is_lead: true, need_follow_up: true });
+    }
     assert.equal(init?.method, "PATCH");
     assert.deepEqual(JSON.parse(String(init?.body)), { is_lead: true, need_follow_up: true });
     providerMutations++;
@@ -215,6 +220,51 @@ test("production report webhooks cannot be deleted even with a valid approval", 
     }, new Date(now.getTime() + 2_000)),
     (error: NewoControlError) => error.code === "newo_production_webhook_delete_forbidden",
   );
+});
+
+test("approved Newo provider mutations use the universal effect ledger and provider readback", async (t) => {
+  resetNewoTokenCacheForTest();
+  const runtime = env(undefined, { EFFECT_RUNTIME_ENABLED: "true" });
+  const now = new Date();
+  const preview = await previewNewoControlAction(runtime, {
+    requested_by: "owner@example.com",
+    action: { operation: "user_actor.update", args: { actor_id: "actor-1", input: { name: "Ada" } } },
+  }, now);
+  const approval = await approveNewoControlAction(runtime, {
+    dry_run_receipt: preview.dry_run_receipt,
+    approved_by: "owner@example.com",
+    reason: "Approved after reviewing the exact actor update arguments.",
+  }, new Date(now.getTime() + 1_000));
+
+  let mutations = 0;
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/auth/api-key/token")) {
+      return json({ access_token: "access", refresh_token: "refresh", token_type: "Bearer", expires_in: 900 });
+    }
+    if (url.endsWith("/api/v1/actors/user/actor-1") && init?.method === "PATCH") {
+      mutations++;
+      return json({ id: "actor-1", updated: true });
+    }
+    if (url.endsWith("/api/v1/actors/user/actor-1") && (!init?.method || init.method === "GET")) {
+      return json({ id: "actor-1", name: "Ada" });
+    }
+    throw new Error(`unexpected Newo runtime fetch ${url}`);
+  });
+
+  const executed = await executeApprovedNewoControlAction(runtime, {
+    dry_run_receipt: preview.dry_run_receipt,
+    approval_receipt: approval.approval_receipt,
+  }, new Date(now.getTime() + 2_000));
+  assert.equal(executed.status, "completed");
+  assert.equal(mutations, 1);
+  const ledger = runtime.DB.prepare(
+    "SELECT state, provider, provider_external_id FROM external_effects WHERE provider = 'newo'",
+  );
+  const row = await ledger.bind().first() as { state: string; provider: string; provider_external_id: string };
+  assert.equal(row.state, "succeeded");
+  assert.equal(row.provider, "newo");
+  assert.equal(row.provider_external_id, "actor-1");
 });
 
 function json(body: unknown, status = 200): Response {

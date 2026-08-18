@@ -416,6 +416,24 @@ describe("OwnerNowPage", () => {
     expect(screen.queryByText("Automatic retry")).not.toBeInTheDocument();
   });
 
+  it("distinguishes OCR review from job matching", async () => {
+    const exceptions = measurementExceptionsModel();
+    exceptions.measurements = [
+      {
+        ...exceptions.measurements[0]!,
+        job_number: "26-0044",
+        reason: "ocr_review_required",
+      },
+    ];
+    vi.mocked(loadMeasurementIntakeExceptions).mockResolvedValueOnce(exceptions);
+
+    renderOwner();
+
+    expect(await screen.findByText("RoofRuler report needs OCR review")).toBeVisible();
+    expect(screen.getByText(/compare them with the saved report/i)).toBeVisible();
+    expect(screen.queryByText(/needs a job match/i)).not.toBeInTheDocument();
+  });
+
   it("keeps an empty measurement queue honest", async () => {
     vi.mocked(loadMeasurementIntakeExceptions).mockResolvedValueOnce({ measurements: [] });
     renderOwner();

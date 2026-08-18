@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { handlePhotoIngest, parsePhotoSubmission, photoFileName } from "../src/photos.ts";
 import { jobFolderName, safeSegment } from "../src/google.ts";
 import { isVoiceNoteUri } from "../src/core.ts";
+import { withErpReadback, withTestEffectRuntime } from "./effect-runtime-fixture.ts";
 
 test("parsePhotoSubmission: normalized shape", () => {
   const s = parsePhotoSubmission({
@@ -73,7 +74,7 @@ test("safeSegment + jobFolderName", () => {
 
 test("handlePhotoIngest: raw capture plus ERPNext photo Evidence Item sync without Drive", async (t) => {
   const fetches: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     fetches.push({ url, init: init ?? {} });
     if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0001" }] });
@@ -84,11 +85,11 @@ test("handlePhotoIngest: raw capture plus ERPNext photo Evidence Item sync witho
     }
     if (url.endsWith("/api/resource/Field%20Check-in")) return json({ data: { name: "FCI-0001" } });
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
 
   const writes: Array<{ sql: string; args: unknown[] }> = [];
   const rawWrites: Array<{ key: string; body: string }> = [];
-  const env = {
+  const env = withTestEffectRuntime({
     ERPNEXT_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://erp.example.com",
     ERPNEXT_API_KEY: "erp-key",
@@ -103,7 +104,7 @@ test("handlePhotoIngest: raw capture plus ERPNext photo Evidence Item sync witho
         };
       },
     },
-  };
+  });
 
   const res = await handlePhotoIngest(env as never, JSON.stringify({
     job_number: "26-0001",

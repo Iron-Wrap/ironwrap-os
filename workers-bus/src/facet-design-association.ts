@@ -1,5 +1,5 @@
 import { sha256Hex } from "./app-auth.ts";
-import type { AppEnv } from "./app-types.ts";
+import type { AppEnv, AuthContext } from "./app-types.ts";
 import { listOfficeEstimatorFrappeResource } from "./frappe-read.ts";
 
 export interface FacetDesignAssociationAnchor {
@@ -26,7 +26,7 @@ export interface FacetDesignAssociationInput {
   reason: string;
 }
 
-export interface AssociationReadyFacetEvidence {
+interface FacetDesignWorkflowEvidenceBase {
   event_id: string;
   tenant_id: string;
   brand_id: string;
@@ -38,7 +38,48 @@ export interface AssociationReadyFacetEvidence {
   received_at: string;
   provenance: "customer_approved";
   identity_assurance: "bearer_capability_only";
-  association_state: "required";
+}
+
+export type FacetDesignWorkflowEvidence =
+  | (FacetDesignWorkflowEvidenceBase & { association_state: "required" })
+  | (FacetDesignWorkflowEvidenceBase & {
+    association_state: "associated";
+    roof_job_id: string;
+    customer_quote_id: string;
+    association_anchor_sha256: string;
+    associated_at: string;
+  })
+  | (FacetDesignWorkflowEvidenceBase & {
+    association_state: "revision_prepared";
+    roof_job_id: string;
+    customer_quote_id: string;
+    association_anchor_sha256: string;
+    associated_at: string;
+    quote_revision_approval_id: string;
+    quote_revision_approval_state:
+      | "pending"
+      | "executing"
+      | "failed"
+      | "audit_failed"
+      | "execution_uncertain";
+  });
+
+export interface FacetDesignAssociationTarget {
+  roof_job_id: string;
+  job_name: string;
+  job_number: string;
+  brand_id: string;
+  service_type: string | null;
+  job_status: string | null;
+  customer_quote_id: string;
+  quote_name: string;
+  quote_version: number;
+  approved_at: string;
+}
+
+export interface FacetDesignAssociationTargetList {
+  targets: FacetDesignAssociationTarget[];
+  partial_targets: boolean;
 }
 
 export interface FacetDesignAssociationProjection extends FacetDesignAssociationAnchor {
@@ -64,6 +105,16 @@ interface StoredFacetCustomerApprovalEvent {
   identity_assurance: "bearer_capability_only";
 }
 
+interface StoredFacetDesignWorkflowEvent extends StoredFacetCustomerApprovalEvent {
+  association_event_id: string | null;
+  roof_job_id: string | null;
+  customer_quote_id: string | null;
+  association_anchor_sha256: string | null;
+  associated_at: string | null;
+  quote_revision_approval_id: string | null;
+  quote_revision_approval_state: string | null;
+}
+
 interface StoredFacetDesignAssociation extends FacetDesignAssociationAnchor {
   associated_by_user_id: string;
   reason: string;
@@ -71,6 +122,22 @@ interface StoredFacetDesignAssociation extends FacetDesignAssociationAnchor {
   association_intent_sha256: string;
   association_anchor_sha256: string;
   associated_at: string;
+}
+
+export function canPrepareFacetQuoteRevision(
+  env: AppEnv,
+  auth: AuthContext,
+): boolean {
+  return hasFacetQuoteRevisionPreparationPermissions(auth) &&
+    String(env.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED) === "true";
+}
+
+export function hasFacetQuoteRevisionPreparationPermissions(
+  auth: AuthContext,
+): boolean {
+  return auth.permissions.includes("facet:associate") &&
+    auth.permissions.includes("approvals:prepare") &&
+    auth.permissions.includes("estimator:read");
 }
 
 export type FacetDesignAssociationResult =
@@ -145,34 +212,92 @@ export function parseFacetDesignAssociationInput(
   };
 }
 
-export async function listFacetDesignEvidenceRequiringAssociation(
+export async function listFacetDesignWorkflowEvidence(
   env: Env,
   tenantId: string,
   limit = 50,
-): Promise<AssociationReadyFacetEvidence[]> {
+): Promise<FacetDesignWorkflowEvidence[]> {
   const result = await env.DB.prepare(
     `SELECT event.event_id, event.tenant_id, event.brand_id, event.facet_project_id,
             event.design_revision_id, event.design_revision_sha256,
             event.frozen_evidence_sha256, event.occurred_at, event.received_at,
-            event.identity_assurance
+            event.identity_assurance, association.event_id AS association_event_id,
+            association.roof_job_id, association.customer_quote_id,
+            association.association_anchor_sha256, association.associated_at,
+            approval.quote_revision_approval_id, approval.state AS quote_revision_approval_state
        FROM facet_customer_approval_events AS event
        LEFT JOIN facet_design_evidence_associations AS association
          ON association.event_id = event.event_id
+       LEFT JOIN quote_revision_approval_requests AS approval
+         ON approval.tenant_id = event.tenant_id
+        AND approval.prepare_idempotency_key =
+          ('facet-quote-revision:' || association.association_anchor_sha256)
        WHERE event.tenant_id = ?
          AND event.event_type = 'facet.design.customer_approved.v2'
          AND event.schema_version = 2
          AND event.approval_actor_type = 'customer_capability'
          AND event.identity_assurance = 'bearer_capability_only'
-         AND association.event_id IS NULL
+         AND (
+           approval.quote_revision_approval_id IS NULL
+           OR approval.state IN ('pending', 'executing', 'failed', 'audit_failed', 'execution_uncertain')
+         )
        ORDER BY event.occurred_at ASC, event.event_id ASC
        LIMIT ?`,
-  ).bind(tenantId, Math.max(1, Math.min(100, limit))).all<StoredFacetCustomerApprovalEvent>();
-  return (result.results ?? []).map((event) => ({
-    ...event,
-    provenance: "customer_approved",
-    identity_assurance: "bearer_capability_only",
-    association_state: "required",
-  }));
+  ).bind(tenantId, Math.max(1, Math.min(100, limit))).all<StoredFacetDesignWorkflowEvent>();
+  return (result.results ?? []).map(workflowEvidenceProjection);
+}
+
+export async function listFacetDesignAssociationTargets(
+  env: AppEnv,
+): Promise<FacetDesignAssociationTargetList> {
+  const limit = 100;
+  const [jobs, quotes] = await Promise.all([
+    listOfficeEstimatorFrappeResource(env, "Roof Job", [], limit),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Customer Quote",
+      [["Customer Quote", "status", "=", "Approved"]],
+      limit,
+    ),
+  ]);
+  const quotesByName = new Map(
+    quotes.flatMap((quote) => {
+      const name = text(quote.name);
+      return name ? [[name, quote] as const] : [];
+    }),
+  );
+  const targets = jobs.flatMap((job): FacetDesignAssociationTarget[] => {
+    const jobName = text(job.name);
+    const roofJobId = text(job.roof_job_id);
+    const jobNumber = text(job.job_number);
+    const brandId = text(job.brand);
+    const quoteName = text(job.quotation);
+    const quote = quoteName ? quotesByName.get(quoteName) : null;
+    const customerQuoteId = text(quote?.customer_quote_id);
+    const quoteVersion = positiveInteger(quote?.quote_version);
+    const approvedAt = text(quote?.approved_at);
+    if (
+      !jobName || !roofJobId || !jobNumber || !brandId || !quoteName ||
+      !quote || text(quote.roof_job) !== jobName || text(quote.status) !== "Approved" ||
+      !customerQuoteId || quoteVersion === null || !approvedAt
+    ) return [];
+    return [{
+      roof_job_id: roofJobId,
+      job_name: jobName,
+      job_number: jobNumber,
+      brand_id: brandId,
+      service_type: text(job.service_type),
+      job_status: text(job.job_status),
+      customer_quote_id: customerQuoteId,
+      quote_name: quoteName,
+      quote_version: quoteVersion,
+      approved_at: approvedAt,
+    }];
+  });
+  return {
+    targets,
+    partial_targets: jobs.length === limit || quotes.length === limit,
+  };
 }
 
 export async function createFacetDesignAssociation(
@@ -441,6 +566,43 @@ function associationProjection(
   };
 }
 
+function workflowEvidenceProjection(
+  event: StoredFacetDesignWorkflowEvent,
+): FacetDesignWorkflowEvidence {
+  const base: FacetDesignWorkflowEvidenceBase = {
+    event_id: event.event_id,
+    tenant_id: event.tenant_id,
+    brand_id: event.brand_id,
+    facet_project_id: event.facet_project_id,
+    design_revision_id: event.design_revision_id,
+    design_revision_sha256: event.design_revision_sha256,
+    frozen_evidence_sha256: event.frozen_evidence_sha256,
+    occurred_at: event.occurred_at,
+    received_at: event.received_at,
+    provenance: "customer_approved",
+    identity_assurance: "bearer_capability_only",
+  };
+  if (!event.association_event_id) return { ...base, association_state: "required" };
+  const association = {
+    roof_job_id: requiredStoredText(event.roof_job_id),
+    customer_quote_id: requiredStoredText(event.customer_quote_id),
+    association_anchor_sha256: requiredStoredText(event.association_anchor_sha256),
+    associated_at: requiredStoredText(event.associated_at),
+  };
+  if (!event.quote_revision_approval_id) {
+    return { ...base, ...association, association_state: "associated" };
+  }
+  const approvalState = activeQuoteRevisionState(event.quote_revision_approval_state);
+  if (!approvalState) throw new Error("facet_design_workflow_state_invalid");
+  return {
+    ...base,
+    ...association,
+    association_state: "revision_prepared",
+    quote_revision_approval_id: event.quote_revision_approval_id,
+    quote_revision_approval_state: approvalState,
+  };
+}
+
 function eventMatchesInput(
   event: StoredFacetCustomerApprovalEvent,
   input: FacetDesignAssociationInput,
@@ -500,6 +662,26 @@ function boundedReason(value: unknown): string | null {
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function positiveInteger(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function requiredStoredText(value: unknown): string {
+  const stored = text(value);
+  if (!stored) throw new Error("facet_design_workflow_state_invalid");
+  return stored;
+}
+
+function activeQuoteRevisionState(
+  value: unknown,
+): Extract<FacetDesignWorkflowEvidence, { association_state: "revision_prepared" }>["quote_revision_approval_state"] | null {
+  return value === "pending" || value === "executing" || value === "failed" ||
+      value === "audit_failed" || value === "execution_uncertain"
+    ? value
+    : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

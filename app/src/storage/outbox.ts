@@ -15,9 +15,12 @@ import type {
 // The browser outbox is intentionally limited to field evidence and durable
 // acknowledgement/stop intents. Lifecycle changes must use a fresh online read.
 const fieldActionEndpoints: Record<OutboxActionKind, RegExp> = {
-  field_checkin: /^\/api\/v1\/jobs\/[^/?#]+\/check-ins$/,
-  work_package_acknowledgement: /^\/api\/v1\/jobs\/[^/?#]+\/work-package\/acknowledgements$/,
-  work_package_stop: /^\/api\/v1\/jobs\/[^/?#]+\/work-package\/stop-work$/,
+  field_checkin:
+    /^\/api\/v1\/(?:jobs\/[^/?#]+\/check-ins|work-objects\/[^/?#]+\/[^/?#]+\/physical-contexts\/[^/?#]+\/[^/?#]+\/check-ins)$/,
+  work_package_acknowledgement:
+    /^\/api\/v1\/(?:jobs\/[^/?#]+\/work-package\/acknowledgements|work-objects\/[^/?#]+\/[^/?#]+\/physical-contexts\/[^/?#]+\/[^/?#]+\/work-package\/acknowledgements)$/,
+  work_package_stop:
+    /^\/api\/v1\/(?:jobs\/[^/?#]+\/work-package\/stop-work|work-objects\/[^/?#]+\/[^/?#]+\/physical-contexts\/[^/?#]+\/[^/?#]+\/work-package\/stop-work)$/,
 };
 const WORK_PACKAGE_ID_MAX_LENGTH = 140;
 const STOP_WORK_REASON_MAX_LENGTH = 1_000;
@@ -469,34 +472,105 @@ function assertOutboxInput(input: SaveOutboxActionInput): void {
     throw new Error("Work Package actions cannot include attachments.");
   }
   if (input.kind === "work_package_acknowledgement") {
-    assertWorkPackageAcknowledgementPayload(input.payload);
+    assertWorkPackageAcknowledgementPayload(
+      input.payload,
+      input.endpoint.includes("/work-objects/"),
+    );
   }
-  if (input.kind === "work_package_stop") assertWorkPackageStopPayload(input.payload);
+  if (input.kind === "work_package_stop") {
+    assertWorkPackageStopPayload(input.payload, input.endpoint.includes("/work-objects/"));
+  }
   for (const attachment of input.attachments ?? []) {
     if (!attachment.fileName.trim()) throw new Error("Every attachment needs a file name.");
   }
   assertNoSessionSecrets(input.payload);
 }
 
-function assertWorkPackageAcknowledgementPayload(payload: unknown): void {
+function assertWorkPackageAcknowledgementPayload(payload: unknown, typedScope = false): void {
   const value = objectPayload(payload);
-  if (Object.keys(value).length !== 1 || !("work_package_id" in value)) {
+  const keys = Object.keys(value);
+  const scopeKeys = [
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
+  ];
+  const allowedKeys = [
+    "work_package_id",
+    "work_package_version",
+    "release_attempt_id",
+    ...(typedScope ? scopeKeys : []),
+  ];
+  if (
+    keys.length !== allowedKeys.length ||
+    !("work_package_id" in value) ||
+    !("work_package_version" in value) ||
+    !("release_attempt_id" in value) ||
+    keys.some((key) => !allowedKeys.includes(key)) ||
+    (typedScope && scopeKeys.some((key) => !(key in value)))
+  ) {
     throw new Error("Work Package acknowledgement payload is invalid.");
   }
   assertBoundedText(value.work_package_id, "Work Package ID", WORK_PACKAGE_ID_MAX_LENGTH);
+  assertPositiveInteger(value.work_package_version, "Work Package version");
+  assertBoundedText(
+    value.release_attempt_id,
+    "Work Package release attempt",
+    WORK_PACKAGE_ID_MAX_LENGTH,
+  );
+  if (typedScope) assertWorkObjectScopePayload(value);
 }
 
-function assertWorkPackageStopPayload(payload: unknown): void {
+function assertWorkPackageStopPayload(payload: unknown, typedScope = false): void {
   const value = objectPayload(payload);
+  const keys = Object.keys(value);
+  const scopeKeys = [
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
+  ];
+  const baseKeys = [
+    "work_package_id",
+    "blocker_reason",
+    "work_package_version",
+    "release_attempt_id",
+  ];
+  const allowedKeys = [...baseKeys, ...(typedScope ? scopeKeys : [])];
   if (
-    Object.keys(value).length !== 2 ||
+    (keys.length !== (typedScope ? 7 : 3) && keys.length !== (typedScope ? 8 : 4)) ||
     !("work_package_id" in value) ||
-    !("blocker_reason" in value)
+    !("blocker_reason" in value) ||
+    !("work_package_version" in value) ||
+    keys.some((key) => !allowedKeys.includes(key)) ||
+    (typedScope && scopeKeys.some((key) => !(key in value)))
   ) {
     throw new Error("Stop Work payload is invalid.");
   }
   assertBoundedText(value.work_package_id, "Work Package ID", WORK_PACKAGE_ID_MAX_LENGTH);
   assertBoundedText(value.blocker_reason, "Stop Work reason", STOP_WORK_REASON_MAX_LENGTH);
+  assertPositiveInteger(value.work_package_version, "Work Package version");
+  if ("release_attempt_id" in value)
+    assertBoundedText(
+      value.release_attempt_id,
+      "Work Package release attempt",
+      WORK_PACKAGE_ID_MAX_LENGTH,
+    );
+  if (typedScope) assertWorkObjectScopePayload(value);
+}
+
+function assertWorkObjectScopePayload(value: Record<string, unknown>): void {
+  for (const [key, label] of [
+    ["work_object_type", "Work object type"],
+    ["work_object_id", "Work object ID"],
+    ["physical_context_type", "Physical context type"],
+    ["physical_context_id", "Physical context ID"],
+  ] as const) {
+    assertBoundedText(value[key], label, WORK_PACKAGE_ID_MAX_LENGTH);
+  }
+  if (value.work_object_type === "Roof Job") {
+    throw new Error("Typed Work Package actions cannot use the Roof Job scope.");
+  }
 }
 
 function objectPayload(payload: unknown): Record<string, unknown> {
@@ -508,6 +582,12 @@ function objectPayload(payload: unknown): Record<string, unknown> {
 
 function assertBoundedText(value: unknown, label: string, maximumLength: number): void {
   if (typeof value !== "string" || !value.trim() || value.length > maximumLength) {
+    throw new Error(`${label} is required.`);
+  }
+}
+
+function assertPositiveInteger(value: unknown, label: string): void {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 1_000_000) {
     throw new Error(`${label} is required.`);
   }
 }

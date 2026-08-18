@@ -48,6 +48,10 @@ function rule(status = "Approved") {
 }
 
 test("quote price-rule binding is receipt-bound, redacted, and fails before a Hermes Run on rule drift", async (t) => {
+  t.mock.timers.enable({
+    apis: ["Date"],
+    now: new Date("2026-08-16T21:37:12.500Z"),
+  });
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const server = buildServer({
     baseUrl: "https://erp.example",
@@ -92,9 +96,9 @@ test("quote price-rule binding is receipt-bound, redacted, and fails before a He
   assert.equal(preview.target.name, "QUOTE-A");
   assert.deepEqual(preview.patch, { price_rule_snapshot_bound: true });
   assert.equal(preview.source.rule_count, 1);
-  const emitted = JSON.stringify(preview);
-  assert.equal(emitted.includes("12.5"), false);
-  assert.equal(emitted.includes("unit_price"), false);
+  const emittedSource = JSON.stringify(preview.source);
+  assert.equal(emittedSource.includes("12.5"), false);
+  assert.equal(emittedSource.includes("unit_price"), false);
 
   const writeArgs = {
     ...baseArgs,

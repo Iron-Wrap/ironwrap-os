@@ -6,9 +6,11 @@ import {
   jobResponseSchema,
   proofPageResponseSchema,
   todayResponseSchema,
+  workObjectResponseSchema,
   type JobResponse,
   type ProofPageResponse,
   type TodayResponse,
+  type WorkObjectResponse,
 } from "./field-contracts";
 
 export async function loadToday(
@@ -53,6 +55,27 @@ export async function loadJob(
     return model;
   } catch (error) {
     return await offlineModel(key, jobResponseSchema, error);
+  }
+}
+
+export async function loadWorkObject(
+  session: AuthenticatedSession,
+  scope: WorkObjectResponse["work_object"],
+  fetcher: typeof fetch = fetch,
+): Promise<WorkObjectResponse> {
+  const key = cacheKey(session, workObjectCacheSuffix(scope));
+  const path = workObjectPath(scope);
+  try {
+    const model = await apiRequest({
+      path,
+      schema: workObjectResponseSchema,
+      fetcher,
+      deviceProof: proofFor(session),
+    });
+    await cacheFieldModel(key, model, model.source_updated_at);
+    return model;
+  } catch (error) {
+    return await offlineModel(key, workObjectResponseSchema, error);
   }
 }
 
@@ -130,6 +153,14 @@ export async function prefetchAssignedPackets(
 
 function cacheKey(session: AuthenticatedSession, suffix: string): string {
   return `${session.tenant.id}:${session.user.id}:${suffix}`;
+}
+
+export function workObjectPath(scope: WorkObjectResponse["work_object"]): string {
+  return `/api/v1/work-objects/${encodeURIComponent(scope.workObjectType)}/${encodeURIComponent(scope.workObjectId)}/physical-contexts/${encodeURIComponent(scope.physicalContextType)}/${encodeURIComponent(scope.physicalContextId)}`;
+}
+
+function workObjectCacheSuffix(scope: WorkObjectResponse["work_object"]): string {
+  return `work-object:${scope.workObjectType}:${scope.workObjectId}:${scope.physicalContextType}:${scope.physicalContextId}`;
 }
 
 function proofFor(session: AuthenticatedSession) {

@@ -172,7 +172,21 @@ const fixtureJob = {
       issued_at: "2026-07-10T15:00:00.000Z",
       released_at: "2026-07-10T15:15:00.000Z",
       expires_at: "2026-07-10T23:00:00.000Z",
-      acknowledgement: { current_user_acknowledged: false, acknowledged_at: null },
+      release_attempt_id: "wpe_acceptance_release_00000003",
+      supersession: null,
+      acknowledgement: {
+        current_user_acknowledged: false,
+        acknowledged_at: null,
+        workers: [
+          {
+            worker_user: "field.acceptance@example.test",
+            worker_role: "field",
+            required: true,
+            acknowledged: false,
+            acknowledged_at: null,
+          },
+        ],
+      },
       steps: [
         {
           sequence: 1,

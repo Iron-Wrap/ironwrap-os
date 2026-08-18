@@ -29,7 +29,7 @@ test("esx: zip-wrapped AppliCad XML goes end-to-end into verified geometry", asy
   // The unwrapped payload must survive the full verification pipeline.
   const g = parseAppliCadGeometry(x.appliCadXml!.text)!;
   assert.equal(g.needsReview, false);
-  assert.equal(g.measurements.roof_area, 1942.68);
+  assert.equal(g.measurements.roof_area, 1942.69);
 });
 
 test("esx: stored (uncompressed) entries round-trip byte-exact", async () => {

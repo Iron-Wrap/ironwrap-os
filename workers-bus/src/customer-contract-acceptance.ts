@@ -24,6 +24,7 @@ import {
 import { r2ObjectStore } from "./field-actions.ts";
 import { frappeBaseUrl, frappeRequestTimeout } from "./frappe-read.ts";
 import { sendGmail } from "./google.ts";
+import { assertEffectLedgerReady, runExternalEffect } from "./effect-runtime.ts";
 import type { AppEnv, AuthRequestContext } from "./app-types.ts";
 
 const MAX_BODY_BYTES = 2_048;
@@ -483,12 +484,102 @@ async function frappeCustomerAcceptanceCall(
   env: AppEnv,
   method: string,
   claim: Record<string, unknown>,
+  bypassRuntime = false,
 ): Promise<unknown> {
   const secret = customerAcceptanceHmacKey(env);
   const frappeApiKey = customerAcceptanceFrappeApiKey(env);
   const frappeApiSecret = customerAcceptanceFrappeApiSecret(env);
   if (!secret || !frappeApiKey || !frappeApiSecret) {
     throw new FrappeAcceptanceTransportError("frappe_acceptance_not_configured");
+  }
+  if (!bypassRuntime && method === COMMIT_METHOD) {
+    assertEffectLedgerReady(env);
+    const tenantId = String(claim.tenant_id ?? env.APP_TENANT_ID ?? "ironwrap");
+    const acceptanceIdValue = boundedText(claim.acceptance_id, 16, 100);
+    if (!acceptanceIdValue) {
+      throw new FrappeAcceptanceTransportError("frappe_commit_acceptance_id_invalid");
+    }
+    const acceptanceId = acceptanceIdValue;
+    const request = { method, claim };
+    const requestHash = await sha256Hex(canonicalJson(request));
+    const idempotencyKey = `customer-contract:${acceptanceId}:${requestHash}`;
+    const deadlineAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    const result = await runExternalEffect(env, {
+      tenantId,
+      actor: { type: "customer", id: String(claim.customer_id ?? acceptanceId) },
+      taskId: `customer-contract:${acceptanceId}`,
+      authority: {
+        permitRef: `customer-portal:${acceptanceId}`,
+        policyRef: "customer.contract.acceptance",
+        policyVersion: "v1",
+        tenantId,
+        actorType: "customer",
+        actorId: String(claim.customer_id ?? acceptanceId),
+        expiresAt: deadlineAt,
+        allowedActions: ["customer.contract.accept"],
+        maxAttempts: 1,
+      },
+      aggregate: { type: "customer_contract_acceptance", id: acceptanceId, version: 0 },
+      intentId: acceptanceId,
+      action: "customer.contract.accept",
+      request,
+      requestHash,
+      provider: "frappe",
+      idempotencyKey,
+      deadlineAt,
+      expectedReadback: { acceptance_id: acceptanceId },
+      retryLimit: 0,
+      compensationPlan: {},
+      correlationId: acceptanceId,
+    }, {
+      async dispatch() {
+        try {
+          const value = await frappeCustomerAcceptanceCall(env, method, claim, true);
+          return {
+            outcome: "accepted" as const,
+            value,
+            providerExternalId: acceptanceId,
+            providerResponse: value,
+          };
+        } catch (error) {
+          if (error instanceof FrappeAcceptanceHttpError) {
+            return {
+              outcome: error.status < 500 ? "rejected" as const : "unknown" as const,
+              detailCode: `frappe_http_${error.status}`,
+            };
+          }
+          if (error instanceof FrappeAcceptanceTransportError) {
+            return { outcome: "unknown" as const, detailCode: error.code };
+          }
+          throw error;
+        }
+      },
+      async readback() {
+        return await frappeCustomerAcceptanceReadback(env, acceptanceId);
+      },
+      async replay({ effect }) {
+        const providerExternalId = effect.provider_external_id;
+        if (!providerExternalId || providerExternalId !== acceptanceId) {
+          throw new Error("frappe_acceptance_replay_id_missing");
+        }
+        const readback = await frappeCustomerAcceptanceReadback(env, acceptanceId);
+        if (readback.status !== "match") {
+          throw new Error(readback.detailCode ?? "frappe_acceptance_replay_readback_failed");
+        }
+        return { message: { acceptance_id: acceptanceId } };
+      },
+    });
+    if (result.effect.state === "unknown") {
+      throw new FrappeAcceptanceTransportError(result.effect.result_code ?? "frappe_commit_outcome_unknown");
+    }
+    const rejectedStatus = /^frappe_http_(\d{3})$/.exec(result.effect.result_code ?? "");
+    if (result.effect.state === "failed" && rejectedStatus && Number(rejectedStatus[1]) < 500) {
+      throw new FrappeAcceptanceHttpError(Number(rejectedStatus[1]));
+    }
+    if (result.effect.state !== "succeeded" || result.value === undefined) {
+      throw new FrappeAcceptanceTransportError(result.effect.result_code ?? "frappe_commit_not_succeeded");
+    }
+    return result.value;
   }
   const claimJson = canonicalJson(claim);
   const path = `/api/method/${method}`;
@@ -543,6 +634,46 @@ async function frappeCustomerAcceptanceCall(
     throw new FrappeAcceptanceTransportError("frappe_request_network_error");
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function frappeCustomerAcceptanceReadback(
+  env: AppEnv,
+  acceptanceId: string,
+): Promise<{
+  status: "match" | "conflict" | "unavailable" | "not_found";
+  providerExternalId?: string;
+  observed?: unknown;
+  detailCode?: string;
+}> {
+  try {
+    const response = await fetch(
+      `${frappeBaseUrl(env)}/api/resource/Contract%20Acceptance/${encodeURIComponent(acceptanceId)}`,
+      {
+        method: "GET",
+        redirect: "manual",
+        headers: {
+          accept: "application/json",
+          authorization: `token ${customerAcceptanceFrappeApiKey(env)}:${customerAcceptanceFrappeApiSecret(env)}`,
+        },
+      },
+    );
+    if (response.status === 404) return { status: "not_found", detailCode: "frappe_acceptance_readback_not_found" };
+    if (!response.ok) return { status: "unavailable", detailCode: `frappe_acceptance_readback_${response.status}` };
+    const value = await response.json() as { data?: Record<string, unknown> };
+    const observed = value.data ?? {};
+    const providerId = typeof observed.acceptance_id === "string" ? observed.acceptance_id : null;
+    if (providerId !== acceptanceId) {
+      return {
+        status: "conflict",
+        providerExternalId: providerId ?? acceptanceId,
+        observed,
+        detailCode: "frappe_acceptance_readback_conflict",
+      };
+    }
+    return { status: "match", providerExternalId: acceptanceId, observed };
+  } catch {
+    return { status: "unavailable", detailCode: "frappe_acceptance_readback_unavailable" };
   }
 }
 

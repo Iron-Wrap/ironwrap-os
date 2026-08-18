@@ -16,6 +16,9 @@ const APPROVAL = {
 interface FakeOptions {
   d1Throws?: boolean;
   missingSchemaArtifact?: boolean;
+  missingAccessRoleIndex?: boolean;
+  weakFacetAssociationTrigger?: boolean;
+  activeNullAccessRole?: boolean;
   heartbeatAt?: string;
   qbAt?: string;
   auditFailures?: Array<Record<string, unknown>>;
@@ -60,8 +63,34 @@ function fakeEnv(options: FakeOptions = {}) {
   const executeFirst = async (sql: string, args: unknown[]) => {
     sqlCalls.push({ sql, args });
     if (options.d1Throws && sql.includes("sqlite_master")) throw new Error("d1_unavailable");
+    if (sql.includes("AS access_role_index_sql")) {
+      return {
+        access_role_index_sql: options.missingAccessRoleIndex
+          ? null
+          : `CREATE INDEX idx_app_users_tenant_access_role_active
+               ON app_users (tenant_id, active, access_role, updated_at)`,
+        facet_association_trigger_sql: `CREATE TRIGGER facet_design_evidence_associations_validate_insert
+          BEFORE INSERT ON facet_design_evidence_associations BEGIN
+            SELECT RAISE(ABORT, 'facet_design_association_event_anchor_mismatch') WHERE NOT EXISTS (
+              SELECT 1 FROM facet_customer_approval_events AS event
+              WHERE event.event_type = 'facet.design.customer_approved.v2'
+                AND event.schema_version = 2
+                AND event.approval_actor_type = 'customer_capability'
+                AND event.identity_assurance = 'bearer_capability_only'
+            );
+            SELECT RAISE(ABORT, 'facet_design_association_office_actor_required') WHERE NOT EXISTS (
+              SELECT 1 FROM app_users AS actor
+              WHERE actor.user_id = NEW.associated_by_user_id
+                AND actor.tenant_id = NEW.tenant_id
+                AND actor.active = 1
+                AND ${options.weakFacetAssociationTrigger ? "actor.role" : "actor.access_role"} IN ('owner', 'ops')
+            );
+          END`,
+        unresolved_access_roles: options.activeNullAccessRole ? 1 : 0,
+      };
+    }
     if (sql.includes("sqlite_master")) {
-      return { table_count: 39, index_count: options.missingSchemaArtifact ? 55 : 56, trigger_count: 43 };
+      return { table_count: 45, index_count: options.missingSchemaArtifact ? 62 : 63, trigger_count: 54 };
     }
     if (sql.includes("COUNT(*) AS n FROM dead_letter")) {
       return { n: deadLetters.filter((row) => row.recovered === 0).length };
@@ -248,6 +277,7 @@ function fakeEnv(options: FakeOptions = {}) {
         for (const message of messages) queue.push(message.body.envelope_id);
       },
     },
+    MEASUREMENT_QUEUE: { send: async () => {} },
     DB: {
       prepare(sql: string) {
         const statement = (args: unknown[]) => ({
@@ -501,6 +531,32 @@ test("readiness fails closed when the operational migration artifacts are missin
   assert.equal(body.checks.schema, false);
 });
 
+test("readiness proves the explicit access-role authority contract", async (t) => {
+  for (const [name, options] of [
+    ["missing access-role index", { missingAccessRoleIndex: true }],
+    ["legacy-role Facet trigger", { weakFacetAssociationTrigger: true }],
+    ["active user without access role", { activeNullAccessRole: true }],
+  ] as const) {
+    await t.test(name, async () => {
+      const { env } = fakeEnv(options);
+      const response = await worker.fetch(
+        new Request("https://bus.example/ready", { headers: adminHeaders }),
+        env as never,
+        ctx,
+      );
+      const body = await response.json() as {
+        ok: boolean;
+        checks: { d1: boolean; schema: boolean };
+      };
+
+      assert.equal(response.status, 503);
+      assert.equal(body.ok, false);
+      assert.equal(body.checks.d1, true);
+      assert.equal(body.checks.schema, false);
+    });
+  }
+});
+
 test("readiness fails closed when the public estimator is enabled without its complete boundary", async () => {
   const { env } = fakeEnv();
   (env as Record<string, unknown>).PUBLIC_ESTIMATE_ENABLED = "true";
@@ -511,6 +567,26 @@ test("readiness fails closed when the public estimator is enabled without its co
   assert.equal(response.status, 503);
   assert.equal(body.ok, false);
   assert.equal(body.checks.public_estimate_configuration, false);
+});
+
+test("readiness fails closed when measurement OCR is enabled without its secret", async () => {
+  const { env } = fakeEnv();
+  Object.assign(env, {
+    MEASUREMENT_OCR_ENABLED: "true",
+    MEASUREMENT_OCR_MODEL: "claude-opus-5",
+  });
+
+  const blocked = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
+  const blockedBody = await blocked.json() as { checks: Record<string, boolean> };
+  assert.equal(blocked.status, 503);
+  assert.equal(blockedBody.checks.measurement_ocr_configuration, false);
+
+  Object.assign(env, { MEASUREMENT_OCR_API_KEY: "anthropic-secret-not-returned" });
+  const ready = await worker.fetch(new Request("https://bus.example/ready", { headers: adminHeaders }), env as never, ctx);
+  const readyBody = await ready.json() as { checks: Record<string, boolean> };
+  assert.equal(ready.status, 200);
+  assert.equal(readyBody.checks.measurement_ocr_configuration, true);
+  assert.equal(JSON.stringify(readyBody).includes("not-returned"), false);
 });
 
 test("readiness accepts a complete enabled production-schedule approval rail", async () => {

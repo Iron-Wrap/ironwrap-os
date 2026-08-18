@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import unittest
 
 from ironwrap_roofing.domain_policy import (
     PolicyViolation,
+    evaluate_price_rule,
     parse_json_field,
     validate_record,
+)
+from ironwrap_roofing.authority_policy import authority_state_digest
+
+
+PRICE_RULE_JSON = json.dumps(
+    {
+        "schema_version": "ironwrap.price-rule.v1",
+        "operation": "quantity_times_unit_price",
+        "rounding": "half_up_cent",
+    },
+    separators=(",", ":"),
 )
 
 
@@ -94,13 +107,72 @@ def price_rule_source() -> dict[str, object]:
         "currency": "CAD",
         "source_ref": "supplier-sheet-2026-07",
         "effective_from": "2026-07-01",
-        "effective_to": "",
+        "effective_to": "2026-08-31",
         "assumptions": "Standard colour.",
         "exclusions": "Freight.",
         "approved_by": "owner@example.com",
         "approved_at": "2026-07-10 10:00:00",
-        "rule_json": '{"unit_price":12.5}',
+        "approval_note": "Supplier sheet checked.",
+        "rule_json": PRICE_RULE_JSON,
     }
+
+
+def pricing_policy_anchor(**overrides: object) -> dict[str, object]:
+    snapshot = {
+        "approvedPolicy": {
+            "schemaVersion": "ironwrap.pricing-policy.v1",
+            "tenantId": "ironwrap",
+            "policyId": "retail-metal",
+            "revision": 1,
+            "effectiveAt": "2026-08-01T00:00:00.000Z",
+            "expiresAt": "2026-08-31T23:59:59.999Z",
+            "pricing": {"method": "markup", "rateBps": 1000},
+            "freightCents": 0,
+            "contingencyRateBps": 0,
+            "minimumChargeCents": 0,
+            "taxRateBps": 500,
+        },
+        "currency": "CAD",
+        "panel": {
+            "sku": "PANEL",
+            "unit": "lf",
+            "rateCents": 500,
+            "sourceRef": "price-book:panel",
+        },
+        "trims": {},
+    }
+    canonical = json.dumps(
+        snapshot,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    record: dict[str, object] = {
+        "price_rule_id": "policy-anchor-1",
+        "rule_name": "Retail metal pricing policy",
+        "rule_type": "Pricing Policy",
+        "status": "Approved",
+        "currency": "CAD",
+        "source_ref": "owner-approved-policy:retail-metal:1",
+        "rule_json": (
+            '{"operation":"bind_canonical_pricing_snapshot",'
+            '"schema_version":"ironwrap.price-policy-authority.v1"}'
+        ),
+        "pricing_policy_id": "retail-metal",
+        "pricing_policy_revision": 1,
+        "pricing_policy_snapshot_json": canonical,
+        "pricing_policy_snapshot_sha256": hashlib.sha256(
+            canonical.encode("utf-8")
+        ).hexdigest(),
+        "effective_from": "2026-08-01",
+        "effective_to": "2026-08-31",
+        "assumptions": "Standard residential retail scope.",
+        "exclusions": "Unapproved scope changes.",
+        "approved_by": "owner@example.com",
+        "approved_at": "2026-07-31 12:00:00",
+        "approval_note": "Canonical composite policy reviewed.",
+    }
+    record.update(overrides)
+    return record
 
 
 def price_rule_snapshot() -> str:
@@ -144,11 +216,113 @@ def price_rule_snapshot() -> str:
     )
 
 
+def job_cost_event(**overrides: object) -> dict[str, object]:
+    event: dict[str, object] = {
+        "name": "cost:job-1:material:001",
+        "job_cost_event_id": "cost:job-1:material:001",
+        "tenant": "tenant:ironwrap",
+        "roof_job": "job-1",
+        "event_kind": "cost",
+        "category": "Material",
+        "quantity": "2.5",
+        "unit": "bundle",
+        "amount_cents": 12345,
+        "amount_basis": "Net of Recoverable Tax",
+        "currency": "CAD",
+        "occurred_at": "2026-08-12 10:00:00",
+        "source_doctype": "Material Lot",
+        "source_name": "lot:cost:001",
+        "source_digest": "a" * 64,
+        "source_evidence": "evidence:cost:001",
+        "accounting_state": "Operational",
+        "accounting_system": "",
+        "accounting_entity_type": "",
+        "accounting_entity_id": "",
+        "accounting_digest": "",
+        "accounting_posted_at": "",
+        "reconciliation": "",
+        "reversal_of": "",
+        "reversal_reason": "",
+        "actor_type": "worker",
+        "actor_id": "worker:001",
+        "authority_ref": "work-package:001",
+        "recorded_at": "2026-08-12 10:15:00",
+        "approved_by": "finance@example.com",
+        "approved_at": "2026-08-12 10:10:00",
+        "approval_reference": "approval:cost:001",
+    }
+    event.update(overrides)
+    return event
+
+
+def job_cost_context(**overrides: object) -> dict[str, object]:
+    context: dict[str, object] = {
+        "tenant_record": {
+            "name": "tenant:ironwrap",
+            "tenant_id": "tenant:ironwrap",
+            "status": "Active",
+        },
+        "cost_source_record": {
+            "name": "lot:cost:001",
+            "roof_job": "job-1",
+        },
+        "source_evidence": {
+            "name": "evidence:cost:001",
+            "evidence_id": "evidence:cost:001",
+            "roof_job": "job-1",
+            "sync_state": "Verified",
+            "content_checksum": "a" * 64,
+            "checksum_algorithm": "SHA-256",
+            "verified_at": "2026-08-12 10:04:00",
+            "verification_source": "worker-checksum",
+        },
+    }
+    context.update(overrides)
+    return context
+
+
 def price_rule_snapshot_context(**overrides: object) -> dict[str, object]:
     source = price_rule_source()
     context: dict[str, object] = {"price_rule_snapshot_rules": {"rule-1": source}}
     context.update(overrides)
     return context
+
+
+def supplier_quote_record(**overrides: object) -> dict[str, object]:
+    record: dict[str, object] = {
+        "supplier_quote_id": "sq-1",
+        "status": "Approved",
+        "roof_job": "job-1",
+        "material_takeoff": "to-1",
+        "supplier": "supplier-1",
+        "quoted_at": "2026-07-09 12:00:00",
+        "valid_until": "2026-08-01",
+        "assumptions": "Stock confirmed.",
+        "exclusions": "Freight variance.",
+        "approved_by": "owner@example.com",
+        "approved_at": "2026-07-10 11:00:00",
+        "quote_total": "8000.00",
+        "currency": "CAD",
+        "quote_summary_json": '{"supplier":"supplier-1"}',
+        "items": [
+            {
+                "item_name": "Synthetic panel",
+                "quantity": "20",
+                "unit": "sheet",
+                "unit_price": "400.00",
+                "line_total": "8000.00",
+                "source_ref": "supplier-sheet:line-1",
+            }
+        ],
+    }
+    record.update(overrides)
+    return record
+
+
+SUPPLIER_QUOTE_CONTEXT = {
+    "takeoff_status": "Approved",
+    "validation_date": "2026-07-10",
+}
 
 
 def verified_gate_evidence(roof_job: str = "job-1", **overrides: object) -> dict[str, object]:
@@ -194,6 +368,234 @@ def supplier_order_context(**overrides: object) -> dict[str, object]:
         "supplier_order_evidence": {
             "evidence:materials-1": supplier_order_evidence(),
             "evidence:materials-2": supplier_order_evidence("evidence:materials-2"),
+        },
+    }
+    context.update(overrides)
+    return context
+
+
+def canonical_digest(value: object) -> str:
+    payload = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def governed_takeoff_policy(**overrides: object) -> dict[str, object]:
+    policy: dict[str, object] = {
+        "policy_id": "mtp:ironwrap:ss16:v1",
+        "tenant": "ironwrap",
+        "brand": "ironwrap",
+        "service_type": "Metal Roofing",
+        "material_system": "standing_seam_16",
+        "policy_version": 1,
+        "status": "Approved",
+        "effective_from": "2026-08-01",
+        "effective_to": "",
+        "source_evidence": "evidence:mtp:ss16:v1",
+        "approved_by": "owner@example.com",
+        "approved_at": "2026-08-01 12:00:00",
+        "approval_note": "Approved engineered installation schedule IW-SS16-2026-01.",
+        "policy_json": json.dumps(
+            {
+                "schema_version": "material_takeoff_policy/v1",
+                "calculation_version": "material_takeoff/v1",
+                "options": {
+                    "panel_item_id": "panel:ss16",
+                    "coverage_width_ft": 1.25,
+                    "length_increment_ft": 1 / 12,
+                    "max_panel_length_ft": 40,
+                    "mode": "coil",
+                    "stock_lengths_ft": [],
+                    "min_reusable_offcut_ft": 2,
+                    "coil_allowances": {
+                        "setup_ft": 5,
+                        "tail_ft": 3,
+                        "scrap_factor": 0.02,
+                    },
+                    "trim_stock_ft": 10,
+                    "trim_lap_ft": 0.5,
+                    "trim_profiles": {"FASCIA": "trim:eave_drip"},
+                    "clip_spacing_ft": 2,
+                    "screws_per_clip": 1,
+                    "trim_screw_spacing_ft": 1.5,
+                    "fastener_item_ids": {
+                        "clip": "fastener:clip",
+                        "clip_screw": "fastener:clip_screw",
+                        "trim_screw": "fastener:trim_screw",
+                    },
+                },
+            }
+        ),
+    }
+    policy.update(overrides)
+    return policy
+
+
+def governed_policy_context(**overrides: object) -> dict[str, object]:
+    context: dict[str, object] = {
+        "tenant_record": {"tenant_id": "ironwrap", "status": "Active"},
+        "policy_evidence": {
+            "name": "evidence:mtp:ss16:v1",
+            "sync_state": "Verified",
+            "checksum_algorithm": "SHA-256",
+            "content_checksum": "b" * 64,
+            "verified_at": "2026-08-01 11:50:00",
+            "verification_source": "ironwrap-owner-review",
+        },
+    }
+    context.update(overrides)
+    return context
+
+
+def governed_takeoff_record(**overrides: object) -> dict[str, object]:
+    policy = governed_takeoff_policy()
+    payload = json.loads(str(policy["policy_json"]))
+    options = {
+        "panelProfileId": "panel:ss16",
+        "coverageWidthFt": 1.25,
+        "lengthIncrementFt": 1 / 12,
+        "maxPanelLengthFt": 40,
+        "mode": "coil",
+        "stockLengthsFt": [],
+        "minReusableOffcutFt": 2,
+        "coilSetupAllowanceFt": 5,
+        "coilTailAllowanceFt": 3,
+        "coilScrapFactor": 0.02,
+        "trimStockFt": 10,
+        "trimLapFt": 0.5,
+        "trimProfiles": {"FASCIA": "trim:eave_drip"},
+        "clipSpacingFt": 2,
+        "screwsPerClip": 1,
+        "trimScrewSpacingFt": 1.5,
+        "fastenerItemIds": {
+            "clip": "fastener:clip",
+            "clipScrew": "fastener:clip_screw",
+            "trimScrew": "fastener:trim_screw",
+        },
+    }
+    policy_binding = {
+        "id": policy["policy_id"],
+        "tenant": policy["tenant"],
+        "brand": policy["brand"],
+        "service_type": policy["service_type"],
+        "material_system": policy["material_system"],
+        "version": policy["policy_version"],
+        "effective_from": policy["effective_from"],
+        "effective_to": None,
+        "source_evidence": policy["source_evidence"],
+        "source_evidence_sha256": "b" * 64,
+        "source_evidence_verified_at": "2026-08-01 11:50:00",
+        "source_evidence_verification_source": "ironwrap-owner-review",
+        "approved_by": policy["approved_by"],
+        "approved_at": policy["approved_at"],
+        "policy_payload": payload,
+    }
+    policy_digest = canonical_digest(policy_binding)
+    options_digest = canonical_digest(options)
+    base_row = {
+        "policy_digest": policy_digest,
+        "options_digest": options_digest,
+        "geometry_revision": "a" * 64,
+        "stock_mode": "coil",
+        "needs_review": 0,
+        "confidence": "computed-governed",
+        "category": "Panel Material",
+        "item_name": "panel:ss16",
+        "quantity": 110,
+        "unit": "ft",
+        "waste_factor": 9.0909,
+        "waste_basis": "coil cuts plus setup=5ft, tail=3ft, scrap=0.02",
+        "source_ref": f"roof_graph:{'a' * 64}#panel_cuts",
+    }
+    envelope = {
+        "schema_version": "material_takeoff/v1",
+        "source": {
+            "measurement_report": "m-1",
+            "roof_job": "job-1",
+            "geometry_schema_version": "roof_graph/v1",
+            "geometry_revision": "a" * 64,
+            "raw_key": "measurements/job-1/source.xml",
+            "raw_sha256": "a" * 64,
+            "provider": "AppliCad",
+        },
+        "policy": policy_binding,
+        "options": options,
+        "options_digest": options_digest,
+        "result": {
+            "needsReview": False,
+            "panelNest": {
+                "mode": "coil",
+                "stockFt": 110,
+                "cutFt": 100,
+                "wastePct": 0.0909,
+            },
+            "totals": {"panelCount": 8, "skippedFacets": 0},
+            "checks": [],
+        },
+        "rows": [base_row],
+        "review_reasons": [],
+    }
+    calculation_digest = canonical_digest(envelope)
+    item = {**base_row, "calculation_digest": calculation_digest}
+    record: dict[str, object] = {
+        "takeoff_id": "to-1",
+        "status": "Approved",
+        "roof_job": "job-1",
+        "measurement_report": "m-1",
+        "prepared_at": "2026-08-12 10:00:00",
+        "approved_by": "owner@example.com",
+        "approved_at": "2026-08-12 11:00:00",
+        "approval_note": "Geometry, policy, cut schedule, and review reasons checked.",
+        "tenant": "ironwrap",
+        "material_system": "standing_seam_16",
+        "calculation_schema": "material_takeoff/v1",
+        "calculation_version": "material_takeoff/v1",
+        "geometry_revision": "a" * 64,
+        "source_raw_key": "measurements/job-1/source.xml",
+        "source_raw_sha256": "a" * 64,
+        "takeoff_policy": "mtp:ironwrap:ss16:v1",
+        "policy_version": 1,
+        "policy_source_evidence": "evidence:mtp:ss16:v1",
+        "policy_source_sha256": "b" * 64,
+        "policy_digest": policy_digest,
+        "options_digest": options_digest,
+        "calculation_digest": calculation_digest,
+        "stock_mode": "coil",
+        "waste_basis": "coil cuts plus setup=5ft, tail=3ft, scrap=0.02",
+        "options_json": json.dumps(options),
+        "calculation_json": json.dumps(envelope),
+        "review_reasons_json": "[]",
+        "source_measurements_json": json.dumps(
+            {
+                "measurement_report": "m-1",
+                "raw_sha256": "a" * 64,
+                "geometry_revision": "a" * 64,
+            }
+        ),
+        "assumptions": "Approved Material Takeoff Policy supplies all governed inputs.",
+        "exclusions": "No supplier order or commercial mutation.",
+        "items": [item],
+    }
+    record.update(overrides)
+    return record
+
+
+def governed_takeoff_context(**overrides: object) -> dict[str, object]:
+    context: dict[str, object] = {
+        "measurement": {
+            "name": "m-1",
+            "roof_job": "job-1",
+            "review_status": "Approved",
+            "roof_graph_revision": "a" * 64,
+            "raw_key": "measurements/job-1/source.xml",
+        },
+        "takeoff_policy": governed_takeoff_policy(),
+        **governed_policy_context(),
+        "roof_job_record": {
+            "name": "job-1",
+            "brand": "ironwrap",
+            "service_type": "Metal Roofing",
         },
     }
     context.update(overrides)
@@ -282,7 +684,257 @@ def current_compliance_authority(gate: str, **overrides: object) -> dict[str, ob
     return record
 
 
+def canonical_authority_record(
+    *,
+    record_id: str,
+    kind: str = "Worker Competency",
+    scope_type: str = "Field",
+    scope_ref: str = "field:job-1",
+) -> dict[str, object]:
+    record: dict[str, object] = {
+        "name": record_id,
+        "authority_record_id": record_id,
+        "tenant": "tenant:ironwrap",
+        "subject_type": "Person",
+        "subject_role": "Worker",
+        "person_user": "user:worker-1",
+        "organization": "",
+        "authority_kind": kind,
+        "authority_scope": "roofing-installation",
+        "scope_type": scope_type,
+        "scope_ref": scope_ref,
+        "roof_job": "job-1",
+        "scope_json": json.dumps({"tasks": ["install"]}),
+        "issuer_name": "IronWrap competency register",
+        "issuer_jurisdiction": "Alberta",
+        "issuer_reference": f"issuer:{record_id}",
+        "source_version": "readback:2026-08-17T10:00:00Z",
+        "evidence_refs_json": json.dumps([{"ref": f"evidence:{record_id}", "sha256": "a" * 64}]),
+        "evidence_sha256": "b" * 64,
+        "effective_from": "2026-01-01",
+        "expires_at": "2026-12-31",
+        "status": "Verified",
+        "version": 1,
+        "verification_method": "Internal Competency Assessment",
+        "verified_at": "2026-08-17 10:00:00",
+        "verification_reference": f"readback:{record_id}",
+        "verified_by": "owner@example.invalid",
+        "revoked_at": "",
+        "revocation_reference": "",
+        "revoked_by": "",
+        "supersedes": "",
+        "correction_reason": "",
+        "exception_status": "None",
+        "exception_reason": "",
+    }
+    record["state_digest_sha256"] = authority_state_digest(record)
+    return record
+
+
 class DomainPolicyTests(unittest.TestCase):
+    def test_job_cost_event_is_append_only_evidence_bound_and_integer_cents(
+        self,
+    ) -> None:
+        event = job_cost_event()
+        validate_record("job_cost_event", event, context=job_cost_context())
+
+        self.assert_policy(
+            "append_only_cost_event",
+            validate_record,
+            "job_cost_event",
+            event,
+            previous=event,
+            context=job_cost_context(),
+        )
+        self.assert_policy(
+            "invalid_cost_amount_cents",
+            validate_record,
+            "job_cost_event",
+            job_cost_event(amount_cents="123.5"),
+            context=job_cost_context(),
+        )
+        self.assert_policy(
+            "invalid_cost_amount_basis",
+            validate_record,
+            "job_cost_event",
+            job_cost_event(amount_basis="Unknown"),
+            context=job_cost_context(),
+        )
+        self.assert_policy(
+            "unverified_cost_evidence",
+            validate_record,
+            "job_cost_event",
+            event,
+            context=job_cost_context(
+                source_evidence={
+                    **job_cost_context()["source_evidence"],
+                    "content_checksum": "b" * 64,
+                }
+            ),
+        )
+        self.assert_policy(
+            "unverified_cost_source",
+            validate_record,
+            "job_cost_event",
+            event,
+            context=job_cost_context(
+                cost_source_record={"name": "lot:cost:001", "roof_job": "other-job"}
+            ),
+        )
+        self.assert_policy(
+            "invalid_cost_amount_cents",
+            validate_record,
+            "job_cost_event",
+            job_cost_event(amount_cents=2_147_483_648),
+            context=job_cost_context(),
+        )
+        self.assert_policy(
+            "invalid_cost_event_timeline",
+            validate_record,
+            "job_cost_event",
+            job_cost_event(recorded_at="2026-08-12 09:59:59"),
+            context=job_cost_context(),
+        )
+        self.assert_policy(
+            "invalid_cost_event_timeline",
+            validate_record,
+            "job_cost_event",
+            job_cost_event(approved_at="2026-08-12 10:16:00"),
+            context=job_cost_context(),
+        )
+        self.assert_policy(
+            "unverified_cost_evidence",
+            validate_record,
+            "job_cost_event",
+            event,
+            context=job_cost_context(
+                source_evidence={
+                    **job_cost_context()["source_evidence"],
+                    "verified_at": "2026-08-12 10:16:00",
+                }
+            ),
+        )
+
+    def test_job_cost_reversals_are_exact_and_unique(self) -> None:
+        prior = job_cost_event()
+        reversal = job_cost_event(
+            name="reversal:job-1:material:001",
+            job_cost_event_id="reversal:job-1:material:001",
+            event_kind="reversal",
+            reversal_of=prior["name"],
+            reversal_reason="Receipt line was transcribed incorrectly.",
+            approval_reference="approval:cost:002",
+        )
+        context = job_cost_context(
+            reversal_target=prior,
+            existing_reversal_count=0,
+        )
+        validate_record("job_cost_event", reversal, context=context)
+        self.assert_policy(
+            "cost_reversal_binding_mismatch",
+            validate_record,
+            "job_cost_event",
+            {**reversal, "amount_cents": 11345},
+            context=context,
+        )
+        self.assert_policy(
+            "cost_event_already_reversed",
+            validate_record,
+            "job_cost_event",
+            reversal,
+            context={**context, "existing_reversal_count": 1},
+        )
+
+        corrected_cost = job_cost_event(
+            name="cost:job-1:material:002",
+            job_cost_event_id="cost:job-1:material:002",
+            amount_cents=11345,
+            source_digest="b" * 64,
+            source_evidence="evidence:cost:002",
+            source_name="lot:cost:002",
+            approval_reference="approval:cost:003",
+        )
+        validate_record(
+            "job_cost_event",
+            corrected_cost,
+            context=job_cost_context(
+                cost_source_record={"name": "lot:cost:002", "roof_job": "job-1"},
+                source_evidence={
+                    **job_cost_context()["source_evidence"],
+                    "name": "evidence:cost:002",
+                    "evidence_id": "evidence:cost:002",
+                    "content_checksum": "b" * 64,
+                }
+            ),
+        )
+
+    def test_job_cost_accounting_state_never_implies_reconciliation(self) -> None:
+        submitted = job_cost_event(
+            accounting_state="Submitted",
+            accounting_system="QuickBooks",
+            accounting_entity_type="Bill",
+            accounting_entity_id="1001",
+        )
+        validate_record("job_cost_event", submitted, context=job_cost_context())
+        self.assert_policy(
+            "premature_accounting_claim",
+            validate_record,
+            "job_cost_event",
+            {**submitted, "accounting_posted_at": "2026-08-12 12:00:00"},
+            context=job_cost_context(),
+        )
+
+        posted = job_cost_event(
+            accounting_state="Posted",
+            accounting_system="QuickBooks",
+            accounting_entity_type="Bill",
+            accounting_entity_id="1001",
+            accounting_digest="c" * 64,
+            accounting_posted_at="2026-08-12 12:00:00",
+            reconciliation="reconciliation:cost:001",
+            recorded_at="2026-08-12 12:10:00",
+        )
+        reconciliation = {
+            "name": "reconciliation:cost:001",
+            "reconciliation_id": "reconciliation:cost:001",
+            "roof_job": "job-1",
+            "system_name": "QuickBooks",
+            "entity_type": "Bill",
+            "external_entity_id": "1001",
+            "local_doctype": "Job Cost Event",
+            "local_name": posted["name"],
+            "status": "Matched",
+            "currency": "CAD",
+            "source_payload_hash": "c" * 64,
+            "detected_at": "2026-08-12 12:05:00",
+        }
+        validate_record(
+            "job_cost_event",
+            posted,
+            context=job_cost_context(accounting_reconciliation=reconciliation),
+        )
+        self.assert_policy(
+            "unverified_cost_reconciliation",
+            validate_record,
+            "job_cost_event",
+            posted,
+            context=job_cost_context(
+                accounting_reconciliation={**reconciliation, "currency": "USD"}
+            ),
+        )
+        self.assert_policy(
+            "unverified_cost_reconciliation",
+            validate_record,
+            "job_cost_event",
+            posted,
+            context=job_cost_context(
+                accounting_reconciliation={
+                    **reconciliation,
+                    "detected_at": "2026-08-12 11:59:59",
+                }
+            ),
+        )
+
     def assert_policy(self, code: str, function, *args, **kwargs) -> PolicyViolation:
         with self.assertRaises(PolicyViolation) as caught:
             function(*args, **kwargs)
@@ -448,6 +1100,22 @@ class DomainPolicyTests(unittest.TestCase):
                 )
 
     def test_estimate_review_and_approval_gate(self) -> None:
+        captured = {
+            "estimate_session_id": "est-captured",
+            "status": "Captured",
+            "review_required": 1,
+            "assumptions": "Measurement and estimator review required before pricing.",
+            "exclusions": "Not a final quote.",
+            "selected_services_json": '[{"service":"metal-roof"}]',
+        }
+        validate_record("instant_estimate_session", captured)
+        self.assert_policy(
+            "captured_estimate_has_price",
+            validate_record,
+            "instant_estimate_session",
+            {**captured, "range_low": 10_000},
+        )
+
         approved = {
             "estimate_session_id": "est-1",
             "status": "Approved",
@@ -502,28 +1170,194 @@ class DomainPolicyTests(unittest.TestCase):
             },
         )
 
-        takeoff = {
-            "takeoff_id": "to-1",
-            "status": "Approved",
-            "roof_job": "job-1",
-            "measurement_report": "m-1",
-            "approved_by": "owner@example.com",
-            "approved_at": "2026-07-10 11:00:00",
-            "approval_note": "Waste and quantities checked.",
-            "assumptions": "Full sheets.",
-            "exclusions": "Special-order trim.",
-            "source_measurements_json": '{"measurement":"m-1"}',
-            "items": [{"quantity": 20, "needs_review": 0}],
-        }
-        validate_record(
-            "material_takeoff", takeoff, context={"measurement_status": "Approved"}
-        )
+        takeoff = governed_takeoff_record()
+        validate_record("material_takeoff", takeoff, context=governed_takeoff_context())
         self.assert_policy(
             "unapproved_measurement",
             validate_record,
             "material_takeoff",
             takeoff,
-            context={"measurement_status": "Needs Review"},
+            context=governed_takeoff_context(
+                measurement={
+                    **governed_takeoff_context()["measurement"],
+                    "review_status": "Needs Review",
+                }
+            ),
+        )
+
+    def test_takeoff_policy_is_closed_approved_and_source_verified(self) -> None:
+        policy = governed_takeoff_policy()
+        validate_record(
+            "material_takeoff_policy", policy, context=governed_policy_context()
+        )
+
+        self.assert_policy(
+            "takeoff_policy_evidence_unverified",
+            validate_record,
+            "material_takeoff_policy",
+            policy,
+            context=governed_policy_context(
+                policy_evidence={
+                    **governed_policy_context()["policy_evidence"],
+                    "sync_state": "Pending",
+                }
+            ),
+        )
+        payload = json.loads(str(policy["policy_json"]))
+        payload["options"]["undeclared_default"] = 10
+        self.assert_policy(
+            "takeoff_policy_keys",
+            validate_record,
+            "material_takeoff_policy",
+            {**policy, "policy_json": json.dumps(payload)},
+            context=governed_policy_context(),
+        )
+        payload = json.loads(str(policy["policy_json"]))
+        payload["options"]["coil_allowances"] = {
+            "setup_ft": 0,
+            "tail_ft": 0,
+            "scrap_factor": 0,
+        }
+        self.assert_policy(
+            "takeoff_policy_coil_allowance",
+            validate_record,
+            "material_takeoff_policy",
+            {**policy, "policy_json": json.dumps(payload)},
+            context=governed_policy_context(),
+        )
+
+    def test_approved_takeoff_policy_is_immutable_and_versioned(self) -> None:
+        policy = governed_takeoff_policy()
+        self.assert_policy(
+            "approved_takeoff_policy_immutable",
+            validate_record,
+            "material_takeoff_policy",
+            {**policy, "material_system": "other_system"},
+            previous=policy,
+            context=governed_policy_context(),
+        )
+        validate_record(
+            "material_takeoff_policy",
+            {**policy, "status": "Retired"},
+            previous=policy,
+            context=governed_policy_context(),
+        )
+
+    def test_retired_policy_remains_exact_historical_takeoff_proof(self) -> None:
+        takeoff = governed_takeoff_record()
+        retired = {**governed_takeoff_policy(), "status": "Retired"}
+        validate_record(
+            "material_takeoff",
+            takeoff,
+            previous=takeoff,
+            context=governed_takeoff_context(takeoff_policy=retired),
+        )
+        self.assert_policy(
+            "takeoff_policy_retired_historical_only",
+            validate_record,
+            "material_takeoff",
+            takeoff,
+            previous={**takeoff, "status": "Needs Review"},
+            context=governed_takeoff_context(takeoff_policy=retired),
+        )
+        self.assert_policy(
+            "takeoff_policy_initial_state",
+            validate_record,
+            "material_takeoff_policy",
+            retired,
+            context=governed_policy_context(),
+        )
+        self.assert_policy(
+            "takeoff_policy_binding",
+            validate_record,
+            "material_takeoff",
+            takeoff,
+            previous=takeoff,
+            context=governed_takeoff_context(
+                takeoff_policy={**retired, "effective_to": "2026-08-31"}
+            ),
+        )
+
+    def test_approved_takeoff_rejects_digest_drift_cross_tenant_and_review_reasons(
+        self,
+    ) -> None:
+        takeoff = governed_takeoff_record()
+        context = governed_takeoff_context()
+        for code, altered, altered_context in (
+            (
+                "takeoff_calculation_digest",
+                {**takeoff, "calculation_digest": "c" * 64},
+                context,
+            ),
+            (
+                "takeoff_policy_tenant_mismatch",
+                takeoff,
+                governed_takeoff_context(
+                    takeoff_policy={**governed_takeoff_policy(), "tenant": "iroof"}
+                ),
+            ),
+            (
+                "takeoff_review_unresolved",
+                {**takeoff, "review_reasons_json": '["geometry_needs_review"]'},
+                context,
+            ),
+        ):
+            with self.subTest(code=code):
+                self.assert_policy(
+                    code,
+                    validate_record,
+                    "material_takeoff",
+                    altered,
+                    context=altered_context,
+                )
+
+        options = json.loads(str(takeoff["options_json"]))
+        options["coverageWidthFt"] = 2
+        options_digest = canonical_digest(options)
+        envelope = json.loads(str(takeoff["calculation_json"]))
+        envelope["options"] = options
+        envelope["options_digest"] = options_digest
+        calculation_digest = canonical_digest(envelope)
+        drift = {
+            **takeoff,
+            "options_json": json.dumps(options),
+            "options_digest": options_digest,
+            "calculation_json": json.dumps(envelope),
+            "calculation_digest": calculation_digest,
+            "items": [
+                {
+                    **takeoff["items"][0],
+                    "options_digest": options_digest,
+                    "calculation_digest": calculation_digest,
+                }
+            ],
+        }
+        self.assert_policy(
+            "takeoff_options_policy_mismatch",
+            validate_record,
+            "material_takeoff",
+            drift,
+            context=context,
+        )
+
+    def test_legacy_takeoff_remains_readable_but_cannot_be_approved(self) -> None:
+        legacy = {
+            "takeoff_id": "legacy-1",
+            "status": "Needs Review",
+            "roof_job": "job-1",
+            "source_measurements_json": '{"legacy":true}',
+        }
+        validate_record("material_takeoff", legacy)
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "material_takeoff",
+            {
+                **legacy,
+                "status": "Approved",
+                "approved_by": "owner@example.com",
+                "approved_at": "2026-08-12 10:00:00",
+            },
         )
 
     def test_roof_graph_is_bound_to_measurement_evidence(self) -> None:
@@ -574,22 +1408,8 @@ class DomainPolicyTests(unittest.TestCase):
         )
 
     def test_supplier_quote_and_order_require_approved_upstream_records(self) -> None:
-        quote = {
-            "supplier_quote_id": "sq-1",
-            "status": "Approved",
-            "roof_job": "job-1",
-            "material_takeoff": "to-1",
-            "supplier": "supplier-1",
-            "valid_until": "2026-08-01",
-            "assumptions": "Stock confirmed.",
-            "exclusions": "Freight variance.",
-            "approved_by": "owner@example.com",
-            "approved_at": "2026-07-10 11:00:00",
-            "quote_total": 8500,
-            "quote_summary_json": '{"supplier":"supplier-1"}',
-            "items": [{"quantity": 20, "unit_price": 400, "line_total": 8000}],
-        }
-        validate_record("supplier_quote", quote, context={"takeoff_status": "Approved"})
+        quote = supplier_quote_record()
+        validate_record("supplier_quote", quote, context=SUPPLIER_QUOTE_CONTEXT)
 
         review = supplier_order_record("Needs Review")
         order = {
@@ -606,6 +1426,74 @@ class DomainPolicyTests(unittest.TestCase):
             order,
             previous=review,
             context={**context, "supplier_quote_status": "Draft"},
+        )
+
+    def test_supplier_quote_recomputes_half_up_lines_and_total(self) -> None:
+        quote = supplier_quote_record(
+            quote_total="1.01",
+            items=[
+                {
+                    "item_name": "Synthetic washer",
+                    "quantity": "3",
+                    "unit": "each",
+                    "unit_price": "0.335",
+                    "line_total": "1.01",
+                    "source_ref": "supplier-sheet:line-2",
+                }
+            ],
+        )
+        validate_record("supplier_quote", quote, context=SUPPLIER_QUOTE_CONTEXT)
+        self.assert_policy(
+            "supplier_quote_line_total_mismatch",
+            validate_record,
+            "supplier_quote",
+            {
+                **quote,
+                "items": [{**quote["items"][0], "line_total": "1.00"}],
+            },
+            context=SUPPLIER_QUOTE_CONTEXT,
+        )
+        self.assert_policy(
+            "supplier_quote_total_mismatch",
+            validate_record,
+            "supplier_quote",
+            {**quote, "quote_total": "1.02"},
+            context=SUPPLIER_QUOTE_CONTEXT,
+        )
+
+    def test_supplier_quote_rejects_stale_or_ambiguous_approved_money(self) -> None:
+        quote = supplier_quote_record()
+        self.assert_policy(
+            "expired_supplier_quote",
+            validate_record,
+            "supplier_quote",
+            quote,
+            context={**SUPPLIER_QUOTE_CONTEXT, "validation_date": "2026-08-02"},
+        )
+        self.assert_policy(
+            "invalid_currency",
+            validate_record,
+            "supplier_quote",
+            {**quote, "currency": "cad"},
+            context=SUPPLIER_QUOTE_CONTEXT,
+        )
+        self.assert_policy(
+            "invalid_number",
+            validate_record,
+            "supplier_quote",
+            {**quote, "quote_total": "Infinity"},
+            context=SUPPLIER_QUOTE_CONTEXT,
+        )
+
+    def test_approved_supplier_quote_commercial_facts_are_immutable(self) -> None:
+        approved = supplier_quote_record()
+        self.assert_policy(
+            "immutable_field",
+            validate_record,
+            "supplier_quote",
+            {**approved, "quote_total": "8100.00"},
+            previous=approved,
+            context=SUPPLIER_QUOTE_CONTEXT,
         )
 
     def test_supplier_order_lifecycle_is_explicit_and_freezes_approved_facts(self) -> None:
@@ -915,6 +1803,28 @@ class DomainPolicyTests(unittest.TestCase):
             context={"superseded_record": {**prior, "contract_acceptance": "accept-1"}},
         )
 
+    def test_rejected_facet_quote_revision_cannot_reenter_the_commercial_flow(
+        self,
+    ) -> None:
+        rejected = {
+            "customer_quote_id": "facet-quote-revision:proof-1",
+            "roof_job": "job-1",
+            "customer": "customer-1",
+            "quote_version": 2,
+            "status": "Rejected",
+            "supersedes": "cq-1",
+            "correction_reason": "Customer withdrew or superseded the Facet design.",
+        }
+        for status in ("Draft", "Needs Review", "Approved", "Accepted"):
+            with self.subTest(status=status):
+                self.assert_policy(
+                    "invalid_state_transition",
+                    validate_record,
+                    "customer_quote",
+                    {**rejected, "status": status},
+                    previous=rejected,
+                )
+
     def test_quote_proposal_and_closeout_evidence_chain(self) -> None:
         customer_quote = {
             "customer_quote_id": "cq-1",
@@ -939,6 +1849,8 @@ class DomainPolicyTests(unittest.TestCase):
             "payment_status": "Deposit Due",
             "payment_truth_source": "IronWrap Quote",
             "payment_truth_at": "2026-07-10 12:00:00",
+            "qb_terms_ref": "99",
+            "qb_terms_due_days": 30,
             "scope_summary": "Standing-seam replacement.",
             "assumptions": "Clear driveway.",
             "exclusions": "Structural repairs.",
@@ -1180,6 +2092,7 @@ class DomainPolicyTests(unittest.TestCase):
 
         completion = {
             "completion_packet_id": "cp-1",
+            "packet_version": 1,
             "status": "Approved",
             "roof_job": "job-1",
             "customer_signoff_ref": "signoff-1",
@@ -1192,6 +2105,25 @@ class DomainPolicyTests(unittest.TestCase):
             "deficiencies_resolved": 1,
         }
         validate_record("completion_packet", completion)
+        self.assert_policy(
+            "invalid_completion_version",
+            validate_record,
+            "completion_packet",
+            {**completion, "packet_version": 1.5},
+        )
+        self.assert_policy(
+            "completion_version_required",
+            validate_record,
+            "completion_packet",
+            {key: value for key, value in completion.items() if key != "packet_version"},
+        )
+        self.assert_policy(
+            "immutable_field",
+            validate_record,
+            "completion_packet",
+            {**completion, "customer_signoff_ref": "signoff-rewritten"},
+            previous=completion,
+        )
         self.assert_policy(
             "open_deficiencies",
             validate_record,
@@ -1288,6 +2220,114 @@ class DomainPolicyTests(unittest.TestCase):
             context=closeout_context,
         )
 
+    def test_typed_assignment_authority_context_and_worker_roster_are_immutable(self) -> None:
+        assignment = {
+            "assignment_id": "assignment-shop-1",
+            "roof_job": "",
+            "assignment_type": "Shop",
+            "status": "Assigned",
+            "crew_profile": "",
+            "assigned_user": "",
+            "authority_user": "production@example.com",
+            "authority_role": "IronWrap Production",
+            "assigned_by": "dispatcher@example.com",
+            "assigned_at": "2026-07-10 08:00:00",
+            "work_object_type": "Shop Order",
+            "work_object_id": "SHOP-001",
+            "physical_context_type": "Shop Floor",
+            "physical_context_id": "SHOP-FLOOR-1",
+            "scheduled_start": "2026-07-11 08:00:00",
+            "assigned_workers": [
+                {
+                    "sequence": 1,
+                    "worker_user": "operator@example.com",
+                    "worker_role": "Shop Operator",
+                    "required": 1,
+                },
+                {
+                    "sequence": 2,
+                    "worker_user": "helper@example.com",
+                    "worker_role": "Shop Helper",
+                    "required": 0,
+                },
+            ],
+        }
+        validate_record("job_assignment", assignment)
+
+        scalar_mutations = {
+            "authority_user": "owner@example.com",
+            "authority_role": "IronWrap Owner",
+            "work_object_type": "Service Order",
+            "work_object_id": "SHOP-002",
+            "physical_context_type": "Warehouse Bay",
+            "physical_context_id": "WAREHOUSE-1",
+        }
+        for field, value in scalar_mutations.items():
+            with self.subTest(field=field):
+                self.assert_policy(
+                    "write_once_field",
+                    validate_record,
+                    "job_assignment",
+                    {**assignment, field: value},
+                    previous=assignment,
+                )
+
+        roster_mutations = (
+            [
+                {**assignment["assigned_workers"][0], "worker_user": "other@example.com"},
+                assignment["assigned_workers"][1],
+            ],
+            [
+                {**assignment["assigned_workers"][0], "worker_role": "Shop Foreman"},
+                assignment["assigned_workers"][1],
+            ],
+            [
+                assignment["assigned_workers"][0],
+                {**assignment["assigned_workers"][1], "required": 1},
+            ],
+            assignment["assigned_workers"][:1],
+            [
+                *assignment["assigned_workers"],
+                {
+                    "sequence": 3,
+                    "worker_user": "spotter@example.com",
+                    "worker_role": "Spotter",
+                    "required": 0,
+                },
+            ],
+        )
+        for index, assigned_workers in enumerate(roster_mutations, start=1):
+            with self.subTest(roster_mutation=index):
+                self.assert_policy(
+                    "write_once_field",
+                    validate_record,
+                    "job_assignment",
+                    {**assignment, "assigned_workers": assigned_workers},
+                    previous=assignment,
+                )
+
+        validate_record(
+            "job_assignment",
+            {
+                **assignment,
+                "assignment_id": "assignment-shop-2",
+                "authority_user": "owner@example.com",
+                "authority_role": "IronWrap Owner",
+                "assigned_workers": [
+                    assignment["assigned_workers"][0],
+                    {
+                        "sequence": 2,
+                        "worker_user": "spotter@example.com",
+                        "worker_role": "Spotter",
+                        "required": 1,
+                    },
+                ],
+                "supersedes": assignment["assignment_id"],
+                "correction_reason": "Transfer authority and issue the replacement roster.",
+            },
+            context={"superseded_record": assignment},
+        )
+
     def test_scheduled_production_assignment_requires_current_non_closeout_gates(self) -> None:
         def gate(gate_name: str, state: str) -> dict[str, str]:
             result = {
@@ -1335,8 +2375,10 @@ class DomainPolicyTests(unittest.TestCase):
             "assigned_by": "production@example.com",
             "assigned_at": "2026-07-10 08:00:00",
             "scheduled_start": "2026-07-11 08:00:00",
+            "scheduled_end": "2026-07-11 16:00:00",
         }
         authority_context = {
+            "legacy_authority_context": True,
             "scheduled_assignment_crew_profile": current_crew_authority(),
             "job_compliance_rows": [
                 current_compliance_authority(gate)
@@ -1409,7 +2451,12 @@ class DomainPolicyTests(unittest.TestCase):
 
         validate_record(
             "job_assignment",
-            {**assignment, "assignment_id": "assignment-production-unscheduled", "scheduled_start": ""},
+            {
+                **assignment,
+                "assignment_id": "assignment-production-unscheduled",
+                "scheduled_start": "",
+                "scheduled_end": "",
+            },
         )
         validate_record(
             "job_assignment",
@@ -1490,6 +2537,7 @@ class DomainPolicyTests(unittest.TestCase):
             "assignment_type": "Production",
             "status": "Assigned",
             "scheduled_start": "2026-07-11 08:00:00",
+            "scheduled_end": "2026-07-11 16:00:00",
         }
         assignment = {
             "assignment_id": "assignment:next",
@@ -1500,8 +2548,10 @@ class DomainPolicyTests(unittest.TestCase):
             "assigned_by": "production@example.com",
             "assigned_at": "2026-07-10 08:00:00",
             "scheduled_start": "2026-07-12 08:00:00",
+            "scheduled_end": "2026-07-12 16:00:00",
         }
         context = {
+            "legacy_authority_context": True,
             "gates": gates,
             "gate_evidence": {},
             "job_assignment_rows": [current],
@@ -1561,6 +2611,126 @@ class DomainPolicyTests(unittest.TestCase):
                 },
             )
 
+    def test_scheduled_production_assignment_rejects_same_crew_cross_job_overlaps(self) -> None:
+        gates = [
+            {
+                "roof_job": "job-2",
+                "gate": gate,
+                "state": "Done",
+                "evidence_item": f"ev-{gate.lower()}",
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+            }
+            for gate in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
+        ]
+        crew = current_crew_authority(name="crew-2", crew_profile_id="crew-2")
+        context = {
+            "legacy_authority_context": True,
+            "gates": gates,
+            "gate_evidence": gate_evidence_context(gates),
+            "scheduled_assignment_crew_profile": crew,
+            "job_compliance_rows": [
+                current_compliance_authority(gate) for gate in ("Crew", "Safety", "Access")
+            ],
+        }
+        assignment = {
+            "assignment_id": "assignment:new",
+            "roof_job": "job-2",
+            "assignment_type": "Production",
+            "status": "Assigned",
+            "crew_profile": "crew-2",
+            "assigned_by": "production@example.com",
+            "assigned_at": "2026-07-10 08:00:00",
+            "scheduled_start": "2026-07-12 09:00:00",
+            "scheduled_end": "2026-07-12 12:00:00",
+        }
+        overlapping = {
+            "name": "assignment:other-job",
+            "assignment_id": "assignment:other-job",
+            "roof_job": "job-9",
+            "assignment_type": "Production",
+            "status": "Accepted",
+            "crew_profile": "crew-2",
+            "scheduled_start": "2026-07-12 10:00:00",
+            "scheduled_end": "2026-07-12 13:00:00",
+        }
+        self.assert_policy(
+            "overlapping_crew_schedule",
+            validate_record,
+            "job_assignment",
+            assignment,
+            context={**context, "job_assignment_rows": [overlapping]},
+        )
+
+        validate_record(
+            "job_assignment",
+            assignment,
+            context={
+                **context,
+                "job_assignment_rows": [{**overlapping, "scheduled_start": "2026-07-12 12:00:00"}],
+            },
+        )
+        validate_record(
+            "job_assignment",
+            assignment,
+            context={
+                **context,
+                "job_assignment_rows": [{**overlapping, "crew_profile": "crew-9"}],
+            },
+        )
+        validate_record(
+            "job_assignment",
+            assignment,
+            context={
+                **context,
+                "job_assignment_rows": [{**overlapping, "status": "Cancelled"}],
+            },
+        )
+        superseded_same_job = {**overlapping, "roof_job": "job-2"}
+        validate_record(
+            "job_assignment",
+            {
+                **assignment,
+                "supersedes": "assignment:other-job",
+                "correction_reason": "Shift crew window.",
+            },
+            context={
+                **context,
+                "job_assignment_rows": [superseded_same_job],
+                "superseded_record": superseded_same_job,
+            },
+        )
+        validate_record(
+            "job_assignment",
+            assignment,
+            previous=assignment,
+            context={**context, "job_assignment_rows": [assignment]},
+        )
+        self.assert_policy(
+            "scheduled_assignment_window_required",
+            validate_record,
+            "job_assignment",
+            {**assignment, "assignment_id": "assignment:no-end", "scheduled_end": ""},
+            context=context,
+        )
+        self.assert_policy(
+            "invalid_assignment_window",
+            validate_record,
+            "job_assignment",
+            {**assignment, "assignment_id": "assignment:bad-end", "scheduled_end": "not-a-time"},
+            context=context,
+        )
+        self.assert_policy(
+            "scheduled_assignment_window_required",
+            validate_record,
+            "job_assignment",
+            assignment,
+            context={
+                **context,
+                "job_assignment_rows": [{**overlapping, "assignment_id": "assignment:bad-row", "scheduled_end": ""}],
+            },
+        )
+
     def test_work_package_release_requires_current_controls_and_preserves_issued_content(
         self,
     ) -> None:
@@ -1583,6 +2753,7 @@ class DomainPolicyTests(unittest.TestCase):
             "status": "Assigned",
             "crew_profile": "crew-1",
             "scheduled_start": "2026-07-10 12:00:00",
+            "scheduled_end": "2026-07-10 18:00:00",
         }
         safety_plan = {
             "name": "safety:job-1:v1",
@@ -1636,6 +2807,7 @@ class DomainPolicyTests(unittest.TestCase):
 
         def release_context(**overrides: object) -> dict[str, object]:
             context: dict[str, object] = {
+                "legacy_authority_context": True,
                 "now": "2026-07-10 10:00:00",
                 "gates": gates,
                 "gate_evidence": gate_evidence_context(gates),
@@ -1813,6 +2985,7 @@ class DomainPolicyTests(unittest.TestCase):
             "assigned_by": "production@example.com",
             "assigned_at": "2026-07-10 08:00:00",
             "scheduled_start": "2026-07-11 08:00:00",
+            "scheduled_end": "2026-07-11 16:00:00",
         }
         safety_plan = {
             "name": "safety:authority",
@@ -1860,6 +3033,7 @@ class DomainPolicyTests(unittest.TestCase):
 
         def scheduled_context(**overrides: object) -> dict[str, object]:
             context: dict[str, object] = {
+                "legacy_authority_context": True,
                 "gates": gates,
                 "gate_evidence": gate_evidence_context(gates),
                 "scheduled_assignment_crew_profile": crew,
@@ -1870,6 +3044,7 @@ class DomainPolicyTests(unittest.TestCase):
 
         def release_context(**overrides: object) -> dict[str, object]:
             context: dict[str, object] = {
+                "legacy_authority_context": True,
                 "now": "2026-07-10 10:00:00",
                 "gates": gates,
                 "gate_evidence": gate_evidence_context(gates),
@@ -2118,6 +3293,7 @@ class DomainPolicyTests(unittest.TestCase):
             "assigned_by": "production@example.com",
             "assigned_at": "2026-07-10 08:00:00",
             "scheduled_start": "2026-07-11 08:00:00",
+            "scheduled_end": "2026-07-11 16:00:00",
         }
         self.assert_policy(
             "unverified_gate_evidence",
@@ -2247,7 +3423,7 @@ class DomainPolicyTests(unittest.TestCase):
             previous=evidence,
         )
         self.assert_policy(
-            "invalid_state_transition",
+            "immutable_field",
             validate_record,
             "evidence_item",
             {**evidence, "sync_state": "Uploaded"},
@@ -2449,6 +3625,99 @@ class DomainPolicyTests(unittest.TestCase):
             "truth_at": "2026-07-10 11:00:00",
         }
         validate_record("payment_milestone", payment)
+
+    def test_payment_milestone_recognition_binding_requires_exact_terminal_reconciliation(
+        self,
+    ) -> None:
+        payment = {
+            "payment_milestone_id": "pay-1",
+            "roof_job": "job-1",
+            "milestone_type": "Invoice",
+            "milestone_version": 1,
+            "status": "Matched",
+            "currency": "CAD",
+            "subtotal": 1000,
+            "tax_amount": 50,
+            "total_amount": 1050,
+            "amount_due": 1050,
+            "amount_paid": 250,
+            "balance_due": 800,
+            "payment_status": "Partially Paid",
+            "tax_code": "GST",
+            "tax_rate": 5,
+            "tax_policy_snapshot_json": '{"rate":5}',
+            "truth_source": "QuickBooks",
+            "truth_at": "2026-07-10 11:00:00",
+            "qb_entity_type": "Invoice",
+            "qb_entity_id": "42",
+            "recognition_posted_at": "2026-07-10 10:30:00",
+            "recognition_digest": "a" * 64,
+            "recognition_reconciliation": "recon:pay-1",
+        }
+        reconciliation = {
+            "name": "recon:pay-1",
+            "reconciliation_id": "recon:pay-1",
+            "roof_job": "job-1",
+            "system_name": "QuickBooks",
+            "entity_type": "Invoice",
+            "external_entity_id": "42",
+            "local_doctype": "Payment Milestone",
+            "local_name": "pay-1",
+            "status": "Matched",
+            "currency": "CAD",
+            "source_payload_hash": "a" * 64,
+            "detected_at": "2026-07-10 10:45:00",
+        }
+        validate_record(
+            "payment_milestone",
+            payment,
+            context={"recognition_reconciliation": reconciliation},
+        )
+        self.assert_policy(
+            "premature_revenue_recognition_claim",
+            validate_record,
+            "payment_milestone",
+            {**payment, "status": "Needs Review"},
+            context={"recognition_reconciliation": reconciliation},
+        )
+        self.assert_policy(
+            "invalid_revenue_recognition_binding",
+            validate_record,
+            "payment_milestone",
+            {**payment, "milestone_type": "Payment", "qb_entity_type": "Payment"},
+            context={"recognition_reconciliation": {**reconciliation, "entity_type": "Payment"}},
+        )
+        self.assert_policy(
+            "unverified_revenue_recognition",
+            validate_record,
+            "payment_milestone",
+            {**payment, "recognition_digest": "b" * 64},
+            context={"recognition_reconciliation": reconciliation},
+        )
+        self.assert_policy(
+            "unverified_revenue_recognition",
+            validate_record,
+            "payment_milestone",
+            payment,
+            context={
+                "recognition_reconciliation": {
+                    **reconciliation,
+                    "detected_at": "2026-07-10 10:15:00",
+                }
+            },
+        )
+        self.assert_policy(
+            "unverified_revenue_recognition",
+            validate_record,
+            "payment_milestone",
+            payment,
+            context={
+                "recognition_reconciliation": {
+                    **reconciliation,
+                    "detected_at": "2026-07-10 11:15:00",
+                }
+            },
+        )
 
     def test_insurance_supplement_requires_verified_human_evidence(self) -> None:
         def evidence(evidence_type: str) -> dict[str, object]:
@@ -2916,6 +4185,31 @@ class DomainPolicyTests(unittest.TestCase):
             previous=run,
         )
 
+        historical_takeoff = {"calculation_digest": "a" * 64}
+        no_op_replay = {
+            **run,
+            "run_id": "run-takeoff-replay-1",
+            "target_doctype": "Material Takeoff",
+            "target_name": "takeoff:job-1",
+            "tool_name": "request_create_material_takeoff",
+            "dry_run_json": json.dumps(
+                {"operation": "replay", "target_mutation": False}
+            ),
+            "before_target_ids": json.dumps(historical_takeoff),
+            "after_target_ids": json.dumps(historical_takeoff),
+            "mutation_applied": 0,
+        }
+        validate_record("hermes_run", no_op_replay)
+        for altered in (
+            {**no_op_replay, "dry_run_json": '{"operation":"create","target_mutation":false}'},
+            {**no_op_replay, "dry_run_json": '{"operation":"replay","target_mutation":true}'},
+            {**no_op_replay, "after_target_ids": '{"calculation_digest":"changed"}'},
+            {**no_op_replay, "tool_name": "request_update_gate"},
+        ):
+            self.assert_policy(
+                "audit_state_mismatch", validate_record, "hermes_run", altered
+            )
+
     def test_audit_failure_preserves_truth_about_an_applied_mutation(self) -> None:
         audit_failed = {
             "run_id": "run-audit-failed",
@@ -2974,6 +4268,9 @@ class DomainPolicyTests(unittest.TestCase):
                 "status": "Approved",
                 "rule_type": "Material",
                 "unit": "sqft",
+                "unit_price": "12.50",
+                "minimum_quantity": "0",
+                "currency": "CAD",
                 "source_ref": "supplier-sheet-2026-07",
                 "effective_from": "2026-07-01",
                 "assumptions": "Standard colour.",
@@ -2981,7 +4278,8 @@ class DomainPolicyTests(unittest.TestCase):
                 "approved_by": "owner@example.com",
                 "approved_at": "2026-07-10 10:00:00",
                 "approval_note": "Supplier sheet checked.",
-                "rule_json": '{"unit_price":12.50}',
+                "effective_to": "2026-08-31",
+                "rule_json": PRICE_RULE_JSON,
             },
             "visual_property_model": {
                 "visual_model_id": "model-1",
@@ -3101,6 +4399,160 @@ class DomainPolicyTests(unittest.TestCase):
             "price_book_rule",
             {**price_rule, "source_ref": "supplier-sheet-2026-08"},
             previous=price_rule,
+        )
+
+    def test_price_rule_contract_rejects_unknown_or_arbitrary_json(self) -> None:
+        rule = price_rule_source()
+        unknown_contract = json.loads(PRICE_RULE_JSON)
+        unknown_contract["hidden_adjustment"] = "1.25"
+        self.assert_policy(
+            "invalid_price_rule_contract",
+            validate_record,
+            "price_book_rule",
+            {**rule, "rule_json": json.dumps(unknown_contract)},
+        )
+        self.assert_policy(
+            "unsupported_price_rule_contract",
+            validate_record,
+            "price_book_rule",
+            {
+                **rule,
+                "rule_json": json.dumps(
+                    {
+                        **json.loads(PRICE_RULE_JSON),
+                        "operation": "eval_python",
+                    }
+                ),
+            },
+        )
+
+    def test_price_rule_executes_exact_decimal_snapshot_replay(self) -> None:
+        rule = {
+            **price_rule_source(),
+            "unit_price": "12.345",
+            "minimum_quantity": "2.5",
+        }
+        first = evaluate_price_rule(rule, "1.25", effective_at="2026-07-10")
+        replay = evaluate_price_rule(
+            json.loads(json.dumps(rule)),
+            "1.25",
+            effective_at="2026-07-10",
+        )
+        self.assertEqual(first, replay)
+        self.assertEqual(first["billable_quantity"], "2.5")
+        self.assertEqual(first["line_total"], "30.86")
+        self.assertTrue(first["minimum_applied"])
+        self.assert_policy(
+            "price_rule_not_effective",
+            evaluate_price_rule,
+            rule,
+            "1.25",
+            effective_at="2026-09-01",
+        )
+
+    def test_pricing_policy_anchor_binds_exact_human_reviewed_snapshot(self) -> None:
+        anchor = pricing_policy_anchor()
+        validate_record("price_book_rule", anchor)
+        self.assert_policy(
+            "non_executable_pricing_policy_anchor",
+            evaluate_price_rule,
+            anchor,
+            "1",
+            effective_at="2026-08-13",
+        )
+
+        self.assert_policy(
+            "pricing_policy_snapshot_hash_mismatch",
+            validate_record,
+            "price_book_rule",
+            {
+                **anchor,
+                "pricing_policy_snapshot_sha256": "0" * 64,
+            },
+        )
+        self.assert_policy(
+            "noncanonical_pricing_policy_snapshot",
+            validate_record,
+            "price_book_rule",
+            {
+                **anchor,
+                "pricing_policy_snapshot_json": f"{anchor['pricing_policy_snapshot_json']} ",
+            },
+        )
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "price_book_rule",
+            {
+                **anchor,
+                "pricing_policy_snapshot_json": None,
+            },
+        )
+        self.assert_policy(
+            "invalid_pricing_policy_approver",
+            validate_record,
+            "price_book_rule",
+            {**anchor, "approved_by": "forged-operator"},
+        )
+        self.assert_policy(
+            "invalid_pricing_policy_approval_timestamp",
+            validate_record,
+            "price_book_rule",
+            {**anchor, "approved_at": "2026-07-31T12:00:00.000Z"},
+        )
+
+    def test_pricing_policy_anchor_snapshot_rejects_unknown_keys_and_is_immutable(self) -> None:
+        anchor = pricing_policy_anchor()
+        snapshot = json.loads(str(anchor["pricing_policy_snapshot_json"]))
+        snapshot["customer_name"] = "must not be stored"
+        tampered = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+        self.assert_policy(
+            "invalid_pricing_policy_snapshot",
+            validate_record,
+            "price_book_rule",
+            {
+                **anchor,
+                "pricing_policy_snapshot_json": tampered,
+                "pricing_policy_snapshot_sha256": hashlib.sha256(
+                    tampered.encode("utf-8")
+                ).hexdigest(),
+            },
+        )
+        free_text_snapshot = json.loads(str(anchor["pricing_policy_snapshot_json"]))
+        free_text_snapshot["panel"]["description"] = "Customer-specific note"
+        free_text_canonical = json.dumps(
+            free_text_snapshot, sort_keys=True, separators=(",", ":")
+        )
+        self.assert_policy(
+            "invalid_pricing_policy_snapshot",
+            validate_record,
+            "price_book_rule",
+            {
+                **anchor,
+                "pricing_policy_snapshot_json": free_text_canonical,
+                "pricing_policy_snapshot_sha256": hashlib.sha256(
+                    free_text_canonical.encode("utf-8")
+                ).hexdigest(),
+            },
+        )
+        revised_snapshot = json.loads(str(anchor["pricing_policy_snapshot_json"]))
+        revised_snapshot["approvedPolicy"]["revision"] = 2
+        revised_canonical = json.dumps(
+            revised_snapshot, sort_keys=True, separators=(",", ":")
+        )
+        self.assert_policy(
+            "immutable_field",
+            validate_record,
+            "price_book_rule",
+            {
+                **anchor,
+                "pricing_policy_revision": 2,
+                "pricing_policy_snapshot_json": revised_canonical,
+                "pricing_policy_snapshot_sha256": hashlib.sha256(
+                    revised_canonical.encode("utf-8")
+                ).hexdigest(),
+            },
+            previous=anchor,
         )
 
     def test_reception_session_and_request_only_appointment_contracts(self) -> None:
@@ -3892,6 +5344,223 @@ class DomainPolicyTests(unittest.TestCase):
                     **remnant_context["source_shop_order"],
                     "roof_job": "job-other",
                 },
+            },
+        )
+
+    def test_canonical_authorities_bind_schedule_and_work_package_consumers(self) -> None:
+        gates = [
+            {
+                "roof_job": "job-1",
+                "gate": name,
+                "state": "Done",
+                "evidence_item": f"evidence:{name.lower()}",
+                "owner_user": "production@example.invalid",
+                "assigned_at": "2026-08-17 08:00:00",
+            }
+            for name in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
+        ]
+        authority = canonical_authority_record(record_id="authority:worker:1")
+        requirements = json.dumps([
+            {
+                "subject_type": "Person",
+                "subject_ref": "user:worker-1",
+                "authority_kind": "Worker Competency",
+                "scope_type": "Field",
+                "scope_ref": "field:job-1",
+            }
+        ])
+        assignment = {
+            "name": "assignment:production:canonical",
+            "assignment_id": "assignment:production:canonical",
+            "roof_job": "job-1",
+            "assignment_type": "Production",
+            "status": "Assigned",
+            "crew_profile": "crew-1",
+            "assigned_by": "production@example.invalid",
+            "assigned_at": "2026-08-17 07:00:00",
+            "scheduled_start": "2026-08-17 08:00:00",
+            "scheduled_end": "2026-08-17 16:00:00",
+            "authority_requirements_json": requirements,
+        }
+        compliance = [
+            current_compliance_authority(gate, authority_record="authority:worker:1")
+            for gate in ("Crew", "Safety", "Access")
+        ]
+        schedule_context = {
+            "gates": gates,
+            "gate_evidence": gate_evidence_context(gates),
+            "job_assignment_rows": [],
+            "supplier_order_exception_rows": [],
+            "scheduled_assignment_crew_profile": current_crew_authority(),
+            "job_compliance_rows": compliance,
+            "authority_tenant": "tenant:ironwrap",
+            "authority_records": [authority],
+        }
+        validate_record("job_assignment", assignment, context=schedule_context)
+
+        external_authority = canonical_authority_record(
+            record_id="authority:wcb:1",
+            kind="WCB Clearance",
+        )
+        external_authority["verification_method"] = "Issuer Portal Readback"
+        external_authority["state_digest_sha256"] = authority_state_digest(external_authority)
+        external_requirements = json.dumps([
+            {
+                "subject_type": "Person",
+                "subject_ref": "user:worker-1",
+                "authority_kind": "WCB Clearance",
+                "scope_type": "Field",
+                "scope_ref": "field:job-1",
+            }
+        ])
+        external_assignment = {
+            **assignment,
+            "authority_requirements_json": external_requirements,
+        }
+        with self.assertRaisesRegex(PolicyViolation, "missing_issuer_readback"):
+            validate_record(
+                "job_assignment",
+                external_assignment,
+                context={
+                    **schedule_context,
+                    "authority_records": [authority, external_authority],
+                    "authority_readbacks": {},
+                },
+            )
+        external_readback = {
+            "tenant": external_authority["tenant"],
+            "authority_record_id": external_authority["authority_record_id"],
+            "authority_version": external_authority["version"],
+            "issuer_name": external_authority["issuer_name"],
+            "issuer_jurisdiction": external_authority["issuer_jurisdiction"],
+            "issuer_reference": external_authority["issuer_reference"],
+            "issuer_source_version": external_authority["source_version"],
+            "evidence_refs_json": external_authority["evidence_refs_json"],
+            "evidence_sha256": external_authority["evidence_sha256"],
+            "state_digest_sha256": external_authority["state_digest_sha256"],
+            "verification_state": "verified",
+        }
+        validate_record(
+            "job_assignment",
+            external_assignment,
+            context={
+                **schedule_context,
+                "authority_records": [authority, external_authority],
+                "authority_readbacks": {external_authority["authority_record_id"]: external_readback},
+            },
+        )
+        with self.assertRaisesRegex(PolicyViolation, "issuer_readback_mismatch"):
+            validate_record(
+                "job_assignment",
+                external_assignment,
+                context={
+                    **schedule_context,
+                    "authority_records": [authority, external_authority],
+                    "authority_readbacks": {
+                        external_authority["authority_record_id"]: {
+                            **external_readback,
+                            "evidence_refs_json": json.dumps(
+                                [{"ref": "evidence:forged", "sha256": "a" * 64}]
+                            ),
+                        }
+                    },
+                },
+            )
+        external_compliance = [
+            current_compliance_authority(
+                gate,
+                authority_record=external_authority["authority_record_id"],
+            )
+            for gate in ("Crew", "Safety", "Access")
+        ]
+        with self.assertRaisesRegex(PolicyViolation, "missing_issuer_readback"):
+            validate_record(
+                "job_assignment",
+                assignment,
+                context={
+                    **schedule_context,
+                    "authority_records": [authority, external_authority],
+                    "job_compliance_rows": external_compliance,
+                    "authority_readbacks": {},
+                },
+            )
+        validate_record(
+            "job_assignment",
+            assignment,
+            context={
+                **schedule_context,
+                "authority_records": [authority, external_authority],
+                "job_compliance_rows": external_compliance,
+                "authority_readbacks": {
+                    external_authority["authority_record_id"]: external_readback,
+                },
+            },
+        )
+        self.assert_policy(
+            "authority_missing_current_authority",
+            validate_record,
+            "job_assignment",
+            assignment,
+            context={**schedule_context, "authority_records": []},
+        )
+
+        safety_plan = {
+            "name": "safety:canonical:1",
+            "safety_plan_id": "safety:canonical:1",
+            "roof_job": "job-1",
+            "version": 1,
+            "status": "Acknowledged",
+        }
+        package = {
+            "name": "work-package:canonical:1",
+            "work_package_id": "work-package:canonical:1",
+            "roof_job": "job-1",
+            "job_assignment": assignment["assignment_id"],
+            "safety_plan": safety_plan["safety_plan_id"],
+            "version": 1,
+            "status": "Released",
+            "authority_requirements_json": requirements,
+            "title": "Canonical field package",
+            "objective": "Install released panels.",
+            "boundaries": "Main roof only.",
+            "prerequisites": "Gates and evidence current.",
+            "expected_result": "Panels installed to detail.",
+            "stop_conditions": "Stop on unsafe conditions.",
+            "make_safe_procedure": "Secure the site and notify production.",
+            "issued_at": "2026-08-17 07:00:00",
+            "expires_at": "2026-08-17 17:00:00",
+            "released_by": "production@example.invalid",
+            "released_at": "2026-08-17 07:30:00",
+            "steps": [{
+                "sequence": 1,
+                "instruction": "Install panels.",
+                "required_evidence": "Progress photo.",
+                "acceptance_criteria": "Alignment is within released detail.",
+            }],
+            "hold_points": [{
+                "sequence": 1,
+                "hold_point": "Substrate check",
+                "release_authority": "IronWrap Production",
+                "required_evidence": "Deck photo.",
+                "acceptance_criteria": "Substrate is sound.",
+            }],
+        }
+        validate_record(
+            "work_package",
+            package,
+            context={
+                "now": "2026-08-17 08:00:00",
+                "gates": gates,
+                "gate_evidence": gate_evidence_context(gates),
+                "job_assignment_rows": [assignment],
+                "work_package_assignment": assignment,
+                "work_package_crew_profile": current_crew_authority(),
+                "job_compliance_rows": compliance,
+                "safety_plan_rows": [safety_plan],
+                "work_package_safety_plan": safety_plan,
+                "work_package_rows": [],
+                "authority_tenant": "tenant:ironwrap",
+                "authority_records": [authority],
             },
         )
 

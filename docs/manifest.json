@@ -78,6 +78,11 @@
       "authority": []
     },
     {
+      "path": "docs/HERMES-DESKTOP-TEXT-PILOT.md",
+      "class": "canonical",
+      "authority": []
+    },
+    {
       "path": "docs/LAUNCH-PROOF-SIDE-EFFECTS.md",
       "class": "runbook",
       "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]

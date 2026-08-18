@@ -27,8 +27,9 @@
 //   overstate (conservative: orders more, never less).
 // ponytail: no cross-facet block cutting (hip offcut reused on the mirrored
 //   valley); add via roof-graph adjacency when metal volume justifies it.
-// ponytail: trim profile map and fastener rates are defaults; calibrate per
-//   assembly spec before quoting from them.
+// ponytail: the optional-input calculator carries preview defaults only. It is
+//   non-operational and non-approvable; production callers must use the closed,
+//   policy-bound `takeoffFromGeometryWithPolicy` entry point below.
 
 import type { GeoCheck, GeometryModel, GeoPoint } from "./geometry.ts";
 import { chainRing, newellNormal } from "./geometry.ts";
@@ -42,6 +43,12 @@ export interface TakeoffOptions {
   maxPanelLengthFt?: number | null;
   /** Stock lengths to nest panel cuts into; null = coil (cut-to-length). */
   stockLengthsFt?: number[] | null;
+  /** Fixed roll-former setup material consumed once per coil run, ft. */
+  coilSetupAllowanceFt?: number;
+  /** Fixed unusable tail material consumed once per coil run, ft. */
+  coilTailAllowanceFt?: number;
+  /** Proportional coil scrap allowance, expressed as a fraction of cut feet. */
+  coilScrapFactor?: number;
   /** Offcut counted as reusable in the summary when at least this long, ft. */
   minReusableOffcutFt?: number;
   /** Trim stick length, ft (default 10). */
@@ -55,6 +62,38 @@ export interface TakeoffOptions {
   screwsPerClip?: number;
   /** Trim fastener spacing, ft. */
   trimScrewSpacingFt?: number;
+}
+
+/** Immutable calculation contract persisted by governed Material Takeoff drafts. */
+export const GOVERNED_TAKEOFF_CALCULATION_VERSION = "material_takeoff/v1";
+
+/**
+ * Fully specified inputs required by the operational calculator. Unlike
+ * `TakeoffOptions`, no field defaults: these values must come from an approved,
+ * effective Material Takeoff Policy and remain bound to its calculation digest.
+ */
+export interface GovernedTakeoffOptions {
+  panelProfileId: string;
+  coverageWidthFt: number;
+  lengthIncrementFt: number;
+  maxPanelLengthFt: number;
+  mode: "coil" | "stock";
+  stockLengthsFt: number[];
+  minReusableOffcutFt: number;
+  coilSetupAllowanceFt: number;
+  coilTailAllowanceFt: number;
+  coilScrapFactor: number;
+  trimStockFt: number;
+  trimLapFt: number;
+  trimProfiles: Record<string, string>;
+  clipSpacingFt: number;
+  screwsPerClip: number;
+  trimScrewSpacingFt: number;
+  fastenerItemIds: {
+    clip: string;
+    clipScrew: string;
+    trimScrew: string;
+  };
 }
 
 export interface PanelCut { facetId: string; seam: number; lengthFt: number; widthFt: number }
@@ -128,6 +167,7 @@ export const DEFAULT_TRIM_PROFILES: Record<string, string> = {
 const NON_TRIM = /^(NONE|UNKNOWN|DRAWING|WALL|WINDOW|DOOR)/;
 
 const EPS = 1e-6;
+const POLICY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 type V3 = [number, number, number];
 type P2 = [number, number];
 
@@ -190,13 +230,19 @@ export function nestLengths(cuts: number[], stockLengthsFt: number[], minReusabl
   };
 }
 
-/** Simulate laying panels and trim over verified geometry. Pure. */
+/**
+ * Non-operational preview calculator. Defaults are not manufacturing authority;
+ * production callers must use `takeoffFromGeometryWithPolicy`.
+ */
 export function takeoffFromGeometry(model: GeometryModel, opts: TakeoffOptions = {}): TakeoffModel {
   const o = {
     coverageWidthFt: 16 / 12,
     lengthIncrementFt: 1 / 12,
     maxPanelLengthFt: null as number | null,
     stockLengthsFt: null as number[] | null,
+    coilSetupAllowanceFt: 0,
+    coilTailAllowanceFt: 0,
+    coilScrapFactor: 0,
     minReusableOffcutFt: 2,
     trimStockFt: 10,
     trimLapFt: 0,
@@ -271,12 +317,24 @@ export function takeoffFromGeometry(model: GeometryModel, opts: TakeoffOptions =
 
   const allCuts = layouts.flatMap((l) => l.panels.map((p) => p.lengthFt));
   const panelFt = allCuts.reduce((s, c) => s + c, 0);
+  const coilStockFt = panelFt * (1 + o.coilScrapFactor) + o.coilSetupAllowanceFt + o.coilTailAllowanceFt;
   const panelNest: NestSummary = o.stockLengthsFt
     ? nestLengths(allCuts, o.stockLengthsFt, o.minReusableOffcutFt)
     : {
       mode: "coil",
-      pieces: allCuts.map((c) => ({ stockFt: c, cuts: [c], offcutFt: 0 })),
-      stockFt: round(panelFt, 2), cutFt: round(panelFt, 2), wastePct: 0,
+      pieces: allCuts.map((c, index) => ({
+        stockFt: round(
+          c * (1 + o.coilScrapFactor)
+            + (index === 0 ? o.coilSetupAllowanceFt : 0)
+            + (index === allCuts.length - 1 ? o.coilTailAllowanceFt : 0),
+          6,
+        ),
+        cuts: [c],
+        offcutFt: 0,
+      })),
+      stockFt: round(coilStockFt, 2),
+      cutFt: round(panelFt, 2),
+      wastePct: coilStockFt > 0 ? round(1 - panelFt / coilStockFt, 4) : 0,
       reusedCuts: 0, reusableOffcuts: 0, unplaced: [],
     };
   for (const c of panelNest.unplaced) {
@@ -331,6 +389,9 @@ export function takeoffFromGeometry(model: GeometryModel, opts: TakeoffOptions =
     panel_count: `strips(coverage=${round(o.coverageWidthFt, 4)}ft) over ${laidOut.length} roof facet rings`,
     panel_total_ft: `sum(strip v-extent rounded up to ${round(o.lengthIncrementFt, 4)}ft)`,
     panel_area_sqft: "sum(panel length x coverage width)",
+    panel_stock_ft: o.stockLengthsFt
+      ? `best-fit nesting into policy stock lengths ${o.stockLengthsFt.join("|")}ft`
+      : `coil cuts plus setup=${o.coilSetupAllowanceFt}ft, tail=${o.coilTailAllowanceFt}ft, scrap=${o.coilScrapFactor}`,
     roof_area_computed_sqft: `sum(newell(ring)) over ${laidOut.length} facets`,
     clips: `ceil(length/${o.clipSpacingFt}ft)+1 per seam`,
     trim_screws: `ceil(profile total/${o.trimScrewSpacingFt}ft)`,
@@ -355,4 +416,96 @@ export function takeoffFromGeometry(model: GeometryModel, opts: TakeoffOptions =
     needsReview: model.needsReview || checks.some((c) => !c.ok),
     sourceRefs,
   };
+}
+
+/**
+ * Production entry point. It validates every catalog/system-dependent input
+ * before calling the geometry engine, so calculator preview defaults can never
+ * become ordering authority by omission.
+ */
+export function takeoffFromGeometryWithPolicy(
+  model: GeometryModel,
+  policy: GovernedTakeoffOptions,
+): TakeoffModel {
+  if (!policy || typeof policy !== "object") throw new Error("takeoff_policy_required");
+  requireId(policy.panelProfileId, "takeoff_policy_panel_profile_id_required");
+  requirePositive(policy.coverageWidthFt, "takeoff_policy_coverage_width_ft_required", 10);
+  requirePositive(policy.lengthIncrementFt, "takeoff_policy_length_increment_ft_required", 1);
+  requirePositive(policy.maxPanelLengthFt, "takeoff_policy_max_panel_length_ft_required", 1_000);
+  requireBounded(policy.minReusableOffcutFt, "takeoff_policy_min_reusable_offcut_ft_required", 0, 100);
+  requirePositive(policy.trimStockFt, "takeoff_policy_trim_stock_ft_required", 100);
+  requireBounded(policy.trimLapFt, "takeoff_policy_trim_lap_ft_required", 0, policy.trimStockFt - EPS);
+  requirePositive(policy.clipSpacingFt, "takeoff_policy_clip_spacing_ft_required", 20);
+  requirePositive(policy.trimScrewSpacingFt, "takeoff_policy_trim_screw_spacing_ft_required", 20);
+  if (!Number.isInteger(policy.screwsPerClip) || policy.screwsPerClip < 1 || policy.screwsPerClip > 20) {
+    throw new Error("takeoff_policy_screws_per_clip_required");
+  }
+  requireId(policy.fastenerItemIds?.clip, "takeoff_policy_clip_item_id_required");
+  requireId(policy.fastenerItemIds?.clipScrew, "takeoff_policy_clip_screw_item_id_required");
+  requireId(policy.fastenerItemIds?.trimScrew, "takeoff_policy_trim_screw_item_id_required");
+
+  if (!policy.trimProfiles || typeof policy.trimProfiles !== "object" || Array.isArray(policy.trimProfiles)) {
+    throw new Error("takeoff_policy_trim_profiles_required");
+  }
+  for (const [lineType, profileId] of Object.entries(policy.trimProfiles)) {
+    requireId(lineType, "takeoff_policy_trim_line_type_invalid");
+    requireId(profileId, `takeoff_policy_trim_profile_invalid:${lineType}`);
+  }
+  for (const lineType of new Set(model.lines.filter((line) => !NON_TRIM.test(line.type)).map((line) => line.type))) {
+    if (!policy.trimProfiles[lineType]) throw new Error(`takeoff_policy_trim_profile_missing:${lineType}`);
+  }
+
+  requireBounded(policy.coilSetupAllowanceFt, "takeoff_policy_coil_setup_allowance_ft_required", 0, 1_000);
+  requireBounded(policy.coilTailAllowanceFt, "takeoff_policy_coil_tail_allowance_ft_required", 0, 1_000);
+  requireBounded(policy.coilScrapFactor, "takeoff_policy_coil_scrap_factor_required", 0, 1);
+  if (policy.mode === "coil") {
+    if (!Array.isArray(policy.stockLengthsFt) || policy.stockLengthsFt.length !== 0) {
+      throw new Error("takeoff_policy_coil_stock_lengths_forbidden");
+    }
+    if (policy.coilSetupAllowanceFt + policy.coilTailAllowanceFt + policy.coilScrapFactor <= 0) {
+      throw new Error("takeoff_policy_coil_allowance_required");
+    }
+  } else if (policy.mode === "stock") {
+    if (!Array.isArray(policy.stockLengthsFt) || policy.stockLengthsFt.length === 0) {
+      throw new Error("takeoff_policy_stock_lengths_required");
+    }
+    if (policy.stockLengthsFt.length > 64) throw new Error("takeoff_policy_stock_lengths_too_many");
+    for (const length of policy.stockLengthsFt) {
+      requirePositive(length, "takeoff_policy_stock_length_invalid", 1_000);
+    }
+    if (policy.coilSetupAllowanceFt !== 0 || policy.coilTailAllowanceFt !== 0 || policy.coilScrapFactor !== 0) {
+      throw new Error("takeoff_policy_stock_coil_allowances_forbidden");
+    }
+  } else {
+    throw new Error("takeoff_policy_mode_required");
+  }
+
+  return takeoffFromGeometry(model, {
+    coverageWidthFt: policy.coverageWidthFt,
+    lengthIncrementFt: policy.lengthIncrementFt,
+    maxPanelLengthFt: policy.maxPanelLengthFt,
+    stockLengthsFt: policy.mode === "stock" ? [...policy.stockLengthsFt] : null,
+    minReusableOffcutFt: policy.minReusableOffcutFt,
+    coilSetupAllowanceFt: policy.coilSetupAllowanceFt,
+    coilTailAllowanceFt: policy.coilTailAllowanceFt,
+    coilScrapFactor: policy.coilScrapFactor,
+    trimStockFt: policy.trimStockFt,
+    trimLapFt: policy.trimLapFt,
+    trimProfiles: { ...policy.trimProfiles },
+    clipSpacingFt: policy.clipSpacingFt,
+    screwsPerClip: policy.screwsPerClip,
+    trimScrewSpacingFt: policy.trimScrewSpacingFt,
+  });
+}
+
+function requireId(value: unknown, code: string): asserts value is string {
+  if (typeof value !== "string" || !POLICY_ID.test(value)) throw new Error(code);
+}
+
+function requirePositive(value: unknown, code: string, max: number): asserts value is number {
+  requireBounded(value, code, Number.MIN_VALUE, max);
+}
+
+function requireBounded(value: unknown, code: string, min: number, max: number): asserts value is number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) throw new Error(code);
 }

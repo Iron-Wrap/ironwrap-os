@@ -121,8 +121,11 @@ Estimator intake enters IronWrap OS through the Worker `POST /ingest/estimate` r
 server reads the resulting `Instant Estimate Session` rows and can draft downstream takeoff/proposal
 work, but it does not accept raw public estimator submissions itself.
 
-Frappe write tools are disabled unless `ERPNEXT_WRITE_ENABLED=true`. Every MCP
-process must also bind one canonical `HERMES_AGENT_ROLE` and `HERMES_ACTOR_USER`;
+Frappe write tools are disabled unless `ERPNEXT_WRITE_ENABLED=true`. A writable
+process must also configure the Worker effect runtime with
+`IRONWRAP_EFFECT_RUNTIME_URL` and `IRONWRAP_EFFECT_RUNTIME_TOKEN`; it cannot
+fall back to a direct provider mutation. Every MCP process must also bind one
+canonical `HERMES_AGENT_ROLE` and `HERMES_ACTOR_USER`;
 the server registers only that role's `roles.json` allowlist. An approved request
 needs a stable `run_id`, request text, approver, a short-lived server-issued
 `dry_run_receipt`, and an independently signed `approval_receipt` for the exact
@@ -134,12 +137,23 @@ claim. A source change or an already-created append-only target fails closed dur
 preview revalidation; an in-flight, failed, or audit-failed claim never re-executes
 the mutation.
 
+The Worker admin effect boundary exposes claim/settle for the MCP provider call and
+reconcile/retry for operator evidence. A provider timeout or missing readback remains
+`unknown`; the MCP never calls the provider again until an operator reconciles the
+effect and explicitly permits a new attempt.
+
 Current approved-write tools:
 
 - `request_update_gate` updates one `Production Gate State`.
-- `request_create_material_takeoff` creates or updates one review-gated
-  `Material Takeoff` from linked Measurement Report values. It does not approve
-  quantities, create supplier orders, create purchase orders, or mutate invoices.
+- `request_create_material_takeoff` creates or deterministically no-op replays one review-gated
+  `Material Takeoff` from canonical Measurement Report roof geometry and one exact approved,
+  effective, tenant/brand/service/material-system-scoped Material Takeoff Policy. Provider-declared
+  measurements remain comparison evidence only; missing/ambiguous policy, unverified policy source,
+  contradictory geometry binding, or unknown legacy state causes zero target writes. Existing records
+  replay only from their stored calculation time, Measurement Report, and policy; that exact policy may
+  be Retired solely as historical proof. A replay never updates the Material Takeoff and its Hermes Run
+  records `mutation_applied=0`. It does not approve quantities, create supplier orders, create purchase
+  orders, or mutate invoices.
 - `request_update_material_takeoff_status` updates one `Material Takeoff`
   review status with an approval note and Hermes Run audit row. It does not
   create supplier orders, purchase orders, invoices, or customer-facing scope.
@@ -211,7 +225,14 @@ ERPNEXT_BASE_URL=https://erp.example.com
 # Per-actor Frappe token: its API user must exactly equal HERMES_ACTOR_USER.
 ERPNEXT_API_KEY=...
 ERPNEXT_API_SECRET=...
+# Stable environment binding; never infer a tenant from a policy document.
+ERPNEXT_TENANT_ID=...
 ERPNEXT_WRITE_ENABLED=false
+# Required whenever ERPNEXT_WRITE_ENABLED=true. The MCP keeps Frappe credentials
+# and performs the provider call; the Worker owns claim, lease, readback settlement,
+# unknown/reconciliation state, and the durable effect ledger.
+IRONWRAP_EFFECT_RUNTIME_URL=https://<worker-subdomain>.workers.dev
+IRONWRAP_EFFECT_RUNTIME_TOKEN=<dedicated-worker-admin-token>
 HERMES_AGENT_ROLE=owner-operator
 HERMES_ACTOR_USER=owner@example.com
 HERMES_APPROVER_ID=owner@example.com

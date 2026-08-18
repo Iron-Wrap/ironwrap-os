@@ -43,11 +43,14 @@
   // JobNimbus bridge plus the independently retried Newo-to-owned-core pipeline. Create with:
   //   wrangler queues create ironwrap-jn-push
   //   wrangler queues create ironwrap-jn-dlq
+  //   wrangler queues create ironwrap-measurements
+  //   wrangler queues create ironwrap-measurements-dlq
   //   wrangler queues create ironwrap-newo-events
   //   wrangler queues create ironwrap-newo-dlq
   "queues": {
     "producers": [
       { "binding": "JN_QUEUE", "queue": "ironwrap-jn-push" },
+      { "binding": "MEASUREMENT_QUEUE", "queue": "ironwrap-measurements" },
       { "binding": "NEWO_QUEUE", "queue": "ironwrap-newo-events" }
     ],
     "consumers": [
@@ -59,6 +62,14 @@
         "dead_letter_queue": "ironwrap-jn-dlq"
       },
       { "queue": "ironwrap-jn-dlq", "max_retries": 1 },
+      {
+        "queue": "ironwrap-measurements",
+        "max_retries": 5,
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "dead_letter_queue": "ironwrap-measurements-dlq"
+      },
+      { "queue": "ironwrap-measurements-dlq", "max_retries": 1 },
       {
         "queue": "ironwrap-newo-events",
         "max_retries": 5,
@@ -74,19 +85,23 @@
   "triggers": { "crons": ["*/5 * * * *", "0 14 * * *"] },
 
   // Non-secret config. Secrets go only via `wrangler secret put`:
-  //   INGEST_TOKEN, ADMIN_TOKEN, NEWO_WEBHOOK_TOKEN, NEWO_API_KEY, NEWO_BOOKING_TOKEN,
+  //   INGEST_TOKEN, ADMIN_TOKEN, EFFECT_RUNTIME_TOKEN, NEWO_WEBHOOK_TOKEN, NEWO_API_KEY, NEWO_BOOKING_TOKEN,
   //   NEWO_CONTROL_SIGNING_SECRET,
-  //   JOBNIMBUS_API_KEY, GOOGLE_SERVICE_ACCOUNT_JSON,
-  //   QB_WEBHOOK_TOKEN, QB_RECONCILIATION_ISSUER_API_KEY,
+  //   JOBNIMBUS_API_KEY, GOOGLE_SERVICE_ACCOUNT_JSON, MEASUREMENT_OCR_API_KEY,
+  //   QB_WEBHOOK_TOKEN, QB_CLIENT_ID, QB_CLIENT_SECRET, QB_TOKEN_ENCRYPTION_KEY,
+  //   QB_FINAL_INVOICE_FRAPPE_API_KEY, QB_FINAL_INVOICE_FRAPPE_API_SECRET,
+  //   QB_RECONCILIATION_ISSUER_API_KEY,
   //   QB_RECONCILIATION_ISSUER_API_SECRET, ERPNEXT_API_KEY, ERPNEXT_API_SECRET, APP_AUTH_PEPPER,
   //   APP_CUSTOMER_ACCEPTANCE_HMAC_KEY, APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY,
   //   APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET,
-  //   FACET_DESIGN_INGEST_HMAC_KEY, FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY,
+  //   FACET_DESIGN_INGEST_HMAC_KEY, FACET_V2_KEYS_JSON, POSTIZ_API_KEY,
+  //   FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY,
   //   FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY,
   //   FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET,
   //   PUBLIC_ESTIMATE_TURNSTILE_SECRET, PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER,
   //   APPROVAL_BROKER_SHARED_SECRET, QUOTE_REVISION_BROKER_SHARED_SECRET,
-  //   PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET. Broker secrets
+  //   PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET, AUTHORITY_RECORD_EXECUTOR_HMAC_KEY.
+  //   Broker and authority-executor secrets
   //   are Worker-to-private-broker only; never expose either through the PWA or a public
   //   environment variable.
   // Email/Drive = Google Workspace via service account + domain-wide delegation (live-verified
@@ -96,7 +111,10 @@
     "OWNER_ALERT_EMAIL": "info@ironwrapexteriors.com",
     "BACKUP_ALERT_EMAIL": "sales@ironwrapexteriors.com",
     "FROM_EMAIL": "sales@ironwrapexteriors.com",
+    "EFFECT_RUNTIME_ENABLED": "true",
     "JOBNIMBUS_ENABLED": "true",
+    "MEASUREMENT_OCR_ENABLED": "true",
+    "MEASUREMENT_OCR_MODEL": "claude-opus-5",
     "NEWO_PRODUCTION_REQUIRED": "false",
     "NEWO_ENABLED": "false",
     "NEWO_CONTROL_WRITE_ENABLED": "false",
@@ -140,6 +158,12 @@
     "ERPNEXT_BASE_URL": "https://os.ironwrapexteriors.com",
     "QB_EXPECTED_REALM_ID": "",
     "QB_RECONCILIATION_ISSUER_USER": "",
+    "QB_OAUTH_ENABLED": "false",
+    "QB_FINAL_INVOICE_ENABLED": "false",
+    "QB_API_ENVIRONMENT": "production",
+    "QB_API_MINOR_VERSION": "75",
+    "QB_API_TIMEOUT_MS": "10000",
+    "QB_TOKEN_ENCRYPTION_KEY_VERSION": "",
     "ERPNEXT_LEAD_ENVELOPE_DOCTYPE": "Lead Envelope",
     // Out of scope for the lead path: only the public-estimator consent mirror requires it,
     // and PUBLIC_ESTIMATE_ENABLED stays false. Other writers fall back to "Administrator".
@@ -159,12 +183,28 @@
     // secret of at least 32 characters. Magic-link email goes through Gmail in production
     // (the dev_outbox capture is localhost-only).
     "APP_BFF_ENABLED": "true",
+    "APP_HERMES_DESKTOP_ENABLED": "false",
     "APP_CUSTOMER_PORTAL_ENABLED": "false",
     "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "false",
     "FACET_DESIGN_INGEST_ENABLED": "false",
     "FACET_DESIGN_INGEST_TENANT_MAP_JSON": "{}",
+    "FACET_V2_INGEST_ENABLED": "false",
+    "FACET_V2_ROUTES_JSON": "[]",
+    "FACET_V2_FRAPPE_PROJECTION_ENABLED": "false",
     "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED": "false",
     "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED": "false",
+    "APP_FACET_LAUNCH_ENABLED": "false",
+    "APP_FACET_LAUNCH_BASE_URL": "",
+    "APP_FACET_LAUNCH_SOURCE_TENANT_ID": "",
+    "POSTIZ_ENABLED": "false",
+    "POSTIZ_EXPECTED_VERSION": "v2.23.0",
+    "POSTIZ_API_BASE_URL": "",
+    "POSTIZ_API_TIMEOUT_MS": "10000",
+    "POSTIZ_ALLOWED_PROVIDERS": "facebook,linkedin-page,gmb",
+    "POSTIZ_FACET_DRAFT_ENABLED": "false",
+    "POSTIZ_FACET_DRAFT_PROVIDER": "facebook",
+    "POSTIZ_FACET_DRAFT_OFFSET_HOURS": "168",
+    "POSTIZ_FACET_DRAFT_NOT_BEFORE": "",
     // Tenant pricing for the estimator's computed estimate; empty disables pricing.
     "ESTIMATOR_PRICE_LIST_JSON": "",
     // Google Doc template id for proposal generation; empty disables the action.
@@ -232,7 +272,10 @@
         { "binding": "RAW", "bucket_name": "ironwrap-bus-raw" }
       ],
       "queues": {
-        "producers": [{ "binding": "JN_QUEUE", "queue": "ironwrap-jn-push" }],
+        "producers": [
+          { "binding": "JN_QUEUE", "queue": "ironwrap-jn-push" },
+          { "binding": "MEASUREMENT_QUEUE", "queue": "ironwrap-local-measurements" }
+        ],
         "consumers": [
           {
             "queue": "ironwrap-jn-push",
@@ -241,14 +284,25 @@
             "max_batch_timeout": 5,
             "dead_letter_queue": "ironwrap-jn-dlq"
           },
-          { "queue": "ironwrap-jn-dlq", "max_retries": 1 }
+          { "queue": "ironwrap-jn-dlq", "max_retries": 1 },
+          {
+            "queue": "ironwrap-local-measurements",
+            "max_retries": 5,
+            "max_batch_size": 1,
+            "max_batch_timeout": 1,
+            "dead_letter_queue": "ironwrap-local-measurements-dlq"
+          },
+          { "queue": "ironwrap-local-measurements-dlq", "max_retries": 1 }
         ]
       },
       "vars": {
         "OWNER_ALERT_EMAIL": "info@ironwrapexteriors.com",
         "BACKUP_ALERT_EMAIL": "sales@ironwrapexteriors.com",
         "FROM_EMAIL": "sales@ironwrapexteriors.com",
+        "EFFECT_RUNTIME_ENABLED": "true",
         "JOBNIMBUS_ENABLED": "false",
+        "MEASUREMENT_OCR_ENABLED": "true",
+        "MEASUREMENT_OCR_MODEL": "claude-opus-5",
         "NEWO_PRODUCTION_REQUIRED": "false",
         "NEWO_ENABLED": "false",
         "NEWO_CONTROL_WRITE_ENABLED": "false",
@@ -289,25 +343,47 @@
         "ERPNEXT_BASE_URL": "http://localhost:8000",
         "QB_EXPECTED_REALM_ID": "",
         "QB_RECONCILIATION_ISSUER_USER": "ironwrap-quickbooks-issuer@ironwrap.local",
+        "QB_OAUTH_ENABLED": "false",
+        "QB_FINAL_INVOICE_ENABLED": "false",
+        "QB_API_ENVIRONMENT": "sandbox",
+        "QB_API_MINOR_VERSION": "75",
+        "QB_API_TIMEOUT_MS": "10000",
+        "QB_TOKEN_ENCRYPTION_KEY_VERSION": "",
         "ERPNEXT_LEAD_ENVELOPE_DOCTYPE": "Lead Envelope",
         "ERPNEXT_INTEGRATION_USER": "ironwrap-bus@ironwrap.local",
         "PUBLIC_ESTIMATE_ENABLED": "true",
         "PUBLIC_ESTIMATE_ALLOWED_ORIGINS": "http://localhost:7100",
-        "PUBLIC_ESTIMATE_ALLOWED_BRANDS": "IronWrap,iRoof Alberta",
+        "PUBLIC_ESTIMATE_ALLOWED_BRANDS": "ironwrap,iroof",
         "PUBLIC_ESTIMATE_CONSENT_JURISDICTION": "Alberta, Canada",
         "PUBLIC_ESTIMATE_ALLOW_INSECURE_LOCAL": "true",
         "PUBLIC_ESTIMATE_TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
         "PUBLIC_ESTIMATE_RATE_LIMIT_WINDOW_SECONDS": "60",
         "PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX": "30",
         "PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX": "10",
-        "PUBLIC_ESTIMATE_RANGE_RULES_JSON": "[{\"rule_id\":\"iw-metal-ab\",\"brand\":\"IronWrap\",\"service\":\"metal_roofing\",\"province\":\"AB\",\"min_cad\":18000,\"max_cad\":95000},{\"rule_id\":\"iw-roof-ab\",\"brand\":\"IronWrap\",\"service\":\"roofing\",\"province\":\"AB\",\"min_cad\":9000,\"max_cad\":48000},{\"rule_id\":\"iw-gutters-ab\",\"brand\":\"IronWrap\",\"service\":\"gutters\",\"province\":\"AB\",\"min_cad\":1800,\"max_cad\":9500},{\"rule_id\":\"iw-siding-ab\",\"brand\":\"IronWrap\",\"service\":\"siding\",\"province\":\"AB\",\"min_cad\":12000,\"max_cad\":62000},{\"rule_id\":\"iw-soffit-ab\",\"brand\":\"IronWrap\",\"service\":\"soffit_fascia\",\"province\":\"AB\",\"min_cad\":2500,\"max_cad\":14000},{\"rule_id\":\"iroof-roof-ab\",\"brand\":\"iRoof Alberta\",\"service\":\"roofing\",\"province\":\"AB\",\"min_cad\":8500,\"max_cad\":45000},{\"rule_id\":\"iroof-metal-ab\",\"brand\":\"iRoof Alberta\",\"service\":\"metal_roofing\",\"province\":\"AB\",\"min_cad\":17000,\"max_cad\":92000}]",
+        "PUBLIC_ESTIMATE_RANGE_RULES_JSON": "[]",
         "APP_BFF_ENABLED": "true",
+        "APP_HERMES_DESKTOP_ENABLED": "false",
         "APP_CUSTOMER_PORTAL_ENABLED": "true",
         "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "false",
         "FACET_DESIGN_INGEST_ENABLED": "false",
         "FACET_DESIGN_INGEST_TENANT_MAP_JSON": "{}",
+        "FACET_V2_INGEST_ENABLED": "false",
+        "FACET_V2_ROUTES_JSON": "[]",
+        "FACET_V2_FRAPPE_PROJECTION_ENABLED": "false",
         "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED": "false",
         "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED": "false",
+        "APP_FACET_LAUNCH_ENABLED": "false",
+        "APP_FACET_LAUNCH_BASE_URL": "",
+        "APP_FACET_LAUNCH_SOURCE_TENANT_ID": "",
+        "POSTIZ_ENABLED": "false",
+        "POSTIZ_EXPECTED_VERSION": "v2.23.0",
+        "POSTIZ_API_BASE_URL": "",
+        "POSTIZ_API_TIMEOUT_MS": "10000",
+        "POSTIZ_ALLOWED_PROVIDERS": "facebook,linkedin-page,gmb",
+        "POSTIZ_FACET_DRAFT_ENABLED": "false",
+        "POSTIZ_FACET_DRAFT_PROVIDER": "facebook",
+        "POSTIZ_FACET_DRAFT_OFFSET_HOURS": "168",
+        "POSTIZ_FACET_DRAFT_NOT_BEFORE": "",
         "APP_TENANT_ID": "ironwrap",
         "APP_TENANT_NAME": "IronWrap OS — Local",
         "APP_TENANT_BRAND": "IronWrap",
@@ -360,6 +436,7 @@
       "queues": {
         "producers": [
           { "binding": "JN_QUEUE", "queue": "ironwrap-staging-jn-push" },
+          { "binding": "MEASUREMENT_QUEUE", "queue": "ironwrap-staging-measurements" },
           { "binding": "NEWO_QUEUE", "queue": "ironwrap-staging-newo-events" }
         ],
         "consumers": [
@@ -371,6 +448,14 @@
             "dead_letter_queue": "ironwrap-staging-jn-dlq"
           },
           { "queue": "ironwrap-staging-jn-dlq", "max_retries": 1 },
+          {
+            "queue": "ironwrap-staging-measurements",
+            "max_retries": 5,
+            "max_batch_size": 1,
+            "max_batch_timeout": 1,
+            "dead_letter_queue": "ironwrap-staging-measurements-dlq"
+          },
+          { "queue": "ironwrap-staging-measurements-dlq", "max_retries": 1 },
           {
             "queue": "ironwrap-staging-newo-events",
             "max_retries": 5,
@@ -386,7 +471,10 @@
         "OWNER_ALERT_EMAIL": "",
         "BACKUP_ALERT_EMAIL": "",
         "FROM_EMAIL": "",
+        "EFFECT_RUNTIME_ENABLED": "true",
         "JOBNIMBUS_ENABLED": "false",
+        "MEASUREMENT_OCR_ENABLED": "true",
+        "MEASUREMENT_OCR_MODEL": "claude-opus-5",
         "NEWO_PRODUCTION_REQUIRED": "true",
         "NEWO_ENABLED": "false",
         "NEWO_CONTROL_WRITE_ENABLED": "false",
@@ -427,6 +515,12 @@
         "ERPNEXT_BASE_URL": "",
         "QB_EXPECTED_REALM_ID": "",
         "QB_RECONCILIATION_ISSUER_USER": "",
+        "QB_OAUTH_ENABLED": "false",
+        "QB_FINAL_INVOICE_ENABLED": "false",
+        "QB_API_ENVIRONMENT": "sandbox",
+        "QB_API_MINOR_VERSION": "75",
+        "QB_API_TIMEOUT_MS": "10000",
+        "QB_TOKEN_ENCRYPTION_KEY_VERSION": "",
         "ERPNEXT_LEAD_ENVELOPE_DOCTYPE": "Lead Envelope",
         "ERPNEXT_INTEGRATION_USER": "",
         "PUBLIC_ESTIMATE_ENABLED": "false",
@@ -440,12 +534,28 @@
         "PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX": "",
         "PUBLIC_ESTIMATE_RANGE_RULES_JSON": "",
         "APP_BFF_ENABLED": "false",
+        "APP_HERMES_DESKTOP_ENABLED": "false",
         "APP_CUSTOMER_PORTAL_ENABLED": "false",
         "APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED": "false",
         "FACET_DESIGN_INGEST_ENABLED": "false",
         "FACET_DESIGN_INGEST_TENANT_MAP_JSON": "{}",
+        "FACET_V2_INGEST_ENABLED": "false",
+        "FACET_V2_ROUTES_JSON": "[]",
+        "FACET_V2_FRAPPE_PROJECTION_ENABLED": "false",
         "FACET_DESIGN_FRAPPE_PROJECTION_ENABLED": "false",
         "APP_FACET_QUOTE_REVISION_PREPARE_ENABLED": "false",
+        "APP_FACET_LAUNCH_ENABLED": "false",
+        "APP_FACET_LAUNCH_BASE_URL": "",
+        "APP_FACET_LAUNCH_SOURCE_TENANT_ID": "",
+        "POSTIZ_ENABLED": "false",
+        "POSTIZ_EXPECTED_VERSION": "v2.23.0",
+        "POSTIZ_API_BASE_URL": "",
+        "POSTIZ_API_TIMEOUT_MS": "10000",
+        "POSTIZ_ALLOWED_PROVIDERS": "facebook,linkedin-page,gmb",
+        "POSTIZ_FACET_DRAFT_ENABLED": "false",
+        "POSTIZ_FACET_DRAFT_PROVIDER": "facebook",
+        "POSTIZ_FACET_DRAFT_OFFSET_HOURS": "168",
+        "POSTIZ_FACET_DRAFT_NOT_BEFORE": "",
         "APP_TENANT_ID": "ironwrap",
         "APP_TENANT_NAME": "IronWrap OS — Owner Test",
         "APP_TENANT_BRAND": "IronWrap",

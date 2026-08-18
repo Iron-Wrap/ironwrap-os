@@ -7,10 +7,19 @@ vi.mock("./session", async (importOriginal) => {
   return { ...actual, fetchSession: vi.fn() };
 });
 
-vi.mock("./field-bootstrap", () => ({ takePrimedFieldBootstrap: vi.fn() }));
+vi.mock("./field-bootstrap", () => ({
+  fetchFieldBootstrap: vi.fn(),
+  takePrimedFieldBootstrap: vi.fn(),
+}));
+
+vi.mock("./device-credential", () => ({
+  clearDeviceSecret: vi.fn(),
+  getDeviceSecret: vi.fn(),
+}));
 
 import { AuthBoundary } from "./auth-boundary";
-import { takePrimedFieldBootstrap } from "./field-bootstrap";
+import { clearDeviceSecret, getDeviceSecret } from "./device-credential";
+import { fetchFieldBootstrap, takePrimedFieldBootstrap } from "./field-bootstrap";
 import { fetchSession, type SessionResponse } from "./session";
 import { ApiError } from "../lib/api";
 
@@ -43,6 +52,7 @@ const unpairedSession: SessionResponse = {
 describe("AuthBoundary", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getDeviceSecret).mockResolvedValue(undefined);
     window.history.replaceState({}, "", "/");
   });
 
@@ -94,6 +104,38 @@ describe("AuthBoundary", () => {
     expect(screen.queryByLabelText(/Work email/i)).not.toBeInTheDocument();
   });
 
+  it("admits an office session on a direct Today entry through the combined bootstrap", async () => {
+    window.history.replaceState({}, "", "/today");
+    vi.mocked(takePrimedFieldBootstrap).mockResolvedValue({
+      session: {
+        ...unpairedSession,
+        authenticated: true,
+        user: {
+          id: "appu_ops",
+          email: "ops@example.invalid",
+          display_name: "Operations",
+          role: "ops",
+          frappe_user_id: "ops@example.invalid",
+        },
+        tenant: unpairedSession.tenant!,
+        permissions: ["session:read", "today:read", "jobs:read:any"],
+        allowed_actions: ["session.logout", "today.read", "job.read"],
+        csrf_token: "csrf",
+        session_expires_at: "2026-07-11T12:00:00.000Z",
+      },
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <AuthBoundary>
+          <div>Authenticated office work</div>
+        </AuthBoundary>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Authenticated office work")).toBeVisible();
+  });
+
   it("does not label an unavailable API as an offline device", async () => {
     window.history.replaceState({}, "", "/today");
     vi.mocked(takePrimedFieldBootstrap).mockRejectedValue(
@@ -131,5 +173,80 @@ describe("AuthBoundary", () => {
 
     expect(await screen.findByText("Sign in to IronWrap OS")).toBeVisible();
     expect(screen.getByLabelText("Work email")).toBeVisible();
+  });
+
+  it("offers both office sign-in and supervised crew pairing at the unified entry", async () => {
+    window.history.replaceState({}, "", "/now");
+    vi.mocked(getDeviceSecret).mockResolvedValue(undefined);
+    vi.mocked(fetchSession).mockResolvedValue(unpairedSession);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <AuthBoundary>
+          <div>Authenticated work</div>
+        </AuthBoundary>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Sign in to IronWrap OS")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Crew phone" })).toBeVisible();
+    expect(screen.getByText(/one-time QR code on this phone/i)).toBeVisible();
+  });
+
+  it("uses the combined field bootstrap at the unified entry when the phone is paired", async () => {
+    window.history.replaceState({}, "", "/now");
+    vi.mocked(getDeviceSecret).mockResolvedValue("a".repeat(43));
+    vi.mocked(fetchFieldBootstrap).mockResolvedValue({ session: unpairedSession });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <AuthBoundary>
+          <div>Authenticated work</div>
+        </AuthBoundary>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Crew phone" })).toBeVisible();
+    expect(fetchFieldBootstrap).toHaveBeenCalledOnce();
+    expect(fetchSession).not.toHaveBeenCalled();
+  });
+
+  it("recovers an office session from a stale field-device proof at the unified entry", async () => {
+    window.history.replaceState({}, "", "/now");
+    vi.mocked(getDeviceSecret).mockResolvedValue("a".repeat(43));
+    vi.mocked(fetchFieldBootstrap).mockRejectedValue(
+      new ApiError({
+        status: 403,
+        code: "today_read_required",
+        message: "Forbidden",
+      }),
+    );
+    const officeSession = {
+      ...unpairedSession,
+      authenticated: true as const,
+      user: {
+        id: "appu_production",
+        email: "production@example.invalid",
+        display_name: "Production",
+        role: "production" as const,
+        frappe_user_id: null,
+      },
+      tenant: unpairedSession.tenant!,
+      csrf_token: "csrf",
+      session_expires_at: "2026-07-11T12:00:00.000Z",
+    };
+    vi.mocked(fetchSession).mockResolvedValue(officeSession);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <AuthBoundary>
+          <div>Authenticated production work</div>
+        </AuthBoundary>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Authenticated production work")).toBeVisible();
+    expect(clearDeviceSecret).toHaveBeenCalledOnce();
+    expect(fetchSession).toHaveBeenCalledOnce();
   });
 });

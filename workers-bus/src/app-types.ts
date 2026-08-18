@@ -9,10 +9,26 @@ export const MAGIC_LINK_CONSUME_IP_LIMIT = 30;
 export const DEVICE_PAIRING_TTL_SECONDS = 10 * 60;
 export const APP_DEVICE_PROOF_HEADER = "x-ironwrap-device-proof";
 
-export type AppRole = "owner" | "ops" | "field";
+export type AppRole = "owner" | "ops" | "sales" | "production" | "accounting" | "field";
+
+/** Immutable parent/context envelope for universal physical-work routes. */
+export interface WorkObjectScope {
+  workObjectType: string;
+  workObjectId: string;
+  physicalContextType: string;
+  physicalContextId: string;
+}
 
 export type AppEnv = Env & {
   APP_BFF_ENABLED?: string;
+  // Dedicated owner/ops desktop draft pilot. False by default and separate from
+  // field-device pairing, browser sessions, and every approved-write rail.
+  APP_HERMES_DESKTOP_ENABLED?: string;
+  // The native desktop and hosted reference paths share one persisted provider request.
+  // A real provider model must be configured explicitly; source never chooses one.
+  APP_HERMES_PROVIDER_MODEL?: string;
+  // Reference execution remains separately disabled even when desktop pairing is enabled.
+  APP_HERMES_HOSTED_REFERENCE_ENABLED?: string;
   // A customer portal is a separately activated, read-only capability surface. It never
   // inherits an office BFF session or the office read-model allowlists.
   APP_CUSTOMER_PORTAL_ENABLED?: string;
@@ -61,6 +77,42 @@ export type AppEnv = Env & {
   // A durable Facet association may prepare the existing quote-revision approval rail only
   // after this separate, false-by-default capability is explicitly enabled.
   APP_FACET_QUOTE_REVISION_PREPARE_ENABLED?: string;
+  // Governed Facet launch is a distinct owner-only capability. The source tenant must match one
+  // exact static v2 route; the HMAC key is declared only in the secret binding contract.
+  APP_FACET_LAUNCH_ENABLED?: string;
+  APP_FACET_LAUNCH_BASE_URL?: string;
+  APP_FACET_LAUNCH_SOURCE_TENANT_ID?: string;
+  FACET_LAUNCH_HMAC_KEY?: string;
+  // Postiz is an execution adapter only. The API key remains a Worker secret;
+  // D1 and the browser receive only opaque integration ids and bounded receipts.
+  // Every provider mutation adapter is fail-closed behind the durable universal effect ledger.
+  // Unit-only callers may omit this flag; deployed Worker environments set it explicitly.
+  EFFECT_RUNTIME_ENABLED?: string;
+  POSTIZ_ENABLED?: string;
+  POSTIZ_EXPECTED_VERSION?: string;
+  POSTIZ_API_BASE_URL?: string;
+  POSTIZ_API_TIMEOUT_MS?: string;
+  POSTIZ_ALLOWED_PROVIDERS?: string;
+  POSTIZ_API_KEY?: string;
+  POSTIZ_FACET_DRAFT_ENABLED?: string;
+  POSTIZ_FACET_DRAFT_PROVIDER?: string;
+  POSTIZ_FACET_DRAFT_OFFSET_HOURS?: string;
+  POSTIZ_FACET_DRAFT_NOT_BEFORE?: string;
+  // QuickBooks authorization and residential final-balance invoicing are two independent,
+  // false-by-default capabilities. Provider credentials and the 32-byte bundle key are Worker
+  // secrets; D1 and browser projections receive ciphertext or non-secret configuration only.
+  QB_OAUTH_ENABLED?: string;
+  QB_FINAL_INVOICE_ENABLED?: string;
+  QB_API_ENVIRONMENT?: "sandbox" | "production" | string;
+  QB_API_MINOR_VERSION?: string;
+  QB_EXPECTED_REALM_ID?: string;
+  QB_API_TIMEOUT_MS?: string;
+  QB_CLIENT_ID?: string;
+  QB_CLIENT_SECRET?: string;
+  QB_TOKEN_ENCRYPTION_KEY?: string;
+  QB_TOKEN_ENCRYPTION_KEY_VERSION?: string;
+  QB_FINAL_INVOICE_FRAPPE_API_KEY?: string;
+  QB_FINAL_INVOICE_FRAPPE_API_SECRET?: string;
   // Production scheduling is a separate high-consequence authority from lead
   // triage and commercial quote revisions. Its broker identity, approver, and
   // recent-session limit must never inherit another mutation rail by default.
@@ -74,6 +126,9 @@ export type AppEnv = Env & {
   ERPNEXT_BASE_URL?: string;
   ERPNEXT_API_KEY?: string;
   ERPNEXT_API_SECRET?: string;
+  // Dedicated HMAC for the narrow authority-record executor. Browser sessions
+  // and the ordinary app bearer never authorize Frappe authority mutations.
+  AUTHORITY_RECORD_EXECUTOR_HMAC_KEY?: string;
 };
 
 export interface AppUserRecord {
@@ -141,9 +196,64 @@ export interface AppTenantPublic {
 }
 
 export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
-  owner: ["session:read", "jobs:read:any", "owner:read", "sales:read", "estimator:read", "approvals:read", "approvals:decide"],
-  ops: ["session:read", "jobs:read:any", "owner:read", "sales:read", "estimator:read", "approvals:read", "approvals:prepare"],
-  field: ["session:read", "jobs:read:assigned", "field:write:assigned"],
+  owner: [
+    "session:read",
+    "now:read",
+    "today:read",
+    "jobs:read:any",
+    "owner:read",
+    "sales:read",
+    "estimator:read",
+    "production:read",
+    "approvals:read",
+    "approvals:prepare",
+    "approvals:decide",
+    "facet:read",
+    "facet:launch",
+    "quickbooks:read",
+    "quickbooks:review",
+    "quickbooks:reconcile",
+    "authority:read",
+    "authority:write",
+  ],
+  ops: [
+    "session:read",
+    "now:read",
+    "today:read",
+    "jobs:read:any",
+    "owner:read",
+    "sales:read",
+    "estimator:read",
+    "production:read",
+    "approvals:read",
+    "approvals:prepare",
+    "facet:read",
+    "authority:read",
+    "authority:write",
+  ],
+  sales: [
+    "session:read",
+    "now:read",
+    "sales:read",
+    "estimator:read",
+    "approvals:read",
+    "approvals:prepare",
+  ],
+  production: ["session:read", "now:read", "jobs:read:any", "production:read", "authority:read"],
+  accounting: [
+    "session:read",
+    "now:read",
+    "quickbooks:read",
+    "quickbooks:review",
+    "quickbooks:reconcile",
+  ],
+  field: [
+    "session:read",
+    "today:read",
+    "jobs:read:assigned",
+    "field:write:assigned",
+    "authority:read",
+  ],
 };
 
 export function permissionsForRole(role: AppRole): string[] {

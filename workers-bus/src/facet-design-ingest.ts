@@ -1,495 +1,839 @@
 import { sha256Hex } from "./app-auth.ts";
-import { FieldActionError, r2ObjectStore } from "./field-actions.ts";
+import { r2ObjectStore } from "./field-actions.ts";
+import {
+  FACET_V2_RECEIPT_SCHEMA,
+  canonicalJson,
+  parseFacetV2CustomerDecisionEvent,
+  signFacetV2Receipt,
+  verifyFacetV2Delivery,
+  type FacetV2CustomerDecisionEvent,
+  type FacetV2Receipt,
+  type FacetV2StaticRoute,
+  type FacetV2VerificationKey,
+  type SignedFacetV2Receipt,
+} from "./facet-design-v2-protocol.ts";
+import {
+  resolveFacetV2AuthorityLink,
+  type FacetV2AuthorityLink,
+} from "./facet-v2-authority.ts";
 
+const POLICY_VERSION = "ironwrap-facet-consumer-v2";
 const MAX_BODY_BYTES = 512 * 1024;
-const MAX_FROZEN_EVIDENCE_BYTES = 384 * 1024;
-const MAX_CLOCK_SKEW_MS = 5 * 60 * 1_000;
-const LEGACY_EVENT_TYPE = "facet.design.approved.v1";
-const LEGACY_EVENT_SCHEMA_VERSION = 1;
-const CUSTOMER_APPROVAL_EVENT_TYPE = "facet.design.customer_approved.v2";
-const CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION = 2;
-const LEGACY_EVENT_KEYS = [
-  "design_revision",
-  "event_id",
-  "event_type",
-  "frozen_evidence",
-  "occurred_at",
-  "schema_version",
-  "tenant_id",
-  "facet_project_id",
-] as const;
-const CUSTOMER_APPROVAL_EVENT_KEYS = [
-  ...LEGACY_EVENT_KEYS,
-  "approval_actor_type",
-  "brand_id",
-  "capability_fingerprint",
-  "identity_assurance",
-] as const;
-const CUSTOMER_APPROVAL_EVIDENCE_KEYS = ["approval", "design"] as const;
-const CUSTOMER_APPROVAL_KEYS = ["approved_at", "client_revision"] as const;
-const CUSTOMER_APPROVAL_FORBIDDEN_KEYS = new Set([
-  "address",
-  "amount",
-  "customeremail",
-  "customername",
-  "customerphone",
-  "estimate",
-  "price",
-  "projectsharetoken",
-  "projectshareurl",
-  "propertyaddress",
-  "sharetoken",
-  "shareurl",
-  "subtotal",
-  "tax",
-  "total",
-]);
+const RECONCILE_BATCH_SIZE = 25;
 
-interface SignedEventHeaders {
-  eventId: string;
-  timestamp: string;
-  nonce: string;
-  signature: string;
+interface FacetV2ConsumerConfig {
+  routes: readonly FacetV2StaticRoute[];
+  keys: readonly FacetV2VerificationKey[];
 }
 
-interface FacetDesignEvent {
-  kind: "legacy" | "customer_approval";
-  eventId: string;
-  eventType: typeof LEGACY_EVENT_TYPE | typeof CUSTOMER_APPROVAL_EVENT_TYPE;
-  schemaVersion: typeof LEGACY_EVENT_SCHEMA_VERSION | typeof CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION;
-  occurredAt: string;
-  sourceTenantId: string;
-  facetProjectId: string;
-  designRevisionId: string;
-  designRevisionSha256: string;
-  frozenEvidenceSha256: string;
-  brandId: string | null;
-  approvalActorType: "customer_capability" | null;
-  capabilityFingerprint: string | null;
-  identityAssurance: "bearer_capability_only" | null;
-}
-
-interface FacetDesignReceipt extends Omit<FacetDesignEvent, "sourceTenantId"> {
-  tenantId: string;
-  rawKey: string;
-  rawSha256: string;
-  rawContentLength: number;
-  receivedAt: string;
-}
-
-interface FacetTenantBinding {
-  tenantId: string;
-  brandIds: ReadonlySet<string>;
-}
-
-interface StoredFacetDesignEvent {
+interface StoredDecisionIdentity {
   event_id: string;
-  event_type: string;
-  schema_version: number;
+  event_body_sha256: string;
+  decision_kind: "approved" | "corrected" | "superseded" | "withdrawn";
+  customer_party_ref: string;
+  external_customer_identity_link_id: string;
+  oidc_issuer: string;
+  oidc_subject_sha256: string;
   occurred_at: string;
-  tenant_id: string;
-  facet_project_id: string;
-  design_revision_id: string;
-  design_revision_sha256: string;
-  frozen_evidence_sha256: string;
-  raw_key: string;
-  raw_sha256: string;
-  raw_content_length: number;
 }
 
-interface StoredFacetCustomerApprovalEvent extends StoredFacetDesignEvent {
-  brand_id: string;
-  approval_actor_type: "customer_capability";
-  capability_fingerprint: string;
-  identity_assurance: "bearer_capability_only";
+interface StoredReceiptEnvelope {
+  receipt_json: string;
+  receipt_sha256: string;
+  signature_algorithm: "HMAC-SHA256";
+  signature_key_id: string;
+  signature_key_version: number;
+  signature_value: string;
 }
 
-interface FacetDesignAcceptance {
-  accepted: true;
+interface StoredIntakeReplay {
+  intake_id: string;
   event_id: string;
-  status: "received";
-  raw_sha256: string;
-  frozen_evidence_sha256: string;
-  design_revision: {
-    id: string;
-    sha256: string;
-  };
-  provenance:
-    | { status: "provenance_unknown" }
-    | {
-      status: "customer_approved";
-      brand_id: string;
-      approval_actor_type: "customer_capability";
-      capability_fingerprint: string;
-      identity_assurance: "bearer_capability_only";
-    };
-  idempotent_replay?: true;
+  event_body_sha256: string;
 }
 
-type ReceiptClaim = "accepted" | "duplicate" | "replay" | "conflict" | "unavailable";
+interface UnassociatedIntake {
+  intake_id: string;
+  event_id: string;
+  event_body_sha256: string;
+  raw_key: string;
+}
+
+type DecisionDisposition =
+  | { kind: "new" }
+  | {
+    kind: "duplicate";
+    receiptResult: "duplicate" | "reconciled";
+    detailCode: "exact_event_replay" | "exact_reconciled_event_replay";
+  }
+  | { kind: "rejected"; detailCode: string };
 
 /**
- * Captures an approved Facet design as immutable evidence only. This is deliberately not an
- * estimate, quote, proposal, or contract mutation; the later Frappe projection must consume the
- * anchored D1/R2 receipt rather than the caller's original payload.
+ * Authenticated raw-first Facet v2 intake. The bounded request stays in
+ * memory until its transport signature and canonical v2 body are verified;
+ * only then does immutable R2 evidence precede every D1 effect. Legacy v1
+ * and the old bearer-capability v2 contract are intentionally unreachable.
  */
 export async function handleFacetDesignIngest(req: Request, env: Env): Promise<Response> {
-  if (req.method !== "POST" || String(env.FACET_DESIGN_INGEST_ENABLED) !== "true") {
+  if (req.method !== "POST" || String(env.FACET_V2_INGEST_ENABLED) !== "true") {
     return facetJson({ error: "not_found" }, 404);
   }
-  const secret = facetDesignIngestSecret(env);
-  const tenantId = configuredTenantId(env);
-  const tenantMap = configuredFacetTenantMap(env);
-  if (!secret || !tenantId || !tenantMap) return facetJson({ error: "facet_design_ingest_unavailable" }, 503);
+  const config = facetV2ConsumerConfig(env);
+  if (!config) return facetJson({ error: "facet_v2_ingest_unavailable" }, 503);
 
   const raw = await readRawJson(req);
   if (!raw.ok) return facetJson({ error: raw.error }, raw.status);
-
-  const headers = signedHeaders(req);
-  if (!headers) return facetJson({ error: "invalid_event_headers" }, 400);
-  if (!freshTimestamp(headers.timestamp)) return facetJson({ error: "event_timestamp_stale" }, 401);
-
-  const rawSha256 = await sha256Hex(raw.text);
-  const expectedSignature = await hmacBase64Url(
-    secret,
-    `${headers.timestamp}.${headers.nonce}.${rawSha256}`,
+  const verified = await verifyFacetV2Delivery(req, raw.text, config);
+  if (!verified.ok) return facetJson({ error: verified.code }, verified.status);
+  const key = config.keys.find((candidate) =>
+    candidate.keyId === verified.value.headers.keyId &&
+    candidate.keyVersion === verified.value.headers.keyVersion
   );
-  if (!constantTimeEqual(headers.signature, expectedSignature)) {
-    return facetJson({ error: "event_signature_invalid" }, 401);
-  }
-
-  const event = await parseFacetDesignEvent(raw.text);
+  if (!key) return facetJson({ error: "event_key_unknown" }, 401);
+  const event = await parseFacetV2CustomerDecisionEvent(verified.value.event);
   if (!event) return facetJson({ error: "invalid_event_body" }, 400);
-  if (event.eventId !== headers.eventId) return facetJson({ error: "event_id_mismatch" }, 400);
-  const tenantBinding = tenantMap.get(event.sourceTenantId);
-  if (!tenantBinding || tenantBinding.tenantId !== tenantId) {
-    return facetJson({ error: "event_tenant_untrusted" }, 403);
-  }
-  if (event.kind === "customer_approval" && !tenantBinding.brandIds.has(event.brandId!)) {
-    return facetJson({ error: "event_brand_untrusted" }, 403);
-  }
+  const bodySha256 = verified.value.bodySha256;
+  const rawKey = `facet-design/v2/raw/${bodySha256}.json`;
 
-  const receipt: FacetDesignReceipt = {
-    kind: event.kind,
-    eventId: event.eventId,
-    eventType: event.eventType,
-    schemaVersion: event.schemaVersion,
-    occurredAt: event.occurredAt,
-    tenantId,
-    facetProjectId: event.facetProjectId,
-    designRevisionId: event.designRevisionId,
-    designRevisionSha256: event.designRevisionSha256,
-    frozenEvidenceSha256: event.frozenEvidenceSha256,
-    brandId: event.brandId,
-    approvalActorType: event.approvalActorType,
-    capabilityFingerprint: event.capabilityFingerprint,
-    identityAssurance: event.identityAssurance,
-    rawKey: `facet-design/v${event.schemaVersion}/${event.eventId}.json`,
-    rawSha256,
-    rawContentLength: raw.bytes,
-    receivedAt: new Date().toISOString(),
-  };
-
-  // R2 is the first durable write. A failure returns before any D1 receipt/nonce mutation.
+  // Authentication and canonical schema validation happen in memory. This
+  // remains the first durable write for every accepted or signed-rejected
+  // intake, so no D1 effect can outlive missing raw evidence.
   try {
-    await r2ObjectStore(env.RAW).ensure(
-      receipt.rawKey,
-      raw.text,
-      "application/json",
-      receipt.rawSha256,
+    await r2ObjectStore(env.RAW).ensure(rawKey, raw.text, "application/json", bodySha256);
+  } catch {
+    return facetJson({ error: "facet_v2_raw_store_unavailable" }, 503);
+  }
+
+  const nonceSha256 = await sha256Hex([
+    verified.value.headers.issuer,
+    verified.value.headers.keyId,
+    String(verified.value.headers.keyVersion),
+    verified.value.headers.nonce,
+  ].join("\n"));
+  const replay = await intakeByNonce(env, nonceSha256);
+  if (replay) {
+    if (
+      replay.event_id !== verified.value.headers.eventId ||
+      replay.event_body_sha256 !== bodySha256
+    ) return facetJson({ error: "event_nonce_conflict" }, 409);
+    const receipt = await signedReceiptForIntake(
+      env,
+      replay.intake_id,
+      replay.event_id,
+      replay.event_body_sha256,
+      key,
     );
-  } catch (error) {
-    if (error instanceof FieldActionError && error.code === "immutable_object_conflict") {
-      return facetJson({ error: "event_id_conflict" }, 409);
-    }
-    return facetJson({ error: "facet_design_ingest_unavailable" }, 503);
+    return receipt
+      ? facetJson(receipt, receiptStatus(receipt))
+      : facetJson({ error: "facet_v2_receipt_integrity_unavailable" }, 503);
   }
 
-  const claim = event.kind === "legacy"
-    ? await claimLegacyReceipt(env, receipt, await sha256Hex(headers.nonce))
-    : await claimCustomerApprovalReceipt(env, receipt, await sha256Hex(headers.nonce));
-  if (claim === "accepted" || claim === "duplicate") {
-    const acceptance = await durableAcceptance(env, receipt, claim === "duplicate");
-    if (!acceptance) return facetJson({ error: "facet_design_ingest_unavailable" }, 503);
-    return facetJson(acceptance, claim === "accepted" ? 202 : 200);
-  }
-  if (claim === "replay") return facetJson({ error: "event_replay" }, 409);
-  if (claim === "conflict") return facetJson({ error: "event_id_conflict" }, 409);
-  return facetJson({ error: "facet_design_ingest_unavailable" }, 503);
-}
-
-async function claimLegacyReceipt(env: Env, receipt: FacetDesignReceipt, nonceHash: string): Promise<ReceiptClaim> {
-  let existing: StoredFacetDesignEvent | null;
-  try {
-    if (await getCustomerApprovalReceipt(env, receipt.eventId)) return "conflict";
-    existing = await getLegacyReceipt(env, receipt.eventId);
-  } catch {
-    return "unavailable";
-  }
-  if (existing) {
-    if (!sameLegacyReceipt(existing, receipt)) return "conflict";
-    return await claimNonce(env, nonceHash, receipt.eventId, receipt.eventType);
-  }
-
-  try {
-    const results = await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO facet_design_events
-           (event_id, event_type, schema_version, occurred_at, tenant_id, facet_project_id,
-            design_revision_id, design_revision_sha256, frozen_evidence_sha256, raw_key,
-            raw_sha256, raw_content_length, received_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(event_id) DO NOTHING`,
-      ).bind(
-        receipt.eventId,
-        receipt.eventType,
-        receipt.schemaVersion,
-        receipt.occurredAt,
-        receipt.tenantId,
-        receipt.facetProjectId,
-        receipt.designRevisionId,
-        receipt.designRevisionSha256,
-        receipt.frozenEvidenceSha256,
-        receipt.rawKey,
-        receipt.rawSha256,
-        receipt.rawContentLength,
-        receipt.receivedAt,
-      ),
-      env.DB.prepare(
-        `INSERT INTO facet_design_ingest_nonce_registry
-           (nonce_hash, event_id, event_type, received_at)
-         VALUES (?, ?, ?, ?)`,
-      ).bind(nonceHash, receipt.eventId, receipt.eventType, receipt.receivedAt),
-    ]);
-    if (d1Changes(results[0]) === 1) return "accepted";
-  } catch {
+  const receivedAt = new Date().toISOString();
+  const intakeId = `facet-v2-intake:${crypto.randomUUID()}`;
+  const authority = await resolveFacetV2AuthorityLink(env, event);
+  if (!authority) {
+    const signed = await signedReceipt(event, bodySha256, key, {
+      result: "accepted_unassociated",
+      detailCode: "awaiting_exact_project_identity_association",
+      occurredAt: receivedAt,
+      idempotentReplay: false,
+    });
     try {
-      if (await getCustomerApprovalReceipt(env, receipt.eventId)) return "conflict";
-      return await getNonce(env, nonceHash) ? "replay" : "unavailable";
+      await appendIntakeAndReceipt(env, {
+        intakeId,
+        event,
+        bodySha256,
+        rawKey,
+        rawBytes: raw.bytes,
+        verified: verified.value.headers,
+        nonceSha256,
+        result: "accepted_unassociated",
+        detailCode: "awaiting_exact_project_identity_association",
+        receivedAt,
+        signed,
+      });
+      return facetJson(signed, 202);
     } catch {
-      return "unavailable";
+      return await concurrentNonceReplayResponse(env, nonceSha256, event, bodySha256, key) ??
+        facetJson({ error: "facet_v2_intake_conflict" }, 409);
     }
   }
 
-  try {
-    const concurrent = await getLegacyReceipt(env, receipt.eventId);
-    return concurrent && sameLegacyReceipt(concurrent, receipt) ? "duplicate" : "conflict";
-  } catch {
-    return "unavailable";
-  }
-}
-
-async function claimCustomerApprovalReceipt(
-  env: Env,
-  receipt: FacetDesignReceipt,
-  nonceHash: string,
-): Promise<ReceiptClaim> {
-  let existing: StoredFacetCustomerApprovalEvent | null;
-  try {
-    if (await getLegacyReceipt(env, receipt.eventId)) return "conflict";
-    existing = await getCustomerApprovalReceipt(env, receipt.eventId);
-  } catch {
-    return "unavailable";
-  }
-  if (existing) {
-    if (!sameCustomerApprovalReceipt(existing, receipt)) return "conflict";
-    return await claimNonce(env, nonceHash, receipt.eventId, receipt.eventType);
-  }
-
-  try {
-    const results = await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO facet_customer_approval_events
-           (event_id, event_type, schema_version, occurred_at, tenant_id, brand_id,
-            facet_project_id, design_revision_id, design_revision_sha256,
-            frozen_evidence_sha256, approval_actor_type, capability_fingerprint,
-            identity_assurance, raw_key, raw_sha256, raw_content_length, received_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(event_id) DO NOTHING`,
-      ).bind(
-        receipt.eventId,
-        receipt.eventType,
-        receipt.schemaVersion,
-        receipt.occurredAt,
-        receipt.tenantId,
-        receipt.brandId,
-        receipt.facetProjectId,
-        receipt.designRevisionId,
-        receipt.designRevisionSha256,
-        receipt.frozenEvidenceSha256,
-        receipt.approvalActorType,
-        receipt.capabilityFingerprint,
-        receipt.identityAssurance,
-        receipt.rawKey,
-        receipt.rawSha256,
-        receipt.rawContentLength,
-        receipt.receivedAt,
-      ),
-      env.DB.prepare(
-        `INSERT INTO facet_design_ingest_nonce_registry
-           (nonce_hash, event_id, event_type, received_at)
-         VALUES (?, ?, ?, ?)`,
-      ).bind(nonceHash, receipt.eventId, receipt.eventType, receipt.receivedAt),
-    ]);
-    if (d1Changes(results[0]) === 1) return "accepted";
-  } catch {
+  const disposition = await decisionDisposition(env, event, bodySha256);
+  if (disposition.kind === "duplicate") {
+    const signed = await signedReceipt(event, bodySha256, key, {
+      result: disposition.receiptResult,
+      detailCode: disposition.detailCode,
+      occurredAt: receivedAt,
+      idempotentReplay: true,
+    });
     try {
-      if (await getLegacyReceipt(env, receipt.eventId)) return "conflict";
-      return await getNonce(env, nonceHash) ? "replay" : "unavailable";
+      await appendIntakeAndReceipt(env, {
+        intakeId,
+        event,
+        bodySha256,
+        rawKey,
+        rawBytes: raw.bytes,
+        verified: verified.value.headers,
+        nonceSha256,
+        result: "duplicate",
+        detailCode: disposition.detailCode,
+        receivedAt,
+        signed,
+      });
+      return facetJson(signed, 200);
     } catch {
-      return "unavailable";
+      return await concurrentNonceReplayResponse(env, nonceSha256, event, bodySha256, key) ??
+        facetJson({ error: "facet_v2_intake_conflict" }, 409);
     }
   }
-
-  try {
-    const concurrent = await getCustomerApprovalReceipt(env, receipt.eventId);
-    return concurrent && sameCustomerApprovalReceipt(concurrent, receipt) ? "duplicate" : "conflict";
-  } catch {
-    return "unavailable";
-  }
-}
-
-async function claimNonce(
-  env: Env,
-  nonceHash: string,
-  eventId: string,
-  eventType: string,
-): Promise<"duplicate" | "replay" | "unavailable"> {
-  try {
-    await env.DB.prepare(
-      `INSERT INTO facet_design_ingest_nonce_registry
-         (nonce_hash, event_id, event_type, received_at)
-       VALUES (?, ?, ?, ?)`,
-    ).bind(nonceHash, eventId, eventType, new Date().toISOString()).run();
-    return "duplicate";
-  } catch {
+  if (disposition.kind === "rejected") {
+    const signed = await signedReceipt(event, bodySha256, key, {
+      result: "rejected",
+      detailCode: disposition.detailCode,
+      occurredAt: receivedAt,
+      idempotentReplay: false,
+    });
     try {
-      return await getNonce(env, nonceHash) ? "replay" : "unavailable";
+      await appendIntakeAndReceipt(env, {
+        intakeId,
+        event,
+        bodySha256,
+        rawKey,
+        rawBytes: raw.bytes,
+        verified: verified.value.headers,
+        nonceSha256,
+        result: "rejected",
+        detailCode: disposition.detailCode,
+        receivedAt,
+        signed,
+      });
+      return facetJson(signed, 409);
     } catch {
-      return "unavailable";
+      return await concurrentNonceReplayResponse(env, nonceSha256, event, bodySha256, key) ??
+        facetJson({ error: "facet_v2_intake_conflict" }, 409);
     }
   }
-}
 
-async function getLegacyReceipt(env: Env, eventId: string): Promise<StoredFacetDesignEvent | null> {
-  return await env.DB.prepare(
-    `SELECT event_id, event_type, schema_version, occurred_at, tenant_id, facet_project_id,
-            design_revision_id, design_revision_sha256, frozen_evidence_sha256, raw_key,
-            raw_sha256, raw_content_length
-       FROM facet_design_events WHERE event_id = ? LIMIT 1`,
-  ).bind(eventId).first<StoredFacetDesignEvent>();
-}
-
-async function getCustomerApprovalReceipt(
-  env: Env,
-  eventId: string,
-): Promise<StoredFacetCustomerApprovalEvent | null> {
-  return await env.DB.prepare(
-    `SELECT event_id, event_type, schema_version, occurred_at, tenant_id, brand_id,
-            facet_project_id, design_revision_id, design_revision_sha256,
-            frozen_evidence_sha256, approval_actor_type, capability_fingerprint,
-            identity_assurance, raw_key, raw_sha256, raw_content_length
-       FROM facet_customer_approval_events WHERE event_id = ? LIMIT 1`,
-  ).bind(eventId).first<StoredFacetCustomerApprovalEvent>();
-}
-
-async function getNonce(env: Env, nonceHash: string): Promise<boolean> {
-  return !!await env.DB.prepare(
-    "SELECT nonce_hash FROM facet_design_ingest_nonce_registry WHERE nonce_hash = ? LIMIT 1",
-  ).bind(nonceHash).first<{ nonce_hash: string }>();
-}
-
-async function durableAcceptance(
-  env: Env,
-  receipt: FacetDesignReceipt,
-  idempotentReplay: boolean,
-): Promise<FacetDesignAcceptance | null> {
+  const signed = await signedReceipt(event, bodySha256, key, {
+    result: "accepted_associated",
+    detailCode: "exact_identity_project_association_verified",
+    occurredAt: receivedAt,
+    idempotentReplay: false,
+  });
   try {
-    const stored = receipt.kind === "legacy"
-      ? await getLegacyReceipt(env, receipt.eventId)
-      : await getCustomerApprovalReceipt(env, receipt.eventId);
-    if (!stored) return null;
+    await appendAcceptedDecision(env, {
+      intakeId,
+      event,
+      authority,
+      bodySha256,
+      rawKey,
+      rawBytes: raw.bytes,
+      verified: verified.value.headers,
+      nonceSha256,
+      receivedAt,
+      signed,
+    });
+  } catch {
+    const sameNonce = await concurrentNonceReplayResponse(
+      env,
+      nonceSha256,
+      event,
+      bodySha256,
+      key,
+    );
+    if (sameNonce) return sameNonce;
+    const raced = await decisionDisposition(env, event, bodySha256);
+    if (raced.kind === "duplicate") {
+      const replaySigned = await signedReceipt(event, bodySha256, key, {
+        result: raced.receiptResult,
+        detailCode: raced.detailCode,
+        occurredAt: receivedAt,
+        idempotentReplay: true,
+      });
+      try {
+        await appendIntakeAndReceipt(env, {
+          intakeId,
+          event,
+          bodySha256,
+          rawKey,
+          rawBytes: raw.bytes,
+          verified: verified.value.headers,
+          nonceSha256,
+          result: "duplicate",
+          detailCode: raced.detailCode,
+          receivedAt,
+          signed: replaySigned,
+        });
+        return facetJson(replaySigned, 200);
+      } catch {
+        return await concurrentNonceReplayResponse(
+          env,
+          nonceSha256,
+          event,
+          bodySha256,
+          key,
+        ) ?? facetJson({ error: "facet_v2_intake_conflict" }, 409);
+      }
+    }
+    return facetJson({ error: "facet_v2_intake_conflict" }, 409);
+  }
+  return facetJson(signed, 202);
+}
+
+/**
+ * Re-check raw-first unassociated evidence after an exact link is established.
+ * The original intake is never rewritten; reconciliation appends the trusted
+ * decision and a new signed receipt.
+ */
+export async function reconcileFacetV2UnassociatedIntakes(
+  env: Env,
+  now = new Date(),
+): Promise<number> {
+  if (String(env.FACET_V2_INGEST_ENABLED) !== "true") return 0;
+  const config = facetV2ConsumerConfig(env);
+  if (!config) throw new Error("facet_v2_ingest_not_configured");
+  const receiptKey = activeReceiptSigningKey(config.keys, now.getTime());
+  if (!receiptKey) return 0;
+  const rows = await env.DB.prepare(
+    `SELECT intake.intake_id, intake.event_id, intake.event_body_sha256, intake.raw_key
+       FROM facet_v2_raw_intakes AS intake
+       WHERE intake.result = 'accepted_unassociated'
+         AND NOT EXISTS (
+           SELECT 1 FROM facet_v2_customer_decisions AS decision
+           WHERE decision.event_id = intake.event_id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM facet_v2_consumer_receipts AS receipt
+           WHERE receipt.intake_id = intake.intake_id AND receipt.result = 'reconciled'
+         )
+       ORDER BY intake.received_at ASC
+       LIMIT ?`,
+  ).bind(RECONCILE_BATCH_SIZE).all<UnassociatedIntake>();
+  let reconciled = 0;
+  for (const row of rows.results ?? []) {
+    const object = await env.RAW.get(row.raw_key);
+    if (!object) continue;
+    const raw = await object.text();
+    if (await sha256Hex(raw) !== row.event_body_sha256) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch {
+      continue;
+    }
+    const event = await parseFacetV2CustomerDecisionEvent(parsed);
+    if (!event || event.event_id !== row.event_id || canonicalJson(event) !== raw) continue;
+    const authority = await resolveFacetV2AuthorityLink(env, event);
+    if (!authority) continue;
+    const disposition = await decisionDisposition(env, event, row.event_body_sha256);
+    if (disposition.kind !== "new") continue;
+    const signed = await signedReceipt(event, row.event_body_sha256, receiptKey, {
+      result: "reconciled",
+      detailCode: "exact_association_reconciled_from_raw_intake",
+      occurredAt: now.toISOString(),
+      idempotentReplay: false,
+    });
+    try {
+      await env.DB.batch([
+        decisionInsert(env, {
+          event,
+          authority,
+          bodySha256: row.event_body_sha256,
+          rawKey: row.raw_key,
+          rawBytes: new TextEncoder().encode(raw).byteLength,
+          receivedAt: now.toISOString(),
+        }),
+        receiptInsert(env, row.intake_id, event.event_id, row.event_body_sha256, signed),
+      ]);
+      reconciled += 1;
+    } catch {
+      // A concurrent exact reconciliation wins; conflicting state remains held.
+    }
+  }
+  return reconciled;
+}
+
+export function facetV2ConsumerConfig(env: Env): FacetV2ConsumerConfig | null {
+  const routes = facetV2StaticRoutes(env);
+  const keysRaw = String(env.FACET_V2_KEYS_JSON ?? "").trim();
+  if (!routes || !keysRaw) return null;
+  try {
+    const keyValues = JSON.parse(keysRaw) as unknown;
+    if (!Array.isArray(keyValues) || !keyValues.length || keyValues.length > 16) return null;
+    const keys = keyValues.map(parseKey);
+    if (keys.some((key) => !key)) return null;
+    const keyIdentities = new Set(keys.map((key) => key && `${key.keyId}\n${key.keyVersion}`));
+    if (keyIdentities.size !== keys.length) return null;
     return {
-      accepted: true,
-      event_id: stored.event_id,
-      status: "received",
-      raw_sha256: stored.raw_sha256,
-      frozen_evidence_sha256: stored.frozen_evidence_sha256,
-      design_revision: {
-        id: stored.design_revision_id,
-        sha256: stored.design_revision_sha256,
-      },
-      provenance: stored.event_type === CUSTOMER_APPROVAL_EVENT_TYPE
-        ? {
-          status: "customer_approved",
-          brand_id: (stored as StoredFacetCustomerApprovalEvent).brand_id,
-          approval_actor_type: (stored as StoredFacetCustomerApprovalEvent).approval_actor_type,
-          capability_fingerprint: (stored as StoredFacetCustomerApprovalEvent).capability_fingerprint,
-          identity_assurance: (stored as StoredFacetCustomerApprovalEvent).identity_assurance,
-        }
-        : { status: "provenance_unknown" },
-      ...(idempotentReplay ? { idempotent_replay: true } : {}),
+      routes,
+      keys: keys as FacetV2VerificationKey[],
     };
   } catch {
     return null;
   }
 }
 
-function sameLegacyReceipt(stored: StoredFacetDesignEvent, receipt: FacetDesignReceipt): boolean {
-  return stored.event_id === receipt.eventId &&
-    stored.event_type === LEGACY_EVENT_TYPE &&
-    Number(stored.schema_version) === LEGACY_EVENT_SCHEMA_VERSION &&
-    stored.occurred_at === receipt.occurredAt &&
-    stored.tenant_id === receipt.tenantId &&
-    stored.facet_project_id === receipt.facetProjectId &&
-    stored.design_revision_id === receipt.designRevisionId &&
-    stored.design_revision_sha256 === receipt.designRevisionSha256 &&
-    stored.frozen_evidence_sha256 === receipt.frozenEvidenceSha256 &&
-    stored.raw_key === receipt.rawKey &&
-    stored.raw_sha256 === receipt.rawSha256 &&
-    Number(stored.raw_content_length) === receipt.rawContentLength;
+export function facetV2StaticRoutes(
+  env: Pick<Env, "FACET_V2_ROUTES_JSON">,
+): FacetV2StaticRoute[] | null {
+  const routesRaw = String(env.FACET_V2_ROUTES_JSON ?? "").trim();
+  if (!routesRaw) return null;
+  try {
+    const routeValues = JSON.parse(routesRaw) as unknown;
+    if (!Array.isArray(routeValues) || !routeValues.length || routeValues.length > 32)
+      return null;
+    const routes = routeValues.map(parseRoute);
+    if (routes.some((route) => !route)) return null;
+    const exact = routes as FacetV2StaticRoute[];
+    const identities = new Set(exact.map((route) => canonicalJson(route)));
+    return identities.size === exact.length ? exact : null;
+  } catch {
+    return null;
+  }
 }
 
-function sameCustomerApprovalReceipt(
-  stored: StoredFacetCustomerApprovalEvent,
-  receipt: FacetDesignReceipt,
-): boolean {
-  return stored.event_id === receipt.eventId &&
-    stored.event_type === CUSTOMER_APPROVAL_EVENT_TYPE &&
-    Number(stored.schema_version) === CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION &&
-    stored.occurred_at === receipt.occurredAt &&
-    stored.tenant_id === receipt.tenantId &&
-    stored.brand_id === receipt.brandId &&
-    stored.facet_project_id === receipt.facetProjectId &&
-    stored.design_revision_id === receipt.designRevisionId &&
-    stored.design_revision_sha256 === receipt.designRevisionSha256 &&
-    stored.frozen_evidence_sha256 === receipt.frozenEvidenceSha256 &&
-    stored.approval_actor_type === receipt.approvalActorType &&
-    stored.capability_fingerprint === receipt.capabilityFingerprint &&
-    stored.identity_assurance === receipt.identityAssurance &&
-    stored.raw_key === receipt.rawKey &&
-    stored.raw_sha256 === receipt.rawSha256 &&
-    Number(stored.raw_content_length) === receipt.rawContentLength;
+function parseRoute(value: unknown): FacetV2StaticRoute | null {
+  if (!isRecord(value) || !sameKeys(value, [
+    "version", "issuer", "source_product", "source_environment", "source_tenant_id",
+    "destination_tenant_id", "destination_url",
+  ])) return null;
+  if (
+    value.version !== 1 || value.source_product !== "facet" ||
+    !safeIdentifier(value.issuer) || !safeIdentifier(value.source_environment) ||
+    !uuid(value.source_tenant_id) || !safeIdentifier(value.destination_tenant_id) ||
+    !publicHttpsUrl(value.destination_url)
+  ) return null;
+  return {
+    version: 1,
+    issuer: value.issuer,
+    sourceProduct: "facet",
+    sourceEnvironment: value.source_environment,
+    sourceTenantId: value.source_tenant_id,
+    destinationTenantId: value.destination_tenant_id,
+    destinationUrl: value.destination_url,
+  };
+}
+
+function parseKey(value: unknown): FacetV2VerificationKey | null {
+  if (!isRecord(value) || !sameKeys(value, [
+    "key_id", "key_version", "secret", "not_before_ms", "not_after_ms",
+  ])) return null;
+  if (
+    !keyId(value.key_id) || !Number.isSafeInteger(value.key_version) || Number(value.key_version) < 1 ||
+    typeof value.secret !== "string" || value.secret.length < 32 ||
+    !Number.isSafeInteger(value.not_before_ms) || !Number.isSafeInteger(value.not_after_ms) ||
+    Number(value.not_after_ms) <= Number(value.not_before_ms)
+  ) return null;
+  return {
+    keyId: value.key_id,
+    keyVersion: Number(value.key_version),
+    secret: value.secret,
+    notBeforeMs: Number(value.not_before_ms),
+    notAfterMs: Number(value.not_after_ms),
+  };
+}
+
+async function decisionDisposition(
+  env: Env,
+  event: FacetV2CustomerDecisionEvent,
+  bodySha256: string,
+): Promise<DecisionDisposition> {
+  const existing = await env.DB.prepare(
+    `SELECT event_id, event_body_sha256, decision_kind, customer_party_ref,
+            external_customer_identity_link_id, oidc_issuer, oidc_subject_sha256, occurred_at
+       FROM facet_v2_customer_decisions WHERE event_id = ? LIMIT 1`,
+  ).bind(event.event_id).first<StoredDecisionIdentity>();
+  if (existing) {
+    if (existing.event_body_sha256 !== bodySha256)
+      return { kind: "rejected", detailCode: "event_id_body_conflict" };
+    const reconciled = await env.DB.prepare(
+      `SELECT 1 AS present FROM facet_v2_consumer_receipts
+       WHERE event_id = ? AND event_body_sha256 = ? AND result = 'reconciled'
+       LIMIT 1`,
+    ).bind(event.event_id, bodySha256).first<{ present: number }>();
+    return reconciled
+      ? {
+        kind: "duplicate",
+        receiptResult: "reconciled",
+        detailCode: "exact_reconciled_event_replay",
+      }
+      : {
+        kind: "duplicate",
+        receiptResult: "duplicate",
+        detailCode: "exact_event_replay",
+      };
+  }
+  const latest = await env.DB.prepare(
+    `SELECT decision.event_id, decision.event_body_sha256, decision.decision_kind,
+            decision.customer_party_ref, decision.external_customer_identity_link_id,
+            decision.oidc_issuer, decision.oidc_subject_sha256, decision.occurred_at
+       FROM facet_v2_customer_decisions AS decision
+       WHERE decision.destination_tenant_id = ? AND decision.facet_project_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM facet_v2_customer_decisions AS child
+           WHERE child.previous_event_id = decision.event_id
+         )
+       LIMIT 2`,
+  ).bind(event.destination.tenant_id, event.facet_project_id).all<StoredDecisionIdentity>();
+  const chainHeads = latest.results ?? [];
+  if (chainHeads.length > 1)
+    return { kind: "rejected", detailCode: "decision_chain_collision" };
+  const previous = chainHeads[0] ?? null;
+  if (event.approval.decision === "approved") {
+    return previous
+      ? { kind: "rejected", detailCode: "initial_decision_already_exists" }
+      : { kind: "new" };
+  }
+  if (!previous || previous.event_id !== event.approval.previous_event_id)
+    return { kind: "rejected", detailCode: "decision_predecessor_mismatch" };
+  if (
+    previous.customer_party_ref !== event.approval.actor.customer_party_ref ||
+    previous.external_customer_identity_link_id !== event.approval.actor.external_identity_link_id ||
+    previous.oidc_issuer !== event.approval.actor.oidc_issuer ||
+    previous.oidc_subject_sha256 !== event.approval.actor.oidc_subject_sha256
+  ) return { kind: "rejected", detailCode: "decision_customer_identity_mismatch" };
+  if (previous.decision_kind === "withdrawn")
+    return { kind: "rejected", detailCode: "withdrawn_chain_is_terminal" };
+  if (Date.parse(event.occurred_at) <= Date.parse(previous.occurred_at))
+    return { kind: "rejected", detailCode: "decision_time_not_monotonic" };
+  return { kind: "new" };
+}
+
+async function signedReceipt(
+  event: FacetV2CustomerDecisionEvent,
+  bodySha256: string,
+  key: FacetV2VerificationKey,
+  input: {
+    result: FacetV2Receipt["result"];
+    detailCode: string;
+    occurredAt: string;
+    idempotentReplay: boolean;
+  },
+): Promise<SignedFacetV2Receipt> {
+  return await signFacetV2Receipt({
+    schema: FACET_V2_RECEIPT_SCHEMA,
+    receipt_id: crypto.randomUUID(),
+    event_id: event.event_id,
+    event_body_sha256: bodySha256,
+    frozen_evidence_sha256: event.approval.manifest_sha256,
+    design_revision: event.design_revision,
+    decision_kind: event.approval.decision,
+    approval_receipt_sha256: event.approval.receipt_sha256,
+    actor_identity_assurance: "oidc",
+    destination_tenant_id: event.destination.tenant_id,
+    result: input.result,
+    policy_version: POLICY_VERSION,
+    occurred_at: input.occurredAt,
+    detail_code: input.detailCode,
+    idempotent_replay: input.idempotentReplay,
+  }, key);
+}
+
+async function appendAcceptedDecision(
+  env: Env,
+  input: IntakeInput & {
+    authority: FacetV2AuthorityLink;
+    signed: SignedFacetV2Receipt;
+  },
+): Promise<void> {
+  await env.DB.batch([
+    intakeInsert(env, {
+      ...input,
+      result: "accepted_associated",
+      detailCode: "exact_identity_project_association_verified",
+    }),
+    decisionInsert(env, input),
+    receiptInsert(env, input.intakeId, input.event.event_id, input.bodySha256, input.signed),
+  ]);
+}
+
+async function appendIntakeAndReceipt(
+  env: Env,
+  input: IntakeInput & {
+    result: "accepted_unassociated" | "rejected" | "duplicate";
+    detailCode: string;
+    signed: SignedFacetV2Receipt;
+  },
+): Promise<void> {
+  await env.DB.batch([
+    intakeInsert(env, input),
+    receiptInsert(env, input.intakeId, input.event.event_id, input.bodySha256, input.signed),
+  ]);
+}
+
+interface IntakeInput {
+  intakeId: string;
+  event: FacetV2CustomerDecisionEvent;
+  bodySha256: string;
+  rawKey: string;
+  rawBytes: number;
+  verified: {
+    issuer: string;
+    product: string;
+    environment: string;
+    destinationTenantId: string;
+    keyId: string;
+    keyVersion: number;
+    issuedAt: string;
+    expiresAt: string;
+  };
+  nonceSha256: string;
+  receivedAt: string;
+}
+
+function intakeInsert(
+  env: Env,
+  input: IntakeInput & {
+    result: "accepted_associated" | "accepted_unassociated" | "rejected" | "duplicate";
+    detailCode: string;
+  },
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT INTO facet_v2_raw_intakes
+     (intake_id, event_id, event_body_sha256, raw_key, raw_sha256, raw_content_length,
+      issuer, source_product, source_environment, source_tenant_id, destination_tenant_id,
+      delivery_key_id, delivery_key_version, issued_at_ms, expires_at_ms, nonce_sha256,
+      result, detail_code, received_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(
+    input.intakeId,
+    input.event.event_id,
+    input.bodySha256,
+    input.rawKey,
+    input.bodySha256,
+    input.rawBytes,
+    input.verified.issuer,
+    input.verified.product,
+    input.verified.environment,
+    input.event.source.tenant_id,
+    input.verified.destinationTenantId,
+    input.verified.keyId,
+    input.verified.keyVersion,
+    Number(input.verified.issuedAt),
+    Number(input.verified.expiresAt),
+    input.nonceSha256,
+    input.result,
+    input.detailCode,
+    input.receivedAt,
+  );
+}
+
+function decisionInsert(
+  env: Pick<Env, "DB">,
+  input: {
+    event: FacetV2CustomerDecisionEvent;
+    authority: FacetV2AuthorityLink;
+    bodySha256: string;
+    rawKey: string;
+    rawBytes: number;
+    receivedAt: string;
+  },
+): D1PreparedStatement {
+  const { event, authority } = input;
+  return env.DB.prepare(
+    `INSERT INTO facet_v2_customer_decisions
+     (event_id, event_type, schema_version, event_body_sha256, issuer, source_product,
+      source_environment, source_tenant_id, destination_tenant_id, brand_id,
+      facet_project_id, external_project_link_id, producer_identity_link_id,
+      association_sha256, roof_job_id, customer_quote_id, customer_party_ref,
+      external_customer_identity_link_id, oidc_issuer, oidc_subject_sha256,
+      identity_assurance, attestation_version, decision_kind, previous_event_id,
+      reason_sha256, approval_receipt_id, approval_receipt_sha256, design_revision_id,
+      design_revision_sha256, frozen_evidence_sha256, raw_key, raw_sha256,
+      raw_content_length, occurred_at, received_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+             ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(
+    event.event_id,
+    event.event_type,
+    event.schema_version,
+    input.bodySha256,
+    event.source.issuer,
+    event.source.product,
+    event.source.environment,
+    event.source.tenant_id,
+    event.destination.tenant_id,
+    event.brand_id,
+    event.facet_project_id,
+    authority.externalProjectLinkId,
+    authority.producerIdentityLinkId,
+    authority.associationSha256,
+    authority.roofJobId,
+    authority.customerQuoteId,
+    event.approval.actor.customer_party_ref,
+    event.approval.actor.external_identity_link_id,
+    event.approval.actor.oidc_issuer,
+    event.approval.actor.oidc_subject_sha256,
+    event.approval.actor.identity_assurance,
+    event.approval.attestation_version,
+    event.approval.decision,
+    event.approval.previous_event_id,
+    event.approval.reason_sha256,
+    event.approval.receipt_id,
+    event.approval.receipt_sha256,
+    event.design_revision.id,
+    event.design_revision.sha256,
+    event.approval.manifest_sha256,
+    input.rawKey,
+    input.bodySha256,
+    input.rawBytes,
+    event.occurred_at,
+    input.receivedAt,
+  );
+}
+
+function receiptInsert(
+  env: Pick<Env, "DB">,
+  intakeId: string,
+  eventId: string,
+  bodySha256: string,
+  signed: SignedFacetV2Receipt,
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `INSERT INTO facet_v2_consumer_receipts
+     (receipt_id, intake_id, event_id, event_body_sha256, result, detail_code,
+      receipt_json, receipt_sha256, signature_algorithm, signature_key_id,
+      signature_key_version, signature_value, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(
+    signed.receipt.receipt_id,
+    intakeId,
+    eventId,
+    bodySha256,
+    signed.receipt.result,
+    signed.receipt.detail_code,
+    canonicalJson(signed.receipt),
+    signed.receipt_sha256,
+    signed.signature.algorithm,
+    signed.signature.key_id,
+    signed.signature.key_version,
+    signed.signature.value,
+    signed.receipt.occurred_at,
+  );
+}
+
+async function intakeByNonce(env: Env, nonceSha256: string): Promise<StoredIntakeReplay | null> {
+  return await env.DB.prepare(
+    `SELECT intake_id, event_id, event_body_sha256
+       FROM facet_v2_raw_intakes WHERE nonce_sha256 = ? LIMIT 1`,
+  ).bind(nonceSha256).first<StoredIntakeReplay>();
+}
+
+async function signedReceiptForIntake(
+  env: Env,
+  intakeId: string,
+  eventId: string,
+  bodySha256: string,
+  key: FacetV2VerificationKey,
+): Promise<SignedFacetV2Receipt | null> {
+  const stored = await env.DB.prepare(
+    `SELECT receipt_json, receipt_sha256, signature_algorithm, signature_key_id,
+            signature_key_version, signature_value
+       FROM facet_v2_consumer_receipts
+       WHERE intake_id = ?
+         AND signature_key_id = ? AND signature_key_version = ?
+       ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+  ).bind(intakeId, key.keyId, key.keyVersion).first<StoredReceiptEnvelope>();
+  return await verifiedStoredReceipt(stored, eventId, bodySha256, key);
+}
+
+async function verifiedStoredReceipt(
+  stored: StoredReceiptEnvelope | null,
+  eventId: string,
+  bodySha256: string,
+  key: FacetV2VerificationKey,
+): Promise<SignedFacetV2Receipt | null> {
+  if (!stored) return null;
+  try {
+    const receipt = JSON.parse(stored.receipt_json) as FacetV2Receipt;
+    if (canonicalJson(receipt) !== stored.receipt_json) return null;
+    const expected = await signFacetV2Receipt(receipt, key);
+    if (
+      receipt.event_id !== eventId || receipt.event_body_sha256 !== bodySha256 ||
+      stored.signature_algorithm !== "HMAC-SHA256" ||
+      stored.signature_key_id !== key.keyId ||
+      Number(stored.signature_key_version) !== key.keyVersion ||
+      !constantTimeEqual(stored.receipt_sha256, expected.receipt_sha256) ||
+      !constantTimeEqual(stored.signature_value, expected.signature.value)
+    ) return null;
+    return {
+      receipt,
+      receipt_sha256: stored.receipt_sha256,
+      signature: {
+        algorithm: stored.signature_algorithm,
+        key_id: stored.signature_key_id,
+        key_version: Number(stored.signature_key_version),
+        value: stored.signature_value,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function concurrentNonceReplayResponse(
+  env: Env,
+  nonceSha256: string,
+  event: FacetV2CustomerDecisionEvent,
+  bodySha256: string,
+  key: FacetV2VerificationKey,
+): Promise<Response | null> {
+  const replay = await intakeByNonce(env, nonceSha256);
+  if (!replay || replay.event_id !== event.event_id || replay.event_body_sha256 !== bodySha256)
+    return null;
+  const signed = await signedReceiptForIntake(
+    env,
+    replay.intake_id,
+    event.event_id,
+    bodySha256,
+    key,
+  );
+  return signed ? facetJson(signed, receiptStatus(signed)) : null;
+}
+
+function activeReceiptSigningKey(
+  keys: readonly FacetV2VerificationKey[],
+  nowMs: number,
+): FacetV2VerificationKey | null {
+  return [...keys]
+    .filter((key) => key.notBeforeMs <= nowMs && key.notAfterMs >= nowMs)
+    .sort((left, right) =>
+      right.notBeforeMs - left.notBeforeMs || right.keyVersion - left.keyVersion ||
+      right.keyId.localeCompare(left.keyId)
+    )[0] ?? null;
+}
+
+function receiptStatus(signed: SignedFacetV2Receipt): number {
+  if (signed.receipt.result === "rejected") return 409;
+  if (
+    signed.receipt.result === "accepted_associated" ||
+    signed.receipt.result === "accepted_unassociated"
+  ) return 202;
+  return 200;
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1)
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  return difference === 0;
 }
 
 async function readRawJson(req: Request): Promise<
-  { ok: true; text: string; bytes: number } | { ok: false; error: string; status: number }
+  { ok: true; text: string; bytes: number } |
+  { ok: false; error: "content_type_required" | "payload_too_large" | "invalid_event_body"; status: 400 | 413 | 415 }
 > {
-  if (!req.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+  if (!req.headers.get("content-type")?.toLowerCase().startsWith("application/json"))
     return { ok: false, error: "content_type_required", status: 415 };
-  }
   const declared = Number(req.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES)
     return { ok: false, error: "payload_too_large", status: 413 };
-  }
-  let bytes: Uint8Array;
   try {
-    bytes = new Uint8Array(await req.arrayBuffer());
-  } catch {
-    return { ok: false, error: "invalid_event_body", status: 400 };
-  }
-  if (bytes.byteLength > MAX_BODY_BYTES) return { ok: false, error: "payload_too_large", status: 413 };
-  try {
+    const bytes = new Uint8Array(await req.arrayBuffer());
+    if (bytes.byteLength > MAX_BODY_BYTES)
+      return { ok: false, error: "payload_too_large", status: 413 };
     return {
       ok: true,
       text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes),
@@ -500,241 +844,49 @@ async function readRawJson(req: Request): Promise<
   }
 }
 
-function signedHeaders(req: Request): SignedEventHeaders | null {
-  const eventId = req.headers.get("x-ironwrap-event-id") ?? "";
-  const timestamp = req.headers.get("x-ironwrap-event-timestamp") ?? "";
-  const nonce = req.headers.get("x-ironwrap-event-nonce") ?? "";
-  const signature = req.headers.get("x-ironwrap-event-signature") ?? "";
-  if (!validId(eventId) || !/^\d{13}$/.test(timestamp) || !/^[A-Za-z0-9_-]{32,128}$/.test(nonce)) return null;
-  return /^[A-Za-z0-9_-]{43}$/.test(signature) ? { eventId, timestamp, nonce, signature } : null;
-}
-
-function freshTimestamp(timestamp: string): boolean {
-  const milliseconds = Number(timestamp);
-  return Number.isSafeInteger(milliseconds) && Math.abs(Date.now() - milliseconds) <= MAX_CLOCK_SKEW_MS;
-}
-
-async function parseFacetDesignEvent(raw: string): Promise<FacetDesignEvent | null> {
-  let value: unknown;
+function publicHttpsUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
   try {
-    value = JSON.parse(raw) as unknown;
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    return url.protocol === "https:" && !url.username && !url.password && !url.search &&
+      !url.hash && !!host && host !== "localhost" && !host.endsWith(".localhost") &&
+      !host.endsWith(".local") && !/^\d+\.\d+\.\d+\.\d+$/.test(host) && !host.includes(":");
   } catch {
-    return null;
+    return false;
   }
-  if (!isRecord(value)) return null;
-  const legacy = value.event_type === LEGACY_EVENT_TYPE &&
-    value.schema_version === LEGACY_EVENT_SCHEMA_VERSION && sameKeys(value, LEGACY_EVENT_KEYS);
-  const customerApproval = value.event_type === CUSTOMER_APPROVAL_EVENT_TYPE &&
-    value.schema_version === CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION &&
-    sameKeys(value, CUSTOMER_APPROVAL_EVENT_KEYS);
-  if (!legacy && !customerApproval) return null;
-  const eventId = validId(value.event_id) ? value.event_id : null;
-  const occurredAt = validOccurredAt(value.occurred_at) ? value.occurred_at : null;
-  const sourceTenantId = validTenantId(value.tenant_id) ? value.tenant_id : null;
-  const facetProjectId = validId(value.facet_project_id) ? value.facet_project_id : null;
-  const designRevision = parseDesignRevision(value.design_revision);
-  if (!eventId || !occurredAt || !sourceTenantId || !facetProjectId || !designRevision || !isRecord(value.frozen_evidence)) {
-    return null;
-  }
-  try {
-    const frozenEvidence = canonicalJson(value.frozen_evidence);
-    if (!Object.keys(value.frozen_evidence).length || new TextEncoder().encode(frozenEvidence).byteLength > MAX_FROZEN_EVIDENCE_BYTES) {
-      return null;
-    }
-    const design = value.frozen_evidence.design;
-    if (!isRecord(design) || !Object.keys(design).length) return null;
-    if (customerApproval) {
-      if (
-        !sameKeys(value.frozen_evidence, CUSTOMER_APPROVAL_EVIDENCE_KEYS) ||
-        !isRecord(value.frozen_evidence.approval) ||
-        !sameKeys(value.frozen_evidence.approval, CUSTOMER_APPROVAL_KEYS) ||
-        value.frozen_evidence.approval.approved_at !== occurredAt ||
-        (
-          value.frozen_evidence.approval.client_revision !== null &&
-          !isRecord(value.frozen_evidence.approval.client_revision)
-        ) ||
-        containsForbiddenCustomerEvidence(value.frozen_evidence)
-      ) return null;
-    }
-    const designSha256 = await sha256Hex(canonicalJson(design));
-    if (
-      designRevision.sha256 !== designSha256 ||
-      designRevision.id !== `facet-json-v1:${designSha256}`
-    ) {
-      return null;
-    }
-    const brandId = customerApproval && validBrandId(value.brand_id) ? value.brand_id : null;
-    const approvalActorType = customerApproval && value.approval_actor_type === "customer_capability"
-      ? value.approval_actor_type
-      : null;
-    const capabilityFingerprint = customerApproval && validSha256(value.capability_fingerprint)
-      ? value.capability_fingerprint
-      : null;
-    const identityAssurance = customerApproval && value.identity_assurance === "bearer_capability_only"
-      ? value.identity_assurance
-      : null;
-    if (
-      customerApproval &&
-      (
-        !brandId || design.brandId !== brandId || !approvalActorType ||
-        !capabilityFingerprint || !identityAssurance
-      )
-    ) return null;
-    return {
-      kind: customerApproval ? "customer_approval" : "legacy",
-      eventId,
-      eventType: customerApproval ? CUSTOMER_APPROVAL_EVENT_TYPE : LEGACY_EVENT_TYPE,
-      schemaVersion: customerApproval
-        ? CUSTOMER_APPROVAL_EVENT_SCHEMA_VERSION
-        : LEGACY_EVENT_SCHEMA_VERSION,
-      occurredAt,
-      sourceTenantId,
-      facetProjectId,
-      designRevisionId: designRevision.id,
-      designRevisionSha256: designRevision.sha256,
-      frozenEvidenceSha256: await sha256Hex(frozenEvidence),
-      brandId,
-      approvalActorType,
-      capabilityFingerprint,
-      identityAssurance,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function parseDesignRevision(value: unknown): { id: string; sha256: string } | null {
-  if (!isRecord(value) || !sameKeys(value, ["id", "sha256"])) return null;
-  return validId(value.id) && validSha256(value.sha256) ? { id: value.id, sha256: value.sha256 } : null;
-}
-
-function facetDesignIngestSecret(env: Env): string | null {
-  const secret = env.FACET_DESIGN_INGEST_HMAC_KEY?.trim() ?? "";
-  return secret.length >= 32 ? secret : null;
-}
-
-function configuredTenantId(env: Env): string | null {
-  const tenantId = env.APP_TENANT_ID?.trim() ?? "";
-  return validTenantId(tenantId) ? tenantId : null;
-}
-
-function configuredFacetTenantMap(env: Env): Map<string, FacetTenantBinding> | null {
-  const raw = String(env.FACET_DESIGN_INGEST_TENANT_MAP_JSON ?? "").trim();
-  if (!raw) return null;
-  try {
-    const value = JSON.parse(raw) as unknown;
-    if (!isRecord(value)) return null;
-    const entries = Object.entries(value);
-    if (!entries.length) return null;
-    const map = new Map<string, FacetTenantBinding>();
-    for (const [sourceTenantId, candidate] of entries) {
-      if (!validTenantId(sourceTenantId)) return null;
-      if (validTenantId(candidate)) {
-        map.set(sourceTenantId, { tenantId: candidate, brandIds: new Set() });
-        continue;
-      }
-      if (
-        !isRecord(candidate) || !sameKeys(candidate, ["brand_ids", "tenant_id"]) ||
-        !validTenantId(candidate.tenant_id) || !Array.isArray(candidate.brand_ids) ||
-        !candidate.brand_ids.length || candidate.brand_ids.length > 8
-      ) return null;
-      const brandIds = new Set<string>();
-      for (const brandId of candidate.brand_ids) {
-        if (!validBrandId(brandId) || brandIds.has(brandId)) return null;
-        brandIds.add(brandId);
-      }
-      map.set(sourceTenantId, { tenantId: candidate.tenant_id, brandIds });
-    }
-    return map;
-  } catch {
-    return null;
-  }
-}
-
-function containsForbiddenCustomerEvidence(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some(containsForbiddenCustomerEvidence);
-  if (!isRecord(value)) return false;
-  return Object.entries(value).some(([key, item]) =>
-    CUSTOMER_APPROVAL_FORBIDDEN_KEYS.has(key.replace(/[_-]/g, "").toLowerCase()) ||
-    containsForbiddenCustomerEvidence(item)
-  );
-}
-
-async function hmacBase64Url(secret: string, value: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  return base64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value))));
-}
-
-function base64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function constantTimeEqual(a: string, b: string): boolean {
-  const aa = new TextEncoder().encode(a);
-  const bb = new TextEncoder().encode(b);
-  if (aa.byteLength !== bb.byteLength) return false;
-  let diff = 0;
-  for (let index = 0; index < aa.length; index += 1) diff |= aa[index]! ^ bb[index]!;
-  return diff === 0;
-}
-
-function validId(value: unknown): value is string {
-  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/.test(value);
-}
-
-function validTenantId(value: unknown): value is string {
-  return typeof value === "string" && /^[a-z0-9][a-z0-9-]{1,63}$/.test(value);
-}
-
-function validBrandId(value: unknown): value is string {
-  return typeof value === "string" && /^[a-z0-9][a-z0-9-]{1,31}$/.test(value);
-}
-
-function validSha256(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
-}
-
-function validOccurredAt(value: unknown): value is string {
-  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
-    Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function sameKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+function sameKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+  const sortedExpected = [...expected].sort();
+  return actual.length === sortedExpected.length &&
+    actual.every((key, index) => key === sortedExpected[index]);
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (isRecord(value)) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
-  }
-  if (typeof value === "number" && !Number.isFinite(value)) throw new Error("non_finite_json_number");
-  const encoded = JSON.stringify(value);
-  if (encoded === undefined) throw new Error("unsupported_json_value");
-  return encoded;
+function safeIdentifier(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{2,159}$/.test(value);
 }
 
-function d1Changes(result: { meta?: { changes?: number } } | undefined): number {
-  return Number(result?.meta?.changes ?? 0);
+function keyId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$/.test(value);
+}
+
+function uuid(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 function facetJson(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    },
   });
 }

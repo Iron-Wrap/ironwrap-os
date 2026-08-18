@@ -65,6 +65,7 @@ function today(jobIds: string[]): TodayResponse {
       next_action: "Open field check-in",
       assignment: { ...assignment, id: `ASSIGN-${id}` },
     })),
+    work_objects: [],
   };
 }
 

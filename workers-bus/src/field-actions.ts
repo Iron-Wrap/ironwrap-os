@@ -1,11 +1,17 @@
-import type { AppEnv, AuthContext } from "./app-types.ts";
-import type { FieldFrappeWriter, PersistFieldCheckInInput, PersistFieldMediaInput } from "./frappe-field.ts";
+import type { AppEnv, AuthContext, WorkObjectScope } from "./app-types.ts";
+import type {
+  FieldFrappeWriter,
+  PersistFieldCheckInInput,
+  PersistFieldMediaInput,
+  PersistWorkPackageEvidenceInput,
+} from "./frappe-field.ts";
 import { frappeFieldWriter } from "./frappe-field.ts";
 
 export const MAX_FIELD_MEDIA_COUNT = 12;
 export const MAX_FIELD_MEDIA_BYTES = 12 * 1024 * 1024;
 export const MAX_FIELD_ACTION_MEDIA_BYTES = 24 * 1024 * 1024;
-export const MAX_FIELD_REQUEST_BYTES = MAX_FIELD_ACTION_MEDIA_BYTES + 256 * 1024;
+export const MAX_FIELD_REQUEST_BYTES =
+  MAX_FIELD_ACTION_MEDIA_BYTES + 256 * 1024;
 const MAX_FIELD_METADATA_BYTES = 16 * 1024;
 const FIELD_ACTION_LEASE_MS = 90_000;
 const FIELD_UPLOAD_WINDOW_MS = 60_000;
@@ -43,7 +49,16 @@ const PROOF_SLOTS = new Set([
   "Communication",
   "Other",
 ]);
-const BLOCKER_CATEGORIES = new Set(["Safety", "Weather", "Access", "Material", "Crew", "Scope", "Customer", "Other"]);
+const BLOCKER_CATEGORIES = new Set([
+  "Safety",
+  "Weather",
+  "Access",
+  "Material",
+  "Crew",
+  "Scope",
+  "Customer",
+  "Other",
+]);
 
 export interface FieldActionPayload {
   assignment_id: string;
@@ -57,10 +72,24 @@ export interface FieldActionPayload {
   latitude: number | null;
   longitude: number | null;
   location_accuracy_m: number | null;
-  location_permission_state: "not_requested" | "granted" | "denied" | "unavailable" | "error";
+  location_permission_state:
+    "not_requested" | "granted" | "denied" | "unavailable" | "error";
   correction_of: string | null;
   correction_reason: string | null;
   evidence_correction_of: string | null;
+  evidence_item_correction_of: string | null;
+  work_package_release_attempt_id?: string | null;
+  work_package_id?: string | null;
+  work_package_version?: number | null;
+  evidence_slot_id?: string | null;
+  evidence_requirement?: string | null;
+  evidence_source?: string | null;
+  evidence_device_id?: string | null;
+  evidence_freshness?: "Current" | "Stale" | "Unknown" | null;
+  evidence_conflict_state?: "None" | "Detected" | "Resolved" | null;
+  evidence_verification?: "Pending" | "Verified" | "Rejected" | null;
+  evidence_disposition?:
+    "Open" | "Accepted" | "Needs Correction" | "Superseded" | null;
   customer_safe_requested: boolean;
 }
 
@@ -76,6 +105,7 @@ export interface FieldSubmission {
   deviceActionId: string;
   jobId: string;
   assignmentId: string;
+  scope?: WorkObjectScope;
   payload: FieldActionPayload;
   media: FieldMediaInput[];
 }
@@ -115,24 +145,78 @@ interface ClaimInput {
   now: string;
   token: string;
   leaseExpiresAt: string;
+  workPackageId: string | null;
+  workPackageVersion: number | null;
+  evidenceSlotId: string | null;
+  evidenceRequirement: string | null;
+  evidenceSource: string | null;
+  evidenceDeviceId: string | null;
+  evidenceFreshness: "Current" | "Stale" | "Unknown" | null;
+  evidenceConflictState: "None" | "Detected" | "Resolved" | null;
+  evidenceVerification: "Pending" | "Verified" | "Rejected" | null;
+  evidenceDisposition:
+    "Open" | "Accepted" | "Needs Correction" | "Superseded" | null;
+  evidenceCorrectionOf: string | null;
+  evidenceItemCorrectionOf: string | null;
+  workPackageReleaseAttemptId: string | null;
+  correctionReason: string | null;
 }
 
 type ClaimResult =
-  { state: "acquired" } | { state: "busy" } | { state: "conflict" } | { state: "verified"; response: VerifiedFieldActionResponse };
+  | { state: "acquired" }
+  | { state: "busy" }
+  | { state: "conflict" }
+  | { state: "verified"; response: VerifiedFieldActionResponse };
 
 export interface FieldActionStore {
   claim(input: ClaimInput): Promise<ClaimResult>;
-  renew(deviceActionId: string, token: string, now: string, leaseExpiresAt: string): Promise<boolean>;
-  getMedia(deviceActionId: string, attachmentId: string): Promise<FieldMediaReceipt | null>;
-  recordMedia(deviceActionId: string, receipt: FieldMediaReceipt, now: string): Promise<FieldMediaReceipt>;
-  markMediaPersisted(deviceActionId: string, attachmentId: string, frappeName: string, now: string): Promise<void>;
-  markR2Stored(deviceActionId: string, manifestKey: string, now: string): Promise<void>;
-  complete(deviceActionId: string, token: string, response: VerifiedFieldActionResponse, now: string): Promise<void>;
-  fail(deviceActionId: string, token: string, errorCode: string, now: string): Promise<void>;
+  renew(
+    deviceActionId: string,
+    token: string,
+    now: string,
+    leaseExpiresAt: string,
+  ): Promise<boolean>;
+  getMedia(
+    deviceActionId: string,
+    attachmentId: string,
+  ): Promise<FieldMediaReceipt | null>;
+  recordMedia(
+    deviceActionId: string,
+    receipt: FieldMediaReceipt,
+    now: string,
+  ): Promise<FieldMediaReceipt>;
+  markMediaPersisted(
+    deviceActionId: string,
+    attachmentId: string,
+    frappeName: string,
+    now: string,
+  ): Promise<void>;
+  markR2Stored(
+    deviceActionId: string,
+    manifestKey: string,
+    now: string,
+  ): Promise<void>;
+  complete(
+    deviceActionId: string,
+    token: string,
+    response: VerifiedFieldActionResponse,
+    now: string,
+  ): Promise<void>;
+  fail(
+    deviceActionId: string,
+    token: string,
+    errorCode: string,
+    now: string,
+  ): Promise<void>;
 }
 
 export interface ImmutableObjectStore {
-  ensure(key: string, body: Blob | string, contentType: string, checksum: string): Promise<void>;
+  ensure(
+    key: string,
+    body: Blob | string,
+    contentType: string,
+    checksum: string,
+  ): Promise<void>;
 }
 
 export interface ProcessFieldDependencies {
@@ -148,7 +232,12 @@ export class FieldActionError extends Error {
   readonly status: number;
   readonly retryAfterSeconds: number | undefined;
 
-  constructor(code: string, status: number, message: string, retryAfterSeconds?: number) {
+  constructor(
+    code: string,
+    status: number,
+    message: string,
+    retryAfterSeconds?: number,
+  ) {
     super(message);
     this.name = "FieldActionError";
     this.code = code;
@@ -163,6 +252,7 @@ export async function handleFieldAction(
   auth: AuthContext,
   jobId: string,
   assignmentId: string,
+  scope?: WorkObjectScope,
 ): Promise<Response> {
   try {
     const rateLimit = await claimFieldUploadWindow(env, auth);
@@ -174,7 +264,10 @@ export async function handleFieldAction(
         rateLimit.retryAfterSeconds,
       );
     }
-    const submission = await parseFieldActionRequest(req, jobId, assignmentId);
+    const submission = {
+      ...(await parseFieldActionRequest(req, jobId, assignmentId)),
+      ...(scope ? { scope } : {}),
+    } satisfies FieldSubmission;
     const response = await processFieldSubmission(submission, auth, {
       store: d1FieldActionStore(env),
       objects: r2ObjectStore(env.RAW),
@@ -185,9 +278,18 @@ export async function handleFieldAction(
     const failure =
       error instanceof FieldActionError
         ? error
-        : new FieldActionError("field_action_failed", 502, "The field action could not be verified yet.", 5);
-    const response = fieldJson({ error: failure.code, message: failure.message }, failure.status);
-    if (failure.retryAfterSeconds) response.headers.set("retry-after", String(failure.retryAfterSeconds));
+        : new FieldActionError(
+            "field_action_failed",
+            502,
+            "The field action could not be verified yet.",
+            5,
+          );
+    const response = fieldJson(
+      { error: failure.code, message: failure.message },
+      failure.status,
+    );
+    if (failure.retryAfterSeconds)
+      response.headers.set("retry-after", String(failure.retryAfterSeconds));
     return response;
   }
 }
@@ -198,7 +300,9 @@ export async function claimFieldUploadWindow(
   now = new Date(),
 ): Promise<{ allowed: boolean; retryAfterSeconds: number }> {
   const windowStartedAt = now.toISOString();
-  const windowExpiresAt = new Date(now.getTime() + FIELD_UPLOAD_WINDOW_MS).toISOString();
+  const windowExpiresAt = new Date(
+    now.getTime() + FIELD_UPLOAD_WINDOW_MS,
+  ).toISOString();
   const row = await env.DB.prepare(
     `INSERT INTO app_action_throttles
        (tenant_id, user_id, scope, window_started_at, window_expires_at, attempts, updated_at)
@@ -216,58 +320,125 @@ export async function claimFieldUploadWindow(
        updated_at = excluded.updated_at
      RETURNING attempts, window_expires_at`,
   )
-    .bind(auth.session.tenant_id, auth.session.user_id, windowStartedAt, windowExpiresAt, windowStartedAt)
+    .bind(
+      auth.session.tenant_id,
+      auth.session.user_id,
+      windowStartedAt,
+      windowExpiresAt,
+      windowStartedAt,
+    )
     .first<{ attempts: number; window_expires_at: string }>();
   if (!row) throw new Error("field_upload_throttle_failed");
-  const retryAfterSeconds = Math.max(1, Math.ceil((Date.parse(row.window_expires_at) - now.getTime()) / 1_000));
+  const retryAfterSeconds = Math.max(
+    1,
+    Math.ceil((Date.parse(row.window_expires_at) - now.getTime()) / 1_000),
+  );
   return {
     allowed: Number(row.attempts) <= FIELD_UPLOADS_PER_WINDOW,
     retryAfterSeconds,
   };
 }
 
-export async function parseFieldActionRequest(req: Request, jobId: string, assignmentId: string): Promise<FieldSubmission> {
+export async function parseFieldActionRequest(
+  req: Request,
+  jobId: string,
+  assignmentId: string,
+): Promise<FieldSubmission> {
   const declared = Number(req.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declared) && declared > MAX_FIELD_REQUEST_BYTES) throw payloadTooLarge();
-  if (!req.headers.get("content-type")?.toLowerCase().startsWith("multipart/form-data;")) {
-    throw new FieldActionError("multipart_required", 415, "Field actions require multipart form data.");
+  if (Number.isFinite(declared) && declared > MAX_FIELD_REQUEST_BYTES)
+    throw payloadTooLarge();
+  if (
+    !req.headers
+      .get("content-type")
+      ?.toLowerCase()
+      .startsWith("multipart/form-data;")
+  ) {
+    throw new FieldActionError(
+      "multipart_required",
+      415,
+      "Field actions require multipart form data.",
+    );
   }
   let form: FormData;
   try {
     form = await boundedFormData(req);
   } catch (error) {
     if (error instanceof FieldActionError) throw error;
-    throw new FieldActionError("invalid_multipart", 400, "The saved field action could not be read.");
+    throw new FieldActionError(
+      "invalid_multipart",
+      400,
+      "The saved field action could not be read.",
+    );
   }
   const metadataValue = form.get("metadata");
-  if (typeof metadataValue !== "string" || byteLength(metadataValue) > MAX_FIELD_METADATA_BYTES) {
-    throw new FieldActionError("invalid_metadata", 400, "Field action metadata is missing or too large.");
+  if (
+    typeof metadataValue !== "string" ||
+    byteLength(metadataValue) > MAX_FIELD_METADATA_BYTES
+  ) {
+    throw new FieldActionError(
+      "invalid_metadata",
+      400,
+      "Field action metadata is missing or too large.",
+    );
   }
   let metadata: unknown;
   try {
     metadata = JSON.parse(metadataValue) as unknown;
   } catch {
-    throw new FieldActionError("invalid_metadata", 400, "Field action metadata is not valid JSON.");
+    throw new FieldActionError(
+      "invalid_metadata",
+      400,
+      "Field action metadata is not valid JSON.",
+    );
   }
   const parsed = parseMetadata(metadata, assignmentId);
   const files = form.getAll("attachments");
   if (files.length !== parsed.attachments.length) {
-    throw new FieldActionError("attachment_mismatch", 400, "Saved attachment metadata does not match the uploaded files.");
+    throw new FieldActionError(
+      "attachment_mismatch",
+      400,
+      "Saved attachment metadata does not match the uploaded files.",
+    );
   }
   if (files.length > MAX_FIELD_MEDIA_COUNT) {
-    throw new FieldActionError("too_many_attachments", 413, `Send at most ${MAX_FIELD_MEDIA_COUNT} files per saved action.`);
+    throw new FieldActionError(
+      "too_many_attachments",
+      413,
+      `Send at most ${MAX_FIELD_MEDIA_COUNT} files per saved action.`,
+    );
   }
   const media = await Promise.all(
     files.map(async (entry, index) => {
-      if (typeof entry === "string") throw new FieldActionError("attachment_missing", 400, "A saved attachment is missing.");
+      if (typeof entry === "string")
+        throw new FieldActionError(
+          "attachment_missing",
+          400,
+          "A saved attachment is missing.",
+        );
       const expected = parsed.attachments[index]!;
       const mimeType = entry.type.toLowerCase();
-      if (!FIELD_MEDIA_TYPES.has(mimeType) || mimeType !== expected.mimeType.toLowerCase()) {
-        throw new FieldActionError("media_type_not_allowed", 415, "Only supported photo and voice-note formats are accepted.");
+      if (
+        !FIELD_MEDIA_TYPES.has(mimeType) ||
+        mimeType !== expected.mimeType.toLowerCase()
+      ) {
+        throw new FieldActionError(
+          "media_type_not_allowed",
+          415,
+          "Only supported photo and voice-note formats are accepted.",
+        );
       }
-      if (entry.size < 1 || entry.size > MAX_FIELD_MEDIA_BYTES || entry.size !== expected.size) throw payloadTooLarge();
+      if (
+        entry.size < 1 ||
+        entry.size > MAX_FIELD_MEDIA_BYTES ||
+        entry.size !== expected.size
+      )
+        throw payloadTooLarge();
       if (safeFileName(entry.name) !== expected.fileName) {
-        throw new FieldActionError("attachment_mismatch", 400, "Attachment names do not match the saved action.");
+        throw new FieldActionError(
+          "attachment_mismatch",
+          400,
+          "Attachment names do not match the saved action.",
+        );
       }
       if (!(await mediaSignatureMatches(entry, mimeType))) {
         throw new FieldActionError(
@@ -285,7 +456,11 @@ export async function parseFieldActionRequest(req: Request, jobId: string, assig
       };
     }),
   );
-  if (media.reduce((sum, item) => sum + item.size, 0) > MAX_FIELD_ACTION_MEDIA_BYTES) throw payloadTooLarge();
+  if (
+    media.reduce((sum, item) => sum + item.size, 0) >
+    MAX_FIELD_ACTION_MEDIA_BYTES
+  )
+    throw payloadTooLarge();
   return {
     deviceActionId: parsed.deviceActionId,
     jobId,
@@ -314,23 +489,44 @@ async function boundedFormData(req: Request): Promise<FormData> {
   }).formData();
 }
 
-export async function mediaSignatureMatches(blob: Blob, mimeType: string): Promise<boolean> {
+export async function mediaSignatureMatches(
+  blob: Blob,
+  mimeType: string,
+): Promise<boolean> {
   const bytes = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
-  const ascii = (start: number, end: number) => String.fromCharCode(...bytes.slice(start, end));
-  if (mimeType === "image/jpeg") return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const ascii = (start: number, end: number) =>
+    String.fromCharCode(...bytes.slice(start, end));
+  if (mimeType === "image/jpeg")
+    return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
   if (mimeType === "image/png") {
-    return [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((value, index) => bytes[index] === value);
+    return [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every(
+      (value, index) => bytes[index] === value,
+    );
   }
-  if (mimeType === "image/webp") return ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP";
+  if (mimeType === "image/webp")
+    return ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP";
   if (mimeType === "image/heic" || mimeType === "image/heif") {
-    return ascii(4, 8) === "ftyp" && new Set(["heic", "heix", "hevc", "hevx", "mif1", "msf1"]).has(ascii(8, 12));
+    return (
+      ascii(4, 8) === "ftyp" &&
+      new Set(["heic", "heix", "hevc", "hevx", "mif1", "msf1"]).has(
+        ascii(8, 12),
+      )
+    );
   }
   if (mimeType === "audio/mpeg") {
-    return ascii(0, 3) === "ID3" || (bytes[0] === 0xff && ((bytes[1] ?? 0) & 0xe0) === 0xe0);
+    return (
+      ascii(0, 3) === "ID3" ||
+      (bytes[0] === 0xff && ((bytes[1] ?? 0) & 0xe0) === 0xe0)
+    );
   }
   if (mimeType === "audio/mp4") return ascii(4, 8) === "ftyp";
   if (mimeType === "audio/webm") {
-    return bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
+    return (
+      bytes[0] === 0x1a &&
+      bytes[1] === 0x45 &&
+      bytes[2] === 0xdf &&
+      bytes[3] === 0xa3
+    );
   }
   if (mimeType === "audio/wav" || mimeType === "audio/x-wav") {
     return ascii(0, 4) === "RIFF" && ascii(8, 12) === "WAVE";
@@ -344,26 +540,146 @@ export async function processFieldSubmission(
   dependencies: ProcessFieldDependencies,
 ): Promise<VerifiedFieldActionResponse> {
   validateSubmission(submission, auth);
+  // Treat a slot-only payload as typed as well.  The HTTP parser rejects this
+  // shape, but callers can construct FieldSubmission objects directly (for
+  // example an older offline queue or an internal adapter).  Those callers
+  // must receive the same fail-closed evidence contract rather than falling
+  // through to a generic Field Check-in.
+  const typedEvidence =
+    submission.payload.work_package_id != null ||
+    submission.payload.evidence_slot_id != null;
+  const hasCorrectionOf = hasNonEmptyValue(submission.payload.correction_of);
+  const hasEvidenceCorrectionOf = hasNonEmptyValue(
+    submission.payload.evidence_correction_of,
+  );
+  const hasEvidenceItemCorrectionOf = hasNonEmptyValue(
+    submission.payload.evidence_item_correction_of,
+  );
+  const hasCorrectionReason = hasNonEmptyValue(
+    submission.payload.correction_reason,
+  );
+  if (hasCorrectionOf !== hasCorrectionReason) throw invalidMetadata();
+  if (hasEvidenceCorrectionOf !== hasEvidenceItemCorrectionOf)
+    throw invalidMetadata();
+  if (
+    hasEvidenceCorrectionOf &&
+    hasEvidenceCorrectionOf !== hasCorrectionReason
+  )
+    throw invalidMetadata();
+  if (hasCorrectionOf && (hasEvidenceCorrectionOf || hasEvidenceItemCorrectionOf))
+    throw invalidMetadata();
+  if (!typedEvidence && (hasEvidenceCorrectionOf || hasEvidenceItemCorrectionOf))
+    throw invalidMetadata();
+  if (typedEvidence && hasCorrectionOf) throw invalidMetadata();
+  if (typedEvidence && hasCorrectionReason !== hasEvidenceCorrectionOf)
+    throw invalidMetadata();
+  if (typedEvidence) {
+    // Technical verification is derived only after the Worker has verified the
+    // immutable R2 receipts.  A field payload may carry the compatibility value
+    // `Verified`/`Open`, but it cannot select a business disposition or forge a
+    // different verification result.
+    if (
+      submission.payload.evidence_verification != null &&
+      submission.payload.evidence_verification !== "Verified"
+    ) {
+      throw new FieldActionError(
+        "evidence_verification_forbidden",
+        400,
+        "Technical evidence verification is derived by the Worker.",
+      );
+    }
+    if (
+      submission.payload.evidence_disposition != null &&
+      submission.payload.evidence_disposition !== "Open"
+    ) {
+      throw new FieldActionError(
+        "evidence_disposition_forbidden",
+        400,
+        "Field evidence starts Open; an authorized review command sets its disposition.",
+      );
+    }
+    // Normalize the trusted values before hashing, persisting, or replaying so
+    // callers that construct a typed submission internally cannot bypass the
+    // same contract enforced by parsePayload at the HTTP boundary.
+    submission = {
+      ...submission,
+      payload: {
+        ...submission.payload,
+        evidence_verification: "Verified",
+        evidence_disposition: "Open",
+      },
+    };
+  }
+  if (typedEvidence && submission.media.length === 0) {
+    throw new FieldActionError(
+      "evidence_attachment_required",
+      400,
+      "A typed evidence slot must include at least one captured attachment.",
+    );
+  }
+  if (typedEvidence && !submission.payload.work_package_release_attempt_id) {
+    throw new FieldActionError(
+      "evidence_release_attempt_missing",
+      409,
+      "Refresh this Work Package before capturing evidence for its current release attempt.",
+    );
+  }
+  if (
+    typedEvidence &&
+    submission.payload.evidence_correction_of &&
+    submission.media.length !== 1
+  ) {
+    throw new FieldActionError(
+      "evidence_correction_attachment_count",
+      400,
+      "A correction must contain exactly one attachment so its replacement identity is unambiguous.",
+    );
+  }
+  if (
+    typedEvidence &&
+    (!auth.session.device_id ||
+      (submission.payload.evidence_device_id !== null &&
+        submission.payload.evidence_device_id !== undefined &&
+        submission.payload.evidence_device_id !== auth.session.device_id))
+  ) {
+    throw new FieldActionError(
+      "evidence_device_mismatch",
+      409,
+      "The evidence device binding is stale. Reconnect and refresh this package before retrying.",
+    );
+  }
   const now = dependencies.now ?? (() => new Date());
   const randomId = dependencies.randomId ?? (() => crypto.randomUUID());
   const prepared = await Promise.all(
     submission.media.map(async (media) => ({
       ...media,
       checksum: await sha256Blob(media.blob),
-      evidenceId: await deterministicId("evi", `${submission.deviceActionId}:${media.attachmentId}`),
+      evidenceId: await deterministicId(
+        "evi",
+        `${submission.deviceActionId}:${media.attachmentId}`,
+      ),
     })),
   );
-  prepared.sort((left, right) => left.attachmentId.localeCompare(right.attachmentId));
+  prepared.sort((left, right) =>
+    left.attachmentId.localeCompare(right.attachmentId),
+  );
   const payloadHash = await sha256Text(
     stableStringify({
       job_id: submission.jobId,
       assignment_id: submission.assignmentId,
+      scope: submission.scope ?? null,
       payload: submission.payload,
       media: prepared.map(({ blob: _blob, ...item }) => item),
     }),
   );
   const checkinId = await deterministicId("fci", submission.deviceActionId);
-  const scopeDigest = (await sha256Text(`${auth.session.tenant_id}:${submission.jobId}`)).slice(0, 24);
+  const scopeDigest = (
+    await sha256Text(
+      `${auth.session.tenant_id}:${stableStringify(
+        submission.scope ?? { job_id: submission.jobId },
+      )}`,
+    )
+  ).slice(0, 24);
   const started = now();
   const token = randomId();
   const claim = await dependencies.store.claim({
@@ -376,21 +692,58 @@ export async function processFieldSubmission(
     checkinId,
     now: started.toISOString(),
     token,
-    leaseExpiresAt: new Date(started.getTime() + FIELD_ACTION_LEASE_MS).toISOString(),
+    leaseExpiresAt: new Date(
+      started.getTime() + FIELD_ACTION_LEASE_MS,
+    ).toISOString(),
+    workPackageId: submission.payload.work_package_id ?? null,
+    workPackageVersion: submission.payload.work_package_version ?? null,
+    evidenceSlotId: submission.payload.evidence_slot_id ?? null,
+    evidenceRequirement: submission.payload.evidence_requirement ?? null,
+    evidenceSource: submission.payload.evidence_source ?? null,
+    evidenceDeviceId:
+      auth.session.device_id ?? submission.payload.evidence_device_id ?? null,
+    evidenceFreshness: submission.payload.evidence_freshness ?? null,
+    evidenceConflictState: submission.payload.evidence_conflict_state ?? null,
+    evidenceVerification: submission.payload.evidence_verification ?? null,
+    evidenceDisposition: submission.payload.evidence_disposition ?? null,
+    evidenceCorrectionOf: submission.payload.evidence_correction_of,
+    evidenceItemCorrectionOf: submission.payload.evidence_item_correction_of,
+    workPackageReleaseAttemptId:
+      submission.payload.work_package_release_attempt_id ?? null,
+    correctionReason: submission.payload.correction_reason,
   });
   if (claim.state === "verified") return claim.response;
   if (claim.state === "conflict") {
-    throw new FieldActionError("idempotency_conflict", 409, "This device action id is already bound to different saved content.");
+    throw new FieldActionError(
+      "idempotency_conflict",
+      409,
+      "This device action id is already bound to different saved content.",
+    );
   }
   if (claim.state === "busy") {
-    throw new FieldActionError("action_in_progress", 503, "This saved action is already being verified.", 3);
+    throw new FieldActionError(
+      "action_in_progress",
+      503,
+      "This saved action is already being verified.",
+      3,
+    );
   }
 
   try {
     const receipts: FieldMediaReceipt[] = [];
     for (const media of prepared) {
-      await renewLease(dependencies.store, submission.deviceActionId, token, now);
-      const r2Key = mediaKey(scopeDigest, checkinId, media.evidenceId, media.mimeType);
+      await renewLease(
+        dependencies.store,
+        submission.deviceActionId,
+        token,
+        now,
+      );
+      const r2Key = mediaKey(
+        scopeDigest,
+        checkinId,
+        media.evidenceId,
+        media.mimeType,
+      );
       const expected: FieldMediaReceipt = {
         attachmentId: media.attachmentId,
         evidenceId: media.evidenceId,
@@ -400,14 +753,28 @@ export async function processFieldSubmission(
         contentLength: media.size,
         frappeEvidenceName: null,
       };
-      const existing = await dependencies.store.getMedia(submission.deviceActionId, media.attachmentId);
+      const existing = await dependencies.store.getMedia(
+        submission.deviceActionId,
+        media.attachmentId,
+      );
       if (existing) {
         assertReceiptMatches(existing, expected);
         receipts.push(existing);
         continue;
       }
-      await dependencies.objects.ensure(r2Key, media.blob, media.mimeType, media.checksum);
-      receipts.push(await dependencies.store.recordMedia(submission.deviceActionId, expected, now().toISOString()));
+      await dependencies.objects.ensure(
+        r2Key,
+        media.blob,
+        media.mimeType,
+        media.checksum,
+      );
+      receipts.push(
+        await dependencies.store.recordMedia(
+          submission.deviceActionId,
+          expected,
+          now().toISOString(),
+        ),
+      );
     }
 
     const manifest = stableStringify({
@@ -416,26 +783,44 @@ export async function processFieldSubmission(
       user_id: auth.session.user_id,
       job_id: submission.jobId,
       assignment_id: submission.assignmentId,
+      scope: submission.scope ?? null,
       device_action_id: submission.deviceActionId,
       payload: submission.payload,
-      media: receipts.map(({ frappeEvidenceName: _frappe, ...receipt }) => receipt),
+      media: receipts.map(
+        ({ frappeEvidenceName: _frappe, ...receipt }) => receipt,
+      ),
     });
     const manifestKey = manifestObjectKey(scopeDigest, checkinId);
     await renewLease(dependencies.store, submission.deviceActionId, token, now);
-    await dependencies.objects.ensure(manifestKey, manifest, "application/json", await sha256Text(manifest));
-    await dependencies.store.markR2Stored(submission.deviceActionId, manifestKey, now().toISOString());
+    await dependencies.objects.ensure(
+      manifestKey,
+      manifest,
+      "application/json",
+      await sha256Text(manifest),
+    );
+    await dependencies.store.markR2Stored(
+      submission.deviceActionId,
+      manifestKey,
+      now().toISOString(),
+    );
 
     const persistedReceipts: FieldMediaReceipt[] = [];
     for (const receipt of receipts) {
-      await renewLease(dependencies.store, submission.deviceActionId, token, now);
+      await renewLease(
+        dependencies.store,
+        submission.deviceActionId,
+        token,
+        now,
+      );
       let frappeEvidenceName = receipt.frappeEvidenceName;
       if (!frappeEvidenceName) {
-        const preparedMedia = prepared.find((item) => item.attachmentId === receipt.attachmentId)!;
         const persisted = await dependencies.frappe.persistEvidence({
           evidenceId: receipt.evidenceId,
           deviceActionId: evidenceDeviceActionId(receipt.evidenceId),
           jobId: submission.jobId,
-          evidenceType: receipt.contentType.startsWith("image/") ? "Photo" : "Voice Note",
+          evidenceType: receipt.contentType.startsWith("image/")
+            ? "Photo"
+            : "Voice Note",
           proofSlot: submission.payload.proof_slot,
           r2Key: receipt.r2Key,
           checksum: receipt.checksum,
@@ -447,9 +832,33 @@ export async function processFieldSubmission(
           longitude: submission.payload.longitude,
           locationAccuracyM: submission.payload.location_accuracy_m,
           summary: submission.payload.notes,
-          customerSafe: auth.session.role !== "field" && submission.payload.customer_safe_requested,
-          correctionOf: submission.payload.evidence_correction_of,
-          correctionReason: submission.payload.correction_reason,
+          customerSafe:
+            auth.session.role !== "field" &&
+            submission.payload.customer_safe_requested,
+          correctionOf: submission.payload.evidence_item_correction_of ?? null,
+          // A generic Field Check-in correction belongs to the check-in
+          // lineage.  Only typed Evidence Item corrections may carry this
+          // reason onto an Evidence Item; otherwise a multi-media generic
+          // correction would falsely annotate every attachment.
+          correctionReason: typedEvidence
+            ? submission.payload.correction_reason
+            : null,
+          workPackageId: submission.payload.work_package_id,
+          workPackageVersion: submission.payload.work_package_version,
+          evidenceSlotId: submission.payload.evidence_slot_id,
+          evidenceRequirement: submission.payload.evidence_requirement,
+          evidenceSource: submission.payload.evidence_source,
+          evidenceDeviceId: auth.session.device_id,
+          evidenceFreshness: submission.payload.evidence_freshness,
+          evidenceConflictState: submission.payload.evidence_conflict_state,
+          evidenceVerification: submission.payload.evidence_verification,
+          evidenceDisposition: submission.payload.evidence_disposition,
+          workPackageReleaseAttemptId:
+            submission.payload.work_package_release_attempt_id,
+          workObjectType: submission.scope?.workObjectType ?? null,
+          workObjectId: submission.scope?.workObjectId ?? null,
+          physicalContextType: submission.scope?.physicalContextType ?? null,
+          physicalContextId: submission.scope?.physicalContextId ?? null,
         } satisfies PersistFieldMediaInput);
         frappeEvidenceName = persisted.name;
         await dependencies.store.markMediaPersisted(
@@ -459,10 +868,46 @@ export async function processFieldSubmission(
           now().toISOString(),
         );
       }
+      if (typedEvidence) {
+        const persistWorkPackageEvidence =
+          dependencies.frappe.persistWorkPackageEvidence;
+        if (!persistWorkPackageEvidence)
+          throw new Error("work_package_evidence_writer_missing");
+        await persistWorkPackageEvidence.call(dependencies.frappe, {
+          workPackageId: submission.payload.work_package_id!,
+          workPackageVersion: submission.payload.work_package_version!,
+          jobId: submission.jobId,
+          assignmentId: submission.assignmentId,
+          actorUser: auth.session.frappe_user_id!,
+          deviceActionId: workPackageEvidenceDeviceActionId(receipt.evidenceId),
+          evidenceSlotId: submission.payload.evidence_slot_id!,
+          evidenceRequirement: submission.payload.evidence_requirement!,
+          evidenceSource: submission.payload.evidence_source!,
+          evidenceItemId: frappeEvidenceName!,
+          evidenceDeviceId: auth.session.device_id!,
+          evidenceCapturedAt: submission.payload.capture_completed_at,
+          evidenceFreshness: submission.payload.evidence_freshness!,
+          evidenceConflictState: submission.payload.evidence_conflict_state!,
+          evidenceCorrectionOf: submission.payload.evidence_correction_of,
+          evidenceItemCorrectionOf:
+            submission.payload.evidence_item_correction_of,
+          workPackageReleaseAttemptId:
+            submission.payload.work_package_release_attempt_id!,
+          workObjectType: submission.scope?.workObjectType ?? null,
+          workObjectId: submission.scope?.workObjectId ?? null,
+          physicalContextType: submission.scope?.physicalContextType ?? null,
+          physicalContextId: submission.scope?.physicalContextId ?? null,
+          correctionReason: submission.payload.correction_reason,
+          evidenceVerification: submission.payload.evidence_verification!,
+          evidenceDisposition: submission.payload.evidence_disposition!,
+        } satisfies PersistWorkPackageEvidenceInput);
+      }
       persistedReceipts.push({ ...receipt, frappeEvidenceName });
     }
 
-    const voiceEvidence = persistedReceipts.find((item) => item.contentType.startsWith("audio/"));
+    const voiceEvidence = persistedReceipts.find((item) =>
+      item.contentType.startsWith("audio/"),
+    );
     await renewLease(dependencies.store, submission.deviceActionId, token, now);
     const checkin = await dependencies.frappe.persistCheckIn({
       checkinId,
@@ -476,14 +921,18 @@ export async function processFieldSubmission(
       latitude: submission.payload.latitude,
       longitude: submission.payload.longitude,
       locationAccuracyM: submission.payload.location_accuracy_m,
-      photoCount: persistedReceipts.filter((item) => item.contentType.startsWith("image/")).length,
+      photoCount: persistedReceipts.filter((item) =>
+        item.contentType.startsWith("image/"),
+      ).length,
       evidenceIds: persistedReceipts.map((item) => item.evidenceId),
       blocker: submission.payload.blocker,
       blockerCategory: submission.payload.blocker_category,
       blockerSummary: submission.payload.blocker_summary,
       voiceEvidenceId: voiceEvidence?.frappeEvidenceName ?? null,
       correctionOf: submission.payload.correction_of,
-      correctionReason: submission.payload.correction_reason,
+      correctionReason: typedEvidence
+        ? null
+        : submission.payload.correction_reason,
       notes: submission.payload.notes,
       manifestKey,
     } satisfies PersistFieldCheckInInput);
@@ -501,14 +950,27 @@ export async function processFieldSubmission(
       })),
     };
     await renewLease(dependencies.store, submission.deviceActionId, token, now);
-    await dependencies.store.complete(submission.deviceActionId, token, response, now().toISOString());
+    await dependencies.store.complete(
+      submission.deviceActionId,
+      token,
+      response,
+      now().toISOString(),
+    );
     return response;
   } catch (error) {
-    const code = error instanceof FieldActionError ? error.code : safeErrorCode(error);
-    await dependencies.store.fail(submission.deviceActionId, token, code, now().toISOString()).catch(() => {});
+    const code =
+      error instanceof FieldActionError ? error.code : safeErrorCode(error);
+    await dependencies.store
+      .fail(submission.deviceActionId, token, code, now().toISOString())
+      .catch(() => {});
     throw error instanceof FieldActionError
       ? error
-      : new FieldActionError(code, 502, "The action remains queued until R2 and Frappe both verify it.", 5);
+      : new FieldActionError(
+          code,
+          502,
+          "The action remains queued until R2 and Frappe both verify it.",
+          5,
+        );
   }
 }
 
@@ -517,9 +979,13 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
     async claim(input) {
       await env.DB.prepare(
         `INSERT OR IGNORE INTO field_actions
-          (device_action_id, tenant_id, user_id, job_id, assignment_id, action_kind, payload_hash,
-           status, checkin_id, processing_token, lease_expires_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'field_checkin', ?, 'processing', ?, ?, ?, ?, ?)`,
+         (device_action_id, tenant_id, user_id, job_id, assignment_id, action_kind, payload_hash,
+           status, checkin_id, processing_token, lease_expires_at, created_at, updated_at,
+           work_package_id, work_package_version, evidence_slot_id, evidence_requirement,
+           evidence_source, evidence_device_id, evidence_freshness, evidence_conflict_state,
+           evidence_verification, evidence_disposition, evidence_correction_of,
+           evidence_item_correction_of, work_package_release_attempt_id, correction_reason)
+         VALUES (?, ?, ?, ?, ?, 'field_checkin', ?, 'processing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
         .bind(
           input.deviceActionId,
@@ -533,6 +999,20 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
           input.leaseExpiresAt,
           input.now,
           input.now,
+          input.workPackageId,
+          input.workPackageVersion,
+          input.evidenceSlotId,
+          input.evidenceRequirement,
+          input.evidenceSource,
+          input.evidenceDeviceId,
+          input.evidenceFreshness,
+          input.evidenceConflictState,
+          input.evidenceVerification,
+          input.evidenceDisposition,
+          input.evidenceCorrectionOf,
+          input.evidenceItemCorrectionOf,
+          input.workPackageReleaseAttemptId,
+          input.correctionReason,
         )
         .run();
       let row = await fieldActionRow(env, input.deviceActionId);
@@ -542,7 +1022,33 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
         row.user_id !== input.userId ||
         row.payload_hash !== input.payloadHash ||
         row.job_id !== input.jobId ||
-        row.assignment_id !== input.assignmentId
+        row.assignment_id !== input.assignmentId ||
+        !sameNullable(row.work_package_id, input.workPackageId) ||
+        !sameNullableNumber(
+          row.work_package_version,
+          input.workPackageVersion,
+        ) ||
+        !sameNullable(row.evidence_slot_id, input.evidenceSlotId) ||
+        !sameNullable(row.evidence_requirement, input.evidenceRequirement) ||
+        !sameNullable(row.evidence_source, input.evidenceSource) ||
+        !sameNullable(row.evidence_device_id, input.evidenceDeviceId) ||
+        !sameNullable(row.evidence_freshness, input.evidenceFreshness) ||
+        !sameNullable(
+          row.evidence_conflict_state,
+          input.evidenceConflictState,
+        ) ||
+        !sameNullable(row.evidence_verification, input.evidenceVerification) ||
+        !sameNullable(row.evidence_disposition, input.evidenceDisposition) ||
+        !sameNullable(row.evidence_correction_of, input.evidenceCorrectionOf) ||
+        !sameNullable(
+          row.evidence_item_correction_of,
+          input.evidenceItemCorrectionOf,
+        ) ||
+        !sameNullable(
+          row.work_package_release_attempt_id,
+          input.workPackageReleaseAttemptId,
+        ) ||
+        !sameNullable(row.correction_reason, input.correctionReason)
       ) {
         return { state: "conflict" };
       }
@@ -552,7 +1058,10 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
         return { state: "verified", response: parsed };
       }
       if (row.processing_token === input.token) return { state: "acquired" };
-      const reclaimable = row.status === "retryable_error" || !row.lease_expires_at || row.lease_expires_at <= input.now;
+      const reclaimable =
+        row.status === "retryable_error" ||
+        !row.lease_expires_at ||
+        row.lease_expires_at <= input.now;
       if (!reclaimable) return { state: "busy" };
       await env.DB.prepare(
         `UPDATE field_actions
@@ -560,10 +1069,19 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
          WHERE device_action_id = ? AND payload_hash = ? AND status != 'verified'
            AND (status = 'retryable_error' OR lease_expires_at IS NULL OR lease_expires_at <= ?)`,
       )
-        .bind(input.token, input.leaseExpiresAt, input.now, input.deviceActionId, input.payloadHash, input.now)
+        .bind(
+          input.token,
+          input.leaseExpiresAt,
+          input.now,
+          input.deviceActionId,
+          input.payloadHash,
+          input.now,
+        )
         .run();
       row = await fieldActionRow(env, input.deviceActionId);
-      return row?.processing_token === input.token ? { state: "acquired" } : { state: "busy" };
+      return row?.processing_token === input.token
+        ? { state: "acquired" }
+        : { state: "busy" };
     },
     async renew(deviceActionId, token, now, leaseExpiresAt) {
       const result = await env.DB.prepare(
@@ -601,7 +1119,10 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
           now,
         )
         .run();
-      const existing = await this.getMedia(deviceActionId, receipt.attachmentId);
+      const existing = await this.getMedia(
+        deviceActionId,
+        receipt.attachmentId,
+      );
       if (!existing) throw new Error("field_media_receipt_missing");
       assertReceiptMatches(existing, receipt);
       return existing;
@@ -632,7 +1153,8 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
       )
         .bind(JSON.stringify(response), now, now, deviceActionId, token)
         .run();
-      if (Number(result.meta.changes ?? 0) !== 1) throw new Error("field_action_lease_lost");
+      if (Number(result.meta.changes ?? 0) !== 1)
+        throw new Error("field_action_lease_lost");
     },
     async fail(deviceActionId, token, errorCode, now) {
       await env.DB.prepare(
@@ -646,7 +1168,12 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
   };
 }
 
-async function renewLease(store: FieldActionStore, deviceActionId: string, token: string, now: () => Date): Promise<void> {
+async function renewLease(
+  store: FieldActionStore,
+  deviceActionId: string,
+  token: string,
+  now: () => Date,
+): Promise<void> {
   const current = now();
   const renewed = await store.renew(
     deviceActionId,
@@ -654,7 +1181,13 @@ async function renewLease(store: FieldActionStore, deviceActionId: string, token
     current.toISOString(),
     new Date(current.getTime() + FIELD_ACTION_LEASE_MS).toISOString(),
   );
-  if (!renewed) throw new FieldActionError("action_lease_lost", 503, "Another retry now owns this saved action.", 3);
+  if (!renewed)
+    throw new FieldActionError(
+      "action_lease_lost",
+      503,
+      "Another retry now owns this saved action.",
+      3,
+    );
 }
 
 interface FieldActionRow {
@@ -668,6 +1201,20 @@ interface FieldActionRow {
   processing_token: string | null;
   lease_expires_at: string | null;
   response_json: string | null;
+  work_package_id: string | null;
+  work_package_version: number | null;
+  evidence_slot_id: string | null;
+  evidence_requirement: string | null;
+  evidence_source: string | null;
+  evidence_device_id: string | null;
+  evidence_freshness: string | null;
+  evidence_conflict_state: string | null;
+  evidence_verification: string | null;
+  evidence_disposition: string | null;
+  evidence_correction_of: string | null;
+  evidence_item_correction_of: string | null;
+  work_package_release_attempt_id: string | null;
+  correction_reason: string | null;
 }
 
 interface FieldMediaRow {
@@ -680,10 +1227,17 @@ interface FieldMediaRow {
   frappe_evidence_name: string | null;
 }
 
-async function fieldActionRow(env: AppEnv, deviceActionId: string): Promise<FieldActionRow | null> {
+async function fieldActionRow(
+  env: AppEnv,
+  deviceActionId: string,
+): Promise<FieldActionRow | null> {
   return await env.DB.prepare(
     `SELECT device_action_id, tenant_id, user_id, job_id, assignment_id, payload_hash, status, processing_token,
-            lease_expires_at, response_json
+            lease_expires_at, response_json, work_package_id, work_package_version, evidence_slot_id,
+            evidence_requirement, evidence_source, evidence_device_id, evidence_freshness,
+            evidence_conflict_state, evidence_verification, evidence_disposition,
+            evidence_correction_of, evidence_item_correction_of,
+            work_package_release_attempt_id, correction_reason
      FROM field_actions WHERE device_action_id = ?`,
   )
     .bind(deviceActionId)
@@ -708,7 +1262,11 @@ export function r2ObjectStore(bucket: R2Bucket): ImmutableObjectStore {
       const existing = await bucket.head(key);
       if (existing) {
         if (!r2ObjectMatches(existing, bodySize(body), checksum)) {
-          throw new FieldActionError("immutable_object_conflict", 409, "Stored media does not match this saved action.");
+          throw new FieldActionError(
+            "immutable_object_conflict",
+            409,
+            "Stored media does not match this saved action.",
+          );
         }
         return;
       }
@@ -720,7 +1278,11 @@ export function r2ObjectStore(bucket: R2Bucket): ImmutableObjectStore {
       });
       const verified = await bucket.head(key);
       if (!verified || !r2ObjectMatches(verified, bodySize(body), checksum)) {
-        throw new FieldActionError("immutable_object_conflict", 409, "Stored media does not match this saved action.");
+        throw new FieldActionError(
+          "immutable_object_conflict",
+          409,
+          "Stored media does not match this saved action.",
+        );
       }
     },
   };
@@ -740,7 +1302,12 @@ function parseMetadata(
   }>;
 } {
   if (!isRecord(value)) throw invalidMetadata();
-  const deviceActionId = boundedId(value.device_action_id, 8, 80, "device_action_id");
+  const deviceActionId = boundedId(
+    value.device_action_id,
+    8,
+    80,
+    "device_action_id",
+  );
   if (!isRecord(value.payload)) throw invalidMetadata();
   const payload = parsePayload(value.payload, assignmentId);
   if (!Array.isArray(value.attachments)) throw invalidMetadata();
@@ -750,40 +1317,160 @@ function parseMetadata(
       attachmentId: boundedId(item.attachmentId, 1, 80, "attachment_id"),
       fileName: safeFileName(item.fileName),
       mimeType: boundedText(item.mimeType, 3, 100, "mime_type").toLowerCase(),
-      size: boundedInteger(item.size, 1, MAX_FIELD_MEDIA_BYTES, "content_length"),
+      size: boundedInteger(
+        item.size,
+        1,
+        MAX_FIELD_MEDIA_BYTES,
+        "content_length",
+      ),
     };
   });
-  if (new Set(attachments.map((item) => item.attachmentId)).size !== attachments.length) throw invalidMetadata();
+  if (
+    new Set(attachments.map((item) => item.attachmentId)).size !==
+    attachments.length
+  )
+    throw invalidMetadata();
   return { deviceActionId, payload, attachments };
 }
 
-function parsePayload(value: Record<string, unknown>, assignmentId: string): FieldActionPayload {
-  const suppliedAssignment = boundedText(value.assignment_id, 1, 140, "assignment_id");
+function parsePayload(
+  value: Record<string, unknown>,
+  assignmentId: string,
+): FieldActionPayload {
+  const suppliedAssignment = boundedText(
+    value.assignment_id,
+    1,
+    140,
+    "assignment_id",
+  );
   if (suppliedAssignment !== assignmentId) {
-    throw new FieldActionError("assignment_changed", 409, "The active job assignment changed. Refresh the job packet before retrying.");
+    throw new FieldActionError(
+      "assignment_changed",
+      409,
+      "The active job assignment changed. Refresh the job packet before retrying.",
+    );
   }
   const proofSlot = boundedText(value.proof_slot, 2, 40, "proof_slot");
   if (!PROOF_SLOTS.has(proofSlot)) throw invalidMetadata();
-  const captureStarted = isoDatetime(value.capture_started_at, "capture_started_at");
-  const captureCompleted = isoDatetime(value.capture_completed_at, "capture_completed_at");
-  if (Date.parse(captureCompleted) < Date.parse(captureStarted)) throw invalidMetadata();
+  const captureStarted = isoDatetime(
+    value.capture_started_at,
+    "capture_started_at",
+  );
+  const captureCompleted = isoDatetime(
+    value.capture_completed_at,
+    "capture_completed_at",
+  );
+  if (Date.parse(captureCompleted) < Date.parse(captureStarted))
+    throw invalidMetadata();
   const blocker = value.blocker === true;
   const blockerCategory = optionalText(value.blocker_category, 40);
   const blockerSummary = optionalText(value.blocker_summary, 1000);
-  if (blocker && (!blockerCategory || !BLOCKER_CATEGORIES.has(blockerCategory) || !blockerSummary)) throw invalidMetadata();
+  if (
+    blocker &&
+    (!blockerCategory ||
+      !BLOCKER_CATEGORIES.has(blockerCategory) ||
+      !blockerSummary)
+  )
+    throw invalidMetadata();
   const correctionOf = optionalId(value.correction_of, 140);
   const evidenceCorrectionOf = optionalId(value.evidence_correction_of, 140);
+  const evidenceItemCorrectionOf = optionalId(
+    value.evidence_item_correction_of,
+    140,
+  );
   const correctionReason = optionalText(value.correction_reason, 1000);
-  if ((correctionOf || evidenceCorrectionOf) && !correctionReason) throw invalidMetadata();
-  const locationPermissionState = boundedText(value.location_permission_state, 5, 20, "location_permission_state");
-  if (!["not_requested", "granted", "denied", "unavailable", "error"].includes(locationPermissionState)) throw invalidMetadata();
+  if (Boolean(correctionOf) !== Boolean(correctionReason))
+    throw invalidMetadata();
+  if ((correctionOf || evidenceCorrectionOf) && !correctionReason)
+    throw invalidMetadata();
+  const locationPermissionState = boundedText(
+    value.location_permission_state,
+    5,
+    20,
+    "location_permission_state",
+  );
+  if (
+    !["not_requested", "granted", "denied", "unavailable", "error"].includes(
+      locationPermissionState,
+    )
+  )
+    throw invalidMetadata();
   const latitude = optionalNumber(value.latitude, -90, 90);
   const longitude = optionalNumber(value.longitude, -180, 180);
-  const locationAccuracyM = optionalNumber(value.location_accuracy_m, 0, 100_000);
-  if (locationPermissionState === "granted" && (latitude === null || longitude === null || locationAccuracyM === null))
+  const locationAccuracyM = optionalNumber(
+    value.location_accuracy_m,
+    0,
+    100_000,
+  );
+  if (
+    locationPermissionState === "granted" &&
+    (latitude === null || longitude === null || locationAccuracyM === null)
+  )
     throw invalidMetadata();
-  if (locationPermissionState !== "granted" && (latitude !== null || longitude !== null || locationAccuracyM !== null))
+  if (
+    locationPermissionState !== "granted" &&
+    (latitude !== null || longitude !== null || locationAccuracyM !== null)
+  )
     throw invalidMetadata();
+  const workPackageId = optionalId(value.work_package_id, 140);
+  const evidenceSlotId = optionalId(value.evidence_slot_id, 140);
+  const typedEvidence = workPackageId !== null || evidenceSlotId !== null;
+  if (typedEvidence && (!workPackageId || !evidenceSlotId))
+    throw invalidMetadata();
+  if (typedEvidence && !optionalId(value.work_package_release_attempt_id, 140))
+    throw invalidMetadata();
+  if (Boolean(evidenceCorrectionOf) !== Boolean(evidenceItemCorrectionOf))
+    throw invalidMetadata();
+  if (evidenceCorrectionOf && !typedEvidence) throw invalidMetadata();
+  if (typedEvidence && evidenceCorrectionOf && !correctionReason)
+    throw invalidMetadata();
+  if (typedEvidence && !evidenceCorrectionOf && correctionReason)
+    throw invalidMetadata();
+  if (typedEvidence && correctionOf) throw invalidMetadata();
+  if (evidenceItemCorrectionOf && !typedEvidence) throw invalidMetadata();
+  const workPackageVersion = optionalPositiveInteger(
+    value.work_package_version,
+  );
+  const evidenceRequirement = optionalText(value.evidence_requirement, 2_000);
+  const evidenceSource = optionalText(value.evidence_source, 140);
+  const evidenceDeviceId = optionalId(value.evidence_device_id, 140);
+  if (
+    typedEvidence &&
+    (!workPackageVersion || !evidenceRequirement || !evidenceSource)
+  ) {
+    throw invalidMetadata();
+  }
+  const evidenceFreshness = typedEvidence
+    ? evidenceEnum(
+        value.evidence_freshness,
+        ["Current", "Stale", "Unknown"] as const,
+        "Current",
+      )
+    : null;
+  const evidenceConflictState = typedEvidence
+    ? evidenceEnum(
+        value.evidence_conflict_state,
+        ["None", "Detected", "Resolved"] as const,
+        "None",
+      )
+    : null;
+  const evidenceVerification = typedEvidence
+    ? evidenceEnum(
+        value.evidence_verification,
+        ["Pending", "Verified", "Rejected"] as const,
+        "Verified",
+      )
+    : null;
+  const evidenceDisposition = typedEvidence
+    ? evidenceEnum(
+        value.evidence_disposition,
+        ["Open", "Accepted", "Needs Correction", "Superseded"] as const,
+        "Open",
+      )
+    : null;
+  if (typedEvidence && evidenceVerification !== "Verified")
+    throw invalidMetadata();
+  if (typedEvidence && evidenceDisposition !== "Open") throw invalidMetadata();
   return {
     assignment_id: suppliedAssignment,
     proof_slot: proofSlot,
@@ -796,32 +1483,71 @@ function parsePayload(value: Record<string, unknown>, assignmentId: string): Fie
     latitude,
     longitude,
     location_accuracy_m: locationAccuracyM,
-    location_permission_state: locationPermissionState as FieldActionPayload["location_permission_state"],
+    location_permission_state:
+      locationPermissionState as FieldActionPayload["location_permission_state"],
     correction_of: correctionOf,
     correction_reason: correctionReason,
     evidence_correction_of: evidenceCorrectionOf,
+    evidence_item_correction_of: evidenceItemCorrectionOf,
+    work_package_release_attempt_id: typedEvidence
+      ? optionalId(value.work_package_release_attempt_id, 140)
+      : null,
+    work_package_id: workPackageId,
+    work_package_version: typedEvidence ? workPackageVersion : null,
+    evidence_slot_id: evidenceSlotId,
+    evidence_requirement: typedEvidence ? evidenceRequirement : null,
+    evidence_source: typedEvidence ? evidenceSource : null,
+    evidence_device_id: evidenceDeviceId,
+    evidence_freshness: evidenceFreshness,
+    evidence_conflict_state: evidenceConflictState,
+    evidence_verification: evidenceVerification,
+    evidence_disposition: evidenceDisposition,
     customer_safe_requested: value.customer_safe_requested === true,
   };
 }
 
-function validateSubmission(submission: FieldSubmission, auth: AuthContext): void {
+function validateSubmission(
+  submission: FieldSubmission,
+  auth: AuthContext,
+): void {
   boundedId(submission.deviceActionId, 8, 80, "device_action_id");
   boundedText(submission.jobId, 1, 140, "job_id");
-  if (submission.payload.assignment_id !== submission.assignmentId) throw invalidMetadata();
+  if (submission.payload.assignment_id !== submission.assignmentId)
+    throw invalidMetadata();
   if (auth.session.role === "field" && !auth.session.frappe_user_id) {
-    throw new FieldActionError("field_identity_missing", 403, "This field account is not linked to a Frappe user.");
+    throw new FieldActionError(
+      "field_identity_missing",
+      403,
+      "This field account is not linked to a Frappe user.",
+    );
   }
   if (submission.media.length > MAX_FIELD_MEDIA_COUNT) throw payloadTooLarge();
-  if (submission.media.reduce((sum, item) => sum + item.size, 0) > MAX_FIELD_ACTION_MEDIA_BYTES) throw payloadTooLarge();
+  if (
+    submission.media.reduce((sum, item) => sum + item.size, 0) >
+    MAX_FIELD_ACTION_MEDIA_BYTES
+  )
+    throw payloadTooLarge();
   for (const media of submission.media) {
     boundedId(media.attachmentId, 1, 80, "attachment_id");
-    if (!FIELD_MEDIA_TYPES.has(media.mimeType) || media.size !== media.blob.size || media.size < 1 || media.size > MAX_FIELD_MEDIA_BYTES) {
-      throw new FieldActionError("media_type_or_size_not_allowed", 415, "Only bounded photo and voice-note files are accepted.");
+    if (
+      !FIELD_MEDIA_TYPES.has(media.mimeType) ||
+      media.size !== media.blob.size ||
+      media.size < 1 ||
+      media.size > MAX_FIELD_MEDIA_BYTES
+    ) {
+      throw new FieldActionError(
+        "media_type_or_size_not_allowed",
+        415,
+        "Only bounded photo and voice-note files are accepted.",
+      );
     }
   }
 }
 
-function assertReceiptMatches(actual: FieldMediaReceipt, expected: FieldMediaReceipt): void {
+function assertReceiptMatches(
+  actual: FieldMediaReceipt,
+  expected: FieldMediaReceipt,
+): void {
   if (
     actual.evidenceId !== expected.evidenceId ||
     actual.r2Key !== expected.r2Key ||
@@ -829,11 +1555,17 @@ function assertReceiptMatches(actual: FieldMediaReceipt, expected: FieldMediaRec
     actual.contentType !== expected.contentType ||
     actual.contentLength !== expected.contentLength
   ) {
-    throw new FieldActionError("media_receipt_conflict", 409, "A prior media receipt does not match this saved action.");
+    throw new FieldActionError(
+      "media_receipt_conflict",
+      409,
+      "A prior media receipt does not match this saved action.",
+    );
   }
 }
 
-function parseStoredResponse(value: string | null): VerifiedFieldActionResponse | null {
+function parseStoredResponse(
+  value: string | null,
+): VerifiedFieldActionResponse | null {
   if (!value) return null;
   try {
     const parsed = JSON.parse(value) as Partial<VerifiedFieldActionResponse>;
@@ -850,7 +1582,12 @@ function parseStoredResponse(value: string | null): VerifiedFieldActionResponse 
   }
 }
 
-function mediaKey(scopeDigest: string, checkinId: string, evidenceId: string, mimeType: string): string {
+function mediaKey(
+  scopeDigest: string,
+  checkinId: string,
+  evidenceId: string,
+  mimeType: string,
+): string {
   return `field/v1/${scopeDigest}/${checkinId}/media/${evidenceId}.${extensionForMime(mimeType)}`;
 }
 
@@ -860,6 +1597,10 @@ function manifestObjectKey(scopeDigest: string, checkinId: string): string {
 
 function evidenceDeviceActionId(evidenceId: string): string {
   return `fem_${evidenceId.replace(/^evi_/, "")}`;
+}
+
+function workPackageEvidenceDeviceActionId(evidenceId: string): string {
+  return `wpe_${evidenceId.replace(/^evi_/, "")}`;
 }
 
 function extensionForMime(mimeType: string): string {
@@ -883,7 +1624,13 @@ function extensionForMime(mimeType: string): string {
 
 function safeFileName(value: unknown): string {
   const name = boundedText(value, 1, 180, "file_name").normalize("NFKC");
-  if (name.includes("/") || name.includes("\\") || name.includes("..") || /[\u0000-\u001f]/.test(name)) throw invalidMetadata();
+  if (
+    name.includes("/") ||
+    name.includes("\\") ||
+    name.includes("..") ||
+    /[\u0000-\u001f]/.test(name)
+  )
+    throw invalidMetadata();
   return name;
 }
 
@@ -892,12 +1639,18 @@ async function deterministicId(prefix: string, value: string): Promise<string> {
 }
 
 async function sha256Blob(blob: Blob): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    await blob.arrayBuffer(),
+  );
   return hex(new Uint8Array(digest));
 }
 
 async function sha256Text(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
   return hex(new Uint8Array(digest));
 }
 
@@ -920,7 +1673,11 @@ function bodySize(body: Blob | string): number {
   return typeof body === "string" ? byteLength(body) : body.size;
 }
 
-function r2ObjectMatches(object: R2Object, expectedSize: number, checksum: string): boolean {
+function r2ObjectMatches(
+  object: R2Object,
+  expectedSize: number,
+  checksum: string,
+): boolean {
   const serverChecksum = object.checksums?.sha256;
   return (
     object.size === expectedSize &&
@@ -934,17 +1691,29 @@ function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
-function boundedId(value: unknown, min: number, max: number, field: string): string {
+function boundedId(
+  value: unknown,
+  min: number,
+  max: number,
+  field: string,
+): string {
   const parsed = boundedText(value, min, max, field);
   if (!/^[A-Za-z0-9._:-]+$/.test(parsed)) throw invalidMetadata();
   return parsed;
 }
 
 function optionalId(value: unknown, max: number): string | null {
-  return value === null || value === undefined || value === "" ? null : boundedId(value, 1, max, "id");
+  return value === null || value === undefined || value === ""
+    ? null
+    : boundedId(value, 1, max, "id");
 }
 
-function boundedText(value: unknown, min: number, max: number, _field: string): string {
+function boundedText(
+  value: unknown,
+  min: number,
+  max: number,
+  _field: string,
+): string {
   if (typeof value !== "string") throw invalidMetadata();
   const parsed = value.trim();
   if (parsed.length < min || parsed.length > max) throw invalidMetadata();
@@ -956,15 +1725,76 @@ function optionalText(value: unknown, max: number): string | null {
   return boundedText(value, 1, max, "text");
 }
 
-function boundedInteger(value: unknown, min: number, max: number, _field: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) throw invalidMetadata();
+function boundedInteger(
+  value: unknown,
+  min: number,
+  max: number,
+  _field: string,
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < min ||
+    value > max
+  )
+    throw invalidMetadata();
   return value;
 }
 
-function optionalNumber(value: unknown, min: number, max: number): number | null {
+function optionalNumber(
+  value: unknown,
+  min: number,
+  max: number,
+): number | null {
   if (value === null || value === undefined || value === "") return null;
-  if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) throw invalidMetadata();
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < min ||
+    value > max
+  )
+    throw invalidMetadata();
   return value;
+}
+
+function sameNullable(actual: unknown, expected: string | null): boolean {
+  const normalized =
+    typeof actual === "string" && actual.trim() ? actual.trim() : null;
+  return normalized === expected;
+}
+
+function sameNullableNumber(actual: unknown, expected: number | null): boolean {
+  if (expected === null)
+    return actual === null || actual === undefined || actual === "";
+  return Number(actual) === expected;
+}
+
+function hasNonEmptyValue(value: unknown): boolean {
+  return typeof value === "string" ? value.trim().length > 0 : value != null;
+}
+
+function optionalPositiveInteger(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > 1_000_000
+  ) {
+    throw invalidMetadata();
+  }
+  return value;
+}
+
+function evidenceEnum<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  fallback: T,
+): T {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value !== "string" || !allowed.includes(value as T))
+    throw invalidMetadata();
+  return value as T;
 }
 
 function isoDatetime(value: unknown, field: string): string {
@@ -975,15 +1805,24 @@ function isoDatetime(value: unknown, field: string): string {
 }
 
 function invalidMetadata(): FieldActionError {
-  return new FieldActionError("invalid_metadata", 400, "The saved field action metadata is invalid.");
+  return new FieldActionError(
+    "invalid_metadata",
+    400,
+    "The saved field action metadata is invalid.",
+  );
 }
 
 function payloadTooLarge(): FieldActionError {
-  return new FieldActionError("payload_too_large", 413, "Split field media into smaller saved actions and retry.");
+  return new FieldActionError(
+    "payload_too_large",
+    413,
+    "Split field media into smaller saved actions and retry.",
+  );
 }
 
 function safeErrorCode(error: unknown): string {
-  const message = error instanceof Error ? error.message : "field_action_failed";
+  const message =
+    error instanceof Error ? error.message : "field_action_failed";
   return /^[a-z0-9_]{3,80}$/.test(message) ? message : "field_action_failed";
 }
 

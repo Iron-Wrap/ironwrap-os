@@ -12,6 +12,13 @@ import {
   verifyIntuitSignature,
 } from "../src/quickbooks.ts";
 import * as store from "../src/store.ts";
+import {
+  withErpReadback,
+  withQuickBooksReconciliationReadback,
+  withTestEffectRuntime,
+} from "./effect-runtime-fixture.ts";
+
+const effectEnv = (values: Record<string, unknown>) => withTestEffectRuntime(values) as never;
 
 test("parseMeasurementSubmission: job + report + numeric measurements", () => {
   const m = parseMeasurementSubmission({
@@ -76,7 +83,7 @@ test("deriveMeasurementIntakeIdentity: provider identity wins over retry headers
 
 test("pushMeasurementToErpNext: an unmatched report is unlinked and explicitly needs review", async (t) => {
   const fetches: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     fetches.push({ url, init: init ?? {} });
     if (url.includes("/api/resource/Roof%20Job?")) throw new Error("unmatched intake must not search with an empty job number");
@@ -85,7 +92,7 @@ test("pushMeasurementToErpNext: an unmatched report is unlinked and explicitly n
     if (url.includes("/api/resource/Evidence%20Item?")) return json({ data: [] });
     if (url.endsWith("/api/resource/Evidence%20Item")) return json({ data: { name: "EV-UNMATCHED" } });
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
 
   const rawSha256 = "b".repeat(64);
   const roofGraph: RoofGraphV1 = {
@@ -107,12 +114,12 @@ test("pushMeasurementToErpNext: an unmatched report is unlinked and explicitly n
     measurements: { squares: 24 },
     source_refs: { squares: "raw" },
   };
-  const result = await pushMeasurementToErpNext({
+  const result = await pushMeasurementToErpNext(effectEnv({
     ERPNEXT_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://erp.example.com",
     ERPNEXT_API_KEY: "erp-key",
     ERPNEXT_API_SECRET: "erp-secret",
-  } as never, {
+  }), {
     measurementId: `measurement:${"a".repeat(64)}`,
     jobNumber: null,
     reportUrl: null,
@@ -133,6 +140,46 @@ test("pushMeasurementToErpNext: an unmatched report is unlinked and explicitly n
   const evidence = JSON.parse(String(fetches.find((f) => f.url.endsWith("/api/resource/Evidence%20Item"))?.init.body));
   assert.equal("roof_job" in evidence, false);
   assert.equal(evidence.evidence_type, "Measurement Report");
+});
+
+test("pushMeasurementToErpNext: cited OCR remains parsed and review-required", async (t) => {
+  const fetches: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    fetches.push({ url, init: init ?? {} });
+    if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0009" }] });
+    if (url.includes("/api/resource/Measurement%20Report?")) return json({ data: [] });
+    if (url.endsWith("/api/resource/Measurement%20Report")) return json({ data: { name: "MR-OCR" } });
+    if (url.includes("/api/resource/Evidence%20Item?")) return json({ data: [] });
+    if (url.endsWith("/api/resource/Evidence%20Item")) return json({ data: { name: "EV-OCR" } });
+    throw new Error(`unexpected fetch ${url}`);
+  }));
+
+  await pushMeasurementToErpNext(effectEnv({
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "erp-key",
+    ERPNEXT_API_SECRET: "erp-secret",
+  }), {
+    measurementId: `measurement:${"c".repeat(64)}`,
+    jobNumber: "26-0009",
+    reportUrl: "https://reports.example.invalid/report.pdf",
+    reportFileUrl: "https://drive.google.com/open?id=report",
+    rawKey: `raw/measurement-reports/${"d".repeat(64)}.bin`,
+    parsedAt: "2026-08-13T10:00:00.000Z",
+    measurements: { squares: 21.4 },
+    needsReview: true,
+    sourceRefs: { squares: "page:1; region:Roof summary; label:Total squares" },
+    sourceConfidences: { squares: "parsed" },
+  });
+
+  const report = JSON.parse(String(
+    fetches.find((call) => call.url.endsWith("/api/resource/Measurement%20Report"))?.init.body,
+  ));
+  assert.equal(report.review_status, "Needs Review");
+  assert.equal(report.measurements[0].confidence, "parsed");
+  assert.equal(report.measurements[0].needs_review, 1);
+  assert.match(report.measurements[0].source_ref, /^page:1;/);
 });
 
 test("parseQbEvents: keeps only supported QuickBooks finance identities", () => {
@@ -288,7 +335,7 @@ function makeQuickBooksWebhookEnv(options: {
       batch: async (statements: Array<{ run: () => Promise<unknown> }>) => await Promise.all(statements.map((statement) => statement.run())),
     },
   };
-  return { env, writes, rawWrites, receipts, outbox };
+  return { env: withTestEffectRuntime(env), writes, rawWrites, receipts, outbox };
 }
 
 test("verifyIntuitSignature: accepts a correct HMAC, rejects wrong/empty", async () => {
@@ -336,7 +383,7 @@ test("QuickBooks projection claim repeats the due-time predicate for stale concu
 
 test("handleQuickbooksWebhook: raw finance identities open Pending reconciliation work without provider-truth claims", async (t) => {
   const fetches: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(withQuickBooksReconciliationReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     fetches.push({ url, init: init ?? {} });
     if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.check_issuer_readiness")) {
@@ -354,7 +401,7 @@ test("handleQuickbooksWebhook: raw finance identities open Pending reconciliatio
       return json({ data: { name: body.payment_milestone_id } });
     }
     throw new Error(`unexpected fetch ${url}`);
-  });
+  })));
 
   const { env, writes, rawWrites } = makeQuickBooksWebhookEnv();
   const bodyText = JSON.stringify({
@@ -445,10 +492,10 @@ test("handleQuickbooksWebhook: raw finance identities open Pending reconciliatio
   assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") && w.args.includes("webhook_replay")));
 });
 
-test("handleQuickbooksWebhook: a temporary ERP failure stays pending and redelivery resumes only unprojected events", async (t) => {
+test("handleQuickbooksWebhook: an uncertain ERP write stays pending and redelivery never blindly reissues it", async (t) => {
   const reconciliationPosts: Array<Record<string, unknown>> = [];
   let failCreditMemoOnce = true;
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withQuickBooksReconciliationReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.check_issuer_readiness")) {
       return json({ message: { ready: true, issuer: "quickbooks-issuer@ironwrapexteriors.com" } });
@@ -465,7 +512,7 @@ test("handleQuickbooksWebhook: a temporary ERP failure stays pending and redeliv
       return json({ message: { name: body.reconciliation_id, idempotent_replay: false } });
     }
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
   const { env, rawWrites, outbox } = makeQuickBooksWebhookEnv();
   const bodyText = JSON.stringify({
     eventNotifications: [{
@@ -494,24 +541,24 @@ test("handleQuickbooksWebhook: a temporary ERP failure stays pending and redeliv
   assert.deepEqual([...outbox.values()].map((row) => row.attempt_count), [1, 1]);
   assert.equal(rawWrites.length, 1);
 
-  // A replay honors bounded backoff. Make this synthetic pending event due to
-  // demonstrate that the next eligible delivery resumes only the missing work.
+  // A replay honors bounded backoff but cannot prove whether the first provider
+  // write committed. Making it due must not cause a second write.
   const pending = [...outbox.values()].find((row) => row.projection_status === "pending");
   assert.ok(pending);
   pending.next_attempt_at = "1970-01-01T00:00:00.000Z";
   const replay = await handleQuickbooksWebhook(env as never, bodyText, signature);
-  assert.equal(replay.status, 200);
+  assert.equal(replay.status, 503);
   assert.equal((await replay.json() as { replay?: boolean }).replay, true);
-  assert.deepEqual([...outbox.values()].map((row) => row.projection_status), ["projected", "projected"]);
+  assert.deepEqual([...outbox.values()].map((row) => row.projection_status), ["projected", "pending"]);
   assert.deepEqual([...outbox.values()].map((row) => row.attempt_count), [1, 2]);
   assert.equal(rawWrites.length, 1);
   assert.equal(reconciliationPosts.filter((body) => body.entity_type === "Payment").length, 1);
-  assert.equal(reconciliationPosts.filter((body) => body.entity_type === "CreditMemo").length, 2);
+  assert.equal(reconciliationPosts.filter((body) => body.entity_type === "CreditMemo").length, 1);
 });
 
 test("handleQuickbooksWebhook: only the issuer's explicit stable 409 conflict is durably rejected", async (t) => {
   let reconciliationPosts = 0;
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+  t.mock.method(globalThis, "fetch", withQuickBooksReconciliationReadback(async (input: string | URL | Request) => {
     const url = String(input);
     if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.check_issuer_readiness")) {
       return json({ message: { ready: true, issuer: "quickbooks-issuer@ironwrapexteriors.com" } });
@@ -522,7 +569,7 @@ test("handleQuickbooksWebhook: only the issuer's explicit stable 409 conflict is
       return new Response("quickbooks_reconciliation_identity_conflict", { status: 409 });
     }
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
   const { env, outbox } = makeQuickBooksWebhookEnv();
   const bodyText = JSON.stringify({
     eventNotifications: [{
@@ -542,11 +589,11 @@ test("handleQuickbooksWebhook: only the issuer's explicit stable 409 conflict is
   assert.equal(reconciliationPosts, 1);
 });
 
-test("handleQuickbooksWebhook: 401, 403, and 404 issuer drift remain pending and scheduled recovery succeeds without redelivery", async (t) => {
+test("handleQuickbooksWebhook: 401, 403, and 404 issuer uncertainty requires reconciliation before reissue", async (t) => {
   let failureStatus = 403;
   let repaired = false;
   let issuerPosts = 0;
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withQuickBooksReconciliationReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.check_issuer_readiness")) {
       return json({ message: { ready: true, issuer: "quickbooks-issuer@ironwrapexteriors.com" } });
@@ -560,7 +607,7 @@ test("handleQuickbooksWebhook: 401, 403, and 404 issuer drift remain pending and
       return json({ message: { name: body.reconciliation_id, idempotent_replay: false } });
     }
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
 
   for (const status of [401, 403, 404]) {
     failureStatus = status;
@@ -586,14 +633,15 @@ test("handleQuickbooksWebhook: 401, 403, and 404 issuer drift remain pending and
     repaired = true;
     row.next_attempt_at = "1970-01-01T00:00:00.000Z";
     const recovered = await recoverDueQuickBooksProjections(env as never);
-    assert.deepEqual(recovered, { due: 1, projected: 1, rejected: 0, pending: 0, escalated: 0 });
-    assert.equal(row.projection_status, "projected");
+    assert.deepEqual(recovered, { due: 1, projected: 0, rejected: 0, pending: 1, escalated: 0 });
+    assert.equal(row.projection_status, "pending");
+    assert.match(String(row.last_error), /effect_unknown_requires_reconciliation/);
   }
-  assert.equal(issuerPosts, 6, "each failed event was recovered by cron, not a webhook replay");
+  assert.equal(issuerPosts, 3, "neither cron nor webhook replay may blindly repeat an uncertain issuer write");
 });
 
 test("recoverDueQuickBooksProjections: uses capped exponential backoff and emits a one-time escalation", async (t) => {
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+  t.mock.method(globalThis, "fetch", withQuickBooksReconciliationReadback(async (input: string | URL | Request) => {
     const url = String(input);
     if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.check_issuer_readiness")) {
       return json({ message: { ready: true, issuer: "quickbooks-issuer@ironwrapexteriors.com" } });
@@ -603,7 +651,7 @@ test("recoverDueQuickBooksProjections: uses capped exponential backoff and emits
       return new Response("temporary Frappe outage", { status: 503 });
     }
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
   const { env, writes, outbox } = makeQuickBooksWebhookEnv();
   const bodyText = JSON.stringify({
     eventNotifications: [{
@@ -709,13 +757,13 @@ test("pushQuickBooksEventToErpNext: issuer conflict never falls back to generic 
   });
 
   await assert.rejects(
-    pushQuickBooksEventToErpNext({
+    pushQuickBooksEventToErpNext(effectEnv({
       ERPNEXT_ENABLED: "true", ERPNEXT_BASE_URL: "https://erp.example.com", ERPNEXT_API_KEY: "erp-key", ERPNEXT_API_SECRET: "erp-secret",
       QB_EXPECTED_REALM_ID: "1234567890",
       QB_RECONCILIATION_ISSUER_USER: "quickbooks-issuer@ironwrapexteriors.com",
       QB_RECONCILIATION_ISSUER_API_KEY: "qb-issuer-key",
       QB_RECONCILIATION_ISSUER_API_SECRET: "qb-issuer-secret",
-    } as never, {
+    }), {
       realmId: "1234567890", type: "Invoice", id: "42", operation: "Update",
       rawKey: "raw/quickbooks/2026-07-31/ow_test.json", eventTs: "2026-07-31T12:00:00.000Z", payloadHash, eventIndex: 0,
     }),
@@ -733,13 +781,13 @@ test("pushQuickBooksEventToErpNext: rejects a cross-realm direct call before any
   });
 
   await assert.rejects(
-    pushQuickBooksEventToErpNext({
+    pushQuickBooksEventToErpNext(effectEnv({
       ERPNEXT_ENABLED: "true", ERPNEXT_BASE_URL: "https://erp.example.com", ERPNEXT_API_KEY: "erp-key", ERPNEXT_API_SECRET: "erp-secret",
       QB_EXPECTED_REALM_ID: "1234567890",
       QB_RECONCILIATION_ISSUER_USER: "quickbooks-issuer@ironwrapexteriors.com",
       QB_RECONCILIATION_ISSUER_API_KEY: "qb-issuer-key",
       QB_RECONCILIATION_ISSUER_API_SECRET: "qb-issuer-secret",
-    } as never, {
+    }), {
       realmId: "9876543210", type: "Invoice", id: "42", operation: "Update",
       rawKey: "raw/quickbooks/2026-07-31/ow_test.json", eventTs: "2026-07-31T12:00:00.000Z", payloadHash: "a".repeat(64), eventIndex: 0,
     }),
@@ -760,13 +808,13 @@ test("pushQuickBooksEventToErpNext: failed invoice milestone never creates an or
   });
 
   await assert.rejects(
-    pushQuickBooksEventToErpNext({
+    pushQuickBooksEventToErpNext(effectEnv({
       ERPNEXT_ENABLED: "true", ERPNEXT_BASE_URL: "https://erp.example.com", ERPNEXT_API_KEY: "erp-key", ERPNEXT_API_SECRET: "erp-secret",
       QB_EXPECTED_REALM_ID: "1234567890",
       QB_RECONCILIATION_ISSUER_USER: "quickbooks-issuer@ironwrapexteriors.com",
       QB_RECONCILIATION_ISSUER_API_KEY: "qb-issuer-key",
       QB_RECONCILIATION_ISSUER_API_SECRET: "qb-issuer-secret",
-    } as never, {
+    }), {
       realmId: "1234567890", type: "Invoice", id: "42", operation: "Update",
       rawKey: "raw/quickbooks/2026-07-31/ow_test.json", eventTs: "2026-07-31T12:00:00.000Z", payloadHash: "a".repeat(64), eventIndex: 0,
     }),

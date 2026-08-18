@@ -6,10 +6,11 @@
   "doctype": "DocType",
   "editable_grid": 1,
   "engine": "InnoDB",
-  "field_order": ["sequence", "hold_point", "release_authority", "required_evidence", "acceptance_criteria"],
+  "field_order": ["sequence", "hold_point", "release_phase", "release_authority", "required_evidence", "acceptance_criteria"],
   "fields": [
     { "fieldname": "sequence", "fieldtype": "Int", "in_list_view": 1, "label": "Sequence", "reqd": 1 },
     { "fieldname": "hold_point", "fieldtype": "Data", "in_list_view": 1, "label": "Hold Point", "reqd": 1 },
+    { "default": "Pre-start", "fieldname": "release_phase", "fieldtype": "Select", "in_list_view": 1, "label": "Release Phase", "options": "Pre-start\nIn-process\nCompletion" },
     { "fieldname": "release_authority", "fieldtype": "Data", "label": "Release Authority", "reqd": 1 },
     { "fieldname": "required_evidence", "fieldtype": "Small Text", "label": "Required Evidence", "reqd": 1 },
     { "fieldname": "acceptance_criteria", "fieldtype": "Small Text", "label": "Acceptance Criteria", "reqd": 1 }

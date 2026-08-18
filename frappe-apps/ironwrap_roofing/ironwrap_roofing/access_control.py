@@ -33,6 +33,7 @@ WRITE = "write"
 WRITE_EXISTING = "write_existing"
 CREATE_OWN = "create_own"
 CREATE = "create"
+CREATE_WRITE = "create_write"
 
 # Each Frappe site is one tenant.  These roles never grant cross-site access.
 DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
@@ -41,6 +42,13 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Support": READ,
     },
     "Automation Incident": {"IronWrap Support": WRITE},
+    "Authority Record": {
+        "IronWrap Production": WRITE,
+        "IronWrap Estimator": READ,
+        "IronWrap Field": READ,
+        "IronWrap Closeout": READ,
+        "IronWrap Support": READ,
+    },
     "Change Order": {
         "IronWrap Sales": WRITE,
         "IronWrap Estimator": WRITE,
@@ -73,7 +81,7 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Finance": READ,
         "IronWrap Production": READ,
         CUSTOMER_ACCEPTANCE_SERVICE_ROLE: WRITE_EXISTING,
-        FACET_DESIGN_PROJECTION_SERVICE_ROLE: READ,
+        FACET_DESIGN_PROJECTION_SERVICE_ROLE: CREATE_WRITE,
     },
     "Contract Acceptance": {
         "IronWrap Sales": WRITE,
@@ -128,6 +136,12 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         FACET_DESIGN_PROJECTION_SERVICE_ROLE: CREATE,
     },
     "Insurance Supplement": {"IronWrap Estimator": WRITE},
+    "Job Cost Event": {
+        "IronWrap Finance": WRITE,
+        "IronWrap Estimator": READ,
+        "IronWrap Production": READ,
+        "IronWrap Closeout": READ,
+    },
     "Job Assignment": {
         "IronWrap Sales": READ,
         "IronWrap Production": WRITE,
@@ -159,6 +173,10 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Estimator": WRITE,
         "IronWrap Production": READ,
         "IronWrap Finance": READ,
+    },
+    "Material Takeoff Policy": {
+        "IronWrap Estimator": READ,
+        "IronWrap Production": READ,
     },
     "Measurement Report": {
         "IronWrap Estimator": WRITE,
@@ -315,6 +333,8 @@ def permission_row(role: str, access: str) -> dict[str, int | str]:
         row.update({"create": 1, "write": 1, "if_owner": 1})
     elif access == CREATE:
         row.update({"create": 1})
+    elif access == CREATE_WRITE:
+        row.update({"create": 1, "write": 1})
     else:
         raise ValueError(f"unknown access level {access!r}")
     return row

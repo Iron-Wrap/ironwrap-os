@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Validates hermes/agents/roles.json against the implemented MCP source inventory parsed from the
-// three server sources, and enforces the Hermes safety contract at config level:
+// three role-filtered server sources, plus the fixed desktop-pilot manifest/source contract, and
+// enforces the Hermes safety contract at config level:
 //   - every referenced tool actually exists in a server
 //   - reads are read-only, dry_run are previews, approved_write are request_* mutations
 //   - every approved_write tool carries its dry_run counterpart in the same role
@@ -22,6 +23,22 @@ const servers = {
   "ironwrap-bus-mcp": "mcp/ironwrap-bus-mcp/src/server.mjs",
   "erpnext-roofing-mcp": "mcp/erpnext-roofing-mcp/src/server.mjs",
   "newo-mcp": "mcp/newo-mcp/src/server.mjs",
+};
+const desktopServer = {
+  name: "ironwrap-hermes-desktop-mcp",
+  source: "mcp/ironwrap-bus-mcp/src/desktop-server.mjs",
+  toolFilter: {
+    read: ["hermes_next_tasks"],
+    draft: ["hermes_stage_context", "hermes_submit_draft"],
+  },
+  env: [
+    "IRONWRAP_BUS_BASE_URL",
+    "IRONWRAP_HERMES_DESKTOP_PAIRING_URL",
+    "IRONWRAP_HERMES_DESKTOP_ACCESS_TOKEN",
+    "IRONWRAP_HERMES_DESKTOP_DEVICE_PROOF",
+    "IRONWRAP_BUS_ALLOW_INSECURE_LOCAL",
+    "IRONWRAP_BUS_REQUEST_TIMEOUT_MS",
+  ],
 };
 
 // Implemented-source inventory: tool names from every registration path in the servers, i.e.
@@ -176,6 +193,7 @@ const WRITE_PAIRS = {
   request_create_proposal_evidence_pack: "dry_run_proposal_evidence_pack",
   request_publish_proposal_evidence_pack: "dry_run_publish_proposal_evidence_pack",
   request_create_completion_packet: "dry_run_completion_packet",
+  request_complete_work_package: "dry_run_complete_work_package",
   request_create_warranty_packet: "dry_run_warranty_packet",
   request_create_review_request: "dry_run_review_request",
   request_record_communication_event: "dry_run_communication_event",
@@ -190,6 +208,7 @@ const WRITE_PAIRS = {
   request_create_safety_plan: "dry_run_safety_plan",
   request_record_safety_acknowledgement: "dry_run_safety_acknowledgement",
   request_record_job_compliance: "dry_run_job_compliance_record",
+  request_authority_record: "dry_run_authority_record",
   request_record_customer_decision: "dry_run_customer_decision",
   request_record_communication_consent: "dry_run_communication_consent",
   request_resolve_reconciliation: "dry_run_reconciliation_resolution",
@@ -211,12 +230,14 @@ const NEW_STRICT_READS = new Set([
   "get_change_order", "list_change_orders_for_job",
   "get_insurance_supplement", "list_insurance_supplements_for_job",
   "get_safety_plan", "list_safety_plans_for_job",
+  "get_authority_record", "list_authority_records_for_job",
   "get_job_compliance_record", "list_job_compliance_records_for_job",
   "get_communication_consent", "list_communication_consents_for_job",
   "get_customer_decision", "list_customer_decisions_for_job",
   "get_customer_quote", "list_customer_quotes_for_job",
   "get_contract_acceptance", "list_contract_acceptances_for_job",
   "get_integration_reconciliation", "list_integration_reconciliations_for_job",
+  "get_job_cost_event", "list_job_cost_events_for_job",
   "get_tenant_export_run", "list_tenant_export_runs_for_tenant",
 ]);
 for (const tool of NEW_STRICT_READS) {
@@ -225,13 +246,13 @@ for (const tool of NEW_STRICT_READS) {
 }
 
 const frappeTools = new Set([...inventory].filter((tool) => toolServer.get(tool) === "erpnext-roofing-mcp"));
-assert.equal(frappeTools.size, 151, "Frappe MCP inventory must stay at the reviewed 151-tool contract");
-assert.equal([...frappeTools].filter((tool) => reads.has(tool)).length, 75,
-  "Frappe MCP must expose 75 read tools");
-assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 38,
-  "Frappe MCP must expose 38 dry-run tools");
-assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 38,
-  "Frappe MCP must expose 38 approved-write tools");
+assert.equal(frappeTools.size, 164, "Frappe MCP inventory must stay at the reviewed 164-tool contract");
+assert.equal([...frappeTools].filter((tool) => reads.has(tool)).length, 83,
+  "Frappe MCP must expose 83 read tools");
+assert.equal([...frappeTools].filter((tool) => dryRuns.has(tool)).length, 41,
+  "Frappe MCP must expose 41 dry-run tools");
+assert.equal([...frappeTools].filter((tool) => requests.has(tool)).length, 40,
+  "Frappe MCP must expose 40 approved-write tools");
 const newoTools = new Set([...inventory].filter((tool) => toolServer.get(tool) === "newo-mcp"));
 assert.equal(newoTools.size, 20, "Newo MCP inventory must stay at the reviewed 20-tool contract");
 assert.equal([...newoTools].filter((tool) => reads.has(tool)).length, 17,
@@ -240,7 +261,17 @@ assert.equal([...newoTools].filter((tool) => dryRuns.has(tool)).length, 1,
   "Newo MCP must expose one exact-argument dry-run tool");
 assert.equal([...newoTools].filter((tool) => requests.has(tool)).length, 2,
   "Newo MCP must expose separate approval and receipt-consuming execution tools");
-assert.equal(inventory.size, 179, "three-server Hermes inventory must stay at 179 tools");
+assert.equal(inventory.size, 192, "three-server Hermes inventory must stay at 192 tools");
+
+const desktopSource = readFileSync(join(root, desktopServer.source), "utf8");
+const desktopTools = new Set(
+  [...desktopSource.matchAll(/\.registerTool\(\s*"([a-z0-9_]+)"/g)].map((match) => match[1]),
+);
+assert.deepEqual(
+  desktopTools,
+  new Set([...desktopServer.toolFilter.read, ...desktopServer.toolFilter.draft]),
+  "desktop MCP must register exactly the three fixed pilot tools",
+);
 
 // Contract Acceptance is evidence produced by the customer/provider, never an agent mutation.
 assert.ok(reads.has("get_contract_acceptance") && reads.has("list_contract_acceptances_for_job"),
@@ -454,8 +485,11 @@ for (const forbiddenTool of [
 // out, or the runtime could expose a tool no role should reach.
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 assert.ok(manifest.mcpServers, "mcp-servers.json missing mcpServers");
-assert.deepEqual(new Set(Object.keys(manifest.mcpServers)), new Set(Object.keys(servers)),
-  "mcp-servers.json must declare exactly the three known servers");
+assert.deepEqual(
+  new Set(Object.keys(manifest.mcpServers)),
+  new Set([...Object.keys(servers), desktopServer.name]),
+  "mcp-servers.json must declare exactly the three role-filtered servers and fixed desktop server",
+);
 
 // Union of role grants per server, derived from roles.json + which server owns each tool.
 const roleUnion = {};
@@ -466,9 +500,11 @@ for (const role of Object.values(config.roles)) {
   }
 }
 
-for (const [serverName, spec] of Object.entries(manifest.mcpServers)) {
+for (const [serverName, serverPath] of Object.entries(servers)) {
+  const spec = manifest.mcpServers[serverName];
   const label = `mcp-servers.json[${serverName}]`;
-  assert.equal(spec.args?.[0], servers[serverName], `${label} args must launch ${servers[serverName]}`);
+  assert.equal(spec.command, "node", `${label} command must be node`);
+  assert.equal(spec.args?.[0], serverPath, `${label} args must launch ${serverPath}`);
   const filter = spec.tool_filter ?? {};
   for (const [bucket, membership] of [["read", reads], ["dry_run", dryRuns], ["approved_write", requests]]) {
     const listed = filter[bucket] ?? [];
@@ -490,4 +526,21 @@ for (const [serverName, spec] of Object.entries(manifest.mcpServers)) {
   }
 }
 
-console.log(`ok ${roleNames.length} Hermes agent roles + manifest validated against ${inventory.size} implemented MCP tools`);
+const desktopSpec = manifest.mcpServers[desktopServer.name];
+const desktopLabel = `mcp-servers.json[${desktopServer.name}]`;
+assert.equal(desktopSpec.command, "node", `${desktopLabel} command must be node`);
+assert.deepEqual(desktopSpec.args, [desktopServer.source],
+  `${desktopLabel} must launch only ${desktopServer.source}`);
+assert.deepEqual(desktopSpec.tool_filter, desktopServer.toolFilter,
+  `${desktopLabel}.tool_filter must expose exactly the three fixed read/draft tools`);
+assert.deepEqual(new Set(Object.keys(desktopSpec.env ?? {})), new Set(desktopServer.env),
+  `${desktopLabel}.env must contain only the bounded desktop credential and transport names`);
+for (const [key, value] of Object.entries(desktopSpec.env ?? {})) {
+  assert.equal(value, `\${${key}}`, `${desktopLabel}.env.${key} must reference its matching placeholder`);
+  assert.doesNotMatch(key, /ADMIN|WRITE|CONNECTOR|GMAIL|OUTLOOK|CALENDAR|DRIVE|TEAMS|SLACK/,
+    `${desktopLabel}.env must not receive admin, write, or connector credentials`);
+}
+assert.ok(!("HERMES_AGENT_ROLE" in desktopSpec.env),
+  `${desktopLabel} must stay outside the broad roles.json inventory`);
+
+console.log(`ok ${roleNames.length} Hermes agent roles + 179 role-filtered tools + 3 fixed desktop pilot tools validated`);

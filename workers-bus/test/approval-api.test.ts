@@ -11,6 +11,7 @@ import {
   claimApprovalExecution,
   getApprovalRequest,
 } from "../src/approval-store.ts";
+import { permissionsForRole } from "../src/app-types.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 
 const TENANT = "ironwrap";
@@ -76,9 +77,7 @@ function auth(role: AppRole): AuthContext {
   return {
     rawSessionToken: "s".repeat(43),
     csrfToken: "csrf",
-    permissions: role === "owner"
-      ? ["session:read", "approvals:read", "approvals:decide"]
-      : ["session:read", "approvals:read", "approvals:prepare"],
+    permissions: permissionsForRole(role),
     session: {
       session_hash: "a".repeat(64),
       session_created_at: new Date(now.getTime() - 60_000).toISOString(),

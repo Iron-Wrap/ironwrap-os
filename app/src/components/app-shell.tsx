@@ -55,7 +55,7 @@ export function AppShell() {
       </a>
       <header className="safe-top sticky top-0 z-40 border-b bg-surface/95 backdrop-blur-lg">
         <div className="mx-auto flex min-h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
-          <Link to="/today" className="flex min-w-0 items-center gap-3 rounded-md">
+          <Link to="/now" className="flex min-w-0 items-center gap-3 rounded-md">
             <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-foreground text-background">
               <ShieldCheck className="size-5 text-accent" aria-hidden="true" />
             </span>

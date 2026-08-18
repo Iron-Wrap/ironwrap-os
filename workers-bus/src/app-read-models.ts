@@ -1,4 +1,4 @@
-import type { AppEnv, AuthContext } from "./app-types.ts";
+import type { AppEnv, AuthContext, WorkObjectScope } from "./app-types.ts";
 import {
   approvalBrokerConfig,
   approvalDecisionConfig,
@@ -21,12 +21,24 @@ import { parseBody } from "./core.ts";
 import { extractGeometry } from "./measurements.ts";
 import type { GeometryModel } from "./geometry.ts";
 import { takeoffFromGeometry, type TakeoffModel } from "./takeoff.ts";
-import { priceTakeoff, type PriceList } from "./pricing.ts";
+import {
+  approvedPricingPolicyIdentity,
+  priceTakeoff,
+  verifyPricingAuthority,
+  type PriceList,
+  type VerifiedPricingAuthority,
+} from "./pricing.ts";
+import {
+  buildJobEconomicsProjection,
+  type JobEconomicsProjection,
+} from "./job-economics.ts";
 import { listLeadMctbEvidence, type LeadAckReceipt } from "./store.ts";
 import {
   fieldWorkPackageForAssignment,
   fieldWorkPackageProjection,
+  hasWorkPackageCompletionAuthority,
 } from "./work-package.ts";
+import { facetLaunchConfigured } from "./facet-launch.ts";
 
 const ACTIVE_JOB_STATUSES = ["Won", "In Production"] as const;
 export const ACTIVE_ASSIGNMENT_STATUSES = [
@@ -47,6 +59,7 @@ const MAX_ESTIMATOR_METRICS = 120;
 const MAX_ESTIMATOR_TAKEOFF_ITEMS = 250;
 const MAX_ESTIMATOR_COMPUTED_TRIMS = 40;
 const MAX_ESTIMATOR_ESTIMATE_LINES = 60;
+const ESTIMATOR_PRICING_AUTHORITY_LIMIT = 2;
 const MAX_ESTIMATOR_GEOMETRY_LABEL = 240;
 const MAX_ESTIMATOR_GEOMETRY_DETAIL = 600;
 const MAX_ESTIMATOR_ROOF_GRAPH_JSON_LENGTH = 768 * 1024;
@@ -118,6 +131,17 @@ export interface TodayReadModel extends ReadModelEnvelope {
     scheduled_start: string | null;
     scheduled_end: string | null;
     blocked_gate_count: number;
+    next_action: string;
+    assignment: AssignmentReadModel | null;
+  }>;
+  /** Typed non-roof physical assignments. A missing/ambiguous scope is never emitted. */
+  work_objects: Array<{
+    work_object_type: string;
+    work_object_id: string;
+    physical_context_type: string;
+    physical_context_id: string;
+    scheduled_start: string | null;
+    scheduled_end: string | null;
     next_action: string;
     assignment: AssignmentReadModel | null;
   }>;
@@ -326,6 +350,7 @@ export interface OwnerNowReadModel extends ReadModelEnvelope {
   }>;
   /** Sources that reached the bounded query limit; displayed totals are lower bounds. */
   partial_sources: string[];
+  economics: JobEconomicsProjection[];
   summary: {
     active_jobs: number;
     field_blockers: number;
@@ -336,6 +361,7 @@ export interface OwnerNowReadModel extends ReadModelEnvelope {
     lead_triage_unknown: number;
     mctb_unproven_due: number;
     material_exceptions: number;
+    economics_needs_review: number;
   };
 }
 
@@ -493,6 +519,7 @@ export interface EstimatorWorkbenchReadModel extends ReadModelEnvelope {
     status: string | null;
     workflow_profile: string | null;
   };
+  economics: JobEconomicsProjection;
   lineage: {
     measurement_to_takeoff:
       "linked" | "no_measurement" | "no_takeoff" | "mismatch" | "unknown";
@@ -768,18 +795,162 @@ export async function activeAssignmentForJob(
   return preferredAssignment(assignments);
 }
 
+/**
+ * Resolve one exact active assignment for a typed physical work object.  This
+ * is the universal route's authority boundary: a work-object id is never
+ * silently interpreted as a Roof Job, and ambiguous active assignments fail
+ * closed instead of letting the browser choose a write target.
+ */
+export async function activeAssignmentForWorkObject(
+  env: AppEnv,
+  auth: AuthContext,
+  scope: WorkObjectScope,
+): Promise<FrappeRow | null> {
+  const values = [
+    scope.workObjectType,
+    scope.workObjectId,
+    scope.physicalContextType,
+    scope.physicalContextId,
+  ];
+  if (
+    values.some((value) => !validJobName(value)) ||
+    scope.workObjectType === "Roof Job"
+  ) {
+    return null;
+  }
+  const filters: FrappeFilter[] = [
+    ["Job Assignment", "work_object_type", "=", scope.workObjectType],
+    ["Job Assignment", "work_object_id", "=", scope.workObjectId],
+    [
+      "Job Assignment",
+      "physical_context_type",
+      "=",
+      scope.physicalContextType,
+    ],
+    ["Job Assignment", "physical_context_id", "=", scope.physicalContextId],
+    ["Job Assignment", "status", "in", [...ACTIVE_ASSIGNMENT_STATUSES]],
+  ];
+  const candidates = await listFrappeResource(
+    env,
+    "Job Assignment",
+    filters,
+    100,
+  );
+  if (jobReadMode(auth) === "any")
+    return candidates.length === 1 ? candidates[0] ?? null : null;
+  const userId = auth.session.frappe_user_id;
+  if (!userId) return null;
+  const direct = candidates.filter((row) => sameUser(row.assigned_user, userId));
+  const candidateNames = candidates
+    .map((row) => text(row.name))
+    .filter(notNull);
+  const workerRows =
+    candidateNames.length > 0
+      ? await listFrappeResource(
+          env,
+          "Work Package Worker",
+          [["Work Package Worker", "worker_user", "=", userId]],
+          100,
+          "Job Assignment",
+        )
+      : [];
+  const workerAssignmentNames = new Set(
+    workerRows
+      .filter(
+        (row) =>
+          row.parenttype === "Job Assignment" &&
+          row.parentfield === "assigned_workers" &&
+          sameUser(row.worker_user, userId),
+      )
+      .map((row) => text(row.parent))
+      .filter((parent): parent is string =>
+        Boolean(parent && candidateNames.includes(parent)),
+      ),
+  );
+  const authorized = candidates.filter(
+    (row) =>
+      sameUser(row.assigned_user, userId) ||
+      workerAssignmentNames.has(text(row.name) ?? ""),
+  );
+  const unique = new Map(
+    authorized.flatMap((row) => {
+      const name = text(row.name);
+      return name ? [[name, row] as const] : [];
+    }),
+  );
+  return unique.size === 1 ? [...unique.values()][0] ?? null : null;
+}
+
+/** Build the universal work-object packet used by discovery and action clients. */
+export async function buildUniversalWorkPackageReadModel(
+  env: AppEnv,
+  auth: AuthContext,
+  scope: WorkObjectScope,
+): Promise<Record<string, unknown> | null> {
+  const assignment = await activeAssignmentForWorkObject(env, auth, scope);
+  const assignmentId = text(assignment?.name);
+  if (!assignment || !assignmentId) return null;
+  const workPackage = await fieldWorkPackageForAssignment(
+    env,
+    scope.workObjectId,
+    assignmentId,
+  );
+  if (
+    !workPackage ||
+    workPackage.workObjectType !== scope.workObjectType ||
+    workPackage.workObjectId !== scope.workObjectId ||
+    workPackage.physicalContextType !== scope.physicalContextType ||
+    workPackage.physicalContextId !== scope.physicalContextId
+  ) {
+    return null;
+  }
+  const projection = fieldWorkPackageProjection(
+    workPackage,
+    auth.session.frappe_user_id,
+    {
+      completionAuthority: hasWorkPackageCompletionAuthority(
+        workPackage,
+        assignment,
+        auth.session.frappe_user_id,
+        auth.session.role,
+      ),
+    },
+  );
+  const allowedActions = [...projection.allowedActions];
+  if (
+    auth.session.role === "field" &&
+    !allowedActions.includes("field.checkin.create")
+  ) {
+    allowedActions.push("field.checkin.create");
+  }
+  return {
+    ...envelope(auth, [assignment], []),
+    work_object: scope,
+    assignment: assignmentModel(assignment),
+    work_package: projection.work_package,
+    allowed_actions: allowedActions,
+  };
+}
+
 export async function buildTodayReadModel(
   env: AppEnv,
   auth: AuthContext,
 ): Promise<TodayReadModel> {
+  const readMode = jobReadMode(auth);
   const assignments = await authorizedAssignments(env, auth);
   const preferredByJob = preferredAssignmentsByJob(assignments);
   const assignedJobIds = [...preferredByJob.keys()];
-  if (auth.session.role === "field" && assignedJobIds.length === 0)
+  const typedAssignments = preferredAssignmentsByWorkObject(assignments);
+  if (
+    readMode === "assigned" &&
+    assignedJobIds.length === 0 &&
+    typedAssignments.length === 0
+  )
     return emptyToday(env, auth, assignments);
   const jobs =
-    auth.session.role === "field"
-      ? await listFrappeResource(
+    readMode === "assigned"
+      ? assignedJobIds.length > 0
+        ? await listFrappeResource(
           env,
           "Roof Job",
           [
@@ -788,6 +959,7 @@ export async function buildTodayReadModel(
           ],
           100,
         )
+        : []
       : await listFrappeResource(
           env,
           "Roof Job",
@@ -825,7 +997,7 @@ export async function buildTodayReadModel(
     .flatMap((row) => {
       const id = text(row.name);
       const assignmentRow = id ? preferredByJob.get(id) : undefined;
-      if (!id || (auth.session.role === "field" && !assignmentRow)) return [];
+      if (!id || (readMode === "assigned" && !assignmentRow)) return [];
       const blocked = blockedByJob.get(id) ?? [];
       const assignment = assignmentRow ? assignmentModel(assignmentRow) : null;
       return [
@@ -849,6 +1021,27 @@ export async function buildTodayReadModel(
     .sort((left, right) =>
       compareSchedule(left.scheduled_start, right.scheduled_start),
     );
+  const workObjects: TodayReadModel["work_objects"] = typedAssignments
+    .flatMap((assignmentRow) => {
+      const scope = assignmentWorkObjectScope(assignmentRow);
+      if (!scope) return [];
+      const assignment = assignmentModel(assignmentRow);
+      return [{
+        ...scope,
+        scheduled_start: assignment.scheduled_start,
+        scheduled_end: assignment.scheduled_end,
+        next_action:
+          assignment.blocker_reason ?? "Open the typed physical work package",
+        assignment,
+      }];
+    })
+    .sort(
+      (left, right) =>
+        compareSchedule(left.scheduled_start, right.scheduled_start) ||
+        left.work_object_type.localeCompare(right.work_object_type) ||
+        left.work_object_id.localeCompare(right.work_object_id) ||
+        left.physical_context_id.localeCompare(right.physical_context_id),
+    );
   const stale: string[] = [];
   if (properties.length < new Set(propertyIds).size) stale.push("jobs.address");
   return {
@@ -859,6 +1052,7 @@ export async function buildTodayReadModel(
     ),
     date: tenantDate(env.APP_TIME_ZONE),
     jobs: shaped,
+    work_objects: workObjects,
   };
 }
 
@@ -866,8 +1060,8 @@ export async function buildProductionRunwayReadModel(
   env: AppEnv,
   auth: AuthContext,
 ): Promise<ProductionRunwayReadModel> {
-  if (auth.session.role !== "owner" && auth.session.role !== "ops")
-    throw new Error("owner_scope_required");
+  if (!auth.permissions.includes("production:read"))
+    throw new Error("production_scope_required");
 
   const schedulePreparationConfigured =
     auth.session.role === "owner" &&
@@ -1139,8 +1333,9 @@ export async function buildJobReadModel(
   jobName: string,
 ): Promise<JobReadModel | null> {
   if (!validJobName(jobName)) return null;
+  const readMode = jobReadMode(auth);
   const assignmentRow = await activeAssignmentForJob(env, auth, jobName);
-  if (auth.session.role === "field" && !assignmentRow) return null;
+  if (readMode === "assigned" && !assignmentRow) return null;
   const jobs = await listFrappeResource(
     env,
     "Roof Job",
@@ -1253,7 +1448,7 @@ export async function buildJobReadModel(
           1,
         )
       : Promise.resolve([]),
-    auth.session.role === "field" && assignmentRow
+    readMode === "assigned" && assignmentRow
       ? fieldWorkPackageForAssignment(env, jobName, text(assignmentRow.name)!)
       : Promise.resolve(null),
   ]);
@@ -1270,11 +1465,19 @@ export async function buildJobReadModel(
   )[0];
   const workPackagePacket = fieldWorkPackageProjection(
     workPackage,
-    auth.session.role === "field" ? auth.session.frappe_user_id : null,
+    readMode === "assigned" ? auth.session.frappe_user_id : null,
+    {
+      completionAuthority: hasWorkPackageCompletionAuthority(
+        workPackage,
+        assignmentRow ?? null,
+        auth.session.frappe_user_id,
+        auth.session.role,
+      ),
+    },
   );
   const stale: string[] = [];
   if (
-    auth.session.role !== "field" &&
+    readMode === "any" &&
     gates.some((row) => !text(row.owner_user))
   )
     stale.push("gates.owner");
@@ -1305,10 +1508,9 @@ export async function buildJobReadModel(
   );
   return {
     ...readEnvelope,
-    allowed_actions: [
-      ...readEnvelope.allowed_actions,
-      ...workPackagePacket.allowedActions,
-    ],
+    allowed_actions: auth.session.role === "production"
+      ? ["job.read"]
+      : [...readEnvelope.allowed_actions, ...workPackagePacket.allowedActions],
     job: {
       id: text(job.name)!,
       roof_job_id: text(job.roof_job_id),
@@ -1321,7 +1523,7 @@ export async function buildJobReadModel(
     },
     assignment: assignmentRow ? assignmentModel(assignmentRow) : null,
     gates: gates.flatMap((row) =>
-      gateModel(row, auth.session.role === "field"),
+      gateModel(row, readMode === "assigned"),
     ),
     packet: {
       scope_clauses: scopeClauses.flatMap((row) => {
@@ -1446,8 +1648,9 @@ export async function buildJobProofReadModel(
   jobName: string,
   cursor: string | null,
 ): Promise<ProofPageReadModel | null> {
+  const readMode = jobReadMode(auth);
   const assignment = await activeAssignmentForJob(env, auth, jobName);
-  if (auth.session.role === "field" && !assignment) return null;
+  if (readMode === "assigned" && !assignment) return null;
   const offset = parseProofCursor(cursor);
   if (offset === null) return null;
   const evidence = await listFrappeResourcePage(
@@ -1540,6 +1743,122 @@ export async function buildOwnerNowReadModel(
       OWNER_NOW_SOURCE_LIMIT,
     ),
   ]);
+  const economicsJobIds = jobs.map((row) => text(row.name)).filter(notNull).sort();
+  const [
+    economicsQuotes,
+    economicsChangeOrders,
+    economicsSupplierQuotes,
+    economicsSupplierOrders,
+    economicsMaterialLots,
+    economicsShopOrders,
+    economicsFieldCheckins,
+    economicsPayments,
+    economicsCostEvents,
+    economicsReconciliations,
+  ] = economicsJobIds.length
+    ? await Promise.all([
+        listOfficeEstimatorFrappeResource(
+          env,
+          "Customer Quote",
+          [["Customer Quote", "roof_job", "in", economicsJobIds]],
+          OWNER_NOW_SOURCE_LIMIT,
+        ),
+        listOfficeEstimatorFrappeResource(
+          env,
+          "Change Order",
+          [["Change Order", "roof_job", "in", economicsJobIds]],
+          OWNER_NOW_SOURCE_LIMIT,
+        ),
+        listOfficeEstimatorFrappeResource(
+          env,
+          "Supplier Quote",
+          [["Supplier Quote", "roof_job", "in", economicsJobIds]],
+          OWNER_NOW_SOURCE_LIMIT,
+        ),
+        listOfficeEstimatorFrappeResource(
+          env,
+          "Supplier Order",
+          [["Supplier Order", "roof_job", "in", economicsJobIds]],
+          OWNER_NOW_SOURCE_LIMIT,
+        ),
+        listOfficeEstimatorFrappeResource(
+          env,
+          "Material Lot",
+          [["Material Lot", "roof_job", "in", economicsJobIds]],
+          OWNER_NOW_SOURCE_LIMIT,
+        ),
+        listOfficeEstimatorFrappeResource(
+          env,
+          "Shop Order",
+          [["Shop Order", "roof_job", "in", economicsJobIds]],
+          OWNER_NOW_SOURCE_LIMIT,
+        ),
+        listOfficeEstimatorFrappeResource(
+          env,
+          "Field Check-in",
+          [["Field Check-in", "roof_job", "in", economicsJobIds]],
+          OWNER_NOW_SOURCE_LIMIT,
+        ),
+        listOfficeEstimatorFrappeResource(
+          env,
+          "Payment Milestone",
+          [["Payment Milestone", "roof_job", "in", economicsJobIds]],
+          OWNER_NOW_SOURCE_LIMIT,
+        ),
+        listOfficeEstimatorFrappeResource(
+          env,
+          "Job Cost Event",
+          [
+            ["Job Cost Event", "tenant", "=", auth.session.tenant_id],
+            ["Job Cost Event", "roof_job", "in", economicsJobIds],
+          ],
+          OWNER_NOW_SOURCE_LIMIT,
+        ),
+        listOfficeEstimatorFrappeResource(
+          env,
+          "Integration Reconciliation",
+          [["Integration Reconciliation", "roof_job", "in", economicsJobIds]],
+          OWNER_NOW_SOURCE_LIMIT,
+        ),
+      ])
+    : [[], [], [], [], [], [], [], [], [], []];
+  const ownerEconomicsSources: Array<readonly [string, FrappeRow[]]> = [
+    ["economics.customer_quotes", economicsQuotes],
+    ["economics.change_orders", economicsChangeOrders],
+    ["economics.supplier_quotes", economicsSupplierQuotes],
+    ["economics.supplier_orders", economicsSupplierOrders],
+    ["economics.material_lots", economicsMaterialLots],
+    ["economics.shop_orders", economicsShopOrders],
+    ["economics.field_checkins", economicsFieldCheckins],
+    ["economics.payment_milestones", economicsPayments],
+    ["economics.job_cost_events", economicsCostEvents],
+    ["economics.integration_reconciliations", economicsReconciliations],
+  ];
+  const ownerEconomicsPartialSources = ownerEconomicsSources.flatMap(
+    ([name, rows]) => (rows.length === OWNER_NOW_SOURCE_LIMIT ? [name] : []),
+  );
+  const rowsForEconomicsJob = (rows: FrappeRow[], jobId: string) =>
+    rows.filter((row) => text(row.roof_job) === jobId);
+  const economics = [...economicsJobIds].sort().map((jobId) =>
+    buildJobEconomicsProjection({
+      tenantId: auth.session.tenant_id,
+      jobId,
+      customerQuotes: rowsForEconomicsJob(economicsQuotes, jobId),
+      changeOrders: rowsForEconomicsJob(economicsChangeOrders, jobId),
+      supplierQuotes: rowsForEconomicsJob(economicsSupplierQuotes, jobId),
+      supplierOrders: rowsForEconomicsJob(economicsSupplierOrders, jobId),
+      materialLots: rowsForEconomicsJob(economicsMaterialLots, jobId),
+      shopOrders: rowsForEconomicsJob(economicsShopOrders, jobId),
+      fieldCheckins: rowsForEconomicsJob(economicsFieldCheckins, jobId),
+      paymentMilestones: rowsForEconomicsJob(economicsPayments, jobId),
+      costEvents: rowsForEconomicsJob(economicsCostEvents, jobId),
+      accountingReconciliations: rowsForEconomicsJob(
+        economicsReconciliations,
+        jobId,
+      ),
+      partialSources: ownerEconomicsPartialSources,
+    }),
+  );
   const leadRows = [...untriagedLeads, ...unknownTriageLeads];
   const leadIds = leadRows
     .map((row) => text(row.envelope_id) ?? text(row.name))
@@ -1663,6 +1982,7 @@ export async function buildOwnerNowReadModel(
     ["untriaged_leads", untriagedLeads],
     ["lead_triage_unknown", unknownTriageLeads],
     ["material_exceptions", supplierOrders],
+    ...ownerEconomicsSources,
   ];
   const partialSources = ownerSources.flatMap(([name, rows]) =>
     rows.length === OWNER_NOW_SOURCE_LIMIT ? [name] : [],
@@ -1682,11 +2002,22 @@ export async function buildOwnerNowReadModel(
         ...payments,
         ...leadRows,
         ...supplierOrders,
+        ...economicsQuotes,
+        ...economicsChangeOrders,
+        ...economicsSupplierQuotes,
+        ...economicsSupplierOrders,
+        ...economicsMaterialLots,
+        ...economicsShopOrders,
+        ...economicsFieldCheckins,
+        ...economicsPayments,
+        ...economicsCostEvents,
+        ...economicsReconciliations,
       ],
       stale,
     ),
     exceptions,
     partial_sources: partialSources,
+    economics,
     summary: {
       active_jobs: jobs.length,
       field_blockers: fieldBlockers.length,
@@ -1699,6 +2030,9 @@ export async function buildOwnerNowReadModel(
         mctbMissedSla(row.mctb),
       ).length,
       material_exceptions: supplierOrders.length,
+      economics_needs_review: economics.filter(
+        (projection) => projection.state !== "complete",
+      ).length,
     },
   };
 }
@@ -1712,7 +2046,7 @@ export async function buildSalesReadModel(
   env: AppEnv,
   auth: AuthContext,
 ): Promise<SalesReadModel> {
-  if (auth.session.role !== "owner" && auth.session.role !== "ops")
+  if (!auth.permissions.includes("sales:read"))
     throw new Error("office_scope_required");
 
   const leads = await listOfficeSalesFrappeResource(
@@ -1843,7 +2177,15 @@ export async function buildSalesReadModel(
         ...(jobId ? (consentsByJob.get(jobId) ?? []) : []),
         ...(customerId ? (consentsByCustomer.get(customerId) ?? []) : []),
       ]);
+      const supersededConsentIds = new Set(
+        linkedConsents.map((row) => text(row.supersedes)).filter(notNull),
+      );
       const consentRecords = linkedConsents
+        .filter((row) =>
+          ![text(row.name), text(row.consent_id)]
+            .filter(notNull)
+            .some((id) => supersededConsentIds.has(id))
+        )
         .map(salesConsentRecord)
         .filter(notNull);
       const estimate = salesEstimateModel(estimatesByLead.get(leadId));
@@ -1933,7 +2275,9 @@ export async function buildSalesReadModel(
     partialSources.length > 0 ? ["sales.partial_sources"] : [],
   );
   const leadTriagePreparationAvailable = Boolean(
-    approvalBrokerConfig(env) && auth.session.frappe_user_id?.trim(),
+    auth.permissions.includes("approvals:prepare") &&
+      approvalBrokerConfig(env) &&
+      auth.session.frappe_user_id?.trim(),
   );
   return {
     ...base,
@@ -1978,10 +2322,13 @@ export async function buildEstimatorWorkbenchReadModel(
   env: AppEnv,
   auth: AuthContext,
   jobName: string,
+  asOf: Date = new Date(),
 ): Promise<EstimatorWorkbenchReadModel | null> {
-  if (auth.session.role !== "owner" && auth.session.role !== "ops")
+  if (!auth.permissions.includes("estimator:read"))
     throw new Error("office_scope_required");
   if (!validJobName(jobName)) return null;
+  const readModelGeneratedAt = asOf.toISOString();
+  const configuredPriceList = estimatorPriceList(env, readModelGeneratedAt);
 
   const [job] = await listOfficeEstimatorFrappeResource(
     env,
@@ -2001,8 +2348,17 @@ export async function buildEstimatorWorkbenchReadModel(
     quoteRows,
     proposalRows,
     changeOrderRows,
+    supplierQuoteRows,
+    supplierOrderRows,
+    materialLotRows,
+    shopOrderRows,
+    fieldCheckinRows,
+    paymentMilestoneRows,
+    jobCostEventRows,
+    accountingReconciliationRows,
     insuranceSupplementRows,
     scopeRows,
+    pricingAuthorityRows,
   ] = await Promise.all([
     listOfficeEstimatorFrappeResource(
       env,
@@ -2046,6 +2402,57 @@ export async function buildEstimatorWorkbenchReadModel(
       [["Change Order", "roof_job", "=", jobId]],
       ESTIMATOR_SOURCE_LIMIT,
     ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Supplier Quote",
+      [["Supplier Quote", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Supplier Order",
+      [["Supplier Order", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Material Lot",
+      [["Material Lot", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Shop Order",
+      [["Shop Order", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Field Check-in",
+      [["Field Check-in", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Payment Milestone",
+      [["Payment Milestone", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Job Cost Event",
+      [
+        ["Job Cost Event", "tenant", "=", auth.session.tenant_id],
+        ["Job Cost Event", "roof_job", "=", jobId],
+      ],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
+    listOfficeEstimatorFrappeResource(
+      env,
+      "Integration Reconciliation",
+      [["Integration Reconciliation", "roof_job", "=", jobId]],
+      ESTIMATOR_SOURCE_LIMIT,
+    ),
     insuranceAccessGranted
       ? listOfficeEstimatorFrappeResource(
           env,
@@ -2060,6 +2467,30 @@ export async function buildEstimatorWorkbenchReadModel(
       [["Scope Clause", "roof_job", "=", jobId]],
       ESTIMATOR_SOURCE_LIMIT,
     ),
+    configuredPriceList.identity &&
+      configuredPriceList.identity.tenantId === auth.session.tenant_id
+      ? listOfficeEstimatorFrappeResource(
+          env,
+          "Price Book Rule",
+          [
+            ["Price Book Rule", "status", "=", "Approved"],
+            ["Price Book Rule", "rule_type", "=", "Pricing Policy"],
+            [
+              "Price Book Rule",
+              "pricing_policy_id",
+              "=",
+              configuredPriceList.identity.policyId,
+            ],
+            [
+              "Price Book Rule",
+              "pricing_policy_revision",
+              "=",
+              configuredPriceList.identity.policyRevision,
+            ],
+          ],
+          ESTIMATOR_PRICING_AUTHORITY_LIMIT,
+        ).catch(() => [])
+      : Promise.resolve([]),
   ]);
 
   const selectedMeasurementRow = latestRecord(measurementRows);
@@ -2180,7 +2611,22 @@ export async function buildEstimatorWorkbenchReadModel(
   // Measurement-to-money projection: recomputed takeoff over the same verified
   // model, priced only when the tenant supplies a price list.
   const computedTakeoff = estimatorComputedTakeoff(geometryCapture.model ?? null);
-  const computedEstimate = estimatorComputedEstimate(env, computedTakeoff.takeoff);
+  const pricingAuthority = configuredPriceList.identity && configuredPriceList.list
+    ? await verifyPricingAuthority(
+        configuredPriceList.list,
+        pricingAuthorityRows,
+        {
+          pricedAt: readModelGeneratedAt,
+          tenantId: auth.session.tenant_id,
+        },
+      )
+    : undefined;
+  const computedEstimate = estimatorComputedEstimate(
+    configuredPriceList,
+    computedTakeoff.takeoff,
+    readModelGeneratedAt,
+    pricingAuthority ?? undefined,
+  );
   const staleFields: string[] = [];
   if (selectedMeasurementRow && !measurementDetail)
     staleFields.push("measurements.selected_detail");
@@ -2207,12 +2653,38 @@ export async function buildEstimatorWorkbenchReadModel(
     ["customer_quotes", quoteRows],
     ["proposal_evidence_packs", proposalRows],
     ["change_orders", changeOrderRows],
+    ["supplier_quotes", supplierQuoteRows],
+    ["supplier_orders", supplierOrderRows],
+    ["material_lots", materialLotRows],
+    ["shop_orders", shopOrderRows],
+    ["field_checkins", fieldCheckinRows],
+    ["payment_milestones", paymentMilestoneRows],
+    ["job_cost_events", jobCostEventRows],
+    ["integration_reconciliations", accountingReconciliationRows],
     ["insurance_supplements", insuranceSupplementRows],
     ["scope_clauses", scopeRows],
   ];
   const partialSources = sourceRows.flatMap(([name, rows]) =>
     rows.length === ESTIMATOR_SOURCE_LIMIT ? [name] : [],
   );
+  if (pricingAuthorityRows.length === ESTIMATOR_PRICING_AUTHORITY_LIMIT) {
+    partialSources.push("pricing_authority");
+  }
+  const economics = buildJobEconomicsProjection({
+    tenantId: auth.session.tenant_id,
+    jobId,
+    customerQuotes: quoteRows,
+    changeOrders: changeOrderRows,
+    supplierQuotes: supplierQuoteRows,
+    supplierOrders: supplierOrderRows,
+    materialLots: materialLotRows,
+    shopOrders: shopOrderRows,
+    fieldCheckins: fieldCheckinRows,
+    paymentMilestones: paymentMilestoneRows,
+    costEvents: jobCostEventRows,
+    accountingReconciliations: accountingReconciliationRows,
+    partialSources,
+  });
   const base = envelope(
     auth,
     [
@@ -2224,10 +2696,20 @@ export async function buildEstimatorWorkbenchReadModel(
       ...quoteRows,
       ...proposalRows,
       ...changeOrderRows,
+      ...supplierQuoteRows,
+      ...supplierOrderRows,
+      ...materialLotRows,
+      ...shopOrderRows,
+      ...fieldCheckinRows,
+      ...paymentMilestoneRows,
+      ...jobCostEventRows,
+      ...accountingReconciliationRows,
       ...insuranceSupplementRows,
       ...scopeRows,
+      ...pricingAuthorityRows,
     ],
     staleFields,
+    readModelGeneratedAt,
   );
   const quoteRevisionPreparationAvailable = Boolean(
     quote &&
@@ -2239,6 +2721,12 @@ export async function buildEstimatorWorkbenchReadModel(
     approvalDecisionConfig(env) &&
     auth.session.frappe_user_id?.trim(),
   );
+  const facetLaunchAvailable = Boolean(
+    auth.permissions.includes("facet:launch") && quote &&
+    selectedQuoteName === text(job.quotation) && quote.version !== null && quote.version > 0 &&
+    quote.status === "Approved" && quote.approved_at && !quote.accepted_at &&
+    facetLaunchConfigured(env, auth.session.tenant_id)
+  );
   return {
     ...base,
     allowed_actions: [
@@ -2247,6 +2735,7 @@ export async function buildEstimatorWorkbenchReadModel(
       ...(quoteRevisionPreparationAvailable
         ? ["quote_revision_approval.prepare"]
         : []),
+      ...(facetLaunchAvailable ? ["facet_launch.create"] : []),
     ],
     partial_sources: partialSources,
     job: {
@@ -2258,6 +2747,7 @@ export async function buildEstimatorWorkbenchReadModel(
       status: text(job.job_status),
       workflow_profile: text(job.workflow_profile),
     },
+    economics,
     lineage: {
       measurement_to_takeoff: measurementToTakeoffLineage(
         selectedMeasurementRow,
@@ -2342,6 +2832,7 @@ function emptyToday(
     ...envelope(auth, rows, []),
     date: tenantDate(env.APP_TIME_ZONE),
     jobs: [],
+    work_objects: [],
   };
 }
 
@@ -2355,12 +2846,12 @@ async function authorizedAssignments(
   ];
   if (jobName)
     baseFilters.unshift(["Job Assignment", "roof_job", "=", jobName]);
-  if (auth.session.role !== "field") {
+  if (jobReadMode(auth) === "any") {
     return await listFrappeResource(env, "Job Assignment", baseFilters, 100);
   }
   const userId = auth.session.frappe_user_id;
   if (!userId) return [];
-  const [direct, memberRows] = await Promise.all([
+  const [direct, memberRows, workerRows] = await Promise.all([
     listFrappeResource(
       env,
       "Job Assignment",
@@ -2377,6 +2868,15 @@ async function authorizedAssignments(
       100,
       "Crew Profile",
     ),
+    !jobName
+      ? listFrappeResource(
+          env,
+          "Work Package Worker",
+          [["Work Package Worker", "worker_user", "=", userId]],
+          100,
+          "Job Assignment",
+        )
+      : Promise.resolve([]),
   ]);
   const crewProfiles = new Set(
     memberRows.flatMap((row) => {
@@ -2400,8 +2900,31 @@ async function authorizedAssignments(
           100,
         )
       : [];
+  const workerAssignmentNames = new Set(
+    workerRows
+      .filter(
+        (row) =>
+          row.parenttype === "Job Assignment" &&
+          row.parentfield === "assigned_workers" &&
+          sameUser(row.worker_user, userId),
+      )
+      .map((row) => text(row.parent))
+      .filter((value): value is string => Boolean(value)),
+  );
+  const workerAssignments =
+    workerAssignmentNames.size > 0
+      ? await listFrappeResource(
+          env,
+          "Job Assignment",
+          [
+            ...baseFilters,
+            ["Job Assignment", "name", "in", [...workerAssignmentNames]],
+          ],
+          100,
+        )
+      : [];
   const deduplicated = new Map<string, FrappeRow>();
-  for (const row of [...direct, ...crew]) {
+  for (const row of [...direct, ...crew, ...workerAssignments]) {
     const id = text(row.name);
     const active = ACTIVE_ASSIGNMENT_STATUSES.includes(
       text(row.status) as never,
@@ -2409,10 +2932,17 @@ async function authorizedAssignments(
     const correctJob = !jobName || text(row.roof_job) === jobName;
     const allowed =
       sameUser(row.assigned_user, userId) ||
-      crewProfiles.has(text(row.crew_profile) ?? "");
+      crewProfiles.has(text(row.crew_profile) ?? "") ||
+      workerAssignmentNames.has(id ?? "");
     if (id && active && correctJob && allowed) deduplicated.set(id, row);
   }
   return [...deduplicated.values()];
+}
+
+function jobReadMode(auth: AuthContext): "any" | "assigned" {
+  if (auth.permissions.includes("jobs:read:any")) return "any";
+  if (auth.permissions.includes("jobs:read:assigned")) return "assigned";
+  throw new Error("job_scope_required");
 }
 
 function assignmentModel(row: FrappeRow): AssignmentReadModel {
@@ -2448,6 +2978,60 @@ function preferredAssignmentsByJob(rows: FrappeRow[]): Map<string, FrappeRow> {
       return preferred ? [[job, preferred]] : [];
     }),
   );
+}
+
+function assignmentWorkObjectScope(
+  row: FrappeRow,
+): Pick<
+  TodayReadModel["work_objects"][number],
+  | "work_object_type"
+  | "work_object_id"
+  | "physical_context_type"
+  | "physical_context_id"
+> | null {
+  const workObjectType = text(row.work_object_type);
+  const workObjectId = text(row.work_object_id);
+  const physicalContextType = text(row.physical_context_type);
+  const physicalContextId = text(row.physical_context_id);
+  if (
+    !workObjectType ||
+    workObjectType === "Roof Job" ||
+    !workObjectId ||
+    !physicalContextType ||
+    !physicalContextId
+  ) {
+    return null;
+  }
+  return {
+    work_object_type: workObjectType,
+    work_object_id: workObjectId,
+    physical_context_type: physicalContextType,
+    physical_context_id: physicalContextId,
+  };
+}
+
+function preferredAssignmentsByWorkObject(
+  rows: FrappeRow[],
+): FrappeRow[] {
+  const grouped = new Map<string, FrappeRow[]>();
+  for (const row of rows) {
+    const scope = assignmentWorkObjectScope(row);
+    if (!scope) continue;
+    const key = [
+      scope.work_object_type,
+      scope.work_object_id,
+      scope.physical_context_type,
+      scope.physical_context_id,
+    ].join("\u0000");
+    const current = grouped.get(key) ?? [];
+    current.push(row);
+    grouped.set(key, current);
+  }
+  return [...grouped.values()]
+    // A typed Today row is an actionable route, so an ambiguous active
+    // assignment must be withheld rather than choosing a browser write target.
+    .map((candidates) => (candidates.length === 1 ? candidates[0] ?? null : null))
+    .filter((row): row is FrappeRow => row !== null);
 }
 
 function preferredAssignment(rows: FrappeRow[]): FrappeRow | null {
@@ -2540,11 +3124,12 @@ function envelope(
   auth: AuthContext,
   rows: FrappeRow[],
   staleFields: string[],
+  generatedAt: string = new Date().toISOString(),
 ): ReadModelEnvelope {
   return {
     version: 1,
     source_updated_at: newestModified(rows),
-    read_model_generated_at: new Date().toISOString(),
+    read_model_generated_at: generatedAt,
     stale_fields: staleFields,
     permissions: auth.permissions,
     allowed_actions:
@@ -3225,15 +3810,24 @@ function visualConfidence(value: unknown): number | null | undefined {
   return result !== null && result >= 0 && result <= 100 ? result : undefined;
 }
 
-// ---- computed takeoff + estimate: the measurement-to-money projection ----
+// ---- computed takeoff + estimate: non-operational estimator preview ----
 //
 // Both are pure recomputations over the verified geometry the workbench already
 // loads: no Frappe writes, no stored state, bounded like every other estimator
-// projection. Pricing activates only when the tenant configures
-// ESTIMATOR_PRICE_LIST_JSON; rates never live in code.
+// projection. They intentionally use legacy preview defaults and are never
+// policy-bound or approval-eligible. The governed Material Takeoff MCP/Frappe
+// rail is the only operational calculation path. Pricing activates only when
+// the tenant configures ESTIMATOR_PRICE_LIST_JSON; rates never live in code.
+
+const LEGACY_PREVIEW_CALCULATION_SCHEMA = "legacy_preview/v1" as const;
+const NON_OPERATIONAL_PREVIEW_AUTHORITY = "non_operational_preview" as const;
 
 export interface EstimatorComputedTakeoffProjection {
   state: "computed" | "unavailable";
+  authority: typeof NON_OPERATIONAL_PREVIEW_AUTHORITY;
+  calculation_schema: typeof LEGACY_PREVIEW_CALCULATION_SCHEMA;
+  policy_bound: false;
+  approval_eligible: false;
   reason: string | null;
   needs_review: boolean | null;
   panel_count: number | null;
@@ -3251,6 +3845,14 @@ export interface EstimatorComputedTakeoffProjection {
 
 export interface EstimatorComputedEstimateProjection {
   state: "priced" | "unconfigured" | "invalid_price_list" | "unavailable";
+  authority: typeof NON_OPERATIONAL_PREVIEW_AUTHORITY;
+  calculation_schema: typeof LEGACY_PREVIEW_CALCULATION_SCHEMA;
+  policy_bound: false;
+  approval_eligible: false;
+  mode: "approved_policy" | "read_only_legacy" | null;
+  policy_id: string | null;
+  policy_revision: number | null;
+  policy_snapshot_sha256: string | null;
   currency: string | null;
   lines: Array<{ kind: string; sku: string; description: string; qty: number; unit: string; rate: number; amount: number }>;
   lines_truncated: boolean;
@@ -3264,7 +3866,12 @@ export interface EstimatorComputedEstimateProjection {
 
 function unavailableComputedTakeoff(reason: string): EstimatorComputedTakeoffProjection {
   return {
-    state: "unavailable", reason, needs_review: null, panel_count: null, panel_ft: null,
+    state: "unavailable",
+    authority: NON_OPERATIONAL_PREVIEW_AUTHORITY,
+    calculation_schema: LEGACY_PREVIEW_CALCULATION_SCHEMA,
+    policy_bound: false,
+    approval_eligible: false,
+    reason, needs_review: null, panel_count: null, panel_ft: null,
     panel_area_sqft: null, roof_area_computed_sqft: null, overage: null, skipped_facets: null,
     nest: null, trims: [], trims_truncated: false, fasteners: null, failed_check_count: null,
   };
@@ -3280,6 +3887,10 @@ function estimatorComputedTakeoff(
       takeoff,
       projection: {
         state: "computed",
+        authority: NON_OPERATIONAL_PREVIEW_AUTHORITY,
+        calculation_schema: LEGACY_PREVIEW_CALCULATION_SCHEMA,
+        policy_bound: false,
+        approval_eligible: false,
         reason: null,
         needs_review: takeoff.needsReview,
         panel_count: takeoff.totals.panelCount,
@@ -3314,18 +3925,30 @@ function estimatorComputedTakeoff(
   }
 }
 
-function estimatorPriceList(env: AppEnv): { state: "unconfigured" | "invalid" | "ok"; list?: PriceList } {
+type EstimatorPriceList = {
+  state: "unconfigured" | "invalid" | "ok";
+  list?: PriceList;
+  identity?: { tenantId: string; policyId: string; policyRevision: number };
+};
+
+function estimatorPriceList(env: AppEnv, pricedAt: string): EstimatorPriceList {
   const raw = (env as { ESTIMATOR_PRICE_LIST_JSON?: string }).ESTIMATOR_PRICE_LIST_JSON;
   if (!raw || !raw.trim()) return { state: "unconfigured" };
   try {
-    const parsed = JSON.parse(raw) as PriceList;
-    const valid = !!parsed && typeof parsed === "object" &&
-      typeof parsed.currency === "string" && !!parsed.currency.trim() &&
-      !!parsed.panel && typeof parsed.panel.sku === "string" &&
-      (parsed.panel.unit === "lf" || parsed.panel.unit === "sqft") &&
-      typeof parsed.panel.rate === "number" && Number.isFinite(parsed.panel.rate) &&
-      !!parsed.trims && typeof parsed.trims === "object";
-    return valid ? { state: "ok", list: parsed } : { state: "invalid" };
+    const parsed: unknown = JSON.parse(raw);
+    // JSON shape belongs here; all commercial semantics live in priceTakeoff's
+    // single closed validator so approved cents and legacy read-only inputs
+    // cannot drift between the runtime path and the pricing module.
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { state: "invalid" };
+    }
+    const list = parsed as PriceList;
+    if (list.approvedPolicy === undefined) return { state: "ok", list };
+    return {
+      state: "ok",
+      list,
+      identity: approvedPricingPolicyIdentity(list, pricedAt),
+    };
   } catch {
     return { state: "invalid" };
   }
@@ -3335,24 +3958,39 @@ function emptyComputedEstimate(
   state: EstimatorComputedEstimateProjection["state"],
 ): EstimatorComputedEstimateProjection {
   return {
-    state, currency: null, lines: [], lines_truncated: false,
+    state,
+    authority: NON_OPERATIONAL_PREVIEW_AUTHORITY,
+    calculation_schema: LEGACY_PREVIEW_CALCULATION_SCHEMA,
+    policy_bound: false,
+    approval_eligible: false,
+    mode: null, policy_id: null, policy_revision: null,
+    policy_snapshot_sha256: null, currency: null, lines: [], lines_truncated: false,
     subtotal: null, markup: null, tax: null, total: null,
     unpriced_profiles: [], needs_review: null,
   };
 }
 
 function estimatorComputedEstimate(
-  env: AppEnv,
+  priceList: EstimatorPriceList,
   takeoff: TakeoffModel | null,
+  pricedAt: string,
+  authority?: VerifiedPricingAuthority,
 ): EstimatorComputedEstimateProjection {
   if (!takeoff) return emptyComputedEstimate("unavailable");
-  const priceList = estimatorPriceList(env);
   if (priceList.state === "unconfigured") return emptyComputedEstimate("unconfigured");
   if (priceList.state === "invalid") return emptyComputedEstimate("invalid_price_list");
   try {
-    const estimate = priceTakeoff(takeoff, priceList.list!);
+    const estimate = priceTakeoff(takeoff, priceList.list!, { pricedAt, authority });
     return {
       state: "priced",
+      authority: NON_OPERATIONAL_PREVIEW_AUTHORITY,
+      calculation_schema: LEGACY_PREVIEW_CALCULATION_SCHEMA,
+      policy_bound: false,
+      approval_eligible: false,
+      mode: estimate.commercial.mode,
+      policy_id: estimate.commercial.policyId,
+      policy_revision: estimate.commercial.policyRevision,
+      policy_snapshot_sha256: estimate.commercial.policySnapshotSha256,
       currency: estimate.currency,
       lines: estimate.lines.slice(0, MAX_ESTIMATOR_ESTIMATE_LINES).map((line) => ({
         kind: line.kind,

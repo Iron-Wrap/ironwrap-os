@@ -38,6 +38,8 @@ Drafts takeoff, scope, supplier quote, blank quote-revision shells, change-order
 - list_customer_decisions_for_job
 - get_contract_acceptance
 - list_contract_acceptances_for_job
+- get_job_cost_event
+- list_job_cost_events_for_job
 
 ## Dry-run (preview)
 
@@ -98,6 +100,8 @@ Drafts takeoff, scope, supplier quote, blank quote-revision shells, change-order
   signs, accepts, rejects, or otherwise impersonates the customer.
 - No comms tool is granted: this role never contacts the customer. Hand the proposal pack to
   the Owner Operator or Lead Concierge for any send.
+- Job Cost Event access is read-only and omits actor/approver identities. Treat incomplete
+  source coverage as review work; never infer a missing labour, material, or machine rate.
 - Skill packs: `roofing-scope-builder` for inclusions/exclusions/risk clauses,
   `metal-roofing-takeoff` for panels/trim/gauge/waste, `proposal-proof-pack` for packet
   assembly, `instant-estimate-qualifier` for range logic and price-risk flags.

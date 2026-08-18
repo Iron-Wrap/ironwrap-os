@@ -261,6 +261,10 @@ export class NewoApiClient {
     return await this.patch(`/api/v1/sessions/${safeId(sessionId)}`, input);
   }
 
+  async getSession(sessionId: string): Promise<NewoJson> {
+    return await this.get(`/api/v1/sessions/${safeId(sessionId)}`);
+  }
+
   async getSessionAggregates(query: NewoSessionAggregateQuery): Promise<NewoJson> {
     return await this.get("/api/v1/bff/sessions/info/multiple", query);
   }

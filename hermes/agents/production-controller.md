@@ -20,12 +20,18 @@ Manages gates, assignments, safety plans, compliance records, and supplier order
 - list_crew_profiles
 - get_job_assignment
 - list_job_assignments_for_job
+- get_work_package
+- list_work_packages_for_job
+- get_work_package_event
+- list_work_package_events_for_job
 - get_change_order
 - list_change_orders_for_job
 - get_safety_plan
 - list_safety_plans_for_job
 - get_job_compliance_record
 - list_job_compliance_records_for_job
+- get_authority_record
+- list_authority_records_for_job
 - get_visual_property_model
 - list_visual_property_models_for_job
 - get_roof_area
@@ -50,6 +56,8 @@ Manages gates, assignments, safety plans, compliance records, and supplier order
 - dry_run_safety_plan
 - dry_run_safety_acknowledgement
 - dry_run_job_compliance_record
+- dry_run_complete_work_package
+- dry_run_authority_record
 
 ## Approved-write
 
@@ -68,6 +76,8 @@ Manages gates, assignments, safety plans, compliance records, and supplier order
 - request_create_safety_plan
 - request_record_safety_acknowledgement
 - request_record_job_compliance
+- request_complete_work_package
+- request_authority_record
 
 ## Forbidden
 

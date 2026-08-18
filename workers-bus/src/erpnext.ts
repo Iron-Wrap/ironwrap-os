@@ -4,8 +4,11 @@ import { isOn, isVoiceNoteUri, type EnvelopeRecord } from "./core.ts";
 import type { JnResult } from "./jobnimbus.ts";
 import type { RoofGraphV1 } from "./roof-graph.ts";
 import type { NewoSessionRecord } from "./newo-store.ts";
+import { adapterAuthority, assertEffectLedgerReady, runExternalEffect } from "./effect-runtime.ts";
+import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 
 type ErpEnv = Env & {
+  EFFECT_RUNTIME_ENABLED?: string;
   ERPNEXT_ENABLED?: string;
   ERPNEXT_BASE_URL?: string;
   ERPNEXT_API_KEY?: string;
@@ -81,6 +84,8 @@ export interface ErpNextMeasurementInput {
   needsReview?: boolean;
   /** metric -> in-file source ref from the geometry engine (evidence graph). */
   sourceRefs?: Record<string, string>;
+  /** metric -> extraction class; a citation alone does not make OCR deterministic. */
+  sourceConfidences?: Record<string, "deterministic" | "parsed">;
   /** Canonical evidence-first geometry; omitted for non-geometry report paths. */
   roofGraph?: RoofGraphV1;
 }
@@ -734,6 +739,7 @@ async function upsertInstantEstimateSession(
   const high = money(p.range_high ?? p.estimate_high ?? p.high_estimate ?? p.max_price);
   const total = money(p.estimate_total ?? p.total_estimate ?? p.totalEstimate ?? p.total);
   if (!hasInstantEstimateSignal(p, low, high, total)) return null;
+  const hasPrice = low !== undefined || high !== undefined || total !== undefined;
 
   // Keep an estimator's approved/rejected review decision sticky across transport retries.
   return await createIfMissingByField(env, base, "Instant Estimate Session", "estimate_session_id", stableId("estimate", estimateProjectRef(p), rec.envelope_id), {
@@ -742,14 +748,14 @@ async function upsertInstantEstimateSession(
     roof_job: roofJobName,
     source: rec.source,
     service_type: serviceType(p),
-    status: "Needs Review",
+    status: hasPrice ? "Needs Review" : "Captured",
     range_low: low,
     range_high: high,
     estimate_total: total,
     configurator_url: str(p.configurator_url ?? p.project_url ?? p.projectUrl ?? p.share_url ?? p.shareUrl),
     confidence: str(p.confidence ?? p.estimate_confidence),
     review_required: 1,
-    assumptions: str(p.assumptions ?? p.estimate_assumptions) ?? "Non-binding range; estimator review required.",
+    assumptions: str(p.assumptions ?? p.estimate_assumptions) ?? "Measurement and estimator review required before pricing.",
     exclusions: str(p.exclusions ?? p.estimate_exclusions) ?? "Not a final quote, contract, material order, or payment request.",
     selected_services_json: jsonMaybe(p.selected_services ?? p.services ?? p.line_items ?? p.lineItems),
     material_choices_json: jsonMaybe(p.material_choices ?? p.materials ?? p.colors),
@@ -809,7 +815,8 @@ export async function pushMeasurementToErpNext(
       metric,
       value,
       unit: measurementUnit(metric),
-      confidence: input.sourceRefs?.[metric] ? "deterministic" : "parsed",
+      confidence: input.sourceConfidences?.[metric] ??
+        (input.sourceRefs?.[metric] ? "deterministic" : "parsed"),
       source_ref: input.sourceRefs?.[metric] ?? input.rawKey,
       needs_review: input.needsReview ? 1 : 0,
     })),
@@ -923,6 +930,7 @@ export async function pushQuickBooksEventToErpNext(
     system_name: "QuickBooks",
     entity_type: input.type,
     external_entity_id: input.id,
+    realm_id: input.realmId,
     local_doctype: paymentMilestoneName ? "Payment Milestone" : "Unresolved QuickBooks Event",
     local_name: paymentMilestoneName ?? reconciliationId,
     direction: "Inbound",
@@ -1039,20 +1047,177 @@ async function createImmutableQuickBooksReconciliation(
   reconciliationId: string,
   doc: Record<string, unknown>,
 ): Promise<ErpNextResult> {
-  // Generic `/api/resource` creation is intentionally forbidden for
-  // QuickBooks. The bounded Frappe method authenticates the configured Worker
-  // principal and creates only an exact Pending reconciliation/idempotent replay.
-  const created = await quickBooksIssuerFetch(
-    env,
-    base,
-    "POST",
-    "/api/method/ironwrap_roofing.quickbooks_reconciliation_api.issue_pending_reconciliation",
-    { reconciliation_json: JSON.stringify(doc) },
-  );
-  const message = created.message as { name?: unknown; idempotent_replay?: unknown } | undefined;
-  const name = typeof message?.name === "string" && message.name ? message.name : null;
-  if (!name || name !== reconciliationId) throw new Error("erpnext_quickbooks_reconciliation_name_mismatch");
-  return { name, reused: message?.idempotent_replay === true };
+  assertEffectLedgerReady(env);
+  const { issuer } = quickBooksProjectionConfiguration(env);
+    const path = "/api/method/ironwrap_roofing.quickbooks_reconciliation_api.issue_pending_reconciliation";
+    const request = {
+      method: "POST",
+      path,
+      body: { reconciliation_json: JSON.stringify(doc) },
+    };
+    const tenantId = String(env.APP_TENANT_ID ?? "ironwrap");
+    const requestHash = await sha256Hex(canonicalJson(request));
+    const idempotencyKey = `quickbooks:reconciliation:${reconciliationId}`;
+    const deadlineAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    const expectedReadback = quickBooksReconciliationExpectedReadback(reconciliationId, doc);
+    const result = await runExternalEffect<ErpNextResult>(env as never, {
+      tenantId,
+      actor: { type: "agent", id: "quickbooks-reconciliation-adapter" },
+      taskId: `quickbooks:reconciliation:${reconciliationId}`,
+      authority: adapterAuthority({
+        tenantId,
+        provider: "frappe",
+        action: "quickbooks.reconciliation.issue_pending",
+        actorId: "quickbooks-reconciliation-adapter",
+        deadlineAt,
+      }),
+      aggregate: { type: "integration_reconciliation", id: reconciliationId, version: 0 },
+      intentId: idempotencyKey,
+      action: "quickbooks.reconciliation.issue_pending",
+      request,
+      requestHash,
+      provider: "frappe",
+      providerAccountRef: issuer,
+      idempotencyKey,
+      deadlineAt,
+      expectedReadback,
+      retryLimit: 0,
+      compensationPlan: {},
+      correlationId: idempotencyKey,
+    }, {
+      async dispatch() {
+        let created: { data?: unknown; message?: unknown };
+        try {
+          created = await quickBooksIssuerFetch(env, base, "POST", path, request.body);
+        } catch (error) {
+          // The issuer's 409 is an authoritative immutable-identity conflict;
+          // unlike a timeout or auth drift, it did not leave provider state
+          // uncertain and must remain a failed effect rather than unknown.
+          const message = String(error);
+          if (message.includes("erpnext_http_409")) {
+            return {
+              outcome: "rejected" as const,
+              detailCode: message.includes("quickbooks_reconciliation_identity_conflict")
+                ? "erpnext_http_409:quickbooks_reconciliation_identity_conflict"
+                : "erpnext_http_409",
+              providerResponse: message.slice(0, 500),
+            };
+          }
+          throw error;
+        }
+        const message = created.message as { name?: unknown; idempotent_replay?: unknown } | undefined;
+        const name = typeof message?.name === "string" && message.name ? message.name : null;
+        if (!name || name !== reconciliationId) {
+          return {
+            outcome: "rejected" as const,
+            detailCode: "erpnext_quickbooks_reconciliation_name_mismatch",
+            providerResponse: created,
+          };
+        }
+        return {
+          outcome: "accepted" as const,
+          value: { name, reused: message?.idempotent_replay === true },
+          providerExternalId: name,
+          providerResponse: created,
+        };
+      },
+      async readback({ providerExternalId }) {
+        return await quickBooksReconciliationReadback(
+          env,
+          base,
+          reconciliationId,
+          providerExternalId,
+          expectedReadback,
+        );
+      },
+      async replay({ effect }) {
+        const name = effect.provider_external_id;
+        if (!name || name !== reconciliationId) throw new Error("erpnext_quickbooks_reconciliation_replay_id_missing");
+        const readback = await quickBooksReconciliationReadback(
+          env,
+          base,
+          reconciliationId,
+          name,
+          expectedReadback,
+        );
+        if (readback.status !== "match") {
+          throw new Error(readback.detailCode ?? "erpnext_quickbooks_reconciliation_replay_readback_failed");
+        }
+        return { name, reused: true };
+      },
+    });
+    if (result.effect.state !== "succeeded" || result.value === undefined) {
+      throw new Error(result.effect.result_code ?? "erpnext_quickbooks_reconciliation_effect_unknown");
+    }
+  return result.value;
+}
+
+async function quickBooksReconciliationReadback(
+  env: ErpEnv,
+  base: string,
+  reconciliationId: string,
+  providerExternalId: string | null,
+  expected: Record<string, unknown>,
+): Promise<{
+  status: "match" | "conflict" | "unavailable" | "not_found";
+  providerExternalId?: string;
+  observed?: unknown;
+  detailCode?: string;
+}> {
+  try {
+    const readback = await quickBooksIssuerFetch(
+      env,
+      base,
+      "POST",
+      "/api/method/ironwrap_roofing.quickbooks_reconciliation_api.read_pending_reconciliation",
+      { reconciliation_id: providerExternalId ?? reconciliationId },
+    );
+    const message = readback.message as
+      { found?: unknown; reconciliation?: unknown } | undefined;
+    if (message?.found !== true) {
+      return {
+        status: "not_found",
+        detailCode: "erpnext_quickbooks_reconciliation_not_found",
+      };
+    }
+    const observed =
+      message.reconciliation &&
+      typeof message.reconciliation === "object" &&
+      !Array.isArray(message.reconciliation)
+        ? (message.reconciliation as Record<string, unknown>)
+        : {};
+    const observedMaterial = Object.fromEntries(
+      Object.keys(expected).map((field) => [field, observed[field]]),
+    );
+    return observed.name === (providerExternalId ?? reconciliationId) &&
+      canonicalJson(observedMaterial) === canonicalJson(expected)
+      ? { status: "match", providerExternalId: String(observed.name), observed }
+      : {
+          status: "conflict",
+          observed,
+          detailCode: "erpnext_quickbooks_reconciliation_readback_conflict",
+        };
+  } catch {
+    return {
+      status: "unavailable",
+      detailCode: "erpnext_quickbooks_reconciliation_readback_unavailable",
+    };
+  }
+}
+
+function quickBooksReconciliationExpectedReadback(
+  reconciliationId: string,
+  doc: Record<string, unknown>,
+): Record<string, unknown> {
+  const expected: Record<string, unknown> = { name: reconciliationId };
+  for (const field of [
+    "reconciliation_id", "roof_job", "system_name", "entity_type", "external_entity_id", "realm_id",
+    "local_doctype", "local_name", "direction", "status", "detected_at", "raw_key", "source_version",
+    "source_payload_hash", "local_payload_hash", "attempt_count",
+  ]) {
+    if (doc[field] !== undefined) expected[field] = doc[field];
+  }
+  return expected;
 }
 
 async function quickBooksProjectionHash(input: ErpNextQuickBooksEventInput): Promise<string> {
@@ -1135,6 +1300,79 @@ async function erpFetch(
   path: string,
   body?: unknown,
 ): Promise<{ data?: unknown; message?: unknown }> {
+  if (method !== "GET") {
+    assertEffectLedgerReady(env);
+    const tenantId = String((env as ErpEnv & { APP_TENANT_ID?: string }).APP_TENANT_ID ?? "ironwrap");
+    const bodyJson = body === undefined ? undefined : JSON.stringify(body);
+    if (body !== undefined && bodyJson === undefined) throw new Error("erpnext_body_not_json");
+    const normalizedBody = bodyJson === undefined ? undefined : JSON.parse(bodyJson) as unknown;
+    const request = normalizedBody === undefined ? { method, path } : { method, path, body: normalizedBody };
+    const requestHash = await sha256Hex(canonicalJson(request));
+    const action = `frappe.${method.toLowerCase()}`;
+    const idempotencyKey = `frappe:${method}:${path}:${requestHash}`;
+    const deadlineAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    const expectedReadback = await frappeResourceExpectedReadback(method, path, normalizedBody);
+    const result = await runExternalEffect(env as never, {
+      tenantId,
+      actor: { type: "agent", id: "frappe-adapter" },
+      taskId: `frappe:${path}`,
+      authority: adapterAuthority({ tenantId, provider: "frappe", action, actorId: "frappe-adapter", deadlineAt, retryLimit: 1 }),
+      aggregate: { type: "frappe_record", id: path.replace(/[^A-Za-z0-9:_-]/g, "_").slice(0, 150) || "unknown", version: 0 },
+      intentId: idempotencyKey,
+      action,
+      request,
+      requestHash,
+      provider: "frappe",
+      idempotencyKey,
+      deadlineAt,
+      expectedReadback,
+      retryLimit: 1,
+      compensationPlan: {},
+      correlationId: idempotencyKey,
+    }, {
+      async dispatch() {
+        const response = await fetch(base + path, {
+          method,
+          headers: {
+            accept: "application/json",
+            authorization: `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`,
+            ...(bodyJson === undefined ? {} : { "content-type": "application/json" }),
+          },
+          body: bodyJson,
+        });
+        const raw = await response.text();
+        if (!response.ok) return { outcome: "rejected" as const, detailCode: `erpnext_http_${response.status}`, providerResponse: raw.slice(0, 200) };
+        let value: { data?: unknown; message?: unknown };
+        try { value = raw ? JSON.parse(raw) as { data?: unknown; message?: unknown } : {}; }
+        catch { return { outcome: "accepted" as const, providerResponse: raw.slice(0, 200), detailCode: "erpnext_response_invalid_json" };
+        }
+        const data = value.data as { name?: unknown } | undefined;
+        const pathName = method === "PUT" ? decodeURIComponent(path.split("/").at(-1) ?? "") : null;
+        const providerExternalId = typeof data?.name === "string" ? data.name : pathName || null;
+        return { outcome: "accepted" as const, value, providerExternalId, providerResponse: value };
+      },
+      async readback({ providerExternalId }) {
+        return (await frappeResourceReadback(env, base, method, path, normalizedBody, providerExternalId)).readback;
+      },
+      async replay({ effect }) {
+        const replay = await frappeResourceReadback(
+          env,
+          base,
+          method,
+          path,
+          normalizedBody,
+          effect.provider_external_id,
+        );
+        if (replay.readback.status !== "match" || !replay.value) {
+          throw new Error(replay.readback.detailCode ?? "erpnext_replay_readback_failed");
+        }
+        return replay.value;
+      },
+    });
+    if (result.effect.state !== "succeeded") throw new Error(result.effect.result_code ?? "erpnext_effect_outcome_unknown");
+    if (!result.value || typeof result.value !== "object") throw new Error("erpnext_effect_result_missing");
+    return result.value as { data?: unknown; message?: unknown };
+  }
   const res = await fetch(base + path, {
     method,
     headers: {
@@ -1180,6 +1418,162 @@ function normalizeBaseUrl(raw: string | undefined): string {
 function readName(created: { data?: unknown }): string | null {
   const data = created.data as { name?: unknown } | undefined;
   return typeof data?.name === "string" && data.name ? data.name : null;
+}
+
+async function frappeResourceExpectedReadback(
+  method: string,
+  path: string,
+  body: unknown,
+): Promise<Record<string, unknown>> {
+  const expected: Record<string, unknown> = {};
+  if (method === "PUT") {
+    const name = decodeURIComponent(path.split("/").at(-1) ?? "");
+    if (name) expected.name = name;
+  }
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    expected.material_sha256 = await sha256Hex(canonicalJson(frappeMaterial(body)));
+  }
+  return expected;
+}
+
+const FRAPPE_MANAGED_FIELDS = new Set([
+  "doctype",
+  "name",
+  "owner",
+  "creation",
+  "modified",
+  "modified_by",
+  "docstatus",
+  "idx",
+]);
+
+function frappeMaterial(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(frappeMaterial);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(
+        ([key, item]) => !FRAPPE_MANAGED_FIELDS.has(key) && item !== undefined,
+      )
+      .map(([key, item]) => [key, frappeMaterial(item)]),
+  );
+}
+
+function frappeObservedShape(observed: unknown, requested: unknown): unknown {
+  if (Array.isArray(requested)) {
+    return Array.isArray(observed)
+      ? requested.map((item, index) =>
+          frappeObservedShape(observed[index], item),
+        )
+      : null;
+  }
+  if (!requested || typeof requested !== "object" || Array.isArray(requested))
+    return observed;
+  const row =
+    observed && typeof observed === "object" && !Array.isArray(observed)
+      ? (observed as Record<string, unknown>)
+      : {};
+  return Object.fromEntries(
+    Object.entries(requested as Record<string, unknown>).map(([key, item]) => [
+      key,
+      frappeObservedShape(row[key], item),
+    ]),
+  );
+}
+
+async function frappeResourceReadback(
+  env: ErpEnv,
+  base: string,
+  method: string,
+  path: string,
+  body: unknown,
+  providerExternalId: string | null,
+): Promise<{
+  readback: {
+    status: "match" | "conflict" | "unavailable" | "not_found";
+    providerExternalId?: string;
+    observed?: unknown;
+    detailCode?: string;
+  };
+  value?: { data?: unknown; message?: unknown };
+}> {
+  const readbackPath = providerExternalId
+    ? method === "PUT"
+      ? path
+      : `${path}/${encodeURIComponent(providerExternalId)}`
+    : null;
+  if (!readbackPath)
+    return {
+      readback: {
+        status: "unavailable",
+        detailCode: "erpnext_readback_id_missing",
+      },
+    };
+  try {
+    const response = await fetch(`${base}${readbackPath}`, {
+      headers: {
+        accept: "application/json",
+        authorization: `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`,
+      },
+    });
+    if (response.status === 404)
+      return {
+        readback: {
+          status: "not_found",
+          detailCode: "erpnext_readback_not_found",
+        },
+      };
+    if (!response.ok)
+      return {
+        readback: {
+          status: "unavailable",
+          detailCode: `erpnext_readback_${response.status}`,
+        },
+      };
+    const value = (await response.json()) as { data?: Record<string, unknown> };
+    const expectedName =
+      providerExternalId ?? decodeURIComponent(path.split("/").at(-1) ?? "");
+    const requestedMaterial = frappeMaterial(body);
+    const observed = {
+      name: value.data?.name,
+      ...(body && typeof body === "object" && !Array.isArray(body)
+        ? {
+            material_sha256: await sha256Hex(
+              canonicalJson(frappeObservedShape(value.data, requestedMaterial)),
+            ),
+          }
+        : {}),
+    };
+    const expected = await frappeResourceExpectedReadback(method, path, body);
+    const materialMatches = Object.entries(expected).every(
+      ([key, item]) => observed[key as keyof typeof observed] === item,
+    );
+    return value.data?.name === expectedName && materialMatches
+      ? {
+          readback: {
+            status: "match",
+            providerExternalId: expectedName,
+            observed,
+          },
+          value,
+        }
+      : {
+          readback: {
+            status: "conflict",
+            providerExternalId: expectedName,
+            observed,
+            detailCode: "erpnext_readback_conflict",
+          },
+          value,
+        };
+  } catch {
+    return {
+      readback: {
+        status: "unavailable",
+        detailCode: "erpnext_readback_unavailable",
+      },
+    };
+  }
 }
 
 function brand(p: Record<string, unknown>): string | undefined {

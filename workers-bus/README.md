@@ -160,7 +160,7 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | POST | `/ingest/estimate` | `Bearer INGEST_TOKEN` | ingest public estimator/configurator payloads into owned R2/D1 and ERPNext without a JobNimbus/GHL queue dependency; accepts stable project ids or `Idempotency-Key`/`X-Idempotency-Key` for retry-safe replay |
 | POST | `/ingest/facet-design` | dedicated HMAC + exact source-tenant map | receive only `facet.design.approved.v1` design-decision evidence; raw R2 first, immutable local-tenant D1 receipt/nonce second, no quote/contract/Frappe side effect |
 | GET | `/public/instant-estimate/config` | exact configured `Origin` when supplied | public Turnstile/site availability envelope; an Origin-less same-origin GET is allowed without CORS headers |
-| POST | `/public/instant-estimate` | exact configured `Origin` + Turnstile | public estimate qualification; raw canonical consent is stored first, client/IP rate keys are HMAC hashes only, and a non-binding CAD range is returned only from an enabled server rule |
+| POST | `/public/instant-estimate` | exact configured `Origin` + Turnstile | public review intake; raw canonical consent is stored first, client/IP rate keys are HMAC hashes only, and no price is returned before measurement and approved pricing evidence |
 | POST | `/ingest/photo` | `Bearer INGEST_TOKEN` | ingest Jotform jobsite photos, file them to Google Drive, and optionally sync ERPNext Evidence Items |
 | POST | `/ingest/measurement` | `Bearer INGEST_TOKEN` | ingest RoofRuler/AppliCad measurement metadata/report files; provider attachment identity takes precedence over a retry header, raw is stored before downstream work, and completed receipts replay safely |
 | GET | `/health` | — | backward-compatible, dependency-free liveness probe (`{"ok":true}`) |
@@ -251,10 +251,11 @@ There is never a wildcard credentialed CORS response.
 
 Leave `PUBLIC_ESTIMATE_ENABLED=false` until every control below is set. When enabled, `/ready`
 fails closed unless the exact browser origin, tenant brand allowlist, consent jurisdiction,
-Turnstile site/secret pair, HMAC rate-limit pepper, numeric rate limits, and valid JSON rule set are present. `[]` is a valid rule set and accepts a
-review-required lead without returning dollars; a missing or invalid rule set disables the public
-endpoint. If `ERPNEXT_ENABLED=true`, `ERPNEXT_INTEGRATION_USER` is also required so captured
-follow-up consent is mirrored under a deterministic integration identity.
+Turnstile site/secret pair, HMAC rate-limit pepper, numeric rate limits, and the exact disabled range catalogue `[]` are present. `[]` accepts a
+review-required lead and, when ERPNext is enabled, creates a price-free `Captured` Instant Estimate
+Session; this public path never returns or persists public pricing. A missing or non-empty rule set
+disables the public endpoint. If `ERPNEXT_ENABLED=true`, `ERPNEXT_INTEGRATION_USER` is also required
+so captured follow-up consent is mirrored under a deterministic integration identity.
 
 ```text
 PUBLIC_ESTIMATE_ENABLED=true
@@ -271,9 +272,8 @@ ERPNEXT_INTEGRATION_USER=<Frappe integration user when ERPNext is enabled>
 
 `PUBLIC_ESTIMATE_ALLOWED_ORIGINS` controls browser CORS to this Worker only. It is deliberately
 separate from any website iframe `frame-ancestors` policy: configure each surface explicitly; do
-not add an iframe parent merely to the Worker CORS allowlist. Every range rule must use one of
-the configured tenant-brand keys and a service id from the tenant config; the browser never
-calculates a range.
+not add an iframe parent merely to the Worker CORS allowlist. The browser and Worker never
+calculate or return a price from this intake path.
 
 ### Governed approval broker (optional BFF slice)
 

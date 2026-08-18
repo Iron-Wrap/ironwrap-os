@@ -25,7 +25,7 @@ test keys, and captures magic-link email into the `dev_outbox` table instead of 
 | Flow | Entry point |
 |---|---|
 | Estimate spine (D1/R2 → Frappe Lead Envelope + Roof Job + gates) | `POST /ingest/estimate` (INGEST_TOKEN) |
-| Public instant estimate (Turnstile test keys, non-binding range) | `POST /public/instant-estimate` |
+| Public estimator-review intake (Turnstile test keys, no online price) | `POST /public/instant-estimate` |
 | Magic-link sign-in (dev outbox instead of email) | `POST /api/v1/auth/magic-link/request` → `GET /admin/dev-outbox` (ADMIN_TOKEN) |
 | Owner → field QR pairing → device-bound field session | `POST /api/v1/device-pairings` → `POST /api/v1/auth/device-pairing/consume` |
 | Field check-in + evidence (R2 + Frappe Evidence Item) | `POST /api/v1/jobs/{job}/check-ins` (multipart) |

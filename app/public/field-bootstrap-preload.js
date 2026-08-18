@@ -5,7 +5,11 @@
   const BOOTSTRAP_PATH = "/api/v1/field/bootstrap";
   const TIMEOUT_MS = 12_000;
 
-  if (window.location.pathname !== "/today" || typeof indexedDB.databases !== "function") return;
+  if (
+    !["/today", "/now"].includes(window.location.pathname) ||
+    typeof indexedDB.databases !== "function"
+  )
+    return;
 
   const preload = readStoredDeviceProof().then((deviceProof) => {
     if (!deviceProof) throw new Error("field_device_proof_unavailable");

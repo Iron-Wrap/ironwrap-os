@@ -5,6 +5,7 @@ export type OfficeProductionDocType =
   keyof typeof OFFICE_PRODUCTION_READ_FIELDS;
 export type OfficeSalesDocType = keyof typeof OFFICE_SALES_READ_FIELDS;
 export type OfficeEstimatorDocType = keyof typeof OFFICE_ESTIMATOR_READ_FIELDS;
+export type FacetLaunchDocType = keyof typeof FACET_LAUNCH_READ_FIELDS;
 export type OfficeEstimatorDetailDocType =
   keyof typeof OFFICE_ESTIMATOR_DETAIL_READ;
 export type CustomerPortalDocType = keyof typeof CUSTOMER_PORTAL_READ_FIELDS;
@@ -29,6 +30,12 @@ export type OfficeSalesFrappeFilter = readonly [
 ];
 export type OfficeEstimatorFrappeFilter = readonly [
   doctype: OfficeEstimatorDocType,
+  field: string,
+  operator: string,
+  value: unknown,
+];
+export type FacetLaunchFrappeFilter = readonly [
+  doctype: FacetLaunchDocType,
   field: string,
   operator: string,
   value: unknown,
@@ -70,12 +77,30 @@ export const FRAPPE_READ_FIELDS = {
     "assignment_id",
     "roof_job",
     "assignment_type",
+    "authority_user",
+    "authority_role",
     "status",
     "crew_profile",
     "assigned_user",
+    "assigned_by",
+    "assigned_at",
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
     "scheduled_start",
     "scheduled_end",
     "blocker_reason",
+    "modified",
+  ],
+  "Work Package Worker": [
+    "name",
+    "parent",
+    "parenttype",
+    "parentfield",
+    "worker_user",
+    "worker_role",
+    "required",
     "modified",
   ],
   "Crew Member": [
@@ -117,6 +142,13 @@ export const FRAPPE_READ_FIELDS = {
     "evidence_id",
     "device_action_id",
     "roof_job",
+    "work_package",
+    "work_package_version",
+    "work_package_release_attempt_id",
+    "evidence_slot_id",
+    "evidence_requirement",
+    "evidence_source",
+    "evidence_device_id",
     "evidence_type",
     "proof_slot",
     "source_system",
@@ -130,6 +162,11 @@ export const FRAPPE_READ_FIELDS = {
     "correction_of",
     "summary",
     "sync_state",
+    "evidence_freshness",
+    "evidence_conflict_state",
+    "evidence_verification",
+    "evidence_disposition",
+    "correction_reason",
     "modified",
   ],
   "Field Check-in": [
@@ -230,6 +267,18 @@ export const FRAPPE_READ_FIELDS = {
     "due_date",
     "event_ts",
     "notes",
+    "currency",
+    "subtotal",
+    "tax_amount",
+    "total_amount",
+    "truth_source",
+    "truth_at",
+    "recognition_posted_at",
+    "recognition_digest",
+    "recognition_reconciliation",
+    "qb_entity_type",
+    "qb_entity_id",
+    "supersedes",
     "modified",
   ],
   "Lead Envelope": [
@@ -393,6 +442,7 @@ export const OFFICE_SALES_READ_FIELDS = {
     "effective_from",
     "expires_at",
     "revoked_at",
+    "supersedes",
     "modified",
   ],
 } as const;
@@ -520,6 +570,111 @@ export const OFFICE_ESTIMATOR_READ_FIELDS = {
     "correction_reason",
     "modified",
   ],
+  "Supplier Quote": [
+    "name",
+    "supplier_quote_id",
+    "roof_job",
+    "status",
+    "quote_total",
+    "currency",
+    "valid_until",
+    "modified",
+  ],
+  "Supplier Order": [
+    "name",
+    "supplier_order_id",
+    "roof_job",
+    "source_quote",
+    "status",
+    "modified",
+  ],
+  "Material Lot": [
+    "name",
+    "material_lot_id",
+    "roof_job",
+    "status",
+    "modified",
+  ],
+  "Shop Order": [
+    "name",
+    "shop_order_id",
+    "roof_job",
+    "status",
+    "modified",
+  ],
+  "Field Check-in": [
+    "name",
+    "checkin_id",
+    "roof_job",
+    "status",
+    "sync_state",
+    "modified",
+  ],
+  "Payment Milestone": [
+    "name",
+    "payment_milestone_id",
+    "roof_job",
+    "milestone_type",
+    "milestone_version",
+    "status",
+    "due_date",
+    "event_ts",
+    "notes",
+    "currency",
+    "subtotal",
+    "tax_amount",
+    "total_amount",
+    "truth_source",
+    "truth_at",
+    "qb_entity_type",
+    "qb_entity_id",
+    "supersedes",
+    "modified",
+  ],
+  "Integration Reconciliation": [
+    "name",
+    "reconciliation_id",
+    "roof_job",
+    "system_name",
+    "entity_type",
+    "external_entity_id",
+    "local_doctype",
+    "local_name",
+    "status",
+    "currency",
+    "source_payload_hash",
+    "detected_at",
+    "supersedes",
+    "modified",
+  ],
+  "Job Cost Event": [
+    "name",
+    "job_cost_event_id",
+    "tenant",
+    "roof_job",
+    "event_kind",
+    "category",
+    "quantity",
+    "unit",
+    "amount_cents",
+    "amount_basis",
+    "currency",
+    "occurred_at",
+    "source_doctype",
+    "source_name",
+    "source_digest",
+    "source_evidence",
+    "accounting_state",
+    "accounting_system",
+    "accounting_entity_type",
+    "accounting_entity_id",
+    "accounting_digest",
+    "accounting_posted_at",
+    "reconciliation",
+    "reversal_of",
+    "recorded_at",
+    "modified",
+  ],
   "Insurance Supplement": [
     "name",
     "roof_job",
@@ -547,6 +702,51 @@ export const OFFICE_ESTIMATOR_READ_FIELDS = {
     "approved_at",
     "modified",
   ],
+  "Price Book Rule": [
+    "name",
+    "price_rule_id",
+    "rule_type",
+    "status",
+    "currency",
+    "source_ref",
+    "rule_json",
+    "effective_from",
+    "effective_to",
+    "approved_by",
+    "approved_at",
+    "pricing_policy_id",
+    "pricing_policy_revision",
+    "pricing_policy_snapshot_json",
+    "pricing_policy_snapshot_sha256",
+    "modified",
+  ],
+} as const;
+
+/**
+ * Backend-only launch identity contract. Customer email is fetched solely to derive the
+ * privacy-preserving customer-party and external-identity hashes that Facet later proves with
+ * OIDC. These rows must never be returned through a browser read model.
+ */
+const FACET_LAUNCH_READ_FIELDS = {
+  "Roof Job": [
+    "name",
+    "roof_job_id",
+    "brand",
+    "customer",
+    "quotation",
+    "modified",
+  ],
+  "Customer Quote": [
+    "name",
+    "customer_quote_id",
+    "roof_job",
+    "customer",
+    "quote_version",
+    "status",
+    "approved_at",
+    "modified",
+  ],
+  "Roofing Customer": ["name", "email", "modified"],
 } as const;
 
 /**
@@ -792,6 +992,10 @@ const FIELD_WORK_PACKAGE_LIST_READ = {
     "work_package_id",
     "roof_job",
     "job_assignment",
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
     "status",
     "modified",
   ],
@@ -808,9 +1012,68 @@ const FIELD_WORK_PACKAGE_HOLD_RELEASE_READ = {
     "work_package",
     "roof_job",
     "job_assignment",
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
     "work_package_version",
+    "release_attempt_id",
     "hold_point_sequence",
     "evidence_item",
+  ],
+} as const;
+
+const FIELD_WORK_PACKAGE_ACKNOWLEDGEMENT_READ = {
+  "Work Package Event": [
+    "name",
+    "event_type",
+    "work_package",
+    "roof_job",
+    "job_assignment",
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
+    "work_package_version",
+    "release_attempt_id",
+    "actor_user",
+    "actor_role",
+    "device_action_id",
+    "occurred_at",
+  ],
+} as const;
+
+const FIELD_WORK_PACKAGE_EVIDENCE_READ = {
+  "Work Package Event": [
+    "name",
+    "event_type",
+    "work_package",
+    "roof_job",
+    "job_assignment",
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
+    "work_package_version",
+    "release_attempt_id",
+    "actor_user",
+    "actor_role",
+    "device_action_id",
+    "occurred_at",
+    "evidence_item",
+    "evidence_slot_id",
+    "evidence_requirement",
+    "evidence_source",
+    "evidence_device_id",
+    "evidence_captured_at",
+    "evidence_freshness",
+    "evidence_conflict_state",
+    "evidence_correction_of",
+    "evidence_item_correction_of",
+    "evidence_review_of",
+    "evidence_verification",
+    "evidence_disposition",
+    "correction_reason",
   ],
 } as const;
 
@@ -821,6 +1084,10 @@ const FIELD_WORK_PACKAGE_DETAIL_READ = {
       "work_package_id",
       "roof_job",
       "job_assignment",
+      "work_object_type",
+      "work_object_id",
+      "physical_context_type",
+      "physical_context_id",
       "version",
       "status",
       "title",
@@ -833,11 +1100,21 @@ const FIELD_WORK_PACKAGE_DETAIL_READ = {
       "issued_at",
       "expires_at",
       "released_at",
+      "completed_at",
+      "release_attempt_id",
       "acknowledged_by",
       "acknowledged_at",
+      "supersedes",
+      "correction_reason",
       "modified",
     ],
     children: {
+      assigned_workers: [
+        "sequence",
+        "worker_user",
+        "worker_role",
+        "required",
+      ],
       steps: [
         "sequence",
         "instruction",
@@ -847,6 +1124,7 @@ const FIELD_WORK_PACKAGE_DETAIL_READ = {
       hold_points: [
         "sequence",
         "hold_point",
+        "release_phase",
         "release_authority",
         "required_evidence",
         "acceptance_criteria",
@@ -871,10 +1149,15 @@ const FILTER_FIELDS: Readonly<Record<FrappeDocType, ReadonlySet<string>>> = {
   "Job Assignment": new Set([
     "name",
     "roof_job",
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
     "status",
     "assigned_user",
     "crew_profile",
   ]),
+  "Work Package Worker": new Set(["parent", "worker_user"]),
   "Crew Member": new Set(["parent", "crew_user", "active"]),
   "Roofing Property": new Set(["name"]),
   "Roofing Customer": new Set(["name"]),
@@ -947,8 +1230,35 @@ const OFFICE_ESTIMATOR_FILTER_FIELDS: Readonly<
   "Customer Quote": new Set(["roof_job", "status"]),
   "Proposal Evidence Pack": new Set(["roof_job", "quotation", "status"]),
   "Change Order": new Set(["roof_job", "customer_quote", "status"]),
+  "Supplier Quote": new Set(["roof_job", "status"]),
+  "Supplier Order": new Set(["roof_job", "status"]),
+  "Material Lot": new Set(["roof_job", "status"]),
+  "Shop Order": new Set(["roof_job", "status"]),
+  "Field Check-in": new Set(["roof_job", "status", "sync_state"]),
+  "Payment Milestone": new Set(["roof_job", "status"]),
+  "Integration Reconciliation": new Set(["roof_job", "status"]),
+  "Job Cost Event": new Set([
+    "tenant",
+    "roof_job",
+    "event_kind",
+    "accounting_state",
+  ]),
   "Insurance Supplement": new Set(["roof_job", "status"]),
   "Scope Clause": new Set(["roof_job", "status"]),
+  "Price Book Rule": new Set([
+    "status",
+    "rule_type",
+    "pricing_policy_id",
+    "pricing_policy_revision",
+  ]),
+};
+
+const FACET_LAUNCH_FILTER_FIELDS: Readonly<
+  Record<FacetLaunchDocType, ReadonlySet<string>>
+> = {
+  "Roof Job": new Set(["name"]),
+  "Customer Quote": new Set(["roof_job"]),
+  "Roofing Customer": new Set(["name"]),
 };
 
 const CUSTOMER_PORTAL_FILTER_FIELDS: Readonly<
@@ -974,7 +1284,15 @@ const RECEPTION_LOOKUP_FILTER_FIELDS: Readonly<
 const FIELD_WORK_PACKAGE_FILTER_FIELDS: Readonly<
   Record<keyof typeof FIELD_WORK_PACKAGE_LIST_READ, ReadonlySet<string>>
 > = {
-  "Work Package": new Set(["roof_job", "job_assignment", "status"]),
+  "Work Package": new Set([
+    "roof_job",
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
+    "job_assignment",
+    "status",
+  ]),
 };
 
 const FIELD_WORK_PACKAGE_HOLD_RELEASE_FILTER_FIELDS: Readonly<
@@ -983,6 +1301,42 @@ const FIELD_WORK_PACKAGE_HOLD_RELEASE_FILTER_FIELDS: Readonly<
   "Work Package Event": new Set([
     "work_package",
     "roof_job",
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
+    "job_assignment",
+    "work_package_version",
+    "event_type",
+  ]),
+};
+
+const FIELD_WORK_PACKAGE_ACKNOWLEDGEMENT_FILTER_FIELDS: Readonly<
+  Record<keyof typeof FIELD_WORK_PACKAGE_ACKNOWLEDGEMENT_READ, ReadonlySet<string>>
+> = {
+  "Work Package Event": new Set([
+    "work_package",
+    "roof_job",
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
+    "job_assignment",
+    "work_package_version",
+    "event_type",
+  ]),
+};
+
+const FIELD_WORK_PACKAGE_EVIDENCE_FILTER_FIELDS: Readonly<
+  Record<keyof typeof FIELD_WORK_PACKAGE_EVIDENCE_READ, ReadonlySet<string>>
+> = {
+  "Work Package Event": new Set([
+    "work_package",
+    "roof_job",
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
     "job_assignment",
     "work_package_version",
     "event_type",
@@ -1094,6 +1448,27 @@ export async function listOfficeEstimatorFrappeResource(
 }
 
 /**
+ * Read the minimum server-side records needed to bind a launch to one exact current approved
+ * quote and customer identity. This is intentionally not part of the estimator browser contract.
+ */
+export async function listFacetLaunchFrappeResource(
+  env: AppEnv,
+  doctype: FacetLaunchDocType,
+  filters: readonly FacetLaunchFrappeFilter[] = [],
+  limit = 2,
+): Promise<FrappeRow[]> {
+  return await listFrappeResourcePageForContract(
+    env,
+    doctype,
+    filters,
+    limit,
+    0,
+    FACET_LAUNCH_READ_FIELDS,
+    FACET_LAUNCH_FILTER_FIELDS,
+  );
+}
+
+/**
  * Dedicated customer-capability lookup. Callers cannot ask for an office field, arbitrary
  * DocType, or arbitrary filter through this function.
  */
@@ -1179,11 +1554,30 @@ export async function listFieldWorkPackagesForAssignment(
   jobId: string,
   assignmentId: string,
 ): Promise<FrappeRow[]> {
-  return await listFrappeResourcePageForContract(
+  const roofRows = await listFrappeResourcePageForContract(
     env,
     "Work Package",
     [
       ["Work Package", "roof_job", "=", jobId],
+      ["Work Package", "job_assignment", "=", assignmentId],
+      [
+        "Work Package",
+        "status",
+        "in",
+        [...FIELD_WORK_PACKAGE_CURRENT_STATUSES],
+      ],
+    ],
+    2,
+    0,
+    FIELD_WORK_PACKAGE_LIST_READ,
+    FIELD_WORK_PACKAGE_FILTER_FIELDS,
+  );
+  if (roofRows.length > 0) return roofRows;
+  return await listFrappeResourcePageForContract(
+    env,
+    "Work Package",
+    [
+      ["Work Package", "work_object_id", "=", jobId],
       ["Work Package", "job_assignment", "=", assignmentId],
       [
         "Work Package",
@@ -1218,7 +1612,9 @@ export async function listFieldWorkPackageHoldReleases(
     ["Work Package Event", "work_package_version", "=", version],
     ["Work Package Event", "event_type", "=", "Hold Point Released"],
   ] as const;
-  const releases = await listFrappeResourcePageForContract(
+  let activeFilters: readonly (readonly [string, string, string, unknown])[] =
+    filters;
+  let releases = await listFrappeResourcePageForContract(
     env,
     "Work Package Event",
     filters,
@@ -1227,17 +1623,143 @@ export async function listFieldWorkPackageHoldReleases(
     FIELD_WORK_PACKAGE_HOLD_RELEASE_READ,
     FIELD_WORK_PACKAGE_HOLD_RELEASE_FILTER_FIELDS,
   );
+  if (releases.length === 0) {
+    activeFilters = filters.map((filter): readonly [string, string, string, unknown] =>
+      filter[1] === "roof_job"
+        ? [filter[0], "work_object_id", filter[2], filter[3]] as const
+        : filter,
+    );
+    releases = await listFrappeResourcePageForContract(
+      env,
+      "Work Package Event",
+      activeFilters,
+      100,
+      0,
+      FIELD_WORK_PACKAGE_HOLD_RELEASE_READ,
+      FIELD_WORK_PACKAGE_HOLD_RELEASE_FILTER_FIELDS,
+    );
+  }
   if (releases.length < 100) return releases;
   const extra = await listFrappeResourcePageForContract(
     env,
     "Work Package Event",
-    filters,
+    activeFilters,
     1,
     100,
     FIELD_WORK_PACKAGE_HOLD_RELEASE_READ,
     FIELD_WORK_PACKAGE_HOLD_RELEASE_FILTER_FIELDS,
   );
-  return extra.length === 0 ? releases : [...releases, ...extra];
+  return extra.length === 0 ? releases : [{ __ledger_overflow: true }];
+}
+
+/** Read the immutable per-worker acknowledgement ledger for one exact package version. */
+export async function listFieldWorkPackageAcknowledgements(
+  env: AppEnv,
+  workPackageName: string,
+  jobId: string,
+  assignmentId: string,
+  version: number,
+): Promise<FrappeRow[]> {
+  const filters = [
+    ["Work Package Event", "work_package", "=", workPackageName],
+    ["Work Package Event", "roof_job", "=", jobId],
+    ["Work Package Event", "job_assignment", "=", assignmentId],
+    ["Work Package Event", "work_package_version", "=", version],
+    ["Work Package Event", "event_type", "=", "Acknowledged"],
+  ] as const;
+  let activeFilters: readonly (readonly [string, string, string, unknown])[] =
+    filters;
+  let acknowledgements = await listFrappeResourcePageForContract(
+    env,
+    "Work Package Event",
+    filters,
+    100,
+    0,
+    FIELD_WORK_PACKAGE_ACKNOWLEDGEMENT_READ,
+    FIELD_WORK_PACKAGE_ACKNOWLEDGEMENT_FILTER_FIELDS,
+  );
+  if (acknowledgements.length === 0) {
+    activeFilters = filters.map((filter): readonly [string, string, string, unknown] =>
+      filter[1] === "roof_job"
+        ? [filter[0], "work_object_id", filter[2], filter[3]] as const
+        : filter,
+    );
+    acknowledgements = await listFrappeResourcePageForContract(
+      env,
+      "Work Package Event",
+      activeFilters,
+      100,
+      0,
+      FIELD_WORK_PACKAGE_ACKNOWLEDGEMENT_READ,
+      FIELD_WORK_PACKAGE_ACKNOWLEDGEMENT_FILTER_FIELDS,
+    );
+  }
+  if (acknowledgements.length < 100) return acknowledgements;
+  const extra = await listFrappeResourcePageForContract(
+    env,
+    "Work Package Event",
+    activeFilters,
+    1,
+    100,
+    FIELD_WORK_PACKAGE_ACKNOWLEDGEMENT_READ,
+    FIELD_WORK_PACKAGE_ACKNOWLEDGEMENT_FILTER_FIELDS,
+  );
+  return extra.length === 0 ? acknowledgements : [{ __ledger_overflow: true }];
+}
+
+/** Read typed evidence-slot events without exposing raw object locations to the PWA. */
+export async function listFieldWorkPackageEvidence(
+  env: AppEnv,
+  workPackageName: string,
+  jobId: string,
+  assignmentId: string,
+  version: number,
+): Promise<FrappeRow[]> {
+  const filters = [
+    ["Work Package Event", "work_package", "=", workPackageName],
+    ["Work Package Event", "roof_job", "=", jobId],
+    ["Work Package Event", "job_assignment", "=", assignmentId],
+    ["Work Package Event", "work_package_version", "=", version],
+    ["Work Package Event", "event_type", "in", ["Evidence Captured", "Evidence Reviewed"]],
+  ] as const;
+  let activeFilters: readonly (readonly [string, string, string, unknown])[] =
+    filters;
+  let evidence = await listFrappeResourcePageForContract(
+    env,
+    "Work Package Event",
+    filters,
+    100,
+    0,
+    FIELD_WORK_PACKAGE_EVIDENCE_READ,
+    FIELD_WORK_PACKAGE_EVIDENCE_FILTER_FIELDS,
+  );
+  if (evidence.length === 0) {
+    activeFilters = filters.map((filter): readonly [string, string, string, unknown] =>
+      filter[1] === "roof_job"
+        ? [filter[0], "work_object_id", filter[2], filter[3]] as const
+        : filter,
+    );
+    evidence = await listFrappeResourcePageForContract(
+      env,
+      "Work Package Event",
+      activeFilters,
+      100,
+      0,
+      FIELD_WORK_PACKAGE_EVIDENCE_READ,
+      FIELD_WORK_PACKAGE_EVIDENCE_FILTER_FIELDS,
+    );
+  }
+  if (evidence.length < 100) return evidence;
+  const extra = await listFrappeResourcePageForContract(
+    env,
+    "Work Package Event",
+    activeFilters,
+    1,
+    100,
+    FIELD_WORK_PACKAGE_EVIDENCE_READ,
+    FIELD_WORK_PACKAGE_EVIDENCE_FILTER_FIELDS,
+  );
+  return extra.length === 0 ? evidence : [{ __ledger_overflow: true }];
 }
 
 async function listFrappeResourcePageForContract(

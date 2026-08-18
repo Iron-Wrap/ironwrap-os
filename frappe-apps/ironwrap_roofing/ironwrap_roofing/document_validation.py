@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from datetime import datetime, timezone
+import json
 from typing import Any
 
 import frappe
@@ -13,7 +15,12 @@ from ironwrap_roofing.access_control import (
     FACET_DESIGN_PROJECTION_SERVICE_ROLE,
 )
 from ironwrap_roofing.domain_policy import PolicyViolation, validate_record
-from ironwrap_roofing.domain_policy import SHOP_ORDER_FINAL_STATUSES, parse_json_field
+from ironwrap_roofing.domain_policy import (
+    ACTIVE_SCHEDULED_PRODUCTION_ASSIGNMENT_STATUSES,
+    JOB_COST_EVENT_SOURCE_DOCTYPES,
+    SHOP_ORDER_FINAL_STATUSES,
+    parse_json_field,
+)
 
 
 CORRECTION_TARGETS: dict[str, tuple[str, str, tuple[str, ...]]] = {
@@ -125,7 +132,18 @@ JOB_ASSIGNMENT_SCHEDULE_CONTEXT_FIELDS = (
     "assignment_type",
     "status",
     "crew_profile",
+    "assigned_user",
+    "assigned_by",
+    "assigned_at",
+    "authority_user",
+    "authority_role",
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
+    "authority_requirements_json",
     "scheduled_start",
+    "scheduled_end",
     "supersedes",
 )
 _JOB_ASSIGNMENT_SCHEDULE_CONTEXT_SELECT = ", ".join(
@@ -159,6 +177,7 @@ JOB_COMPLIANCE_CONTEXT_FIELDS = (
     "effective_date",
     "expiry_date",
     "supersedes",
+    "authority_record",
 )
 _JOB_COMPLIANCE_CONTEXT_SELECT = ", ".join(JOB_COMPLIANCE_CONTEXT_FIELDS)
 SAFETY_PLAN_CONTEXT_FIELDS = (
@@ -174,11 +193,57 @@ WORK_PACKAGE_CONTEXT_FIELDS = (
     "name",
     "work_package_id",
     "roof_job",
+    "job_assignment",
+    "safety_plan",
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
     "version",
     "status",
+    "authority_requirements_json",
     "supersedes",
 )
 _WORK_PACKAGE_CONTEXT_SELECT = ", ".join(WORK_PACKAGE_CONTEXT_FIELDS)
+AUTHORITY_RECORD_CONTEXT_FIELDS = (
+    "name",
+    "authority_record_id",
+    "tenant",
+    "subject_type",
+    "subject_role",
+    "person_user",
+    "organization",
+    "authority_kind",
+    "authority_scope",
+    "scope_type",
+    "scope_ref",
+    "roof_job",
+    "scope_json",
+    "issuer_name",
+    "issuer_jurisdiction",
+    "issuer_reference",
+    "source_version",
+    "evidence_refs_json",
+    "evidence_sha256",
+    "issuer_readback_json",
+    "effective_from",
+    "expires_at",
+    "version",
+    "status",
+    "state_digest_sha256",
+    "verification_method",
+    "verified_at",
+    "verification_reference",
+    "verified_by",
+    "revoked_at",
+    "revocation_reference",
+    "revoked_by",
+    "supersedes",
+    "correction_reason",
+    "exception_status",
+    "exception_reason",
+)
+_AUTHORITY_RECORD_CONTEXT_SELECT = ", ".join(AUTHORITY_RECORD_CONTEXT_FIELDS)
 SUPPLIER_ORDER_EXCEPTION_CONTEXT_FIELDS = (
     "name",
     "supplier_order_id",
@@ -229,6 +294,12 @@ _TRUSTED_QUICKBOOKS_RECONCILIATION_ISSUANCE: ContextVar[
     "ironwrap_trusted_quickbooks_reconciliation_issuance",
     default=None,
 )
+_TRUSTED_QUICKBOOKS_FINAL_INVOICE_BIND: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar("ironwrap_trusted_quickbooks_final_invoice_bind", default=None)
+_TRUSTED_QUICKBOOKS_FINAL_INVOICE_RESOLVER: ContextVar[
+    tuple[str, tuple[tuple[str, str], ...]] | None
+] = ContextVar("ironwrap_trusted_quickbooks_final_invoice_resolver", default=None)
 _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE: ContextVar[Any | None] = ContextVar(
     "ironwrap_trusted_customer_contract_acceptance",
     default=None,
@@ -271,6 +342,13 @@ FIELD_EVIDENCE_ISSUANCE_FIELDS = (
     "evidence_id",
     "device_action_id",
     "roof_job",
+    "work_package",
+    "work_package_version",
+    "work_package_release_attempt_id",
+    "evidence_slot_id",
+    "evidence_requirement",
+    "evidence_source",
+    "evidence_device_id",
     "evidence_type",
     "proof_owner",
     "proof_slot",
@@ -290,6 +368,10 @@ FIELD_EVIDENCE_ISSUANCE_FIELDS = (
     "sync_state",
     "verified_at",
     "verification_source",
+    "evidence_freshness",
+    "evidence_conflict_state",
+    "evidence_verification",
+    "evidence_disposition",
     "correction_of",
     "correction_reason",
     "customer_safe",
@@ -301,6 +383,7 @@ QUICKBOOKS_RECONCILIATION_ISSUANCE_FIELDS = (
     "system_name",
     "entity_type",
     "external_entity_id",
+    "realm_id",
     "local_doctype",
     "local_name",
     "direction",
@@ -311,6 +394,59 @@ QUICKBOOKS_RECONCILIATION_ISSUANCE_FIELDS = (
     "source_payload_hash",
     "local_payload_hash",
     "attempt_count",
+    "notes",
+)
+QUICKBOOKS_FINAL_INVOICE_FIELDS = (
+    "status",
+    "roof_job",
+    "shop_order",
+    "milestone_type",
+    "milestone_version",
+    "currency",
+    "subtotal",
+    "tax_amount",
+    "total_amount",
+    "amount_due",
+    "amount_paid",
+    "balance_due",
+    "due_date",
+    "payment_status",
+    "price_book_version",
+    "tax_code",
+    "tax_rate",
+    "tax_policy_snapshot_json",
+    "truth_source",
+    "truth_at",
+    "qb_entity_type",
+    "qb_entity_id",
+    "qb_operation",
+    "realm_id",
+    "invoice_intent_id",
+    "billing_basis_sha256",
+    "billing_basis_json",
+    "provider_request_sha256",
+    "provider_create_response_sha256",
+    "provider_created_at",
+    "provider_readback_sha256",
+    "provider_facts_sha256",
+    "provider_read_at",
+    "system_name",
+    "entity_type",
+    "external_entity_id",
+    "local_doctype",
+    "local_name",
+    "direction",
+    "detected_at",
+    "raw_key",
+    "source_version",
+    "source_amount",
+    "local_amount",
+    "diff_json",
+    "source_payload_hash",
+    "local_payload_hash",
+    "last_attempt_at",
+    "attempt_count",
+    "resolution_action",
     "notes",
 )
 CUSTOMER_CONTRACT_EVIDENCE_FIELDS = (
@@ -424,6 +560,49 @@ FACET_DESIGN_PROJECTION_RECONCILIATION_FIELDS = (
     "notes",
     "diff_json",
 )
+FACET_DESIGN_PROJECTION_QUOTE_FIELDS = (
+    "customer_quote_id",
+    "roof_job",
+    "customer",
+    "quote_version",
+    "status",
+    "price_book_version",
+    "pricing_effective_at",
+    "price_rule_snapshot_json",
+    "subtotal",
+    "tax_amount",
+    "tax_code",
+    "tax_rate",
+    "tax_policy_snapshot_json",
+    "quote_total",
+    "currency",
+    "deposit_amount",
+    "amount_due",
+    "amount_paid",
+    "balance_due",
+    "payment_status",
+    "payment_due_date",
+    "payment_truth_source",
+    "payment_truth_at",
+    "qb_item_ref",
+    "qb_tax_code_ref",
+    "qb_terms_ref",
+    "qb_terms_due_days",
+    "valid_until",
+    "prepared_at",
+    "approved_by",
+    "approved_at",
+    "acceptance_evidence",
+    "contract_acceptance",
+    "accepted_at",
+    "scope_summary",
+    "assumptions",
+    "exclusions",
+    "quote_summary_json",
+    "supersedes",
+    "correction_reason",
+    "notes",
+)
 # A projection's source/quote binding is immutable, but its reconciliation is
 # still a governed workflow.  Keep the two concerns separate so a human can
 # resolve the pending discrepancy without rewriting the evidence it is about.
@@ -448,6 +627,7 @@ WORK_PACKAGE_RUNTIME_FIELDS = (
     "status",
     "released_by",
     "released_at",
+    "release_attempt_id",
     "acknowledged_by",
     "acknowledged_at",
     "acknowledgement_device_action_id",
@@ -465,6 +645,7 @@ WORK_PACKAGE_EVENT_ISSUANCE_FIELDS = (
     "roof_job",
     "job_assignment",
     "work_package_version",
+    "release_attempt_id",
     "actor_user",
     "actor_role",
     "device_action_id",
@@ -473,6 +654,19 @@ WORK_PACKAGE_EVENT_ISSUANCE_FIELDS = (
     "hold_point_sequence",
     "evidence_item",
     "blocker_reason",
+    "evidence_slot_id",
+    "evidence_requirement",
+    "evidence_source",
+    "evidence_device_id",
+    "evidence_captured_at",
+    "evidence_freshness",
+    "evidence_conflict_state",
+    "evidence_correction_of",
+    "evidence_item_correction_of",
+    "evidence_review_of",
+    "evidence_verification",
+    "evidence_disposition",
+    "correction_reason",
 )
 CONTROLLED_ITEM_RUNTIME_FIELDS = (
     "status",
@@ -519,6 +713,7 @@ SHOP_ORDER_RUNTIME_FIELDS = (
     "bundles",
 )
 SHOP_ORDER_LIFECYCLE_FIELDS = SHOP_ORDER_RUNTIME_FIELDS[:14]
+PRICE_POLICY_APPROVER_ROLES = frozenset(("IronWrap Owner", "System Manager"))
 
 
 def _as_dict(document: Any) -> Any:
@@ -531,6 +726,86 @@ def _as_dict(document: Any) -> Any:
 def _previous(document: Any) -> Any:
     getter = getattr(document, "get_doc_before_save", None)
     return _as_dict(getter()) if callable(getter) else None
+
+
+def _set_document_value(document: Any, field: str, value: Any) -> None:
+    setter = getattr(document, "set", None)
+    if callable(setter):
+        setter(field, value)
+    else:
+        document[field] = value
+
+
+def _server_approval_utc_timestamp() -> str:
+    """Return the canonical UTC value stored in Frappe's timezone-free Datetime."""
+
+    return datetime.now(timezone.utc).replace(microsecond=0).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+
+def _valid_frappe_approver(value: Any) -> bool:
+    if not isinstance(value, str) or not value or len(value) > 254:
+        return False
+    if value == "Administrator":
+        return True
+    if any(character.isspace() for character in value) or value.count("@") != 1:
+        return False
+    local, domain = value.split("@", 1)
+    return bool(local and domain and "." in domain and not domain.startswith(".") and not domain.endswith("."))
+
+
+def validate_price_policy_approval_mutation(document: Any) -> None:
+    """Make the composite pricing-policy approval transition server-owned."""
+
+    if document.get("rule_type") != "Pricing Policy":
+        return
+    previous = _previous(document)
+    previous_status = previous.get("status") if previous is not None else None
+    status = document.get("status")
+
+    if status == "Approved" and previous_status != "Approved":
+        actor = getattr(getattr(frappe, "session", None), "user", None)
+        if not _valid_frappe_approver(actor):
+            frappe.throw(
+                "Pricing Policy approval requires a current authenticated Frappe user.",
+                exc=frappe.PermissionError,
+            )
+        if not PRICE_POLICY_APPROVER_ROLES.intersection(frappe.get_roles(actor)):
+            frappe.throw(
+                "Pricing Policy approval requires an IronWrap Owner or System Manager role.",
+                exc=frappe.PermissionError,
+            )
+        if not isinstance(document.get("source_ref"), str) or not document.get(
+            "source_ref"
+        ).strip():
+            frappe.throw(
+                "Pricing Policy approval requires an explicit source reference.",
+                exc=frappe.ValidationError,
+            )
+        if not isinstance(document.get("approval_note"), str) or not document.get(
+            "approval_note"
+        ).strip():
+            frappe.throw(
+                "Pricing Policy approval requires an explicit approval note.",
+                exc=frappe.ValidationError,
+            )
+        _set_document_value(document, "approved_by", actor)
+        _set_document_value(document, "approved_at", _server_approval_utc_timestamp())
+        return
+
+    if status == "Retired" and previous_status not in {"Approved", "Retired"}:
+        frappe.throw(
+            "A Pricing Policy can be retired only after approval.",
+            exc=frappe.ValidationError,
+        )
+    if previous_status not in {"Approved", "Retired"} and any(
+        document.get(field) for field in ("approved_by", "approved_at")
+    ):
+        frappe.throw(
+            "Pricing Policy approval attribution is server-owned.",
+            exc=frappe.ValidationError,
+        )
 
 
 def _acknowledgement_snapshot(document: Any) -> tuple[tuple[str, ...], ...]:
@@ -593,6 +868,12 @@ def _quickbooks_reconciliation_issuance_snapshot(
     return _runtime_snapshot(document, QUICKBOOKS_RECONCILIATION_ISSUANCE_FIELDS)
 
 
+def _quickbooks_final_invoice_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    return _runtime_snapshot(document, QUICKBOOKS_FINAL_INVOICE_FIELDS)
+
+
 def _customer_contract_evidence_snapshot(document: Any) -> tuple[tuple[str, str], ...]:
     return _runtime_snapshot(document, CUSTOMER_CONTRACT_EVIDENCE_FIELDS)
 
@@ -622,6 +903,15 @@ def _facet_design_projection_reconciliation_snapshot(
     document: Any,
 ) -> tuple[tuple[str, str], ...]:
     return _runtime_snapshot(document, FACET_DESIGN_PROJECTION_RECONCILIATION_FIELDS)
+
+
+def _facet_design_projection_quote_snapshot(
+    document: Any,
+) -> tuple[str, tuple[tuple[str, str], ...]]:
+    return (
+        str(document.get("name") or document.get("customer_quote_id") or ""),
+        _runtime_snapshot(document, FACET_DESIGN_PROJECTION_QUOTE_FIELDS),
+    )
 
 
 def _facet_design_projection_reconciliation_anchor_snapshot(
@@ -862,6 +1152,48 @@ def quickbooks_reconciliation_issuance_context(document: Any):
 
 
 @contextmanager
+def quickbooks_final_invoice_bind_context(document: Any):
+    """Authorize one exact identity/basis bind from the configured service."""
+
+    if str(document.get("doctype") or "") == "Roof Job":
+        snapshot = (
+            ("name", str(document.get("name") or document.get("roof_job_id") or "")),
+            ("qb_realm_id", str(document.get("qb_realm_id") or "")),
+            ("qb_invoice_ref", str(document.get("qb_invoice_ref") or "")),
+        )
+    else:
+        snapshot = _quickbooks_final_invoice_snapshot(document)
+    token = _TRUSTED_QUICKBOOKS_FINAL_INVOICE_BIND.set(
+        (str(document.get("doctype") or ""), snapshot)
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_QUICKBOOKS_FINAL_INVOICE_BIND.reset(token)
+
+
+@contextmanager
+def quickbooks_final_invoice_resolver_context(document: Any):
+    """Authorize one exact provider-GET reconciliation mutation."""
+
+    if str(document.get("doctype") or "") == "Roof Job":
+        snapshot = (
+            ("name", str(document.get("name") or document.get("roof_job_id") or "")),
+            ("qb_realm_id", str(document.get("qb_realm_id") or "")),
+            ("qb_invoice_ref", str(document.get("qb_invoice_ref") or "")),
+        )
+    else:
+        snapshot = _quickbooks_final_invoice_snapshot(document)
+    token = _TRUSTED_QUICKBOOKS_FINAL_INVOICE_RESOLVER.set(
+        (str(document.get("doctype") or ""), snapshot)
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_QUICKBOOKS_FINAL_INVOICE_RESOLVER.reset(token)
+
+
+@contextmanager
 def customer_contract_acceptance_issuance_context(
     evidence: Any, acceptance: Any, quote: Any
 ):
@@ -885,19 +1217,30 @@ def customer_contract_acceptance_issuance_context(
 
 
 @contextmanager
-def facet_design_projection_issuance_context(evidence: Any, reconciliation: Any):
-    """Authorize one exact, review-only Facet evidence/reconciliation insert.
+def facet_design_projection_issuance_context(
+    evidence: Any,
+    reconciliation: Any,
+    quote: Any | None = None,
+    invalidated_quote: Any | None = None,
+):
+    """Authorize exact Facet evidence/reconciliation and bounded quote changes.
 
     The bounded Worker command creates this private context only after it has
     authenticated the dedicated service user, verified its independent HMAC,
-    and locked the explicit Roof Job/Customer Quote association.  It grants no
-    authority to edit either commercial record or publish a proposal.
+    and locked the explicit Roof Job/Customer Quote association. It grants no
+    authority to populate commercial fields or publish a proposal.
     """
 
     token = _TRUSTED_FACET_DESIGN_PROJECTION.set(
         (
             _facet_design_projection_evidence_snapshot(evidence),
             _facet_design_projection_reconciliation_snapshot(reconciliation),
+            _facet_design_projection_quote_snapshot(quote) if quote is not None else None,
+            (
+                _facet_design_projection_quote_snapshot(invalidated_quote)
+                if invalidated_quote is not None
+                else None
+            ),
         )
     )
     try:
@@ -1011,10 +1354,15 @@ def validate_evidence_verification_mutation(document: Any) -> None:
         ):
             return
         _reject_facet_design_projection_service_generic_write()
-    if document.get("sync_state") != "Verified":
-        return
     previous = _previous(document)
     if previous is not None and previous.get("sync_state") == "Verified":
+        if _field_evidence_issuance_snapshot(document) != _field_evidence_issuance_snapshot(previous):
+            frappe.throw(
+                "Verified Evidence Item identity, content, binding, and lifecycle facts are immutable; issue a correction instead.",
+                exc=frappe.ValidationError,
+            )
+        return
+    if document.get("sync_state") != "Verified":
         return
     if _TRUSTED_FIELD_EVIDENCE_ISSUANCE.get() == _field_evidence_issuance_snapshot(
         document
@@ -1044,6 +1392,70 @@ def validate_quickbooks_reconciliation_issuance(document: Any) -> None:
         return
     frappe.throw(
         "QuickBooks reconciliations can only be issued by the dedicated Worker command.",
+        exc=frappe.PermissionError,
+    )
+
+
+def _quickbooks_final_invoice_context_matches(
+    document: Any,
+    trusted: ContextVar[tuple[str, tuple[tuple[str, str], ...]] | None],
+) -> bool:
+    context = trusted.get()
+    return context == (
+        str(document.get("doctype") or ""),
+        _quickbooks_final_invoice_snapshot(document),
+    )
+
+
+def _quickbooks_final_invoice_roof_job_context_matches(document: Any) -> bool:
+    name = str(document.get("name") or document.get("roof_job_id") or "")
+    realm = str(document.get("qb_realm_id") or "")
+    invoice = str(document.get("qb_invoice_ref") or "")
+    return any(
+        context is not None
+        and context
+        == (
+            "Roof Job",
+            (("name", name), ("qb_realm_id", realm), ("qb_invoice_ref", invoice)),
+        )
+        for context in (
+            _TRUSTED_QUICKBOOKS_FINAL_INVOICE_BIND.get(),
+            _TRUSTED_QUICKBOOKS_FINAL_INVOICE_RESOLVER.get(),
+        )
+    )
+
+
+def validate_quickbooks_final_invoice_mutation(document: Any) -> None:
+    """Keep final-invoice identity and provider truth off generic REST paths."""
+
+    previous = _previous(document)
+    doctype = str(document.get("doctype") or "")
+    current_intent = str(document.get("invoice_intent_id") or "")
+    previous_intent = str(previous.get("invoice_intent_id") or "") if previous else ""
+    sensitive = False
+    if doctype == "Roof Job":
+        sensitive = (
+            any(document.get(field) not in {None, ""} for field in ("qb_realm_id", "qb_invoice_ref"))
+            if previous is None
+            else any(
+                str(document.get(field) or "") != str(previous.get(field) or "")
+                for field in ("qb_realm_id", "qb_invoice_ref")
+            )
+        )
+    elif doctype in {"Payment Milestone", "Integration Reconciliation"}:
+        sensitive = bool(current_intent or previous_intent)
+    if not sensitive:
+        return
+    if doctype == "Roof Job" and _quickbooks_final_invoice_roof_job_context_matches(document):
+        return
+    if _quickbooks_final_invoice_context_matches(
+        document, _TRUSTED_QUICKBOOKS_FINAL_INVOICE_BIND
+    ) or _quickbooks_final_invoice_context_matches(
+        document, _TRUSTED_QUICKBOOKS_FINAL_INVOICE_RESOLVER
+    ):
+        return
+    frappe.throw(
+        "QuickBooks final-invoice basis and provider truth can only be changed by the bounded service commands.",
         exc=frappe.PermissionError,
     )
 
@@ -1154,6 +1566,22 @@ def validate_customer_quote_acceptance_mutation(document: Any) -> None:
     current = _customer_quote_acceptance_snapshot(document)
     previous_document = _previous(document)
     customer_contract_context = _TRUSTED_CUSTOMER_CONTRACT_ACCEPTANCE.get()
+    facet_projection_context = _TRUSTED_FACET_DESIGN_PROJECTION.get()
+    if _is_facet_design_projection_service_actor():
+        if facet_projection_context is not None and (
+            (
+                previous_document is None
+                and facet_projection_context[2]
+                == _facet_design_projection_quote_snapshot(document)
+            )
+            or (
+                previous_document is not None
+                and facet_projection_context[3]
+                == _facet_design_projection_quote_snapshot(document)
+            )
+        ):
+            return
+        _reject_facet_design_projection_service_generic_write()
     if _is_customer_acceptance_service_actor():
         if previous_document is not None:
             previous = _customer_quote_acceptance_snapshot(previous_document)
@@ -1551,6 +1979,75 @@ def _locked_production_gates(
     return gates, _locked_gate_evidence([gate.get("evidence_item") for gate in gates])
 
 
+def _parse_authority_readback(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return dict(value)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return None
+    return dict(parsed) if isinstance(parsed, dict) else None
+
+
+def _authority_readbacks(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    readbacks: dict[str, dict[str, Any]] = {}
+    for row in records:
+        authority_id = row.get("authority_record_id") or row.get("name")
+        readback = _parse_authority_readback(row.get("issuer_readback_json"))
+        if authority_id and readback is not None:
+            readbacks[str(authority_id)] = readback
+    return readbacks
+
+
+def _locked_authority_records() -> tuple[str | None, list[dict[str, Any]]]:
+    """Lock the single active tenant and its complete authority snapshot."""
+
+    active_tenants = frappe.db.sql(
+        """
+        SELECT tenant_id
+        FROM `tabWhite-Label Tenant`
+        WHERE status = %s
+        FOR UPDATE
+        """,
+        ("Active",),
+        as_dict=True,
+    )
+    if not active_tenants:
+        # Production release consumers must never silently fall back to Crew
+        # Profile or legacy compliance summaries. A pure unit-test adapter may
+        # opt in explicitly through frappe.flags; absence alone is not an
+        # authority context.
+        if getattr(getattr(frappe, "flags", None), "allow_legacy_authority_context", False):
+            return None, []
+        raise PolicyViolation(
+            "authority_tenant_unavailable",
+            "an active white-label tenant is required for authority resolution",
+            "tenant",
+        )
+    if len(active_tenants) != 1 or not active_tenants[0].get("tenant_id"):
+        raise PolicyViolation(
+            "authority_tenant_ambiguous",
+            "exactly one active white-label tenant is required for authority resolution",
+        )
+    tenant = str(active_tenants[0]["tenant_id"])
+    rows = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_AUTHORITY_RECORD_CONTEXT_SELECT}
+            FROM `tabAuthority Record`
+            WHERE tenant = %s
+            FOR UPDATE
+            """,
+            (tenant,),
+            as_dict=True,
+        )
+    ]
+    return str(tenant), rows
+
+
 def _locked_scheduled_production_context(
     roof_job: Any, crew_profile: Any | None = None
 ) -> tuple[
@@ -1564,7 +2061,7 @@ def _locked_scheduled_production_context(
     """Load every scheduling fence only after the parent Roof Job is locked."""
 
     gates, gate_evidence = _locked_production_gates(roof_job)
-    assignments = [
+    roof_job_assignments = [
         dict(row)
         for row in frappe.db.sql(
             f"""
@@ -1594,7 +2091,7 @@ def _locked_scheduled_production_context(
     crew_profile_names = sorted(
         {
             str(row.get("crew_profile"))
-            for row in assignments
+            for row in roof_job_assignments
             if row.get("crew_profile")
         }
         | ({str(crew_profile)} if crew_profile else set())
@@ -1616,6 +2113,39 @@ def _locked_scheduled_production_context(
         if crew_profile_names
         else []
     )
+    crew_window_assignments = (
+        [
+            dict(row)
+            for row in frappe.db.sql(
+                f"""
+                SELECT {_JOB_ASSIGNMENT_SCHEDULE_CONTEXT_SELECT}
+                FROM `tabJob Assignment`
+                WHERE assignment_type = 'Production'
+                  AND scheduled_start IS NOT NULL
+                  AND crew_profile IN ({", ".join("%s" for _ in crew_profile_names)})
+                  AND status IN ({", ".join("%s" for _ in ACTIVE_SCHEDULED_PRODUCTION_ASSIGNMENT_STATUSES)})
+                FOR UPDATE
+                """,
+                tuple(crew_profile_names)
+                + tuple(sorted(ACTIVE_SCHEDULED_PRODUCTION_ASSIGNMENT_STATUSES)),
+                as_dict=True,
+            )
+        ]
+        if crew_profile_names
+        else []
+    )
+    assignments: list[dict[str, Any]] = []
+    seen_assignments: set[str] = set()
+    for row in [*roof_job_assignments, *crew_window_assignments]:
+        keys = tuple(
+            str(value)
+            for value in (row.get("name"), row.get("assignment_id"))
+            if value
+        )
+        if keys and any(key in seen_assignments for key in keys):
+            continue
+        assignments.append(row)
+        seen_assignments.update(keys)
     compliance_rows = [
         dict(row)
         for row in frappe.db.sql(
@@ -1740,6 +2270,75 @@ def _locked_work_package_context(
     )
 
 
+def _locked_generic_work_package_context(
+    work_object_type: Any,
+    work_object_id: Any,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    """Lock the bounded parent/context adapter for non-roof physical work.
+
+    Generic packages deliberately do not acquire Roof Job gates, Safety Plans,
+    Crew Profiles, or compliance rows.  Their adapter authority is the exact
+    typed parent/context plus a Job Assignment with an explicit child roster.
+    Unknown context types are rejected by the pure domain policy after this
+    readback; this helper must never reinterpret them as a Roof Job.
+    """
+
+    assignments = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_JOB_ASSIGNMENT_SCHEDULE_CONTEXT_SELECT}
+            FROM `tabJob Assignment`
+            WHERE work_object_type = %s
+              AND work_object_id = %s
+            FOR UPDATE
+            """,
+            (work_object_type, work_object_id),
+            as_dict=True,
+        )
+    ]
+    for assignment in assignments:
+        worker_rows = [
+            dict(row)
+            for row in frappe.db.sql(
+                """
+                SELECT parent, sequence, worker_user, worker_role, required
+                FROM `tabWork Package Worker`
+                WHERE parent = %s
+                  AND parenttype = 'Job Assignment'
+                ORDER BY sequence ASC
+                FOR UPDATE
+                """,
+                (assignment.get("name"),),
+                as_dict=True,
+            )
+        ]
+        assignment["assigned_workers"] = worker_rows
+    work_packages = [
+        dict(row)
+        for row in frappe.db.sql(
+            f"""
+            SELECT {_WORK_PACKAGE_CONTEXT_SELECT}
+            FROM `tabWork Package`
+            WHERE work_object_type = %s
+              AND work_object_id = %s
+            FOR UPDATE
+            """,
+            (work_object_type, work_object_id),
+            as_dict=True,
+        )
+    ]
+    return ([], {}, assignments, [], work_packages, [], [])
+
+
 def _assert_unique_production_gate(document: Any) -> None:
     """Keep one current gate record per Roof Job/gate pair under the parent lock."""
 
@@ -1767,6 +2366,14 @@ def _assert_unique_production_gate(document: Any) -> None:
 
 def _context(document: Any, kind: str) -> dict[str, Any]:
     context: dict[str, Any] = {}
+    if _quickbooks_final_invoice_context_matches(
+        document, _TRUSTED_QUICKBOOKS_FINAL_INVOICE_BIND
+    ):
+        context["quickbooks_final_invoice_bind"] = True
+    if _quickbooks_final_invoice_context_matches(
+        document, _TRUSTED_QUICKBOOKS_FINAL_INVOICE_RESOLVER
+    ):
+        context["quickbooks_final_invoice_provider_resolver"] = True
     scheduled_production_assignment = (
         kind == "job_assignment"
         and document.get("assignment_type") == "Production"
@@ -1787,6 +2394,115 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
         if target:
             context["superseded_record"] = frappe.db.get_value(
                 doctype, target, fields, as_dict=True
+            )
+    if kind == "job_cost_event":
+        _lock_roof_job(document.get("roof_job"))
+        source_doctype = document.get("source_doctype")
+        source_name = document.get("source_name")
+        if source_doctype in JOB_COST_EVENT_SOURCE_DOCTYPES and source_name:
+            context["cost_source_record"] = frappe.db.get_value(
+                source_doctype,
+                source_name,
+                ("name", "roof_job"),
+                as_dict=True,
+            )
+        reversal_of = document.get("reversal_of")
+        if reversal_of:
+            context["reversal_target"] = frappe.db.get_value(
+                "Job Cost Event",
+                reversal_of,
+                (
+                    "name",
+                    "event_kind",
+                    "tenant",
+                    "roof_job",
+                    "category",
+                    "quantity",
+                    "unit",
+                    "amount_cents",
+                    "amount_basis",
+                    "currency",
+                    "source_doctype",
+                    "source_name",
+                    "source_digest",
+                    "source_evidence",
+                ),
+                as_dict=True,
+            )
+            filters: dict[str, Any] = {"reversal_of": reversal_of}
+            if document.get("name"):
+                filters["name"] = ["!=", document.get("name")]
+            context["existing_reversal_count"] = frappe.db.count(
+                "Job Cost Event", filters=filters
+            )
+        source_evidence = document.get("source_evidence")
+        if source_evidence:
+            context["source_evidence"] = frappe.db.get_value(
+                "Evidence Item",
+                source_evidence,
+                (
+                    "name",
+                    "evidence_id",
+                    "roof_job",
+                    "sync_state",
+                    "content_checksum",
+                    "checksum_algorithm",
+                    "verified_at",
+                    "verification_source",
+                ),
+                as_dict=True,
+            )
+        tenant = document.get("tenant")
+        if tenant:
+            context["tenant_record"] = frappe.db.get_value(
+                "White-Label Tenant",
+                tenant,
+                ("name", "tenant_id", "status"),
+                as_dict=True,
+            )
+        reconciliation = document.get("reconciliation")
+        if reconciliation:
+            context["accounting_reconciliation"] = frappe.db.get_value(
+                "Integration Reconciliation",
+                reconciliation,
+                (
+                    "name",
+                    "reconciliation_id",
+                    "roof_job",
+                    "system_name",
+                    "entity_type",
+                    "external_entity_id",
+                    "local_doctype",
+                    "local_name",
+                    "status",
+                    "currency",
+                    "source_payload_hash",
+                    "detected_at",
+                ),
+                as_dict=True,
+            )
+    if kind == "payment_milestone":
+        _lock_roof_job(document.get("roof_job"))
+        recognition_reconciliation = document.get("recognition_reconciliation")
+        if recognition_reconciliation:
+            context["recognition_reconciliation"] = frappe.db.get_value(
+                "Integration Reconciliation",
+                recognition_reconciliation,
+                (
+                    "name",
+                    "reconciliation_id",
+                    "roof_job",
+                    "system_name",
+                    "entity_type",
+                    "external_entity_id",
+                    "local_doctype",
+                    "local_name",
+                    "status",
+                    "currency",
+                    "source_payload_hash",
+                    "detected_at",
+                ),
+                as_dict=True,
             )
     if kind == "customer_quote":
         snapshot = parse_json_field(
@@ -1849,14 +2565,93 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
             if customer_quote
             else None
         )
+    elif kind == "material_takeoff_policy":
+        context["tenant_record"] = frappe.db.get_value(
+            "White-Label Tenant",
+            document.get("tenant"),
+            ("tenant_id", "status"),
+            as_dict=True,
+        )
+        context["policy_evidence"] = frappe.db.get_value(
+            "Evidence Item",
+            document.get("source_evidence"),
+            (
+                "name",
+                "sync_state",
+                "checksum_algorithm",
+                "content_checksum",
+                "verified_at",
+                "verification_source",
+            ),
+            as_dict=True,
+        )
     elif kind == "material_takeoff":
-        context["measurement_status"] = _value(
-            "Measurement Report", document.get("measurement_report"), "review_status"
+        context["measurement"] = frappe.db.get_value(
+            "Measurement Report",
+            document.get("measurement_report"),
+            (
+                "name",
+                "measurement_id",
+                "roof_job",
+                "review_status",
+                "roof_graph_revision",
+                "raw_key",
+            ),
+            as_dict=True,
+        )
+        context["takeoff_policy"] = frappe.db.get_value(
+            "Material Takeoff Policy",
+            document.get("takeoff_policy"),
+            (
+                "name",
+                "policy_id",
+                "tenant",
+                "brand",
+                "service_type",
+                "material_system",
+                "policy_version",
+                "status",
+                "effective_from",
+                "effective_to",
+                "policy_json",
+                "source_evidence",
+                "approved_by",
+                "approved_at",
+                "approval_note",
+            ),
+            as_dict=True,
+        )
+        context["tenant_record"] = frappe.db.get_value(
+            "White-Label Tenant",
+            document.get("tenant"),
+            ("tenant_id", "status"),
+            as_dict=True,
+        )
+        context["policy_evidence"] = frappe.db.get_value(
+            "Evidence Item",
+            document.get("policy_source_evidence"),
+            (
+                "name",
+                "sync_state",
+                "checksum_algorithm",
+                "content_checksum",
+                "verified_at",
+                "verification_source",
+            ),
+            as_dict=True,
+        )
+        context["roof_job_record"] = frappe.db.get_value(
+            "Roof Job",
+            document.get("roof_job"),
+            ("name", "roof_job_id", "brand", "service_type"),
+            as_dict=True,
         )
     elif kind in {"supplier_quote", "supplier_order"}:
         context["takeoff_status"] = _value(
             "Material Takeoff", document.get("material_takeoff"), "status"
         )
+        if kind == "supplier_quote":
+            context["validation_date"] = str(frappe.utils.now_datetime())[:10]
         if kind == "supplier_order":
             context["supplier_quote_status"] = _value(
                 "Supplier Quote", document.get("source_quote"), "status"
@@ -2203,6 +2998,13 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
         ) = _locked_scheduled_production_context(
             document.get("roof_job"), document.get("crew_profile")
         )
+        authority_tenant, authority_records = _locked_authority_records()
+        if authority_tenant:
+            context["authority_tenant"] = authority_tenant
+            context["authority_records"] = authority_records
+            context["authority_readbacks"] = _authority_readbacks(authority_records)
+        else:
+            context["legacy_authority_context"] = True
         crew_profile = document.get("crew_profile")
         context["scheduled_assignment_crew_profile"] = next(
             (
@@ -2231,7 +3033,22 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
             context["work_package_rows"],
             context["crew_profile_rows"],
             context["job_compliance_rows"],
-        ) = _locked_work_package_context(document.get("roof_job"))
+        ) = (
+            _locked_generic_work_package_context(
+                document.get("work_object_type"),
+                document.get("work_object_id"),
+            )
+            if document.get("work_object_type")
+            and document.get("work_object_type") != "Roof Job"
+            else _locked_work_package_context(document.get("roof_job"))
+        )
+        authority_tenant, authority_records = _locked_authority_records()
+        if authority_tenant:
+            context["authority_tenant"] = authority_tenant
+            context["authority_records"] = authority_records
+            context["authority_readbacks"] = _authority_readbacks(authority_records)
+        else:
+            context["legacy_authority_context"] = True
         assignment = document.get("job_assignment")
         context["work_package_assignment"] = next(
             (
@@ -2295,6 +3112,73 @@ def _context(document: Any, kind: str) -> dict[str, Any]:
 
 
 def validate_business_document(document: Any, kind: str) -> None:
+    if kind == "authority_record":
+        from ironwrap_roofing.authority_policy import (
+            AuthorityPolicyViolation,
+            validate_authority_record,
+        )
+
+        previous = _previous(document)
+        superseded = (
+            frappe.db.get_value(
+                "Authority Record",
+                document.get("supersedes"),
+                (
+                    "name, authority_record_id, tenant, subject_type, subject_role, person_user, organization, "
+                    "authority_kind, authority_scope, scope_type, scope_ref, roof_job, scope_json, issuer_name, "
+                    "issuer_jurisdiction, issuer_reference, source_version, evidence_refs_json, evidence_sha256, "
+                    "issuer_readback_json, "
+                    "effective_from, expires_at, version, status, state_digest_sha256, verification_method, "
+                    "verified_at, verification_reference, verified_by, revoked_at, revocation_reference, revoked_by, "
+                    "supersedes, correction_reason, exception_status, exception_reason"
+                ),
+                as_dict=True,
+            )
+            if document.get("supersedes")
+            else None
+        )
+        existing = frappe.get_all(
+            "Authority Record",
+            filters={"tenant": document.get("tenant")},
+            fields=[
+                "name", "authority_record_id", "tenant", "subject_type", "subject_role", "person_user", "organization",
+                "authority_kind", "authority_scope", "scope_type", "scope_ref", "roof_job", "scope_json", "issuer_name",
+                "issuer_jurisdiction", "issuer_reference", "source_version", "evidence_refs_json", "evidence_sha256",
+                "issuer_readback_json",
+                "effective_from", "expires_at", "version", "status", "state_digest_sha256", "verification_method",
+                "verified_at", "verification_reference", "verified_by", "revoked_at", "revocation_reference", "revoked_by",
+                "supersedes", "correction_reason", "exception_status", "exception_reason",
+            ],
+            limit_page_length=500,
+        )
+        command = None
+        if previous and previous.get("status") != document.get("status"):
+            if document.get("status") == "Verified":
+                command = "verify"
+            elif document.get("status") == "Revoked":
+                command = "revoke"
+        try:
+            validate_authority_record(
+                _as_dict(document),
+                previous=_as_dict(previous) if previous else None,
+                context={
+                    "superseded_record": superseded,
+                    "existing_records": existing,
+                    "command": command,
+                    "require_issuer_readback": document.get("status") in {
+                        "Verified", "Revoked", "Contradictory"
+                    } and document.get("authority_kind") in {
+                        "Trade Licence", "WCB Clearance", "Insurance Certificate", "Permit",
+                        "Inspection", "Manufacturer Certification", "Manufacturer Bulletin",
+                    },
+                    "issuer_readback": _parse_authority_readback(document.get("issuer_readback_json")),
+                },
+            )
+        except AuthorityPolicyViolation as exc:
+            frappe.throw(str(exc), exc=frappe.ValidationError)
+        return
+    if kind == "price_book_rule":
+        validate_price_policy_approval_mutation(document)
     if kind == "integration_reconciliation":
         validate_quickbooks_reconciliation_issuance(document)
     if kind in {"job_compliance_record", "production_gate_state"} and document.get(
@@ -2311,6 +3195,44 @@ def validate_business_document(document: Any, kind: str) -> None:
         ):
             frappe.throw(
                 "a waiver requires an IronWrap Owner or System Manager role",
+                exc=frappe.PermissionError,
+            )
+    if kind == "material_takeoff_policy" and document.get("status") == "Approved":
+        actor = getattr(getattr(frappe, "session", None), "user", None)
+        if (
+            not actor
+            or actor == "Guest"
+            or document.get("approved_by") != actor
+            or not frappe.db.exists("User", actor)
+        ):
+            frappe.throw(
+                "a Material Takeoff Policy approval must name the current existing Frappe user",
+                exc=frappe.PermissionError,
+            )
+        if not {"IronWrap Owner", "System Manager"}.intersection(
+            frappe.get_roles(actor)
+        ):
+            frappe.throw(
+                "a Material Takeoff Policy approval requires an IronWrap Owner or System Manager role",
+                exc=frappe.PermissionError,
+            )
+    if kind == "job_cost_event":
+        actor = getattr(getattr(frappe, "session", None), "user", None)
+        if (
+            not actor
+            or actor == "Guest"
+            or document.get("approved_by") != actor
+            or not frappe.db.exists("User", actor)
+        ):
+            frappe.throw(
+                "a Job Cost Event must be approved by the current existing Frappe user",
+                exc=frappe.PermissionError,
+            )
+        if not {"IronWrap Finance", "IronWrap Owner", "System Manager"}.intersection(
+            frappe.get_roles(actor)
+        ):
+            frappe.throw(
+                "a Job Cost Event requires an IronWrap Finance, Owner, or System Manager approver",
                 exc=frappe.PermissionError,
             )
     try:

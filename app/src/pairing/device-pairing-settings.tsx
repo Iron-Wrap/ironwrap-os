@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   ClipboardCopy,
   Clock3,
+  Laptop,
   QrCode,
   Share2,
   ShieldOff,
@@ -20,12 +21,22 @@ import { EmptyState, ErrorState, LoadingState } from "../components/ui/state-pan
 import { ApiError } from "../lib/api";
 import {
   issueDevicePairing,
+  issueHermesDesktopPairing,
   listDevicePairings,
   listFieldUsers,
   revokeDevicePairing,
 } from "./pairing-api";
-import type { DevicePairing, IssuedDevicePairing } from "./pairing-contracts";
-import { formatDateTime, pairingExpiryLabel, safePairingUrl } from "./pairing-link";
+import type {
+  DevicePairing,
+  IssuedDevicePairing,
+  IssuedHermesDesktopPairing,
+} from "./pairing-contracts";
+import {
+  formatDateTime,
+  pairingExpiryLabel,
+  safeHermesDesktopPairingUrl,
+  safePairingUrl,
+} from "./pairing-link";
 
 export function DevicePairingSettings() {
   return (
@@ -51,6 +62,9 @@ function OfficeDevicePairingSettings() {
   });
   const [selectedUserId, setSelectedUserId] = useState("");
   const [issued, setIssued] = useState<IssuedDevicePairing>();
+  const [desktopIssued, setDesktopIssued] = useState<IssuedHermesDesktopPairing>();
+  const [desktopIssueError, setDesktopIssueError] = useState<unknown>();
+  const [desktopIssuing, setDesktopIssuing] = useState(false);
   const [issueError, setIssueError] = useState<unknown>();
   const [issuing, setIssuing] = useState(false);
   const [confirmingDeviceId, setConfirmingDeviceId] = useState<string>();
@@ -69,6 +83,19 @@ function OfficeDevicePairingSettings() {
       setIssueError(error);
     } finally {
       setIssuing(false);
+    }
+  }
+
+  async function issueDesktop() {
+    if (desktopIssuing) return;
+    setDesktopIssuing(true);
+    setDesktopIssueError(undefined);
+    try {
+      setDesktopIssued(await issueHermesDesktopPairing(session));
+    } catch (error) {
+      setDesktopIssueError(error);
+    } finally {
+      setDesktopIssuing(false);
     }
   }
 
@@ -114,6 +141,9 @@ function OfficeDevicePairingSettings() {
   const activeUserId = selectedUserId || fieldUsers.data.users[0]?.id || "";
   const selectedUser = fieldUsers.data.users.find((user) => user.id === activeUserId);
   const pairingUrl = issued ? safePairingUrl(issued.pairing_url) : undefined;
+  const desktopPairingUrl = desktopIssued
+    ? safeHermesDesktopPairingUrl(desktopIssued.pairing_url)
+    : undefined;
 
   return (
     <section className="mx-auto max-w-5xl space-y-6">
@@ -130,6 +160,72 @@ function OfficeDevicePairingSettings() {
           needs a password on the roof.
         </p>
       </header>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Laptop aria-hidden="true" />
+            Hermes desktop text pilot
+          </CardTitle>
+          <CardDescription>
+            Issue a one-time link for this signed-in owner or operations account. The dedicated
+            desktop MCP consumes it without receiving admin, write, or connector credentials.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {desktopIssueError ? <InlineError message={messageFor(desktopIssueError)} /> : null}
+          <Button
+            type="button"
+            variant="outline"
+            busy={desktopIssuing}
+            onClick={() => void issueDesktop()}
+          >
+            <Laptop aria-hidden="true" />
+            Issue desktop pairing link
+          </Button>
+          {desktopIssued ? (
+            desktopPairingUrl ? (
+              <>
+                <p className="text-sm font-bold text-warning">
+                  {pairingExpiryLabel(desktopIssued.expires_at)} Paste the bootstrap prompt into the
+                  desktop AI client once, complete pairing, then discard it.
+                </p>
+                <label
+                  className="block text-sm font-extrabold"
+                  htmlFor="hermes-desktop-bootstrap-prompt"
+                >
+                  Self-configuring Hermes bootstrap prompt
+                </label>
+                <textarea
+                  id="hermes-desktop-bootstrap-prompt"
+                  className="min-h-48 w-full rounded-lg border bg-surface-muted px-3 py-3 font-mono text-xs"
+                  readOnly
+                  value={desktopIssued.bootstrap_prompt}
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+                <p className="text-xs text-muted">
+                  Bound API audience: <code>{desktopIssued.api_audience}</code>
+                </p>
+                <label
+                  className="block text-sm font-extrabold"
+                  htmlFor="hermes-desktop-pairing-link"
+                >
+                  One-time Hermes desktop pairing link
+                </label>
+                <input
+                  id="hermes-desktop-pairing-link"
+                  className="min-h-14 w-full rounded-lg border bg-surface-muted px-3 font-mono text-xs"
+                  readOnly
+                  value={desktopPairingUrl}
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+              </>
+            ) : (
+              <InlineError message="The server returned an unsafe desktop pairing link. Discard it and check the configured app origin." />
+            )
+          ) : null}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

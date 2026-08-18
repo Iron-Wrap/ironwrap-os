@@ -15,10 +15,13 @@ Reads payment/invoice mirror truth and records evidence-backed reconciliation re
 - list_change_orders_for_job
 - get_integration_reconciliation
 - list_integration_reconciliations_for_job
+- get_job_cost_event
+- list_job_cost_events_for_job
 
 ## Dry-run (preview)
 
 - dry_run_reconciliation_resolution
+- dry_run_job_cost_event
 
 ## Approved-write
 
@@ -35,6 +38,9 @@ Reads payment/invoice mirror truth and records evidence-backed reconciliation re
   Mismatch may move to Resolved or Ignored.
 - QuickBooks remains the accounting system of record. Hermes never mutates invoices or
   payments; `request_resolve_reconciliation` updates only the Frappe reconciliation row.
+- `dry_run_job_cost_event` prepares a verified append-only candidate but has no write companion.
+  Posted is accepted only with an exact Matched/Resolved external reconciliation; the current
+  Frappe Finance/Owner must independently review and insert the event.
 - Skill pack: `alberta-compliance` where reconciliation intersects privacy or record-keeping
   obligations; otherwise this role is deterministic read-and-report.
 - Human approval: `request_resolve_reconciliation` must follow its dry-run and requires the

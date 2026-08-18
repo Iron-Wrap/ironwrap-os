@@ -68,6 +68,8 @@ export const measurementIntakeOwnerExceptionSchema = z
     reason: z.enum([
       "job_number_missing",
       "job_match_required",
+      "ocr_review_required",
+      "ocr_failed",
       "drive_not_configured",
       "report_fetch_failed",
       "raw_source_missing",

@@ -17,7 +17,7 @@ state and never mutates a system of record with a free-form write.
 
 ## MCP servers
 
-Three MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, per-server
+Four MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, per-server
 `tool_filter`, and env var names):
 
 - `mcp/ironwrap-bus-mcp/src/server.mjs`: readiness and operational truth
@@ -29,25 +29,56 @@ Three MCP servers are wired in `hermes/mcp-servers.json` (launch command, args, 
   review-gated `request_*` writes. Its legacy name is retained for deployment compatibility.
 - `mcp/newo-mcp/src/server.mjs`: bounded Worker-backed session, conversation, actor, webhook,
   analytics, and control access. It never receives the provider API key or exposes a raw proxy.
+- `mcp/ironwrap-bus-mcp/src/desktop-server.mjs`: fixed owner/ops desktop text pilot with only
+  `hermes_next_tasks`, `hermes_stage_context`, and `hermes_submit_draft`. It is device-credential
+  bound and can return only a governed communication-record handoff.
 
-The validated implemented-source inventory is **159 tools** across all three servers: the bus contributes 8,
-the Frappe server contributes **131 (75 reads, 28 dry-runs, 28 approved writes)**, and Newo contributes
-**20 (17 reads, 1 exact-argument dry-run, 2 approval/execution actions)**.
+The validated role-filtered inventory is **179 tools** across the first three servers: the bus
+contributes 8, the Frappe server contributes **151 (75 reads, 38 dry-runs, 38 approved writes)**,
+and Newo contributes **20 (17 reads, 1 exact-argument dry-run, 2 approval/execution actions)**.
+The desktop server's three fixed tools are validated separately and are not role grants.
 
 ## Tool filtering per agent role
 
-`hermes/agents/roles.json` is the source of truth for which MCP tools each of the eight
-agent roles may call. Each role declares `reads`, `dry_run`, `approved_write`, and
-`forbidden`. The eight per-role profiles under `hermes/agents/*.md` are derived from it.
+`hermes/agents/roles.json` is the source of truth for which tools on the three role-filtered MCP
+servers each of the eight agent roles may call. Each role declares `reads`, `dry_run`,
+`approved_write`, and `forbidden`. The eight per-role profiles under `hermes/agents/*.md` are
+derived from it.
 
-`hermes/mcp-servers.json` `tool_filter` arrays are the UNION of each bucket across the roles
-that use that server for host discovery only. The Frappe MCP server itself requires
+`hermes/mcp-servers.json` `tool_filter` arrays for those three servers are the UNION of each bucket
+across the roles that use that server for host discovery only. The Frappe MCP server itself requires
 `HERMES_AGENT_ROLE` and `HERMES_ACTOR_USER`, loads canonical `roles.json`, and registers only
 that role's tools. The Newo MCP applies the same runtime role registration and connects only to
 bounded Worker routes. Its Frappe API key pair must belong to exactly `HERMES_ACTOR_USER`, not a
 shared service principal; Field Companion calls are additionally checked against an active assignment.
 `tools/validate-hermes-config.mjs` validates the source/runtime contract against the implemented-source tool
 inventory (see below).
+
+The desktop server is deliberately outside `roles.json`. Its filter is fixed at one read and two
+draft tools, and each call is authorized by the paired tenant, user, current application role, and
+device credential rather than a broad Hermes role process.
+
+## Desktop text pilot
+
+The default-off pilot is limited to `lead_follow_up_draft`. An authenticated owner or ops user
+issues a fragment-only link from PWA Settings. The dedicated desktop MCP generates its device
+proof, consumes that link once, removes it from the child-process environment, and keeps the
+15-minute access credential only in memory. A native launcher may instead inject the same bounded
+access token and device proof from OS secure storage. The raw pairing token never enters a query,
+log, database, Hermes memory, or connector configuration.
+
+`task_envelope_v1` binds tenant, user, current role, device, a 15-minute expiry, and
+`context_sha256`. Native Gmail, Outlook, Calendar, Drive, OneDrive, Teams, and Slack observations
+may be staged as untrusted read/draft context, but no connector credential enters IronWrap.
+
+`hermes_submit_draft` returns only a `governed_handoff` with `execution_attempted=false` for
+`dry_run_communication_event`. A separate human approval receipt is required before
+`request_record_communication_event` records an audited Draft or Blocked event. Immutable desktop
+submission/event rows are the pilot's append-only ledger. The desktop pilot never
+sends, books, writes through a connector, or creates downstream
+approval, outbox, projection, accounting, Newo, or Facet authority. Facet, capture, and vision are
+deferred. The canonical boundary is
+[`docs/HERMES-DESKTOP-TEXT-PILOT.md`](../docs/HERMES-DESKTOP-TEXT-PILOT.md).
 
 ## Mutation contract
 
@@ -133,9 +164,10 @@ its separate write token gate.
 node tools/validate-hermes-config.mjs
 ```
 
-It parses the implemented tool inventory from all three server sources, checks that every tool referenced
-in `roles.json` exists, that reads are read-only, dry-runs are previews, approved-writes are
-`request_*` mutations each paired with its dry-run counterpart in the same role, and that all
-all configured roles are present with no duplicate grants.
-It also freezes the 159-tool inventory, enforces Contract Acceptance as read-only, checks
-least-privilege boundaries for field/finance roles, and validates manifest union exactness.
+It parses the 179-tool role-filtered inventory from the three broad server sources, checks that
+every tool referenced in `roles.json` exists, that reads are read-only, dry-runs are previews, and
+approved-writes are `request_*` mutations each paired with its dry-run counterpart in the same
+role. It also checks that all configured roles are present with no duplicate grants.
+It also freezes that inventory, enforces Contract Acceptance as read-only, checks least-privilege
+boundaries for field/finance roles, validates manifest union exactness, and separately freezes the
+desktop server at its three fixed read/draft tools and credential-only environment.

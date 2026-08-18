@@ -15,10 +15,59 @@ const workPackageSchema = z.object({
   issued_at: z.string().min(1),
   expires_at: z.string().min(1),
   released_at: z.string().min(1),
+  work_object_type: z.string().min(1).default("Roof Job"),
+  work_object_id: z.string().min(1).default("unknown"),
+  physical_context_type: z.string().min(1).default("Roof Site"),
+  physical_context_id: z.string().min(1).default("unknown"),
+  release_attempt_id: nullableText,
+  supersession: z
+    .object({
+      prior_id: z.string().min(1),
+      reason: z.string().min(1),
+      changed_steps: z.array(z.number().int().positive()),
+      changed_hold_points: z.array(z.number().int().positive()),
+    })
+    .nullable(),
   acknowledgement: z.object({
     current_user_acknowledged: z.boolean(),
     acknowledged_at: nullableText,
+    workers: z
+      .array(
+        z.object({
+          worker_user: z.string().min(1),
+          worker_role: z.string().min(1),
+          required: z.boolean(),
+          acknowledged: z.boolean(),
+          acknowledged_at: nullableText,
+        }),
+      )
+      .optional()
+      .default([]),
   }),
+  evidence_slots: z
+    .array(
+      z.object({
+        event_id: z.string().min(1),
+        evidence_item: z.string().min(1),
+        slot_id: z.string().min(1),
+        requirement: z.string().min(1),
+        source: z.string().min(1),
+        actor_user: z.string().min(1),
+        device_id: z.string().min(1),
+        captured_at: z.string().min(1),
+        freshness: z.enum(["Current", "Stale", "Unknown"]),
+        conflict_state: z.enum(["None", "Detected", "Resolved"]),
+        correction_of: nullableText,
+        evidence_item_correction_of: nullableText,
+        review_reason: nullableText,
+        verification: z.enum(["Pending", "Verified", "Rejected"]),
+        disposition: z.enum(["Open", "Accepted", "Needs Correction", "Superseded"]),
+        correction_reason: nullableText,
+        superseded: z.boolean(),
+      }),
+    )
+    .optional()
+    .default([]),
   steps: z.array(
     z.object({
       sequence: z.number().int().positive(),
@@ -31,6 +80,7 @@ const workPackageSchema = z.object({
     z.object({
       sequence: z.number().int().positive(),
       hold_point: z.string().min(1),
+      release_phase: z.enum(["Pre-start", "In-process", "Completion"]).default("Pre-start"),
       release_authority: z.string().min(1),
       required_evidence: z.string().min(1),
       acceptance_criteria: z.string().min(1),
@@ -86,6 +136,31 @@ export const todayResponseSchema = envelopeSchema.extend({
       assignment: assignmentSchema.nullable(),
     }),
   ),
+  work_objects: z
+    .array(
+      z.object({
+        work_object_type: z.string().min(1),
+        work_object_id: z.string().min(1),
+        physical_context_type: z.string().min(1),
+        physical_context_id: z.string().min(1),
+        scheduled_start: nullableText,
+        scheduled_end: nullableText,
+        next_action: z.string().min(1),
+        assignment: assignmentSchema.nullable(),
+      }),
+    )
+    .default([]),
+});
+
+export const workObjectResponseSchema = envelopeSchema.extend({
+  work_object: z.object({
+    workObjectType: z.string().min(1),
+    workObjectId: z.string().min(1),
+    physicalContextType: z.string().min(1),
+    physicalContextId: z.string().min(1),
+  }),
+  assignment: assignmentSchema.nullable(),
+  work_package: workPackageSchema.nullish().transform((value) => value ?? null),
 });
 
 export const jobResponseSchema = envelopeSchema.extend({
@@ -194,6 +269,7 @@ export const proofPageResponseSchema = envelopeSchema.extend({
 });
 
 export type TodayResponse = z.infer<typeof todayResponseSchema>;
+export type WorkObjectResponse = z.infer<typeof workObjectResponseSchema>;
 export type JobResponse = z.infer<typeof jobResponseSchema>;
 export type ProofStreamItem = z.infer<typeof proofStreamItemSchema>;
 export type ProofPageResponse = z.infer<typeof proofPageResponseSchema>;

@@ -104,13 +104,10 @@ Two allowlists protect different boundaries and must not be mixed up:
   marketing sites authorized to host the iframe.
 
 Do not enable the embed until the Worker has a real Turnstile widget/secret, a unique rate-limit
-pepper, the dedicated `ERPNEXT_INTEGRATION_USER`, and either owner-approved range rules or an
-explicit empty rule array for estimator-review-only mode, plus the tenant's explicit
+pepper, the dedicated `ERPNEXT_INTEGRATION_USER`, and the exact empty range array `[]`, plus the tenant's explicit
 `PUBLIC_ESTIMATE_CONSENT_JURISDICTION`. A live proof must show that the public response contains no
-submitted contact/address data and that consent reaches the owned raw/Frappe evidence path. Every
-rule's `brand` and `service` must exactly match an allowed tenant brand and the configured tenant
-service id (`roofing`, `metal_roofing`, `siding`, `gutters`, or
-`soffit_fascia` for IronWrap).
+submitted contact/address data or numeric price and that consent reaches the owned raw/Frappe
+evidence path. Any non-empty range array fails readiness.
 
 ## Quick test (server-side, replace the token)
 ```bash

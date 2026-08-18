@@ -1,15 +1,51 @@
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { frappeFieldWriter, type PersistFieldCheckInInput, type PersistFieldMediaInput } from "../src/frappe-field.ts";
+import {
+  frappeFieldWriter,
+  type PersistFieldCheckInInput,
+  type PersistFieldMediaInput,
+  type PersistWorkPackageEvidenceInput,
+} from "../src/frappe-field.ts";
 import type { AppEnv } from "../src/app-types.ts";
 
-const env = {
-  ERPNEXT_BASE_URL: "https://frappe.example.com",
-  ERPNEXT_API_KEY: "key",
-  ERPNEXT_API_SECRET: "secret",
-  APP_FRAPPE_REQUEST_TIMEOUT_MS: "8000",
-} as AppEnv;
+class SqliteD1 {
+  readonly raw = new DatabaseSync(":memory:");
+
+  constructor() {
+    this.raw.exec("PRAGMA foreign_keys = ON");
+    this.raw.exec(readFileSync(new URL("../migrations/0042_external_effect_runtime.sql", import.meta.url), "utf8"));
+  }
+
+  prepare(sql: string) {
+    return {
+      bind: (...args: unknown[]) => {
+        const statement = this.raw.prepare(sql);
+        return {
+          first: async <T>() => (statement.get(...args) ?? null) as T | null,
+          all: async <T>() => ({ results: statement.all(...args) as T[] }),
+          run: async () => {
+            const result = statement.run(...args);
+            return { success: true, meta: { changes: Number(result.changes) } };
+          },
+        };
+      },
+    };
+  }
+}
+
+function testEnv(): AppEnv {
+  return {
+    DB: new SqliteD1() as never,
+    EFFECT_RUNTIME_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://frappe.example.com",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
+    APP_FRAPPE_REQUEST_TIMEOUT_MS: "8000",
+  } as AppEnv;
+}
 
 const evidenceInput: PersistFieldMediaInput = {
   evidenceId: "evi_0123456789abcdef",
@@ -81,7 +117,7 @@ test("an existing Evidence Item must match every immutable replay identity", asy
         ],
       }),
     async () => {
-      await assert.rejects(frappeFieldWriter(env).persistEvidence(evidenceInput), /frappe_field_identity_conflict/);
+      await assert.rejects(frappeFieldWriter(testEnv()).persistEvidence(evidenceInput), /frappe_field_identity_conflict/);
     },
   );
 });
@@ -101,7 +137,7 @@ test("a field correction cannot link to another job", async () => {
       }),
     async () => {
       await assert.rejects(
-        frappeFieldWriter(env).persistEvidence({
+        frappeFieldWriter(testEnv()).persistEvidence({
           ...evidenceInput,
           correctionOf: "EVIDENCE-OLD",
           correctionReason: "Correcting the deck photo",
@@ -117,6 +153,9 @@ test("new Field Companion evidence uses the trusted Frappe issuer command", asyn
   await withFetch(
     async (input, init) => {
       requests.push({ url: String(input), init });
+      if (init?.method === "GET" && String(input).endsWith("/api/resource/Evidence%20Item/EVIDENCE-ISSUED-1")) {
+        return Response.json({ data: { name: "EVIDENCE-ISSUED-1" } });
+      }
       if (init?.method === "GET") return Response.json({ data: [] });
       assert.equal(
         String(input),
@@ -148,13 +187,99 @@ test("new Field Companion evidence uses the trusted Frappe issuer command", asyn
       return Response.json({ message: { name: "EVIDENCE-ISSUED-1" } });
     },
     async () => {
-      assert.deepEqual(await frappeFieldWriter(env).persistEvidence(evidenceInput), {
+      assert.deepEqual(await frappeFieldWriter(testEnv()).persistEvidence(evidenceInput), {
         name: "EVIDENCE-ISSUED-1",
       });
     },
   );
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 3);
   assert.match(requests[0]!.url, /\/api\/resource\/Evidence%20Item\?/);
+});
+
+test("typed Shop Order evidence keeps the parent/context envelope and omits Roof Job projection", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const env = testEnv();
+  const typedEvidence: PersistFieldMediaInput = {
+    ...evidenceInput,
+    jobId: "SHOP-001",
+    workObjectType: "Shop Order",
+    workObjectId: "SHOP-001",
+    physicalContextType: "Shop Floor",
+    physicalContextId: "SHOP-FLOOR-1",
+    workPackageId: "WORK-PACKAGE-SHOP-1",
+    workPackageVersion: 4,
+    workPackageReleaseAttemptId: "attempt-shop-1",
+    evidenceSlotId: "step:1",
+    evidenceRequirement: "Anchor inspection photo",
+    evidenceSource: "field-companion",
+    evidenceDeviceId: "paired-device-1",
+    evidenceFreshness: "Current",
+    evidenceConflictState: "None",
+    evidenceVerification: "Verified",
+    evidenceDisposition: "Open",
+  };
+  const typedEvent: PersistWorkPackageEvidenceInput = {
+    workPackageId: "WORK-PACKAGE-SHOP-1",
+    workPackageVersion: 4,
+    jobId: "SHOP-001",
+    workObjectType: "Shop Order",
+    workObjectId: "SHOP-001",
+    physicalContextType: "Shop Floor",
+    physicalContextId: "SHOP-FLOOR-1",
+    assignmentId: "ASSIGN-SHOP-1",
+    actorUser: "crew@example.com",
+    deviceActionId: "wpe_typed-evidence",
+    evidenceSlotId: "step:1",
+    evidenceRequirement: "Anchor inspection photo",
+    evidenceSource: "field-companion",
+    evidenceItemId: "EVIDENCE-SHOP-1",
+    evidenceDeviceId: "paired-device-1",
+    evidenceCapturedAt: "2026-07-10T10:05:00.000Z",
+    evidenceFreshness: "Current",
+    evidenceConflictState: "None",
+    evidenceCorrectionOf: null,
+    evidenceItemCorrectionOf: null,
+    workPackageReleaseAttemptId: "attempt-shop-1",
+    correctionReason: null,
+    evidenceVerification: "Verified",
+    evidenceDisposition: "Open",
+  };
+  await withFetch(
+    async (input, init) => {
+      requests.push({ url: String(input), init });
+      if (init?.method === "GET") {
+        if (String(input).includes("?")) return Response.json({ data: [] });
+        return Response.json({
+          data: { name: decodeURIComponent(String(input).split("/").pop() ?? "") },
+        });
+      }
+      if (String(input).includes("field_evidence_api")) {
+        const outer = JSON.parse(String(init?.body)) as { evidence_json: string };
+        const document = JSON.parse(outer.evidence_json) as Record<string, unknown>;
+        assert.equal(document.roof_job, undefined);
+        assert.equal(document.work_object_type, undefined);
+        assert.equal(document.work_package, "WORK-PACKAGE-SHOP-1");
+        return Response.json({ message: { name: "EVIDENCE-SHOP-1" } });
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      assert.equal(body.roof_job_id, undefined);
+      assert.equal(body.work_object_type, "Shop Order");
+      assert.equal(body.work_object_id, "SHOP-001");
+      assert.equal(body.physical_context_type, "Shop Floor");
+      assert.equal(body.physical_context_id, "SHOP-FLOOR-1");
+      return Response.json({ message: { event: { name: "EVENT-SHOP-1" } } });
+    },
+    async () => {
+      assert.deepEqual(await frappeFieldWriter(env).persistEvidence(typedEvidence), {
+        name: "EVIDENCE-SHOP-1",
+      });
+      assert.deepEqual(
+        await frappeFieldWriter(env).persistWorkPackageEvidence(typedEvent),
+        { name: "EVENT-SHOP-1" },
+      );
+    },
+  );
+  assert.equal(requests.length, 5);
 });
 
 test("an exact existing Field Check-in replay is accepted without a second write", async () => {
@@ -182,12 +307,48 @@ test("an exact existing Field Check-in replay is accepted without a second write
       });
     },
     async () => {
-      assert.deepEqual(await frappeFieldWriter(env).persistCheckIn(checkInInput), {
+      assert.deepEqual(await frappeFieldWriter(testEnv()).persistCheckIn(checkInInput), {
         name: "FIELD-CHECKIN-1",
       });
     },
   );
   assert.equal(calls, 1);
+});
+
+test("runtime-governed Field evidence is read back and replays without a second provider write", async () => {
+  const requests: Array<{ url: string; method: string }> = [];
+  const runtimeEnv = {
+    ...testEnv(),
+    APP_TENANT_ID: "ironwrap",
+    EFFECT_RUNTIME_ENABLED: "true",
+    DB: new SqliteD1(),
+  } as AppEnv;
+  await withFetch(
+    async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method ?? "GET");
+      requests.push({ url, method });
+      if (method === "GET" && url.endsWith("/api/resource/Evidence%20Item/EVIDENCE-ISSUED-1")) {
+        return Response.json({ data: { name: "EVIDENCE-ISSUED-1" } });
+      }
+      if (method === "GET") return Response.json({ data: [] });
+      if (method === "POST") return Response.json({ message: { name: "EVIDENCE-ISSUED-1" } });
+      throw new Error(`unexpected_method:${method}`);
+    },
+    async () => {
+      assert.deepEqual(await frappeFieldWriter(runtimeEnv).persistEvidence(evidenceInput), {
+        name: "EVIDENCE-ISSUED-1",
+      });
+      assert.deepEqual(await frappeFieldWriter(runtimeEnv).persistEvidence(evidenceInput), {
+        name: "EVIDENCE-ISSUED-1",
+      });
+    },
+  );
+  assert.equal(requests.filter((request) => request.method === "POST").length, 1);
+  assert.equal(
+    Number((runtimeEnv.DB as unknown as SqliteD1).raw.prepare("SELECT COUNT(*) AS count FROM external_effects WHERE state = 'succeeded'").get().count),
+    1,
+  );
 });
 
 async function withFetch(replacement: typeof fetch, run: () => Promise<void>): Promise<void> {

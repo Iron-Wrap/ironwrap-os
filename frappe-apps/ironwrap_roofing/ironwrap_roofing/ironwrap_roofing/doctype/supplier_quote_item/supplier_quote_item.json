@@ -20,12 +20,12 @@
   "fields": [
     { "fieldname": "category", "fieldtype": "Data", "in_list_view": 1, "label": "Category" },
     { "fieldname": "item_name", "fieldtype": "Data", "in_list_view": 1, "label": "Item Name", "reqd": 1 },
-    { "fieldname": "quantity", "fieldtype": "Float", "in_list_view": 1, "label": "Quantity" },
-    { "fieldname": "unit", "fieldtype": "Data", "in_list_view": 1, "label": "Unit" },
-    { "fieldname": "unit_price", "fieldtype": "Currency", "in_list_view": 1, "label": "Unit Price" },
-    { "fieldname": "line_total", "fieldtype": "Currency", "in_list_view": 1, "label": "Line Total" },
+    { "fieldname": "quantity", "fieldtype": "Float", "in_list_view": 1, "label": "Quantity", "non_negative": 1, "precision": "6", "reqd": 1 },
+    { "fieldname": "unit", "fieldtype": "Data", "in_list_view": 1, "label": "Unit", "reqd": 1 },
+    { "fieldname": "unit_price", "fieldtype": "Currency", "in_list_view": 1, "label": "Unit Price", "non_negative": 1, "precision": "6", "reqd": 1 },
+    { "fieldname": "line_total", "fieldtype": "Currency", "in_list_view": 1, "label": "Line Total", "non_negative": 1, "precision": "2", "reqd": 1 },
     { "fieldname": "substitution", "fieldtype": "Data", "label": "Substitution" },
-    { "fieldname": "source_ref", "fieldtype": "Data", "label": "Source Ref" },
+    { "fieldname": "source_ref", "fieldtype": "Data", "label": "Source Ref", "reqd": 1 },
     { "fieldname": "needs_review", "fieldtype": "Check", "label": "Needs Review" }
   ],
   "index_web_pages_for_search": 0,

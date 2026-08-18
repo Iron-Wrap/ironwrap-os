@@ -1,0 +1,151 @@
+{
+  "secret": "synthetic-facet-v2-hmac-key-for-contract-tests-0001",
+  "key": {
+    "key_id": "facet-v2-2026-08",
+    "key_version": 3,
+    "not_before_ms": 1799913600000,
+    "not_after_ms": 1800086400000
+  },
+  "route": {
+    "version": 1,
+    "issuer": "facet",
+    "source_product": "facet",
+    "source_environment": "production",
+    "source_tenant_id": "22222222-2222-4222-8222-222222222222",
+    "destination_tenant_id": "ironwrap",
+    "destination_url": "https://bus.example.invalid/ingest/facet-design"
+  },
+  "delivery": {
+    "issued_at": "1799999999000",
+    "expires_at": "1800000119000",
+    "nonce": "0123456789abcdefghijklmnopqrstuv"
+  },
+  "event": {
+    "approval": {
+      "actor": {
+        "customer_party_ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "external_identity_link_id": "facet-customer-oidc-v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "identity_assurance": "oidc",
+        "oidc_issuer": "https://accounts.google.com",
+        "oidc_subject_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "attestation_version": "facet-customer-approval-v1",
+      "decision": "approved",
+      "manifest_sha256": "857ef6fc02f0a2b4f991b2a68667473384cc349ec2c0a4be3e0f82cb505d83fa",
+      "previous_event_id": null,
+      "reason_sha256": null,
+      "receipt_id": "33333333-3333-4333-8333-333333333333",
+      "receipt_sha256": "9542c6f4cfe62e3d0b0e64625decb14e01f74af31b0a1c73fe26a25d7ef0aedf"
+    },
+    "brand_id": "ironwrap",
+    "design_revision": {
+      "id": "facet-json-v1:8620e6f36a8c578498edaf8ea462f61591210c40cec285c592ce5c50f67303ce",
+      "sha256": "8620e6f36a8c578498edaf8ea462f61591210c40cec285c592ce5c50f67303ce"
+    },
+    "destination": {
+      "tenant_id": "ironwrap"
+    },
+    "event_id": "44444444-4444-4444-8444-444444444444",
+    "event_type": "facet.design.customer_approved.v2",
+    "facet_project_id": "11111111-1111-4111-8111-111111111111",
+    "frozen_evidence": {
+      "approval": {
+        "approved_at": "2027-01-15T08:00:00.000Z",
+        "client_revision": {
+          "roofColorId": "roof-charcoal",
+          "wallColorId": null
+        }
+      },
+      "design": {
+        "brandId": "ironwrap",
+        "catalogRevision": {
+          "schema": "facet.catalog-selection-identities.v1",
+          "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "facetOverrides": [],
+        "layers": [
+          {
+            "id": "roof-layer-1",
+            "visible": true,
+            "xmlSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "xmlUtf8Bytes": 4096
+          }
+        ],
+        "roof": {
+          "colorId": "roof-charcoal",
+          "productId": "roof-standing-seam"
+        },
+        "schema": "facet.selection-evidence.v2",
+        "trimAccents": [],
+        "uniformFinish": true,
+        "wall": {
+          "colorId": null,
+          "productId": null
+        }
+      }
+    },
+    "occurred_at": "2027-01-15T08:00:00.000Z",
+    "project_link": {
+      "external_project_link_id": "ironwrap-project-v1:2222222222222222222222222222222222222222222222222222222222222222",
+      "producer_identity_link_id": "ironwrap-identity-v1:3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "schema_version": 2,
+    "source": {
+      "environment": "production",
+      "issuer": "facet",
+      "product": "facet",
+      "tenant_id": "22222222-2222-4222-8222-222222222222"
+    }
+  },
+  "receipt": {
+    "schema": "ironwrap.facet-design-receipt.v2",
+    "receipt_id": "55555555-5555-4555-8555-555555555555",
+    "event_id": "44444444-4444-4444-8444-444444444444",
+    "event_body_sha256": "28dc9408673f6ad19a1a59a644915854007981b1dca9181f2f45663d68e846e5",
+    "frozen_evidence_sha256": "857ef6fc02f0a2b4f991b2a68667473384cc349ec2c0a4be3e0f82cb505d83fa",
+    "design_revision": {
+      "id": "facet-json-v1:8620e6f36a8c578498edaf8ea462f61591210c40cec285c592ce5c50f67303ce",
+      "sha256": "8620e6f36a8c578498edaf8ea462f61591210c40cec285c592ce5c50f67303ce"
+    },
+    "decision_kind": "approved",
+    "approval_receipt_sha256": "9542c6f4cfe62e3d0b0e64625decb14e01f74af31b0a1c73fe26a25d7ef0aedf",
+    "actor_identity_assurance": "oidc",
+    "destination_tenant_id": "ironwrap",
+    "result": "accepted_unassociated",
+    "policy_version": "ironwrap-facet-consumer-v2",
+    "occurred_at": "2027-01-15T08:00:01.000Z",
+    "detail_code": "awaiting_exact_project_identity_association",
+    "idempotent_replay": false
+  },
+  "expected": {
+    "event_body_sha256": "28dc9408673f6ad19a1a59a644915854007981b1dca9181f2f45663d68e846e5",
+    "delivery_signature": "fvFGR4Minw8_11H19oN5N49tYTS4ZPbOMzO218_RDRk",
+    "receipt_sha256": "409aec9a2712ea108f278b2e3448ab140fbb09ef2810be205da74262b2ca4553",
+    "receipt_signature": "gG8w7KYIHCdM8r1oxWr4b1xB3c1KSUKfcQWbjqWq8tM"
+  },
+  "producer_decision_receipt": {
+    "actor": {
+      "customer_party_ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "external_identity_link_id": "facet-customer-oidc-v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "identity_assurance": "oidc",
+      "oidc_issuer": "https://accounts.google.com",
+      "oidc_subject_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "attestation_version": "facet-customer-approval-v1",
+    "decision": "approved",
+    "design_revision": {
+      "id": "facet-json-v1:8620e6f36a8c578498edaf8ea462f61591210c40cec285c592ce5c50f67303ce",
+      "sha256": "8620e6f36a8c578498edaf8ea462f61591210c40cec285c592ce5c50f67303ce"
+    },
+    "event_id": "44444444-4444-4444-8444-444444444444",
+    "external_project_link_id": "ironwrap-project-v1:2222222222222222222222222222222222222222222222222222222222222222",
+    "facet_project_id": "11111111-1111-4111-8111-111111111111",
+    "frozen_evidence_sha256": "857ef6fc02f0a2b4f991b2a68667473384cc349ec2c0a4be3e0f82cb505d83fa",
+    "occurred_at": "2027-01-15T08:00:00.000Z",
+    "previous_event_id": null,
+    "producer_identity_link_id": "ironwrap-identity-v1:3333333333333333333333333333333333333333333333333333333333333333",
+    "reason_sha256": null,
+    "receipt_id": "33333333-3333-4333-8333-333333333333",
+    "schema": "facet.customer-design-decision-receipt.v2"
+  }
+}

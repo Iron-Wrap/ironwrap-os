@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -8,6 +8,7 @@ import {
   FileSearch,
   FileText,
   Layers3,
+  Palette,
   RefreshCw,
   Ruler,
   ScrollText,
@@ -15,14 +16,23 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
+import { useRef } from "react";
 
+import { isOfflineSession } from "../auth/session";
 import { useSession } from "../auth/session-context";
 import { RoleGuard } from "../components/role-guard";
 import { Button } from "../components/ui/button";
 import { ErrorState } from "../components/ui/state-panel";
 import { cn } from "../lib/cn";
+import { useOnlineStatus } from "../hooks/use-online-status";
+import { ApiError } from "../lib/api";
 import { CustomerPortalOfficeAccess } from "../portal/customer-portal-office-access";
-import { loadEstimatorWorkbench } from "./estimator-api";
+import {
+  createFacetLaunch,
+  loadEstimatorWorkbench,
+  navigateToFacetLaunch,
+  newFacetLaunchKey,
+} from "./estimator-api";
 import type { EstimatorGeometry, EstimatorWorkbenchResponse } from "./estimator-contracts";
 import { RoofGraphEvidence } from "./roof-graph-evidence";
 
@@ -1719,7 +1729,18 @@ function QuoteRevisionEntry({
   model: EstimatorWorkbenchResponse;
   quote: NonNullable<EstimatorWorkbenchResponse["quote"]>;
 }) {
-  if (!model.allowed_actions.includes("quote_revision_approval.prepare")) return null;
+  const session = useSession();
+  const online = useOnlineStatus();
+  const launchKey = useRef(newFacetLaunchKey());
+  const canLaunch = model.allowed_actions.includes("facet_launch.create");
+  const canRevise = model.allowed_actions.includes("quote_revision_approval.prepare");
+  const launch = useMutation({
+    retry: false,
+    mutationFn: () => createFacetLaunch(model.job.id, session.csrf_token, launchKey.current),
+    onSuccess: navigateToFacetLaunch,
+  });
+  if (!canLaunch && !canRevise) return null;
+  const launchDisabled = !online || isOfflineSession(session) || launch.isPending;
   return (
     <section
       className="mt-6 border-y border-border py-4"
@@ -1728,20 +1749,52 @@ function QuoteRevisionEntry({
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="max-w-xl">
           <h3 id="revision-request-heading" className="text-sm font-bold text-foreground">
-            Correct this version without carrying terms forward
+            {canLaunch ? "Continue this approved record in Facet" : "Correct this version safely"}
           </h3>
           <p className="mt-1 text-sm leading-6 text-muted">
-            The next step creates a human-reviewed request for a blank Draft shell. It does not copy
-            price, tax, scope, payment, approval, acceptance, or customer terms.
+            {canLaunch
+              ? "Open the exact customer-linked design project through the signed identity boundary. No address, price, scope, proposal, payment, or customer promise crosses with the launch."
+              : "The next step creates a human-reviewed request for a blank Draft shell. It does not copy price, tax, scope, payment, approval, acceptance, or customer terms."}
           </p>
         </div>
-        <Button asChild variant="outline" size="default" className="shrink-0">
-          <Link to="/estimator/jobs/$jobId/revision" params={{ jobId: model.job.id }}>
-            <FileText aria-hidden="true" />
-            Request draft revision
-          </Link>
-        </Button>
+        <div className="flex shrink-0 flex-col gap-2">
+          {canLaunch ? (
+            <Button
+              type="button"
+              size="default"
+              disabled={launchDisabled}
+              onClick={() => launch.mutate(undefined)}
+            >
+              <Palette aria-hidden="true" />
+              {launch.isPending ? "Opening Facet…" : "Design in Facet"}
+            </Button>
+          ) : null}
+          {canRevise ? (
+            <Button asChild variant="outline" size="default">
+              <Link to="/estimator/jobs/$jobId/revision" params={{ jobId: model.job.id }}>
+                <FileText aria-hidden="true" />
+                Request draft revision
+              </Link>
+            </Button>
+          ) : null}
+        </div>
       </div>
+      {canLaunch && (!online || isOfflineSession(session)) ? (
+        <p className="mt-3 text-xs font-semibold text-muted">
+          Reconnect to open the signed project.
+        </p>
+      ) : null}
+      {launch.isError ? (
+        <p role="alert" className="mt-3 text-sm font-semibold text-danger">
+          {launch.error instanceof ApiError &&
+          [
+            "facet_design_current_approved_quote_required",
+            "facet_launch_idempotency_conflict",
+          ].includes(launch.error.code)
+            ? "The approved quote or launch identity changed. Reload this job before opening Facet."
+            : "Facet could not be opened. IronWrap did not change the quote; try again."}
+        </p>
+      ) : null}
       <p className="mt-3 break-all text-xs font-semibold text-muted">
         Source: {quote.id}
         {quote.version === null ? " · Version not recorded" : ` · Version ${quote.version}`}

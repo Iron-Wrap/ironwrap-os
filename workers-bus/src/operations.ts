@@ -7,11 +7,13 @@ import { productionScheduleApprovalDecisionConfig } from "./production-schedule-
 import { productionScheduleApprovalBrokerConfig } from "./production-schedule-approval-broker-client.ts";
 import { publicEstimateConfigured, type PublicEstimatorEnv } from "./public-estimator.ts";
 import type { AppEnv } from "./app-types.ts";
+import { quickBooksFinalInvoiceOperationalCounts } from "./quickbooks-final-invoice.ts";
 import { NewoApiClient, newoClientConfigFromEnv, type NewoJson } from "./newo-client.ts";
 import { countOpenNewoDeadLetters, newoOperationalCounts } from "./newo-store.ts";
 import { listMeasurementIntakeExceptions } from "./measurement-intake-store.ts";
 import { countFailedDeltasSince } from "./measurement-deltas-store.ts";
 import { gmailConfigured, sendGmail } from "./google.ts";
+import { measurementPdfOcrConfigured } from "./measurements.ts";
 
 export const BULK_REPLAY_CONFIRMATION = "REPLAY_ALL_OPEN_DEAD_LETTERS";
 const HEARTBEAT_FRESHNESS_HOURS = 36;
@@ -82,6 +84,7 @@ export interface ReadinessReport {
     customer_portal_configuration: boolean;
     production_schedule_configuration: boolean;
     public_estimate_configuration: boolean;
+    measurement_ocr_configuration: boolean;
     newo_enabled: boolean;
     newo_webhook_credentials: boolean;
     newo_api_authentication: boolean;
@@ -157,6 +160,15 @@ export interface OperationalStatus {
     events_count: number | null;
     replay_count: number | null;
   };
+  quickbooks_final_invoices: {
+    outbound_pending: number;
+    outbound_uncertain: number;
+    outbound_failed: number;
+    inbound_pending: number;
+    inbound_rejected: number;
+    unresolved_reconciliation: number;
+    connection_uncertain: number;
+  };
 }
 
 export type OwnerRuntimeCheckId =
@@ -197,6 +209,7 @@ export interface OwnerRuntimeReadModel {
       events_count: number | null;
       replay_count: number | null;
     };
+    quickbooks_final_invoices: OperationalStatus["quickbooks_final_invoices"];
   };
 }
 
@@ -205,13 +218,15 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
   const db = runtime.DB as { prepare?: unknown } | undefined;
   const raw = runtime.RAW as { put?: unknown } | undefined;
   const queue = runtime.JN_QUEUE as { send?: unknown; sendBatch?: unknown } | undefined;
+  const measurementQueue = runtime.MEASUREMENT_QUEUE as { send?: unknown } | undefined;
   const extended = env as AppEnv & ExtendedEnv & PublicEstimatorEnv;
 
   const checks: ReadinessReport["checks"] = {
     d1: false,
     schema: false,
     raw_store_binding: typeof raw?.put === "function",
-    queue_binding: typeof queue?.send === "function" && typeof queue?.sendBatch === "function",
+    queue_binding: typeof queue?.send === "function" && typeof queue?.sendBatch === "function" &&
+      typeof measurementQueue?.send === "function",
     auth_configuration: nonEmpty(env.INGEST_TOKEN) && nonEmpty(env.ADMIN_TOKEN),
     notification_configuration:
       nonEmpty(env.GOOGLE_SERVICE_ACCOUNT_JSON) && nonEmpty(env.FROM_EMAIL) &&
@@ -230,6 +245,7 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
     customer_portal_configuration: customerPortalConfigured(extended),
     production_schedule_configuration: productionScheduleConfigured(extended),
     public_estimate_configuration: publicEstimateConfigured(extended),
+    measurement_ocr_configuration: measurementPdfOcrConfigured(env),
     newo_enabled: true,
     newo_webhook_credentials: true,
     newo_api_authentication: true,
@@ -385,7 +401,8 @@ export async function buildOwnerRuntimeReadModel(
     { id: "core_auth", ok: readiness.checks.auth_configuration },
     {
       id: "provider_delivery",
-      ok: readiness.checks.notification_configuration && readiness.checks.jobnimbus_configuration,
+      ok: readiness.checks.notification_configuration && readiness.checks.jobnimbus_configuration &&
+        readiness.checks.measurement_ocr_configuration,
     },
     {
       id: "office_bff",
@@ -435,6 +452,7 @@ export async function buildOwnerRuntimeReadModel(
         events_count: operations.quickbooks_receipts.events_count,
         replay_count: operations.quickbooks_receipts.replay_count,
       },
+      quickbooks_final_invoices: operations.quickbooks_final_invoices,
     },
   };
 }
@@ -708,13 +726,14 @@ export async function getOperationalStatus(
   const stuckCutoff = new Date(now.getTime() - thresholdMin * 60_000).toISOString();
   const auditSince = new Date(now.getTime() - AUDIT_FAILURE_WINDOW_HOURS * 3_600_000).toISOString();
 
-  const [heartbeatRow, openDeadLetters, envelopeCounts, replayCounts, auditFailures, qbReceipt] = await Promise.all([
+  const [heartbeatRow, openDeadLetters, envelopeCounts, replayCounts, auditFailures, qbReceipt, qbFinalInvoices] = await Promise.all([
     store.getLatestHeartbeat(env),
     store.countOpenDeadLetter(env),
     store.getOperationalEnvelopeCounts(env, stuckCutoff),
     store.getReplayOperationalCounts(env, stuckCutoff),
     store.listRecentAuditFailures(env, auditSince, auditLimit),
     store.getLatestQuickBooksWebhookReceipt(env),
+    quickBooksFinalInvoiceOperationalCounts(env as AppEnv),
   ]);
 
   const heartbeatAge = ageSeconds(heartbeatRow?.ran_at ?? null, now.getTime());
@@ -749,7 +768,8 @@ export async function getOperationalStatus(
 
   const degraded = !heartbeat || !heartbeat.fresh || !heartbeat.reconciled ||
     openDeadLetters > 0 || envelopeCounts.stuck > 0 || envelopeCounts.frappe_errors > 0 ||
-    replayCounts.failed > 0 || replayCounts.stuck > 0 || auditFailures.length > 0;
+    replayCounts.failed > 0 || replayCounts.stuck > 0 || auditFailures.length > 0 ||
+    Object.values(qbFinalInvoices).some((count) => count > 0);
 
   return {
     status: degraded ? "degraded" : "ok",
@@ -768,6 +788,7 @@ export async function getOperationalStatus(
       entries: auditFailures,
     },
     quickbooks_receipts: quickbooks,
+    quickbooks_final_invoices: qbFinalInvoices,
   };
 }
 

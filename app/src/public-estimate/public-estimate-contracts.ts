@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-export const NON_BINDING_ESTIMATE_DISCLAIMER =
-  "This is a non-binding preliminary range. A site review and approved quote are required before final pricing, scope, scheduling, materials, or payment.";
+export const PUBLIC_ESTIMATE_DISCLAIMER =
+  "This request does not produce an online price. An estimator must verify measurements, access, materials, and approved pricing before any quote, scope, schedule, material, or payment commitment.";
 
 export const PUBLIC_ESTIMATE_SERVICES = [
   { id: "roofing", label: "Roof replacement" },
@@ -26,8 +26,7 @@ export const PUBLIC_ESTIMATE_BRANDS = {
 
 export const publicEstimateBrandSchema = z.enum(["ironwrap", "iroof"]);
 
-/** The IronWrap tenant only offers online ranges in Alberta. */
-export const PUBLIC_ESTIMATE_RANGE_PROVINCE = "AB";
+export const PUBLIC_ESTIMATE_DEFAULT_PROVINCE = "AB";
 
 export const PUBLIC_ESTIMATE_PROVINCES = [
   { id: "AB", label: "Alberta" },
@@ -110,7 +109,7 @@ export const publicEstimateFormSchema = z
 export const publicEstimateConfigSchema = z.object({
   enabled: z.boolean(),
   turnstile_site_key: z.string().trim().min(1).nullable(),
-  range_available: z.boolean(),
+  range_available: z.literal(false),
   disclaimer: z.string().trim().min(1),
   review_required: z.literal(true),
 });
@@ -138,14 +137,7 @@ export const publicInstantEstimateRequestSchema = z.object({
 export const publicInstantEstimateResponseSchema = z.object({
   accepted: z.literal(true),
   envelope_id: z.string().min(1).optional(),
-  range: z
-    .object({
-      min_cad: z.number().finite().nonnegative(),
-      max_cad: z.number().finite().nonnegative(),
-      currency: z.literal("CAD"),
-    })
-    .refine((range) => range.max_cad >= range.min_cad, "Invalid estimate range.")
-    .nullable(),
+  range: z.null(),
   disclaimer: z.string().trim().min(1),
   review_required: z.literal(true),
   idempotent_replay: z.boolean().optional(),

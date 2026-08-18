@@ -4,7 +4,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { handleProposalDocAction, parseProposalDocRequest } from "../src/proposal-doc-action.ts";
+import { fileToJobFolder } from "../src/google.ts";
+import { sha256Hex } from "../src/newo-hash.ts";
 import type { AppRole, AuthContext } from "../src/app-types.ts";
+import { withTestEffectRuntime } from "./effect-runtime-fixture.ts";
 
 function auth(role: AppRole): AuthContext {
   return {
@@ -74,7 +77,7 @@ test("proposal-doc: permission, CSRF, and configuration gates fire in order", as
 
 test("proposal-doc: happy path copies the template, merges, and audits", async (t) => {
   const audits: unknown[] = [];
-  const env = {
+  const env = withTestEffectRuntime({
     GOOGLE_SERVICE_ACCOUNT_JSON: await syntheticServiceAccount(),
     SHARED_DRIVE_ID_JOBS: "drive-jobs",
     FROM_EMAIL: "sales@example.invalid",
@@ -89,9 +92,12 @@ test("proposal-doc: happy path copies the template, merges, and audits", async (
         }),
       }),
     },
-  } as never;
+  }) as never;
 
   const fetches: string[] = [];
+  const templateIdSha256 = await sha256Hex("template-doc-1");
+  let readbackParent = "folder-contract";
+  let readbackTemplateSha256 = templateIdSha256;
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     fetches.push(url);
@@ -104,13 +110,31 @@ test("proposal-doc: happy path copies the template, merges, and audits", async (
         return Response.json({ files: [{ id: "folder-contract" }] });
       return Response.json({ files: [{ id: "folder-job", name: "26-0007 Dana" }] });
     }
-    if (url.includes("/drive/v3/files/template-doc-1/copy"))
+    if (url.includes("/drive/v3/files/template-doc-1/copy")) {
+      const body = JSON.parse(String(init?.body)) as { appProperties?: Record<string, unknown> };
+      assert.equal(body.appProperties?.ironwrap_template_id_sha256, templateIdSha256);
       return Response.json({ id: "doc-new", webViewLink: "https://docs.google.com/document/d/doc-new" });
+    }
+    if (url.includes("/drive/v3/files/doc-new?"))
+      return Response.json({
+        id: "doc-new",
+        name: "26-0007 Proposal - Metal re-roof",
+        parents: [readbackParent],
+        mimeType: "application/vnd.google-apps.document",
+        trashed: false,
+        webViewLink: "https://docs.google.com/document/d/doc-new",
+        appProperties: { ironwrap_template_id_sha256: readbackTemplateSha256 },
+      });
     if (url.includes("docs.googleapis.com/v1/documents/doc-new:batchUpdate")) {
       const body = JSON.parse(String(init?.body));
       assert.equal(body.requests[0].replaceAllText.containsText.text, "{{customer_name}}");
       return Response.json({ replies: [] });
     }
+    if (url.includes("docs.googleapis.com/v1/documents/doc-new"))
+      return Response.json({
+        documentId: "doc-new",
+        body: { content: [{ paragraph: { elements: [{ textRun: { content: "Dana Example 3257.1" } }] } }] },
+      });
     throw new Error(`unexpected fetch ${url}`);
   });
 
@@ -123,6 +147,128 @@ test("proposal-doc: happy path copies the template, merges, and audits", async (
   const body = (await response.json()) as { doc_id: string; url: string; folder_id: string };
   assert.equal(body.doc_id, "doc-new");
   assert.equal(body.folder_id, "folder-contract");
-  assert.equal(audits.length, 1); // one audit row recorded
+  const replay = await handleProposalDocAction(
+    request({
+      job_number: "26-0007",
+      customer: "Dana Example",
+      title: "Metal re-roof",
+      replacements: { customer_name: "Dana Example", total: 3257.1 },
+    }),
+    env,
+    auth("ops"),
+  );
+  assert.equal(replay.status, 200);
+  assert.deepEqual(await replay.json(), body);
+  assert.equal(
+    fetches.filter((url) => url.includes("/drive/v3/files/template-doc-1/copy"))
+      .length,
+    1,
+  );
+  assert.equal(fetches.filter((url) => url.includes(":batchUpdate")).length, 1);
+  assert.equal(audits.length, 2);
   assert.ok(fetches.some((u) => u.includes(":batchUpdate")));
+
+  readbackParent = "wrong-parent";
+  const wrongParent = await handleProposalDocAction(
+    request({
+      job_number: "26-0007",
+      customer: "Dana Example",
+      title: "Metal re-roof",
+      replacements: { customer_name: "Dana Example", total: 3257.1 },
+    }),
+    env,
+    auth("ops"),
+  );
+  assert.equal(wrongParent.status, 502);
+  readbackParent = "folder-contract";
+  readbackTemplateSha256 = "0".repeat(64);
+  const wrongTemplate = await handleProposalDocAction(
+    request({
+      job_number: "26-0007",
+      customer: "Dana Example",
+      title: "Metal re-roof",
+      replacements: { customer_name: "Dana Example", total: 3257.1 },
+    }),
+    env,
+    auth("ops"),
+  );
+  assert.equal(wrongTemplate.status, 502);
+  assert.equal(
+    fetches.filter((url) => url.includes("/drive/v3/files/template-doc-1/copy"))
+      .length,
+    1,
+  );
+  assert.equal(fetches.filter((url) => url.includes(":batchUpdate")).length, 1);
+});
+
+test("Drive upload exact replay binds parent, name, content type, and bytes hash", async (t) => {
+  const env = withTestEffectRuntime({
+    GOOGLE_SERVICE_ACCOUNT_JSON: await syntheticServiceAccount(),
+    SHARED_DRIVE_ID_JOBS: "drive-jobs",
+    FROM_EMAIL: "ops@example.invalid",
+    DB: {
+      prepare: () => ({
+        bind: () => ({ run: async () => ({ success: true }) }),
+      }),
+    },
+  }) as never;
+  const bytes = new TextEncoder().encode("synthetic-photo-bytes").buffer;
+  const contentSha256 = await crypto.subtle
+    .digest("SHA-256", bytes)
+    .then((digest) =>
+      [...new Uint8Array(digest)]
+        .map((value) => value.toString(16).padStart(2, "0"))
+        .join(""),
+    );
+  let readbackContentSha256 = contentSha256;
+  let uploadCalls = 0;
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("https://oauth2.googleapis.com/token")) {
+        return Response.json({ access_token: "tok" });
+      }
+      if (url.includes("/drive/v3/files?q=")) {
+        const query = decodeURIComponent(url);
+        return query.includes("03 Photos")
+          ? Response.json({
+              files: [{ id: "folder-photos", name: "03 Photos" }],
+            })
+          : Response.json({ files: [{ id: "folder-job", name: "26-0007" }] });
+      }
+      if (url.startsWith("https://www.googleapis.com/upload/drive/v3/files?")) {
+        uploadCalls += 1;
+        assert.equal(init?.method, "POST");
+        return Response.json({
+          id: "photo-1",
+          webViewLink: "https://drive.google.com/file/d/photo-1",
+        });
+      }
+      if (url.includes("/drive/v3/files/photo-1?")) {
+        return Response.json({
+          id: "photo-1",
+          name: "photo.jpg",
+          parents: ["folder-photos"],
+          mimeType: "image/jpeg",
+          trashed: false,
+          webViewLink: "https://drive.google.com/file/d/photo-1",
+          appProperties: { ironwrap_content_sha256: readbackContentSha256 },
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    },
+  );
+  const input = [{ name: "photo.jpg", bytes, contentType: "image/jpeg" }];
+
+  const first = await fileToJobFolder(env, "26-0007", "03 Photos", input);
+  const replay = await fileToJobFolder(env, "26-0007", "03 Photos", input);
+  assert.deepEqual(replay, first);
+  assert.equal(uploadCalls, 1);
+
+  readbackContentSha256 = "0".repeat(64);
+  const drift = await fileToJobFolder(env, "26-0007", "03 Photos", input);
+  assert.match(drift.files[0]?.error ?? "", /drive_readback_conflict/);
+  assert.equal(uploadCalls, 1, "content drift must not repeat the upload");
 });

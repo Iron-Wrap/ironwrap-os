@@ -6,8 +6,10 @@ import {
   devicePairingsResponseSchema,
   fieldUsersResponseSchema,
   issueDevicePairingResponseSchema,
+  issueHermesDesktopPairingResponseSchema,
   revokeDevicePairingResponseSchema,
   type IssuedDevicePairing,
+  type IssuedHermesDesktopPairing,
 } from "./pairing-contracts";
 
 export async function listFieldUsers(session: AuthenticatedSession) {
@@ -35,6 +37,18 @@ export async function issueDevicePairing(
     method: "POST",
     body: { field_user_id: fieldUserId },
     schema: issueDevicePairingResponseSchema,
+    csrfToken: session.csrf_token,
+  });
+}
+
+export async function issueHermesDesktopPairing(
+  session: AuthenticatedSession,
+): Promise<IssuedHermesDesktopPairing> {
+  return await apiRequest({
+    path: API_PATHS.hermesDesktopPairings,
+    method: "POST",
+    body: {},
+    schema: issueHermesDesktopPairingResponseSchema,
     csrfToken: session.csrf_token,
   });
 }

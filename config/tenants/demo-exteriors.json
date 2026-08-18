@@ -77,9 +77,10 @@
   },
   "estimates": {
     "instant_estimate": {
-      "non_binding": true,
+      "online_price": false,
+      "measurement_required": true,
       "review_required": true,
-      "disclaimer": "This is a non-binding budget range for demonstration purposes only. Final pricing requires an estimator review."
+      "disclaimer": "This request does not produce an online price. Measurement evidence and estimator review are required before pricing."
     }
   },
   "proposal": {

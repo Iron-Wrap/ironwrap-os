@@ -6,7 +6,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseAppliCadGeometry } from "../src/geometry.ts";
-import { nestLengths, takeoffFromGeometry } from "../src/takeoff.ts";
+import {
+  GOVERNED_TAKEOFF_CALCULATION_VERSION,
+  nestLengths,
+  takeoffFromGeometry,
+  takeoffFromGeometryWithPolicy,
+  type GovernedTakeoffOptions,
+} from "../src/takeoff.ts";
 
 const SAMPLE = readFileSync(
   fileURLToPath(new URL("../../tools/fixtures/synthetic-applicad-roof.xml", import.meta.url)),
@@ -82,6 +88,96 @@ test("takeoff: gable resolves to the exact closed-form panel schedule", () => {
   for (const key of ["panel_count", "panel_total_ft", "roof_area_computed_sqft"]) {
     assert.ok(t.sourceRefs[key], `missing source ref: ${key}`);
   }
+});
+
+const governedCoilPolicy = (): GovernedTakeoffOptions => ({
+  panelProfileId: "standing_seam_16in",
+  coverageWidthFt: 16 / 12,
+  lengthIncrementFt: 1 / 12,
+  maxPanelLengthFt: 40,
+  mode: "coil",
+  stockLengthsFt: [],
+  minReusableOffcutFt: 2,
+  coilSetupAllowanceFt: 5,
+  coilTailAllowanceFt: 3,
+  coilScrapFactor: 0.02,
+  trimStockFt: 10,
+  trimLapFt: 0.5,
+  trimProfiles: {
+    FASCIA: "eave_drip",
+    GABLE: "gable_rake",
+    RIDGE: "ridge_cap",
+  },
+  clipSpacingFt: 2,
+  screwsPerClip: 1,
+  trimScrewSpacingFt: 1.5,
+  fastenerItemIds: {
+    clip: "standing_seam_clip",
+    clipScrew: "clip_screw",
+    trimScrew: "trim_screw",
+  },
+});
+
+test("governed takeoff accepts only a complete policy and prices coil waste explicitly", () => {
+  const g = parseAppliCadGeometry(GABLE)!;
+  const t = takeoffFromGeometryWithPolicy(g, governedCoilPolicy());
+
+  assert.equal(GOVERNED_TAKEOFF_CALCULATION_VERSION, "material_takeoff/v1");
+  assert.equal(t.panelNest.mode, "coil");
+  assert.equal(t.panelNest.cutFt, 300);
+  assert.equal(t.panelNest.stockFt, 314);
+  assert.equal(t.panelNest.wastePct, round4(1 - 300 / 314));
+  assert.match(t.sourceRefs.panel_stock_ft, /setup=5ft/);
+  assert.match(t.sourceRefs.panel_stock_ft, /scrap=0.02/);
+  assert.equal(t.needsReview, false);
+});
+
+test("governed takeoff fails closed instead of inheriting calculator defaults", () => {
+  const g = parseAppliCadGeometry(GABLE)!;
+  const partial = { ...governedCoilPolicy() } as Record<string, unknown>;
+  delete partial.coverageWidthFt;
+  assert.throws(
+    () => takeoffFromGeometryWithPolicy(g, partial as unknown as GovernedTakeoffOptions),
+    /takeoff_policy_coverage_width_ft_required/,
+  );
+
+  assert.throws(
+    () => takeoffFromGeometryWithPolicy(g, {
+      ...governedCoilPolicy(),
+      coilSetupAllowanceFt: 0,
+      coilTailAllowanceFt: 0,
+      coilScrapFactor: 0,
+    }),
+    /takeoff_policy_coil_allowance_required/,
+  );
+
+  const missingTrim = governedCoilPolicy();
+  delete missingTrim.trimProfiles.GABLE;
+  assert.throws(
+    () => takeoffFromGeometryWithPolicy(g, missingTrim),
+    /takeoff_policy_trim_profile_missing:GABLE/,
+  );
+});
+
+test("governed stock takeoff requires declared stock lengths and never applies coil allowances", () => {
+  const g = parseAppliCadGeometry(GABLE)!;
+  const policy: GovernedTakeoffOptions = {
+    ...governedCoilPolicy(),
+    mode: "stock",
+    stockLengthsFt: [20],
+    coilSetupAllowanceFt: 0,
+    coilTailAllowanceFt: 0,
+    coilScrapFactor: 0,
+  };
+  const t = takeoffFromGeometryWithPolicy(g, policy);
+  assert.equal(t.panelNest.mode, "stock");
+  assert.equal(t.panelNest.stockFt, 300);
+  assert.equal(t.panelNest.wastePct, 0);
+
+  assert.throws(
+    () => takeoffFromGeometryWithPolicy(g, { ...policy, stockLengthsFt: [] }),
+    /takeoff_policy_stock_lengths_required/,
+  );
 });
 
 test("takeoff: stock nesting pairs cuts and reuses offcuts", () => {

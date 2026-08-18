@@ -121,6 +121,7 @@ test("checkConsent enforces channel rules", () => {
   assert.deepEqual(checkConsent({ channel: "SMS", consentBasis: "ebr" }).reasons, ["sms_requires_express_consent"]);
   assert.equal(checkConsent({ channel: "SMS", consentBasis: "express" }).allowed, true);
   assert.equal(checkConsent({ channel: "Email", consentBasis: "existing_business_relationship" }).allowed, true);
+  assert.equal(checkConsent({ channel: "Email", consentBasis: "Existing Business Relationship" }).allowed, true);
   assert.deepEqual(checkConsent({ channel: "Email" }).reasons, ["consent_basis_missing"]);
   assert.deepEqual(checkConsent({ channel: "Call", consentBasis: "scraped_list" }).reasons, ["consent_basis_insufficient"]);
 });

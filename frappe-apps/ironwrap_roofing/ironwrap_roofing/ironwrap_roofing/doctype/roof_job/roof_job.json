@@ -23,6 +23,7 @@
     "current_gate_state",
     "jobnimbus_contact_id",
     "jobnimbus_job_id",
+    "qb_realm_id",
     "qb_invoice_ref"
   ],
   "fields": [
@@ -42,6 +43,7 @@
     { "fieldname": "current_gate_state", "fieldtype": "Data", "in_standard_filter": 1, "label": "Current Gate State" },
     { "fieldname": "jobnimbus_contact_id", "fieldtype": "Data", "label": "JobNimbus Contact ID", "read_only": 1 },
     { "fieldname": "jobnimbus_job_id", "fieldtype": "Data", "label": "JobNimbus Job ID", "read_only": 1 },
+    { "fieldname": "qb_realm_id", "fieldtype": "Data", "label": "QuickBooks Realm ID", "read_only": 1 },
     { "fieldname": "qb_invoice_ref", "fieldtype": "Data", "label": "QuickBooks Invoice Ref", "read_only": 1 }
   ],
   "index_web_pages_for_search": 0,

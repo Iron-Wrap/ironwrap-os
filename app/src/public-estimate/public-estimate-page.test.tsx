@@ -7,9 +7,9 @@ import { PublicEstimatePage } from "./public-estimate-page";
 const config = {
   enabled: true,
   turnstile_site_key: null,
-  range_available: true,
+  range_available: false,
   disclaimer:
-    "This is a non-binding preliminary range. A site review and approved quote are required before final pricing, scope, scheduling, materials, or payment.",
+    "This request does not produce an online price. An estimator must verify measurements, access, materials, and approved pricing before any quote, scope, schedule, material, or payment commitment.",
   review_required: true,
 };
 
@@ -64,7 +64,7 @@ describe("PublicEstimatePage", () => {
     const user = userEvent.setup();
 
     await openForm();
-    await user.click(screen.getByRole("button", { name: "Request my non-binding range" }));
+    await user.click(screen.getByRole("button", { name: "Request estimator review" }));
 
     expect(screen.getByText("Enter your full name.")).toBeInTheDocument();
     expect(screen.getByText("Enter the project address.")).toBeInTheDocument();
@@ -76,13 +76,13 @@ describe("PublicEstimatePage", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it("shows only a server-approved non-binding range", async () => {
+  it("submits a price-free estimator review request", async () => {
     const fetcher = mockFetch(
       response(config),
       response({
         accepted: true,
         envelope_id: "env_123",
-        range: { min_cad: 12000, max_cad: 18000, currency: "CAD" },
+        range: null,
         disclaimer: config.disclaimer,
         review_required: true,
       }),
@@ -91,12 +91,14 @@ describe("PublicEstimatePage", () => {
 
     await openForm();
     await completeForm(user);
-    await user.click(screen.getByRole("button", { name: "Request my non-binding range" }));
+    await user.click(screen.getByRole("button", { name: "Request estimator review" }));
 
     expect(
-      await screen.findByRole("heading", { name: "Your non-binding budget range" }),
+      await screen.findByRole("heading", { name: "An estimator will review your project" }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/12,000.*18,000/)).toBeInTheDocument();
+    expect(
+      screen.getByText("Pricing begins only after measurement evidence and estimator review."),
+    ).toBeInTheDocument();
     expect(fetcher).toHaveBeenCalledTimes(2);
 
     const [, request] = fetcher.mock.calls[1]!;
@@ -136,7 +138,7 @@ describe("PublicEstimatePage", () => {
       }),
     ).toBeInTheDocument();
     await completeForm(user);
-    await user.click(screen.getByRole("button", { name: "Request my non-binding range" }));
+    await user.click(screen.getByRole("button", { name: "Request estimator review" }));
 
     await screen.findByRole("heading", { name: "An estimator will review your project" });
     expect(
@@ -148,7 +150,7 @@ describe("PublicEstimatePage", () => {
     expect(JSON.parse(String(request?.body)).brand).toBe("iroof");
   });
 
-  it("routes a request without an approved range to estimator review", async () => {
+  it("always routes a request to estimator review", async () => {
     mockFetch(
       response(config),
       response({
@@ -163,19 +165,17 @@ describe("PublicEstimatePage", () => {
 
     await openForm();
     await completeForm(user);
-    await user.click(screen.getByRole("button", { name: "Request my non-binding range" }));
+    await user.click(screen.getByRole("button", { name: "Request estimator review" }));
 
     expect(
       await screen.findByRole("heading", { name: "An estimator will review your project" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "We do not generate a range when the available information cannot support one safely.",
-      ),
+      screen.getByText("Pricing begins only after measurement evidence and estimator review."),
     ).toBeInTheDocument();
   });
 
-  it("never displays an online range for a project outside Alberta", async () => {
+  it("rejects a numeric range from the public API contract", async () => {
     const fetcher = mockFetch(
       response(config),
       response({
@@ -193,7 +193,7 @@ describe("PublicEstimatePage", () => {
     await user.click(screen.getByRole("button", { name: "Request estimator review" }));
 
     expect(
-      await screen.findByRole("heading", { name: "An estimator will review your project" }),
+      await screen.findByText("We could not submit your request. Please try again."),
     ).toBeInTheDocument();
     expect(screen.queryByText(/12,000.*18,000/)).not.toBeInTheDocument();
 
@@ -207,7 +207,7 @@ describe("PublicEstimatePage", () => {
 
     await openForm();
     await completeForm(user);
-    await user.click(screen.getByRole("button", { name: "Request my non-binding range" }));
+    await user.click(screen.getByRole("button", { name: "Request estimator review" }));
 
     expect(
       await screen.findByText("Too many requests were sent. Please wait a moment and try again."),

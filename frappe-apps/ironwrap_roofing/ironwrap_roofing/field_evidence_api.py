@@ -64,7 +64,6 @@ REQUIRED_INPUT_FIELDS = frozenset(
     {
         "evidence_id",
         "device_action_id",
-        "roof_job",
         "evidence_type",
         "proof_slot",
         "r2_key",
@@ -79,12 +78,42 @@ REQUIRED_INPUT_FIELDS = frozenset(
 )
 OPTIONAL_INPUT_FIELDS = frozenset(
     {
+        # Legacy Roof Job evidence remains a valid adapter input. Non-roof
+        # Work Package evidence deliberately omits this field and binds its
+        # parent/context through the typed capture command instead.
+        "roof_job",
         "latitude",
         "longitude",
         "location_accuracy_m",
         "correction_of",
         "correction_reason",
         "summary",
+        "work_package",
+        "work_package_version",
+        "work_package_release_attempt_id",
+        "evidence_slot_id",
+        "evidence_requirement",
+        "evidence_source",
+        "evidence_device_id",
+        "evidence_freshness",
+        "evidence_conflict_state",
+        "evidence_verification",
+        "evidence_disposition",
+    }
+)
+TYPED_INPUT_FIELDS = frozenset(
+    {
+        "work_package",
+        "work_package_version",
+        "evidence_slot_id",
+        "evidence_requirement",
+        "evidence_source",
+        "evidence_device_id",
+        "evidence_freshness",
+        "evidence_conflict_state",
+        "evidence_verification",
+        "evidence_disposition",
+        "work_package_release_attempt_id",
     }
 )
 ALLOWED_INPUT_FIELDS = REQUIRED_INPUT_FIELDS | OPTIONAL_INPUT_FIELDS
@@ -110,6 +139,17 @@ REPLAY_FIELDS = (
     "correction_reason",
     "customer_safe",
     "summary",
+    "work_package",
+    "work_package_version",
+    "work_package_release_attempt_id",
+    "evidence_slot_id",
+    "evidence_requirement",
+    "evidence_source",
+    "evidence_device_id",
+    "evidence_freshness",
+    "evidence_conflict_state",
+    "evidence_verification",
+    "evidence_disposition",
 )
 _REPLAY_SELECT = ", ".join(
     ("name", *REPLAY_FIELDS, "sync_state", "verified_at", "verification_source")
@@ -237,6 +277,55 @@ def _assert_issuer() -> str:
     return actor
 
 
+def _lock_work_package(
+    work_package: str,
+    roof_job: str | None,
+    version: int,
+    release_attempt: str,
+) -> tuple[str, str | None]:
+    rows = frappe.db.sql(
+        """
+        SELECT name, roof_job, work_object_type, work_object_id,
+               version, status, release_attempt_id
+        FROM `tabWork Package`
+        WHERE name = %s OR work_package_id = %s
+        FOR UPDATE
+        """,
+        (work_package, work_package),
+        as_dict=True,
+    )
+    if len(rows) != 1:
+        _fail(
+            "field_evidence_work_package_missing",
+            "typed evidence must reference one existing Work Package",
+        )
+    package = rows[0]
+    package_roof_job = package.get("roof_job")
+    package_scope = package_roof_job or package.get("work_object_id")
+    if (
+        package_roof_job != roof_job
+        and not (
+            not package_roof_job
+            and roof_job == package_scope
+        )
+    ) or int(package.get("version") or 0) != version:
+        _fail(
+            "field_evidence_work_package_conflict",
+            "typed evidence Work Package, Roof Job, and version must match",
+        )
+    if package.get("status") not in {"Released", "Acknowledged", "In Progress"}:
+        _fail(
+            "field_evidence_work_package_unavailable",
+            "typed evidence requires a released, acknowledged, or active Work Package",
+        )
+    if package.get("release_attempt_id") != release_attempt:
+        _fail(
+            "field_evidence_release_attempt_conflict",
+            "typed evidence must target the current Work Package release attempt",
+        )
+    return str(package["name"]), str(package_roof_job) if package_roof_job else None
+
+
 def _issued_document(payload: Mapping[str, Any]) -> dict[str, Any]:
     checksum = _clean_required(
         payload["content_checksum"], "content_checksum", maximum=64
@@ -280,12 +369,138 @@ def _issued_document(payload: Mapping[str, Any]) -> dict[str, Any]:
         _fail(
             "field_evidence_invalid_input", "evidence_type or proof_slot is unsupported"
         )
+    work_package = _clean_optional(
+        payload.get("work_package"), "work_package", maximum=MAX_IDENTIFIER_LENGTH
+    )
+    slot_id = _clean_optional(
+        payload.get("evidence_slot_id"),
+        "evidence_slot_id",
+        maximum=MAX_IDENTIFIER_LENGTH,
+    )
+    typed_values = (work_package, slot_id)
+    if any(typed_values) and not all(typed_values):
+        _fail(
+            "field_evidence_invalid_input",
+            "work_package and evidence_slot_id must be provided together",
+        )
+    work_package_version = payload.get("work_package_version")
+    typed_supplied = bool(TYPED_INPUT_FIELDS & set(payload))
+    if work_package is not None and (
+        isinstance(work_package_version, bool)
+        or not isinstance(work_package_version, int)
+        or work_package_version < 1
+    ):
+        _fail("field_evidence_invalid_input", "work_package_version must be a positive integer")
+    evidence_requirement = _clean_optional(
+        payload.get("evidence_requirement"),
+        "evidence_requirement",
+        maximum=2_000,
+    )
+    evidence_source = _clean_optional(
+        payload.get("evidence_source"),
+        "evidence_source",
+        maximum=MAX_IDENTIFIER_LENGTH,
+    )
+    evidence_device_id = _clean_optional(
+        payload.get("evidence_device_id"),
+        "evidence_device_id",
+        maximum=MAX_IDENTIFIER_LENGTH,
+    )
+    evidence_freshness = _clean_optional(
+        payload.get("evidence_freshness"),
+        "evidence_freshness",
+        maximum=16,
+    ) or "Current"
+    evidence_conflict_state = _clean_optional(
+        payload.get("evidence_conflict_state"),
+        "evidence_conflict_state",
+        maximum=16,
+    ) or "None"
+    evidence_verification = _clean_optional(
+        payload.get("evidence_verification"),
+        "evidence_verification",
+        maximum=16,
+    )
+    if evidence_verification not in {None, "Verified"}:
+        _fail(
+            "field_evidence_verification_forbidden",
+            "technical evidence verification is derived by the server",
+        )
+    evidence_verification = "Verified"
+    evidence_disposition = _clean_optional(
+        payload.get("evidence_disposition"),
+        "evidence_disposition",
+        maximum=32,
+    )
+    if evidence_disposition not in {None, "Open"}:
+        _fail(
+            "field_evidence_disposition_forbidden",
+            "Field Companion evidence starts Open; an authorized review command must set business disposition",
+        )
+    evidence_disposition = "Open"
+    release_attempt: str | None = None
+    if work_package is not None:
+        if not all((evidence_requirement, evidence_source, evidence_device_id)):
+            _fail(
+                "field_evidence_invalid_input",
+                "typed evidence slots require requirement, source, and device",
+            )
+        if evidence_freshness not in {"Current", "Stale", "Unknown"}:
+            _fail("field_evidence_invalid_input", "evidence_freshness is unsupported")
+        if evidence_conflict_state not in {"None", "Detected", "Resolved"}:
+            _fail("field_evidence_invalid_input", "evidence_conflict_state is unsupported")
+        release_attempt = _clean_optional(
+            payload.get("work_package_release_attempt_id"),
+            "work_package_release_attempt_id",
+            maximum=MAX_IDENTIFIER_LENGTH,
+        )
+        if not release_attempt:
+            _fail(
+                "field_evidence_invalid_input",
+                "typed evidence requires the current Work Package release attempt",
+            )
+        work_package, canonical_roof_job = _lock_work_package(
+            work_package,
+            payload.get("roof_job"),
+            work_package_version,
+            release_attempt,
+        )
+        payload = {**payload, "roof_job": canonical_roof_job}
+        if correction_of:
+            _lock_evidence_correction_target(
+                correction_of,
+                canonical_roof_job,
+                work_package,
+                work_package_version,
+                slot_id,
+                capture_actor,
+                release_attempt,
+            )
+    else:
+        if typed_supplied:
+            _fail(
+                "field_evidence_invalid_input",
+                "typed evidence fields require work_package and evidence_slot_id",
+            )
+        evidence_requirement = None
+        evidence_source = None
+        evidence_device_id = None
+        work_package_version = None
+        evidence_freshness = None
+        evidence_conflict_state = None
+        evidence_verification = None
+        evidence_disposition = None
+        release_attempt = None
     return {
         "evidence_id": _clean_required(payload["evidence_id"], "evidence_id"),
         "device_action_id": _clean_required(
             payload["device_action_id"], "device_action_id"
         ),
-        "roof_job": _clean_required(payload["roof_job"], "roof_job"),
+        "roof_job": _clean_optional(
+            payload.get("roof_job"),
+            "roof_job",
+            maximum=MAX_IDENTIFIER_LENGTH,
+        ),
         "evidence_type": evidence_type,
         "proof_owner": capture_actor,
         "proof_slot": proof_slot,
@@ -313,7 +528,63 @@ def _issued_document(payload: Mapping[str, Any]) -> dict[str, Any]:
         "summary": _clean_optional(
             payload.get("summary"), "summary", maximum=MAX_SUMMARY_LENGTH
         ),
+        "work_package": work_package,
+        "work_package_version": work_package_version,
+        "work_package_release_attempt_id": release_attempt,
+        "evidence_slot_id": slot_id,
+        "evidence_requirement": evidence_requirement,
+        "evidence_source": evidence_source,
+        "evidence_device_id": evidence_device_id,
+        "evidence_freshness": evidence_freshness,
+        "evidence_conflict_state": evidence_conflict_state,
+        "evidence_verification": evidence_verification,
+        "evidence_disposition": evidence_disposition,
     }
+
+
+def _lock_evidence_correction_target(
+    correction_of: str,
+    roof_job: str | None,
+    work_package: str,
+    work_package_version: int,
+    evidence_slot_id: str,
+    capture_actor: str,
+    release_attempt: str,
+) -> dict[str, Any]:
+    rows = frappe.db.sql(
+        """
+        SELECT name, evidence_id, roof_job, work_package, work_package_version,
+               work_package_release_attempt_id, evidence_slot_id, capture_actor,
+               sync_state, evidence_disposition
+        FROM `tabEvidence Item`
+        WHERE name = %s OR evidence_id = %s
+        FOR UPDATE
+        """,
+        (correction_of, correction_of),
+        as_dict=True,
+    )
+    if len(rows) != 1:
+        _fail(
+            "field_evidence_correction_not_found",
+            "correction_of must identify exactly one prior Evidence Item",
+        )
+    target = rows[0]
+    if (
+        target.get("roof_job") != roof_job
+        or target.get("work_package") != work_package
+        or str(target.get("work_package_version")) != str(work_package_version)
+        or target.get("work_package_release_attempt_id") != release_attempt
+        or target.get("evidence_slot_id") != evidence_slot_id
+        or target.get("capture_actor") != capture_actor
+        or target.get("sync_state") != "Verified"
+        or target.get("evidence_disposition") == "Superseded"
+        or correction_of not in {target.get("name"), target.get("evidence_id")}
+    ):
+        _fail(
+            "field_evidence_correction_mismatch",
+            "correction_of must target the same current Work Package version and slot",
+        )
+    return dict(target)
 
 
 def _lock_existing(evidence_id: str) -> dict[str, Any] | None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import frappe
 
 from ironwrap_roofing.access_control import ALL_IRONWRAP_ROLES, IRONWRAP_ROLES
+from ironwrap_roofing.commercial_migration import execute_commercial_schema_preflight
 
 
 def ensure_roles() -> None:
@@ -57,8 +58,9 @@ def before_install() -> None:
 
 
 def before_migrate() -> None:
-    """Ensure upgraded sites have roles before DocType permissions are reloaded."""
+    """Fail closed on unresolved commercial facts before metadata is reloaded."""
 
+    execute_commercial_schema_preflight(frappe)
     reconcile_site_contract()
 
 

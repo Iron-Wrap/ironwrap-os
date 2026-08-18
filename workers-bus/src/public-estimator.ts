@@ -4,12 +4,12 @@ import * as store from "./store.ts";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
-const DEFAULT_DISCLAIMER = "This is a non-binding preliminary range. A site review and approved quote are required before final pricing, scope, scheduling, materials, or payment.";
+const DEFAULT_DISCLAIMER = "This request does not produce an online price. An estimator must verify measurements, access, materials, and approved pricing before any quote, scope, schedule, material, or payment commitment.";
 const PUBLIC_ESTIMATE_SERVICES = new Set(["roofing", "metal_roofing", "siding", "gutters", "soffit_fascia"]);
 const PUBLIC_ESTIMATE_PROVINCES = new Set(["AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT"]);
 
 /**
- * Public browser contract (v1):
+ * Public browser contract (v2):
  *
  * POST /public/instant-estimate
  * {
@@ -21,8 +21,8 @@ const PUBLIC_ESTIMATE_PROVINCES = new Set(["AB", "BC", "MB", "NB", "NL", "NS", "
  * }
  *
  * The response intentionally contains only acceptance, an opaque envelope id,
- * a configured non-binding range (if one matches), the fixed disclaimer, and
- * review state. It never reflects submitted contact/address data.
+ * the fixed no-online-price disclaimer, and review state. It never reflects
+ * submitted contact/address data or claims a price without measurement evidence.
  */
 export type PublicEstimatorEnv = Env & {
   PUBLIC_ESTIMATE_ENABLED?: string;
@@ -41,22 +41,6 @@ export type PublicEstimatorEnv = Env & {
   ERPNEXT_INTEGRATION_USER?: string;
 };
 
-export interface PublicEstimateRange {
-  min_cad: number;
-  max_cad: number;
-  currency: "CAD";
-}
-
-interface EvaluatedRange extends PublicEstimateRange {
-  rule_id: string;
-}
-
-interface RangeRule extends EvaluatedRange {
-  brand: string;
-  service: string;
-  province: string | null;
-}
-
 interface RateLimitConfig {
   windowSeconds: number;
   ipMax: number;
@@ -73,7 +57,6 @@ interface PublicEstimateConfig {
   turnstileSecret: string | null;
   rateLimitPepper: string | null;
   rateLimit: RateLimitConfig | null;
-  rangeRules: RangeRule[] | null;
 }
 
 interface PublicEstimateInput {
@@ -84,14 +67,8 @@ interface PublicEstimateInput {
   clientSubmissionId: string;
 }
 
-interface RangeEvaluation {
-  range: EvaluatedRange | null;
-  reviewRequired: true;
-}
-
 interface ExistingPublicEstimate {
   fingerprint: string;
-  evaluation: RangeEvaluation;
 }
 
 export interface PublicEstimatorDependencies {
@@ -117,13 +94,10 @@ export async function handlePublicInstantEstimate(
 
   const config = publicEstimateConfiguration(env);
   if (isConfig && req.method === "GET") {
-    const requestedBrand = selector(url.searchParams.get("brand"), 80);
-    const rangeAvailable = !!requestedBrand && config.allowedBrands.has(requestedBrand) &&
-      (config.rangeRules?.some((rule) => rule.brand === requestedBrand) ?? false);
     return withCors(publicJson({
       enabled: config.activated && config.ready,
       turnstile_site_key: config.activated && config.ready ? config.siteKey : null,
-      range_available: config.activated && config.ready && rangeAvailable,
+      range_available: false,
       disclaimer: DEFAULT_DISCLAIMER,
       review_required: true,
     }), origin.origin);
@@ -163,19 +137,10 @@ export async function handlePublicInstantEstimate(
     }
     // Turnstile tokens are intentionally single-use. A byte-for-byte retry must
     // re-drive the durable mirror without asking the browser for a new token.
-    const replayPayload = canonicalPayload(
-      parsed.value,
-      estimateProjectId,
-      fingerprint,
-      prior.evaluation,
-      now,
-      origin.origin!,
-      config.consentJurisdiction!,
-    );
     const ingest = dependencies.ingest ?? handleEstimateIngest;
     try {
-      const response = await ingest(env, JSON.stringify(replayPayload), "application/json", parsed.value.clientSubmissionId);
-      return withCors(await publicIngestResponse(response, prior.evaluation), origin.origin);
+      const response = await ingest(env, existing.payload_json, "application/json", parsed.value.clientSubmissionId);
+      return withCors(await publicIngestResponse(response), origin.origin);
     } catch {
       return unavailableResponse(origin.origin);
     }
@@ -210,12 +175,10 @@ export async function handlePublicInstantEstimate(
     return withCors(publicJson({ error: "rate_limited" }, 429), origin.origin);
   }
 
-  const evaluation = evaluateRange(config.rangeRules!, parsed.value);
   const payload = canonicalPayload(
     parsed.value,
     estimateProjectId,
     fingerprint,
-    evaluation,
     now,
     origin.origin!,
     config.consentJurisdiction!,
@@ -223,7 +186,7 @@ export async function handlePublicInstantEstimate(
   const ingest = dependencies.ingest ?? handleEstimateIngest;
   try {
     const response = await ingest(env, JSON.stringify(payload), "application/json", parsed.value.clientSubmissionId);
-    return withCors(await publicIngestResponse(response, evaluation), origin.origin);
+    return withCors(await publicIngestResponse(response), origin.origin);
   } catch {
     return unavailableResponse(origin.origin);
   }
@@ -254,12 +217,12 @@ export function publicEstimateConfiguration(env: PublicEstimatorEnv): PublicEsti
   const turnstileSecret = nonEmpty(env.PUBLIC_ESTIMATE_TURNSTILE_SECRET);
   const rateLimitPepper = secretAtLeast(env.PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER, 32);
   const rateLimit = rateLimitConfig(env);
-  const rangeRules = parseRangeRules(env.PUBLIC_ESTIMATE_RANGE_RULES_JSON, allowedBrands);
+  const legacyRangesDisabled = exactEmptyArray(env.PUBLIC_ESTIMATE_RANGE_RULES_JSON);
   const erpConsentMirrorReady = String(env.ERPNEXT_ENABLED) !== "true" || !!nonEmpty(env.ERPNEXT_INTEGRATION_USER);
   return {
     activated,
     ready: activated && allowedOrigins.size > 0 && allowedBrands.size > 0 && !!consentJurisdiction && !!siteKey && !!turnstileSecret &&
-      !!rateLimitPepper && !!rateLimit && rangeRules !== null && erpConsentMirrorReady,
+      !!rateLimitPepper && !!rateLimit && legacyRangesDisabled && erpConsentMirrorReady,
     allowedOrigins,
     allowedBrands,
     consentJurisdiction,
@@ -267,7 +230,6 @@ export function publicEstimateConfiguration(env: PublicEstimatorEnv): PublicEsti
     turnstileSecret,
     rateLimitPepper,
     rateLimit,
-    rangeRules,
   };
 }
 
@@ -385,13 +347,12 @@ function canonicalPayload(
   input: PublicEstimateInput,
   estimateProjectId: string,
   fingerprint: string,
-  evaluation: RangeEvaluation,
   recordedAt: string,
   origin: string,
   jurisdiction: string,
 ): Record<string, unknown> {
   const publicEstimator = {
-    version: 1,
+    version: 2,
     brand: input.brand,
     service: input.service,
     client_submission_id: input.clientSubmissionId,
@@ -409,12 +370,15 @@ function canonicalPayload(
       origin,
     },
     jurisdiction,
-    range: evaluation.range,
+    pricing_state: "measurement_required",
+    range: null,
     review_required: true,
   };
   return {
     estimate_project_id: estimateProjectId,
     source_detail: "ironwrap_public_estimator",
+    instant_estimate: true,
+    estimate_type: "review_intake",
     service: input.service,
     selected_services: [input.service],
     customer: input.contact.name,
@@ -424,27 +388,9 @@ function canonicalPayload(
     ...(input.property.city ? { city: input.property.city } : {}),
     ...(input.property.province ? { state_text: input.property.province } : {}),
     ...(input.property.postalCode ? { zip: input.property.postalCode } : {}),
-    ...(evaluation.range ? {
-      range_low: evaluation.range.min_cad,
-      range_high: evaluation.range.max_cad,
-    } : {}),
     assumptions: DEFAULT_DISCLAIMER,
     exclusions: "Not a final quote, contract, material order, or payment request.",
     public_estimator: publicEstimator,
-  };
-}
-
-function evaluateRange(rules: RangeRule[], input: PublicEstimateInput): RangeEvaluation {
-  const matches = rules.filter((rule) =>
-    rule.brand === input.brand && rule.service === input.service &&
-    (rule.province === null || rule.province === input.property.province)
-  );
-  const rule = matches.sort((left, right) => Number(right.province !== null) - Number(left.province !== null))[0];
-  return {
-    range: rule
-      ? { min_cad: rule.min_cad, max_cad: rule.max_cad, currency: "CAD", rule_id: rule.rule_id }
-      : null,
-    reviewRequired: true,
   };
 }
 
@@ -457,53 +403,22 @@ function existingPublicEstimate(payloadJson: string): ExistingPublicEstimate | n
       /^[0-9a-f]{64}$/.test(publicEstimator.submission_fingerprint)
       ? publicEstimator.submission_fingerprint
       : null;
-    const range = publicEstimator.range === null ? null : publicRange(publicEstimator.range);
-    if (!fingerprint || (publicEstimator.range !== null && !range) || publicEstimator.review_required !== true) return null;
-    return { fingerprint, evaluation: { range, reviewRequired: true } };
+    if (!fingerprint || publicEstimator.version !== 2 ||
+      publicEstimator.pricing_state !== "measurement_required" ||
+      publicEstimator.range !== null || publicEstimator.review_required !== true) return null;
+    return { fingerprint };
   } catch {
     return null;
   }
 }
 
-function publicRange(value: unknown): EvaluatedRange | null {
-  if (!record(value)) return null;
-  const min = value.min_cad;
-  const max = value.max_cad;
-  const ruleId = value.rule_id;
-  if (typeof min !== "number" || typeof max !== "number" || !Number.isSafeInteger(min) ||
-    !Number.isSafeInteger(max) || min <= 0 || max < min || max > 10_000_000 ||
-    typeof ruleId !== "string" || !/^[a-z0-9][a-z0-9._:-]{2,80}$/.test(ruleId) ||
-    value.currency !== "CAD") return null;
-  return { min_cad: min, max_cad: max, currency: "CAD", rule_id: ruleId };
-}
-
-function parseRangeRules(raw: string | undefined, allowedBrands: Set<string>): RangeRule[] | null {
-  if (!raw?.trim()) return null;
+function exactEmptyArray(raw: string | undefined): boolean {
+  if (!raw?.trim()) return false;
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return null;
-    const result: RangeRule[] = [];
-    const seen = new Set<string>();
-    for (const value of parsed) {
-      if (!record(value) || Object.keys(value).some((key) => !["rule_id", "brand", "service", "province", "min_cad", "max_cad"].includes(key))) return null;
-      const ruleId = ruleIdentifier(value.rule_id);
-      const brand = selector(value.brand, 80);
-      const service = selector(value.service, 120);
-      const province = value.province === undefined ? null : optionalProvince(value.province);
-      const min = value.min_cad;
-      const max = value.max_cad;
-      if (!ruleId || !brand || !allowedBrands.has(brand) || !service || !PUBLIC_ESTIMATE_SERVICES.has(service) ||
-        province === undefined || (province !== null && !PUBLIC_ESTIMATE_PROVINCES.has(province)) || typeof min !== "number" ||
-        typeof max !== "number" || !Number.isSafeInteger(min) || !Number.isSafeInteger(max) ||
-        min <= 0 || max < min || max > 10_000_000) return null;
-      const key = `${brand}|${service}|${province ?? "*"}`;
-      if (seen.has(key)) return null;
-      seen.add(key);
-      result.push({ brand, service, province, min_cad: min, max_cad: max, currency: "CAD", rule_id: ruleId });
-    }
-    return result;
+    return Array.isArray(parsed) && parsed.length === 0;
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -571,7 +486,7 @@ async function claimRateLimit(
   return Number(row?.attempts ?? limit + 1) <= limit;
 }
 
-async function publicIngestResponse(response: Response, evaluation: RangeEvaluation): Promise<Response> {
+async function publicIngestResponse(response: Response): Promise<Response> {
   let body: Record<string, unknown> = {};
   try {
     const parsed = await response.json() as unknown;
@@ -590,17 +505,11 @@ async function publicIngestResponse(response: Response, evaluation: RangeEvaluat
   return publicJson({
     accepted: true,
     envelope_id: envelopeId,
-    range: publicRangeProjection(evaluation.range),
+    range: null,
     disclaimer: DEFAULT_DISCLAIMER,
     review_required: true,
     ...(body.idempotent_replay === true ? { idempotent_replay: true } : {}),
   }, response.status === 202 ? 202 : 200);
-}
-
-function publicRangeProjection(range: EvaluatedRange | null): PublicEstimateRange | null {
-  return range
-    ? { min_cad: range.min_cad, max_cad: range.max_cad, currency: "CAD" }
-    : null;
 }
 
 function withCors(response: Response, origin: string | null): Response {
@@ -674,11 +583,6 @@ function optionalProvince(value: unknown): string | null | undefined {
   if (value === undefined) return null;
   const result = text(value, 2, 3)?.toUpperCase();
   return result && /^[A-Z]{2,3}$/.test(result) ? result : undefined;
-}
-
-function ruleIdentifier(value: unknown): string | null {
-  const result = text(value, 3, 81)?.toLowerCase();
-  return result && /^[a-z0-9][a-z0-9._:-]{2,80}$/.test(result) ? result : null;
 }
 
 function submissionId(value: unknown): string | null {

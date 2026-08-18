@@ -53,6 +53,7 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{16,140}$")
 SIGNATURE_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 TIMESTAMP_RE = re.compile(r"^[0-9]{10,12}$")
+QBO_ID_RE = re.compile(r"^[1-9][0-9]{0,31}$")
 
 PREPARE_FIELDS = frozenset(
     {"tenant_id", "portal_link_id", "roof_job_id", "customer_id", "challenge_id"}
@@ -133,6 +134,29 @@ def _positive_int(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         _fail("customer_contract_invalid_claim", f"{field} must be a positive integer")
     return value
+
+
+def _terms_due_days(value: Any, field: str) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value <= 365
+    ):
+        _fail(
+            "customer_contract_terms_unavailable",
+            f"{field} must be an integer from 0 through 365",
+        )
+    return value
+
+
+def _quickbooks_id(value: Any, field: str) -> str:
+    cleaned = _text(value, field, maximum=32)
+    if not QBO_ID_RE.fullmatch(cleaned):
+        _fail(
+            "customer_contract_terms_unavailable",
+            f"{field} must be an exact QuickBooks ID",
+        )
+    return cleaned
 
 
 def _sha256(value: Any, field: str) -> str:
@@ -338,7 +362,7 @@ def _locked_anchors(roof_job_id: str, customer_id: str) -> dict[str, dict[str, A
                    tax_code, tax_rate, tax_policy_snapshot_json, quote_total, currency,
                    deposit_amount, amount_due, scope_summary, assumptions, exclusions,
                    quote_summary_json, price_rule_snapshot_json, acceptance_evidence,
-                   contract_acceptance, accepted_at
+                   contract_acceptance, accepted_at, qb_terms_ref, qb_terms_due_days
             FROM `tabCustomer Quote`
             WHERE name = %s
             FOR UPDATE
@@ -407,7 +431,7 @@ def _terms_snapshot(anchors: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     pack = anchors["pack"]
     quote_version = _positive_int(quote.get("quote_version"), "quote.quote_version")
     return {
-        "schema": "ironwrap.customer-contract-terms.v1",
+        "schema": "ironwrap.customer-contract-terms.v2",
         "anchor": {
             "roof_job_id": _text(job.get("roof_job_id"), "job.roof_job_id"),
             "customer_id": _text(customer.get("customer_id"), "customer.customer_id"),
@@ -432,6 +456,12 @@ def _terms_snapshot(anchors: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
                 quote.get("deposit_amount"), "quote.deposit_amount", required=False
             ),
             "amount_due": _money(quote.get("amount_due"), "quote.amount_due"),
+            "qb_terms_ref": _quickbooks_id(
+                quote.get("qb_terms_ref"), "quote.qb_terms_ref"
+            ),
+            "qb_terms_due_days": _terms_due_days(
+                quote.get("qb_terms_due_days"), "quote.qb_terms_due_days"
+            ),
             "scope_summary": _text(
                 quote.get("scope_summary"), "quote.scope_summary", maximum=10_000
             ),

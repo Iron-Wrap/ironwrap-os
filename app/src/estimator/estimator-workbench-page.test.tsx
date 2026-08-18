@@ -1,15 +1,25 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
-import { loadEstimatorWorkbench } from "./estimator-api";
+import {
+  createFacetLaunch,
+  loadEstimatorWorkbench,
+  navigateToFacetLaunch,
+  newFacetLaunchKey,
+} from "./estimator-api";
 import type { EstimatorWorkbenchResponse } from "./estimator-contracts";
 import { EstimatorWorkbenchPage } from "./estimator-workbench-page";
 
-vi.mock("./estimator-api", () => ({ loadEstimatorWorkbench: vi.fn() }));
+vi.mock("./estimator-api", () => ({
+  createFacetLaunch: vi.fn(),
+  loadEstimatorWorkbench: vi.fn(),
+  navigateToFacetLaunch: vi.fn(),
+  newFacetLaunchKey: vi.fn(() => "facet-launch:ui-stable-0001"),
+}));
 vi.mock("../portal/customer-portal-office-access", () => ({
   CustomerPortalOfficeAccess: ({ roofJobId }: { roofJobId: string }) => (
     <div data-testid="customer-portal-office-access">{roofJobId}</div>
@@ -271,6 +281,19 @@ function renderWorkbench(session: AuthenticatedSession = ownerSession) {
 describe("EstimatorWorkbenchPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(newFacetLaunchKey).mockReturnValue("facet-launch:ui-stable-0001");
+    vi.mocked(createFacetLaunch).mockResolvedValue({
+      version: 1,
+      read_model_generated_at: "2027-01-15T08:00:00.000Z",
+      permissions: ["facet:launch"],
+      allowed_actions: ["facet_launch.create"],
+      launch: {
+        facet_project_id: "11111111-1111-4111-8111-111111111111",
+        launch_url: `https://facet.example.invalid/#iwlaunch=${"a".repeat(20)}.${"b".repeat(20)}.${"c".repeat(43)}`,
+        expires_at: "2027-01-15T08:10:00.000Z",
+        state: "issued",
+      },
+    });
     vi.mocked(loadEstimatorWorkbench).mockResolvedValue(workbenchModel());
   });
 
@@ -729,5 +752,59 @@ describe("EstimatorWorkbenchPage", () => {
         /does not copy price, tax, scope, payment, approval, acceptance, or customer terms/i,
       ),
     ).toBeVisible();
+  });
+
+  it("opens the exact signed Facet launch only when the BFF grants that action", async () => {
+    vi.mocked(loadEstimatorWorkbench).mockResolvedValue(
+      workbenchModel({
+        allowed_actions: ["job.read", "estimator.read", "facet_launch.create"],
+      }),
+    );
+    renderWorkbench();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Design in Facet" }));
+    await waitFor(() =>
+      expect(createFacetLaunch).toHaveBeenCalledWith(
+        "JOB-A",
+        "csrf",
+        "facet-launch:ui-stable-0001",
+      ),
+    );
+    expect(navigateToFacetLaunch).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/No address, price, scope, proposal, payment/i)).toBeVisible();
+    expect(screen.queryByRole("link", { name: /request draft revision/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps a failed Facet launch retry on the same idempotency key", async () => {
+    vi.mocked(loadEstimatorWorkbench).mockResolvedValue(
+      workbenchModel({
+        allowed_actions: ["job.read", "estimator.read", "facet_launch.create"],
+      }),
+    );
+    vi.mocked(createFacetLaunch)
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce({
+        version: 1,
+        read_model_generated_at: "2027-01-15T08:00:00.000Z",
+        permissions: ["facet:launch"],
+        allowed_actions: ["facet_launch.create"],
+        launch: {
+          facet_project_id: "11111111-1111-4111-8111-111111111111",
+          launch_url: `https://facet.example.invalid/#iwlaunch=${"a".repeat(20)}.${"b".repeat(20)}.${"c".repeat(43)}`,
+          expires_at: "2027-01-15T08:10:00.000Z",
+          state: "issued",
+        },
+      });
+    renderWorkbench();
+
+    const button = await screen.findByRole("button", { name: "Design in Facet" });
+    fireEvent.click(button);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/did not change the quote/i);
+    fireEvent.click(button);
+    await waitFor(() => expect(createFacetLaunch).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(createFacetLaunch).mock.calls.map((call) => call[2])).toEqual([
+      "facet-launch:ui-stable-0001",
+      "facet-launch:ui-stable-0001",
+    ]);
   });
 });

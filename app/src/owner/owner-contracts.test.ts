@@ -135,6 +135,18 @@ describe("Owner Now read model contract", () => {
     expect(measurementIntakeOwnerExceptionsResponseSchema.safeParse(payload).success).toBe(true);
     expect(
       measurementIntakeOwnerExceptionsResponseSchema.safeParse({
+        measurements: [
+          {
+            ...payload.measurements[0],
+            status: "unmatched",
+            reason: "ocr_review_required",
+            recovery_disposition: "manual_review",
+          },
+        ],
+      }).success,
+    ).toBe(true);
+    expect(
+      measurementIntakeOwnerExceptionsResponseSchema.safeParse({
         ...payload,
         measurements: [{ ...payload.measurements[0], lease_token: "must-not-reach-browser" }],
       }).success,

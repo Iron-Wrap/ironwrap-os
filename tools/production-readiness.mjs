@@ -12,6 +12,7 @@ const REQUIRED_DEPLOY_FILES = [
   "deploy/Containerfile.frappe",
   "deploy/apps.example.json",
   "deploy/env.example",
+  "deploy/release.env.example",
   "deploy/cloudflared-config.example.yml",
   "deploy/approval-broker.service.example",
   "deploy/approval-broker.env.example",
@@ -74,8 +75,12 @@ const REQUIRED_ENV_NAMES = [
   "APP_QUOTE_REVISION_BROKER_TIMEOUT_MS",
   "APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS",
   "QUOTE_REVISION_BROKER_SHARED_SECRET",
+  "EFFECT_RUNTIME_TOKEN",
   "IRONWRAP_BUS_BASE_URL",
   "IRONWRAP_ADMIN_TOKEN",
+  "IRONWRAP_EFFECT_RUNTIME_ENABLED",
+  "IRONWRAP_EFFECT_RUNTIME_URL",
+  "IRONWRAP_EFFECT_RUNTIME_TOKEN",
   "IRONWRAP_BUS_WRITE_ENABLED",
   "ERPNEXT_WRITE_ENABLED",
   "HERMES_WRITE_TOKEN",
@@ -175,6 +180,8 @@ const SECRET_ENV_NAMES = [
   "FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY",
   "FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET",
   "QUOTE_REVISION_BROKER_SHARED_SECRET",
+  "EFFECT_RUNTIME_TOKEN",
+  "IRONWRAP_EFFECT_RUNTIME_TOKEN",
   "IRONWRAP_ADMIN_TOKEN",
   "HERMES_WRITE_TOKEN",
   "HERMES_DRY_RUN_SIGNING_KEY",
@@ -187,6 +194,33 @@ const SECRET_ENV_NAMES = [
   "D1_RESTORE_API_TOKEN",
   "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
   "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
+];
+
+const RELEASE_AUTOMATION_ENV_NAMES = [
+  "RELEASE_POLICY_LEDGER_API_TOKEN",
+  "RELEASE_STAGING_CLOUDFLARE_API_TOKEN",
+  "RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN",
+  "RELEASE_INDEPENDENT_ISSUER_URL",
+  "RELEASE_INDEPENDENT_ISSUER_TOKEN",
+  "RELEASE_REVIEW_PUBLIC_KEY",
+  "RELEASE_PERMIT_PRIVATE_KEY",
+  "RELEASE_PERMIT_PUBLIC_KEY",
+  "RELEASE_STAGING_INGEST_TOKEN",
+  "RELEASE_STAGING_ADMIN_TOKEN",
+  "RELEASE_STAGING_FRAPPE_BASE_URL",
+  "RELEASE_STAGING_FRAPPE_API_KEY",
+  "RELEASE_STAGING_FRAPPE_API_SECRET",
+  "RELEASE_PRODUCTION_INGEST_TOKEN",
+  "RELEASE_PRODUCTION_ADMIN_TOKEN",
+  "RELEASE_PRODUCTION_FRAPPE_BASE_URL",
+  "RELEASE_PRODUCTION_FRAPPE_API_KEY",
+  "RELEASE_PRODUCTION_FRAPPE_API_SECRET",
+  "RELEASE_SERVICE_ADAPTER_URL",
+  "RELEASE_SERVICE_ADAPTER_TOKEN",
+  "RELEASE_SERVICE_ADAPTER_PUBLIC_KEY",
+  "RELEASE_REVIEW_PRIVATE_KEY",
+  "RELEASE_REVIEW_PUBLISH_TOKEN",
+  "RELEASE_SERVICE_ADAPTER_PRIVATE_KEY",
 ];
 
 const EXPECTED_SOURCES = {
@@ -215,7 +249,10 @@ async function readText(root, relative) {
 
 function shellCsvAssignment(script, name) {
   const match = script.match(new RegExp(`^${name}="([^"]*)"$`, "m"));
-  return match?.[1] ? match[1].split(",") : [];
+  const additions = [...script.matchAll(new RegExp(`^${name}\\+="([^"]*)"$`, "gm"))]
+    .map((item) => item[1]);
+  const value = [match?.[1] ?? "", ...additions].join("");
+  return value ? value.split(",").filter(Boolean).sort() : [];
 }
 
 function shellIntegerAssignment(script, name) {
@@ -225,29 +262,37 @@ function shellIntegerAssignment(script, name) {
 
 async function d1MigrationInventory(repoRoot) {
   const migrationsRoot = path.join(repoRoot, "workers-bus/migrations");
+  let database;
   try {
+    const { DatabaseSync } = await import("node:sqlite");
     const files = (await readdir(migrationsRoot)).filter((name) => /^\d{4}_.+\.sql$/.test(name)).sort();
-    const tables = new Set();
-    const triggers = new Map();
+    database = new DatabaseSync(":memory:");
+    database.exec("PRAGMA foreign_keys = ON");
     for (const file of files) {
-      const sql = await readFile(path.join(migrationsRoot, file), "utf8");
-      for (const match of sql.matchAll(/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+([A-Za-z0-9_]+)/gi)) {
-        tables.add(match[1]);
-      }
-      for (const match of sql.matchAll(/CREATE\s+TRIGGER\s+IF\s+NOT\s+EXISTS\s+([A-Za-z0-9_]+)([\s\S]*?)(?=CREATE\s+TRIGGER\s+IF\s+NOT\s+EXISTS|$)/gi)) {
-        const binding = match[2].match(/\b(?:BEFORE|AFTER|INSTEAD\s+OF)\s+(?:INSERT|DELETE|UPDATE(?:\s+OF\s+[\s\S]*?)?)\s+ON\s+([A-Za-z0-9_]+)/i);
-        if (!binding || triggers.has(match[1])) return { ok: false, tables: [], triggerBindings: [] };
-        triggers.set(match[1], binding[1]);
-      }
+      database.exec(await readFile(path.join(migrationsRoot, file), "utf8"));
     }
+    const schemaRows = (type) => database.prepare(
+      `SELECT name, tbl_name
+         FROM sqlite_master
+        WHERE type = ? AND name NOT LIKE 'sqlite_%'
+        ORDER BY name`,
+    ).all(type);
+    const tables = schemaRows("table").map(({ name }) => String(name));
+    const indexBindings = schemaRows("index")
+      .map(({ name, tbl_name: table }) => `${String(name)}=${String(table)}`);
+    const triggerBindings = schemaRows("trigger")
+      .map(({ name, tbl_name: table }) => `${String(name)}=${String(table)}`);
     return {
-      ok: files.length > 0 && tables.size > 0 && triggers.size > 0,
-      tables: [...tables].sort(),
-      triggerBindings: [...triggers].sort(([left], [right]) => left.localeCompare(right))
-        .map(([name, table]) => `${name}=${table}`),
+      ok: files.length > 0 && tables.length > 0 && indexBindings.length > 0 &&
+        triggerBindings.length > 0,
+      tables,
+      indexBindings,
+      triggerBindings,
     };
   } catch {
-    return { ok: false, tables: [], triggerBindings: [] };
+    return { ok: false, tables: [], indexBindings: [], triggerBindings: [] };
+  } finally {
+    database?.close();
   }
 }
 
@@ -375,35 +420,10 @@ function validPositiveInteger(value, minimum, maximum) {
     Number(value) >= minimum && Number(value) <= maximum;
 }
 
-function validPublicEstimateRules(value, allowedBrands) {
+function publicEstimateRangesDisabled(value) {
   try {
     const rules = JSON.parse(value);
-    if (!Array.isArray(rules)) return false;
-    const services = new Set(["roofing", "metal_roofing", "siding", "gutters", "soffit_fascia"]);
-    const seen = new Set();
-    return rules.every((rule) => {
-      if (!rule || typeof rule !== "object" || Array.isArray(rule)) return false;
-      const keys = Object.keys(rule).sort();
-      const validKeys = ["brand", "max_cad", "min_cad", "province", "rule_id", "service"];
-      const validKeysWithoutProvince = ["brand", "max_cad", "min_cad", "rule_id", "service"];
-      if (
-        !(
-          keys.length === validKeys.length && keys.every((key, index) => key === validKeys[index]) ||
-          keys.length === validKeysWithoutProvince.length && keys.every((key, index) => key === validKeysWithoutProvince[index])
-        )
-      ) return false;
-      if (
-        typeof rule.rule_id !== "string" || !/^[a-z0-9][a-z0-9._:-]{2,80}$/.test(rule.rule_id) ||
-        !allowedBrands.has(rule.brand) || !services.has(rule.service) ||
-        !(rule.province === undefined || rule.province === null || /^[A-Z]{2,3}$/.test(rule.province)) ||
-        !Number.isSafeInteger(rule.min_cad) || !Number.isSafeInteger(rule.max_cad) ||
-        rule.min_cad <= 0 || rule.max_cad < rule.min_cad || rule.max_cad > 10_000_000
-      ) return false;
-      const key = `${rule.brand}|${rule.service}|${rule.province ?? "*"}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    return Array.isArray(rules) && rules.length === 0;
   } catch {
     return false;
   }
@@ -578,6 +598,13 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
     "deploy/env.example must document the exact Frappe launch-proof reader config and role",
   ));
   checks.push(check("contract.env.secret.no_generic_cloudflare", !envTemplate.values.has("CLOUDFLARE_API_TOKEN"), "environment inventory has no reusable generic Cloudflare API token", "CLOUDFLARE_API_TOKEN must be split into D1_BACKUP_API_TOKEN and ephemeral D1_RESTORE_API_TOKEN"));
+  const releaseEnvText = contents.get("deploy/release.env.example") ?? "";
+  const releaseEnvTemplate = parseEnvTemplate(releaseEnvText);
+  checks.push(check("contract.release_env.duplicates", releaseEnvTemplate.duplicates.size === 0, "release environment template has no duplicate keys", "release environment template has duplicate keys"));
+  for (const name of RELEASE_AUTOMATION_ENV_NAMES) {
+    const value = releaseEnvTemplate.values.get(name) ?? "";
+    checks.push(check(`contract.release_env.${name}`, /^<[^>]+>$/.test(value), `${name} is declared as a name-only release placeholder`, `${name} is missing or contains a committed release value`));
+  }
   const d1SourceTemplate = {
     D1_PRODUCTION_ACCOUNT_ID: "7ee5775bc1ba46f05c5a65235b60e939",
     D1_PRODUCTION_DATABASE_NAME: "ironwrap-bus",
@@ -679,6 +706,8 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   const migrationInventory = await d1MigrationInventory(repoRoot);
   const backupTables = shellCsvAssignment(d1Backup, "REQUIRED_TABLES");
   const restoreTables = shellCsvAssignment(d1Restore, "REQUIRED_TABLES");
+  const backupIndexes = shellCsvAssignment(d1Backup, "REQUIRED_INDEX_BINDINGS");
+  const restoreIndexes = shellCsvAssignment(d1Restore, "REQUIRED_INDEX_BINDINGS");
   const backupTriggers = shellCsvAssignment(d1Backup, "REQUIRED_TRIGGER_BINDINGS");
   const restoreTriggers = shellCsvAssignment(d1Restore, "REQUIRED_TRIGGER_BINDINGS");
   checks.push(check(
@@ -686,26 +715,112 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
     migrationInventory.ok &&
       backupTables.length === shellIntegerAssignment(d1Backup, "REQUIRED_TABLE_COUNT") &&
       restoreTables.length === shellIntegerAssignment(d1Restore, "REQUIRED_TABLE_COUNT") &&
+      backupIndexes.length === shellIntegerAssignment(d1Backup, "REQUIRED_INDEX_COUNT") &&
+      restoreIndexes.length === shellIntegerAssignment(d1Restore, "REQUIRED_INDEX_COUNT") &&
       backupTriggers.length === shellIntegerAssignment(d1Backup, "REQUIRED_TRIGGER_COUNT") &&
       restoreTriggers.length === shellIntegerAssignment(d1Restore, "REQUIRED_TRIGGER_COUNT") &&
       JSON.stringify(backupTables) === JSON.stringify(migrationInventory.tables) &&
       JSON.stringify(restoreTables) === JSON.stringify(migrationInventory.tables) &&
+      JSON.stringify(backupIndexes) === JSON.stringify(migrationInventory.indexBindings) &&
+      JSON.stringify(restoreIndexes) === JSON.stringify(migrationInventory.indexBindings) &&
       JSON.stringify(backupTriggers) === JSON.stringify(migrationInventory.triggerBindings) &&
       JSON.stringify(restoreTriggers) === JSON.stringify(migrationInventory.triggerBindings),
-    "D1 backup and restore inventories match all 52 migration-defined tables and 72 triggers",
-    "D1 backup and restore inventories must exactly match the migration-defined table and trigger schema",
+    "D1 backup and restore inventories match all 87 migration-defined tables, 130 indexes, and 170 triggers",
+    "D1 backup and restore inventories must exactly match the migration-defined table, index, and trigger schema",
   ));
   checks.push(check("contract.d1_backup.safety", d1Backup.includes("set -euo pipefail") && d1Backup.includes("set +x") && d1Backup.includes("umask 077") && d1Backup.includes("this command accepts no arguments") && d1Backup.includes("mktemp -d") && d1Backup.includes("flock -n") && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Backup), "D1 backup uses strict no-argv, no-tracing, private-temp, locking, and signal controls", "D1 backup lacks strict no-argv, no-tracing, private-temp, locking, or signal controls"));
   checks.push(check("contract.d1_backup.source", d1Backup.includes('EXPECTED_ACCOUNT_ID="7ee5775bc1ba46f05c5a65235b60e939"') && d1Backup.includes('EXPECTED_DATABASE_NAME="ironwrap-bus"') && d1Backup.includes('EXPECTED_DATABASE_ID="f0674848-13df-4422-9896-8ba2719663b8"') && d1Backup.includes('"account_id": "$D1_PRODUCTION_ACCOUNT_ID"') && d1Backup.includes('"database_id": "$D1_PRODUCTION_DATABASE_ID"'), "D1 backup is bound to the exact production account, name, UUID, and generated config", "D1 backup must bind an exact generated config to the committed production D1 coordinates"));
   checks.push(check("contract.d1_backup.wrangler", d1Backup.includes('workers-bus/node_modules/.bin/wrangler') && d1Backup.includes('workers-bus/package-lock.json') && d1Backup.includes('CLOUDFLARE_API_TOKEN="$d1_backup_api_token" "$WRANGLER" d1 export') && d1Backup.includes("--remote --config") && d1Backup.includes("exact Wrangler 4 version") && d1Backup.includes("unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN"), "D1 backup uses the locked local Wrangler 4 remote export with command-scoped read authority", "D1 backup must use exact Wrangler 4 and command-scope only the dedicated D1 backup token"));
-  checks.push(check("contract.d1_backup.validation", d1Backup.includes("sqlite3 -bail") && d1Backup.includes("PRAGMA integrity_check") && d1Backup.includes("quickbooks_projection_outbox") && d1Backup.includes("facet_design_evidence_associations") && d1Backup.includes("newo_reconciliation_runs") && d1Backup.includes("customer_portal_acceptance_events") && d1Backup.includes("REQUIRED_TABLE_COUNT=52") && d1Backup.includes("REQUIRED_TRIGGER_COUNT=72") && d1Backup.includes("prevent_production_schedule_approval_binding_rewrite=production_schedule_approval_requests") && d1Backup.includes("renew_approval_execution_lease_from_governed_outbox_claim=governed_transition_outbox") && d1Backup.includes("REQUIRED_APPROVAL_TRIGGER_SEMANTICS=") && d1Backup.includes("production_schedule_approval_events_immutable") && d1Backup.includes("governed_transition_outbox_invalid_uncertain_transition") && d1Backup.includes("governed_transition_outbox_terminal") && d1Backup.includes("governed_transition_outbox_events_immutable") && d1Backup.includes("type='trigger'") && d1Backup.includes("IRONWRAP-D1-BACKUP-MANIFEST.txt") && d1Backup.includes("sql_sha256="), "D1 backup proves an isolated SQLite import, all 52 production tables, all 72 invariant triggers, and a hashed manifest", "D1 backup must validate all 52 migration-defined tables and all 72 trigger bindings before encryption"));
+  checks.push(check(
+    "contract.d1_backup.validation",
+    d1Backup.includes("sqlite3 -bail") && d1Backup.includes("PRAGMA integrity_check") &&
+      d1Backup.includes("quickbooks_projection_outbox") && d1Backup.includes("facet_design_evidence_associations") &&
+      d1Backup.includes("newo_reconciliation_runs") && d1Backup.includes("customer_portal_acceptance_events") &&
+      d1Backup.includes("hermes_desktop_results") && d1Backup.includes("REQUIRED_TABLE_COUNT=87") &&
+      d1Backup.includes("REQUIRED_INDEX_COUNT=130") && d1Backup.includes("REQUIRED_TRIGGER_COUNT=170") &&
+      d1Backup.includes("idx_app_users_tenant_access_role_active=app_users") &&
+      d1Backup.includes("idx_measurement_intake_receipts_ocr_review=measurement_intake_receipts") &&
+      d1Backup.includes("idx_dead_letter_open_measurement=dead_letter") &&
+      d1Backup.includes("hermes_desktop_results_append_only_update=hermes_desktop_results") &&
+      d1Backup.includes("measurement_deltas_append_only_update=measurement_deltas") &&
+      d1Backup.includes("REQUIRED_MEASUREMENT_INDEX_SEMANTICS=") &&
+      d1Backup.includes("REQUIRED_MEASUREMENT_TRIGGER_SEMANTICS=") &&
+      d1Backup.includes("verify_measurement_index_semantics") &&
+      d1Backup.includes("REQUIRED_ROLE_OCR_TABLE_SEMANTICS=") &&
+      d1Backup.includes("REQUIRED_ACCESS_ROLE_TRIGGER_SEMANTICS=") &&
+      d1Backup.includes("actor.access_rolein('owner','ops')") &&
+      d1Backup.includes("active = 1 AND access_role IS NULL") &&
+      d1Backup.includes("verify_role_and_ocr_semantics") &&
+      d1Backup.includes("prevent_production_schedule_approval_binding_rewrite=production_schedule_approval_requests") &&
+      d1Backup.includes("renew_approval_execution_lease_from_governed_outbox_claim=governed_transition_outbox") &&
+      d1Backup.includes("REQUIRED_APPROVAL_TRIGGER_SEMANTICS=") && d1Backup.includes("REQUIRED_HERMES_TABLE_SEMANTICS=") &&
+      d1Backup.includes("REQUIRED_HERMES_INDEX_SEMANTICS=") && d1Backup.includes("REQUIRED_HERMES_TRIGGER_SEMANTICS=") &&
+      d1Backup.includes("verify_hermes_semantics") && d1Backup.includes("type='index'") && d1Backup.includes("type='trigger'") &&
+      d1Backup.includes("IRONWRAP-D1-BACKUP-MANIFEST.txt") && d1Backup.includes("sql_sha256=") &&
+      d1Backup.includes("required_indexes=") && d1Backup.includes("required_triggers="),
+    "D1 backup proves all 87 tables, 130 indexes, 170 triggers, Hermes, access-role, and measurement-evidence semantics, and a hashed manifest",
+    "D1 backup must validate all 87 migration-defined tables, 130 indexes, and 170 trigger bindings before encryption",
+  ));
   checks.push(check("contract.d1_backup.atomic", d1Backup.includes("age --encrypt") && d1Backup.includes("rclone copy") && d1Backup.includes("--immutable") && d1Backup.includes("rclone check") && d1Backup.includes("IRONWRAP-D1-BACKUP-COMPLETE") && d1Backup.indexOf("rclone check") < d1Backup.lastIndexOf("rclone copyto") && d1Backup.includes("remote_complete=1"), "D1 backup encrypts, uploads immutably, verifies, and commits its marker last", "D1 backup must encrypt and remotely verify immutable objects before publishing its completion marker"));
   checks.push(check("contract.d1_backup.retention", d1Backup.includes("MARKER_RETENTION_HOURS") && d1Backup.includes("DATA_RETENTION_HOURS=$((MARKER_RETENTION_HOURS + 1))") && d1Backup.indexOf("**/IRONWRAP-D1-BACKUP-COMPLETE") < d1Backup.indexOf("**/*.age") && d1Backup.includes("remote_started == 1 && remote_complete == 0") && d1Backup.includes("rclone purge"), "D1 retention hides markers before data and incomplete generations are purged", "D1 retention and incomplete-upload cleanup must preserve atomic visibility"));
 
   checks.push(check("contract.d1_restore.safety", d1Restore.includes("set -euo pipefail") && d1Restore.includes("set +x") && d1Restore.includes("umask 077") && d1Restore.includes("this command accepts no arguments") && d1Restore.includes('mode="${D1_RESTORE_MODE:-verify}"') && d1Restore.includes("mktemp -d") && d1Restore.includes("flock -n") && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Restore), "D1 restore defaults to local verification with strict no-argv, private-temp, lock, and signal controls", "D1 restore must default to verification and fail closed around argv, plaintext, concurrency, and signals"));
   checks.push(check("contract.d1_restore.selection", d1Restore.includes("D1_RESTORE_R2_COMPLETED_PREFIX") && d1Restore.includes("IRONWRAP-D1-BACKUP-COMPLETE") && !/rclone\s+ls[fdj]?\b/.test(d1Restore), "D1 restore requires one exact marker-bearing prefix and never discovers latest", "D1 restore must never discover latest or accept an uncommitted generation"));
-  checks.push(check("contract.d1_restore.local", d1Restore.includes("sha256sum --check") && d1Restore.includes("age --decrypt") && d1Restore.indexOf("sha256sum --check") < d1Restore.indexOf("age --decrypt") && d1Restore.includes("sqlite3 -bail") && d1Restore.includes("PRAGMA integrity_check") && d1Restore.includes("quickbooks_projection_outbox") && d1Restore.includes("facet_design_evidence_associations") && d1Restore.includes("newo_reconciliation_runs") && d1Restore.includes("customer_portal_acceptance_events") && d1Restore.includes("REQUIRED_TABLE_COUNT=52") && d1Restore.includes("REQUIRED_TRIGGER_COUNT=72") && d1Restore.includes("renew_approval_execution_lease_from_governed_outbox_claim=governed_transition_outbox") && d1Restore.includes("governed_transition_outbox_invalid_uncertain_transition") && d1Restore.includes("governed_transition_outbox_terminal") && d1Restore.includes("local-trigger-inventory.txt") && d1Restore.includes("verify_receipt_trigger_semantics") && d1Restore.includes("verify_approval_trigger_semantics") && d1Restore.includes("no remote mutation performed"), "D1 restore cryptographically and structurally verifies all 52 production tables and all 72 trigger bindings locally before any remote mutation", "D1 restore must verify ciphertext, manifest, SQL import, integrity, every migration-defined table, and every trigger binding locally first"));
-  checks.push(check("contract.d1_restore.remote", d1Restore.includes("ironwrap-restore-drill-") && d1Restore.includes("production D1 database can never be a restore target") && d1Restore.includes('RESTORE_D1:$D1_RESTORE_TARGET_DATABASE_NAME@$D1_RESTORE_TARGET_DATABASE_ID') && d1Restore.includes('"database_id": "$D1_RESTORE_TARGET_DATABASE_ID"') && d1Restore.includes("target must be an empty dedicated drill database") && d1Restore.includes("local-table-counts.txt") && d1Restore.includes("target-trigger-verify.sql") && d1Restore.includes("sql AS trigger_sql") && d1Restore.includes("immutableSemantics") && d1Restore.includes("production_schedule_approval_events_immutable") && d1Restore.includes("governed_transition_outbox_invalid_uncertain_transition") && d1Restore.includes("governed_transition_outbox_terminal") && d1Restore.includes("governed_transition_outbox_events_immutable") && d1Restore.includes("remote D1 restore table row counts differ") && d1Restore.includes("remote D1 restore trigger inventory or receipt semantics differ") && d1Restore.includes('CLOUDFLARE_API_TOKEN="$d1_restore_api_token" "$WRANGLER" d1 execute') && d1Restore.includes('"$d1_backup_api_token" == "$d1_restore_api_token"') && d1Restore.includes("unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN D1_RESTORE_API_TOKEN"), "remote D1 restore is exact-target-confirmed, empty-target-only, account-bound, production-denied, and equivalent for all 52 tables plus 72 trigger bindings", "remote D1 restore must reject unsafe targets, match every row count plus all 72 trigger bindings, and use a distinct ephemeral write token"));
+  checks.push(check(
+    "contract.d1_restore.local",
+    d1Restore.includes("sha256sum --check") && d1Restore.includes("age --decrypt") &&
+      d1Restore.indexOf("sha256sum --check") < d1Restore.indexOf("age --decrypt") &&
+      d1Restore.includes("sqlite3 -bail") && d1Restore.includes("PRAGMA integrity_check") &&
+      d1Restore.includes("quickbooks_projection_outbox") && d1Restore.includes("facet_design_evidence_associations") &&
+      d1Restore.includes("newo_reconciliation_runs") && d1Restore.includes("customer_portal_acceptance_events") &&
+      d1Restore.includes("hermes_desktop_results") && d1Restore.includes("REQUIRED_TABLE_COUNT=87") &&
+      d1Restore.includes("REQUIRED_INDEX_COUNT=130") && d1Restore.includes("REQUIRED_TRIGGER_COUNT=170") &&
+      d1Restore.includes("idx_app_users_tenant_access_role_active=app_users") &&
+      d1Restore.includes("idx_measurement_intake_receipts_ocr_review=measurement_intake_receipts") &&
+      d1Restore.includes("idx_dead_letter_open_measurement=dead_letter") &&
+      d1Restore.includes("hermes_desktop_results_append_only_update=hermes_desktop_results") &&
+      d1Restore.includes("measurement_deltas_append_only_update=measurement_deltas") &&
+      d1Restore.includes("REQUIRED_MEASUREMENT_INDEX_SEMANTICS=") &&
+      d1Restore.includes("REQUIRED_MEASUREMENT_TRIGGER_SEMANTICS=") &&
+      d1Restore.includes("verify_measurement_index_semantics") &&
+      d1Restore.includes("REQUIRED_ROLE_OCR_TABLE_SEMANTICS=") &&
+      d1Restore.includes("REQUIRED_ACCESS_ROLE_TRIGGER_SEMANTICS=") &&
+      d1Restore.includes("actor.access_rolein('owner','ops')") &&
+      d1Restore.includes("active = 1 AND access_role IS NULL") &&
+      d1Restore.includes("verify_role_and_ocr_semantics") &&
+      d1Restore.includes("renew_approval_execution_lease_from_governed_outbox_claim=governed_transition_outbox") &&
+      d1Restore.includes("local-index-inventory.txt") && d1Restore.includes("local-trigger-inventory.txt") &&
+      d1Restore.includes("verify_receipt_trigger_semantics") && d1Restore.includes("verify_approval_trigger_semantics") &&
+      d1Restore.includes("verify_hermes_semantics") && d1Restore.includes("required_indexes") &&
+      d1Restore.includes("required_triggers") && d1Restore.includes("no remote mutation performed"),
+    "D1 restore verifies all 87 tables, 130 indexes, 170 triggers, and Hermes, access-role, and measurement-evidence semantics before remote mutation",
+    "D1 restore must verify ciphertext, manifest, SQL import, integrity, every migration-defined table, index, and trigger locally first",
+  ));
+  checks.push(check(
+    "contract.d1_restore.remote",
+    d1Restore.includes("ironwrap-restore-drill-") &&
+      d1Restore.includes("production D1 database can never be a restore target") &&
+      d1Restore.includes('RESTORE_D1:$D1_RESTORE_TARGET_DATABASE_NAME@$D1_RESTORE_TARGET_DATABASE_ID') &&
+      d1Restore.includes('"database_id": "$D1_RESTORE_TARGET_DATABASE_ID"') &&
+      d1Restore.includes("target must be an empty dedicated drill database") &&
+      d1Restore.includes("local-table-counts.txt") && d1Restore.includes("target-index-verify.sql") &&
+      d1Restore.includes("sql AS index_sql") && d1Restore.includes("target-trigger-verify.sql") &&
+      d1Restore.includes("sql AS trigger_sql") && d1Restore.includes("immutableSemantics") &&
+      d1Restore.includes("hermes_desktop_results_one_accepted_handoff") &&
+      d1Restore.includes("idx_measurement_intake_receipts_ocr_review") &&
+      d1Restore.includes("idx_dead_letter_open_measurement") &&
+      d1Restore.includes("facet_design_evidence_associations_validate_insert") &&
+      d1Restore.includes("actor.access_rolein('owner','ops')") &&
+      d1Restore.includes("hermes_desktop_device_revocation_not_monotonic") &&
+      d1Restore.includes("remote D1 restore table row counts differ") &&
+      d1Restore.includes("remote D1 restore index inventory or immutable index semantics differ") &&
+      d1Restore.includes("remote D1 restore trigger inventory or immutable trigger semantics differ") &&
+      d1Restore.includes('CLOUDFLARE_API_TOKEN="$d1_restore_api_token" "$WRANGLER" d1 execute') &&
+      d1Restore.includes('"$d1_backup_api_token" == "$d1_restore_api_token"') &&
+      d1Restore.includes("unset CLOUDFLARE_API_TOKEN D1_BACKUP_API_TOKEN D1_RESTORE_API_TOKEN"),
+    "remote D1 restore is exact-target-confirmed, empty-target-only, account-bound, production-denied, and equivalent for all 87 tables, 130 indexes, and 170 trigger bindings",
+    "remote D1 restore must reject unsafe targets, match all table counts, indexes, and trigger bindings, and use a distinct ephemeral write token",
+  ));
   checks.push(check("contract.d1_restore.cleanup", d1Restore.includes('rm -rf -- "$WORK_DIR"') && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Restore), "D1 restore removes decrypted plaintext on success, failure, and signals", "D1 restore must clean decrypted plaintext in every exit path"));
 
   const buildScript = contents.get("deploy/build-production-image.sh") ?? "";
@@ -814,6 +929,8 @@ export async function validateLiveEnv({
     FRAPPE_API_KEY: 10,
     FRAPPE_API_SECRET: 16,
     IRONWRAP_ADMIN_TOKEN: 24,
+    EFFECT_RUNTIME_TOKEN: 32,
+    IRONWRAP_EFFECT_RUNTIME_TOKEN: 32,
     HERMES_WRITE_TOKEN: 32,
     HERMES_DRY_RUN_SIGNING_KEY: 32,
     APPROVAL_BROKER_SHARED_SECRET: 32,
@@ -842,6 +959,7 @@ export async function validateLiveEnv({
     checks.push(check(`live.secret.${name}`, validSecret(env, name, minimum), `${name} is non-placeholder and meets the minimum length`, `${name} is missing, placeholder, malformed, or too short`));
   }
   checks.push(check("live.secret.admin_consistency", env.ADMIN_TOKEN === env.IRONWRAP_ADMIN_TOKEN, "admin token bindings are consistent", "ADMIN_TOKEN and IRONWRAP_ADMIN_TOKEN must reference the same secret"));
+  checks.push(check("live.secret.effect_runtime_consistency", env.EFFECT_RUNTIME_TOKEN === env.IRONWRAP_EFFECT_RUNTIME_TOKEN, "effect-runtime token bindings are consistent", "EFFECT_RUNTIME_TOKEN and IRONWRAP_EFFECT_RUNTIME_TOKEN must reference the same dedicated secret"));
   const purposeSecrets = [
     env.ERPNEXT_API_KEY,
     env.ERPNEXT_API_SECRET,
@@ -851,6 +969,7 @@ export async function validateLiveEnv({
     env.FRAPPE_API_KEY,
     env.FRAPPE_API_SECRET,
     env.ADMIN_TOKEN,
+    env.EFFECT_RUNTIME_TOKEN,
     env.INGEST_TOKEN,
     env.HERMES_WRITE_TOKEN,
     env.HERMES_DRY_RUN_SIGNING_KEY,
@@ -1010,9 +1129,9 @@ export async function validateLiveEnv({
     ));
     checks.push(check(
       "live.public_estimate.rules",
-      validPublicEstimateRules(env.PUBLIC_ESTIMATE_RANGE_RULES_JSON, publicEstimateBrands),
-      "public estimator rule catalogue is valid (including an explicit empty review-only array)",
-      "PUBLIC_ESTIMATE_RANGE_RULES_JSON must be a valid non-binding tenant rule array or []",
+      publicEstimateRangesDisabled(env.PUBLIC_ESTIMATE_RANGE_RULES_JSON),
+      "public estimator cannot return a price before measurement and approved pricing evidence",
+      "PUBLIC_ESTIMATE_RANGE_RULES_JSON must equal [] because public online pricing is disabled",
     ));
     checks.push(check(
       "live.public_estimate.integration_user",

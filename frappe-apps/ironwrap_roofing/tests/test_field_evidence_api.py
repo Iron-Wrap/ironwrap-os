@@ -51,6 +51,12 @@ class FakeDb:
         if "FOR UPDATE" not in normalized:
             raise AssertionError(f"expected row lock: {normalized}")
         self.lock_queries.append(normalized)
+        if "`tabWork Package`" in normalized:
+            return [
+                dict(row)
+                for row in self.fixtures.get("work_packages", [])
+                if row.get("name") in values or row.get("work_package_id") in values
+            ]
         if "`tabEvidence Item`" not in normalized:
             raise AssertionError(f"unexpected SQL: {normalized}")
         return [
@@ -88,7 +94,7 @@ class FieldEvidenceApiTests(unittest.TestCase):
         can_create: bool = True,
         configured_issuer: str | None = "worker@ironwrapexteriors.com",
     ):
-        fixtures = fixtures or {"evidence": []}
+        fixtures = fixtures or {"evidence": [], "work_packages": []}
         db = FakeDb(fixtures)
         issuance_calls: list[dict] = []
 
@@ -212,6 +218,106 @@ class FieldEvidenceApiTests(unittest.TestCase):
         with self.assertRaisesRegex(FakeValidationError, "identity_conflict"):
             self.call(api, {**self.payload(), "content_checksum": "b" * 64})
         self.assertEqual(len(fixtures["evidence"]), 1)
+
+    def test_issuer_derives_verified_open_lifecycle_and_rejects_forged_states(self) -> None:
+        api, fixtures, _, _ = self.load_api()
+        with self.assertRaisesRegex(FakeValidationError, "verification_forbidden"):
+            self.call(api, {**self.payload(), "evidence_verification": "Pending"})
+        with self.assertRaisesRegex(FakeValidationError, "disposition_forbidden"):
+            self.call(api, {**self.payload(), "evidence_disposition": "Accepted"})
+        self.assertEqual(fixtures["evidence"], [])
+
+        fixtures["work_packages"] = [
+            {
+                "name": "WP-001",
+                "work_package_id": "WP-001",
+                "roof_job": "JOB-A",
+                "version": 1,
+                "status": "Released",
+                "release_attempt_id": "attempt-001",
+            }
+        ]
+        issued = self.call(
+            api,
+            {
+                **self.payload(),
+                "work_package": "WP-001",
+                "work_package_version": 1,
+                "work_package_release_attempt_id": "attempt-001",
+                "evidence_slot_id": "step:1",
+                "evidence_requirement": "One clear deck photo",
+                "evidence_source": "worker-camera",
+                "evidence_device_id": "paired-device-1",
+                "evidence_freshness": "Current",
+                "evidence_conflict_state": "None",
+            },
+        )
+        self.assertFalse(issued["idempotent_replay"])
+        self.assertEqual(fixtures["evidence"][0]["evidence_verification"], "Verified")
+        self.assertEqual(fixtures["evidence"][0]["evidence_disposition"], "Open")
+
+    def test_typed_work_package_slot_is_bound_and_replays_exactly(self) -> None:
+        fixtures = {
+            "evidence": [],
+            "work_packages": [
+                {
+                    "name": "WP-001",
+                    "work_package_id": "work-package:JOB-A:v3",
+                    "roof_job": "JOB-A",
+                    "version": 3,
+                    "status": "Acknowledged",
+                    "release_attempt_id": "attempt-001",
+                }
+            ],
+        }
+        api, fixtures, db, _ = self.load_api(fixtures)
+        payload = {
+            **self.payload(),
+            "roof_job": "JOB-A",
+            "work_package": "work-package:JOB-A:v3",
+            "work_package_version": 3,
+            "evidence_slot_id": "step:1",
+            "evidence_requirement": "One clear deck photo",
+            "evidence_source": "worker-camera",
+            "evidence_device_id": "paired-device-1",
+            "work_package_release_attempt_id": "attempt-001",
+            "evidence_freshness": "Current",
+            "evidence_conflict_state": "None",
+            "evidence_verification": "Verified",
+            "evidence_disposition": "Open",
+        }
+
+        first = self.call(api, payload)
+        self.assertFalse(first["idempotent_replay"])
+        issued = fixtures["evidence"][0]
+        self.assertEqual(issued["work_package"], "WP-001")
+        self.assertEqual(issued["work_package_version"], 3)
+        self.assertEqual(issued["evidence_slot_id"], "step:1")
+        self.assertEqual(issued["evidence_device_id"], "paired-device-1")
+        self.assertTrue(any("tabWork Package" in query for query in db.lock_queries))
+
+        replay = self.call(api, payload)
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(len(fixtures["evidence"]), 1)
+
+        with self.assertRaisesRegex(FakeValidationError, "work_package_conflict"):
+            self.call(api, {**payload, "work_package_version": 2})
+
+    def test_typed_fields_fail_closed_without_complete_package_binding(self) -> None:
+        api, fixtures, _, _ = self.load_api()
+        with self.assertRaisesRegex(FakeValidationError, "work_package and evidence_slot_id"):
+            self.call(api, {**self.payload(), "evidence_slot_id": "step:1"})
+        with self.assertRaisesRegex(FakeValidationError, "typed evidence slots require"):
+            self.call(
+                api,
+                {
+                    **self.payload(),
+                    "work_package": "WP-001",
+                    "work_package_version": 1,
+                    "evidence_slot_id": "step:1",
+                },
+            )
+        self.assertEqual(fixtures["evidence"], [])
 
 
 if __name__ == "__main__":

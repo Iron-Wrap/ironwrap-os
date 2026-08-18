@@ -7,6 +7,7 @@ import {
   buildProductionRunwayReadModel,
   buildSalesReadModel,
   buildTodayReadModel,
+  buildUniversalWorkPackageReadModel,
   mctbStatus,
 } from "../src/app-read-models.ts";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
@@ -15,6 +16,7 @@ import {
   OFFICE_PRODUCTION_READ_FIELDS,
   OFFICE_SALES_READ_FIELDS,
 } from "../src/frappe-read.ts";
+import { permissionsForRole } from "../src/app-types.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 
 const MODIFIED = "2026-07-10T11:00:00.000Z";
@@ -97,15 +99,7 @@ function auth(role: AppRole, frappeUserId: string | null): AuthContext {
   return {
     rawSessionToken: "s".repeat(43),
     csrfToken: "csrf",
-    permissions:
-      role === "field"
-        ? ["session:read", "jobs:read:assigned", "field:write:assigned"]
-        : [
-            "session:read",
-            "jobs:read:any",
-            "owner:read",
-            "field:write:assigned",
-          ],
+    permissions: permissionsForRole(role),
     session: {
       session_hash: "a".repeat(64),
       session_created_at: MODIFIED,
@@ -557,6 +551,7 @@ function rowsFor(doctype: string): Array<Record<string, unknown>> {
         effective_from: MODIFIED,
         expires_at: null,
         revoked_at: null,
+        supersedes: null,
         source_reference: "private-form-reference",
         notes: "private-consent-note",
         modified: MODIFIED,
@@ -616,8 +611,19 @@ function rowsFor(doctype: string): Array<Record<string, unknown>> {
         issued_at: "2026-07-10T07:00:00.000Z",
         expires_at: "2026-07-11T07:00:00.000Z",
         released_at: "2026-07-10T07:05:00.000Z",
+        release_attempt_id: null,
+        supersedes: null,
+        correction_reason: null,
         acknowledged_by: null,
         acknowledged_at: null,
+        assigned_workers: [
+          {
+            sequence: 1,
+            worker_user: "crew@example.com",
+            worker_role: "Installer",
+            required: 1,
+          },
+        ],
         steps: [
           {
             sequence: 1,
@@ -684,6 +690,298 @@ test("field Today uses direct and active crew membership assignments, never gene
   }
 });
 
+test("typed Shop Order packet is served through the universal BFF route without a Roof Job", async () => {
+  const shopAssignment = {
+    name: "ASSIGN-SHOP-1",
+    assignment_id: "assignment_shop_1",
+    roof_job: null,
+    assignment_type: "Shop",
+    status: "Assigned",
+    assigned_user: "crew@example.com",
+    crew_profile: null,
+    work_object_type: "Shop Order",
+    work_object_id: "SHOP-001",
+    physical_context_type: "Shop Floor",
+    physical_context_id: "SHOP-FLOOR-1",
+    scheduled_start: "2026-07-10T16:00:00.000Z",
+    scheduled_end: null,
+    blocker_reason: null,
+    modified: MODIFIED,
+  };
+  const shopPackage = {
+    ...rowsFor("Work Package")[0]!,
+    name: "WORK-PACKAGE-SHOP-1",
+    work_package_id: "work_package_shop_1",
+    roof_job: null,
+    job_assignment: "ASSIGN-SHOP-1",
+    work_object_type: "Shop Order",
+    work_object_id: "SHOP-001",
+    physical_context_type: "Shop Floor",
+    physical_context_id: "SHOP-FLOOR-1",
+    release_attempt_id: "shop-release-attempt-1",
+    assigned_workers: [
+      { sequence: 1, worker_user: "crew@example.com", worker_role: "Installer", required: 1 },
+    ],
+  };
+  const mock = installFrappeMock({
+    "Job Assignment": [...assignments, shopAssignment],
+    "Work Package": [shopPackage],
+    "Work Package Event": [],
+  });
+  try {
+    const response = await handleAuthenticatedRoute(
+      new Request(
+        "https://app.example.com/api/v1/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
+      ),
+      env(),
+      auth("field", "crew@example.com"),
+    );
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      version: number;
+      source_updated_at: string;
+      read_model_generated_at: string;
+      stale_fields: string[];
+      permissions: string[];
+      work_object: Record<string, string>;
+      assignment: { id: string };
+      work_package: { id: string; work_object_type: string; physical_context_type: string };
+      allowed_actions: string[];
+    };
+    assert.equal(body.version, 1);
+    assert.equal(body.source_updated_at, MODIFIED);
+    assert.match(body.read_model_generated_at, /^20\d\d-/);
+    assert.deepEqual(body.stale_fields, []);
+    assert.equal(body.permissions.includes("jobs:read:assigned"), true);
+    assert.deepEqual(body.work_object, {
+      workObjectType: "Shop Order",
+      workObjectId: "SHOP-001",
+      physicalContextType: "Shop Floor",
+      physicalContextId: "SHOP-FLOOR-1",
+    });
+    assert.equal(body.assignment.id, "ASSIGN-SHOP-1");
+    assert.equal(body.work_package.id, "work_package_shop_1");
+    assert.equal(body.work_package.work_object_type, "Shop Order");
+    assert.equal(body.work_package.physical_context_type, "Shop Floor");
+    assert.equal(body.allowed_actions.includes("field.checkin.create"), true);
+    assert.equal(body.allowed_actions.includes("work_package.acknowledge"), true);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("typed completion capability requires the immutable assignment authority and an independent actor", async () => {
+  const scope = {
+    workObjectType: "Shop Order",
+    workObjectId: "SHOP-001",
+    physicalContextType: "Shop Floor",
+    physicalContextId: "SHOP-FLOOR-1",
+  } as const;
+  const shopAssignment = {
+    name: "ASSIGN-SHOP-1",
+    assignment_id: "assignment_shop_1",
+    roof_job: null,
+    assignment_type: "Shop",
+    status: "In Progress",
+    assigned_user: "crew@example.com",
+    crew_profile: null,
+    authority_user: "authority@example.com",
+    authority_role: "IronWrap Owner",
+    assigned_by: "dispatcher@example.com",
+    work_object_type: scope.workObjectType,
+    work_object_id: scope.workObjectId,
+    physical_context_type: scope.physicalContextType,
+    physical_context_id: scope.physicalContextId,
+    scheduled_start: "2026-07-10T16:00:00.000Z",
+    scheduled_end: null,
+    blocker_reason: null,
+    modified: MODIFIED,
+  };
+  const shopPackage = {
+    ...rowsFor("Work Package")[0]!,
+    name: "WORK-PACKAGE-SHOP-1",
+    work_package_id: "work_package_shop_1",
+    roof_job: null,
+    job_assignment: shopAssignment.name,
+    status: "In Progress",
+    work_object_type: scope.workObjectType,
+    work_object_id: scope.workObjectId,
+    physical_context_type: scope.physicalContextType,
+    physical_context_id: scope.physicalContextId,
+    release_attempt_id: "shop-release-attempt-1",
+    assigned_workers: [
+      {
+        sequence: 1,
+        worker_user: "crew@example.com",
+        worker_role: "Installer",
+        required: 1,
+      },
+    ],
+  };
+  const commonEvent = {
+    work_package: shopPackage.name,
+    roof_job: null,
+    job_assignment: shopAssignment.name,
+    work_object_type: scope.workObjectType,
+    work_object_id: scope.workObjectId,
+    physical_context_type: scope.physicalContextType,
+    physical_context_id: scope.physicalContextId,
+    work_package_version: 1,
+    release_attempt_id: shopPackage.release_attempt_id,
+    modified: MODIFIED,
+  };
+  const acknowledgement = {
+    ...commonEvent,
+    name: "WORK-PACKAGE-ACK-SHOP-1",
+    event_type: "Acknowledged",
+    actor_user: "crew@example.com",
+    actor_role: "Installer",
+    device_action_id: "shop-ack-device-1",
+    occurred_at: "2026-07-10T07:10:00.000Z",
+  };
+  const holdRelease = {
+    ...commonEvent,
+    name: "WORK-PACKAGE-HOLD-SHOP-1",
+    event_type: "Hold Point Released",
+    hold_point_sequence: 1,
+    evidence_item: "SHOP-HOLD-RELEASE-EVIDENCE-1",
+    actor_user: "authority@example.com",
+    actor_role: "IronWrap Owner",
+    device_action_id: "shop-hold-device-1",
+    occurred_at: "2026-07-10T07:20:00.000Z",
+  };
+  const capture = (sequence: number, slot: string, requirement: string) => ({
+    ...commonEvent,
+    name: `WORK-PACKAGE-EVIDENCE-SHOP-${sequence}`,
+    event_type: "Evidence Captured",
+    actor_user: "crew@example.com",
+    actor_role: "Installer",
+    device_action_id: `shop-evidence-device-${sequence}`,
+    occurred_at: `2026-07-10T07:3${sequence}:00.000Z`,
+    evidence_item: `SHOP-EVIDENCE-ITEM-${sequence}`,
+    evidence_slot_id: slot,
+    evidence_requirement: requirement,
+    evidence_source: "worker-camera",
+    evidence_device_id: `paired-device-${sequence}`,
+    evidence_captured_at: `2026-07-10T07:2${sequence}:00.000Z`,
+    evidence_freshness: "Current",
+    evidence_conflict_state: "None",
+    evidence_correction_of: null,
+    evidence_item_correction_of: null,
+    evidence_verification: "Verified",
+    evidence_disposition: "Open",
+    correction_reason: null,
+  });
+  const review = (captured: ReturnType<typeof capture>) => ({
+    ...commonEvent,
+    name: `${captured.name}-REVIEW`,
+    event_type: "Evidence Reviewed",
+    actor_user: "authority@example.com",
+    actor_role: "IronWrap Owner",
+    device_action_id: `${captured.device_action_id}-review`,
+    occurred_at: captured.occurred_at.replace(":00.000Z", ":30.000Z"),
+    evidence_review_of: captured.name,
+    evidence_item: captured.evidence_item,
+    evidence_slot_id: captured.evidence_slot_id,
+    evidence_disposition: "Accepted",
+    correction_reason: null,
+  });
+  const stepEvidence = capture(1, "step:1", "Zone photo");
+  const holdEvidence = capture(2, "hold:1", "Deck photo");
+  const source = {
+    "Job Assignment": [shopAssignment],
+    "Work Package": [shopPackage],
+    "Work Package Event": [
+      acknowledgement,
+      holdRelease,
+      stepEvidence,
+      review(stepEvidence),
+      holdEvidence,
+      review(holdEvidence),
+    ],
+  };
+  const mock = installFrappeMock(source);
+  try {
+    const authority = await buildUniversalWorkPackageReadModel(
+      env(),
+      auth("owner", "authority@example.com"),
+      scope,
+    );
+    assert.equal(
+      (authority?.allowed_actions as string[]).includes("work_package.complete"),
+      true,
+    );
+    const assigningAuthority = await buildUniversalWorkPackageReadModel(
+      env(),
+      auth("owner", "dispatcher@example.com"),
+      scope,
+    );
+    assert.equal(
+      (assigningAuthority?.allowed_actions as string[]).includes(
+        "work_package.complete",
+      ),
+      false,
+      "assigned_by is provenance, not typed completion authority",
+    );
+    for (const role of ["owner", "ops", "production"] as const) {
+      const unrelated = await buildUniversalWorkPackageReadModel(
+        env(),
+        auth(role, `${role}@example.com`),
+        scope,
+      );
+      assert.equal(
+        (unrelated?.allowed_actions as string[]).includes("work_package.complete"),
+        false,
+        `${role} must not inherit typed completion from role alone`,
+      );
+    }
+  } finally {
+    mock.restore();
+  }
+
+  const wrongDeclaredRole = installFrappeMock({
+    ...source,
+    "Job Assignment": [
+      { ...shopAssignment, authority_role: "IronWrap Production" },
+    ],
+  });
+  try {
+    const model = await buildUniversalWorkPackageReadModel(
+      env(),
+      auth("owner", "authority@example.com"),
+      scope,
+    );
+    assert.equal(
+      (model?.allowed_actions as string[]).includes("work_package.complete"),
+      false,
+      "the declared authority role must match the exact app authority role",
+    );
+  } finally {
+    wrongDeclaredRole.restore();
+  }
+
+  const workerAuthority = installFrappeMock({
+    ...source,
+    "Job Assignment": [
+      { ...shopAssignment, authority_user: "crew@example.com" },
+    ],
+  });
+  try {
+    const model = await buildUniversalWorkPackageReadModel(
+      env(),
+      auth("owner", "crew@example.com"),
+      scope,
+    );
+    assert.equal(
+      (model?.allowed_actions as string[]).includes("work_package.complete"),
+      false,
+      "the immutable authority must still be independent of the frozen worker roster",
+    );
+  } finally {
+    workerAuthority.restore();
+  }
+});
+
 test("field bootstrap keeps an upstream failure private", async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => {
@@ -700,6 +998,30 @@ test("field bootstrap keeps an upstream failure private", async () => {
     assert.deepEqual(await response.json(), { error: "upstream_unavailable" });
   } finally {
     globalThis.fetch = original;
+  }
+});
+
+test("Today bootstrap admits an office role through the same today:read capability", async () => {
+  const mock = installFrappeMock();
+  try {
+    const response = await handleAuthenticatedRoute(
+      new Request("https://app.example.com/api/v1/field/bootstrap"),
+      env(),
+      auth("ops", "ops@example.com"),
+    );
+    const body = (await response.json()) as {
+      session: { user: { role: string } };
+      today: { jobs: Array<{ id: string }> };
+    };
+
+    assert.equal(response.status, 200);
+    assert.equal(body.session.user.role, "ops");
+    assert.deepEqual(
+      new Set(body.today.jobs.map(({ id }) => id)),
+      new Set(["JOB-A", "JOB-B", "JOB-C"]),
+    );
+  } finally {
+    mock.restore();
   }
 });
 
@@ -755,7 +1077,17 @@ test("owner Now is an office-only, exception-first roofing read model", async ()
       lead_triage_unknown: 0,
       mctb_unproven_due: 0,
       material_exceptions: 1,
+      economics_needs_review: 3,
     });
+    assert.deepEqual(
+      model.economics.map((projection) => projection.job_id),
+      ["JOB-A", "JOB-B", "JOB-C"],
+    );
+    assert.ok(
+      model.economics.every(
+        (projection) => projection.metrics.actual_profit.amount_cents === null,
+      ),
+    );
     assert.deepEqual(
       model.exceptions.map((exception) => exception.kind),
       [
@@ -822,6 +1154,116 @@ test("owner Now is an office-only, exception-first roofing read model", async ()
         await buildOwnerNowReadModel(env(), auth("field", "crew@example.com")),
       /owner_scope_required/,
     );
+  } finally {
+    mock.restore();
+  }
+});
+
+test("owner Now projects per-job economics without combining tenant or tax-inclusive facts", async () => {
+  const mock = installFrappeMock({
+    "Customer Quote": [
+      {
+        name: "QUOTE-A",
+        roof_job: "JOB-A",
+        quote_version: 1,
+        status: "Accepted",
+        subtotal: "1000.00",
+        tax_amount: "50.00",
+        quote_total: "1050.00",
+        currency: "CAD",
+        modified: MODIFIED,
+      },
+    ],
+    "Supplier Quote": [
+      {
+        name: "SQ-A",
+        roof_job: "JOB-A",
+        status: "Approved",
+        quote_total: "400.00",
+        currency: "CAD",
+        modified: MODIFIED,
+      },
+    ],
+    "Supplier Order": [
+      {
+        name: "SO-A",
+        roof_job: "JOB-A",
+        source_quote: "SQ-A",
+        status: "Ordered",
+        modified: MODIFIED,
+      },
+    ],
+    "Material Lot": [
+      {
+        name: "LOT-A",
+        roof_job: "JOB-A",
+        status: "Available",
+        modified: MODIFIED,
+      },
+    ],
+    "Payment Milestone": [
+      {
+        name: "PAY-A",
+        roof_job: "JOB-A",
+        milestone_type: "Payment",
+        status: "Matched",
+        total_amount: "250.00",
+        currency: "CAD",
+        modified: MODIFIED,
+      },
+    ],
+    "Job Cost Event": [
+      {
+        name: "COST-A",
+        tenant: "ironwrap",
+        roof_job: "JOB-A",
+        event_kind: "cost",
+        category: "Material",
+        quantity: 1,
+        unit: "lot",
+        amount_cents: 35_000,
+        amount_basis: "Net of Recoverable Tax",
+        currency: "CAD",
+        source_doctype: "Material Lot",
+        source_name: "LOT-A",
+        source_digest: "a".repeat(64),
+        source_evidence: "EVID-A",
+        accounting_state: "Operational",
+        modified: MODIFIED,
+      },
+      {
+        name: "COST-OTHER-TENANT",
+        tenant: "other",
+        roof_job: "JOB-A",
+        event_kind: "cost",
+        amount_cents: 99_999,
+        amount_basis: "Net of Recoverable Tax",
+        currency: "CAD",
+        modified: MODIFIED,
+      },
+    ],
+  });
+  try {
+    const model = await buildOwnerNowReadModel(
+      env(),
+      auth("owner", "owner@example.com"),
+    );
+    const job = model.economics.find(
+      (projection) => projection.job_id === "JOB-A",
+    );
+    assert.ok(job);
+    assert.equal(job.metrics.forecast_revenue.known_cents, 100_000);
+    assert.equal(job.metrics.committed_cost.known_cents, 40_000);
+    assert.equal(job.metrics.accrued_actual_cost.known_cents, 35_000);
+    assert.equal(job.metrics.cash_collected.known_cents, 25_000);
+    assert.equal(job.metrics.actual_profit.amount_cents, null);
+    const costRequest = mock.requests.find(
+      (request) => request.doctype === "Job Cost Event",
+    );
+    assert.deepEqual(costRequest?.filters, [
+      ["Job Cost Event", "tenant", "=", "ironwrap"],
+      ["Job Cost Event", "roof_job", "in", ["JOB-A", "JOB-B", "JOB-C"]],
+    ]);
   } finally {
     mock.restore();
   }
@@ -1011,13 +1453,24 @@ test("production runway is an office-only, bounded read that never treats a gate
       ["Supplier Order", "roof_job", "in", ["JOB-C", "JOB-B", "JOB-A"]],
       ["Supplier Order", "status", "in", ["Needs Review", "Shortage"]],
     ]);
+    const productionRole = await buildProductionRunwayReadModel(
+      env(),
+      auth("production", "production@example.com"),
+    );
+    assert.equal(productionRole.summary.active_jobs, 3);
+    assert.equal(
+      productionRole.allowed_actions.includes(
+        "production_schedule_approval.prepare",
+      ),
+      false,
+    );
     await assert.rejects(
       async () =>
         await buildProductionRunwayReadModel(
           env(),
           auth("field", "crew@example.com"),
         ),
-      /owner_scope_required/,
+      /production_scope_required/,
     );
   } finally {
     mock.restore();
@@ -1408,6 +1861,60 @@ test("Sales Desk receives a bounded office contract without widening Owner Now o
   }
 });
 
+test("Sales Desk removes superseded consent from the current bounded projection", async () => {
+  const shared = {
+    customer: "CUSTOMER-A",
+    lead_envelope: "LEAD-A",
+    roof_job: "JOB-A",
+    channel: "Email",
+    purpose: "Estimate Follow-up",
+    jurisdiction: "AB",
+    consent_basis: "Express",
+    captured_at: MODIFIED,
+    effective_from: MODIFIED,
+    expires_at: null,
+    modified: MODIFIED,
+  };
+  const mock = installFrappeMock({
+    "Communication Consent": [
+      {
+        ...shared,
+        name: "consent_original",
+        consent_id: "consent_original",
+        status: "Granted",
+        revoked_at: null,
+        supersedes: null,
+      },
+      {
+        ...shared,
+        name: "consent_revocation",
+        consent_id: "consent_revocation",
+        status: "Revoked",
+        revoked_at: MODIFIED,
+        supersedes: "consent_original",
+      },
+    ],
+  });
+  try {
+    const model = await buildSalesReadModel(
+      env(),
+      auth("ops", "ops@example.com"),
+    );
+    assert.deepEqual(
+      model.leads[0]?.consent.records.map(({ id, status }) => ({ id, status })),
+      [{ id: "consent_revocation", status: "Revoked" }],
+    );
+    assert.equal(
+      mock.requests
+        .filter(({ doctype }) => doctype === "Communication Consent")
+        .every(({ fields }) => fields.includes("supersedes")),
+      true,
+    );
+  } finally {
+    mock.restore();
+  }
+});
+
 test("Sales grants the bounded triage-prepare action only for a configured broker and Frappe identity", async () => {
   const mock = installFrappeMock();
   try {
@@ -1433,6 +1940,19 @@ test("Sales grants the bounded triage-prepare action only for a configured broke
       auth("ops", "ops@example.com"),
     );
     assert.equal(noBroker.allowed_actions.includes("approval.prepare"), false);
+
+    const readOnly = auth("sales", "sales@example.com");
+    readOnly.permissions = readOnly.permissions.filter(
+      (permission) => permission !== "approvals:prepare",
+    );
+    const noPermission = await buildSalesReadModel(
+      envWithLeadTriageBroker(),
+      readOnly,
+    );
+    assert.equal(
+      noPermission.allowed_actions.includes("approval.prepare"),
+      false,
+    );
   } finally {
     mock.restore();
   }
@@ -1647,6 +2167,79 @@ test("production runway HTTP route is private and starts no upstream read for fi
       3,
     );
 
+    const productionRole = await handleAuthenticatedRoute(
+      request,
+      env(),
+      auth("production", "production@example.com"),
+    );
+    assert.equal(productionRole.status, 200);
+    assert.equal(
+      ((await productionRole.json()) as { summary: { active_jobs: number } })
+        .summary.active_jobs,
+      3,
+    );
+
+    const callsBeforeNow = mock.requests.length;
+    const productionNow = await handleAuthenticatedRoute(
+      new Request("https://app.example.com/api/v1/now"),
+      env(),
+      auth("production", "production@example.com"),
+    );
+    const productionNowBody = (await productionNow.json()) as {
+      role: string;
+      sources: Array<{ id: string }>;
+    };
+    assert.equal(productionNow.status, 200);
+    assert.equal(productionNowBody.role, "production");
+    assert.deepEqual(
+      productionNowBody.sources.map(({ id }) => id),
+      ["production"],
+    );
+    const productionNowDoctypes = mock.requests
+      .slice(callsBeforeNow)
+      .map(({ doctype }) => doctype);
+    for (const forbidden of [
+      "Lead Envelope",
+      "Instant Estimate Session",
+      "Customer Quote",
+      "Proposal Evidence Pack",
+      "Communication Consent",
+      "Automation Incident",
+      "Payment Milestone",
+    ]) {
+      assert.equal(productionNowDoctypes.includes(forbidden), false, forbidden);
+    }
+
+    const productionJob = await handleAuthenticatedRoute(
+      new Request("https://app.example.com/api/v1/jobs/JOB-A"),
+      env(),
+      auth("production", "production@example.com"),
+    );
+    assert.equal(productionJob.status, 200);
+    const productionJobBody = (await productionJob.json()) as {
+      allowed_actions: string[];
+      packet: { work_package: unknown };
+    };
+    assert.deepEqual(productionJobBody.allowed_actions, ["job.read"]);
+    assert.equal(productionJobBody.packet.work_package, null);
+
+    for (const [path, error] of [
+      ["/api/v1/today", "today_read_required"],
+      ["/api/v1/owner/now", "forbidden"],
+      ["/api/v1/sales", "office_role_required"],
+      ["/api/v1/approvals", "office_role_required"],
+    ] as const) {
+      const callsBeforeDeniedRead = mock.requests.length;
+      const deniedRead = await handleAuthenticatedRoute(
+        new Request(`https://app.example.com${path}`),
+        env(),
+        auth("production", "production@example.com"),
+      );
+      assert.equal(deniedRead.status, 403, path);
+      assert.deepEqual(await deniedRead.json(), { error }, path);
+      assert.equal(mock.requests.length, callsBeforeDeniedRead, path);
+    }
+
     const callsBeforeDenied = mock.requests.length;
     const field = await handleAuthenticatedRoute(
       request,
@@ -1676,6 +2269,59 @@ test("Sales Desk HTTP route is private and never starts office reads for field s
       ((await office.json()) as { leads: Array<{ id: string }> }).leads[0]?.id,
       "LEAD-A",
     );
+
+    const salesRole = await handleAuthenticatedRoute(
+      request,
+      env(),
+      auth("sales", "sales@example.com"),
+    );
+    assert.equal(salesRole.status, 200);
+
+    const callsBeforeNow = mock.requests.length;
+    const now = await handleAuthenticatedRoute(
+      new Request("https://app.example.com/api/v1/now"),
+      env(),
+      auth("sales", "sales@example.com"),
+    );
+    const nowBody = (await now.json()) as {
+      role: string;
+      sources: Array<{ id: string }>;
+    };
+    assert.equal(now.status, 200);
+    assert.equal(nowBody.role, "sales");
+    assert.deepEqual(
+      nowBody.sources.map(({ id }) => id),
+      ["sales"],
+    );
+    const salesNowDoctypes = mock.requests
+      .slice(callsBeforeNow)
+      .map(({ doctype }) => doctype);
+    for (const forbidden of [
+      "Production Assignment",
+      "Job Gate",
+      "Automation Incident",
+      "Payment Milestone",
+      "Supplier Order",
+    ]) {
+      assert.equal(salesNowDoctypes.includes(forbidden), false, forbidden);
+    }
+
+    for (const [path, error] of [
+      ["/api/v1/field/bootstrap", "today_read_required"],
+      ["/api/v1/today", "today_read_required"],
+      ["/api/v1/jobs/JOB-A", "job_read_required"],
+      ["/api/v1/jobs/JOB-A/proof", "job_read_required"],
+    ] as const) {
+      const callsBeforeDeniedRead = mock.requests.length;
+      const deniedRead = await handleAuthenticatedRoute(
+        new Request(`https://app.example.com${path}`),
+        env(),
+        auth("sales", "sales@example.com"),
+      );
+      assert.equal(deniedRead.status, 403, path);
+      assert.deepEqual(await deniedRead.json(), { error }, path);
+      assert.equal(mock.requests.length, callsBeforeDeniedRead, path);
+    }
 
     const callsBeforeDenied = mock.requests.length;
     const field = await handleAuthenticatedRoute(
@@ -1728,10 +2374,26 @@ test("field packet contains job-safe contact details and excludes email, financi
       issued_at: "2026-07-10T07:00:00.000Z",
       expires_at: "2026-07-11T07:00:00.000Z",
       released_at: "2026-07-10T07:05:00.000Z",
+      work_object_type: "Roof Job",
+      work_object_id: "JOB-A",
+      physical_context_type: "Roof Site",
+      physical_context_id: "JOB-A",
+      release_attempt_id: null,
+      supersession: null,
       acknowledgement: {
         current_user_acknowledged: false,
         acknowledged_at: null,
+        workers: [
+          {
+            worker_user: "crew@example.com",
+            worker_role: "Installer",
+            required: true,
+            acknowledged: false,
+            acknowledged_at: null,
+          },
+        ],
       },
+      evidence_slots: [],
       steps: [
         {
           sequence: 1,
@@ -1744,6 +2406,7 @@ test("field packet contains job-safe contact details and excludes email, financi
         {
           sequence: 1,
           hold_point: "Deck condition",
+          release_phase: "Pre-start",
           release_authority: "Supervisor",
           required_evidence: "Deck photo",
           acceptance_criteria: "Supervisor release.",
@@ -1753,7 +2416,7 @@ test("field packet contains job-safe contact details and excludes email, financi
     });
     assert.equal(
       model.allowed_actions.includes("work_package.acknowledge"),
-      true,
+      false,
     );
     assert.equal(model.allowed_actions.includes("work_package.start"), false);
     assert.equal(
@@ -1787,6 +2450,7 @@ test("field Work Package Start requires a complete, unique hold-release ledger",
   const packageRow = {
     ...rowsFor("Work Package")[0]!,
     status: "Acknowledged",
+    release_attempt_id: "attempt-a",
     acknowledged_by: "crew@example.com",
     acknowledged_at: "2026-07-10T07:10:00.000Z",
     hold_points: [
@@ -1813,6 +2477,7 @@ test("field Work Package Start requires a complete, unique hold-release ledger",
     roof_job: "JOB-A",
     job_assignment: "ASSIGN-A",
     work_package_version: 1,
+    release_attempt_id: "attempt-a",
     hold_point_sequence: sequence,
     evidence_item: `EVID-${sequence}`,
     actor_user: "private-release@example.com",
@@ -1821,6 +2486,20 @@ test("field Work Package Start requires a complete, unique hold-release ledger",
     occurred_at: "2026-07-10T08:00:00.000Z",
     modified: MODIFIED,
   });
+  const acknowledgement = {
+    name: "WORK-PACKAGE-ACK-1",
+    event_type: "Acknowledged",
+    work_package: "WORK-PACKAGE-A",
+    roof_job: "JOB-A",
+    job_assignment: "ASSIGN-A",
+    work_package_version: 1,
+    release_attempt_id: "attempt-a",
+    actor_user: "crew@example.com",
+    actor_role: "Installer",
+    device_action_id: "ack-device-1",
+    occurred_at: "2026-07-10T07:10:00.000Z",
+    modified: MODIFIED,
+  };
 
   const partial = installFrappeMock({
     "Work Package": [packageRow],
@@ -1846,7 +2525,12 @@ test("field Work Package Start requires a complete, unique hold-release ledger",
       "work_package",
       "roof_job",
       "job_assignment",
+      "work_object_type",
+      "work_object_id",
+      "physical_context_type",
+      "physical_context_id",
       "work_package_version",
+      "release_attempt_id",
       "hold_point_sequence",
       "evidence_item",
     ]);
@@ -1915,7 +2599,7 @@ test("field Work Package Start requires a complete, unique hold-release ledger",
 
   const complete = installFrappeMock({
     "Work Package": [packageRow],
-    "Work Package Event": [release(1), release(2)],
+    "Work Package Event": [release(1), release(2), acknowledgement],
   });
   try {
     const model = await buildJobReadModel(
@@ -1931,6 +2615,511 @@ test("field Work Package Start requires a complete, unique hold-release ledger",
     assert.equal(model.allowed_actions.includes("work_package.start"), true);
   } finally {
     complete.restore();
+  }
+});
+
+test("field packet exposes exact Work Package supersession identity and changed step/hold summary", async () => {
+  const current = {
+    ...rowsFor("Work Package")[0]!,
+    status: "Released",
+    release_attempt_id: "attempt-b",
+    supersedes: "WORK-PACKAGE-OLD",
+    correction_reason:
+      "Changed condition: the deck inspection hold now requires a revised anchor check.",
+    steps: [
+      {
+        sequence: 1,
+        instruction: "Verify the revised roof zone.",
+        required_evidence: "Revised zone photo",
+        acceptance_criteria: "Revised zone matches package.",
+      },
+      {
+        sequence: 2,
+        instruction: "Stage the released material.",
+        required_evidence: "Material staging photo",
+        acceptance_criteria: "Material is protected and staged.",
+      },
+    ],
+    hold_points: [
+      {
+        sequence: 1,
+        hold_point: "Revised deck condition",
+        release_authority: "Supervisor",
+        required_evidence: "Revised deck photo",
+        acceptance_criteria: "Supervisor releases revised deck condition.",
+      },
+      {
+        sequence: 2,
+        hold_point: "Material staging",
+        release_authority: "Supervisor",
+        required_evidence: "Material staging photo",
+        acceptance_criteria: "Supervisor releases material staging.",
+      },
+    ],
+  };
+  const prior = {
+    ...current,
+    name: "WORK-PACKAGE-OLD",
+    work_package_id: "work_package_old",
+    status: "Superseded",
+    release_attempt_id: "attempt-a",
+    supersedes: null,
+    correction_reason: null,
+    steps: [
+      {
+        sequence: 1,
+        instruction: "Verify the original roof zone.",
+        required_evidence: "Original zone photo",
+        acceptance_criteria: "Original zone matches package.",
+      },
+      current.steps[1]!,
+    ],
+    hold_points: [
+      {
+        sequence: 1,
+        hold_point: "Original deck condition",
+        release_authority: "Supervisor",
+        required_evidence: "Original deck photo",
+        acceptance_criteria: "Supervisor releases original deck condition.",
+      },
+      current.hold_points[1]!,
+    ],
+  };
+  const acknowledgement = {
+    name: "WORK-PACKAGE-ACK-CURRENT",
+    event_type: "Acknowledged",
+    work_package: "WORK-PACKAGE-A",
+    roof_job: "JOB-A",
+    job_assignment: "ASSIGN-A",
+    work_package_version: 1,
+    release_attempt_id: "attempt-b",
+    actor_user: "crew@example.com",
+    actor_role: "Installer",
+    device_action_id: "ack-current-attempt",
+    occurred_at: "2026-07-10T07:20:00.000Z",
+    modified: MODIFIED,
+  };
+  const mock = installFrappeMock({
+    "Work Package": [current, prior],
+    "Work Package Event": [acknowledgement],
+  });
+  try {
+    const model = await buildJobReadModel(
+      env(),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+    );
+    assert.ok(model?.packet.work_package);
+    assert.deepEqual(model.packet.work_package.supersession, {
+      prior_id: "WORK-PACKAGE-OLD",
+      reason:
+        "Changed condition: the deck inspection hold now requires a revised anchor check.",
+      changed_steps: [1],
+      changed_hold_points: [1],
+    });
+    assert.equal(
+      model.packet.work_package.acknowledgement.current_user_acknowledged,
+      true,
+    );
+    assert.equal(
+      model.packet.work_package.acknowledgement.acknowledged_at,
+      "2026-07-10T07:20:00.000Z",
+    );
+  } finally {
+    mock.restore();
+  }
+
+  const unreadablePrior = installFrappeMock({
+    "Work Package": [current],
+    "Work Package Event": [acknowledgement],
+  });
+  try {
+    const model = await buildJobReadModel(
+      env(),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+    );
+    assert.equal(model?.packet.work_package, null);
+  } finally {
+    unreadablePrior.restore();
+  }
+});
+
+test("field packet ignores acknowledgements from a prior release attempt", async () => {
+  const packageRow = {
+    ...rowsFor("Work Package")[0]!,
+    status: "Released",
+    release_attempt_id: "attempt-b",
+    acknowledged_by: "crew@example.com",
+    acknowledged_at: "2026-07-10T07:10:00.000Z",
+  };
+  const staleAcknowledgement = {
+    name: "WORK-PACKAGE-ACK-STALE",
+    event_type: "Acknowledged",
+    work_package: "WORK-PACKAGE-A",
+    roof_job: "JOB-A",
+    job_assignment: "ASSIGN-A",
+    work_package_version: 1,
+    release_attempt_id: "attempt-a",
+    actor_user: "crew@example.com",
+    actor_role: "Installer",
+    device_action_id: "ack-stale-attempt",
+    occurred_at: "2026-07-10T07:10:00.000Z",
+    modified: MODIFIED,
+  };
+  const mock = installFrappeMock({
+    "Work Package": [packageRow],
+    "Work Package Event": [staleAcknowledgement],
+  });
+  try {
+    const model = await buildJobReadModel(
+      env(),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+    );
+    assert.ok(model?.packet.work_package);
+    assert.equal(
+      model.packet.work_package.acknowledgement.current_user_acknowledged,
+      false,
+    );
+    assert.equal(
+      model.packet.work_package.acknowledgement.acknowledged_at,
+      null,
+    );
+    assert.equal(
+      model.packet.work_package.acknowledgement.workers[0]?.acknowledged,
+      false,
+    );
+    assert.equal(
+      model.allowed_actions.includes("work_package.acknowledge"),
+      true,
+    );
+    assert.equal(model.allowed_actions.includes("work_package.start"), false);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("field packet rejects an event-to-Evidence Item cross-pair and clears the evidence ledger", async () => {
+  const packageRow = {
+    ...rowsFor("Work Package")[0]!,
+    release_attempt_id: "attempt-a",
+  };
+  const prior = {
+    name: "EVIDENCE-EVENT-1",
+    event_type: "Evidence Captured",
+    work_package: "WORK-PACKAGE-A",
+    roof_job: "JOB-A",
+    job_assignment: "ASSIGN-A",
+    work_package_version: 1,
+    release_attempt_id: "attempt-a",
+    actor_user: "crew@example.com",
+    actor_role: "Installer",
+    device_action_id: "evidence-device-1",
+    occurred_at: "2026-07-10T08:00:00.000Z",
+    evidence_item: "EVIDENCE-ITEM-1",
+    evidence_slot_id: "step:1",
+    evidence_requirement: "Zone photo",
+    evidence_source: "worker-camera",
+    evidence_device_id: "paired-device-1",
+    evidence_captured_at: "2026-07-10T07:59:00.000Z",
+    evidence_freshness: "Current",
+    evidence_conflict_state: "None",
+    evidence_correction_of: null,
+    evidence_item_correction_of: null,
+    evidence_verification: "Verified",
+    evidence_disposition: "Open",
+    correction_reason: null,
+    modified: MODIFIED,
+  };
+  const crossed = {
+    ...prior,
+    name: "EVIDENCE-EVENT-2",
+    device_action_id: "evidence-device-2",
+    occurred_at: "2026-07-10T08:05:00.000Z",
+    evidence_item: "EVIDENCE-ITEM-2",
+    evidence_correction_of: "EVIDENCE-EVENT-1",
+    evidence_item_correction_of: "EVIDENCE-ITEM-2",
+  };
+  const mock = installFrappeMock({
+    "Work Package": [packageRow],
+    "Work Package Event": [prior, crossed],
+  });
+  try {
+    const model = await buildJobReadModel(
+      env(),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+    );
+    assert.ok(model);
+    assert.deepEqual(model.packet.work_package?.evidence_slots, []);
+    assert.equal(
+      model.allowed_actions.includes("work_package.acknowledge"),
+      true,
+    );
+  } finally {
+    mock.restore();
+  }
+});
+
+test("field packet binds crew roles and rejects forged typed lifecycle or review authority", async () => {
+  const packageRow = {
+    ...rowsFor("Work Package")[0]!,
+    status: "Acknowledged",
+    release_attempt_id: "attempt-a",
+    assigned_workers: [
+      {
+        sequence: 1,
+        worker_user: "crew-a@example.com",
+        worker_role: "Installer",
+        required: 1,
+      },
+      {
+        sequence: 2,
+        worker_user: "crew-b@example.com",
+        worker_role: "Spotter",
+        required: 1,
+      },
+    ],
+  };
+  const assignment = {
+    ...assignments[0]!,
+    assigned_user: null,
+    crew_profile: "CREW-1",
+  };
+  const crewMembers = [
+    {
+      name: "CREW-MEMBER-A",
+      parent: "CREW-1",
+      parenttype: "Crew Profile",
+      parentfield: "members",
+      crew_user: "crew-a@example.com",
+      crew_role: "Installer",
+      active: 1,
+    },
+    {
+      name: "CREW-MEMBER-B",
+      parent: "CREW-1",
+      parenttype: "Crew Profile",
+      parentfield: "members",
+      crew_user: "crew-b@example.com",
+      crew_role: "Spotter",
+      active: 1,
+    },
+  ];
+  const acknowledgements = [
+    {
+      name: "ACK-CREW-A",
+      event_type: "Acknowledged",
+      work_package: "WORK-PACKAGE-A",
+      roof_job: "JOB-A",
+      job_assignment: "ASSIGN-A",
+      work_package_version: 1,
+      release_attempt_id: "attempt-a",
+      actor_user: "crew-a@example.com",
+      actor_role: "Installer",
+      device_action_id: "ack-crew-a",
+      occurred_at: "2026-07-10T07:10:00.000Z",
+    },
+    {
+      name: "ACK-CREW-B",
+      event_type: "Acknowledged",
+      work_package: "WORK-PACKAGE-A",
+      roof_job: "JOB-A",
+      job_assignment: "ASSIGN-A",
+      work_package_version: 1,
+      release_attempt_id: "attempt-a",
+      actor_user: "crew-b@example.com",
+      actor_role: "Spotter",
+      device_action_id: "ack-crew-b",
+      occurred_at: "2026-07-10T07:11:00.000Z",
+    },
+  ];
+  const evidence = {
+    name: "EVIDENCE-EVENT-1",
+    event_type: "Evidence Captured",
+    work_package: "WORK-PACKAGE-A",
+    roof_job: "JOB-A",
+    job_assignment: "ASSIGN-A",
+    work_package_version: 1,
+    release_attempt_id: "attempt-a",
+    actor_user: "crew-a@example.com",
+    actor_role: "Installer",
+    device_action_id: "evidence-device-1",
+    occurred_at: "2026-07-10T08:00:00.000Z",
+    evidence_item: "EVIDENCE-ITEM-1",
+    evidence_slot_id: "step:1",
+    evidence_requirement: "Zone photo",
+    evidence_source: "worker-camera",
+    evidence_device_id: "paired-device-1",
+    evidence_captured_at: "2026-07-10T07:59:00.000Z",
+    evidence_freshness: "Current",
+    evidence_conflict_state: "None",
+    evidence_correction_of: null,
+    evidence_item_correction_of: null,
+    evidence_verification: "Verified",
+    evidence_disposition: "Open",
+    correction_reason: null,
+  };
+  const source = {
+    "Job Assignment": [assignment],
+    "Crew Profile": [{ name: "CREW-1", status: "Active" }],
+    "Crew Member": crewMembers,
+    "Work Package": [packageRow],
+    "Work Package Event": [...acknowledgements, evidence],
+  };
+  const mock = installFrappeMock(source);
+  try {
+    const model = await buildJobReadModel(
+      env(),
+      auth("field", "crew-a@example.com"),
+      "JOB-A",
+    );
+    assert.ok(model?.packet.work_package);
+    assert.equal(
+      model.packet.work_package.acknowledgement.current_user_acknowledged,
+      true,
+    );
+    assert.equal(model.allowed_actions.includes("work_package.acknowledge"), false);
+    assert.equal(model.packet.work_package.evidence_slots.length, 1);
+  } finally {
+    mock.restore();
+  }
+
+  const forgedCapture = installFrappeMock({
+    ...source,
+    "Work Package Event": [
+      ...acknowledgements,
+      { ...evidence, evidence_verification: "Pending" },
+    ],
+  });
+  try {
+    const model = await buildJobReadModel(
+      env(),
+      auth("field", "crew-a@example.com"),
+      "JOB-A",
+    );
+    assert.deepEqual(model?.packet.work_package?.evidence_slots, []);
+  } finally {
+    forgedCapture.restore();
+  }
+
+  const forgedReview = installFrappeMock({
+    ...source,
+    "Work Package Event": [
+      ...acknowledgements,
+      evidence,
+      {
+        ...evidence,
+        name: "EVIDENCE-REVIEW-1",
+        event_type: "Evidence Reviewed",
+        actor_user: "crew-a@example.com",
+        actor_role: "Installer",
+        device_action_id: "review-device-1",
+        occurred_at: "2026-07-10T08:05:00.000Z",
+        evidence_review_of: "EVIDENCE-EVENT-1",
+        evidence_disposition: "Accepted",
+        evidence_verification: null,
+      },
+    ],
+  });
+  try {
+    const model = await buildJobReadModel(
+      env(),
+      auth("field", "crew-a@example.com"),
+      "JOB-A",
+    );
+    assert.deepEqual(model?.packet.work_package?.evidence_slots, []);
+  } finally {
+    forgedReview.restore();
+  }
+
+  const sameActorReview = installFrappeMock({
+    ...source,
+    "Work Package Event": [
+      ...acknowledgements,
+      evidence,
+      {
+        ...evidence,
+        name: "EVIDENCE-REVIEW-SAME-ACTOR",
+        event_type: "Evidence Reviewed",
+        actor_user: "crew-a@example.com",
+        actor_role: "IronWrap Production",
+        device_action_id: "review-device-same-actor",
+        occurred_at: "2026-07-10T08:06:00.000Z",
+        evidence_review_of: "EVIDENCE-EVENT-1",
+        evidence_disposition: "Accepted",
+        evidence_verification: null,
+      },
+    ],
+  });
+  try {
+    const model = await buildJobReadModel(
+      env(),
+      auth("field", "crew-a@example.com"),
+      "JOB-A",
+    );
+    assert.deepEqual(model?.packet.work_package?.evidence_slots, []);
+  } finally {
+    sameActorReview.restore();
+  }
+});
+
+test("field packet fails closed when typed evidence exceeds the bounded ledger page", async () => {
+  const packageRow = {
+    ...rowsFor("Work Package")[0]!,
+    release_attempt_id: "attempt-a",
+  };
+  const evidence = Array.from({ length: 101 }, (_, index) => ({
+    name: `EVIDENCE-EVENT-${String(index).padStart(3, "0")}`,
+    event_type: "Evidence Captured",
+    work_package: "WORK-PACKAGE-A",
+    roof_job: "JOB-A",
+    job_assignment: "ASSIGN-A",
+    work_package_version: 1,
+    release_attempt_id: "attempt-a",
+    actor_user: "crew@example.com",
+    actor_role: "Installer",
+    device_action_id: `evidence-device-${index}`,
+    occurred_at: `2026-07-10T08:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`,
+    evidence_item: `EVIDENCE-ITEM-${index}`,
+    evidence_slot_id: "step:1",
+    evidence_requirement: "Zone photo",
+    evidence_source: "worker-camera",
+    evidence_device_id: "paired-device-1",
+    evidence_captured_at: "2026-07-10T07:59:00.000Z",
+    evidence_freshness: "Current",
+    evidence_conflict_state: "None",
+    evidence_correction_of: null,
+    evidence_item_correction_of: null,
+    evidence_verification: "Verified",
+    evidence_disposition: "Open",
+    correction_reason: null,
+    modified: MODIFIED,
+  }));
+  const mock = installFrappeMock({
+    "Work Package": [packageRow],
+    "Work Package Event": evidence,
+  });
+  try {
+    const model = await buildJobReadModel(
+      env(),
+      auth("field", "crew@example.com"),
+      "JOB-A",
+    );
+    assert.ok(model);
+    assert.deepEqual(model.packet.work_package?.evidence_slots, []);
+    const evidenceRequests = mock.requests.filter(
+      (request) =>
+        request.doctype === "Work Package Event" &&
+        request.fields.includes("evidence_correction_of"),
+    );
+    assert.deepEqual(
+      evidenceRequests.map((request) => request.offset),
+      [0, 100],
+    );
+  } finally {
+    mock.restore();
   }
 });
 
@@ -1986,6 +3175,28 @@ test("Frappe read allowlist never requests sensitive contact or commercial field
     FRAPPE_READ_FIELDS["Roof Job"].includes("qb_invoice_ref" as never),
     false,
   );
+  for (const financeField of [
+    "recognition_posted_at",
+    "recognition_digest",
+    "recognition_reconciliation",
+  ]) {
+    assert.equal(
+      FRAPPE_READ_FIELDS["Payment Milestone"].includes(financeField as never),
+      true,
+    );
+  }
+  for (const retainedField of ["due_date", "event_ts", "notes"]) {
+    assert.equal(
+      FRAPPE_READ_FIELDS["Payment Milestone"].includes(retainedField as never),
+      true,
+    );
+  }
+  for (const excludedField of ["raw_key", "raw_payload_hash"]) {
+    assert.equal(
+      FRAPPE_READ_FIELDS["Payment Milestone"].includes(excludedField as never),
+      false,
+    );
+  }
   for (const privateTriageField of [
     "triaged_by",
     "triaged_at",

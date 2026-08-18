@@ -12,8 +12,9 @@ import type {
   SaveOutboxActionInput,
 } from "./outbox-types";
 
-// The browser outbox is intentionally limited to field evidence and durable
-// acknowledgement/stop intents. Lifecycle changes must use a fresh online read.
+// The browser outbox is intentionally limited to field evidence, durable
+// acknowledgement/stop intents, and physical fleet observations. Lifecycle
+// changes must use a fresh online read.
 const fieldActionEndpoints: Record<OutboxActionKind, RegExp> = {
   field_checkin:
     /^\/api\/v1\/(?:jobs\/[^/?#]+\/check-ins|work-objects\/[^/?#]+\/[^/?#]+\/physical-contexts\/[^/?#]+\/[^/?#]+\/check-ins)$/,
@@ -21,9 +22,21 @@ const fieldActionEndpoints: Record<OutboxActionKind, RegExp> = {
     /^\/api\/v1\/(?:jobs\/[^/?#]+\/work-package\/acknowledgements|work-objects\/[^/?#]+\/[^/?#]+\/physical-contexts\/[^/?#]+\/[^/?#]+\/work-package\/acknowledgements)$/,
   work_package_stop:
     /^\/api\/v1\/(?:jobs\/[^/?#]+\/work-package\/stop-work|work-objects\/[^/?#]+\/[^/?#]+\/physical-contexts\/[^/?#]+\/[^/?#]+\/work-package\/stop-work)$/,
+  fleet_pre_trip_inspection: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/pre-trip-inspections$/,
+  fleet_post_trip_inspection: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/post-trip-inspections$/,
+  fleet_defect_report: /^\/api\/v1\/fleet\/assets\/[^/?#]+\/defects$/,
 };
 const WORK_PACKAGE_ID_MAX_LENGTH = 140;
 const STOP_WORK_REASON_MAX_LENGTH = 1_000;
+const FLEET_ASSET_ID_MAX_LENGTH = 140;
+const FLEET_TEXT_MAX_LENGTH = 1_200;
+const FLEET_INSPECTION_ITEM_LIMIT = 60;
+const fleetInspectionKinds = new Set<OutboxActionKind>([
+  "fleet_pre_trip_inspection",
+  "fleet_post_trip_inspection",
+]);
+const fleetItemResults = new Set(["Pass", "Fail", "Not Applicable"]);
+const fleetDefectSeverities = new Set(["Minor", "Major", "Out of Service"]);
 
 const allowedTransitions: Record<OutboxState, readonly OutboxState[]> = {
   saved_locally: ["queued"],
@@ -469,7 +482,10 @@ function assertOutboxInput(input: SaveOutboxActionInput): void {
     throw new Error("Offline field actions must use POST.");
   }
   if (input.kind !== "field_checkin" && (input.attachments?.length ?? 0) > 0) {
-    throw new Error("Work Package actions cannot include attachments.");
+    // Only the check-in rail carries media. A fleet capture is bound to the
+    // immutable manifest the Worker stores, so queuing a blob here would
+    // create a second, unverifiable evidence path.
+    throw new Error("Only field check-ins can include attachments.");
   }
   if (input.kind === "work_package_acknowledgement") {
     assertWorkPackageAcknowledgementPayload(
@@ -480,6 +496,8 @@ function assertOutboxInput(input: SaveOutboxActionInput): void {
   if (input.kind === "work_package_stop") {
     assertWorkPackageStopPayload(input.payload, input.endpoint.includes("/work-objects/"));
   }
+  if (fleetInspectionKinds.has(input.kind)) assertFleetInspectionPayload(input.payload);
+  if (input.kind === "fleet_defect_report") assertFleetDefectPayload(input.payload);
   for (const attachment of input.attachments ?? []) {
     if (!attachment.fileName.trim()) throw new Error("Every attachment needs a file name.");
   }
@@ -573,9 +591,125 @@ function assertWorkObjectScopePayload(value: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Mirror the Worker envelope exactly.
+ *
+ * A capture saved on a roadside with no signal must fail here, in front of the
+ * driver, rather than three hours later when the queue finally drains and the
+ * server rejects a shape nobody can still correct.
+ */
+function assertFleetInspectionPayload(payload: unknown): void {
+  const value = objectPayload(payload);
+  assertExactKeys(
+    value,
+    ["fleet_asset_id", "performed_at", "items"],
+    ["meter_reading", "telematics_reference"],
+    "Fleet inspection payload is invalid.",
+  );
+  assertBoundedText(value.fleet_asset_id, "Fleet Asset ID", FLEET_ASSET_ID_MAX_LENGTH);
+  assertUtcTimestamp(value.performed_at, "Inspection time");
+  if (!Array.isArray(value.items) || value.items.length < 1) {
+    throw new Error("An inspection needs at least one recorded check point.");
+  }
+  if (value.items.length > FLEET_INSPECTION_ITEM_LIMIT) {
+    throw new Error("An inspection carries at most 60 check points.");
+  }
+  value.items.forEach((row, index) => assertFleetInspectionItem(row, index + 1));
+  if (value.meter_reading !== undefined) {
+    assertNonNegativeNumber(value.meter_reading, "Meter reading");
+  }
+  if (value.telematics_reference !== undefined) {
+    assertBoundedText(
+      value.telematics_reference,
+      "Telematics reference",
+      FLEET_ASSET_ID_MAX_LENGTH,
+    );
+  }
+}
+
+function assertFleetInspectionItem(row: unknown, expectedSequence: number): void {
+  const value = objectPayload(row);
+  assertExactKeys(
+    value,
+    ["sequence", "check_point", "result"],
+    ["severity", "observation"],
+    "An inspection check point is invalid.",
+  );
+  if (value.sequence !== expectedSequence) {
+    throw new Error("Inspection check points must stay in order.");
+  }
+  if (typeof value.result !== "string" || !fleetItemResults.has(value.result)) {
+    throw new Error("An inspection check point needs a Pass, Fail, or Not Applicable result.");
+  }
+  assertBoundedText(value.check_point, "Check point", FLEET_ASSET_ID_MAX_LENGTH);
+  const severity = value.severity === undefined ? "None" : value.severity;
+  if (
+    typeof severity !== "string" ||
+    (severity !== "None" && !fleetDefectSeverities.has(severity))
+  ) {
+    throw new Error("An inspection check point severity is invalid.");
+  }
+  // A failed check point must always name its severity; a passing one must not
+  // carry one, so a device can never downgrade a real defect into a note.
+  if ((value.result === "Fail") !== (severity !== "None")) {
+    throw new Error("A failed check point needs a severity and a passing one carries none.");
+  }
+  if (value.observation !== undefined) {
+    assertBoundedText(value.observation, "Observation", FLEET_TEXT_MAX_LENGTH);
+  }
+}
+
+function assertFleetDefectPayload(payload: unknown): void {
+  const value = objectPayload(payload);
+  assertExactKeys(
+    value,
+    ["fleet_asset_id", "detected_at", "severity", "description"],
+    ["asset_inspection_id"],
+    "Defect report payload is invalid.",
+  );
+  assertBoundedText(value.fleet_asset_id, "Fleet Asset ID", FLEET_ASSET_ID_MAX_LENGTH);
+  assertUtcTimestamp(value.detected_at, "Defect time");
+  if (typeof value.severity !== "string" || !fleetDefectSeverities.has(value.severity)) {
+    throw new Error("A defect report needs a Minor, Major, or Out of Service severity.");
+  }
+  assertBoundedText(value.description, "Defect description", FLEET_TEXT_MAX_LENGTH);
+  if (value.asset_inspection_id !== undefined) {
+    assertBoundedText(value.asset_inspection_id, "Inspection ID", FLEET_ASSET_ID_MAX_LENGTH);
+  }
+}
+
+function assertExactKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+  message: string,
+): void {
+  const keys = new Set(Object.keys(value));
+  const allowed = new Set([...required, ...optional]);
+  if (required.some((key) => !keys.has(key)) || [...keys].some((key) => !allowed.has(key))) {
+    throw new Error(message);
+  }
+}
+
+function assertUtcTimestamp(value: unknown, label: string): void {
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(value) ||
+    Number.isNaN(Date.parse(value))
+  ) {
+    throw new Error(`${label} must be a UTC timestamp.`);
+  }
+}
+
+function assertNonNegativeNumber(value: unknown, label: string): void {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${label} must be a number of zero or more.`);
+  }
+}
+
 function objectPayload(payload: unknown): Record<string, unknown> {
   if (!payload || Array.isArray(payload) || typeof payload !== "object") {
-    throw new Error("Work Package action payload is invalid.");
+    throw new Error("This offline action payload is invalid.");
   }
   return payload as Record<string, unknown>;
 }

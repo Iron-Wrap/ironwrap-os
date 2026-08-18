@@ -737,7 +737,7 @@ describe("offline outbox", () => {
         payload: { work_package_id: "WP-1", blocker_reason: "Wind." },
         attachments: [{ blob: new Blob(["not allowed"]), fileName: "extra.txt" }],
       }),
-    ).rejects.toThrow("cannot include attachments");
+    ).rejects.toThrow("Only field check-ins can include attachments.");
   });
 
   it("rejects invalid state jumps and payload secrets", async () => {

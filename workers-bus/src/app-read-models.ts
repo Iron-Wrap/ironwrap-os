@@ -7,6 +7,7 @@ import { quoteRevisionApprovalBrokerConfig } from "./quote-revision-approval-bro
 import { productionScheduleApprovalBrokerConfig } from "./production-schedule-approval-broker-client.ts";
 import { productionScheduleApprovalDecisionConfig } from "./production-schedule-approval-authority.ts";
 import {
+  listFleetCustodyFrappeResource,
   listFrappeResource,
   listFrappeResourcePage,
   listOfficeEstimatorFrappeResource,
@@ -793,6 +794,130 @@ export async function activeAssignmentForJob(
   if (!validJobName(jobName)) return null;
   const assignments = await authorizedAssignments(env, auth, jobName);
   return preferredAssignment(assignments);
+}
+
+/**
+ * A Cargo Load still binds an asset to a job in every one of these states, so a
+ * driver on one of them is a real relationship to the asset. It mirrors
+ * `CARGO_LOAD_RELEASE_FENCE_STATUSES` on the Frappe side.
+ */
+const FLEET_CAPTURE_OPEN_LOAD_STATUSES = [
+  "Draft",
+  "Loaded",
+  "In Transit",
+  "Delivered",
+] as const;
+
+/**
+ * Resolve the Fleet Asset an authenticated field user may capture against.
+ *
+ * Do not trust a fleet asset identifier from the browser. Without this the rail
+ * would let any paired field session post an out-of-service defect against any
+ * vehicle in the fleet — grounding it immediately and irreversibly — or
+ * fabricate a passing pre-trip for an asset it never touched. The relationship
+ * the release fence already reads is the one that authorizes the capture:
+ * custody of the asset, or driving it on an open Cargo Load.
+ *
+ * Returns null for both "no such asset" and "not yours", so the rail cannot be
+ * used to enumerate the fleet. The Frappe command repeats this scope check
+ * under its own asset lock.
+ */
+export async function fleetAssetForFieldActor(
+  env: AppEnv,
+  auth: AuthContext,
+  assetId: string,
+): Promise<FrappeRow | null> {
+  const userId = auth.session.frappe_user_id;
+  if (auth.session.role !== "field" || !userId?.trim()) return null;
+  const asset = await resolveFleetAssetForCapture(env, assetId);
+  if (!asset) return null;
+  const holderType = text(asset.custody_holder_type);
+  if (holderType === "User" && sameUser(asset.custody_user, userId)) return asset;
+  if (holderType === "Crew") {
+    const crewProfile = text(asset.custody_crew_profile);
+    if (crewProfile && (await activeCrewProfilesForUser(env, userId)).has(crewProfile)) {
+      return asset;
+    }
+  }
+  const assetName = text(asset.name);
+  if (!assetName) return null;
+  return (await drivesFleetAsset(env, userId, assetName)) ? asset : null;
+}
+
+/**
+ * The rail addresses an asset by its business id or its Frappe name, exactly as
+ * the Frappe command's own lock does. An ambiguous match resolves to nothing.
+ */
+async function resolveFleetAssetForCapture(
+  env: AppEnv,
+  assetId: string,
+): Promise<FrappeRow | null> {
+  const byBusinessId = await listFleetCustodyFrappeResource(
+    env,
+    "Fleet Asset",
+    [["Fleet Asset", "fleet_asset_id", "=", assetId]],
+    2,
+  );
+  const rows =
+    byBusinessId.length > 0
+      ? byBusinessId
+      : await listFleetCustodyFrappeResource(
+          env,
+          "Fleet Asset",
+          [["Fleet Asset", "name", "=", assetId]],
+          2,
+        );
+  if (rows.length !== 1) return null;
+  return text(rows[0]!.name) ? rows[0]! : null;
+}
+
+async function drivesFleetAsset(
+  env: AppEnv,
+  userId: string,
+  assetName: string,
+): Promise<boolean> {
+  const openStatuses = [...FLEET_CAPTURE_OPEN_LOAD_STATUSES];
+  const [byDriverUser, authorities] = await Promise.all([
+    listFleetCustodyFrappeResource(
+      env,
+      "Cargo Load",
+      [
+        ["Cargo Load", "driver_user", "=", userId],
+        ["Cargo Load", "status", "in", openStatuses],
+      ],
+      100,
+    ),
+    listFleetCustodyFrappeResource(
+      env,
+      "Driver Authority",
+      [["Driver Authority", "driver_user", "=", userId]],
+      20,
+    ),
+  ]);
+  if (byDriverUser.some((row) => loadCarriesAsset(row, assetName))) return true;
+  // A planned load may name the authority before the driver user is recorded,
+  // so the authority this user holds is the second, equivalent binding.
+  const authorityNames = authorities
+    .filter((row) => sameUser(row.driver_user, userId))
+    .map((row) => text(row.name))
+    .filter(notNull);
+  if (authorityNames.length === 0) return false;
+  const byAuthority = await listFleetCustodyFrappeResource(
+    env,
+    "Cargo Load",
+    [
+      ["Cargo Load", "driver_authority", "in", authorityNames],
+      ["Cargo Load", "status", "in", openStatuses],
+    ],
+    100,
+  );
+  return byAuthority.some((row) => loadCarriesAsset(row, assetName));
+}
+
+function loadCarriesAsset(row: FrappeRow, assetName: string): boolean {
+  return (
+    text(row.fleet_asset) === assetName || text(row.trailer_asset) === assetName
+  );
 }
 
 /**
@@ -2836,6 +2961,37 @@ function emptyToday(
   };
 }
 
+/**
+ * The Crew Profiles this user is an active member of. Membership is re-derived
+ * from the child rows rather than trusted from the filter, so a widened Frappe
+ * response can never enlarge the caller's authority.
+ */
+async function activeCrewProfilesForUser(
+  env: AppEnv,
+  userId: string,
+): Promise<Set<string>> {
+  const memberRows = await listFrappeResource(
+    env,
+    "Crew Member",
+    [
+      ["Crew Member", "crew_user", "=", userId],
+      ["Crew Member", "active", "=", 1],
+    ],
+    100,
+    "Crew Profile",
+  );
+  return new Set(
+    memberRows.flatMap((row) => {
+      const parent = text(row.parent);
+      const valid =
+        row.parenttype === "Crew Profile" &&
+        row.parentfield === "members" &&
+        booleanValue(row.active) === true;
+      return parent && valid && sameUser(row.crew_user, userId) ? [parent] : [];
+    }),
+  );
+}
+
 async function authorizedAssignments(
   env: AppEnv,
   auth: AuthContext,
@@ -2851,23 +3007,14 @@ async function authorizedAssignments(
   }
   const userId = auth.session.frappe_user_id;
   if (!userId) return [];
-  const [direct, memberRows, workerRows] = await Promise.all([
+  const [direct, crewProfiles, workerRows] = await Promise.all([
     listFrappeResource(
       env,
       "Job Assignment",
       [...baseFilters, ["Job Assignment", "assigned_user", "=", userId]],
       100,
     ),
-    listFrappeResource(
-      env,
-      "Crew Member",
-      [
-        ["Crew Member", "crew_user", "=", userId],
-        ["Crew Member", "active", "=", 1],
-      ],
-      100,
-      "Crew Profile",
-    ),
+    activeCrewProfilesForUser(env, userId),
     !jobName
       ? listFrappeResource(
           env,
@@ -2878,16 +3025,6 @@ async function authorizedAssignments(
         )
       : Promise.resolve([]),
   ]);
-  const crewProfiles = new Set(
-    memberRows.flatMap((row) => {
-      const parent = text(row.parent);
-      const valid =
-        row.parenttype === "Crew Profile" &&
-        row.parentfield === "members" &&
-        booleanValue(row.active) === true;
-      return parent && valid && sameUser(row.crew_user, userId) ? [parent] : [];
-    }),
-  );
   const crew =
     crewProfiles.size > 0
       ? await listFrappeResource(

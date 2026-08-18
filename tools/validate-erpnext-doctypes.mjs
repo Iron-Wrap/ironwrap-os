@@ -807,6 +807,106 @@ specs.push(
     name: "Shop Order", dir: "shop_order", idField: "shop_order_id",
     requiredFields: ["shop_order_id", "roof_job", "material_takeoff", "supplier_order", "work_package", "status", "released_by", "released_at", "reserved_at", "setup_started_at", "fabrication_started_at", "quality_hold_reason", "ready_at", "handed_over_to", "handed_over_at", "handoff_evidence", "invoice_payment_milestone", "invoice_ready_at", "closed_at", "lines", "material_allocations", "operations", "yields", "inspections", "bundles"],
   },
+  {
+    name: "Fleet Asset", dir: "fleet_asset", idField: "fleet_asset_id",
+    requiredFields: ["fleet_asset_id", "asset_kind", "status", "display_name", "unit_number", "version", "make", "model", "model_year", "vin_or_serial", "licence_plate", "registration_expiry", "insurance_expiry", "required_licence_class", "meter_kind", "current_meter", "current_meter_at", "payload_capacity_kg", "gvwr_kg", "inspection_authority_source", "last_inspection", "last_inspection_at", "next_inspection_due", "next_service_due_date", "next_service_due_meter", "calibration_required", "next_calibration_due", "custody_holder_type", "custody_crew_profile", "custody_user", "custody_since", "custody_event", "out_of_service_reason", "out_of_service_at", "home_region", "notes", "supersedes", "correction_reason"],
+    fieldContracts: {
+      asset_kind: { fieldtype: "Select", options: "Vehicle\nTrailer\nEquipment\nTool", reqd: 1 },
+      status: { fieldtype: "Select", options: "Draft\nActive\nOut of Service\nRetired", default: "Draft", reqd: 1 },
+      inspection_authority_source: {
+        fieldtype: "Select",
+        options: "Physical Inspection\nTelematics",
+        default: "Physical Inspection",
+      },
+    },
+  },
+  {
+    name: "Driver Authority", dir: "driver_authority", idField: "driver_authority_id",
+    requiredFields: ["driver_authority_id", "driver_user", "status", "version", "authority_source", "licence_class", "licence_reference", "licence_issuer", "licence_expiry", "medical_expiry", "endorsements", "restriction_summary", "abstract_checked_at", "abstract_evidence", "verified_by", "verified_at", "suspended_reason", "suspended_at", "notes", "supersedes", "correction_reason"],
+    fieldContracts: {
+      driver_user: { fieldtype: "Link", options: "User", reqd: 1 },
+      authority_source: {
+        fieldtype: "Select",
+        options: "Physical Document\nTelematics",
+        default: "Physical Document",
+        reqd: 1,
+      },
+    },
+  },
+  {
+    name: "Asset Inspection Item", dir: "asset_inspection_item", child: true,
+    requiredFields: ["sequence", "check_point", "result", "severity", "observation", "evidence_item"],
+  },
+  {
+    name: "Asset Inspection", dir: "asset_inspection", idField: "asset_inspection_id",
+    requiredFields: ["asset_inspection_id", "fleet_asset", "inspection_type", "status", "result", "roof_job", "job_assignment", "cargo_load", "performed_by", "performed_at", "device_action_id", "raw_key", "source_system", "capture_actor", "evidence_item", "meter_reading", "telematics_reference", "telematics_observed_at", "defect_count", "items", "next_inspection_due", "sync_state", "verified_at", "notes", "supersedes", "correction_reason"],
+    fieldContracts: {
+      device_action_id: { fieldtype: "Data", unique: 1 },
+      inspection_type: {
+        fieldtype: "Select",
+        options: "Pre-Trip\nPost-Trip\nPeriodic\nReturn To Service",
+        reqd: 1,
+      },
+      items: { fieldtype: "Table", options: "Asset Inspection Item" },
+      sync_state: { fieldtype: "Select", reqd: 1 },
+    },
+  },
+  {
+    name: "Asset Defect", dir: "asset_defect", idField: "asset_defect_id",
+    requiredFields: ["asset_defect_id", "fleet_asset", "asset_inspection", "status", "severity", "out_of_service", "detected_at", "reported_by", "device_action_id", "raw_key", "description", "evidence_item", "containment", "maintenance_order", "repaired_by", "repaired_at", "repair_evidence", "return_to_service_inspection", "closed_by", "closed_at", "cancelled_reason", "notes"],
+    fieldContracts: {
+      device_action_id: { fieldtype: "Data", unique: 1 },
+      severity: { fieldtype: "Select", options: "Minor\nMajor\nOut of Service", reqd: 1 },
+      out_of_service: { fieldtype: "Check", default: "0" },
+    },
+  },
+  {
+    name: "Maintenance Order", dir: "maintenance_order", idField: "maintenance_order_id",
+    requiredFields: ["maintenance_order_id", "fleet_asset", "order_kind", "status", "asset_defect", "due_date", "due_meter", "scheduled_for", "provider_kind", "provider_name", "work_summary", "started_at", "performed_by", "completed_at", "meter_at_completion", "completion_evidence", "certificate_reference", "certificate_expiry", "next_due_date", "next_due_meter", "return_to_service_inspection", "cancelled_reason", "notes"],
+    fieldContracts: {
+      order_kind: { fieldtype: "Select", options: "Preventive\nCorrective\nCalibration", reqd: 1 },
+    },
+  },
+  {
+    name: "Asset Usage Log", dir: "asset_usage_log", idField: "asset_usage_log_id",
+    requiredFields: ["asset_usage_log_id", "fleet_asset", "entry_kind", "source", "status", "authoritative", "roof_job", "cargo_load", "recorded_by", "recorded_at", "device_action_id", "meter_reading", "previous_meter_reading", "distance_km", "duration_hours", "fuel_volume_l", "fuel_cost", "evidence_item", "provider_reference", "notes", "supersedes", "correction_reason"],
+    fieldContracts: {
+      device_action_id: { fieldtype: "Data", unique: 1 },
+      source: { fieldtype: "Select", options: "Physical\nTelematics", default: "Physical", reqd: 1 },
+      authoritative: { fieldtype: "Check", default: "0" },
+    },
+  },
+  {
+    name: "Cargo Load Line", dir: "cargo_load_line", child: true,
+    requiredFields: ["line_no", "line_kind", "controlled_item", "material_lot", "tool_asset", "shop_bundle_id", "description", "unit", "planned_quantity", "loaded_quantity", "delivered_quantity", "returned_quantity", "weight_kg", "scan_reference", "condition", "needs_review", "evidence_item"],
+  },
+  {
+    name: "Cargo Load", dir: "cargo_load", idField: "cargo_load_id",
+    requiredFields: ["cargo_load_id", "roof_job", "fleet_asset", "trailer_asset", "job_assignment", "work_package", "driver_authority", "driver_user", "status", "version", "custody_holder_type", "custody_crew_profile", "custody_user", "planned_weight_kg", "loaded_weight_kg", "securement_confirmed", "pre_trip_inspection", "post_trip_inspection", "loaded_by", "loaded_at", "departed_at", "delivered_at", "delivery_evidence", "returned_at", "return_evidence", "reconciled_by", "reconciled_at", "reconciliation_note", "device_action_id", "lines", "cancelled_reason", "notes", "supersedes", "correction_reason"],
+    fieldContracts: {
+      device_action_id: { fieldtype: "Data", unique: 1 },
+      status: {
+        fieldtype: "Select",
+        options: "Draft\nLoaded\nIn Transit\nDelivered\nReturned\nReconciled\nCancelled",
+        default: "Draft",
+        reqd: 1,
+      },
+      lines: { fieldtype: "Table", options: "Cargo Load Line" },
+      securement_confirmed: { fieldtype: "Check", default: "0" },
+    },
+  },
+  {
+    name: "Asset Custody Event", dir: "asset_custody_event", idField: "asset_custody_event_id",
+    requiredFields: ["asset_custody_event_id", "fleet_asset", "event_type", "status", "occurred_at", "recorded_by", "device_action_id", "from_holder_type", "from_crew_profile", "from_user", "to_holder_type", "to_crew_profile", "to_user", "roof_job", "cargo_load", "condition", "evidence_item", "notes", "supersedes", "correction_reason"],
+    fieldContracts: {
+      device_action_id: { fieldtype: "Data", unique: 1 },
+      event_type: {
+        fieldtype: "Select",
+        options: "Issue\nTransfer\nReturn\nLost\nRecovered",
+        reqd: 1,
+      },
+    },
+  },
 );
 
 const appRoot = "frappe-apps/ironwrap_roofing/ironwrap_roofing";
@@ -818,12 +918,12 @@ const discoveredDirs = readdirSync(doctypePath, { withFileTypes: true })
   .filter((dir) => existsSync(join(doctypePath, dir, `${dir}.json`)))
   .sort();
 
-assert.equal(specs.length, 68, "the product contract must contain exactly 68 DocTypes");
-assert.equal(specs.filter((spec) => spec.child).length, 17, "expected seventeen child-table DocTypes");
-assert.equal(specs.filter((spec) => !spec.child).length, 51, "expected 51 top-level DocTypes");
+assert.equal(specs.length, 78, "the product contract must contain exactly 78 DocTypes");
+assert.equal(specs.filter((spec) => spec.child).length, 19, "expected nineteen child-table DocTypes");
+assert.equal(specs.filter((spec) => !spec.child).length, 59, "expected 59 top-level DocTypes");
 assert.equal(new Set(specs.map((spec) => spec.name)).size, specs.length, "duplicate DocType name in validator");
 assert.equal(new Set(expectedDirs).size, specs.length, "duplicate DocType directory in validator");
-assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 68-type product contract");
+assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 78-type product contract");
 
 const pythonContracts = readPythonContracts();
 assert.deepEqual(
@@ -1090,4 +1190,7 @@ function validateRuntimeWiring() {
   assert.match(adapter, /def\s+deny_business_document_delete\s*\(/, "append-only delete guard is missing");
 }
 
-console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (51 top-level + 17 child)`);
+const childCount = specs.filter((spec) => spec.child).length;
+console.log(
+  `ok ${specs.length} IronWrap Frappe DocTypes validated (${specs.length - childCount} top-level + ${childCount} child)`,
+);

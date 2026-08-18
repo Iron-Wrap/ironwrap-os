@@ -41,10 +41,38 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Sales": WRITE,
         "IronWrap Support": READ,
     },
+    "Asset Custody Event": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": CREATE_OWN,
+        "IronWrap Support": READ,
+    },
+    "Asset Defect": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": CREATE_OWN,
+        "IronWrap Closeout": READ,
+        "IronWrap Support": READ,
+    },
+    "Asset Inspection": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": CREATE_OWN,
+        "IronWrap Closeout": READ,
+        "IronWrap Support": READ,
+    },
+    "Asset Usage Log": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": CREATE_OWN,
+        "IronWrap Finance": READ,
+    },
     "Automation Incident": {"IronWrap Support": WRITE},
     "Authority Record": {
         "IronWrap Production": WRITE,
         "IronWrap Estimator": READ,
+        "IronWrap Field": READ,
+        "IronWrap Closeout": READ,
+        "IronWrap Support": READ,
+    },
+    "Cargo Load": {
+        "IronWrap Production": WRITE,
         "IronWrap Field": READ,
         "IronWrap Closeout": READ,
         "IronWrap Support": READ,
@@ -103,6 +131,11 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Production": READ,
         "IronWrap Closeout": READ,
     },
+    "Driver Authority": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": READ,
+        "IronWrap Support": READ,
+    },
     "Evidence Item": {
         "IronWrap Sales": WRITE,
         "IronWrap Estimator": WRITE,
@@ -117,6 +150,12 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Production": WRITE,
         "IronWrap Field": CREATE_OWN,
         "IronWrap Closeout": READ,
+    },
+    "Fleet Asset": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": READ,
+        "IronWrap Finance": READ,
+        "IronWrap Support": READ,
     },
     "Hermes Run": {"IronWrap Support": WRITE},
     "Instant Estimate Session": {
@@ -162,6 +201,11 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Finance": READ,
         "IronWrap Closeout": READ,
         "IronWrap Support": READ,
+    },
+    "Maintenance Order": {
+        "IronWrap Production": WRITE,
+        "IronWrap Field": READ,
+        "IronWrap Finance": READ,
     },
     "Market Watch Item": {"IronWrap Support": WRITE, "IronWrap Estimator": READ},
     "Material Lot": {

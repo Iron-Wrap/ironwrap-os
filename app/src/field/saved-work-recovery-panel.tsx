@@ -139,18 +139,23 @@ export function SavedWorkRecoveryPanel({ session }: { session: AuthenticatedSess
   );
 }
 
+const actionNames: Record<OutboxAction["kind"], string> = {
+  field_checkin: "Field check-in",
+  work_package_acknowledgement: "Work Package acknowledgement",
+  work_package_stop: "Stop Work report",
+  fleet_pre_trip_inspection: "Pre-trip inspection",
+  fleet_post_trip_inspection: "Post-trip inspection",
+  fleet_defect_report: "Defect report",
+};
+
 function actionLabel(action: OutboxAction): string {
-  const jobId = jobIdFromEndpoint(action.endpoint);
-  const actionName =
-    action.kind === "work_package_acknowledgement"
-      ? "Work Package acknowledgement"
-      : action.kind === "work_package_stop"
-        ? "Stop Work report"
-        : "Field check-in";
   const workPackageId = workPackageIdFromPayload(action);
+  const assetId = fleetAssetIdFromEndpoint(action.endpoint);
+  const jobId = jobIdFromEndpoint(action.endpoint);
   return [
-    actionName,
+    actionNames[action.kind],
     workPackageId ? `package ${workPackageId}` : null,
+    assetId ? `asset ${assetId}` : null,
     jobId ? `job ${jobId}` : null,
   ]
     .filter((value): value is string => Boolean(value))
@@ -171,7 +176,15 @@ function workPackageIdFromPayload(action: OutboxAction): string | undefined {
 }
 
 function jobIdFromEndpoint(endpoint: string): string | undefined {
-  const match = endpoint.match(/^\/api\/v1\/jobs\/([^/]+)/);
+  return pathSegment(endpoint, /^\/api\/v1\/jobs\/([^/]+)/);
+}
+
+function fleetAssetIdFromEndpoint(endpoint: string): string | undefined {
+  return pathSegment(endpoint, /^\/api\/v1\/fleet\/assets\/([^/]+)/);
+}
+
+function pathSegment(endpoint: string, pattern: RegExp): string | undefined {
+  const match = endpoint.match(pattern);
   if (!match?.[1]) return undefined;
   try {
     return decodeURIComponent(match[1]);

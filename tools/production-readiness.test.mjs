@@ -352,7 +352,8 @@ const BASE_REQUIRED_D1_TABLES = [
   "facet_customer_approval_projection_attempts", "facet_design_event_identity_registry",
   "facet_design_events", "facet_design_evidence_associations", "facet_design_ingest_nonce_registry",
   "facet_design_ingest_nonces", "facet_design_projection_attempts", "field_action_media",
-  "field_actions", "field_work_package_actions", "governed_transition_outbox",
+  "field_actions", "field_work_package_actions", "fleet_asset_actions",
+  "governed_transition_outbox",
   "governed_transition_outbox_events", "governed_transitions", "heartbeat", "hermes_desktop_contexts",
   "hermes_desktop_devices", "hermes_desktop_envelopes", "hermes_desktop_events",
   "hermes_desktop_pairings", "hermes_desktop_results", "lead_ack_receipts",
@@ -1546,7 +1547,7 @@ test("contract mode rejects a self-consistent D1 allowlist that omits a migratio
     backupPath,
     backup
       .replace(",facet_design_evidence_associations", "")
-      .replace("REQUIRED_TABLE_COUNT=87", "REQUIRED_TABLE_COUNT=86"),
+      .replace("REQUIRED_TABLE_COUNT=88", "REQUIRED_TABLE_COUNT=87"),
   );
 
   const result = await validateContract({ repoRoot: root });

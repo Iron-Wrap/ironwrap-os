@@ -14,7 +14,13 @@
     "waste_factor",
     "source_ref",
     "confidence",
-    "needs_review"
+    "needs_review",
+    "calculation_digest",
+    "policy_digest",
+    "options_digest",
+    "geometry_revision",
+    "stock_mode",
+    "waste_basis"
   ],
   "fields": [
     { "fieldname": "category", "fieldtype": "Data", "in_list_view": 1, "label": "Category" },
@@ -24,7 +30,13 @@
     { "fieldname": "waste_factor", "fieldtype": "Percent", "label": "Waste Factor" },
     { "fieldname": "source_ref", "fieldtype": "Data", "label": "Source Ref" },
     { "fieldname": "confidence", "fieldtype": "Data", "label": "Confidence" },
-    { "fieldname": "needs_review", "fieldtype": "Check", "label": "Needs Review" }
+    { "fieldname": "needs_review", "fieldtype": "Check", "label": "Needs Review" },
+    { "fieldname": "calculation_digest", "fieldtype": "Data", "label": "Calculation Digest", "read_only": 1 },
+    { "fieldname": "policy_digest", "fieldtype": "Data", "label": "Policy Digest", "read_only": 1 },
+    { "fieldname": "options_digest", "fieldtype": "Data", "label": "Options Digest", "read_only": 1 },
+    { "fieldname": "geometry_revision", "fieldtype": "Data", "label": "Geometry Revision", "read_only": 1 },
+    { "fieldname": "stock_mode", "fieldtype": "Select", "label": "Stock Mode", "options": "coil\nstock", "read_only": 1 },
+    { "fieldname": "waste_basis", "fieldtype": "Small Text", "label": "Waste Basis", "read_only": 1 }
   ],
   "index_web_pages_for_search": 0,
   "istable": 1,

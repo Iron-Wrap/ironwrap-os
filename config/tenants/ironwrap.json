@@ -86,9 +86,10 @@
   },
   "estimates": {
     "instant_estimate": {
-      "non_binding": true,
+      "online_price": false,
+      "measurement_required": true,
       "review_required": true,
-      "disclaimer": "This is a non-binding budget range based on the information you provided. Final pricing requires an estimator review of measurements, access, and material selections."
+      "disclaimer": "This request does not produce an online price. An estimator must verify measurements, access, materials, and approved pricing before any quote, scope, schedule, material, or payment commitment."
     }
   },
   "proposal": {

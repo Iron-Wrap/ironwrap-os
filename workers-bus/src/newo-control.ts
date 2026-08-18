@@ -11,6 +11,11 @@ import {
   type NewoUserActorInput,
   type NewoUserActorUpdate,
 } from "./newo-client.ts";
+import {
+  assertEffectLedgerReady,
+  EffectRuntimeError,
+  runExternalEffect,
+} from "./effect-runtime.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 import {
   approveNewoControlAction as approveStoredAction,
@@ -292,7 +297,14 @@ export async function executeApprovedNewoControlAction(
   if (!claimed) throw new NewoControlError(409, "newo_control_approval_consumed_or_expired");
 
   try {
-    const providerResult = await executeProviderMutation(env, action);
+    const providerResult = await executeNewoMutationThroughRuntime(
+      env,
+      action,
+      approvalPayload.approved_by,
+      approvalReceiptHash,
+      approvalPayload.expires_at,
+      now,
+    );
     const responseJson = canonicalJson(providerResult);
     const responseHash = await sha256Hex(responseJson);
     const completedAt = new Date().toISOString();
@@ -324,6 +336,28 @@ export async function executeApprovedNewoControlAction(
       provider_result: providerResult,
     };
   } catch (error) {
+    // The universal ledger deliberately keeps an uncertain provider outcome
+    // reconcilable. Do not collapse it into a local "failed" control receipt;
+    // the owner surface must see the external uncertainty and reconcile it
+    // before another attempt can be authorized.
+    if (error instanceof EffectRuntimeError && error.code === "effect_unknown_requires_reconciliation") {
+      await recordAudit(env, {
+        automation: "newo_control",
+        trigger: "admin",
+        envelope_id: null,
+        action: `execute:${action.operation}`,
+        // The existing control-audit schema has ok/error only; preserve the
+        // universal unknown state in the error code while leaving the control
+        // action executing for reconciliation instead of marking it failed.
+        result: "error",
+        error: `unknown:${error.code}`,
+        recovery_owner: env.OWNER_ALERT_EMAIL,
+        run_id: dryPayload.action_id,
+        approved_by: approvalPayload.approved_by,
+        reason: approvalPayload.reason,
+      }).catch(() => {});
+      throw error;
+    }
     const failure = safeFailure(error);
     await failNewoControlAction(env, dryPayload.action_id, failure, new Date().toISOString()).catch(() => {});
     await recordAudit(env, {
@@ -535,6 +569,177 @@ async function executeProviderMutation(env: Env, action: NewoControlAction): Pro
       return await client.updateIncomingWebhook(action.args.webhook_id, action.args.input);
     case "webhook.incoming.delete": return await client.deleteIncomingWebhook(action.args.webhook_id);
   }
+}
+
+/**
+ * Newo control already has a signed human approval and a durable control receipt.
+ * The provider call is nevertheless one external effect, so the runtime binds
+ * that receipt to the universal ledger before dispatch.
+ */
+async function executeNewoMutationThroughRuntime(
+  env: Env,
+  action: NewoControlAction,
+  approvedBy: string,
+  approvalReceiptHash: string,
+  approvalExpiresAt: string,
+  now: Date,
+): Promise<NewoJson> {
+  const runtime = env as Env & {
+    APP_TENANT_ID?: string;
+  };
+  assertEffectLedgerReady(env);
+  const tenantId = String(runtime.APP_TENANT_ID ?? "ironwrap");
+  const args = action.args;
+  const argsHash = await actionHash(action);
+  const idempotencyKey = `newo:${action.operation}:${argsHash}`;
+  const approvalExpiryMs = Date.parse(approvalExpiresAt);
+  const deadlineAt = new Date(Math.min(
+    now.getTime() + 5 * 60_000,
+    Number.isFinite(approvalExpiryMs) ? approvalExpiryMs : now.getTime() + 5 * 60_000,
+  )).toISOString();
+  const authority = {
+    permitRef: `newo:approval:${approvalReceiptHash}`,
+    policyRef: `newo.control:${action.operation}`,
+    policyVersion: CONTROL_SCHEMA_VERSION,
+    tenantId,
+    actorType: "owner" as const,
+    actorId: approvedBy,
+    expiresAt: deadlineAt,
+    allowedActions: [action.operation],
+    maxAttempts: 1,
+  };
+  const client = new NewoApiClient(newoClientConfigFromEnv(env));
+  const result = await runExternalEffect(env as never, {
+    tenantId,
+    actor: { type: "owner", id: approvedBy },
+    taskId: `newo-control:${action.operation}`,
+    authority,
+    aggregate: { type: "newo_control_action", id: idempotencyKey, version: 0 },
+    intentId: idempotencyKey,
+    action: action.operation,
+    request: { operation: action.operation, args },
+    requestHash: argsHash,
+    provider: "newo",
+    idempotencyKey,
+    deadlineAt,
+    expectedReadback: {},
+    retryLimit: 0,
+    compensationPlan: {},
+    correlationId: idempotencyKey,
+  }, {
+    async dispatch() {
+      const value = await executeProviderMutation(env, action);
+      return {
+        outcome: "accepted" as const,
+        value,
+        providerExternalId: providerExternalId(action, value),
+        providerResponse: value,
+      };
+    },
+    async readback({ providerExternalId }) {
+      return await readbackNewoMutation(client, action, providerExternalId);
+    },
+    async replay({ effect }) {
+      const readback = await readbackNewoMutation(client, action, effect.provider_external_id);
+      if (readback.status !== "match" || readback.observed === undefined) {
+        throw new NewoControlError(502, readback.detailCode ?? "newo_replay_readback_failed");
+      }
+      return readback.observed as NewoJson;
+    },
+  }, now);
+  if (result.effect.state === "unknown") {
+    throw new EffectRuntimeError("effect_unknown_requires_reconciliation");
+  }
+  if (result.effect.state !== "succeeded" || result.value === undefined) {
+    throw new NewoControlError(502, result.effect.result_code ?? "newo_effect_not_succeeded");
+  }
+  return result.value;
+}
+
+function providerExternalId(action: NewoControlAction, value: NewoJson): string | null {
+  if (action.operation === "user_actor.update" || action.operation === "user_actor.delete") return action.args.actor_id;
+  if (action.operation === "session.update") return action.args.session_id;
+  if (action.operation === "webhook.outgoing.create" || action.operation === "webhook.incoming.create") {
+    return action.args.idn;
+  }
+  if (action.operation === "webhook.outgoing.update" || action.operation === "webhook.outgoing.delete" ||
+      action.operation === "webhook.incoming.update" || action.operation === "webhook.incoming.delete") {
+    return action.args.webhook_id;
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const key of ["id", "idn", "actor_id", "user_actor_id", "agent_actor_id", "webhook_id", "session_id"]) {
+      const candidate = (value as Record<string, unknown>)[key];
+      if (typeof candidate === "string" && candidate) return candidate;
+    }
+  }
+  return null;
+}
+
+async function readbackNewoMutation(
+  client: NewoApiClient,
+  action: NewoControlAction,
+  providerExternalId: string | null,
+): Promise<{
+  status: "match" | "conflict" | "unavailable" | "not_found";
+  observed?: unknown;
+  detailCode?: string;
+}> {
+  try {
+    if (action.operation === "agent_actor.create" && providerExternalId) {
+      const observed = await client.getAgentActor(providerExternalId);
+      return { status: "match", observed };
+    }
+    if ((action.operation === "user_actor.create" || action.operation === "user_actor.get_or_create" ||
+      action.operation === "user_actor.update") && providerExternalId) {
+      const observed = await client.getUserActor(providerExternalId);
+      return { status: "match", observed };
+    }
+    if (action.operation === "session.update" && providerExternalId) {
+      const observed = await client.getSession(providerExternalId);
+      const row = observed && typeof observed === "object" && !Array.isArray(observed)
+        ? observed as Record<string, unknown>
+        : {};
+      const observedId = row.id ?? row.session_id;
+      const matches = observedId === providerExternalId &&
+        Object.entries(action.args.input).every(([key, value]) => row[key] === value);
+      return matches
+        ? { status: "match", observed: row }
+        : { status: "conflict", observed: row, detailCode: "newo_session_readback_conflict" };
+    }
+    if (action.operation === "webhook.outgoing.create" || action.operation === "webhook.outgoing.update") {
+      const rows = await client.listOutgoingWebhooks();
+      return webhookReadback(rows, providerExternalId);
+    }
+    if (action.operation === "webhook.incoming.create" || action.operation === "webhook.incoming.update") {
+      const rows = await client.listIncomingWebhooks();
+      return webhookReadback(rows, providerExternalId);
+    }
+    if (action.operation === "user_actor.delete" && providerExternalId) {
+      try {
+        await client.getUserActor(providerExternalId);
+        return { status: "conflict", observed: { deleted: false }, detailCode: "newo_delete_readback_present" };
+      } catch (error) {
+        return /newo_api_http_404/.test(String(error))
+          ? { status: "match", observed: { deleted: true } }
+          : { status: "unavailable", detailCode: "newo_delete_readback_unavailable" };
+      }
+    }
+  } catch {
+    return { status: "unavailable", detailCode: "newo_readback_unavailable" };
+  }
+  return { status: "unavailable", detailCode: "newo_readback_not_supported" };
+}
+
+function webhookReadback(
+  rows: NewoJson,
+  providerExternalId: string | null,
+): { status: "match" | "conflict" | "unavailable" | "not_found"; observed?: unknown; detailCode?: string } {
+  if (!providerExternalId || !Array.isArray(rows)) return { status: "unavailable", detailCode: "newo_webhook_id_missing" };
+  const matches = rows.filter((value) => value && typeof value === "object" && !Array.isArray(value) &&
+    Object.values(value as Record<string, unknown>).some((candidate) => candidate === providerExternalId));
+  if (matches.length === 1) return { status: "match", observed: matches[0] };
+  if (matches.length === 0) return { status: "not_found", detailCode: "newo_webhook_readback_not_found" };
+  return { status: "conflict", observed: matches, detailCode: "newo_webhook_readback_ambiguous" };
 }
 
 function enforceExecutionPolicy(env: Env, action: NewoControlAction): void {

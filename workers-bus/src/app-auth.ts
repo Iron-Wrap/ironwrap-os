@@ -131,7 +131,7 @@ export function parseProvisionAppUser(
   if (!configuredTenant || tenantId !== configuredTenant) return { ok: false, error: "invalid_tenant" };
   if (!email) return { ok: false, error: "invalid_email" };
   if (!displayName) return { ok: false, error: "invalid_display_name" };
-  if (role !== "owner" && role !== "ops" && role !== "field") return { ok: false, error: "invalid_role" };
+  if (!authStore.isAppRole(role)) return { ok: false, error: "invalid_role" };
   if (typeof active !== "boolean") return { ok: false, error: "invalid_active" };
   if (value.frappe_user_id !== null && value.frappe_user_id !== undefined && !frappeUserId) {
     return { ok: false, error: "invalid_frappe_user_id" };
@@ -807,15 +807,62 @@ function sessionEnvelopeForUser(
     user: publicUser(user),
     tenant: publicTenant(env),
     permissions,
-    allowed_actions: user.role === "field"
-      ? ["session.logout", "today.read", "job.read.assigned", "field.checkin.create", "field.evidence.create"]
-      : ["session.logout", "today.read", "job.read", "owner.now.read"],
+    allowed_actions: sessionAllowedActions(user.role),
     csrf_token: csrfToken,
     session_expires_at: expiresAt,
     source_updated_at: sourceUpdatedAt,
     read_model_generated_at: new Date().toISOString(),
     stale_fields: [],
   };
+}
+
+function sessionAllowedActions(role: AppUserRecord["role"]): string[] {
+  if (role === "field") {
+    return [
+      "session.logout",
+      "today.read",
+      "job.read.assigned",
+      "field.checkin.create",
+      "field.evidence.create",
+      "authority.read",
+    ];
+  }
+  if (role === "sales") {
+    return [
+      "session.logout",
+      "now.read",
+      "sales.read",
+      "estimator.read",
+      "approval.read",
+      "approval.prepare",
+      "quote_revision_approval.read",
+      "quote_revision_approval.prepare",
+    ];
+  }
+  if (role === "production") {
+    return ["session.logout", "now.read", "production.read", "job.read", "authority.read"];
+  }
+  if (role === "accounting") {
+    return [
+      "session.logout",
+      "now.read",
+      "quickbooks.read",
+      "quickbooks.review",
+      "quickbooks.reconcile",
+    ];
+  }
+  return [
+    "session.logout",
+    "today.read",
+    "job.read",
+    "owner.now.read",
+    "authority.read",
+    "authority.record",
+    "authority.verify",
+    "authority.renew",
+    "authority.revoke",
+    "authority.exception",
+  ];
 }
 
 function cookieValue(cookieHeader: string | null, name: string): string | null {

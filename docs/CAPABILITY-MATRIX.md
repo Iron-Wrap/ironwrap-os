@@ -2,8 +2,8 @@
 
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
-Last verified: 2026-07-31
-Latest phase delta verified: 2026-07-31 (repository checks only)
+Last verified: 2026-08-17
+Latest phase delta verified: 2026-08-17 (reviewed IRO-36/38/41/42/43 source assembly; repository checks only, not merged, deployed, runtime-verified, business-accepted, or production-proven)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
 ## Status vocabulary
@@ -18,30 +18,89 @@ Review trigger: merged capability, changed proof, deployment, or production acce
 This file does not claim current deployment or production state. Fresh live evidence must come from
 the launch/readiness tooling and the named external authority.
 
-## Repository baseline
+## Repository evidence contract
 
-Fresh checks on 2026-08-10 against this remediation branch established:
+The documentation gate derives repository facts from the current checkout and compares them with
+this contract. CI also reads the real PWA and Worker test-run outputs, then emits a mutable receipt
+outside canonical prose. That receipt separately binds the authored source commit, pull-request
+base commit, and exact tested checkout/tree to the workflow SHA, event, refs, run, attempt, and job.
+It never upgrades merge, deployment, runtime, business acceptance, or production proof by
+implication.
 
-| Contract | Result |
-|---|---|
-| Documentation | 44 registered documents; authority, privacy paths, review metadata, and internal links validated |
-| Frappe model | 64 DocTypes: 48 top-level and 16 child |
-| Hermes policy | 8 roles validated against 179 implemented MCP tools |
-| Tenant isolation config | 2 tenant configs validated |
-| Newo release config | 5 staged tools, 31 operations, 20 production blockers represented |
-| Deployment contract | 235 checks passed, 0 failed |
-| D1 backup/restore contract | All 52 migration-defined production tables and 72 trigger bindings validated by the deployment verifier |
-| D1 migration chain | 35 migrations applied to an isolated local database |
-| PWA | 216 unit tests; typecheck, lint, build, and distribution checks passed |
-| PWA browser | Not rerun in this remediation; prior browser evidence is not current-head proof |
-| Worker | 339 tests and typecheck passed |
-| MCP | 121 tests across Frappe, bus, and Newo servers passed |
-| Frappe | 161 unit tests, Ruff, compileall, and wheel build passed |
-| Deployment/recovery tools | 74 tests passed |
-| Production Node dependencies | `npm audit --omit=dev` reported zero known vulnerabilities for app, Worker, and all three MCP packages |
+<!-- capability-evidence-contract:start -->
 
-These are branch-local repository facts, not exact-commit CI, deployed, runtime, business-accepted,
-or production-proven facts. CI must repeat them against the committed head.
+```json
+{
+  "schema": "ironwrap_capability_contract_v1",
+  "expected": {
+    "frappe_doctypes": {
+      "total": 68,
+      "top_level": 51,
+      "child": 17
+    },
+    "d1_migrations": {
+      "count": 45,
+      "latest": "0045_authority_record_actions.sql"
+    },
+    "tests": {
+      "pwa": 363,
+      "worker": 579
+    }
+  },
+  "proof_state_policy": {
+    "source": "derive_per_receipt",
+    "local_tests": "observe_separately",
+    "ci": "observe_separately",
+    "merge": "never_infer",
+    "deploy": "never_infer",
+    "runtime": "never_infer",
+    "business_acceptance": "never_infer",
+    "production_proof": "never_infer"
+  }
+}
+```
+
+<!-- capability-evidence-contract:end -->
+
+The expected counts change only with the same reviewed source change that adds or removes the
+underlying contract. A mismatch fails documentation validation. The generated receipt is an
+exact-source and tested-checkout repository/CI observation, not a release permit.
+
+### Machine release admission
+
+IRO-41 branch-local implementation:
+
+- a protected-PR `workflow_run` contract uses generation N enforcement from the PR base, binds the
+  exact PR/head/base/merge tree and CI run/check IDs, publishes exact-digest candidate artifacts to
+  an independently permissioned issuer trigger, waits for the acknowledged issuer run's signed
+  review/full-surface evidence, and rejects unresolved P0/P1 findings;
+- one aggregate artifact binds Worker, PWA, and Frappe component identities; isolated staging must
+  prove config/secret-name readback, authenticated smoke, content-complete D1 restore, and the prior
+  Worker operating against migrated schema before a short-lived permit can be assembled;
+- the durable D1 ledger provides atomic policy genesis/CAS, single-use permit admission, and
+  immutable success/rollback receipts; a migration failure after source merge records a distinct
+  recovery-required outcome without claiming a D1 rollback; production promotion and rollback bind
+  exact Worker/PWA, Frappe adapter, provider, recovery, and post-smoke/post-rollback readbacks; and
+- release policy hashing includes the executable CI/deploy/permit/promotion boundary, so candidate
+  source cannot approve weakening that boundary for its own release.
+
+External proof remains required for the installed predecessor enforcer, protected-branch behavior,
+independent HTTPS review/evidence issuer and publication authority, GitHub secret inventory,
+authenticated Frappe release adapter, isolated
+staging credentials/readiness, production DNS/readiness, provider mutations, genuine IRO-7 actor
+and business receipts, automatic merge, durable provider readback, and a complete rollback-capable
+production run. Repository tests do not satisfy any of those live states.
+
+The checked-in staging contract is intentionally fail-closed today: its named environment omits
+`ESTIMATOR_PRICE_LIST_JSON` and `PROPOSAL_TEMPLATE_DOC_ID`, its notification sender/recipient values
+are empty, and required notification/OCR secret presence has no live readback in this branch. The
+release preflight reports those exact blockers before migration/upload; it does not disable the
+capabilities or treat a red `/ready` result as acceptable.
+
+The governed workflow also treats a provider command with a lost or nonzero response as unknown
+until active-deployment readback resolves it. Failed post-deploy staging runs restore the captured
+previous revision and emit a cleanup-only receipt; production recovery attempts rollback whenever
+production promotion ran, then requires exact Worker, PWA, Frappe, health, and readiness proof.
 
 ## Implemented substrate
 
@@ -59,6 +118,23 @@ Implemented:
 - Idempotency and approval ledgers.
 - Backup/restore contracts with fail-closed target selection and immutable completion markers.
 
+IRO-38 branch-local side-effect substrate:
+
+- Migration `0042_external_effect_runtime.sql` adds one provider-neutral effect, append-only
+  attempt/event, and exception ledger. The Worker runtime binds stable business idempotency to
+  per-attempt identities, leases provider execution, requires authoritative readback before
+  success, leaves unknown outcomes unretryable until reconciliation, and starts compensation as
+  a separately auditable effect.
+- Worker adapters for Frappe, Google, JobNimbus, Newo, Postiz, QuickBooks, customer acceptance,
+  Facet projection, field evidence, and Work Package actions use this ledger when the deployed
+  `EFFECT_RUNTIME_ENABLED=true` boundary is available; otherwise mutation adapters fail closed.
+  QuickBooks Pending projection retains its dedicated issuer authority and verifies material
+  fields through the issuer-scoped readback command before the effect can succeed.
+- Writable ERPNext MCP processes require Worker claim/settle configuration. The MCP retains its
+  Frappe credentials and provider call; the Worker owns the durable lease and settlement state.
+  This branch has repository tests for the remote claim/provider/readback/settle sequence, but no
+  live provider, deployment, or business-acceptance proof.
+
 Missing for autonomous target:
 
 - general event/transition envelope across every company aggregate;
@@ -74,7 +150,8 @@ Implemented model families:
 - measurement, roof area, visual model, evidence, field check-in;
 - takeoff, supplier quote/order, price rule, quote, option, scope;
 - contract acceptance, customer decision, change order, insurance supplement;
-- production gate, crew, assignment, safety plan/acknowledgement, job compliance;
+- production gate, crew, assignment, safety plan/acknowledgement, job compliance, and individually
+  versioned Authority Record;
 - payment milestone, completion, warranty, review request;
 - communication consent/event;
 - versioned Work Package, step, hold point, and immutable Work Package event records;
@@ -90,11 +167,10 @@ Material target gaps:
 - work centre, machine, tooling, route/operation, calibration, maintenance, downtime;
 - receiving inspection, first-piece/in-process/final inspection, NCR, quarantine, disposition;
 - vehicle, trailer, driver, carrier status, inspection, maintenance, collision, cargo;
-- complete multi-worker work-package acknowledgement, physical evidence-slot enforcement, and
-  production-proven independent hold release;
+- production-proven physical evidence-slot capture and independent hold release across real devices;
 - safety incident/near miss/property event distinct from automation incidents;
 - controlled assembly/manufacturer document/technical bulletin/recall/claims substantiation;
-- permit/code/authority object with effective/revocation checks;
+- complete jurisdiction rules and live issuer readback continuity for Authority Records;
 - invoice/holdback/refund/filing/payroll mirrors and provider reconciliation;
 - service case, complaint, callback diagnosis, responsibility, remedy, and recovery;
 - insurance policy/claim, legal hold, continuity exercise, and audit finding.
@@ -109,14 +185,26 @@ Implemented:
 - Frappe, bus, and Newo boundaries.
 - versioned deterministic lead-triage shadow evaluation with an adversarial corpus; it is
   informational only and cannot issue a receipt, activate policy, reach a route, or write a record.
+- default-off owner/ops desktop text pilot with separate one-time fragment pairing, a device-bound
+  15-minute `task_envelope_v1`, and exactly three fixed read/draft MCP tools for
+  `lead_follow_up_draft` handoff.
 
 Current constraint:
 
 - most consequential Frappe writes require a human approval receipt;
+- the shared effect runtime is an execution/reconciliation substrate, not a grant of autonomous
+  business authority; policy, approval, provider evidence, and human boundaries remain required;
+- an unknown or conflicting provider result remains reconciliation/manual-exception work and is
+  never blindly retried; the ledger does not establish accounting truth;
 - a `shadow_eligible` lead-triage result still requires the existing human approval receipt;
 - customer communication is generally record-only;
-- routine autonomous external supplier, customer, accounting, regulator, and machine side effects
-  are not present.
+- desktop-native Gmail, Outlook, Calendar, Drive, OneDrive, Teams, and Slack observations are
+  optional untrusted read/draft context; connector credentials never enter IronWrap;
+- desktop submission stops at a handoff to `dry_run_communication_event`; a separate human approval
+  receipt is still required before `request_record_communication_event` records Draft or Blocked;
+- desktop Facet, capture, and vision workflows are deferred;
+- routine autonomous external supplier, customer, accounting, regulator, and machine authority
+  policies are not present; IRO-38 does not claim those target capabilities.
 
 Target changes:
 
@@ -144,7 +232,8 @@ Implemented surfaces:
 
 Target gaps:
 
-- exact versioned human work package with step/hold-point/evidence slots;
+- real-device acceptance of versioned multi-worker packages, offline completion, evidence-slot
+  capture, and independent hold release;
 - shop floor, warehouse, receiving, inventory, counter sale, and delivery;
 - employee/competency/training and subcontractor clearance;
 - fleet/equipment inspection and maintenance;
@@ -184,7 +273,7 @@ Target gaps:
 | Domain | Current state | Autonomous target gap | Proof required |
 |---|---|---|---|
 | Governance | Target prose and owner role | corporate/delegation/policy objects and activation separation | policy change audit |
-| Legal/licence | job compliance authority records with effective/expiry/revocation fences and owner-attributed waivers | full authority register, jurisdiction rules, and issuer integration | issuer recheck and blocked release |
+| Legal/licence | tenant-scoped, individually versioned Authority Records for Person/Organization Worker/Subcontractor subjects, issuer/jurisdiction/evidence hashes, effective/expiry, verification, revocation, contradiction, and supersession; schedule, Work Package, and shop release consumers resolve exact current versions | complete jurisdiction rules and live issuer integration/readback reconciliation | issuer recheck and blocked release |
 | Marketing | lead source + market watch | claims ledger, campaign side effects, suppression | unsupported claim rejected |
 | Lead intake | Strong implemented spine | all real sources cut over and bridge retirement | real dual-brand lead, reconcile |
 | Consent/comms | consent/event records and policy checks | autonomous provider send and response/suppression loop | opt-in/send/reply/STOP/reconcile |
@@ -193,19 +282,19 @@ Target gaps:
 | Design | scope/options/quote evidence | controlled assemblies, details, bulletins, engineer/permit | system/version conflict block |
 | Estimate | takeoff/price/quote/revision | complete shop/labour/equipment/risk costing | estimate-to-actual closed job |
 | Contract | Partial: email-bound, single-use click-to-accept evidence pinned to an approved quote, proposal pack, and canonical terms snapshot | correct agreement selection, cancellation, legal/commercial e-sign determination, authority, and live business proof | residential/commercial scenarios |
-| Preconstruction | seven gates plus current Crew/Safety/Access authority fences, including owner-attributed waivers | complete multi-domain readiness and issuer-backed freshness | stale permit/WCB/weather injection |
+| Preconstruction | seven gates plus current Crew/Safety/Access Authority Record links and owner-attributed waivers; legacy Crew Profile summaries remain projections only | complete multi-domain readiness and live issuer-backed freshness | stale permit/WCB/weather injection |
 | Procurement | Partial: supplier quote/order records plus signed internal transmission, evidence-backed acknowledgement, and receipt/shortage conservation facts; `Ordered` is internal only | vendor onboarding, direct supplier transmission/acknowledgement, substitution, three-way match, provider reconciliation | duplicate/short/backorder test |
 | Inventory | Partial: signed controlled-item approval, lot receipt/reservation, and reconciled shop yield/remnant/scrap lineage | bin/count/valuation plus physical use and reconciliation | receive-reserve-use-yield-reconcile |
 | Shop | Partial: signed release, reservation, setup route, independent first-piece/final QC, yield, labeled bundles, custody handover, and provider-mirror billing-basis readiness | cutting/fabrication event capture, work-centre tooling/maintenance, physical dispatch proof, and live reconciliation | physical synthetic/real shop batch including handover and billing basis |
 | Scheduling | assignment and approval ledger | complete constraint solver and autonomous reschedule | conflict/weather/material test |
-| Human field work | assignment-scoped Work Package, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
+| Human field work | assignment-scoped Work Package with exact Authority Record requirements, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
 | Safety | plan/acknowledgement plus Crew Profile competence, WCB, equipment, and active-stop release fences | individual equipment/incident/rescue registers and real-world proof | stop/emergency drill |
 | Quality | Partial: signed independent first-piece/final inspection, Quality Hold, NCR/quarantine, and verified evidence | ITP, disposition workflow, and live proof | seeded defect containment and final-inspection regression |
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |
 | Closeout | completion/warranty/review records | inspection, as-built, registration, accounting and archive loop | real closeout and recovery |
 | Warranty/service | warranty packet | service case, diagnosis, responsibility, remedy, recovery | callback end to end |
 | Finance | Partial: raw-backed immutable QuickBooks webhook identity ledger and Pending reconciliation work; no webhook-only provider payment, posting, or reconciliation truth | authenticated provider detail, provider-issued invoice/holdback/payment/refund/tax/payroll contracts, and accountant-approved reconciliation | provider sandbox, linked mirror, and accountant signoff |
-| Workforce | crew/assignment plus current competence and WCB summary controls | individual worker authority, HR, apprenticeship, time, accommodation | worker lifecycle |
+| Workforce | Crew Profile/Crew Member projections plus individually versioned worker/subcontractor competency, trade, WCB, permit, inspection, insurance, and manufacturer Authority Records consumed by schedule/field/shop gates | HR, apprenticeship, time, accommodation, and live issuer readback continuity | worker lifecycle |
 | Fleet/equipment | none | asset/driver/inspection/maintenance/cargo/incident | unsafe asset release blocked |
 | Facility | deployment infra only | shop/building/fire/security/environmental operations | facility inspection/drill |
 | Privacy/security | strong technical controls, consent; production dependency audit clear | complete data inventory, DSAR, breach, retention/destruction; resolve or explicitly accept dev-toolchain advisories | restore, breach, access, production-audit tests |

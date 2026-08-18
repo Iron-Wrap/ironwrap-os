@@ -18,6 +18,7 @@ const CHECKS = {
   customer_portal_configuration: true,
   production_schedule_configuration: true,
   public_estimate_configuration: true,
+  measurement_ocr_configuration: true,
   newo_enabled: false, // the deliberate production gate
   newo_webhook_credentials: true,
   newo_api_authentication: true,

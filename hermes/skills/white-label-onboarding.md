@@ -19,7 +19,7 @@ a second shop runs on the same product without mixing customers.
 ## Procedure
 1. Clone an existing tenant config to `config/tenants/<new-tenant>.json` and edit brand, geography, service areas, suppliers, gates, and market-defense set. Reference secrets by env var name only; never inline a secret value.
 2. Run `node tools/validate-tenant-config.mjs`. It must pass: required areas present, quiet hours
-   sane, CASL consent required, instant estimate non-binding and review-required, every
+   sane, CASL consent required, public intake price-free and review-required, every
    schema-required production gate present, the implemented agent approval policy, no
    secret-looking strings, unique tenant id, and non-overlapping sender domains.
 3. Follow `docs/WHITE-LABEL-CLONE-PLAYBOOK.md` to provision the isolated stack: one plain Frappe

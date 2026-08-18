@@ -262,8 +262,8 @@ deploy/backup-to-r2.sh
 `workers-bus/node_modules/.bin/wrangler` 4.x version and an exact generated config for account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It performs `d1 export --remote`, imports the SQL into an
-isolated SQLite file, runs integrity checks, and requires all 52 production tables and 72 named
-trigger-to-table bindings before packaging, encrypting, uploading immutably, and remotely
+isolated SQLite file, runs integrity checks, and requires all 58 production tables, 95 indexes,
+and 86 named trigger-to-table bindings before packaging, encrypting, uploading immutably, and remotely
 checking the generation. It prints the
 exact committed `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Do not list-and-select latest in
 a script, infer a prefix, or restore a generation without `IRONWRAP-D1-BACKUP-COMPLETE`.
@@ -278,14 +278,14 @@ The D1 script applies the same commit protocol with its D1-specific marker. Rete
 expired marker first and keeps its encrypted archive/checksum for one additional hour, so a
 restore cannot observe a committed marker after its data was deleted.
 
-The D1 required-table allowlist is release state, not a static assumption. Its current 52 tables
+The D1 required-table allowlist is release state, not a static assumption. Its current 58 tables
 include the QuickBooks, customer-acceptance, Newo, measurement, Facet evidence/association, approval,
 governed-transition, and field Work Package ledgers. The readiness checker derives the complete
 table and trigger inventory from the migration chain and requires both recovery scripts to match it
 exactly. Every migration that adds persistent state therefore fails the deployment contract until
 both scripts and executable recovery tests advance with it.
 
-The 72 required trigger bindings include source-count validation, immutable lead-ack receipts,
+The 86 required trigger bindings include source-count validation, immutable lead-ack receipts,
 customer acceptance, Facet identity/nonce/evidence ledgers, all three approval ledgers, and the
 governed-transition outbox. In particular,
 the approval-request binding trigger must reject `UPDATE` with
@@ -313,7 +313,7 @@ deploy/restore-d1-from-r2.sh
 
 The script verifies ciphertext checksum before decryption, validates the exact source manifest,
 imports into isolated SQLite, checks integrity, and records a local row count for every required
-table plus the exact 72 trigger-to-table bindings. It also checks the receipt trigger SQL for
+table plus the exact 95-index inventory and 86 trigger-to-table bindings. It also checks the receipt trigger SQL for
 the required `BEFORE UPDATE` / `BEFORE DELETE` abort semantics. It deletes its plaintext
 workspace on success, failure, or signal.
 

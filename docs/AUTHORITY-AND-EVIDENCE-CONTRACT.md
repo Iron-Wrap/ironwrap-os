@@ -2,7 +2,7 @@
 
 Status: canonical
 Owner: IronWrap OS product owner
-Last verified: 2026-07-30
+Last verified: 2026-08-17
 Review trigger: any new actor, tool, side effect, state transition, or physical workflow
 
 ## Binding assumption
@@ -137,13 +137,24 @@ file, or another system's mutable status alone.
 | `source` | raw form, provider webhook, signed contract, supplier acknowledgement | original bytes or authenticated provider reference, timestamp, hash |
 | `derived` | roof graph, estimate, schedule, compliance decision | source refs, algorithm/policy version, deterministic inputs |
 | `physical` | site photo, scan, machine telemetry, delivery receipt | device/actor, capture time, job binding, integrity hash |
-| `authority` | licence, permit, WCB clearance, credential, consent | issuer, subject, scope, effective/expiry, status |
+| `authority` | tenant-scoped Authority Record for a Person/Organization Worker/Subcontractor, licence, permit, WCB clearance, credential, inspection, or manufacturer record | immutable version, issuer/jurisdiction/source reference, subject and exact scope, evidence refs plus SHA-256 hashes, effective/expiry, verification/readback, revocation, contradiction, and supersession |
 | `financial` | proper invoice, bank receipt, accounting entry | source system, amount/currency, entity, immutable external ID |
 | `decision` | customer selection, owner capital decision, worker stop | authenticated decision-maker, options presented, timestamp |
 | `negative` | failed inspection, rejected permit, no consent, unsafe weather | authoritative source, reason, observed time |
 
 Evidence is immutable. Corrections create a new item linked to the superseded item; they do not
 overwrite history.
+
+Authority mutations use one governed proof chain: an authenticated Owner/Production request enters
+one tenant-scoped D1 action, and the separately authenticated executor binds the exact command,
+authority version, evidence, and (where required) genuine issuer receipt before applying it through
+the exact Frappe business actor,
+reads the material Frappe record back, verifies its state digest and all bound fields, and only then
+records the terminal D1 receipt. A browser session may request or observe the action but cannot mint
+an issuer readback or set an applied result. Frappe `System Manager` is an administrative capability,
+not business verification authority: lifecycle verification is restricted to the mapped `IronWrap
+Owner` or `IronWrap Production` role. External, legal, and professional authority remains with the
+genuine issuer and blocks release when its readback is missing, stale, contradictory, or mismatched.
 
 ## Evidence freshness
 
@@ -237,6 +248,15 @@ The current repository uses reviewed dry-run and signed approval receipts for ma
 the safe implemented baseline. The autonomous target may replace routine human approval with a
 policy-issued machine authority receipt only after the corresponding capability is implemented and
 independently proven. Legal/customer/physical signoffs remain human where required.
+
+Software release authority is generation-bound. The protected predecessor policy and executable
+enforcer must validate the exact PR, CI run/check identities, independent findings, complete
+manifest, isolated staging/recovery proof, provider reconciliation, and business-evidence
+references before issuing a short-lived single-use permit. Candidate policy cannot authorize its
+own weakening. Source admission, provider promotion, post-smoke readback, durable success, durable
+rollback, and post-admission recovery-required state are separate receipts. An unknown, drifted,
+expired, replayed, or unresolved P0/P1 state stops the transition; a partial/unknown migration may
+not be described as rollback.
 
 ## Segregation of duties
 

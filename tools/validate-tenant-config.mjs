@@ -109,7 +109,8 @@ for (const { file, doc } of tenants) {
 
   const instant = doc.estimates?.instant_estimate;
   assert.ok(instant, `${file} missing estimates.instant_estimate`);
-  assert.equal(instant.non_binding, true, `${file} instant_estimate.non_binding must be true`);
+  assert.equal(instant.online_price, false, `${file} instant_estimate.online_price must be false`);
+  assert.equal(instant.measurement_required, true, `${file} instant_estimate.measurement_required must be true`);
   assert.equal(instant.review_required, true, `${file} instant_estimate.review_required must be true`);
   assert.ok(typeof instant.disclaimer === "string" && instant.disclaimer.length > 0, `${file} instant_estimate.disclaimer must be non-empty`);
 

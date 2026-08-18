@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { test } from "node:test";
+import { after, mock, test } from "node:test";
 
 import worker from "../src/index.ts";
 import { handleCustomerPortalLinks } from "../src/customer-portal.ts";
 import type { AppEnv, AuthContext } from "../src/app-types.ts";
 
 const NOW = "2026-07-16T10:00:00.000Z";
+
+mock.timers.enable({ apis: ["Date"], now: new Date(NOW) });
+after(() => mock.timers.reset());
 
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
@@ -146,13 +149,13 @@ function owner(): AuthContext {
   };
 }
 
-// The issue route validates expires_at against the real wall clock (a window of
-// PORTAL_MIN_TTL_MS..PORTAL_MAX_TTL_MS from now), so this must stay relative to
-// now. An absolute instant here silently rots into a 400 invalid_expiry.
 const ISSUE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const ISSUE_EXPIRES_AT = new Date(
+  new Date(NOW).getTime() + ISSUE_TTL_MS,
+).toISOString();
 
 function issueRequest(
-  expiresAt = new Date(Date.now() + ISSUE_TTL_MS).toISOString(),
+  expiresAt = ISSUE_EXPIRES_AT,
 ): Request {
   return new Request("https://app.example.com/api/v1/customer-portal/links", {
     method: "POST",

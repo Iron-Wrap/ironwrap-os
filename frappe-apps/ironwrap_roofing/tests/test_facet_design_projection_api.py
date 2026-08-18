@@ -10,7 +10,6 @@ import time
 import types
 import unittest
 from contextlib import contextmanager
-from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
@@ -51,9 +50,10 @@ class FakeNonceCache:
 
 
 class FakeDocument(dict):
-    def __init__(self, values: dict, on_insert) -> None:
+    def __init__(self, values: dict, on_insert, on_save=None) -> None:
         super().__init__(values)
         object.__setattr__(self, "_on_insert", on_insert)
+        object.__setattr__(self, "_on_save", on_save)
 
     def __getattr__(self, name: str):
         try:
@@ -61,10 +61,25 @@ class FakeDocument(dict):
         except KeyError as exc:
             raise AttributeError(name) from exc
 
+    def __setattr__(self, name: str, value) -> None:
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+        else:
+            self[name] = value
+
     def insert(self) -> None:
-        identity = self.get("evidence_id") or self.get("reconciliation_id")
+        identity = (
+            self.get("customer_quote_id")
+            or self.get("evidence_id")
+            or self.get("reconciliation_id")
+        )
         self["name"] = identity
         self._on_insert(self)
+
+    def save(self) -> None:
+        if self._on_save is None:
+            raise AssertionError("document is not persisted")
+        self._on_save(self)
 
 
 class FakeDb:
@@ -83,8 +98,11 @@ class FakeDb:
             job = self.fixtures["job"]
             return [dict(job)] if job.get("roof_job_id") == value else []
         if "`tabCustomer Quote`" in normalized:
-            quote = self.fixtures["quote"]
-            return [dict(quote)] if quote.get("customer_quote_id") == value else []
+            return [
+                dict(quote)
+                for quote in self.fixtures["quotes"]
+                if quote.get("roof_job") == value
+            ]
         if "`tabEvidence Item`" in normalized:
             return [
                 dict(item)
@@ -102,38 +120,83 @@ class FakeDb:
 
 class FacetDesignProjectionApiTests(unittest.TestCase):
     @staticmethod
-    def fixture_claim() -> dict:
-        return {
-            "event_id": "facet-event-0001",
-            "tenant_id": "ironwrap",
-            "facet_project_id": "facet-project-0001",
-            "design_revision_id": f"facet-json-v1:{'a' * 64}",
-            "design_revision_sha256": "a" * 64,
-            "frozen_evidence_sha256": "b" * 64,
-            "raw_key": "facet-design/v1/facet-event-0001.json",
-            "raw_sha256": "c" * 64,
-            "raw_content_length": 512,
-            "occurred_at": "2026-07-31T12:00:00.000Z",
-            "received_at": "2026-07-31T12:01:00.000Z",
-            "roof_job_id": "roof-job-0001",
-            "customer_quote_id": "customer-quote-0001",
-        }
+    def canonical(payload: dict) -> str:
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
     @classmethod
-    def customer_approval_claim(cls) -> dict:
-        return {
-            **cls.fixture_claim(),
-            "event_type": "facet.design.customer_approved.v2",
-            "schema_version": 2,
+    def claim(cls, **overrides) -> dict:
+        event_id = "44444444-4444-4444-8444-444444444444"
+        project_id = "11111111-1111-4111-8111-111111111111"
+        source_tenant = "22222222-2222-4222-8222-222222222222"
+        values = {
+            "approval_receipt_id": "33333333-3333-4333-8333-333333333333",
+            "approval_receipt_sha256": "d" * 64,
+            "association_sha256": "",
             "brand_id": "ironwrap",
-            "approval_actor_type": "customer_capability",
-            "capability_fingerprint": "d" * 64,
-            "identity_assurance": "bearer_capability_only",
-            "raw_key": "facet-design/v2/facet-event-0001.json",
+            "customer_party_ref": "a" * 64,
+            "customer_quote_id": "customer-quote-0001",
+            "decision_kind": "approved",
+            "design_revision_id": f"facet-json-v1:{'e' * 64}",
+            "design_revision_sha256": "e" * 64,
+            "destination_tenant_id": "ironwrap",
+            "event_id": event_id,
+            "event_type": "facet.design.customer_approved.v2",
+            "external_customer_identity_link_id": f"facet-customer-oidc-v1:{'f' * 64}",
+            "external_project_link_id": f"ironwrap-project-v1:{'2' * 64}",
+            "facet_project_id": project_id,
+            "frozen_evidence_sha256": "c" * 64,
+            "identity_assurance": "oidc",
+            "occurred_at": "2027-01-15T08:00:00.000Z",
+            "oidc_issuer": "https://accounts.google.com",
+            "oidc_subject_sha256": "b" * 64,
+            "previous_event_id": None,
+            "producer_identity_link_id": f"ironwrap-identity-v1:{'3' * 64}",
+            "raw_content_length": 512,
+            "raw_key": f"facet-design/v2/raw/{'9' * 64}.json",
+            "raw_sha256": "9" * 64,
+            "reason_sha256": None,
+            "received_at": "2027-01-15T08:00:01.000Z",
+            "roof_job_id": "roof-job-0001",
+            "schema_version": 2,
+            "source_environment": "production",
+            "source_issuer": "facet",
+            "source_tenant_id": source_tenant,
         }
+        values.update(overrides)
+        association = {
+            "brand_id": values["brand_id"],
+            "customer_party_ref": values["customer_party_ref"],
+            "customer_quote_id": values["customer_quote_id"],
+            "destination_tenant_id": values["destination_tenant_id"],
+            "external_customer_identity_link_id": values[
+                "external_customer_identity_link_id"
+            ],
+            "external_project_link_id": values["external_project_link_id"],
+            "facet_project_id": values["facet_project_id"],
+            "producer_identity_link_id": values["producer_identity_link_id"],
+            "roof_job_id": values["roof_job_id"],
+            "source_tenant_id": values["source_tenant_id"],
+        }
+        if not overrides.get("association_sha256"):
+            values["association_sha256"] = hashlib.sha256(
+                cls.canonical(association).encode()
+            ).hexdigest()
+        return values
 
     @staticmethod
     def fixtures() -> dict:
+        source = {
+            "name": "QUOTE-001",
+            "customer_quote_id": "customer-quote-0001",
+            "roof_job": "JOB-001",
+            "customer": "CUSTOMER-001",
+            "quote_version": 2,
+            "status": "Approved",
+            "contract_acceptance": None,
+            "accepted_at": None,
+            "price_book_version": "source-price-book",
+            "quote_total": 42_000,
+        }
         return {
             "job": {
                 "name": "JOB-001",
@@ -141,14 +204,7 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
                 "brand": "ironwrap",
                 "quotation": "QUOTE-001",
             },
-            "quote": {
-                "name": "QUOTE-001",
-                "customer_quote_id": "customer-quote-0001",
-                "roof_job": "JOB-001",
-                "status": "Approved",
-                "price_book_version": "not-read-by-projection",
-                "quote_total": "not-read-by-projection",
-            },
+            "quotes": [source],
             "evidence": [],
             "reconciliations": [],
         }
@@ -159,23 +215,31 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
         *,
         session_user: str = SERVICE_USER,
         roles: list[str] | None = None,
-        has_permission: bool = True,
+        permission: bool = True,
         request_method: str = "POST",
-        configured_user: str | None = SERVICE_USER,
-        configured_hmac_key: str = HMAC_KEY,
+        hmac_key: str = HMAC_KEY,
     ):
         fixtures = fixtures or self.fixtures()
         db = FakeDb(fixtures)
         cache = FakeNonceCache()
-        issuance_calls: list[tuple[dict, dict]] = []
+        issuance_calls: list[tuple[dict, dict, dict | None, dict | None]] = []
 
         @contextmanager
-        def facet_design_projection_issuance_context(evidence, reconciliation):
-            issuance_calls.append((dict(evidence), dict(reconciliation)))
+        def facet_design_projection_issuance_context(
+            evidence, reconciliation, quote=None, invalidated_quote=None
+        ):
+            issuance_calls.append(
+                (
+                    dict(evidence),
+                    dict(reconciliation),
+                    dict(quote) if quote is not None else None,
+                    dict(invalidated_quote) if invalidated_quote is not None else None,
+                )
+            )
             yield
 
-        validation_module = types.ModuleType("ironwrap_roofing.document_validation")
-        validation_module.facet_design_projection_issuance_context = (
+        validation = types.ModuleType("ironwrap_roofing.document_validation")
+        validation.facet_design_projection_issuance_context = (
             facet_design_projection_issuance_context
         )
         frappe_module = types.ModuleType("frappe")
@@ -184,17 +248,17 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
         frappe_module.db = db
         frappe_module.cache = lambda: cache
         frappe_module.conf = {
-            "ironwrap_facet_design_projection_service_user": configured_user,
-            "ironwrap_facet_design_projection_hmac_key": configured_hmac_key,
+            "ironwrap_facet_design_projection_service_user": SERVICE_USER,
+            "ironwrap_facet_design_projection_hmac_key": hmac_key,
         }
         frappe_module.session = types.SimpleNamespace(user=session_user)
         frappe_module.request = types.SimpleNamespace(method=request_method, headers={})
         frappe_module.get_roles = lambda _user: (
             roles if roles is not None else [FACET_DESIGN_PROJECTION_SERVICE_ROLE]
         )
-        frappe_module.has_permission = lambda *args, **kwargs: has_permission
+        frappe_module.has_permission = lambda *args, **kwargs: permission
         frappe_module.utils = types.SimpleNamespace(
-            now_datetime=lambda: "2026-07-31 12:02:00"
+            now_datetime=lambda: "2027-01-15 08:00:02"
         )
         frappe_module.whitelist = lambda: lambda function: function
 
@@ -204,14 +268,38 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
         frappe_module.throw = throw
 
         def on_insert(document: FakeDocument) -> None:
-            if document["doctype"] == "Evidence Item":
+            if document["doctype"] == "Customer Quote":
+                fixtures["quotes"].append(dict(document))
+            elif document["doctype"] == "Evidence Item":
                 fixtures["evidence"].append(dict(document))
             elif document["doctype"] == "Integration Reconciliation":
                 fixtures["reconciliations"].append(dict(document))
             else:
                 raise AssertionError(f"unexpected document: {document['doctype']}")
 
-        frappe_module.get_doc = lambda values: FakeDocument(dict(values), on_insert)
+        def get_doc(values, name=None):
+            if isinstance(values, dict) and name is None:
+                return FakeDocument(dict(values), on_insert)
+            if values == "Customer Quote" and isinstance(name, str):
+                stored = next(
+                    (
+                        quote
+                        for quote in fixtures["quotes"]
+                        if quote.get("name") == name
+                    ),
+                    None,
+                )
+                if stored is None:
+                    raise AssertionError(f"missing Customer Quote {name}")
+
+                def on_save(document: FakeDocument) -> None:
+                    stored.clear()
+                    stored.update(dict(document))
+
+                return FakeDocument(dict(stored), on_insert, on_save)
+            raise AssertionError(f"unexpected get_doc: {values}, {name}")
+
+        frappe_module.get_doc = get_doc
         spec = importlib.util.spec_from_file_location(
             "ironwrap_facet_design_projection_api_under_test", API_PATH
         )
@@ -220,364 +308,297 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
             sys.modules,
             {
                 "frappe": frappe_module,
-                "ironwrap_roofing.document_validation": validation_module,
+                "ironwrap_roofing.document_validation": validation,
             },
         ):
             spec.loader.exec_module(module)
         return module, fixtures, db, issuance_calls, frappe_module
 
-    @staticmethod
-    def canonical(payload: dict) -> str:
-        return json.dumps(
-            payload,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-
-    def call(self, api, frappe_module, claim: dict | None = None, *, nonce: str) -> dict:
-        raw_claim = self.canonical(claim or self.fixture_claim())
+    def call(self, api, frappe_module, claim: dict, *, nonce: str) -> dict:
+        raw = self.canonical(claim)
         timestamp = str(int(time.time()))
-        body_hash = hashlib.sha256(raw_claim.encode("utf-8")).hexdigest()
-        signed = f"POST\n{api.COMMAND_PATH}\n{timestamp}\n{nonce}\n{body_hash}".encode("utf-8")
+        body_hash = hashlib.sha256(raw.encode()).hexdigest()
+        signing_input = f"POST\n{api.COMMAND_PATH}\n{timestamp}\n{nonce}\n{body_hash}"
         signature = base64.urlsafe_b64encode(
-            hmac.new(HMAC_KEY.encode("utf-8"), signed, hashlib.sha256).digest()
-        ).rstrip(b"=").decode("ascii")
+            hmac.new(HMAC_KEY.encode(), signing_input.encode(), hashlib.sha256).digest()
+        ).rstrip(b"=").decode()
         frappe_module.request.headers = {
             "x-ironwrap-facet-projection-timestamp": timestamp,
             "x-ironwrap-facet-projection-nonce": nonce,
             "x-ironwrap-facet-projection-signature": signature,
         }
-        return api.record_facet_design_proposal_evidence(raw_claim)
+        return api.record_facet_design_proposal_evidence(raw)
 
-    def assert_signed_receipt(
-        self,
-        api,
-        response: dict,
-        claim: dict,
-        *,
-        idempotent_replay: bool,
-    ) -> None:
-        receipt_json = self.canonical(response["receipt"])
-        receipt_sha256 = hashlib.sha256(receipt_json.encode("utf-8")).hexdigest()
-        expected_signature = base64.urlsafe_b64encode(
+    def assert_receipt(self, api, result: dict, claim: dict, *, replay: bool) -> None:
+        receipt_sha = hashlib.sha256(
+            self.canonical(result["receipt"]).encode()
+        ).hexdigest()
+        signature = base64.urlsafe_b64encode(
             hmac.new(
-                HMAC_KEY.encode("utf-8"),
-                f"{api.RECEIPT_SIGNATURE_CONTEXT}\n{receipt_sha256}".encode("utf-8"),
+                HMAC_KEY.encode(),
+                f"{api.RECEIPT_SIGNATURE_CONTEXT}\n{receipt_sha}".encode(),
                 hashlib.sha256,
             ).digest()
-        ).rstrip(b"=").decode("ascii")
-        self.assertEqual(response["receipt_sha256"], receipt_sha256)
-        self.assertEqual(response["receipt_signature_algorithm"], "HMAC-SHA256")
-        self.assertEqual(response["receipt_signature"], expected_signature)
-        receipt = response["receipt"]
-        self.assertEqual(receipt["event_id"], claim["event_id"])
-        self.assertEqual(receipt["roof_job_id"], claim["roof_job_id"])
-        self.assertEqual(receipt["customer_quote_id"], claim["customer_quote_id"])
-        self.assertEqual(receipt["raw_sha256"], claim["raw_sha256"])
+        ).rstrip(b"=").decode()
+        self.assertEqual(result["receipt_sha256"], receipt_sha)
+        self.assertEqual(result["receipt_signature"], signature)
+        self.assertEqual(result["receipt_signature_algorithm"], "HMAC-SHA256")
+        receipt = result["receipt"]
+        self.assertEqual(receipt["claim_sha256"], hashlib.sha256(self.canonical(claim).encode()).hexdigest())
+        self.assertEqual(receipt["actor_identity_assurance"], "oidc")
+        active = claim["decision_kind"] in {"approved", "corrected"}
         self.assertEqual(
-            receipt["frozen_evidence_sha256"], claim["frozen_evidence_sha256"]
+            receipt["draft_quote_status"], "Draft" if active else "Rejected"
         )
-        self.assertEqual(
-            receipt["claim_sha256"],
-            hashlib.sha256(self.canonical(claim).encode("utf-8")).hexdigest(),
-        )
-        self.assertEqual(receipt["idempotent_replay"], idempotent_replay)
-        self.assertEqual(receipt["commercial_state"], "none")
+        self.assertEqual(receipt["blank_commercial_revision"], active)
+        self.assertFalse(receipt["customer_safe"])
+        self.assertEqual(receipt["idempotent_replay"], replay)
 
-    def test_projection_locks_exact_job_quote_creates_review_evidence_and_replays(self) -> None:
+    def test_exact_v2_claim_creates_one_blank_draft_and_replays(self) -> None:
         api, fixtures, db, issuance_calls, frappe_module = self.load_api()
-        before_quote = deepcopy(fixtures["quote"])
-
-        first = self.call(api, frappe_module, nonce="a" * 32)
-
-        event_hash = hashlib.sha256(b"facet-event-0001").hexdigest()
-        self.assertEqual(
-            {
-                key: first[key]
-                for key in (
-                    "event_id",
-                    "evidence_id",
-                    "reconciliation_id",
-                    "idempotent_replay",
-                )
-            },
-            {
-                "event_id": "facet-event-0001",
-                "evidence_id": f"facet-design:{event_hash}",
-                "reconciliation_id": f"facet-design-projection:{event_hash}",
-                "idempotent_replay": False,
-            },
-        )
-        self.assert_signed_receipt(
-            api,
-            first,
-            self.fixture_claim(),
-            idempotent_replay=False,
-        )
-        self.assertEqual(first["receipt"]["provenance"], {"status": "provenance_unknown"})
-        self.assertEqual(fixtures["quote"], before_quote, "projection must not mutate the quote")
+        claim = self.claim()
+        first = self.call(api, frappe_module, claim, nonce="a" * 32)
+        event_hash = hashlib.sha256(claim["event_id"].encode()).hexdigest()
+        draft_id = f"facet-quote-revision:{event_hash}"
+        self.assertEqual(first["draft_customer_quote_id"], draft_id)
+        self.assertEqual(first["draft_quote_version"], 3)
+        self.assertFalse(first["idempotent_replay"])
+        self.assert_receipt(api, first, claim, replay=False)
+        self.assertEqual(len(fixtures["quotes"]), 2)
         self.assertEqual(len(fixtures["evidence"]), 1)
         self.assertEqual(len(fixtures["reconciliations"]), 1)
-        evidence = fixtures["evidence"][0]
-        reconciliation = fixtures["reconciliations"][0]
-        self.assertEqual(evidence["sync_state"], "Verified")
-        self.assertEqual(evidence["verification_source"], api.VERIFICATION_SOURCE)
-        self.assertEqual(evidence["customer_safe"], 0)
-        self.assertEqual(evidence["r2_key"], "facet-design/v1/facet-event-0001.json")
-        for field in (
-            "lead_envelope",
-            "source_uri",
-            "drive_file_id",
-            "latitude",
-            "longitude",
-            "location_accuracy_m",
-            "correction_of",
-            "correction_reason",
-        ):
-            self.assertIsNone(evidence[field], f"projected evidence must leave {field} empty")
-        self.assertEqual(reconciliation["status"], "Pending")
-        self.assertEqual(reconciliation["local_doctype"], "Customer Quote")
-        self.assertEqual(reconciliation["local_name"], "QUOTE-001")
-        self.assertEqual(reconciliation["raw_key"], "facet-design/v1/facet-event-0001.json")
-        self.assertIsNone(reconciliation["resolution_evidence"])
-        for field in (
-            "source_amount",
-            "local_amount",
-            "currency",
-            "resolution_action",
-            "resolved_by",
-            "resolved_at",
-            "automation_incident",
-            "supersedes",
-            "correction_reason",
-            "notes",
-        ):
-            self.assertIsNone(
-                reconciliation[field],
-                f"pending projection reconciliation must leave {field} empty",
-            )
-        self.assertIn('"commercial_state":"none"', reconciliation["diff_json"])
-        self.assertNotIn('"provenance"', reconciliation["diff_json"])
+        draft = fixtures["quotes"][1]
+        self.assertEqual(
+            {
+                "customer_quote_id": draft["customer_quote_id"],
+                "roof_job": draft["roof_job"],
+                "customer": draft["customer"],
+                "quote_version": draft["quote_version"],
+                "status": draft["status"],
+                "supersedes": draft["supersedes"],
+            },
+            {
+                "customer_quote_id": draft_id,
+                "roof_job": "JOB-001",
+                "customer": "CUSTOMER-001",
+                "quote_version": 3,
+                "status": "Draft",
+                "supersedes": "QUOTE-001",
+            },
+        )
+        self.assertTrue(all(draft[field] is None for field in api.BLANK_QUOTE_FIELDS))
         self.assertEqual(len(issuance_calls), 1)
+        self.assertNotEqual(
+            claim["external_customer_identity_link_id"].removeprefix(
+                "facet-customer-oidc-v1:"
+            ),
+            claim["oidc_subject_sha256"],
+        )
         self.assertTrue(all("FOR UPDATE" in query for query in db.lock_queries))
-        self.assertNotIn("price_book_version", " ".join(db.lock_queries))
-        self.assertNotIn("quote_total", " ".join(db.lock_queries))
-
-        reconciliation.update(
-            {
-                "status": "Resolved",
-                "resolution_action": "Estimator confirmed the approved design revision.",
-                "resolved_by": "owner@example.invalid",
-                "resolved_at": "2026-07-31 12:05:00",
-                "resolution_evidence": "facet-resolution-evidence-1",
-            }
-        )
-        frappe_module.utils.now_datetime = lambda: "2026-07-31 12:07:00"
-        replay = self.call(api, frappe_module, nonce="b" * 32)
-        self.assertEqual(replay["idempotent_replay"], True)
-        self.assert_signed_receipt(
-            api,
-            replay,
-            self.fixture_claim(),
-            idempotent_replay=True,
-        )
+        replay = self.call(api, frappe_module, claim, nonce="b" * 32)
+        self.assertTrue(replay["idempotent_replay"])
+        self.assert_receipt(api, replay, claim, replay=True)
+        self.assertEqual(len(fixtures["quotes"]), 2)
         self.assertEqual(len(fixtures["evidence"]), 1)
         self.assertEqual(len(fixtures["reconciliations"]), 1)
         self.assertEqual(len(issuance_calls), 1)
 
-    def test_customer_approval_v2_persists_provenance_and_exact_brand_anchor(self) -> None:
+    def test_correction_rejects_the_prior_draft_and_only_the_new_chain_head_is_operable(
+        self,
+    ) -> None:
         api, fixtures, _, issuance_calls, frappe_module = self.load_api()
+        approved = self.claim()
+        first = self.call(api, frappe_module, approved, nonce="u" * 32)
+        corrected = self.claim(
+            event_id="55555555-5555-4555-8555-555555555555",
+            decision_kind="corrected",
+            previous_event_id=approved["event_id"],
+            reason_sha256="8" * 64,
+            occurred_at="2027-01-15T08:01:00.000Z",
+            received_at="2027-01-15T08:01:01.000Z",
+        )
+        second = self.call(api, frappe_module, corrected, nonce="v" * 32)
+        prior = next(
+            quote
+            for quote in fixtures["quotes"]
+            if quote["customer_quote_id"] == first["draft_customer_quote_id"]
+        )
+        current = next(
+            quote
+            for quote in fixtures["quotes"]
+            if quote["customer_quote_id"] == second["draft_customer_quote_id"]
+        )
+        self.assertEqual(prior["status"], "Rejected")
+        self.assertEqual(current["status"], "Draft")
+        self.assertEqual(current["supersedes"], prior["name"])
+        self.assertEqual(len(fixtures["evidence"]), 2)
+        self.assertEqual(len(fixtures["reconciliations"]), 2)
+        self.assertEqual(len(issuance_calls), 2)
+        replay = self.call(api, frappe_module, corrected, nonce="w" * 32)
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(len(fixtures["quotes"]), 3)
+        self.assertEqual(len(fixtures["reconciliations"]), 2)
 
-        result = self.call(
-            api,
-            frappe_module,
-            self.customer_approval_claim(),
-            nonce="m" * 32,
-        )
-
-        self.assertEqual(result["event_id"], "facet-event-0001")
-        self.assert_signed_receipt(
-            api,
-            result,
-            self.customer_approval_claim(),
-            idempotent_replay=False,
-        )
-        self.assertEqual(
-            result["receipt"]["provenance"],
-            {
-                "status": "customer_approved",
-                "brand_id": "ironwrap",
-                "approval_actor_type": "customer_capability",
-                "capability_fingerprint": "d" * 64,
-                "identity_assurance": "bearer_capability_only",
-            },
-        )
-        self.assertEqual(len(fixtures["evidence"]), 1)
-        self.assertEqual(len(fixtures["reconciliations"]), 1)
-        self.assertEqual(len(issuance_calls), 1)
-        evidence = fixtures["evidence"][0]
-        reconciliation = fixtures["reconciliations"][0]
-        self.assertEqual(evidence["r2_key"], "facet-design/v2/facet-event-0001.json")
-        self.assertEqual(evidence["customer_safe"], 0)
-        self.assertIn("commercial use", evidence["summary"])
-        diff = json.loads(reconciliation["diff_json"])
-        self.assertEqual(diff["schema"], "ironwrap.facet-design-projection.v2")
-        self.assertEqual(
-            diff["source_event"],
-            {
-                "event_type": "facet.design.customer_approved.v2",
-                "schema_version": 2,
-            },
-        )
-        self.assertEqual(
-            diff["provenance"],
-            {
-                "status": "customer_approved",
-                "brand_id": "ironwrap",
-                "approval_actor_type": "customer_capability",
-                "capability_fingerprint": "d" * 64,
-                "identity_assurance": "bearer_capability_only",
-            },
-        )
-        self.assertEqual(diff["commercial_state"], "none")
-
-        tampered = {
-            **self.customer_approval_claim(),
-            "capability_fingerprint": "e" * 64,
-        }
-        with self.assertRaisesRegex(FakeValidationError, "facet_design_projection_conflict"):
-            self.call(api, frappe_module, tampered, nonce="t" * 32)
-        self.assertEqual(len(fixtures["evidence"]), 1)
-        self.assertEqual(len(fixtures["reconciliations"]), 1)
-        self.assertEqual(len(issuance_calls), 1)
-
-    def test_customer_approval_v2_rejects_contract_and_brand_mismatches(self) -> None:
-        fixtures = self.fixtures()
-        fixtures["job"]["brand"] = "iroof"
-        api, fixtures, _, _, frappe_module = self.load_api(fixtures)
-        with self.assertRaisesRegex(FakeValidationError, "brand_mismatch"):
-            self.call(
-                api,
-                frappe_module,
-                self.customer_approval_claim(),
-                nonce="n" * 32,
-            )
-        self.assertEqual(fixtures["evidence"], [])
-
-        invalid_claims = (
-            (
-                {**self.customer_approval_claim(), "schema_version": 1},
-                "event_version_mismatch",
-            ),
-            (
-                {
-                    **self.customer_approval_claim(),
-                    "event_type": "facet.design.approved.v1",
-                },
-                "event_version_mismatch",
-            ),
-            (
-                {
-                    **self.customer_approval_claim(),
-                    "raw_key": "facet-design/v1/facet-event-0001.json",
-                },
-                "raw_key_mismatch",
-            ),
-            (
-                {**self.customer_approval_claim(), "capability_fingerprint": "not-a-hash"},
-                "invalid_claim",
-            ),
-            (
-                {**self.customer_approval_claim(), "identity_assurance": "verified_identity"},
-                "identity_assurance_mismatch",
-            ),
-        )
-        for index, (claim, expected_code) in enumerate(invalid_claims):
-            with self.subTest(expected_code=expected_code):
+    def test_withdrawal_and_supersession_project_a_terminal_hold_on_the_prior_draft(
+        self,
+    ) -> None:
+        for index, decision in enumerate(("withdrawn", "superseded")):
+            with self.subTest(decision=decision):
                 api, fixtures, _, _, frappe_module = self.load_api()
-                with self.assertRaisesRegex(FakeValidationError, expected_code):
+                approved = self.claim()
+                first = self.call(
+                    api,
+                    frappe_module,
+                    approved,
+                    nonce=("x" if index == 0 else "j") * 32,
+                )
+                terminal = self.claim(
+                    event_id=(
+                        "66666666-6666-4666-8666-666666666666"
+                        if decision == "withdrawn"
+                        else "77777777-7777-4777-8777-777777777777"
+                    ),
+                    decision_kind=decision,
+                    previous_event_id=approved["event_id"],
+                    reason_sha256="9" * 64,
+                    occurred_at="2027-01-15T08:02:00.000Z",
+                    received_at="2027-01-15T08:02:01.000Z",
+                )
+                held = self.call(
+                    api,
+                    frappe_module,
+                    terminal,
+                    nonce=("z" if index == 0 else "k") * 32,
+                )
+                self.assertEqual(
+                    held["draft_customer_quote_id"], first["draft_customer_quote_id"]
+                )
+                self.assertEqual(held["receipt"]["draft_quote_status"], "Rejected")
+                self.assertFalse(held["receipt"]["blank_commercial_revision"])
+                self.assertEqual(len(fixtures["quotes"]), 2)
+                self.assertEqual(fixtures["quotes"][1]["status"], "Rejected")
+                self.assertEqual(
+                    fixtures["reconciliations"][-1]["status"], "Superseded"
+                )
+                replay = self.call(
+                    api,
+                    frappe_module,
+                    terminal,
+                    nonce=("n" if index == 0 else "l") * 32,
+                )
+                self.assertTrue(replay["idempotent_replay"])
+
+    def test_correction_rejects_external_email_link_or_oidc_subject_drift_independently(
+        self,
+    ) -> None:
+        for index, drift in enumerate(("external", "subject")):
+            with self.subTest(drift=drift):
+                api, fixtures, _, _, frappe_module = self.load_api()
+                approved = self.claim()
+                self.call(api, frappe_module, approved, nonce=chr(100 + index) * 32)
+                overrides = {
+                    "event_id": (
+                        "88888888-8888-4888-8888-888888888888"
+                        if drift == "external"
+                        else "99999999-9999-4999-8999-999999999999"
+                    ),
+                    "decision_kind": "corrected",
+                    "previous_event_id": approved["event_id"],
+                    "reason_sha256": "7" * 64,
+                    "occurred_at": "2027-01-15T08:03:00.000Z",
+                    "received_at": "2027-01-15T08:03:01.000Z",
+                }
+                if drift == "external":
+                    overrides["external_customer_identity_link_id"] = (
+                        f"facet-customer-oidc-v1:{'1' * 64}"
+                    )
+                else:
+                    overrides["oidc_subject_sha256"] = "1" * 64
+                correction = self.claim(**overrides)
+                with self.assertRaisesRegex(
+                    FakeValidationError, "predecessor_authority_mismatch"
+                ):
                     self.call(
                         api,
                         frappe_module,
-                        claim,
-                        nonce=chr(ord("o") + index) * 32,
+                        correction,
+                        nonce=chr(102 + index) * 32,
                     )
+                self.assertEqual(len(fixtures["quotes"]), 2)
+                self.assertEqual(fixtures["quotes"][1]["status"], "Draft")
+
+    def test_rejects_legacy_bearer_identity_association_and_raw_key_drift(self) -> None:
+        invalid = (
+            ({**self.claim(), "event_type": "facet.design.approved.v1"}, "event_version_mismatch"),
+            ({**self.claim(), "identity_assurance": "bearer_capability_only"}, "identity_assurance_mismatch"),
+            ({**self.claim(), "association_sha256": "0" * 64}, "association_mismatch"),
+            ({**self.claim(), "raw_key": f"facet-design/v2/raw/{'8' * 64}.json"}, "raw_key_mismatch"),
+            ({**self.claim(), "customer_address": "not allowed"}, "invalid_claim"),
+        )
+        for index, (claim, code) in enumerate(invalid):
+            with self.subTest(code=code):
+                api, fixtures, _, _, frappe_module = self.load_api()
+                with self.assertRaisesRegex(FakeValidationError, code):
+                    self.call(api, frappe_module, claim, nonce=chr(99 + index) * 32)
+                self.assertEqual(len(fixtures["quotes"]), 1)
                 self.assertEqual(fixtures["evidence"], [])
 
-    def test_projection_rejects_wrong_service_principal_role_permission_and_hmac(self) -> None:
-        api, fixtures, _, _, frappe_module = self.load_api(session_user="owner@example.invalid")
+    def test_rejects_noncurrent_accepted_or_cross_brand_source_quote(self) -> None:
+        mutations = (
+            (lambda fixtures: fixtures["job"].update(quotation="OTHER"), "quote_job_mismatch"),
+            (lambda fixtures: fixtures["quotes"][0].update(status="Accepted"), "quote_not_reviewable"),
+            (lambda fixtures: fixtures["job"].update(brand="iroof"), "brand_mismatch"),
+        )
+        for mutate, code in mutations:
+            fixtures = self.fixtures()
+            mutate(fixtures)
+            api, fixtures, _, _, frappe_module = self.load_api(fixtures)
+            with self.assertRaisesRegex(FakeValidationError, code):
+                self.call(api, frappe_module, self.claim(), nonce=code[0] * 32)
+            self.assertEqual(len(fixtures["quotes"]), 1)
+
+    def test_requires_exact_service_role_permissions_hmac_and_one_time_nonce(self) -> None:
+        claim = self.claim()
+        api, fixtures, _, _, frappe_module = self.load_api(
+            session_user="owner@example.invalid"
+        )
         with self.assertRaisesRegex(FakePermissionError, "service_user_mismatch"):
-            self.call(api, frappe_module, nonce="c" * 32)
-        self.assertEqual(fixtures["evidence"], [])
-
-        api, fixtures, _, _, frappe_module = self.load_api(roles=[])
+            self.call(api, frappe_module, claim, nonce="m" * 32)
+        self.assertEqual(len(fixtures["quotes"]), 1)
+        api, _, _, _, frappe_module = self.load_api(roles=[])
         with self.assertRaisesRegex(FakePermissionError, "service_role_missing"):
-            self.call(api, frappe_module, nonce="d" * 32)
-        self.assertEqual(fixtures["evidence"], [])
-
-        api, fixtures, _, _, frappe_module = self.load_api(has_permission=False)
+            self.call(api, frappe_module, claim, nonce="n" * 32)
+        api, _, _, _, frappe_module = self.load_api(permission=False)
         with self.assertRaisesRegex(FakePermissionError, "permission_denied"):
-            self.call(api, frappe_module, nonce="e" * 32)
-        self.assertEqual(fixtures["evidence"], [])
-
-        api, fixtures, _, _, frappe_module = self.load_api(request_method="GET")
-        with self.assertRaisesRegex(FakePermissionError, "post_required"):
-            self.call(api, frappe_module, nonce="f" * 32)
-        self.assertEqual(fixtures["evidence"], [])
-
-        api, fixtures, _, _, frappe_module = self.load_api(configured_hmac_key="short")
+            self.call(api, frappe_module, claim, nonce="o" * 32)
+        api, _, _, _, frappe_module = self.load_api(hmac_key="short")
         with self.assertRaisesRegex(FakePermissionError, "hmac_key_invalid"):
-            self.call(api, frappe_module, nonce="s" * 32)
-        self.assertEqual(fixtures["evidence"], [])
+            self.call(api, frappe_module, claim, nonce="p" * 32)
+        api, _, _, _, frappe_module = self.load_api()
+        self.call(api, frappe_module, claim, nonce="q" * 32)
+        with self.assertRaisesRegex(FakePermissionError, "nonce_replayed"):
+            self.call(api, frappe_module, claim, nonce="q" * 32)
 
+    def test_partial_or_commercially_tampered_replay_fails_closed(self) -> None:
+        claim = self.claim()
         api, fixtures, _, _, frappe_module = self.load_api()
-        raw_claim = self.canonical(self.fixture_claim())
-        frappe_module.request.headers = {
-            "x-ironwrap-facet-projection-timestamp": str(int(time.time())),
-            "x-ironwrap-facet-projection-nonce": "g" * 32,
-            "x-ironwrap-facet-projection-signature": "z" * 43,
-        }
-        with self.assertRaisesRegex(FakePermissionError, "hmac_invalid"):
-            api.record_facet_design_proposal_evidence(raw_claim)
-        self.assertEqual(fixtures["evidence"], [])
-
-    def test_projection_rejects_cross_job_stale_or_nonreviewable_quote_before_insert(self) -> None:
+        first = self.call(api, frappe_module, claim, nonce="r" * 32)
+        fixtures["quotes"][1]["quote_total"] = 1
+        with self.assertRaisesRegex(FakeValidationError, "conflict"):
+            self.call(api, frappe_module, claim, nonce="s" * 32)
         fixtures = self.fixtures()
-        fixtures["quote"]["roof_job"] = "JOB-OTHER"
-        api, fixtures, _, _, frappe_module = self.load_api(fixtures)
-        with self.assertRaisesRegex(FakeValidationError, "quote_job_mismatch"):
-            self.call(api, frappe_module, nonce="h" * 32)
-        self.assertEqual(fixtures["evidence"], [])
-
-        fixtures = self.fixtures()
-        fixtures["job"]["quotation"] = "QUOTE-OTHER"
-        api, fixtures, _, _, frappe_module = self.load_api(fixtures)
-        with self.assertRaisesRegex(FakeValidationError, "quote_not_current"):
-            self.call(api, frappe_module, nonce="i" * 32)
-        self.assertEqual(fixtures["reconciliations"], [])
-
-        fixtures = self.fixtures()
-        fixtures["quote"]["status"] = "Accepted"
-        api, fixtures, _, _, frappe_module = self.load_api(fixtures)
-        with self.assertRaisesRegex(FakeValidationError, "quote_not_reviewable"):
-            self.call(api, frappe_module, nonce="j" * 32)
-        self.assertEqual(fixtures["evidence"], [])
-
-    def test_projection_rejects_tampered_replay_and_never_has_a_commercial_write_path(self) -> None:
-        api, fixtures, _, _, frappe_module = self.load_api()
-        self.call(api, frappe_module, nonce="k" * 32)
-        tampered = {**self.fixture_claim(), "raw_sha256": "d" * 64}
-        with self.assertRaisesRegex(FakeValidationError, "facet_design_projection_conflict"):
-            self.call(api, frappe_module, tampered, nonce="l" * 32)
-        self.assertEqual(len(fixtures["evidence"]), 1)
-        self.assertEqual(len(fixtures["reconciliations"]), 1)
-
-        source = API_PATH.read_text(encoding="utf-8")
-        self.assertNotIn("quote_document.save", source)
-        self.assertNotIn("Contract Acceptance", source)
-        self.assertNotIn("proposal_evidence_pack", source)
-        self.assertNotIn("quote_total", source)
+        event_hash = hashlib.sha256(claim["event_id"].encode()).hexdigest()
+        fixtures["evidence"].append(
+            {
+                "evidence_id": f"facet-design:{event_hash}",
+                "sync_state": "Verified",
+                "verification_source": "ironwrap-worker-r2-facet-design-projection",
+            }
+        )
+        api, _, _, _, frappe_module = self.load_api(fixtures)
+        with self.assertRaisesRegex(FakeValidationError, "projection trio is incomplete"):
+            self.call(api, frappe_module, claim, nonce="t" * 32)
+        self.assertFalse(first["idempotent_replay"])
 
 
 if __name__ == "__main__":

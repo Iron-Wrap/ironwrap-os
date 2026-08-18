@@ -82,6 +82,24 @@ const specs = [
     requiredFields: ["supplier_id", "supplier_name", "active", "contact_name", "phone", "email", "address_line1", "city", "province", "notes"],
   },
   {
+    name: "Authority Record",
+    dir: "authority_record",
+    idField: "authority_record_id",
+    requiredFields: [
+      "authority_record_id", "tenant", "subject_type", "subject_role", "authority_kind", "authority_scope",
+      "scope_type", "scope_ref", "issuer_name", "issuer_jurisdiction", "issuer_reference", "source_version",
+      "evidence_refs_json", "evidence_sha256", "effective_from", "expires_at", "version", "status",
+    ],
+    fieldContracts: {
+      status: {
+        fieldtype: "Select",
+        options: "Unverified\nVerified\nContradictory\nExpired\nRevoked\nSuperseded",
+        default: "Unverified",
+      },
+      version: { fieldtype: "Int", default: "1" },
+    },
+  },
+  {
     name: "Roofing Property",
     dir: "roofing_property",
     idField: "property_key",
@@ -127,13 +145,19 @@ const specs = [
     name: "Material Takeoff Item",
     dir: "material_takeoff_item",
     child: true,
-    requiredFields: ["category", "item_name", "quantity", "unit", "waste_factor", "source_ref", "confidence", "needs_review"],
+    requiredFields: ["category", "item_name", "quantity", "unit", "waste_factor", "source_ref", "confidence", "needs_review", "calculation_digest", "policy_digest", "options_digest", "geometry_revision", "stock_mode", "waste_basis"],
+  },
+  {
+    name: "Material Takeoff Policy",
+    dir: "material_takeoff_policy",
+    idField: "policy_id",
+    requiredFields: ["policy_id", "tenant", "brand", "service_type", "material_system", "policy_version", "status", "effective_from", "effective_to", "policy_json", "source_evidence", "approved_by", "approved_at", "approval_note", "notes"],
   },
   {
     name: "Material Takeoff",
     dir: "material_takeoff",
     idField: "takeoff_id",
-    requiredFields: ["takeoff_id", "roof_job", "measurement_report", "status", "prepared_at", "approved_by", "approved_at", "approval_note", "source_measurements_json", "assumptions", "exclusions", "items"],
+    requiredFields: ["takeoff_id", "roof_job", "measurement_report", "tenant", "material_system", "status", "prepared_at", "approved_by", "approved_at", "approval_note", "calculation_schema", "calculation_version", "geometry_revision", "source_raw_key", "source_raw_sha256", "takeoff_policy", "policy_version", "policy_source_evidence", "policy_source_sha256", "policy_digest", "options_digest", "calculation_digest", "stock_mode", "waste_basis", "options_json", "calculation_json", "review_reasons_json", "source_measurements_json", "assumptions", "exclusions", "items"],
   },
   {
     name: "Supplier Order Item",
@@ -196,6 +220,55 @@ const specs = [
     dir: "payment_milestone",
     idField: "payment_milestone_id",
     requiredFields: ["payment_milestone_id", "roof_job", "shop_order", "milestone_type", "status", "qb_entity_type", "qb_entity_id", "qb_operation", "realm_id", "event_ts", "raw_key", "raw_payload_hash", "notes"],
+  },
+  {
+    name: "Job Cost Event",
+    dir: "job_cost_event",
+    idField: "job_cost_event_id",
+    requiredFields: [
+      "job_cost_event_id",
+      "tenant",
+      "roof_job",
+      "event_kind",
+      "category",
+      "quantity",
+      "unit",
+      "amount_cents",
+      "amount_basis",
+      "currency",
+      "occurred_at",
+      "source_doctype",
+      "source_name",
+      "source_digest",
+      "source_evidence",
+      "accounting_state",
+      "accounting_system",
+      "accounting_entity_type",
+      "accounting_entity_id",
+      "accounting_digest",
+      "accounting_posted_at",
+      "reconciliation",
+      "reversal_of",
+      "reversal_reason",
+      "actor_type",
+      "actor_id",
+      "authority_ref",
+      "recorded_at",
+      "approved_by",
+      "approved_at",
+      "approval_reference",
+    ],
+    fieldContracts: {
+      amount_cents: { fieldtype: "Int", reqd: 1 },
+      amount_basis: {
+        fieldtype: "Select",
+        options: "Net of Recoverable Tax\nIncludes Non-Recoverable Tax\nNo Tax",
+        reqd: 1,
+      },
+      event_kind: { fieldtype: "Select", options: "cost\nreversal", reqd: 1 },
+      reversal_of: { fieldtype: "Link", options: "Job Cost Event", unique: 1 },
+      source_digest: { fieldtype: "Data", reqd: 1 },
+    },
   },
   {
     name: "Production Gate State",
@@ -567,7 +640,7 @@ const specs = [
 
 const extendedContracts = {
   "Evidence Item": {
-    requiredFields: ["device_action_id", "proof_owner", "proof_slot", "content_checksum", "checksum_algorithm", "content_type", "content_length", "capture_actor", "captured_at", "latitude", "longitude", "location_accuracy_m", "sync_state", "verified_at", "verification_source", "correction_of", "correction_reason"],
+    requiredFields: ["device_action_id", "proof_owner", "proof_slot", "content_checksum", "checksum_algorithm", "content_type", "content_length", "capture_actor", "captured_at", "latitude", "longitude", "location_accuracy_m", "sync_state", "verified_at", "verification_source", "correction_of", "correction_reason", "work_package", "work_package_version", "work_package_release_attempt_id", "evidence_slot_id", "evidence_requirement", "evidence_source", "evidence_device_id", "evidence_freshness", "evidence_conflict_state", "evidence_verification", "evidence_disposition"],
     fieldContracts: {
       device_action_id: { fieldtype: "Data", unique: 1 },
       content_checksum: { fieldtype: "Data" },
@@ -621,7 +694,7 @@ specs.push(
   },
   {
     name: "Job Assignment", dir: "job_assignment", idField: "assignment_id",
-    requiredFields: ["assignment_id", "roof_job", "assignment_type", "status", "crew_profile", "assigned_user", "scheduled_start", "scheduled_end", "assigned_by", "assigned_at", "accepted_at", "started_at", "completed_at", "blocker_reason", "supersedes", "correction_reason", "notes"],
+    requiredFields: ["assignment_id", "roof_job", "work_object_type", "work_object_id", "physical_context_type", "physical_context_id", "assignment_type", "status", "crew_profile", "assigned_user", "authority_user", "authority_role", "assigned_workers", "scheduled_start", "scheduled_end", "assigned_by", "assigned_at", "accepted_at", "started_at", "completed_at", "blocker_reason", "supersedes", "correction_reason", "notes"],
   },
   {
     name: "Change Order", dir: "change_order", idField: "change_order_id",
@@ -652,12 +725,16 @@ specs.push(
     requiredFields: ["sequence", "hold_point", "release_authority", "required_evidence", "acceptance_criteria"],
   },
   {
+    name: "Work Package Worker", dir: "work_package_worker", child: true,
+    requiredFields: ["sequence", "worker_user", "worker_role", "required"],
+  },
+  {
     name: "Work Package", dir: "work_package", idField: "work_package_id",
-    requiredFields: ["work_package_id", "roof_job", "job_assignment", "safety_plan", "version", "status", "title", "objective", "boundaries", "prerequisites", "expected_result", "stop_conditions", "make_safe_procedure", "issued_at", "expires_at", "released_by", "released_at", "acknowledged_by", "acknowledged_at", "acknowledgement_device_action_id", "started_at", "blocked_by", "blocked_at", "blocked_device_action_id", "blocker_reason", "completed_at", "steps", "hold_points", "supersedes", "correction_reason"],
+    requiredFields: ["work_package_id", "roof_job", "job_assignment", "safety_plan", "work_object_type", "work_object_id", "physical_context_type", "physical_context_id", "version", "status", "title", "objective", "boundaries", "prerequisites", "expected_result", "stop_conditions", "make_safe_procedure", "issued_at", "expires_at", "released_by", "released_at", "release_attempt_id", "acknowledged_by", "acknowledged_at", "acknowledgement_device_action_id", "started_at", "blocked_by", "blocked_at", "blocked_device_action_id", "blocker_reason", "completed_at", "assigned_workers", "steps", "hold_points", "supersedes", "correction_reason"],
   },
   {
     name: "Work Package Event", dir: "work_package_event", idField: "work_package_event_id",
-    requiredFields: ["work_package_event_id", "event_type", "work_package", "roof_job", "job_assignment", "work_package_version", "actor_user", "actor_role", "device_action_id", "occurred_at", "payload_hash", "hold_point_sequence", "evidence_item", "blocker_reason"],
+    requiredFields: ["work_package_event_id", "event_type", "work_package", "roof_job", "job_assignment", "work_package_version", "release_attempt_id", "actor_user", "actor_role", "device_action_id", "occurred_at", "payload_hash", "hold_point_sequence", "evidence_item", "blocker_reason", "evidence_slot_id", "evidence_requirement", "evidence_source", "evidence_device_id", "evidence_captured_at", "evidence_freshness", "evidence_conflict_state", "evidence_correction_of", "evidence_item_correction_of", "evidence_review_of", "evidence_verification", "evidence_disposition", "correction_reason"],
   },
   {
     name: "Job Compliance Record", dir: "job_compliance_record", idField: "compliance_record_id",
@@ -741,12 +818,12 @@ const discoveredDirs = readdirSync(doctypePath, { withFileTypes: true })
   .filter((dir) => existsSync(join(doctypePath, dir, `${dir}.json`)))
   .sort();
 
-assert.equal(specs.length, 64, "the product contract must contain exactly 64 DocTypes");
-assert.equal(specs.filter((spec) => spec.child).length, 16, "expected sixteen child-table DocTypes");
-assert.equal(specs.filter((spec) => !spec.child).length, 48, "expected 48 top-level DocTypes");
+assert.equal(specs.length, 68, "the product contract must contain exactly 68 DocTypes");
+assert.equal(specs.filter((spec) => spec.child).length, 17, "expected seventeen child-table DocTypes");
+assert.equal(specs.filter((spec) => !spec.child).length, 51, "expected 51 top-level DocTypes");
 assert.equal(new Set(specs.map((spec) => spec.name)).size, specs.length, "duplicate DocType name in validator");
 assert.equal(new Set(expectedDirs).size, specs.length, "duplicate DocType directory in validator");
-assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 64-type product contract");
+assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 68-type product contract");
 
 const pythonContracts = readPythonContracts();
 assert.deepEqual(
@@ -1013,4 +1090,4 @@ function validateRuntimeWiring() {
   assert.match(adapter, /def\s+deny_business_document_delete\s*\(/, "append-only delete guard is missing");
 }
 
-console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (48 top-level + 16 child)`);
+console.log(`ok ${specs.length} IronWrap Frappe DocTypes validated (51 top-level + 17 child)`);

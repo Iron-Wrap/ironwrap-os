@@ -136,7 +136,11 @@ describe("SavedWorkRecoveryPanel", () => {
       deviceActionId: "stop-work-review",
       kind: "work_package_stop",
       endpoint: "/api/v1/jobs/JOB-1042/work-package/stop-work",
-      payload: { work_package_id: "WP-1042-v3", blocker_reason: "Wind exceeds the plan limit." },
+      payload: {
+        work_package_id: "WP-1042-v3",
+        work_package_version: 3,
+        blocker_reason: "Wind exceeds the plan limit.",
+      },
     });
     await queueOutboxAction("stop-work-review", 1_000);
     await markOutboxNeedsAttention(

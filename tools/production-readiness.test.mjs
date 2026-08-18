@@ -19,6 +19,11 @@ const RESTORE = path.join(DEFAULT_REPO_ROOT, "deploy/restore-from-r2.sh");
 const D1_BACKUP = path.join(DEFAULT_REPO_ROOT, "deploy/backup-d1-to-r2.sh");
 const D1_RESTORE = path.join(DEFAULT_REPO_ROOT, "deploy/restore-d1-from-r2.sh");
 const BUILD = path.join(DEFAULT_REPO_ROOT, "deploy/build-production-image.sh");
+const D1_BACKUP_CONTRACT = await readFile(D1_BACKUP, "utf8");
+const HERMES_DESKTOP_MIGRATION = await readFile(
+  path.join(DEFAULT_REPO_ROOT, "workers-bus/migrations/0036_hermes_desktop_pilot.sql"),
+  "utf8",
+);
 const APPROVAL_PUBLIC_KEY = generateKeyPairSync("ed25519").publicKey.export({
   type: "spki",
   format: "pem",
@@ -336,10 +341,11 @@ async function stageD1Script(root, source) {
   return { target, workerBin };
 }
 
-const REQUIRED_D1_TABLES = [
+const BASE_REQUIRED_D1_TABLES = [
   "app_action_throttles", "app_auth_audit", "app_auth_throttles", "app_device_pairings",
   "app_devices", "app_magic_links", "app_sessions", "app_users", "approval_request_events",
-  "approval_requests", "audit_log", "customer_portal_acceptance_challenges",
+  "approval_requests", "audit_log", "authority_record_actions", "authority_record_readbacks",
+  "customer_portal_acceptance_challenges",
   "customer_portal_acceptance_events", "customer_portal_acceptance_intents",
   "customer_portal_access_throttles", "customer_portal_links", "dead_letter", "dedup_claims",
   "dev_outbox", "envelopes", "facet_customer_approval_events",
@@ -347,7 +353,9 @@ const REQUIRED_D1_TABLES = [
   "facet_design_events", "facet_design_evidence_associations", "facet_design_ingest_nonce_registry",
   "facet_design_ingest_nonces", "facet_design_projection_attempts", "field_action_media",
   "field_actions", "field_work_package_actions", "governed_transition_outbox",
-  "governed_transition_outbox_events", "governed_transitions", "heartbeat", "lead_ack_receipts",
+  "governed_transition_outbox_events", "governed_transitions", "heartbeat", "hermes_desktop_contexts",
+  "hermes_desktop_devices", "hermes_desktop_envelopes", "hermes_desktop_events",
+  "hermes_desktop_pairings", "hermes_desktop_results", "lead_ack_receipts",
   "measurement_deltas", "measurement_intake_receipts", "newo_control_actions",
   "newo_event_receipts", "newo_reconciliation_runs", "newo_sessions", "newo_slot_reservations",
   "production_schedule_approval_request_events", "production_schedule_approval_requests",
@@ -356,7 +364,110 @@ const REQUIRED_D1_TABLES = [
   "source_counts",
 ];
 
-const REQUIRED_D1_TRIGGER_BINDINGS = [
+const BASE_REQUIRED_D1_INDEX_BINDINGS = [
+  ["idx_app_action_throttles_expiry", "app_action_throttles"],
+  ["idx_app_auth_audit_tenant_created", "app_auth_audit"],
+  ["idx_app_auth_throttles_expiry", "app_auth_throttles"],
+  ["idx_app_device_pairings_user_expiry", "app_device_pairings"],
+  ["idx_app_devices_tenant_user_active", "app_devices"],
+  ["idx_app_magic_links_user_expiry", "app_magic_links"],
+  ["idx_app_sessions_device_active", "app_sessions"],
+  ["idx_app_sessions_user_expiry", "app_sessions"],
+  ["idx_app_users_tenant_role_active", "app_users"],
+  ["idx_approval_request_events_tenant_created", "approval_request_events"],
+  ["idx_approval_requests_pending_expiry", "approval_requests"],
+  ["idx_approval_requests_state_lease", "approval_requests"],
+  ["idx_approval_requests_tenant_state_updated", "approval_requests"],
+  ["idx_audit_env", "audit_log"],
+  ["idx_audit_result_ts", "audit_log"],
+  ["idx_audit_run_id", "audit_log"],
+  ["idx_customer_portal_acceptance_challenges_expiry", "customer_portal_acceptance_challenges"],
+  ["idx_customer_portal_acceptance_events_created", "customer_portal_acceptance_events"],
+  ["idx_customer_portal_acceptance_intents_state_lease", "customer_portal_acceptance_intents"],
+  ["idx_customer_portal_acceptance_one_active_challenge", "customer_portal_acceptance_challenges"],
+  ["idx_customer_portal_access_throttles_expiry", "customer_portal_access_throttles"],
+  ["idx_customer_portal_links_tenant_job_active", "customer_portal_links"],
+  ["idx_dead_letter_open_envelope", "dead_letter"],
+  ["idx_dedup_claims_first_seen", "dedup_claims"],
+  ["idx_dev_outbox_created", "dev_outbox"],
+  ["idx_env_day", "envelopes"],
+  ["idx_env_dedup", "envelopes"],
+  ["idx_env_erpnext", "envelopes"],
+  ["idx_env_erpnext_instant_estimate", "envelopes"],
+  ["idx_env_erpnext_roof_job", "envelopes"],
+  ["idx_env_estimate_submission_key", "envelopes"],
+  ["idx_env_status", "envelopes"],
+  ["idx_envelopes_erpnext_error_open", "envelopes"],
+  ["idx_envelopes_operational", "envelopes"],
+  ["idx_facet_customer_approval_tenant_brand_occurred", "facet_customer_approval_events"],
+  ["idx_facet_customer_projection_attempts_event_time", "facet_customer_approval_projection_attempts"],
+  ["idx_facet_customer_projection_distinct_hold", "facet_customer_approval_projection_attempts"],
+  ["idx_facet_customer_projection_one_frappe_rejection", "facet_customer_approval_projection_attempts"],
+  ["idx_facet_customer_projection_one_success", "facet_customer_approval_projection_attempts"],
+  ["idx_facet_design_events_tenant_project_occurred", "facet_design_events"],
+  ["idx_facet_design_evidence_associations_tenant_time", "facet_design_evidence_associations"],
+  ["idx_facet_design_projection_attempts_event_time", "facet_design_projection_attempts"],
+  ["idx_facet_design_projection_distinct_hold", "facet_design_projection_attempts"],
+  ["idx_facet_design_projection_one_frappe_rejection", "facet_design_projection_attempts"],
+  ["idx_facet_design_projection_one_success", "facet_design_projection_attempts"],
+  ["idx_field_action_media_evidence", "field_action_media"],
+  ["idx_field_actions_job_created", "field_actions"],
+  ["idx_field_actions_recovery", "field_actions"],
+  ["idx_field_work_package_actions_job_created", "field_work_package_actions"],
+  ["idx_field_work_package_actions_recovery", "field_work_package_actions"],
+  ["idx_governed_transition_outbox_events_tenant_created", "governed_transition_outbox_events"],
+  ["idx_governed_transition_outbox_pending", "governed_transition_outbox"],
+  ["idx_governed_transitions_tenant_created", "governed_transitions"],
+  ["idx_heartbeat_ran_at", "heartbeat"],
+  ["idx_hermes_desktop_devices_binding_active", "hermes_desktop_devices"],
+  ["idx_hermes_desktop_envelopes_device_state_expiry", "hermes_desktop_envelopes"],
+  ["idx_hermes_desktop_events_tenant_created", "hermes_desktop_events"],
+  ["idx_hermes_desktop_pairings_user_expiry", "hermes_desktop_pairings"],
+  ["idx_hermes_desktop_results_idempotency_identity", "hermes_desktop_results"],
+  ["idx_hermes_desktop_results_one_accepted_handoff", "hermes_desktop_results"],
+  ["idx_lead_ack_receipts_envelope_observed", "lead_ack_receipts"],
+  ["idx_measurement_deltas_created", "measurement_deltas"],
+  ["idx_measurement_deltas_identity", "measurement_deltas"],
+  ["idx_measurement_deltas_metric", "measurement_deltas"],
+  ["idx_measurement_deltas_tenant_cohort_created", "measurement_deltas"],
+  ["idx_measurement_intake_receipts_exception_updated", "measurement_intake_receipts"],
+  ["idx_newo_control_status", "newo_control_actions"],
+  ["idx_newo_receipts_session", "newo_event_receipts"],
+  ["idx_newo_receipts_status", "newo_event_receipts"],
+  ["idx_newo_reconciliation_runs_at", "newo_reconciliation_runs"],
+  ["idx_newo_sessions_appointment", "newo_sessions"],
+  ["idx_newo_sessions_missing_report", "newo_sessions"],
+  ["idx_newo_sessions_phone", "newo_sessions"],
+  ["idx_newo_sessions_status", "newo_sessions"],
+  ["idx_newo_sessions_sync", "newo_sessions"],
+  ["idx_newo_sessions_verified_job", "newo_sessions"],
+  ["idx_newo_slots_expiry", "newo_slot_reservations"],
+  ["idx_production_schedule_approval_events_tenant_created", "production_schedule_approval_request_events"],
+  ["idx_production_schedule_approvals_active_target", "production_schedule_approval_requests"],
+  ["idx_production_schedule_approvals_pending_expiry", "production_schedule_approval_requests"],
+  ["idx_production_schedule_approvals_state_lease", "production_schedule_approval_requests"],
+  ["idx_production_schedule_approvals_tenant_state_updated", "production_schedule_approval_requests"],
+  ["idx_public_estimate_rate_limits_expiry", "public_estimate_rate_limits"],
+  ["idx_qb_projection_outbox_pending", "quickbooks_projection_outbox"],
+  ["idx_qb_receipts_last_seen", "quickbooks_webhook_receipts"],
+  ["idx_qb_webhook_receipts_envelope", "quickbooks_webhook_receipts"],
+  ["idx_quote_revision_approval_events_tenant_created", "quote_revision_approval_request_events"],
+  ["idx_quote_revision_approvals_active_target", "quote_revision_approval_requests"],
+  ["idx_quote_revision_approvals_pending_expiry", "quote_revision_approval_requests"],
+  ["idx_quote_revision_approvals_state_lease", "quote_revision_approval_requests"],
+  ["idx_quote_revision_approvals_tenant_state_updated", "quote_revision_approval_requests"],
+  ["idx_replay_requests_status_updated", "replay_requests"],
+  ["idx_app_users_tenant_access_role_active", "app_users"],
+  ["idx_authority_record_actions_pending", "authority_record_actions"],
+  ["idx_authority_record_actions_tenant_record", "authority_record_actions"],
+  ["idx_authority_record_readbacks_state", "authority_record_readbacks"],
+  ["idx_authority_record_readbacks_tenant_record", "authority_record_readbacks"],
+  ["idx_dead_letter_open_measurement", "dead_letter"],
+  ["idx_measurement_intake_receipts_ocr_review", "measurement_intake_receipts"],
+  ["idx_field_actions_work_package_evidence", "field_actions"],
+];
+
+const BASE_REQUIRED_D1_TRIGGER_BINDINGS = [
   ["append_approval_request_created_event", "approval_requests"],
   ["append_approval_request_reconciliation_event", "approval_requests"],
   ["append_approval_request_transition_event", "approval_requests"],
@@ -405,6 +516,20 @@ const REQUIRED_D1_TRIGGER_BINDINGS = [
   ["facet_design_ingest_nonces_append_only_update", "facet_design_ingest_nonces"],
   ["facet_design_projection_attempts_append_only_delete", "facet_design_projection_attempts"],
   ["facet_design_projection_attempts_append_only_update", "facet_design_projection_attempts"],
+  ["hermes_desktop_contexts_immutable_delete", "hermes_desktop_contexts"],
+  ["hermes_desktop_contexts_immutable_update", "hermes_desktop_contexts"],
+  ["hermes_desktop_devices_binding_immutable", "hermes_desktop_devices"],
+  ["hermes_desktop_devices_revocation_monotonic", "hermes_desktop_devices"],
+  ["hermes_desktop_envelopes_binding_immutable", "hermes_desktop_envelopes"],
+  ["hermes_desktop_envelopes_state_transition", "hermes_desktop_envelopes"],
+  ["hermes_desktop_events_immutable_delete", "hermes_desktop_events"],
+  ["hermes_desktop_events_immutable_update", "hermes_desktop_events"],
+  ["hermes_desktop_pairings_binding_immutable", "hermes_desktop_pairings"],
+  ["hermes_desktop_pairings_consumption_monotonic", "hermes_desktop_pairings"],
+  ["hermes_desktop_results_append_only_delete", "hermes_desktop_results"],
+  ["hermes_desktop_results_append_only_update", "hermes_desktop_results"],
+  ["measurement_deltas_append_only_delete", "measurement_deltas"],
+  ["measurement_deltas_append_only_update", "measurement_deltas"],
   ["prevent_approval_request_binding_rewrite", "approval_requests"],
   ["prevent_approval_request_delete", "approval_requests"],
   ["prevent_approval_request_event_delete", "approval_request_events"],
@@ -429,14 +554,250 @@ const REQUIRED_D1_TRIGGER_BINDINGS = [
   ["renew_approval_execution_lease_from_governed_outbox_claim", "governed_transition_outbox"],
   ["validate_source_count_insert", "source_counts"],
   ["validate_source_count_update", "source_counts"],
+  ["authority_record_actions_append_only_delete", "authority_record_actions"],
+  ["authority_record_actions_identity_immutable", "authority_record_actions"],
+  ["authority_record_actions_validate_actor", "authority_record_actions"],
+  ["authority_record_readbacks_append_only_delete", "authority_record_readbacks"],
+  ["authority_record_readbacks_append_only_update", "authority_record_readbacks"],
+  ["authority_record_readbacks_validate_actor", "authority_record_readbacks"],
 ];
+
+function d1ContractCsv(name) {
+  const initial = D1_BACKUP_CONTRACT.match(new RegExp(`^${name}="([^"]*)"$`, "m"))?.[1] ?? "";
+  const additions = [...D1_BACKUP_CONTRACT.matchAll(new RegExp(`^${name}\\+="([^"]*)"$`, "gm"))]
+    .map((match) => match[1]);
+  return [initial, ...additions].join("").split(",").filter(Boolean);
+}
+
+function extendD1Bindings(baseline, current) {
+  const bindings = new Map(baseline);
+  for (const value of current) {
+    const separator = value.indexOf("=");
+    assert.ok(separator > 0, `invalid D1 binding fixture: ${value}`);
+    const name = value.slice(0, separator);
+    const table = value.slice(separator + 1);
+    if (bindings.has(name)) assert.equal(bindings.get(name), table, `D1 binding drift: ${name}`);
+    bindings.set(name, table);
+  }
+  return [...bindings.entries()].sort(([left], [right]) => left.localeCompare(right));
+}
+
+const REQUIRED_D1_TABLES = [...new Set([
+  ...BASE_REQUIRED_D1_TABLES,
+  ...d1ContractCsv("REQUIRED_TABLES"),
+])].sort();
+const REQUIRED_D1_INDEX_BINDINGS = extendD1Bindings(
+  BASE_REQUIRED_D1_INDEX_BINDINGS,
+  d1ContractCsv("REQUIRED_INDEX_BINDINGS"),
+);
+const REQUIRED_D1_TRIGGER_BINDINGS = extendD1Bindings(
+  BASE_REQUIRED_D1_TRIGGER_BINDINGS,
+  d1ContractCsv("REQUIRED_TRIGGER_BINDINGS"),
+);
+
+const HERMES_D1_TABLES = new Set([
+  "hermes_desktop_contexts",
+  "hermes_desktop_devices",
+  "hermes_desktop_envelopes",
+  "hermes_desktop_events",
+  "hermes_desktop_pairings",
+  "hermes_desktop_results",
+]);
+const HERMES_D1_INDEXES = new Set(
+  REQUIRED_D1_INDEX_BINDINGS
+    .filter(([, table]) => HERMES_D1_TABLES.has(table))
+    .map(([name]) => name),
+);
+const HERMES_D1_TRIGGERS = new Set(
+  REQUIRED_D1_TRIGGER_BINDINGS
+    .filter(([, table]) => HERMES_D1_TABLES.has(table))
+    .map(([name]) => name),
+);
+
+function hermesTriggerSql(name) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = HERMES_DESKTOP_MIGRATION.match(new RegExp(
+    `CREATE\\s+TRIGGER\\s+IF\\s+NOT\\s+EXISTS\\s+${escapedName}\\b[\\s\\S]*?\\nEND;`,
+    "i",
+  ));
+  assert.ok(match, `missing Hermes migration trigger fixture: ${name}`);
+  return match[0];
+}
+
+function hermesMigrationSql({ missingTrigger = "" } = {}) {
+  if (!HERMES_D1_TRIGGERS.has(missingTrigger)) return HERMES_DESKTOP_MIGRATION;
+  return HERMES_DESKTOP_MIGRATION.replace(hermesTriggerSql(missingTrigger), "");
+}
+
+function hermesIndexSql(name) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = HERMES_DESKTOP_MIGRATION.match(new RegExp(
+    `CREATE\\s+(?:UNIQUE\\s+)?INDEX\\s+IF\\s+NOT\\s+EXISTS\\s+${escapedName}\\b[\\s\\S]*?;`,
+    "i",
+  ));
+  assert.ok(match, `missing Hermes migration index fixture: ${name}`);
+  return match[0].replace(/\s+IF\s+NOT\s+EXISTS/i, "");
+}
+
+function d1IndexSql(name, table) {
+  if (HERMES_D1_INDEXES.has(name)) return hermesIndexSql(name);
+  if (name === "idx_app_users_tenant_access_role_active")
+    return `CREATE INDEX ${name} ON ${table}(tenant_id, active, access_role, updated_at);`;
+  if (name === "idx_measurement_deltas_identity")
+    return `CREATE UNIQUE INDEX ${name} ON ${table}(tenant_id, receipt_id, check_name, metric);`;
+  if (name === "idx_measurement_deltas_tenant_cohort_created")
+    return `CREATE INDEX ${name} ON ${table}(tenant_id, provider, source, metric, error_kind, created_at, id);`;
+  if (name === "idx_measurement_intake_receipts_ocr_review")
+    return `CREATE INDEX ${name} ON ${table}(ocr_review_required, ocr_status, updated_at DESC);`;
+  if (name === "idx_dead_letter_open_measurement")
+    return `CREATE UNIQUE INDEX ${name} ON ${table}(envelope_id, stage) WHERE recovered = 0 AND stage = 'measurement_processing';`;
+  return `CREATE INDEX ${name} ON ${table}(id);`;
+}
+
+function d1GenericTableSql(name, index) {
+  if (name === "app_users") return `CREATE TABLE app_users (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    role TEXT NOT NULL,
+    access_role TEXT CHECK (
+      access_role IS NULL OR access_role IN (
+        'owner', 'ops', 'sales', 'admin', 'production', 'shop', 'accounting', 'field'
+      )
+    ),
+    updated_at TEXT NOT NULL
+  );
+  INSERT INTO app_users (id, tenant_id, active, role, access_role, updated_at)
+  VALUES ('row-${index}', 'ironwrap', 1, 'owner', 'owner', '2026-08-13T00:00:00.000Z');`;
+  if (name === "dead_letter") return `CREATE TABLE dead_letter (
+    id TEXT PRIMARY KEY,
+    envelope_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    recovered INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO dead_letter (id, envelope_id, stage, recovered)
+  VALUES ('row-${index}', 'envelope-${index}', 'other', 0);`;
+  if (name === "measurement_deltas") return `CREATE TABLE measurement_deltas (
+    id INTEGER PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    receipt_id TEXT NOT NULL,
+    check_name TEXT NOT NULL,
+    metric TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    source TEXT NOT NULL,
+    error_kind TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  INSERT INTO measurement_deltas
+    (id, tenant_id, receipt_id, check_name, metric, provider, source, error_kind, created_at)
+  VALUES (1, 'ironwrap', 'receipt-1', 'cross_source_roof_area', 'roof_area',
+    'applicad', 'google_solar', 'relative_fraction', '2026-08-13T00:00:00.000Z');`;
+  if (name === "measurement_intake_receipts") return `CREATE TABLE measurement_intake_receipts (
+    id TEXT PRIMARY KEY,
+    report_raw_key TEXT CHECK (
+      report_raw_key IS NULL OR (
+        length(report_raw_key) = 92 AND substr(report_raw_key, 1, 24) = 'raw/measurement-reports/' AND
+        substr(report_raw_key, 25, 64) NOT GLOB '*[^0-9a-f]*' AND substr(report_raw_key, 89) = '.bin'
+      )
+    ),
+    report_sha256 TEXT CHECK (
+      report_sha256 IS NULL OR (length(report_sha256) = 64 AND report_sha256 NOT GLOB '*[^0-9a-f]*')
+    ),
+    ocr_status TEXT NOT NULL DEFAULT 'not_requested'
+      CHECK (ocr_status IN ('not_requested', 'processing', 'completed', 'failed')),
+    ocr_result_key TEXT CHECK (
+      ocr_result_key IS NULL OR (
+        length(ocr_result_key) = 166 AND
+        substr(ocr_result_key, 1, 32) = 'raw/measurement-ocr/measurement_' AND
+        substr(ocr_result_key, 33, 64) NOT GLOB '*[^0-9a-f]*' AND
+        substr(ocr_result_key, 97, 1) = '/' AND
+        substr(ocr_result_key, 98, 64) NOT GLOB '*[^0-9a-f]*' AND
+        substr(ocr_result_key, 162) = '.json'
+      )
+    ),
+    ocr_result_sha256 TEXT CHECK (
+      ocr_result_sha256 IS NULL OR (length(ocr_result_sha256) = 64 AND ocr_result_sha256 NOT GLOB '*[^0-9a-f]*')
+    ),
+    ocr_review_required INTEGER NOT NULL DEFAULT 0 CHECK (ocr_review_required IN (0, 1)),
+    updated_at TEXT NOT NULL
+  );
+  INSERT INTO measurement_intake_receipts (id, updated_at)
+  VALUES ('row-${index}', '2026-08-13T00:00:00.000Z');`;
+  return `CREATE TABLE ${name} (id TEXT PRIMARY KEY);\nINSERT INTO ${name} (id) VALUES ('row-${index}');`;
+}
+
+const HERMES_D1_SEED_SQL = `
+INSERT INTO hermes_desktop_pairings (
+  pairing_id, token_sha256, tenant_id, user_id, role, api_audience,
+  bound_issuer, bound_origin, issued_at, expires_at
+) VALUES (
+  'pairing-1', '${"a".repeat(64)}', 'tenant-a', 'user-a', 'owner',
+  'https://bus.example.invalid', 'https://os.example.invalid',
+  'https://app.example.invalid', '2026-08-13T00:00:00.000Z', '2026-08-13T01:00:00.000Z'
+);
+INSERT INTO hermes_desktop_devices (
+  device_id, pairing_id, tenant_id, user_id, role, api_audience, bound_issuer,
+  bound_origin, connector_capabilities_json, device_name, device_proof_sha256,
+  access_token_sha256, access_expires_at, paired_at
+) VALUES (
+  'device-0001', 'pairing-1', 'tenant-a', 'user-a', 'owner',
+  'https://bus.example.invalid', 'https://os.example.invalid',
+  'https://app.example.invalid', '{}', 'Fixture desktop', '${"b".repeat(64)}',
+  '${"c".repeat(64)}', '2026-08-13T01:00:00.000Z', '2026-08-13T00:00:00.000Z'
+);
+INSERT INTO hermes_desktop_envelopes (
+  envelope_id, version, workflow, tenant_id, user_id, role, device_id,
+  pairing_id, lead_id, lead_envelope_id, channel, recipient_ref, consent_id,
+  consent_basis, state, context_sha256, context_json, envelope_json,
+  provider_request_json, provider_request_sha256, output_schema_sha256,
+  messages_sha256, issued_at, expires_at
+) VALUES (
+  'envelope-1', 'task_envelope_v1', 'lead_follow_up_draft', 'tenant-a', 'user-a',
+  'owner', 'device-0001', 'pairing-1', 'lead-0001', 'lead-envelope-1', 'Email',
+  'lead@example.invalid', 'consent-1', 'express', 'issued', '${"d".repeat(64)}',
+  '{}', '{}', '{}', '${"e".repeat(64)}', '${"f".repeat(64)}', '${"1".repeat(64)}',
+  '2026-08-13T00:00:00.000Z', '2026-08-13T01:00:00.000Z'
+);
+INSERT INTO hermes_desktop_contexts (
+  context_id, envelope_id, tenant_id, user_id, role, device_id, pairing_id,
+  prior_context_sha256, context_sha256, observations_json, calendar_slots_json,
+  context_json, provider_request_json, provider_request_sha256,
+  output_schema_sha256, messages_sha256, staged_at
+) VALUES (
+  'context-1', 'envelope-1', 'tenant-a', 'user-a', 'owner', 'device-0001',
+  'pairing-1', '${"0".repeat(64)}', '${"d".repeat(64)}', '[]', '[]', '{}', '{}',
+  '${"e".repeat(64)}', '${"f".repeat(64)}', '${"1".repeat(64)}',
+  '2026-08-13T00:05:00.000Z'
+);
+INSERT INTO hermes_desktop_results (
+  result_id, envelope_id, context_id, tenant_id, user_id, role, device_id,
+  pairing_id, context_sha256, provider_request_sha256, source_channel,
+  idempotency_key_sha256, input_sha256, outcome, validation_sha256,
+  handoff_sha256, result_sha256, result_json, recorded_at
+) VALUES (
+  'result-0001', 'envelope-1', 'context-1', 'tenant-a', 'user-a', 'owner',
+  'device-0001', 'pairing-1', '${"d".repeat(64)}', '${"e".repeat(64)}', 'desktop',
+  '${"2".repeat(64)}', '${"3".repeat(64)}', 'accepted', '${"4".repeat(64)}',
+  '${"5".repeat(64)}', '${"6".repeat(64)}', '{}', '2026-08-13T00:10:00.000Z'
+);
+INSERT INTO hermes_desktop_events (
+  event_id, event_type, tenant_id, user_id, role, pairing_id, device_id,
+  envelope_id, context_id, result_id, detail_sha256, created_at
+) VALUES (
+  'event-0001', 'draft_result_recorded', 'tenant-a', 'user-a', 'owner',
+  'pairing-1', 'device-0001', 'envelope-1', 'context-1', 'result-0001',
+  '${"7".repeat(64)}', '2026-08-13T00:10:00.000Z'
+);`;
 
 function d1TriggerSql(name, table, {
   weakReceiptTrigger = "",
   wrongTimingReceiptTrigger = "",
+  weakMeasurementTrigger = "",
   weakApprovalTrigger = "",
   wrongTimingApprovalTrigger = "",
+  weakAccessRoleTrigger = false,
 } = {}) {
+  if (HERMES_D1_TRIGGERS.has(name)) return hermesTriggerSql(name);
   if (name === "validate_source_count_insert") {
     return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} WHEN 0 BEGIN SELECT RAISE(ABORT, 'invalid_source_count'); END;`;
   }
@@ -449,6 +810,10 @@ function d1TriggerSql(name, table, {
   }
   if (name === wrongTimingReceiptTrigger) {
     return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, 'lead_ack_receipts_immutable'); END;`;
+  }
+  if (name === weakMeasurementTrigger) {
+    const timing = name.endsWith("_delete") ? "DELETE" : "UPDATE";
+    return `CREATE TRIGGER ${name} BEFORE ${timing} ON ${table} BEGIN SELECT RAISE(ABORT, 'wrong_measurement_abort'); END;`;
   }
   if (name === weakApprovalTrigger) {
     const timing = name.endsWith("_delete") ? "DELETE" : "UPDATE";
@@ -490,6 +855,27 @@ function d1TriggerSql(name, table, {
   }
   if (name === "prevent_lead_ack_receipts_delete") {
     return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'lead_ack_receipts_immutable'); END;`;
+  }
+  if (name === "measurement_deltas_append_only_update") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'measurement_deltas_append_only'); END;`;
+  }
+  if (name === "measurement_deltas_append_only_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'measurement_deltas_append_only'); END;`;
+  }
+  if (name === "facet_design_evidence_associations_validate_insert") {
+    const rolePredicate = weakAccessRoleTrigger
+      ? "actor.role IN ('owner', 'ops')"
+      : "actor.access_role IN ('owner', 'ops')";
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'facet_design_association_event_anchor_mismatch') WHERE NOT EXISTS (
+        SELECT 1 FROM facet_customer_approval_events AS event
+        WHERE event.event_type = 'facet.design.customer_approved.v2' AND event.schema_version = 2
+          AND event.identity_assurance = 'bearer_capability_only'
+      );
+      SELECT RAISE(ABORT, 'facet_design_association_office_actor_required') WHERE NOT EXISTS (
+        SELECT 1 FROM app_users AS actor WHERE ${rolePredicate}
+      );
+    END;`;
   }
   if (name === "prevent_approval_request_binding_rewrite") {
     return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'approval_request_binding_immutable'); END;`;
@@ -568,24 +954,37 @@ function d1TriggerSql(name, table, {
 
 function d1Sql({
   missingTable = "",
+  missingIndex = "",
   missingTrigger = "",
   weakReceiptTrigger = "",
   wrongTimingReceiptTrigger = "",
+  weakMeasurementTrigger = "",
   weakApprovalTrigger = "",
   wrongTimingApprovalTrigger = "",
+  weakAccessRoleTrigger = false,
+  nullActiveAccessRole = false,
 } = {}) {
   const tables = REQUIRED_D1_TABLES.filter((name) => name !== missingTable);
   const triggers = REQUIRED_D1_TRIGGER_BINDINGS.filter(([name, table]) => name !== missingTrigger && table !== missingTable);
-  return `BEGIN TRANSACTION;\n${tables.map((name, index) => `CREATE TABLE ${name} (id TEXT PRIMARY KEY);\nINSERT INTO ${name} (id) VALUES ('row-${index}');`).join("\n")}\n${triggers.map(([name, table]) => d1TriggerSql(name, table, { weakReceiptTrigger, wrongTimingReceiptTrigger, weakApprovalTrigger, wrongTimingApprovalTrigger })).join("\n")}\nCOMMIT;\n`;
+  const genericTables = tables.filter((name) => !HERMES_D1_TABLES.has(name));
+  const indexes = REQUIRED_D1_INDEX_BINDINGS.filter(([name, table]) =>
+    !HERMES_D1_INDEXES.has(name) && name !== missingIndex && table !== missingTable
+  );
+  const genericTriggers = triggers.filter(([name]) => !HERMES_D1_TRIGGERS.has(name));
+  return `BEGIN TRANSACTION;\n${genericTables.map(d1GenericTableSql).join("\n")}\n${nullActiveAccessRole ? "UPDATE app_users SET access_role = NULL WHERE active = 1;\n" : ""}${hermesMigrationSql({ missingTrigger })}\n${HERMES_D1_SEED_SQL}\n${indexes.map(([name, table]) => d1IndexSql(name, table)).join("\n")}\n${genericTriggers.map(([name, table]) => d1TriggerSql(name, table, { weakReceiptTrigger, wrongTimingReceiptTrigger, weakMeasurementTrigger, weakApprovalTrigger, wrongTimingApprovalTrigger, weakAccessRoleTrigger })).join("\n")}\nCOMMIT;\n`;
 }
 
 async function mockD1BackupEnvironment(t, {
   failCopy = false,
   signalCopy = false,
   missingTable = "",
+  missingIndex = "",
   missingTrigger = "",
   weakReceiptTrigger = "",
+  weakMeasurementTrigger = "",
   weakApprovalTrigger = "",
+  weakAccessRoleTrigger = false,
+  nullActiveAccessRole = false,
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-d1-backup-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -643,7 +1042,16 @@ exit 0
       PATH: `${bin}:${process.env.PATH}`,
       TMPDIR: root,
       MOCK_STATE: state,
-      MOCK_D1_SQL: d1Sql({ missingTable, missingTrigger, weakReceiptTrigger, weakApprovalTrigger }),
+      MOCK_D1_SQL: d1Sql({
+        missingTable,
+        missingIndex,
+        missingTrigger,
+        weakReceiptTrigger,
+        weakMeasurementTrigger,
+        weakApprovalTrigger,
+        weakAccessRoleTrigger,
+        nullActiveAccessRole,
+      }),
       MOCK_FAIL_COPY: failCopy ? "1" : "0",
       MOCK_SIGNAL_COPY: signalCopy ? "1" : "0",
       D1_BACKUP_API_TOKEN: "cloudflare_d1_backup_read_4c8f0b2d6a9137e5",
@@ -669,18 +1077,26 @@ async function mockD1RestoreEnvironment(t, {
   signalDownload = false,
   missingTable = "",
   rowMismatch = false,
+  indexMismatch = false,
+  indexSemanticsMismatch = false,
+  measurementIndexSemanticsMismatch = false,
   rowResultMode = "normal",
   triggerMismatch = false,
   triggerResultMode = "normal",
   triggerSemanticsMismatch = false,
+  measurementTriggerSemanticsMismatch = false,
   quoteRevisionTriggerSemanticsMismatch = false,
   productionScheduleTriggerSemanticsMismatch = false,
   governedTransitionTriggerSemanticsMismatch = false,
   missingTrigger = "",
+  missingIndex = "",
   weakReceiptTrigger = "",
   wrongTimingReceiptTrigger = "",
+  weakMeasurementTrigger = "",
   weakApprovalTrigger = "",
   wrongTimingApprovalTrigger = "",
+  weakAccessRoleTrigger = false,
+  nullActiveAccessRole = false,
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-d1-restore-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -717,11 +1133,15 @@ async function mockD1RestoreEnvironment(t, {
   const sqlPath = path.join(packageDir, sqlFile);
   await writeFile(sqlPath, d1Sql({
     missingTable,
+    missingIndex,
     missingTrigger,
     weakReceiptTrigger,
     wrongTimingReceiptTrigger,
+    weakMeasurementTrigger,
     weakApprovalTrigger,
     wrongTimingApprovalTrigger,
+    weakAccessRoleTrigger,
+    nullActiveAccessRole,
   }));
   const sqlDigest = createHash("sha256").update(await readFile(sqlPath)).digest("hex");
   await writeFile(path.join(packageDir, "IRONWRAP-D1-BACKUP-MANIFEST.txt"), [
@@ -735,6 +1155,8 @@ async function mockD1RestoreEnvironment(t, {
     `sql_file=${sqlFile}`,
     `sql_sha256=${sqlDigest}`,
     `required_tables=${REQUIRED_D1_TABLES.join(",")}`,
+    `required_indexes=${REQUIRED_D1_INDEX_BINDINGS.map(([name, table]) => `${name}=${table}`).join(",")}`,
+    `required_triggers=${REQUIRED_D1_TRIGGER_BINDINGS.map(([name, table]) => `${name}=${table}`).join(",")}`,
     "",
   ].join("\n"));
   const archiveName = `ironwrap-d1-ironwrap-bus-${stamp}.tar.gz.age`;
@@ -756,6 +1178,46 @@ async function mockD1RestoreEnvironment(t, {
   await writeFile(identity, "AGE-SECRET-KEY-MOCK\n", { mode: 0o600 });
   await chmod(identity, 0o600);
 
+  const matchingIndexes = JSON.stringify([{
+    results: REQUIRED_D1_INDEX_BINDINGS.map(([index_name, table_name]) => ({
+      index_name,
+      table_name,
+      index_sql: d1IndexSql(index_name, table_name),
+    })),
+    success: true,
+    meta: { changes: 0, changed_db: false },
+  }]);
+  const mismatchedIndexes = JSON.stringify([{
+    results: REQUIRED_D1_INDEX_BINDINGS.map(([index_name, table_name], index) => ({
+      index_name,
+      table_name: index === 0 ? "lead_ack_receipts" : table_name,
+      index_sql: d1IndexSql(index_name, table_name),
+    })),
+    success: true,
+    meta: { changes: 0, changed_db: false },
+  }]);
+  const semanticallyMismatchedIndexes = JSON.stringify([{
+    results: REQUIRED_D1_INDEX_BINDINGS.map(([index_name, table_name]) => ({
+      index_name,
+      table_name,
+      index_sql: index_name === "idx_hermes_desktop_results_one_accepted_handoff"
+        ? "CREATE INDEX idx_hermes_desktop_results_one_accepted_handoff ON hermes_desktop_results(envelope_id)"
+        : d1IndexSql(index_name, table_name),
+    })),
+    success: true,
+    meta: { changes: 0, changed_db: false },
+  }]);
+  const measurementSemanticallyMismatchedIndexes = JSON.stringify([{
+    results: REQUIRED_D1_INDEX_BINDINGS.map(([index_name, table_name]) => ({
+      index_name,
+      table_name,
+      index_sql: index_name === "idx_measurement_deltas_identity"
+        ? "CREATE UNIQUE INDEX idx_measurement_deltas_identity ON measurement_deltas(receipt_id, check_name, metric)"
+        : d1IndexSql(index_name, table_name),
+    })),
+    success: true,
+    meta: { changes: 0, changed_db: false },
+  }]);
   const matchingTriggers = JSON.stringify([{
     results: REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({
       trigger_name,
@@ -779,6 +1241,17 @@ async function mockD1RestoreEnvironment(t, {
       trigger_name,
       table_name,
       trigger_sql: d1TriggerSql(trigger_name, table_name, { wrongTimingReceiptTrigger: "prevent_lead_ack_receipts_update" }),
+    })),
+    success: true,
+    meta: { changes: 0, changed_db: false },
+  }]);
+  const measurementSemanticallyMismatchedTriggers = JSON.stringify([{
+    results: REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({
+      trigger_name,
+      table_name,
+      trigger_sql: d1TriggerSql(trigger_name, table_name, {
+        weakMeasurementTrigger: "measurement_deltas_append_only_update",
+      }),
     })),
     success: true,
     meta: { changes: 0, changed_db: false },
@@ -858,6 +1331,8 @@ if (( json == 1 )); then
     else
       printf '[{"results":[{"table_name":"%s","row_count":%s}],"success":%s,"meta":{"changes":0,"changed_db":false}}]\\n' "$result_table" "$row_count" "$success"
     fi
+  elif [[ "$command" == *" AS index_name"* ]]; then
+    if [[ "$MOCK_MEASUREMENT_INDEX_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${measurementSemanticallyMismatchedIndexes}'; elif [[ "$MOCK_INDEX_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${semanticallyMismatchedIndexes}'; elif [[ "$MOCK_INDEX_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedIndexes}'; else printf '%s\\n' '${matchingIndexes}'; fi
   elif [[ "$command" == *" AS trigger_name"* ]]; then
     if [[ "$MOCK_TRIGGER_RESULT_MODE" == 'error' ]]; then
       printf '[{"results":[],"success":false,"meta":{"changes":0,"changed_db":false}}]\\n'
@@ -865,7 +1340,7 @@ if (( json == 1 )); then
       printf '%s\\n' '${JSON.stringify([{ results: REQUIRED_D1_TRIGGER_BINDINGS.slice(1).map(([trigger_name, table_name]) => ({ trigger_name, table_name, trigger_sql: d1TriggerSql(trigger_name, table_name) })), success: true, meta: { changes: 0, changed_db: false } }])}'
     elif [[ "$MOCK_TRIGGER_RESULT_MODE" == 'duplicate' ]]; then
       printf '%s\\n' '${JSON.stringify([{ results: [...REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({ trigger_name, table_name, trigger_sql: d1TriggerSql(trigger_name, table_name) })), { trigger_name: REQUIRED_D1_TRIGGER_BINDINGS[0][0], table_name: REQUIRED_D1_TRIGGER_BINDINGS[0][1], trigger_sql: d1TriggerSql(...REQUIRED_D1_TRIGGER_BINDINGS[0]) }], success: true, meta: { changes: 0, changed_db: false } }])}'
-    elif [[ "$MOCK_GOVERNED_TRANSITION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${governedTransitionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_PRODUCTION_SCHEDULE_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${productionScheduleSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_QUOTE_REVISION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${quoteRevisionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${semanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedTriggers}'; else printf '%s\\n' '${matchingTriggers}'; fi
+    elif [[ "$MOCK_GOVERNED_TRANSITION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${governedTransitionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_PRODUCTION_SCHEDULE_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${productionScheduleSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_QUOTE_REVISION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${quoteRevisionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_MEASUREMENT_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${measurementSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${semanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedTriggers}'; else printf '%s\\n' '${matchingTriggers}'; fi
   else
     exit 2
   fi
@@ -918,10 +1393,14 @@ esac
       MOCK_PREFLIGHT_RESPONSE_MODE: preflightResponseMode,
       MOCK_SIGNAL_DOWNLOAD: signalDownload ? "1" : "0",
       MOCK_ROW_MISMATCH: rowMismatch ? "1" : "0",
+      MOCK_INDEX_MISMATCH: indexMismatch ? "1" : "0",
+      MOCK_INDEX_SEMANTICS_MISMATCH: indexSemanticsMismatch ? "1" : "0",
+      MOCK_MEASUREMENT_INDEX_SEMANTICS_MISMATCH: measurementIndexSemanticsMismatch ? "1" : "0",
       MOCK_ROW_RESULT_MODE: rowResultMode,
       MOCK_TRIGGER_MISMATCH: triggerMismatch ? "1" : "0",
       MOCK_TRIGGER_RESULT_MODE: triggerResultMode,
       MOCK_TRIGGER_SEMANTICS_MISMATCH: triggerSemanticsMismatch ? "1" : "0",
+      MOCK_MEASUREMENT_TRIGGER_SEMANTICS_MISMATCH: measurementTriggerSemanticsMismatch ? "1" : "0",
       MOCK_QUOTE_REVISION_TRIGGER_SEMANTICS_MISMATCH: quoteRevisionTriggerSemanticsMismatch ? "1" : "0",
       MOCK_PRODUCTION_SCHEDULE_TRIGGER_SEMANTICS_MISMATCH: productionScheduleTriggerSemanticsMismatch ? "1" : "0",
       MOCK_GOVERNED_TRANSITION_TRIGGER_SEMANTICS_MISMATCH: governedTransitionTriggerSemanticsMismatch ? "1" : "0",
@@ -949,6 +1428,7 @@ esac
 
 function validLiveEnv() {
   const adminToken = "admin_7f9e4c21b6a348d5a8f0c2e4";
+  const effectRuntimeToken = "effect_runtime_8f6e4c2a0b9d7e5f3a1c8b6d4e2f0a9c";
   return {
     FRAPPE_VERSION: "v15.114.0",
     FRAPPE_COMMIT: "105b17938839f4e5c6cdff817d42afc40c3bcc32",
@@ -984,6 +1464,9 @@ function validLiveEnv() {
     APP_FACET_QUOTE_REVISION_PREPARE_ENABLED: "false",
     IRONWRAP_BUS_BASE_URL: "https://bus.ironwrapexteriors.com",
     IRONWRAP_ADMIN_TOKEN: adminToken,
+    IRONWRAP_EFFECT_RUNTIME_ENABLED: "true",
+    IRONWRAP_EFFECT_RUNTIME_URL: "https://bus.ironwrapexteriors.com",
+    IRONWRAP_EFFECT_RUNTIME_TOKEN: effectRuntimeToken,
     IRONWRAP_BUS_WRITE_ENABLED: "false",
     ERPNEXT_WRITE_ENABLED: "false",
     HERMES_WRITE_TOKEN: "approval_1d9a84f620be4c7a936820d5ef31",
@@ -1000,6 +1483,7 @@ function validLiveEnv() {
     BUS_BASE_URL: "https://bus.ironwrapexteriors.com",
     INGEST_TOKEN: "ingest_4ef90c12a86b43d1ab75f3e8",
     ADMIN_TOKEN: adminToken,
+    EFFECT_RUNTIME_TOKEN: effectRuntimeToken,
     FRAPPE_BASE_URL: "https://os.ironwrapexteriors.com",
     FRAPPE_API_KEY: "launch_proof_key_6a8f21",
     FRAPPE_API_SECRET: "launch_proof_secret_8d1c4b7a2e",
@@ -1062,7 +1546,7 @@ test("contract mode rejects a self-consistent D1 allowlist that omits a migratio
     backupPath,
     backup
       .replace(",facet_design_evidence_associations", "")
-      .replace("REQUIRED_TABLE_COUNT=52", "REQUIRED_TABLE_COUNT=51"),
+      .replace("REQUIRED_TABLE_COUNT=87", "REQUIRED_TABLE_COUNT=86"),
   );
 
   const result = await validateContract({ repoRoot: root });
@@ -1141,6 +1625,33 @@ test("contract mode requires the launch-proof Frappe configuration inventory", a
   const result = await validateContract({ repoRoot: root });
   assert.equal(result.ok, false);
   assert.equal(result.checks.find((item) => item.id === "contract.env.FRAPPE_API_SECRET")?.status, "fail");
+});
+
+test("contract mode requires a name-only autonomous release credential inventory", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-readiness-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await cp(path.join(DEFAULT_REPO_ROOT, "deploy"), path.join(root, "deploy"), { recursive: true, preserveTimestamps: true });
+  const envPath = path.join(root, "deploy/release.env.example");
+  const env = await readFile(envPath, "utf8");
+  await writeFile(
+    envPath,
+    env.replace(/^RELEASE_SERVICE_ADAPTER_TOKEN=.*\n/m, ""),
+  );
+
+  const missing = await validateContract({ repoRoot: root });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.checks.find((item) => item.id === "contract.release_env.RELEASE_SERVICE_ADAPTER_TOKEN")?.status, "fail");
+
+  await writeFile(
+    envPath,
+    env.replace(
+      "RELEASE_PERMIT_PRIVATE_KEY=<release-permit-ed25519-private-key-pem>",
+      "RELEASE_PERMIT_PRIVATE_KEY=committed-private-key",
+    ),
+  );
+  const committed = await validateContract({ repoRoot: root });
+  assert.equal(committed.ok, false);
+  assert.equal(committed.checks.find((item) => item.id === "contract.release_env.RELEASE_PERMIT_PRIVATE_KEY")?.status, "fail");
 });
 
 test("live-env mode accepts a complete locked production environment", async () => {
@@ -1254,12 +1765,12 @@ test("live-env mode fails closed when public-estimator controls drift from the t
   env.PUBLIC_ESTIMATE_CONSENT_JURISDICTION = "Unspecified";
   env.PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX = "101";
   env.PUBLIC_ESTIMATE_RANGE_RULES_JSON = JSON.stringify([{
-    rule_id: "wrong-service-v1",
+    rule_id: "otherwise-valid-rule-v1",
     brand: "ironwrap",
-    service: "invented_service",
+    service: "metal_roofing",
     province: "AB",
-    min_cad: 100,
-    max_cad: 200,
+    min_cad: 18_000,
+    max_cad: 32_000,
   }]);
 
   const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
@@ -1696,6 +2207,16 @@ test("D1 backup fails before upload when the durable QuickBooks projection outbo
   await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
 });
 
+test("D1 backup fails before upload when a required production index is missing", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, {
+    missingIndex: "idx_qb_projection_outbox_pending",
+  });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required index: idx_qb_projection_outbox_pending on quickbooks_projection_outbox/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
 test("D1 backup fails before upload when an invariant trigger is missing", async (t) => {
   const mock = await mockD1BackupEnvironment(t, { missingTrigger: "prevent_lead_ack_receipts_delete" });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
@@ -1713,6 +2234,19 @@ test("D1 backup rejects a named receipt trigger without immutable update/delete 
   await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
 });
 
+test("D1 backup rejects a measurement-delta trigger without append-only semantics", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, {
+    weakMeasurementTrigger: "measurement_deltas_append_only_delete",
+  });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(
+    run.stderr,
+    /does not enforce immutable measurement-delta trigger semantics: measurement_deltas_append_only_delete/,
+  );
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
 test("D1 backup rejects a quote-revision ledger trigger without immutable semantics", async (t) => {
   const mock = await mockD1BackupEnvironment(t, { weakApprovalTrigger: "prevent_quote_revision_approval_event_delete" });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
@@ -1726,6 +2260,25 @@ test("D1 backup rejects a governed-transition event trigger without immutable se
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /does not enforce immutable approval-ledger trigger semantics: prevent_governed_transition_outbox_event_delete/);
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
+test("D1 backup rejects Facet authority that falls back to the legacy role", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { weakAccessRoleTrigger: true });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(
+    run.stderr,
+    /does not enforce access-role trigger semantics: facet_design_evidence_associations_validate_insert/,
+  );
+  await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
+});
+
+test("D1 backup rejects active users without an explicit access role", async (t) => {
+  const mock = await mockD1BackupEnvironment(t, { nullActiveAccessRole: true });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /contains active app users without explicit access_role/);
   await assert.rejects(readFile(path.join(mock.state, "rclone.log"), "utf8"));
 });
 
@@ -1757,7 +2310,7 @@ test("D1 recovery defaults to local cryptographic and SQLite verification withou
   assert.equal((await readdir(mock.root)).some((entry) => entry.startsWith("ironwrap-d1-restore.")), false);
 });
 
-test("remote D1 drill uses exact generated target config and verifies restored tables and triggers", async (t) => {
+test("remote D1 drill uses exact generated target config and verifies restored tables, indexes, and triggers", async (t) => {
   const mock = await mockD1RestoreEnvironment(t);
   mock.env.D1_RESTORE_MODE = "remote";
   mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
@@ -1766,12 +2319,12 @@ test("remote D1 drill uses exact generated target config and verifies restored t
   assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
   assert.match(run.stdout, /exact confirmed non-production drill database/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
   assert.equal(operations.every((line) => line.startsWith(`d1 execute ${mock.env.D1_RESTORE_TARGET_DATABASE_NAME} --remote`)), true);
   assert.equal(operations.join("\n").includes(mock.env.D1_RESTORE_API_TOKEN), false);
   const readOperations = operations.filter((line) => line.includes(" --json"));
   const importOperations = operations.filter((line) => line.includes(" --file "));
-  assert.equal(readOperations.length, REQUIRED_D1_TABLES.length + 2);
+  assert.equal(readOperations.length, REQUIRED_D1_TABLES.length + 3);
   assert.equal(readOperations.every((line) => line.includes(" --command ") && !line.includes(" --file ")), true);
   assert.equal(importOperations.length, 1);
   assert.equal(importOperations[0].includes(" --json"), false);
@@ -1779,7 +2332,7 @@ test("remote D1 drill uses exact generated target config and verifies restored t
     .trim()
     .split("\n")
     .map(Number);
-  assert.equal(commandLengths.length, REQUIRED_D1_TABLES.length + 2);
+  assert.equal(commandLengths.length, REQUIRED_D1_TABLES.length + 3);
   assert.equal(commandLengths.every((length) => Number.isSafeInteger(length) && length <= 16_384), true);
   assert.equal((await readFile(path.join(mock.state, "imported"), "utf8")), "");
   const config = JSON.parse(await readFile(path.join(mock.state, "target-config.json"), "utf8"));
@@ -1953,11 +2506,34 @@ test("D1 recovery rejects an export missing the durable QuickBooks projection ou
   await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
 });
 
+test("D1 recovery rejects an export missing a required production index", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, {
+    missingIndex: "idx_qb_projection_outbox_pending",
+  });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /missing required index: idx_qb_projection_outbox_pending on quickbooks_projection_outbox/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
 test("D1 recovery rejects a local receipt trigger without immutable update/delete semantics", async (t) => {
   const mock = await mockD1RestoreEnvironment(t, { weakReceiptTrigger: "prevent_lead_ack_receipts_update" });
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /does not enforce immutable receipt trigger semantics: prevent_lead_ack_receipts_update/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
+test("D1 recovery rejects a local measurement-delta trigger without append-only semantics", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, {
+    weakMeasurementTrigger: "measurement_deltas_append_only_update",
+  });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(
+    run.stderr,
+    /does not enforce immutable measurement-delta trigger semantics: measurement_deltas_append_only_update/,
+  );
   await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
 });
 
@@ -1985,6 +2561,25 @@ test("D1 recovery rejects a governed-transition outbox event trigger without imm
   await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
 });
 
+test("D1 recovery rejects Facet authority that falls back to the legacy role", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { weakAccessRoleTrigger: true });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(
+    run.stderr,
+    /does not enforce access-role trigger semantics: facet_design_evidence_associations_validate_insert/,
+  );
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
+test("D1 recovery rejects active users without an explicit access role", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { nullActiveAccessRole: true });
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /contains active app users without explicit access_role/);
+  await assert.rejects(readFile(path.join(mock.state, "wrangler.log"), "utf8"));
+});
+
 test("remote D1 drill fails when named invariant-trigger inventory differs", async (t) => {
   const mock = await mockD1RestoreEnvironment(t, { triggerMismatch: true });
   mock.env.D1_RESTORE_MODE = "remote";
@@ -1992,7 +2587,43 @@ test("remote D1 drill fails when named invariant-trigger inventory differs", asy
   mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
+  assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
+  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
+});
+
+test("remote D1 drill fails when named index inventory differs", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { indexMismatch: true });
+  mock.env.D1_RESTORE_MODE = "remote";
+  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /index inventory or immutable index semantics differ/);
+  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+});
+
+test("remote D1 drill rejects a non-unique Hermes accepted-handoff index", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { indexSemanticsMismatch: true });
+  mock.env.D1_RESTORE_MODE = "remote";
+  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /index inventory or immutable index semantics differ/);
+  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+});
+
+test("remote D1 drill rejects a measurement identity index without tenant scope", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { measurementIndexSemanticsMismatch: true });
+  mock.env.D1_RESTORE_MODE = "remote";
+  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /index inventory or immutable index semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
   assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
 });
@@ -2006,9 +2637,9 @@ test("remote D1 drill rejects missing, duplicate, and error trigger results", as
       mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
       const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
       assert.notEqual(run.status, 0);
-      assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
+      assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
       const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-      assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+      assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
       assert.equal(operations.at(-1).includes(" --command "), true);
       assert.equal((await readFile(path.join(mock.state, "imported"), "utf8")), "");
     });
@@ -2022,9 +2653,21 @@ test("remote D1 drill rejects receipt triggers without immutable update/delete s
   mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
+  assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
+});
+
+test("remote D1 drill rejects measurement-delta triggers without append-only semantics", async (t) => {
+  const mock = await mockD1RestoreEnvironment(t, { measurementTriggerSemanticsMismatch: true });
+  mock.env.D1_RESTORE_MODE = "remote";
+  mock.env.D1_RESTORE_API_TOKEN = "cloudflare_d1_restore_write_91e6a4c8f02b735d";
+  mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
+  const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
+  const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
 });
 
 test("remote D1 drill rejects quote-revision ledger triggers without immutable semantics", async (t) => {
@@ -2034,9 +2677,9 @@ test("remote D1 drill rejects quote-revision ledger triggers without immutable s
   mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
+  assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
 });
 
 test("remote D1 drill rejects production-schedule ledger triggers without immutable semantics", async (t) => {
@@ -2046,9 +2689,9 @@ test("remote D1 drill rejects production-schedule ledger triggers without immuta
   mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
+  assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
 });
 
 test("remote D1 drill rejects governed-transition outbox event triggers without immutable semantics", async (t) => {
@@ -2058,9 +2701,9 @@ test("remote D1 drill rejects governed-transition outbox event triggers without 
   mock.env.D1_RESTORE_CONFIRMATION = `RESTORE_D1:${mock.env.D1_RESTORE_TARGET_DATABASE_NAME}@${mock.env.D1_RESTORE_TARGET_DATABASE_ID}`;
   const run = spawnSync("bash", [mock.script], { encoding: "utf8", env: mock.env });
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /trigger inventory or receipt semantics differ/);
+  assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 3);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
 });
 
 test("D1 recovery rejects bad ciphertext checksums and signal-cleans decrypted workspace", async (t) => {

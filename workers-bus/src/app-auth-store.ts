@@ -15,7 +15,8 @@ export async function findActiveUser(
   emailNormalized: string,
 ): Promise<AppUserRecord | null> {
   return await env.DB.prepare(
-    `SELECT user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+    `SELECT user_id, tenant_id, email_normalized, display_name,
+            access_role AS role, frappe_user_id,
             active, created_by, created_at, updated_at
      FROM app_users
      WHERE tenant_id = ? AND email_normalized = ? AND active = 1
@@ -29,7 +30,8 @@ export async function findActiveUserById(
   userId: string,
 ): Promise<AppUserRecord | null> {
   return await env.DB.prepare(
-    `SELECT user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+    `SELECT user_id, tenant_id, email_normalized, display_name,
+            access_role AS role, frappe_user_id,
             active, created_by, created_at, updated_at
      FROM app_users
      WHERE tenant_id = ? AND user_id = ? AND active = 1
@@ -44,7 +46,7 @@ export async function listActiveFieldUsers(
   const result = await env.DB.prepare(
     `SELECT user_id, display_name, email_normalized, frappe_user_id
      FROM app_users
-     WHERE tenant_id = ? AND active = 1 AND role = 'field'
+     WHERE tenant_id = ? AND active = 1 AND access_role = 'field'
      ORDER BY display_name COLLATE NOCASE ASC, user_id ASC
      LIMIT 100`,
   ).bind(tenantId).all<Pick<AppUserRecord, "user_id" | "display_name" | "email_normalized" | "frappe_user_id">>();
@@ -54,14 +56,18 @@ export async function listActiveFieldUsers(
 export async function upsertAppUser(env: Env, input: ProvisionAppUserInput): Promise<AppUserRecord> {
   const now = nowIso();
   const candidateId = `appu_${crypto.randomUUID()}`;
+  const storageRole = input.role === "owner" || input.role === "field"
+    ? input.role
+    : "ops";
   await env.DB.prepare(
     `INSERT INTO app_users
-       (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id, active,
+       (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id, active,
         created_by, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)
      ON CONFLICT(tenant_id, email_normalized) DO UPDATE SET
        display_name = excluded.display_name,
        role = excluded.role,
+       access_role = excluded.access_role,
        frappe_user_id = excluded.frappe_user_id,
        active = excluded.active,
        updated_at = excluded.updated_at`,
@@ -70,6 +76,7 @@ export async function upsertAppUser(env: Env, input: ProvisionAppUserInput): Pro
     input.tenant_id,
     input.email_normalized,
     input.display_name,
+    storageRole,
     input.role,
     input.frappe_user_id,
     input.active ? 1 : 0,
@@ -79,7 +86,8 @@ export async function upsertAppUser(env: Env, input: ProvisionAppUserInput): Pro
   ).run();
 
   const row = await env.DB.prepare(
-    `SELECT user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+    `SELECT user_id, tenant_id, email_normalized, display_name,
+            access_role AS role, frappe_user_id,
             active, created_by, created_at, updated_at
      FROM app_users WHERE tenant_id = ? AND email_normalized = ? LIMIT 1`,
   ).bind(input.tenant_id, input.email_normalized).first<AppUserRecord>();
@@ -108,9 +116,9 @@ export async function bootstrapFirstOwnerAppUser(
   const candidateId = `appu_${crypto.randomUUID()}`;
   const result = await env.DB.prepare(
     `INSERT INTO app_users
-       (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id, active,
+       (user_id, tenant_id, email_normalized, display_name, role, access_role, frappe_user_id, active,
         created_by, created_at, updated_at)
-     SELECT ?,?,?,?,?,?,?,?, ?, ?
+     SELECT ?,?,?,?,?,?,?,?,?, ?, ?
      WHERE NOT EXISTS (
        SELECT 1 FROM app_users WHERE tenant_id = ? LIMIT 1
      )`,
@@ -119,6 +127,7 @@ export async function bootstrapFirstOwnerAppUser(
     input.tenant_id,
     input.email_normalized,
     input.display_name,
+    "owner",
     "owner",
     null,
     1,
@@ -129,7 +138,8 @@ export async function bootstrapFirstOwnerAppUser(
   ).run();
   if (d1Changes(result) !== 1) return null;
   return await env.DB.prepare(
-    `SELECT user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+    `SELECT user_id, tenant_id, email_normalized, display_name,
+            access_role AS role, frappe_user_id,
             active, created_by, created_at, updated_at
      FROM app_users WHERE tenant_id = ? AND email_normalized = ? LIMIT 1`,
   ).bind(input.tenant_id, input.email_normalized).first<AppUserRecord>();
@@ -175,7 +185,8 @@ export async function consumeMagicLink(
   now: string,
 ): Promise<AppUserRecord | null> {
   const candidate = await env.DB.prepare(
-    `SELECT u.user_id, u.tenant_id, u.email_normalized, u.display_name, u.role,
+    `SELECT u.user_id, u.tenant_id, u.email_normalized, u.display_name,
+            u.access_role AS role,
             u.frappe_user_id, u.active, u.created_by, u.created_at, u.updated_at
      FROM app_magic_links ml
      INNER JOIN app_users u ON u.user_id = ml.user_id AND u.tenant_id = ml.tenant_id
@@ -242,12 +253,14 @@ export async function consumeDevicePairing(
   },
 ): Promise<{ user: AppUserRecord; deviceId: string } | null> {
   const candidate = await env.DB.prepare(
-    `SELECT u.user_id, u.tenant_id, u.email_normalized, u.display_name, u.role,
+    `SELECT u.user_id, u.tenant_id, u.email_normalized, u.display_name,
+            u.access_role AS role,
             u.frappe_user_id, u.active, u.created_by, u.created_at, u.updated_at
      FROM app_device_pairings p
      INNER JOIN app_users u ON u.user_id = p.user_id AND u.tenant_id = p.tenant_id
      WHERE p.token_hash = ? AND p.consumed_at IS NULL AND p.revoked_at IS NULL
-       AND p.expires_at > ? AND u.active = 1 AND u.role = 'field'
+       AND p.expires_at > ? AND u.active = 1
+       AND u.access_role = 'field'
      LIMIT 1`,
   ).bind(input.tokenHash, input.createdAt).first<AppUserRecord>();
   if (!candidate) return null;
@@ -364,14 +377,16 @@ export async function findActiveSession(
     `SELECT s.session_hash, s.created_at AS session_created_at,
             s.expires_at AS session_expires_at, s.revoked_at, s.device_id,
             d.device_proof_hash,
-            u.user_id, u.tenant_id, u.email_normalized, u.display_name, u.role,
+            u.user_id, u.tenant_id, u.email_normalized, u.display_name,
+            u.access_role AS role,
             u.frappe_user_id, u.active, u.created_by, u.created_at, u.updated_at
      FROM app_sessions s
      INNER JOIN app_users u ON u.user_id = s.user_id AND u.tenant_id = s.tenant_id
      LEFT JOIN app_devices d ON d.device_id = s.device_id AND d.tenant_id = s.tenant_id
      WHERE s.session_hash = ? AND s.tenant_id = ? AND s.revoked_at IS NULL
        AND s.expires_at > ? AND u.active = 1 AND u.tenant_id = ?
-       AND (u.role != 'field' OR (s.device_id IS NOT NULL AND d.device_id IS NOT NULL AND d.revoked_at IS NULL))
+       AND (u.access_role != 'field'
+         OR (s.device_id IS NOT NULL AND d.device_id IS NOT NULL AND d.revoked_at IS NULL))
      LIMIT 1`,
   ).bind(sessionHash, configuredTenantId, now, configuredTenantId).first<AppSessionRecord>();
 }
@@ -498,5 +513,6 @@ function d1Changes(result: unknown): number {
 }
 
 export function isAppRole(value: unknown): value is AppRole {
-  return value === "owner" || value === "ops" || value === "field";
+  return value === "owner" || value === "ops" || value === "sales" ||
+    value === "production" || value === "accounting" || value === "field";
 }

@@ -172,6 +172,8 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
                     "currency": "CAD",
                     "deposit_amount": "250.00",
                     "amount_due": "1050.00",
+                    "qb_terms_ref": "99",
+                    "qb_terms_due_days": 30,
                     "scope_summary": "Replace the main roof.",
                     "assumptions": "Clear driveway.",
                     "exclusions": "Structural repair.",
@@ -355,6 +357,11 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
             prepared["email_hash"], hashlib.sha256(b"alex@example.com").hexdigest()
         )
         self.assertEqual(prepared["proposal_pack_id"], "proposal:cq-1")
+        self.assertEqual(
+            prepared["terms"]["schema"], "ironwrap.customer-contract-terms.v2"
+        )
+        self.assertEqual(prepared["terms"]["quote"]["qb_terms_ref"], "99")
+        self.assertEqual(prepared["terms"]["quote"]["qb_terms_due_days"], 30)
         self.assertEqual(
             prepared["terms_hash"],
             hashlib.sha256(self.canonical(prepared["terms"]).encode("utf-8")).hexdigest(),

@@ -14,10 +14,19 @@ import {
   type ImmutableObjectStore,
   type VerifiedFieldActionResponse,
 } from "../src/field-actions.ts";
-import type { AppRole, AuthContext } from "../src/app-types.ts";
-import type { AppEnv } from "../src/app-types.ts";
+import {
+  permissionsForRole,
+  type AppEnv,
+  type AppRole,
+  type AuthContext,
+} from "../src/app-types.ts";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
-import type { FieldFrappeWriter, PersistFieldCheckInInput, PersistFieldMediaInput } from "../src/frappe-field.ts";
+import type {
+  FieldFrappeWriter,
+  PersistFieldCheckInInput,
+  PersistFieldMediaInput,
+  PersistWorkPackageEvidenceInput,
+} from "../src/frappe-field.ts";
 
 class MemoryFieldStore implements FieldActionStore {
   actions = new Map<
@@ -33,7 +42,9 @@ class MemoryFieldStore implements FieldActionStore {
   media = new Map<string, FieldMediaReceipt>();
   completed = 0;
 
-  async claim(input: Parameters<FieldActionStore["claim"]>[0]): ReturnType<FieldActionStore["claim"]> {
+  async claim(
+    input: Parameters<FieldActionStore["claim"]>[0],
+  ): ReturnType<FieldActionStore["claim"]> {
     const existing = this.actions.get(input.deviceActionId);
     if (!existing) {
       this.actions.set(input.deviceActionId, {
@@ -44,15 +55,23 @@ class MemoryFieldStore implements FieldActionStore {
       });
       return { state: "acquired" };
     }
-    if (existing.tenantId !== input.tenantId || existing.userId !== input.userId || existing.payloadHash !== input.payloadHash) {
+    if (
+      existing.tenantId !== input.tenantId ||
+      existing.userId !== input.userId ||
+      existing.payloadHash !== input.payloadHash
+    ) {
       return { state: "conflict" };
     }
-    if (existing.state === "verified" && existing.response) return { state: "verified", response: existing.response };
+    if (existing.state === "verified" && existing.response)
+      return { state: "verified", response: existing.response };
     existing.state = "processing";
     return { state: "acquired" };
   }
 
-  async getMedia(deviceActionId: string, attachmentId: string): Promise<FieldMediaReceipt | null> {
+  async getMedia(
+    deviceActionId: string,
+    attachmentId: string,
+  ): Promise<FieldMediaReceipt | null> {
     return this.media.get(`${deviceActionId}:${attachmentId}`) ?? null;
   }
 
@@ -60,12 +79,19 @@ class MemoryFieldStore implements FieldActionStore {
     return this.actions.get(deviceActionId)?.state !== "verified";
   }
 
-  async recordMedia(deviceActionId: string, receipt: FieldMediaReceipt): Promise<FieldMediaReceipt> {
+  async recordMedia(
+    deviceActionId: string,
+    receipt: FieldMediaReceipt,
+  ): Promise<FieldMediaReceipt> {
     this.media.set(`${deviceActionId}:${receipt.attachmentId}`, { ...receipt });
     return { ...receipt };
   }
 
-  async markMediaPersisted(deviceActionId: string, attachmentId: string, frappeName: string): Promise<void> {
+  async markMediaPersisted(
+    deviceActionId: string,
+    attachmentId: string,
+    frappeName: string,
+  ): Promise<void> {
     const key = `${deviceActionId}:${attachmentId}`;
     const receipt = this.media.get(key);
     if (!receipt) throw new Error("missing_receipt");
@@ -74,7 +100,11 @@ class MemoryFieldStore implements FieldActionStore {
 
   async markR2Stored(): Promise<void> {}
 
-  async complete(deviceActionId: string, _token: string, response: VerifiedFieldActionResponse): Promise<void> {
+  async complete(
+    deviceActionId: string,
+    _token: string,
+    response: VerifiedFieldActionResponse,
+  ): Promise<void> {
     const action = this.actions.get(deviceActionId);
     if (!action) throw new Error("missing_action");
     action.state = "verified";
@@ -89,35 +119,65 @@ class MemoryFieldStore implements FieldActionStore {
 }
 
 class MemoryObjects implements ImmutableObjectStore {
-  objects = new Map<string, { contentType: string; checksum: string; size: number; bodyText: string | null }>();
+  objects = new Map<
+    string,
+    {
+      contentType: string;
+      checksum: string;
+      size: number;
+      bodyText: string | null;
+    }
+  >();
   calls: string[] = [];
 
-  async ensure(key: string, body: Blob | string, contentType: string, checksum: string): Promise<void> {
+  async ensure(
+    key: string,
+    body: Blob | string,
+    contentType: string,
+    checksum: string,
+  ): Promise<void> {
     this.calls.push(key);
-    const size = typeof body === "string" ? new TextEncoder().encode(body).byteLength : body.size;
+    const size =
+      typeof body === "string"
+        ? new TextEncoder().encode(body).byteLength
+        : body.size;
     const existing = this.objects.get(key);
     if (existing) {
       assert.deepEqual(
-        { contentType: existing.contentType, checksum: existing.checksum, size: existing.size },
+        {
+          contentType: existing.contentType,
+          checksum: existing.checksum,
+          size: existing.size,
+        },
         { contentType, checksum, size },
       );
       return;
     }
-    this.objects.set(key, { contentType, checksum, size, bodyText: typeof body === "string" ? body : null });
+    this.objects.set(key, {
+      contentType,
+      checksum,
+      size,
+      bodyText: typeof body === "string" ? body : null,
+    });
   }
 }
 
 class MemoryFrappe implements FieldFrappeWriter {
   evidence: PersistFieldMediaInput[] = [];
+  workPackageEvidence: PersistWorkPackageEvidenceInput[] = [];
   checkins: PersistFieldCheckInInput[] = [];
   failCheckInOnce = false;
 
-  async persistEvidence(input: PersistFieldMediaInput): Promise<{ name: string }> {
+  async persistEvidence(
+    input: PersistFieldMediaInput,
+  ): Promise<{ name: string }> {
     this.evidence.push(input);
     return { name: `FRAPPE-${input.evidenceId}` };
   }
 
-  async persistCheckIn(input: PersistFieldCheckInInput): Promise<{ name: string }> {
+  async persistCheckIn(
+    input: PersistFieldCheckInInput,
+  ): Promise<{ name: string }> {
     this.checkins.push(input);
     if (this.failCheckInOnce) {
       this.failCheckInOnce = false;
@@ -125,13 +185,24 @@ class MemoryFrappe implements FieldFrappeWriter {
     }
     return { name: `FRAPPE-${input.checkinId}` };
   }
+
+  async persistWorkPackageEvidence(
+    input: PersistWorkPackageEvidenceInput,
+  ): Promise<{ name: string }> {
+    this.workPackageEvidence.push(input);
+    return { name: `EVENT-${input.deviceActionId}` };
+  }
 }
 
-function auth(role: AppRole = "field", tenant = "ironwrap", user = "appu_field"): AuthContext {
+function auth(
+  role: AppRole = "field",
+  tenant = "ironwrap",
+  user = "appu_field",
+): AuthContext {
   return {
     rawSessionToken: "s".repeat(43),
     csrfToken: "csrf",
-    permissions: ["field:write:assigned"],
+    permissions: permissionsForRole(role),
     session: {
       session_hash: "a".repeat(64),
       session_created_at: "2026-07-10T10:00:00.000Z",
@@ -142,6 +213,7 @@ function auth(role: AppRole = "field", tenant = "ironwrap", user = "appu_field")
       email_normalized: "crew@example.com",
       display_name: "Crew",
       role,
+      device_id: "paired-device-1",
       frappe_user_id: "crew@example.com",
       active: 1,
       created_by: "owner@example.com",
@@ -151,7 +223,9 @@ function auth(role: AppRole = "field", tenant = "ironwrap", user = "appu_field")
   };
 }
 
-function payload(overrides: Partial<FieldActionPayload> = {}): FieldActionPayload {
+function payload(
+  overrides: Partial<FieldActionPayload> = {},
+): FieldActionPayload {
   return {
     assignment_id: "ASSIGN-A",
     proof_slot: "Production",
@@ -168,12 +242,16 @@ function payload(overrides: Partial<FieldActionPayload> = {}): FieldActionPayloa
     correction_of: null,
     correction_reason: null,
     evidence_correction_of: null,
+    evidence_item_correction_of: null,
     customer_safe_requested: true,
     ...overrides,
   };
 }
 
-function submission(mediaCount = 2, overrides: Partial<FieldSubmission> = {}): FieldSubmission {
+function submission(
+  mediaCount = 2,
+  overrides: Partial<FieldSubmission> = {},
+): FieldSubmission {
   return {
     deviceActionId: "device-action-123",
     jobId: "JOB-A",
@@ -211,10 +289,17 @@ test("12 attachments get unique Evidence device ids, bounded immutable keys, and
       };
     }),
   });
-  const first = await processFieldSubmission(input, auth(), { store, objects, frappe });
+  const first = await processFieldSubmission(input, auth(), {
+    store,
+    objects,
+    frappe,
+  });
   assert.equal(first.status, "verified");
   assert.equal(frappe.evidence.length, 12);
-  assert.equal(new Set(frappe.evidence.map((item) => item.deviceActionId)).size, 12);
+  assert.equal(
+    new Set(frappe.evidence.map((item) => item.deviceActionId)).size,
+    12,
+  );
   assert.equal(
     frappe.evidence.every((item) => item.deviceActionId.length <= 140),
     true,
@@ -232,7 +317,11 @@ test("12 attachments get unique Evidence device ids, bounded immutable keys, and
     true,
   );
   const callCount = objects.calls.length;
-  const replay = await processFieldSubmission({ ...input, media: [...input.media].reverse() }, auth(), { store, objects, frappe });
+  const replay = await processFieldSubmission(
+    { ...input, media: [...input.media].reverse() },
+    auth(),
+    { store, objects, frappe },
+  );
   assert.deepEqual(replay, first);
   assert.equal(objects.calls.length, callCount);
   assert.equal(frappe.evidence.length, 12);
@@ -247,20 +336,254 @@ test("a failed Frappe check-in resumes from checksum receipts without re-uploadi
   const input = submission(2);
   await assert.rejects(
     processFieldSubmission(input, auth(), { store, objects, frappe }),
-    (error: unknown) => error instanceof FieldActionError && error.status === 502,
+    (error: unknown) =>
+      error instanceof FieldActionError && error.status === 502,
   );
   assert.equal(store.media.size, 2);
   assert.equal(frappe.evidence.length, 2);
   const firstObjectCalls = objects.calls.length;
-  const verified = await processFieldSubmission(input, auth(), { store, objects, frappe });
+  const verified = await processFieldSubmission(input, auth(), {
+    store,
+    objects,
+    frappe,
+  });
   assert.equal(verified.status, "verified");
   assert.equal(frappe.evidence.length, 2);
   assert.equal(frappe.checkins.length, 2);
-  assert.equal(objects.calls.length, firstObjectCalls + 1, "only the immutable manifest is rechecked");
+  assert.equal(
+    objects.calls.length,
+    firstObjectCalls + 1,
+    "only the immutable manifest is rechecked",
+  );
   assert.equal(
     verified.media.every((item) => /^[0-9a-f]{64}$/.test(item.checksum_sha256)),
     true,
   );
+});
+
+test("typed Work Package evidence binds the paired device and replays its immutable event after recovery", async () => {
+  const store = new MemoryFieldStore();
+  const objects = new MemoryObjects();
+  const frappe = new MemoryFrappe();
+  frappe.failCheckInOnce = true;
+  const typed = submission(1, {
+    deviceActionId: "typed-evidence-action",
+    jobId: "SHOP-001",
+    scope: {
+      workObjectType: "Shop Order",
+      workObjectId: "SHOP-001",
+      physicalContextType: "Shop Floor",
+      physicalContextId: "SHOP-FLOOR-1",
+    },
+    payload: payload({
+      work_package_id: "WORK-PACKAGE-A",
+      work_package_version: 4,
+      work_package_release_attempt_id: "attempt-a",
+      evidence_slot_id: "step:1",
+      evidence_requirement: "Anchor inspection photo",
+      evidence_source: "field-companion",
+      evidence_freshness: "Current",
+      evidence_conflict_state: "None",
+      evidence_verification: "Verified",
+      evidence_disposition: "Open",
+    }),
+  });
+
+  await assert.rejects(
+    processFieldSubmission(typed, auth(), { store, objects, frappe }),
+    (error: unknown) =>
+      error instanceof FieldActionError && error.status === 502,
+  );
+  assert.equal(frappe.evidence.length, 1);
+  assert.equal(frappe.evidence[0]?.jobId, "SHOP-001");
+  assert.equal(frappe.evidence[0]?.workObjectType, "Shop Order");
+  assert.equal(frappe.evidence[0]?.workObjectId, "SHOP-001");
+  assert.equal(frappe.evidence[0]?.physicalContextType, "Shop Floor");
+  assert.equal(frappe.evidence[0]?.physicalContextId, "SHOP-FLOOR-1");
+  assert.equal(frappe.evidence[0]?.workObjectType === "Roof Job", false);
+  assert.equal(frappe.workPackageEvidence.length, 1);
+  assert.equal(frappe.workPackageEvidence[0]?.workPackageId, "WORK-PACKAGE-A");
+  assert.equal(frappe.workPackageEvidence[0]?.workPackageVersion, 4);
+  assert.equal(
+    frappe.workPackageEvidence[0]?.evidenceDeviceId,
+    "paired-device-1",
+  );
+  assert.equal(
+    frappe.workPackageEvidence[0]?.deviceActionId,
+    `wpe_${frappe.evidence[0]!.evidenceId.replace(/^evi_/, "")}`,
+  );
+  assert.equal(frappe.workPackageEvidence[0]?.workObjectType, "Shop Order");
+  assert.equal(frappe.workPackageEvidence[0]?.workObjectId, "SHOP-001");
+  assert.equal(
+    frappe.workPackageEvidence[0]?.physicalContextType,
+    "Shop Floor",
+  );
+  assert.equal(frappe.workPackageEvidence[0]?.physicalContextId, "SHOP-FLOOR-1");
+
+  const verified = await processFieldSubmission(typed, auth(), {
+    store,
+    objects,
+    frappe,
+  });
+  assert.equal(verified.status, "verified");
+  assert.equal(
+    frappe.evidence.length,
+    1,
+    "Evidence Item must be replayed, not recreated",
+  );
+  assert.equal(
+    frappe.workPackageEvidence.length,
+    2,
+    "event replay is safe after check-in recovery",
+  );
+  assert.equal(
+    frappe.workPackageEvidence[0]?.deviceActionId,
+    frappe.workPackageEvidence[1]?.deviceActionId,
+  );
+
+  await assert.rejects(
+    processFieldSubmission(
+      {
+        ...typed,
+        payload: {
+          ...typed.payload,
+          evidence_requirement: "Different requirement",
+        },
+      },
+      auth(),
+      { store, objects, frappe },
+    ),
+    (error: unknown) =>
+      error instanceof FieldActionError &&
+      error.code === "idempotency_conflict",
+  );
+  await assert.rejects(
+    processFieldSubmission(
+      {
+        ...typed,
+        deviceActionId: "typed-device-conflict",
+        payload: { ...typed.payload, evidence_device_id: "other-device" },
+      },
+      auth(),
+      { store, objects, frappe },
+    ),
+    (error: unknown) =>
+      error instanceof FieldActionError &&
+      error.code === "evidence_device_mismatch",
+  );
+});
+
+test("typed field evidence starts Open with server-derived verification and rejects forged lifecycle states", async () => {
+  const base = submission(1, {
+    deviceActionId: "typed-lifecycle-open",
+    payload: payload({
+      work_package_id: "WORK-PACKAGE-A",
+      work_package_version: 4,
+      work_package_release_attempt_id: "attempt-a",
+      evidence_slot_id: "step:1",
+      evidence_requirement: "Anchor inspection photo",
+      evidence_source: "field-companion",
+      evidence_freshness: "Current",
+      evidence_conflict_state: "None",
+      evidence_verification: undefined,
+      evidence_disposition: undefined,
+    }),
+  });
+  const frappe = new MemoryFrappe();
+  await processFieldSubmission(base, auth(), {
+    store: new MemoryFieldStore(),
+    objects: new MemoryObjects(),
+    frappe,
+  });
+  assert.equal(frappe.evidence[0]?.evidenceVerification, "Verified");
+  assert.equal(frappe.evidence[0]?.evidenceDisposition, "Open");
+  assert.equal(frappe.workPackageEvidence[0]?.evidenceVerification, "Verified");
+  assert.equal(frappe.workPackageEvidence[0]?.evidenceDisposition, "Open");
+
+  for (const [field, value, code] of [
+    ["evidence_verification", "Pending", "evidence_verification_forbidden"],
+    ["evidence_disposition", "Accepted", "evidence_disposition_forbidden"],
+  ] as const) {
+    await assert.rejects(
+      processFieldSubmission(
+        {
+          ...base,
+          deviceActionId: `${field}-forged`,
+          payload: { ...base.payload, [field]: value },
+        },
+        auth(),
+        {
+          store: new MemoryFieldStore(),
+          objects: new MemoryObjects(),
+          frappe: new MemoryFrappe(),
+        },
+      ),
+      (error: unknown) =>
+        error instanceof FieldActionError && error.code === code,
+    );
+  }
+});
+
+test("directly constructed typed or malformed corrections fail closed like parsed payloads", async () => {
+  const base = submission(1);
+  await assert.rejects(
+    processFieldSubmission(
+      {
+        ...base,
+        deviceActionId: "direct-slot-only",
+        payload: { ...base.payload, evidence_slot_id: "step:1" },
+      },
+      auth(),
+      {
+        store: new MemoryFieldStore(),
+        objects: new MemoryObjects(),
+        frappe: new MemoryFrappe(),
+      },
+    ),
+    (error: unknown) =>
+      error instanceof FieldActionError &&
+      error.code === "evidence_release_attempt_missing",
+  );
+  await assert.rejects(
+    processFieldSubmission(
+      {
+        ...base,
+        deviceActionId: "direct-orphan-reason",
+        payload: { ...base.payload, correction_reason: "orphaned" },
+      },
+      auth(),
+      {
+        store: new MemoryFieldStore(),
+        objects: new MemoryObjects(),
+        frappe: new MemoryFrappe(),
+      },
+    ),
+    (error: unknown) =>
+      error instanceof FieldActionError && error.code === "invalid_metadata",
+  );
+});
+
+test("generic Field Check-in corrections keep their own identity and reason outside typed evidence", async () => {
+  const frappe = new MemoryFrappe();
+  await processFieldSubmission(
+    submission(1, {
+      deviceActionId: "generic-checkin-correction",
+      payload: payload({
+        correction_of: "CHECKIN-ORIGINAL",
+        correction_reason:
+          "The original field note was corrected after supervisor review.",
+      }),
+    }),
+    auth(),
+    { store: new MemoryFieldStore(), objects: new MemoryObjects(), frappe },
+  );
+  assert.equal(frappe.checkins[0]?.correctionOf, "CHECKIN-ORIGINAL");
+  assert.equal(
+    frappe.checkins[0]?.correctionReason,
+    "The original field note was corrected after supervisor review.",
+  );
+  assert.equal(frappe.evidence[0]?.correctionOf, null);
+  assert.equal(frappe.evidence[0]?.correctionReason, null);
 });
 
 test("a cross-tenant device action collision never returns another tenant's verified response", async () => {
@@ -270,8 +593,14 @@ test("a cross-tenant device action collision never returns another tenant's veri
   const input = submission(1);
   await processFieldSubmission(input, auth(), { store, objects, frappe });
   await assert.rejects(
-    processFieldSubmission(input, auth("field", "other-tenant", "appu_other"), { store, objects, frappe }),
-    (error: unknown) => error instanceof FieldActionError && error.code === "idempotency_conflict",
+    processFieldSubmission(input, auth("field", "other-tenant", "appu_other"), {
+      store,
+      objects,
+      frappe,
+    }),
+    (error: unknown) =>
+      error instanceof FieldActionError &&
+      error.code === "idempotency_conflict",
   );
 });
 
@@ -279,7 +608,10 @@ test("location provenance distinguishes denied from not requested and persists c
   const deniedFrappe = new MemoryFrappe();
   const deniedObjects = new MemoryObjects();
   await processFieldSubmission(
-    submission(1, { deviceActionId: "location-denied", payload: payload({ location_permission_state: "denied" }) }),
+    submission(1, {
+      deviceActionId: "location-denied",
+      payload: payload({ location_permission_state: "denied" }),
+    }),
     auth(),
     {
       store: new MemoryFieldStore(),
@@ -288,14 +620,22 @@ test("location provenance distinguishes denied from not requested and persists c
     },
   );
   assert.deepEqual(
-    { latitude: deniedFrappe.evidence[0]?.latitude, longitude: deniedFrappe.evidence[0]?.longitude },
+    {
+      latitude: deniedFrappe.evidence[0]?.latitude,
+      longitude: deniedFrappe.evidence[0]?.longitude,
+    },
     { latitude: null, longitude: null },
   );
-  const deniedManifest = [...deniedObjects.objects.values()].find((item) => item.contentType === "application/json")?.bodyText;
+  const deniedManifest = [...deniedObjects.objects.values()].find(
+    (item) => item.contentType === "application/json",
+  )?.bodyText;
   assert.match(deniedManifest ?? "", /"location_permission_state":"denied"/);
   const untouchedObjects = new MemoryObjects();
   await processFieldSubmission(
-    submission(0, { deviceActionId: "location-not-requested", payload: payload({ location_permission_state: "not_requested" }) }),
+    submission(0, {
+      deviceActionId: "location-not-requested",
+      payload: payload({ location_permission_state: "not_requested" }),
+    }),
     auth(),
     {
       store: new MemoryFieldStore(),
@@ -303,49 +643,87 @@ test("location provenance distinguishes denied from not requested and persists c
       frappe: new MemoryFrappe(),
     },
   );
-  const untouchedManifest = [...untouchedObjects.objects.values()].find((item) => item.contentType === "application/json")?.bodyText;
-  assert.match(untouchedManifest ?? "", /"location_permission_state":"not_requested"/);
+  const untouchedManifest = [...untouchedObjects.objects.values()].find(
+    (item) => item.contentType === "application/json",
+  )?.bodyText;
+  assert.match(
+    untouchedManifest ?? "",
+    /"location_permission_state":"not_requested"/,
+  );
   const grantedFrappe = new MemoryFrappe();
   await processFieldSubmission(
     submission(1, {
       deviceActionId: "location-granted",
-      payload: payload({ latitude: 51.0447, longitude: -114.0719, location_accuracy_m: 7, location_permission_state: "granted" }),
+      payload: payload({
+        latitude: 51.0447,
+        longitude: -114.0719,
+        location_accuracy_m: 7,
+        location_permission_state: "granted",
+      }),
     }),
     auth(),
-    { store: new MemoryFieldStore(), objects: new MemoryObjects(), frappe: grantedFrappe },
+    {
+      store: new MemoryFieldStore(),
+      objects: new MemoryObjects(),
+      frappe: grantedFrappe,
+    },
   );
   assert.equal(grantedFrappe.evidence[0]?.latitude, 51.0447);
   assert.equal(grantedFrappe.evidence[0]?.locationAccuracyM, 7);
 });
 
 test("multipart parsing rejects bad MIME and oversized action batches", async () => {
-  const metadataOnly = await parseFieldActionRequest(multipartRequest("image/jpeg", 0), "JOB-A", "ASSIGN-A");
+  const metadataOnly = await parseFieldActionRequest(
+    multipartRequest("image/jpeg", 0),
+    "JOB-A",
+    "ASSIGN-A",
+  );
   assert.equal(metadataOnly.media.length, 0);
   const bad = multipartRequest("text/plain", 1);
   await assert.rejects(
     parseFieldActionRequest(bad, "JOB-A", "ASSIGN-A"),
-    (error: unknown) => error instanceof FieldActionError && error.status === 415,
+    (error: unknown) =>
+      error instanceof FieldActionError && error.status === 415,
   );
   const tooMany = multipartRequest("image/jpeg", 13);
   await assert.rejects(
     parseFieldActionRequest(tooMany, "JOB-A", "ASSIGN-A"),
-    (error: unknown) => error instanceof FieldActionError && error.status === 413,
+    (error: unknown) =>
+      error instanceof FieldActionError && error.status === 413,
   );
   const spoofed = multipartRequest("image/jpeg", 1);
   await assert.rejects(
     parseFieldActionRequest(spoofed, "JOB-A", "ASSIGN-A"),
-    (error: unknown) => error instanceof FieldActionError && error.code === "media_signature_invalid",
+    (error: unknown) =>
+      error instanceof FieldActionError &&
+      error.code === "media_signature_invalid",
   );
 });
 
 test("media signatures are validated independently of declared MIME", async () => {
   assert.equal(
-    await mediaSignatureMatches(new Blob([Uint8Array.from([0xff, 0xd8, 0xff, 0xe0])], { type: "image/jpeg" }), "image/jpeg"),
+    await mediaSignatureMatches(
+      new Blob([Uint8Array.from([0xff, 0xd8, 0xff, 0xe0])], {
+        type: "image/jpeg",
+      }),
+      "image/jpeg",
+    ),
     true,
   );
-  assert.equal(await mediaSignatureMatches(new Blob(["not-a-jpeg"], { type: "image/jpeg" }), "image/jpeg"), false);
   assert.equal(
-    await mediaSignatureMatches(new Blob([Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3])], { type: "audio/webm" }), "audio/webm"),
+    await mediaSignatureMatches(
+      new Blob(["not-a-jpeg"], { type: "image/jpeg" }),
+      "image/jpeg",
+    ),
+    false,
+  );
+  assert.equal(
+    await mediaSignatureMatches(
+      new Blob([Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3])], {
+        type: "audio/webm",
+      }),
+      "audio/webm",
+    ),
     true,
   );
 });
@@ -357,15 +735,19 @@ test("streaming multipart guard preserves a 413 without buffering an oversized b
       controller.close();
     },
   });
-  const request = new Request("https://app.example.com/api/v1/jobs/JOB-A/check-ins", {
-    method: "POST",
-    headers: { "content-type": "multipart/form-data; boundary=bounded" },
-    body,
-    duplex: "half",
-  } as RequestInit & { duplex: "half" });
+  const request = new Request(
+    "https://app.example.com/api/v1/jobs/JOB-A/check-ins",
+    {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=bounded" },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" },
+  );
   await assert.rejects(
     parseFieldActionRequest(request, "JOB-A", "ASSIGN-A"),
-    (error: unknown) => error instanceof FieldActionError && error.status === 413,
+    (error: unknown) =>
+      error instanceof FieldActionError && error.status === 413,
   );
 });
 
@@ -380,7 +762,10 @@ test("field upload windows fail closed after eight authenticated starts", async 
             return {
               async first() {
                 attempts += 1;
-                return { attempts, window_expires_at: "2026-07-10T10:01:00.000Z" };
+                return {
+                  attempts,
+                  window_expires_at: "2026-07-10T10:01:00.000Z",
+                };
               },
             };
           },
@@ -390,7 +775,10 @@ test("field upload windows fail closed after eight authenticated starts", async 
   } as unknown as AppEnv;
   const now = new Date("2026-07-10T10:00:00.000Z");
   for (let index = 0; index < 8; index += 1) {
-    assert.equal((await claimFieldUploadWindow(env, auth(), now)).allowed, true);
+    assert.equal(
+      (await claimFieldUploadWindow(env, auth(), now)).allowed,
+      true,
+    );
   }
   assert.deepEqual(await claimFieldUploadWindow(env, auth(), now), {
     allowed: false,
@@ -409,12 +797,24 @@ test("field mutation API rejects office roles, bad CSRF, and an unassigned field
     ERPNEXT_API_KEY: "key",
     ERPNEXT_API_SECRET: "secret",
   } as AppEnv;
-  assert.equal((await handleAuthenticatedRoute(request("csrf"), appEnv, auth("owner"))).status, 403);
-  assert.equal((await handleAuthenticatedRoute(request("wrong"), appEnv, auth("field"))).status, 403);
+  assert.equal(
+    (await handleAuthenticatedRoute(request("csrf"), appEnv, auth("owner")))
+      .status,
+    403,
+  );
+  assert.equal(
+    (await handleAuthenticatedRoute(request("wrong"), appEnv, auth("field")))
+      .status,
+    403,
+  );
   const original = globalThis.fetch;
   globalThis.fetch = async () => Response.json({ data: [] });
   try {
-    const denied = await handleAuthenticatedRoute(request("csrf"), appEnv, auth("field"));
+    const denied = await handleAuthenticatedRoute(
+      request("csrf"),
+      appEnv,
+      auth("field"),
+    );
     assert.equal(denied.status, 404);
     assert.deepEqual(await denied.json(), { error: "not_found" });
   } finally {
@@ -430,13 +830,24 @@ test("R2 PUT success is not accepted when the post-write HEAD checksum is wrong"
     head: async () => {
       heads += 1;
       if (heads === 1) return null;
-      return { size: 3, customMetadata: { sha256: right }, checksums: { sha256: wrongBuffer } };
+      return {
+        size: 3,
+        customMetadata: { sha256: right },
+        checksums: { sha256: wrongBuffer },
+      };
     },
     put: async () => ({ key: "x" }),
   } as unknown as R2Bucket;
   await assert.rejects(
-    r2ObjectStore(bucket).ensure("field/key", new Blob(["abc"]), "image/jpeg", right),
-    (error: unknown) => error instanceof FieldActionError && error.code === "immutable_object_conflict",
+    r2ObjectStore(bucket).ensure(
+      "field/key",
+      new Blob(["abc"]),
+      "image/jpeg",
+      right,
+    ),
+    (error: unknown) =>
+      error instanceof FieldActionError &&
+      error.code === "immutable_object_conflict",
   );
   assert.equal(heads, 2);
 });
@@ -445,7 +856,11 @@ function multipartRequest(mimeType: string, count: number): Request {
   const form = new FormData();
   const attachments = Array.from({ length: count }, (_, index) => {
     const blob = new Blob([`x-${index}`], { type: mimeType });
-    form.append("attachments", blob, `file-${index}.${mimeType === "image/jpeg" ? "jpg" : "txt"}`);
+    form.append(
+      "attachments",
+      blob,
+      `file-${index}.${mimeType === "image/jpeg" ? "jpg" : "txt"}`,
+    );
     return {
       attachmentId: `attachment-${index}`,
       fileName: `file-${index}.${mimeType === "image/jpeg" ? "jpg" : "txt"}`,
@@ -461,5 +876,8 @@ function multipartRequest(mimeType: string, count: number): Request {
       attachments,
     }),
   );
-  return new Request("https://app.example.com/api/v1/jobs/JOB-A/check-ins", { method: "POST", body: form });
+  return new Request("https://app.example.com/api/v1/jobs/JOB-A/check-ins", {
+    method: "POST",
+    body: form,
+  });
 }

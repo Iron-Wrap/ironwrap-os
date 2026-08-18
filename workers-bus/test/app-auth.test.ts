@@ -62,6 +62,10 @@ interface DeviceRow {
 
 class AuthMemoryDb {
   users = new Map<string, AppUserRecord>();
+  storageRoles = new Map<string, {
+    role: Extract<AppRole, "owner" | "ops" | "field">;
+    access_role: AppRole;
+  }>();
   magic = new Map<string, MagicRow>();
   sessions = new Map<string, SessionRow>();
   pairings = new Map<string, DevicePairingRow>();
@@ -145,7 +149,7 @@ class AuthMemoryDb {
   }
 
   private all(sql: string, args: unknown[]): unknown[] {
-    if (sql.includes("FROM app_users") && sql.includes("role = 'field'")) {
+    if (sql.includes("FROM app_users") && sql.includes("= 'field'")) {
       return [...this.users.values()]
         .filter((user) => user.tenant_id === String(args[0]) && user.active === 1 && user.role === "field")
         .sort((a, b) => a.display_name.localeCompare(b.display_name) || a.user_id.localeCompare(b.user_id))
@@ -185,7 +189,7 @@ class AuthMemoryDb {
   private run(sql: string, args: unknown[]): { success: true; meta: { changes: number } } {
     if (sql.includes("INSERT INTO app_users")) {
       if (sql.includes("WHERE NOT EXISTS")) {
-        const [candidateId, tenant, email, displayName, role, frappeUser, active, createdBy, createdAt, updatedAt] = args;
+        const [candidateId, tenant, email, displayName, storageRole, accessRole, frappeUser, active, createdBy, createdAt, updatedAt] = args;
         if ([...this.users.values()].some((user) => user.tenant_id === String(tenant))) {
           return changed(0);
         }
@@ -194,7 +198,7 @@ class AuthMemoryDb {
           tenant_id: String(tenant),
           email_normalized: String(email),
           display_name: String(displayName),
-          role: String(role) as AppRole,
+          role: String(accessRole) as AppRole,
           frappe_user_id: frappeUser === null ? null : String(frappeUser),
           active: Number(active),
           created_by: String(createdBy),
@@ -202,14 +206,18 @@ class AuthMemoryDb {
           updated_at: String(updatedAt),
         };
         this.users.set(user.user_id, user);
+        this.storageRoles.set(user.user_id, {
+          role: String(storageRole) as Extract<AppRole, "owner" | "ops" | "field">,
+          access_role: String(accessRole) as AppRole,
+        });
         return changed(1);
       }
-      const [candidateId, tenant, email, displayName, role, frappeUser, active, createdBy, createdAt, updatedAt] = args;
+      const [candidateId, tenant, email, displayName, storageRole, accessRole, frappeUser, active, createdBy, createdAt, updatedAt] = args;
       const existing = this.userByTenantEmail(String(tenant), String(email));
       const user: AppUserRecord = existing ? {
         ...existing,
         display_name: String(displayName),
-        role: String(role) as AppRole,
+        role: String(accessRole) as AppRole,
         frappe_user_id: frappeUser === null ? null : String(frappeUser),
         active: Number(active),
         updated_at: String(updatedAt),
@@ -218,7 +226,7 @@ class AuthMemoryDb {
         tenant_id: String(tenant),
         email_normalized: String(email),
         display_name: String(displayName),
-        role: String(role) as AppRole,
+        role: String(accessRole) as AppRole,
         frappe_user_id: frappeUser === null ? null : String(frappeUser),
         active: Number(active),
         created_by: String(createdBy),
@@ -226,6 +234,10 @@ class AuthMemoryDb {
         updated_at: String(updatedAt),
       };
       this.users.set(user.user_id, user);
+      this.storageRoles.set(user.user_id, {
+        role: String(storageRole) as Extract<AppRole, "owner" | "ops" | "field">,
+        access_role: String(accessRole) as AppRole,
+      });
       return changed(1);
     }
     if (sql.includes("INSERT INTO app_magic_links")) {
@@ -443,7 +455,10 @@ async function addFieldUser(env: AppEnv): Promise<AppUserRecord> {
   });
 }
 
-async function addOfficeUser(env: AppEnv, role: "owner" | "ops" = "owner"): Promise<AppUserRecord> {
+async function addOfficeUser(
+  env: AppEnv,
+  role: Exclude<AppRole, "field"> = "owner",
+): Promise<AppUserRecord> {
   return await upsertAppUser(env, {
     tenant_id: "ironwrap",
     email_normalized: "owner@example.com",
@@ -593,6 +608,105 @@ test("magic links are one-time and create only a hashed fixed-TTL session", asyn
   const replay = await consumeMagicLink(jsonRequest("/api/v1/auth/magic-link/consume", { token }), env);
   assert.equal(replay.status, 401);
   assert.deepEqual(await replay.json(), { error: "invalid_or_expired_link" });
+});
+
+test("sales sessions receive only their bounded desk and preparation capabilities", async () => {
+  const db = new AuthMemoryDb();
+  const env = baseEnv(db);
+  await addOfficeUser(env, "sales");
+  let token = "";
+  const waiter = waitContext();
+  await requestMagicLink(
+    jsonRequest("/api/v1/auth/magic-link/request", {
+      tenant_id: "ironwrap",
+      email: "owner@example.com",
+    }),
+    env,
+    waiter.ctx as never,
+    { sendMagicLink: async (_env, _user, raw) => { token = raw; } },
+  );
+  await waiter.flush();
+
+  const response = await consumeMagicLink(
+    jsonRequest("/api/v1/auth/magic-link/consume", { token }),
+    env,
+  );
+  const body = await response.json() as {
+    user: { role: string };
+    permissions: string[];
+    allowed_actions: string[];
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.user.role, "sales");
+  assert.deepEqual(body.permissions, [
+    "session:read",
+    "now:read",
+    "sales:read",
+    "estimator:read",
+    "approvals:read",
+    "approvals:prepare",
+  ]);
+  assert.equal(body.permissions.includes("owner:read"), false);
+  assert.equal(body.permissions.includes("jobs:read:any"), false);
+  assert.equal(body.permissions.includes("approvals:decide"), false);
+  assert.equal(body.allowed_actions.includes("approval.prepare"), true);
+  assert.equal(body.allowed_actions.includes("approval.approve"), false);
+});
+
+test("production sessions can read jobs and runway without commercial or owner authority", async () => {
+  const db = new AuthMemoryDb();
+  const env = baseEnv(db);
+  await addOfficeUser(env, "production");
+  let token = "";
+  const waiter = waitContext();
+  await requestMagicLink(
+    jsonRequest("/api/v1/auth/magic-link/request", {
+      tenant_id: "ironwrap",
+      email: "owner@example.com",
+    }),
+    env,
+    waiter.ctx as never,
+    { sendMagicLink: async (_env, _user, raw) => { token = raw; } },
+  );
+  await waiter.flush();
+
+  const response = await consumeMagicLink(
+    jsonRequest("/api/v1/auth/magic-link/consume", { token }),
+    env,
+  );
+  const body = await response.json() as {
+    user: { role: string };
+    permissions: string[];
+    allowed_actions: string[];
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.user.role, "production");
+  assert.deepEqual(body.permissions, [
+    "session:read",
+    "now:read",
+    "jobs:read:any",
+    "production:read",
+    "authority:read",
+  ]);
+  assert.deepEqual(body.allowed_actions, [
+    "session.logout",
+    "now.read",
+    "production.read",
+    "job.read",
+    "authority.read",
+  ]);
+  for (const forbidden of [
+    "owner:read",
+    "sales:read",
+    "estimator:read",
+    "approvals:read",
+    "approvals:prepare",
+    "approvals:decide",
+  ]) {
+    assert.equal(body.permissions.includes(forbidden), false, forbidden);
+  }
 });
 
 test("a scanner GET cannot consume a magic link", async () => {
@@ -861,6 +975,56 @@ test("app-session provisioning is tenant-bound, strict, CSRF-gated, and server-a
   const provisionAudit = db.audits.at(-1)?.args as unknown[] | undefined;
   assert.equal(provisionAudit?.[3], "user_provision");
   assert.equal(provisionAudit?.[7], "field:owner@example.com");
+
+  const salesResponse = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
+    ...payload,
+    email: "sales@example.com",
+    display_name: "Sales Desk",
+    role: "sales",
+    frappe_user_id: "sales@example.com",
+  }, {
+    cookie: office.cookiePair,
+    "x-csrf-token": office.csrfToken,
+  }), env, waitContext().ctx as never);
+  assert.equal(salesResponse.status, 200);
+  assert.equal(
+    (await salesResponse.json() as { user: { role: string } }).user.role,
+    "sales",
+  );
+  assert.equal(
+    [...db.users.values()].find((user) => user.email_normalized === "sales@example.com")?.role,
+    "sales",
+  );
+  const salesUser = [...db.users.values()].find((user) =>
+    user.email_normalized === "sales@example.com"
+  );
+  assert.deepEqual(db.storageRoles.get(salesUser!.user_id), {
+    role: "ops",
+    access_role: "sales",
+  });
+
+  const productionResponse = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
+    ...payload,
+    email: "production@example.com",
+    display_name: "Production Manager",
+    role: "production",
+    frappe_user_id: "production@example.com",
+  }, {
+    cookie: office.cookiePair,
+    "x-csrf-token": office.csrfToken,
+  }), env, waitContext().ctx as never);
+  assert.equal(productionResponse.status, 200);
+  assert.equal(
+    (await productionResponse.json() as { user: { role: string } }).user.role,
+    "production",
+  );
+  const productionUser = [...db.users.values()].find((user) =>
+    user.email_normalized === "production@example.com"
+  );
+  assert.deepEqual(db.storageRoles.get(productionUser!.user_id), {
+    role: "ops",
+    access_role: "production",
+  });
 
   const noAssignee = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
     ...payload,

@@ -18,6 +18,7 @@ import { GateChip } from "../field/gate-chip";
 import { Button } from "../components/ui/button";
 import { ErrorState } from "../components/ui/state-panel";
 import { cn } from "../lib/cn";
+import { roleCanAccess, type AppRole } from "../lib/roles";
 import { loadProductionRunway } from "./production-api";
 import type {
   ProductionRunwayJob,
@@ -77,7 +78,7 @@ const laneCopy: Record<
 
 export function ProductionRunwayPage() {
   return (
-    <RoleGuard surface="owner">
+    <RoleGuard surface="production">
       <ProductionRunwayContent />
     </RoleGuard>
   );
@@ -101,6 +102,7 @@ function ProductionRunwayContent() {
       model={model}
       locale={session.tenant.locale}
       timeZone={session.tenant.time_zone}
+      role={session.user.role}
       refreshFailed={query.isError}
       onRetry={() => void query.refetch()}
     />
@@ -111,12 +113,14 @@ function ProductionRunwayScreen({
   model,
   locale,
   timeZone,
+  role,
   refreshFailed,
   onRetry,
 }: {
   model: ProductionRunwayResponse;
   locale: string;
   timeZone: string;
+  role: AppRole;
   refreshFailed: boolean;
   onRetry: () => void;
 }) {
@@ -128,7 +132,10 @@ function ProductionRunwayScreen({
     model.source_updated_at === null ||
     model.partial_sources.length > 0 ||
     model.stale_fields.length > 0;
-  const canPrepareSchedule = model.allowed_actions.includes("production_schedule_approval.prepare");
+  const canOpenJob = roleCanAccess(role, "job");
+  const canPrepareSchedule =
+    roleCanAccess(role, "owner") &&
+    model.allowed_actions.includes("production_schedule_approval.prepare");
 
   return (
     <section className="mx-auto max-w-7xl space-y-6 pb-4">
@@ -169,6 +176,7 @@ function ProductionRunwayScreen({
             jobs={jobs}
             locale={locale}
             timeZone={timeZone}
+            canOpenJob={canOpenJob}
             canPrepareSchedule={canPrepareSchedule}
           />
         ))}
@@ -260,12 +268,14 @@ function RunwayLane({
   jobs,
   locale,
   timeZone,
+  canOpenJob,
   canPrepareSchedule,
 }: {
   lane: ProductionRunwayLane;
   jobs: readonly ProductionRunwayJob[];
   locale: string;
   timeZone: string;
+  canOpenJob: boolean;
   canPrepareSchedule: boolean;
 }) {
   const copy = laneCopy[lane];
@@ -298,6 +308,7 @@ function RunwayLane({
                 locale={locale}
                 timeZone={timeZone}
                 tone={copy.tone}
+                canOpenJob={canOpenJob}
                 canPrepareSchedule={canPrepareSchedule}
               />
             </li>
@@ -317,12 +328,14 @@ function RunwayJobCard({
   locale,
   timeZone,
   tone,
+  canOpenJob,
   canPrepareSchedule,
 }: {
   job: ProductionRunwayJob;
   locale: string;
   timeZone: string;
   tone: string;
+  canOpenJob: boolean;
   canPrepareSchedule: boolean;
 }) {
   const schedule = formatDateTime(job.assignment?.scheduled_start ?? null, locale, timeZone);
@@ -347,16 +360,18 @@ function RunwayJobCard({
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2">
-          <Button asChild variant="outline" size="compact">
-            <Link
-              to="/jobs/$jobId"
-              params={{ jobId: job.id }}
-              aria-label={`Open ${job.job_number ?? job.id}`}
-            >
-              Open
-              <ChevronRight aria-hidden="true" />
-            </Link>
-          </Button>
+          {canOpenJob ? (
+            <Button asChild variant="outline" size="compact">
+              <Link
+                to="/jobs/$jobId"
+                params={{ jobId: job.id }}
+                aria-label={`Open ${job.job_number ?? job.id}`}
+              >
+                Open
+                <ChevronRight aria-hidden="true" />
+              </Link>
+            </Button>
+          ) : null}
           {canPrepareSchedule && job.scheduling_preparation_allowed ? (
             <Button asChild variant="outline" size="compact">
               <Link

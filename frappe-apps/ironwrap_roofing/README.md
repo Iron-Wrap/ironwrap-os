@@ -64,6 +64,22 @@ bench get-app /path/to/ironwrap/frappe-apps/ironwrap_roofing
 bench --site <site> install-app ironwrap_roofing
 ```
 
+Before upgrading an existing site to the commercial-truth schema, run the
+read-only preflight:
+
+```bash
+bench --site <site> execute ironwrap_roofing.commercial_migration.commercial_schema_preflight_report
+```
+
+`ready: true` is required before migration. The report enumerates opaque
+DocType/name/field blockers and the count of deterministic updates. Migration
+derives only missing Supplier Quote line totals (`quantity × unit_price`,
+half-up cents) and their parent quote totals. Missing currency, dates, source
+references, closed Price Book Rule contracts, or contradictory totals are never
+defaulted: `before_migrate` aborts before any repair or metadata synchronization.
+The complete deterministic plan is applied only when the whole site is clean,
+and the same preflight is a no-op after successful application.
+
 Validate the committed DocType contract without a bench. The app contains 64
 DocType JSON contracts (48 top-level records and 16 child tables). The root
 validator keeps its historical `erpnext` filename; the app-local unittest suite

@@ -1,6 +1,6 @@
 {
   "actions": [], "allow_rename": 0, "autoname": "field:compliance_record_id", "creation": "2026-07-10 00:00:00.000000", "custom": 0, "doctype": "DocType", "engine": "InnoDB",
-  "field_order": ["compliance_record_id", "roof_job", "jurisdiction", "record_type", "authority_name", "external_reference", "status", "required_before_gate", "applied_at", "effective_date", "expiry_date", "inspected_at", "evidence_item", "owner_user", "due_date", "waived_by", "waived_at", "waiver_reason", "supersedes", "correction_reason", "notes"],
+  "field_order": ["compliance_record_id", "roof_job", "jurisdiction", "record_type", "authority_name", "external_reference", "authority_record", "status", "required_before_gate", "applied_at", "effective_date", "expiry_date", "inspected_at", "evidence_item", "owner_user", "due_date", "waived_by", "waived_at", "waiver_reason", "supersedes", "correction_reason", "notes"],
   "fields": [
     {"fieldname": "compliance_record_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Compliance Record ID", "reqd": 1, "unique": 1},
     {"fieldname": "roof_job", "fieldtype": "Link", "in_list_view": 1, "in_standard_filter": 1, "label": "Roof Job", "options": "Roof Job", "reqd": 1},
@@ -8,6 +8,7 @@
     {"fieldname": "record_type", "fieldtype": "Select", "label": "Record Type", "options": "Permit\nLicence\nInspection\nHOA\nUtility\nOther", "reqd": 1},
     {"fieldname": "authority_name", "fieldtype": "Data", "label": "Authority Name", "reqd": 1},
     {"fieldname": "external_reference", "fieldtype": "Data", "label": "External Reference"},
+    {"fieldname": "authority_record", "fieldtype": "Link", "label": "Authority Record", "options": "Authority Record"},
     {"fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Status", "options": "Required\nApplied\nApproved\nPassed\nFailed\nExpired\nWaived\nSuperseded", "reqd": 1},
     {"fieldname": "required_before_gate", "fieldtype": "Select", "label": "Required Before Gate", "options": "Proposal\nDeposit\nMaterials\nSafety\nAccess\nWeather\nCrew\nCompletion", "reqd": 1},
     {"fieldname": "applied_at", "fieldtype": "Datetime", "label": "Applied At"},

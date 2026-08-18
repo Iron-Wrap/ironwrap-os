@@ -436,3 +436,35 @@ export const estimatorWorkbenchResponseSchema = envelopeSchema
 
 export type EstimatorWorkbenchResponse = z.infer<typeof estimatorWorkbenchResponseSchema>;
 export type EstimatorGeometry = z.infer<typeof geometrySchema>;
+
+export const facetLaunchResponseSchema = z
+  .object({
+    version: z.literal(1),
+    read_model_generated_at: z.string().datetime(),
+    permissions: z.array(z.string()),
+    allowed_actions: z.array(z.literal("facet_launch.create")),
+    launch: z
+      .object({
+        facet_project_id: z.string().uuid(),
+        launch_url: z
+          .string()
+          .url()
+          .refine((value) => {
+            const url = new URL(value);
+            return (
+              url.protocol === "https:" &&
+              !url.username &&
+              !url.password &&
+              !url.search &&
+              /^#iwlaunch=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(url.hash)
+            );
+          }, "Facet launch must be an HTTPS fragment capability."),
+        expires_at: z.string().datetime(),
+        state: z.literal("issued"),
+      })
+      .strict(),
+    replayed: z.boolean().optional(),
+  })
+  .strict();
+
+export type FacetLaunchResponse = z.infer<typeof facetLaunchResponseSchema>;

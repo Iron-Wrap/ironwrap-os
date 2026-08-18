@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from setuptools import find_namespace_packages
 
+from ironwrap_roofing import __version__
 from ironwrap_roofing.access_control import (
     ALL_IRONWRAP_ROLES,
     DOCTYPE_ROLE_MATRIX,
@@ -32,6 +33,7 @@ DOCTYPE_ROOT = APP_ROOT / "ironwrap_roofing" / "ironwrap_roofing" / "doctype"
 
 TOP_LEVEL_DOCTYPES = {
     "Appointment Request",
+    "Authority Record",
     "Automation Incident",
     "Change Order",
     "Communication Consent",
@@ -48,12 +50,14 @@ TOP_LEVEL_DOCTYPES = {
     "Instant Estimate Session",
     "Integration Reconciliation",
     "Insurance Supplement",
+    "Job Cost Event",
     "Job Assignment",
     "Job Compliance Record",
     "Lead Envelope",
     "Material Lot",
     "Market Watch Item",
     "Material Takeoff",
+    "Material Takeoff Policy",
     "Measurement Report",
     "Nonconformance",
     "Option Package",
@@ -97,6 +101,7 @@ CHILD_DOCTYPES = {
     "Shop Yield",
     "Work Package Hold Point",
     "Work Package Step",
+    "Work Package Worker",
 }
 FRAPPE_CORE_LINK_TARGETS = {"User"}
 NEW_BLUEPRINT_FIELDS = {
@@ -130,6 +135,43 @@ NEW_BLUEPRINT_FIELDS = {
         "approved_at",
         "approval_note",
         "measurements",
+    },
+    "Material Takeoff Policy": {
+        "policy_id",
+        "tenant",
+        "brand",
+        "service_type",
+        "material_system",
+        "policy_version",
+        "status",
+        "effective_from",
+        "effective_to",
+        "policy_json",
+        "source_evidence",
+        "approved_by",
+        "approved_at",
+        "approval_note",
+    },
+    "Material Takeoff": {
+        "takeoff_id",
+        "tenant",
+        "material_system",
+        "calculation_schema",
+        "calculation_version",
+        "geometry_revision",
+        "source_raw_key",
+        "source_raw_sha256",
+        "takeoff_policy",
+        "policy_source_evidence",
+        "policy_source_sha256",
+        "policy_digest",
+        "options_digest",
+        "calculation_digest",
+        "stock_mode",
+        "waste_basis",
+        "options_json",
+        "calculation_json",
+        "review_reasons_json",
     },
     "Option Package": {
         "option_package_id",
@@ -219,7 +261,7 @@ NEW_BLUEPRINT_FIELDS.update(
     {
         "Appointment Request": {"appointment_request_id", "reception_session", "request_status", "booking_mode", "preferred_windows_json", "timezone", "requested_at", "raw_key", "payload_hash"},
         "Crew Profile": {"crew_profile_id", "crew_name", "status", "primary_lead", "members", "home_region", "timezone", "competency_status", "competency_checked_at", "competency_expiry", "equipment_status", "equipment_checked_at", "equipment_expiry", "wcb_status", "wcb_checked_at", "wcb_expiry", "active_stop", "active_stop_at", "active_stop_reason"},
-        "Job Assignment": {"assignment_id", "roof_job", "status", "crew_profile", "assigned_user", "scheduled_start", "scheduled_end", "supersedes", "correction_reason"},
+        "Job Assignment": {"assignment_id", "roof_job", "work_object_type", "work_object_id", "physical_context_type", "physical_context_id", "status", "crew_profile", "assigned_user", "authority_user", "authority_role", "assigned_workers", "scheduled_start", "scheduled_end", "supersedes", "correction_reason"},
         "Change Order": {"change_order_id", "roof_job", "version", "status", "subtotal", "tax_amount", "total_amount", "tax_policy_snapshot_json", "items", "contract_acceptance", "supersedes", "correction_reason"},
         "Safety Plan": {"safety_plan_id", "roof_job", "version", "status", "hazard_summary", "controls", "emergency_plan", "acknowledgements", "supersedes", "correction_reason"},
         "Job Compliance Record": {"compliance_record_id", "roof_job", "jurisdiction", "record_type", "status", "required_before_gate", "evidence_item", "owner_user", "due_date"},
@@ -229,7 +271,7 @@ NEW_BLUEPRINT_FIELDS.update(
         "Integration Reconciliation": {"reconciliation_id", "system_name", "external_entity_id", "status", "raw_key", "diff_json", "source_payload_hash", "local_payload_hash", "resolution_evidence"},
         "Insurance Supplement": {"insurance_supplement_id", "roof_job", "customer_quote", "change_order", "version", "status", "carrier_name", "claim_reference", "policy_reference", "date_of_loss", "adjuster_reference", "supplement_basis", "measurement_report", "invoice_required", "invoice_exception_reason", "evidence", "evidence_manifest_json", "approved_by", "approved_at", "submitted_at", "carrier_response_at", "resolution_summary", "closed_at", "supersedes", "correction_reason"},
         "Tenant Export Run": {"export_run_id", "tenant", "status", "scope_json", "manifest_key", "manifest_checksum", "archive_key", "archive_checksum", "encryption_key_ref"},
-        "Evidence Item": {"evidence_id", "device_action_id", "proof_owner", "proof_slot", "content_checksum", "capture_actor", "latitude", "longitude", "sync_state", "correction_of"},
+        "Evidence Item": {"evidence_id", "device_action_id", "proof_owner", "proof_slot", "content_checksum", "capture_actor", "latitude", "longitude", "sync_state", "correction_of", "work_package", "work_package_version", "evidence_slot_id", "evidence_requirement", "evidence_source", "evidence_device_id", "evidence_freshness", "evidence_conflict_state", "evidence_verification", "evidence_disposition"},
         "Field Check-in": {"checkin_id", "device_action_id", "job_assignment", "crew_profile", "capture_actor", "sync_state", "blocker_flag", "voice_evidence", "correction_of"},
         "Production Gate State": {"gate_id", "owner_user", "assigned_at", "due_at"},
         "Roof Job": {"roof_job_id", "workflow_profile", "locale_policy_version", "locale_policy_snapshot_json"},
@@ -238,11 +280,12 @@ NEW_BLUEPRINT_FIELDS.update(
         "Supplier Order": {"supplier_order_id", "roof_job", "material_takeoff", "source_quote", "supplier", "status", "prepared_at", "approved_by", "approved_at", "internal_transmission_id", "internal_transmitted_at", "supplier_acknowledgement_id", "supplier_acknowledged_at", "supplier_acknowledgement_evidence", "requested_delivery_date", "order_summary_json", "assumptions", "exclusions", "delivery_notes", "received_at", "receipt_evidence_json", "items"},
         "Material Lot": {"material_lot_id", "roof_job", "controlled_item", "source_kind", "supplier_order", "source_shop_order", "source_evidence", "lot_number", "certificate_reference", "condition_status", "received_quantity", "available_quantity", "reserved_quantity", "consumed_quantity", "unit", "received_at", "status"},
         "Nonconformance": {"nonconformance_id", "shop_order", "material_lot", "status", "detected_at", "reported_by", "description", "evidence_item", "containment", "disposition", "disposition_by", "disposition_at", "closed_by", "closed_at", "closure_evidence"},
-        "Payment Milestone": {"payment_milestone_id", "shop_order", "milestone_version", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due", "tax_policy_snapshot_json", "truth_source", "raw_payload_hash", "supersedes"},
+        "Payment Milestone": {"payment_milestone_id", "shop_order", "milestone_version", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due", "tax_policy_snapshot_json", "truth_source", "recognition_posted_at", "recognition_digest", "recognition_reconciliation", "raw_payload_hash", "supersedes"},
         "Shop Order": {"shop_order_id", "roof_job", "material_takeoff", "supplier_order", "work_package", "status", "released_by", "released_at", "reserved_at", "setup_started_at", "fabrication_started_at", "quality_hold_reason", "ready_at", "handed_over_to", "handed_over_at", "handoff_evidence", "invoice_payment_milestone", "invoice_ready_at", "closed_at", "lines", "material_allocations", "operations", "yields", "inspections", "bundles"},
         "Reception Session": {"session_id", "provider", "channel", "direction", "session_status", "lead_envelope", "contact_phone", "structured_summary", "transcript_pointer", "recording_pointer", "ai_disclosed", "recording_disclosed", "raw_key", "payload_hash", "structured_json"},
-        "Work Package": {"work_package_id", "roof_job", "job_assignment", "safety_plan", "version", "status", "objective", "stop_conditions", "make_safe_procedure", "expires_at", "acknowledgement_device_action_id", "blocked_by", "blocked_device_action_id", "steps", "hold_points", "supersedes"},
-        "Work Package Event": {"work_package_event_id", "event_type", "work_package", "roof_job", "job_assignment", "work_package_version", "actor_user", "actor_role", "device_action_id", "occurred_at", "payload_hash", "hold_point_sequence", "evidence_item", "blocker_reason"},
+        "Work Package": {"work_package_id", "roof_job", "job_assignment", "safety_plan", "work_object_type", "work_object_id", "physical_context_type", "physical_context_id", "version", "status", "objective", "stop_conditions", "make_safe_procedure", "expires_at", "acknowledgement_device_action_id", "blocked_by", "blocked_device_action_id", "assigned_workers", "steps", "hold_points", "supersedes"},
+        "Work Package Event": {"work_package_event_id", "event_type", "work_package", "roof_job", "job_assignment", "work_object_type", "work_object_id", "physical_context_type", "physical_context_id", "work_package_version", "actor_user", "actor_role", "device_action_id", "occurred_at", "payload_hash", "hold_point_sequence", "evidence_item", "blocker_reason", "evidence_slot_id", "evidence_requirement", "evidence_source", "evidence_device_id", "evidence_captured_at", "evidence_freshness", "evidence_conflict_state", "evidence_correction_of", "evidence_item_correction_of", "evidence_review_of", "evidence_verification", "evidence_disposition", "correction_reason"},
+        "Work Package Worker": {"sequence", "worker_user", "worker_role", "required"},
     }
 )
 
@@ -260,9 +303,9 @@ class DocTypeContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.doctypes = load_doctypes()
 
-    def test_complete_64_doctype_blueprint(self) -> None:
+    def test_complete_68_doctype_blueprint(self) -> None:
         self.assertEqual(set(self.doctypes), TOP_LEVEL_DOCTYPES | CHILD_DOCTYPES)
-        self.assertEqual(len(self.doctypes), 64)
+        self.assertEqual(len(self.doctypes), 68)
 
         for name, (_, document) in self.doctypes.items():
             with self.subTest(doctype=name):
@@ -299,6 +342,12 @@ class DocTypeContractTests(unittest.TestCase):
             actual_fields = {field["fieldname"] for field in document["fields"]}
             with self.subTest(doctype=name):
                 self.assertTrue(required_fields <= actual_fields)
+
+    def test_price_policy_approval_attribution_is_read_only(self) -> None:
+        document = self.doctypes["Price Book Rule"][1]
+        fields = {field["fieldname"]: field for field in document["fields"]}
+        self.assertEqual(fields["approved_by"].get("read_only"), 1)
+        self.assertEqual(fields["approved_at"].get("read_only"), 1)
 
     def test_permissions_match_the_canonical_least_privilege_matrix(self) -> None:
         self.assertEqual(set(DOCTYPE_ROLE_MATRIX), TOP_LEVEL_DOCTYPES)
@@ -458,6 +507,7 @@ class DocTypeContractTests(unittest.TestCase):
             os.chdir(previous_workdir)
         distribution = setup.call_args.kwargs
         packages = set(distribution["packages"])
+        self.assertEqual(distribution["version"], __version__)
         self.assertEqual(packages, expected_packages)
         self.assertEqual(
             distribution["package_data"], {"": ["*.css", "*.js", "*.json", "*.txt"]}

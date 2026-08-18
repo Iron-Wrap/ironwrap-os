@@ -5,9 +5,7 @@ const DEVICE_SECRET = "a".repeat(43);
  * app's early bootstrap reads this ordinary IndexedDB record before the React bundle
  * starts; no app assets, cookies, or service worker are warmed in this setup page.
  */
-module.exports = async (browser, { url }) => {
-  const page = await browser.newPage();
-  const origin = new URL(url).origin;
+async function seedPairedFieldDevice(page, origin) {
   await page.goto(`${origin}/healthz`, { waitUntil: "domcontentloaded" });
   await page.evaluate(async (deviceSecret) => {
     const database = await new Promise((resolve, reject) => {
@@ -56,5 +54,6 @@ module.exports = async (browser, { url }) => {
       database.close();
     }
   }, DEVICE_SECRET);
-  await page.close();
-};
+}
+
+module.exports = { seedPairedFieldDevice };

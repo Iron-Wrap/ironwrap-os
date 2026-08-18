@@ -26,6 +26,7 @@ class SqliteD1 {
       "0011_app_bff_auth.sql",
       "0018_customer_portal_links.sql",
       "0029_customer_contract_acceptance.sql",
+      "0042_external_effect_runtime.sql",
     ]) {
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
@@ -110,8 +111,12 @@ class MemoryR2 {
 }
 
 type CommitMode = "accepted" | "rejected" | "uncertain";
+type GmailReadbackDrift = "recipient" | "subject" | "body";
 
-function setup(mode: CommitMode = "accepted") {
+function setup(
+  mode: CommitMode = "accepted",
+  gmailReadbackDrift?: GmailReadbackDrift,
+) {
   const db = new SqliteD1();
   const raw = new MemoryR2();
   const sentEmails: string[] = [];
@@ -131,6 +136,28 @@ function setup(mode: CommitMode = "accepted") {
       const payload = JSON.parse(String(init?.body)) as { raw: string };
       sentEmails.push(Buffer.from(payload.raw, "base64url").toString("utf8"));
       return Response.json({ id: `gmail-${sentEmails.length}` });
+    }
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const messageId = decodeURIComponent(
+        url.pathname.split("/").at(-1) ?? "",
+      );
+      const index = Number(messageId.replace(/^gmail-/, "")) - 1;
+      let raw = sentEmails[index];
+      assert.equal(typeof raw, "string");
+      if (gmailReadbackDrift === "recipient")
+        raw = raw.replace(`To: ${CUSTOMER_EMAIL}`, "To: other@example.invalid");
+      if (gmailReadbackDrift === "subject")
+        raw = raw.replace(/^Subject: .*$/m, "Subject: changed");
+      if (gmailReadbackDrift === "body") raw += "changed";
+      return Response.json({
+        id: messageId,
+        raw: Buffer.from(raw).toString("base64url"),
+      });
+    }
+    if (url.pathname.startsWith("/api/resource/Contract%20Acceptance/")) {
+      if (activeMode === "uncertain") return new Response("not found", { status: 404 });
+      const acceptanceId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+      return Response.json({ data: { name: acceptanceId, acceptance_id: acceptanceId } });
     }
     if (url.pathname.includes("customer_contract_acceptance_api.")) {
       const body = JSON.parse(String(init?.body)) as { customer_claim_json?: unknown };
@@ -183,6 +210,7 @@ function testEnv(db: SqliteD1, raw: MemoryR2): AppEnv {
   });
   return {
     DB: db as never,
+    EFFECT_RUNTIME_ENABLED: "true",
     RAW: raw as never,
     APP_BFF_ENABLED: "true",
     APP_CUSTOMER_PORTAL_ENABLED: "true",
@@ -280,7 +308,11 @@ test("customer acceptance is email-challenge-only, pinned, receipt-backed, and r
   try {
     const portalToken = await seedPortalLink(h.db);
     const challenge = await issueChallenge(h.env, portalToken);
-    assert.equal(challenge.response.status, 200);
+    assert.equal(
+      challenge.response.status,
+      200,
+      `${await challenge.response.clone().text()} ${JSON.stringify(h.db.raw.prepare("SELECT state, result_code FROM external_effects").all())}`,
+    );
     const challengeBody = await challenge.response.json() as { status: string; expires_at: string };
     assert.equal(challengeBody.status, "challenge_sent");
     assert.match(challengeBody.expires_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
@@ -426,6 +458,39 @@ test("customer acceptance is email-challenge-only, pinned, receipt-backed, and r
   }
 });
 
+test("Gmail readback hashes bind recipient, subject, and HTML without persisting message content", async () => {
+  for (const drift of ["recipient", "subject", "body"] as const) {
+    const h = setup("accepted", drift);
+    try {
+      const portalToken = await seedPortalLink(h.db);
+      const challenge = await issueChallenge(h.env, portalToken);
+      assert.equal(challenge.response.status, 502, drift);
+      const effect = h.db.raw
+        .prepare(
+          "SELECT state, expected_readback_json FROM external_effects WHERE provider = 'gmail'",
+        )
+        .get() as { state: string; expected_readback_json: string };
+      assert.equal(effect.state, "manual_exception", drift);
+      assert.deepEqual(
+        Object.keys(JSON.parse(effect.expected_readback_json)).sort(),
+        ["html_sha256", "subject_sha256", "to_sha256"],
+      );
+      assert.equal(
+        effect.expected_readback_json.includes(CUSTOMER_EMAIL),
+        false,
+      );
+      assert.equal(
+        effect.expected_readback_json.includes(
+          "Confirm your contract acceptance",
+        ),
+        false,
+      );
+    } finally {
+      h.restore();
+    }
+  }
+});
+
 test("customer acceptance is false by default and never falls back to broad ERP credentials", async () => {
   const h = setup();
   try {
@@ -519,7 +584,30 @@ test("customer acceptance makes Frappe transport or 5xx uncertainty terminal wit
       "SELECT state, error_code FROM customer_portal_acceptance_intents",
     ).get() as { state: string; error_code: string };
     assert.equal(state.state, "uncertain");
-    assert.equal(state.error_code, "frappe_http_503");
+    assert.equal(state.error_code, "frappe_acceptance_readback_not_found");
+  } finally {
+    h.restore();
+  }
+});
+
+test("customer acceptance commits through the universal effect ledger and reads back the acceptance", async () => {
+  const h = setup();
+  try {
+    const portalToken = await seedPortalLink(h.db);
+    const challenge = await issueChallenge(h.env, portalToken);
+    assert.equal(challenge.response.status, 200);
+    h.env.EFFECT_RUNTIME_ENABLED = "true";
+    const token = emailChallengeToken(h.sentEmails);
+    const response = await worker.fetch(confirmRequest(token, "acceptance-runtime-0001"), h.env as never, {} as never);
+    assert.equal(response.status, 200);
+    const accepted = await response.json() as { acceptance_id: string };
+    const ledger = h.db.raw.prepare(
+      "SELECT state, provider, provider_external_id FROM external_effects WHERE provider = 'frappe'",
+    ).get() as { state: string; provider: string; provider_external_id: string };
+    assert.equal(ledger.state, "succeeded");
+    assert.equal(ledger.provider, "frappe");
+    assert.equal(ledger.provider_external_id, accepted.acceptance_id);
+    assert.equal(h.commitClaims.length, 1);
   } finally {
     h.restore();
   }

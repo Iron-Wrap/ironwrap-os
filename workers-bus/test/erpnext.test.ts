@@ -7,6 +7,9 @@ import {
 } from "../src/erpnext.ts";
 import type { EnvelopeRecord } from "../src/core.ts";
 import type { NewoSessionRecord } from "../src/newo-store.ts";
+import { withErpReadback, withTestEffectRuntime } from "./effect-runtime-fixture.ts";
+
+const effectEnv = (values: Record<string, unknown>) => withTestEffectRuntime(values) as never;
 
 const rec: EnvelopeRecord = {
   envelope_id: "ow_11111111-1111-4111-8111-111111111111",
@@ -36,7 +39,7 @@ test("pushToErpNext: disabled flag is a no-op", async () => {
 
 test("pushToErpNext: creates Lead Envelope, Roofing Customer, Property, and Roof Job", async (t) => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, init: init ?? {} });
     if ((init?.method ?? "GET") === "GET") return json({ data: [] });
@@ -49,14 +52,17 @@ test("pushToErpNext: creates Lead Envelope, Roofing Customer, Property, and Roof
       return json({ data: { name: body.gate_id } });
     }
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
 
-  const result = await pushToErpNext({
+  const testEnv = effectEnv({
     ERPNEXT_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://erp.example.com/",
     ERPNEXT_API_KEY: "key",
     ERPNEXT_API_SECRET: "secret",
-  } as never, rec, { contactId: "C-1", jobId: "J-1", reused: false });
+  });
+  const result = await pushToErpNext(testEnv, rec, { contactId: "C-1", jobId: "J-1", reused: false });
+  const mutationsAfterFirstCall = calls.filter((call) => ["POST", "PUT"].includes(call.init.method ?? "GET")).length;
+  const replay = await pushToErpNext(testEnv, rec, { contactId: "C-1", jobId: "J-1", reused: false });
 
   assert.deepEqual(result, {
     name: "LE-0001",
@@ -65,7 +71,12 @@ test("pushToErpNext: creates Lead Envelope, Roofing Customer, Property, and Roof
     roofJobName: "RJ-0001",
     productionGateCount: 7,
   });
-  assert.equal(calls.length, 22);
+  assert.deepEqual(replay, result);
+  assert.equal(
+    calls.filter((call) => ["POST", "PUT"].includes(call.init.method ?? "GET")).length,
+    mutationsAfterFirstCall,
+    "generic Frappe exact replay must reconstruct results from provider GETs without another mutation",
+  );
   assert.match(calls[0].url, /^https:\/\/erp\.example\.com\/api\/resource\/Lead%20Envelope\?/);
   assert.equal(calls[0].init.headers?.["authorization" as never], "token key:secret");
   const leadBody = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/resource/Lead%20Envelope"))?.init.body));
@@ -110,7 +121,7 @@ test("pushToErpNext: creates Lead Envelope, Roofing Customer, Property, and Roof
 
 test("pushToErpNext: retry never resets existing human-owned operational records", async (t) => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, init: init ?? {} });
     if (url.includes("/api/resource/Lead%20Envelope?")) return json({ data: [{ name: "LE-TRIAGED" }] });
@@ -121,12 +132,12 @@ test("pushToErpNext: retry never resets existing human-owned operational records
     if (url.endsWith("/api/resource/Roof%20Job/RJ-TRIAGED")) return json({ data: { name: "RJ-TRIAGED", customer: "RC-HUMAN" } });
     if (url.includes("/api/resource/Production%20Gate%20State?")) return json({ data: [{ name: "gate" }] });
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
 
-  await pushToErpNext({
+  await pushToErpNext(effectEnv({
     ERPNEXT_ENABLED: "true", ERPNEXT_BASE_URL: "https://erp.example.com",
     ERPNEXT_API_KEY: "key", ERPNEXT_API_SECRET: "secret",
-  } as never, { ...rec, status: "pushed", jn_contact_id: "C-2", jn_job_id: "J-2" });
+  }), { ...rec, status: "pushed", jn_contact_id: "C-2", jn_job_id: "J-2" });
 
   const leadUpdate = calls.find((call) => call.url.endsWith("/api/resource/Lead%20Envelope/LE-TRIAGED"));
   assert.ok(leadUpdate);
@@ -146,7 +157,7 @@ test("pushToErpNext: retry never resets existing human-owned operational records
 
 test("pushToErpNext: fills an old unlinked job customer without replacing an existing assignment", async (t) => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, init: init ?? {} });
     if (url.includes("/api/resource/Lead%20Envelope?")) return json({ data: [{ name: "LE-OLD" }] });
@@ -162,12 +173,12 @@ test("pushToErpNext: fills an old unlinked job customer without replacing an exi
     }
     if (url.includes("/api/resource/Production%20Gate%20State?")) return json({ data: [{ name: "gate" }] });
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
 
-  await pushToErpNext({
+  await pushToErpNext(effectEnv({
     ERPNEXT_ENABLED: "true", ERPNEXT_BASE_URL: "https://erp.example.com",
     ERPNEXT_API_KEY: "key", ERPNEXT_API_SECRET: "secret",
-  } as never, rec);
+  }), rec);
 
   const customerLink = calls.find((call) =>
     call.url.endsWith("/api/resource/Roof%20Job/RJ-OLD") && call.init.method === "PUT",
@@ -182,7 +193,7 @@ test("pushToErpNext: fills an old unlinked job customer without replacing an exi
 
 test("syncLeadTransportToErpNext: mirrors only bridge identifiers into the existing job", async (t) => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, init: init ?? {} });
     if (url.includes("/api/resource/Lead%20Envelope?")) return json({ data: [{ name: "LE-1" }] });
@@ -190,12 +201,12 @@ test("syncLeadTransportToErpNext: mirrors only bridge identifiers into the exist
     if (url.endsWith("/api/resource/Lead%20Envelope/LE-1")) return json({ data: { name: "LE-1" } });
     if (url.endsWith("/api/resource/Roof%20Job/RJ-1")) return json({ data: { name: "RJ-1" } });
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
 
-  const result = await syncLeadTransportToErpNext({
+  const result = await syncLeadTransportToErpNext(effectEnv({
     ERPNEXT_ENABLED: "true", ERPNEXT_BASE_URL: "https://erp.example.com",
     ERPNEXT_API_KEY: "key", ERPNEXT_API_SECRET: "secret",
-  } as never, { ...rec, status: "pushed" }, { contactId: "C-9", jobId: "J-9", jobNumber: "26-0009", reused: false });
+  }), { ...rec, status: "pushed" }, { contactId: "C-9", jobId: "J-9", jobNumber: "26-0009", reused: false });
 
   assert.deepEqual(result, { name: "LE-1", roofJobName: "RJ-1" });
   const leadBody = JSON.parse(String(calls.find((call) => call.url.endsWith("/api/resource/Lead%20Envelope/LE-1"))?.init.body));
@@ -208,9 +219,86 @@ test("syncLeadTransportToErpNext: mirrors only bridge identifiers into the exist
   }
 });
 
+test("generic Frappe exact replay rejects a wrong material provider field without another write", async (t) => {
+  const records = new Map<string, Record<string, unknown>>([
+    ["Lead Envelope:LE-1", { name: "LE-1" }],
+    ["Roof Job:RJ-1", { name: "RJ-1" }],
+  ]);
+  let mutations = 0;
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (url.pathname === "/api/resource/Lead%20Envelope" && url.search) {
+        return json({ data: [{ name: "LE-1" }] });
+      }
+      if (url.pathname === "/api/resource/Roof%20Job" && url.search) {
+        return json({ data: [{ name: "RJ-1" }] });
+      }
+      const resource = url.pathname.match(
+        /^\/api\/resource\/([^/]+)\/([^/]+)$/,
+      );
+      if (resource) {
+        const key = `${decodeURIComponent(resource[1]!)}:${decodeURIComponent(resource[2]!)}`;
+        if (method === "GET") return json({ data: records.get(key) });
+        if (method === "PUT") {
+          mutations += 1;
+          const value = {
+            ...records.get(key),
+            ...JSON.parse(String(init?.body)),
+            name: decodeURIComponent(resource[2]!),
+          };
+          records.set(key, value);
+          return json({ data: value });
+        }
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    },
+  );
+  const testEnv = effectEnv({
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
+  });
+  const transport = {
+    contactId: "C-9",
+    jobId: "J-9",
+    jobNumber: "26-0009",
+    reused: false,
+  };
+
+  await syncLeadTransportToErpNext(
+    testEnv,
+    { ...rec, status: "pushed" },
+    transport,
+  );
+  assert.equal(mutations, 2);
+  records.set("Lead Envelope:LE-1", {
+    ...records.get("Lead Envelope:LE-1"),
+    jobnimbus_job_id: "provider-drift",
+  });
+
+  await assert.rejects(
+    syncLeadTransportToErpNext(
+      testEnv,
+      { ...rec, status: "pushed" },
+      transport,
+    ),
+    /erpnext_readback_conflict/,
+  );
+  assert.equal(
+    mutations,
+    2,
+    "a conflicted exact replay must not issue a second provider mutation",
+  );
+});
+
 test("pushToErpNext: captures instant estimate sessions as review-gated ERPNext rows", async (t) => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, init: init ?? {} });
     if ((init?.method ?? "GET") === "GET") return json({ data: [] });
@@ -223,7 +311,7 @@ test("pushToErpNext: captures instant estimate sessions as review-gated ERPNext 
     }
     if (url.endsWith("/api/resource/Instant%20Estimate%20Session")) return json({ data: { name: "IES-0001" } });
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
 
   const instantRec = {
     ...rec,
@@ -237,12 +325,12 @@ test("pushToErpNext: captures instant estimate sessions as review-gated ERPNext 
     }),
   };
 
-  const result = await pushToErpNext({
+  const result = await pushToErpNext(effectEnv({
     ERPNEXT_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://erp.example.com",
     ERPNEXT_API_KEY: "key",
     ERPNEXT_API_SECRET: "secret",
-  } as never, instantRec);
+  }), instantRec);
 
   assert.equal(result?.instantEstimateSessionName, "IES-0001");
   const estimate = JSON.parse(String(calls.find((c) => c.url.endsWith("/api/resource/Instant%20Estimate%20Session"))?.init.body));
@@ -261,7 +349,7 @@ test("pushToErpNext: captures instant estimate sessions as review-gated ERPNext 
 test("pushToErpNext: mirrors explicit public-estimator follow-up consent with raw R2 evidence", async (t) => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const rawBody = JSON.stringify({ original: "public estimator submission" });
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, init: init ?? {} });
     if ((init?.method ?? "GET") === "GET") return json({ data: [] });
@@ -280,7 +368,7 @@ test("pushToErpNext: mirrors explicit public-estimator follow-up consent with ra
       return json({ data: { name: `CC-${body.channel}` } });
     }
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
 
   const publicRec: EnvelopeRecord = {
     ...rec,
@@ -290,10 +378,16 @@ test("pushToErpNext: mirrors explicit public-estimator follow-up consent with ra
       address: "1 Main St",
       service: "metal roof",
       instant_estimate: true,
-      estimate_low: 10000,
-      estimate_high: 20000,
+      estimate_type: "review_intake",
+      selected_services: ["metal_roofing"],
+      assumptions: "Measurement and estimator review required before pricing.",
+      exclusions: "Not a final quote, contract, material order, or payment request.",
       source_detail: "ironwrap_public_estimator",
       public_estimator: {
+        version: 2,
+        pricing_state: "measurement_required",
+        range: null,
+        review_required: true,
         jurisdiction: "Alberta, Canada",
         consent: {
           contact: true,
@@ -305,7 +399,7 @@ test("pushToErpNext: mirrors explicit public-estimator follow-up consent with ra
     }),
   };
 
-  await pushToErpNext({
+  await pushToErpNext(effectEnv({
     ERPNEXT_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://erp.example.com",
     ERPNEXT_API_KEY: "key",
@@ -314,7 +408,17 @@ test("pushToErpNext: mirrors explicit public-estimator follow-up consent with ra
     RAW: {
       get: async () => ({ arrayBuffer: async () => new TextEncoder().encode(rawBody).buffer }),
     },
-  } as never, publicRec);
+  }), publicRec);
+
+  const estimate = JSON.parse(String(calls.find((call) =>
+    call.url.endsWith("/api/resource/Instant%20Estimate%20Session")
+  )?.init.body));
+  assert.equal(estimate.status, "Captured");
+  assert.equal(estimate.review_required, 1);
+  assert.equal(Object.hasOwn(estimate, "range_low"), false);
+  assert.equal(Object.hasOwn(estimate, "range_high"), false);
+  assert.equal(Object.hasOwn(estimate, "estimate_total"), false);
+  assert.deepEqual(JSON.parse(estimate.selected_services_json), ["metal_roofing"]);
 
   const evidence = JSON.parse(String(calls.find((call) => call.url.endsWith("/api/resource/Evidence%20Item"))?.init.body));
   assert.equal(evidence.evidence_id, `evidence:public-estimate-consent:${publicRec.envelope_id}`);
@@ -340,7 +444,7 @@ test("pushToErpNext: mirrors explicit public-estimator follow-up consent with ra
 
 test("pushNewoSessionToErpNext keeps appointment review state human-owned on retries", async (t) => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, init: init ?? {} });
     if (url.includes("/api/resource/Reception%20Session?")) {
@@ -356,7 +460,7 @@ test("pushNewoSessionToErpNext keeps appointment review state human-owned on ret
       return json({ data: { name: "AR-request-001" } });
     }
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
   const session: NewoSessionRecord = {
     session_id: "session-001",
     project_id: "project-001",
@@ -409,13 +513,13 @@ test("pushNewoSessionToErpNext keeps appointment review state human-owned on ret
     updated_at: "2026-07-18T18:01:00.000Z",
   };
 
-  const result = await pushNewoSessionToErpNext({
+  const result = await pushNewoSessionToErpNext(effectEnv({
     ERPNEXT_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://erp.example.com",
     ERPNEXT_API_KEY: "key",
     ERPNEXT_API_SECRET: "secret",
     NEWO_BOOKING_MODE: "request_only",
-  } as never, session, { leadEnvelopeName: "LE-0001", roofJobName: "RJ-0001" });
+  }), session, { leadEnvelopeName: "LE-0001", roofJobName: "RJ-0001" });
 
   assert.deepEqual(result, {
     receptionSessionName: "RS-session-001",
@@ -440,7 +544,7 @@ test("pushNewoSessionToErpNext keeps appointment review state human-owned on ret
 
 test("pushNewoSessionToErpNext creates one owned urgent-callback incident for a failed handoff", async (t) => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, init: init ?? {} });
     if (url.includes("/api/resource/Reception%20Session?")) {
@@ -454,7 +558,7 @@ test("pushNewoSessionToErpNext creates one owned urgent-callback incident for a 
       return json({ data: { name: "incident:newo-callback:session-failed" } });
     }
     throw new Error(`unexpected fetch ${url}`);
-  });
+  }));
   const session: NewoSessionRecord = {
     session_id: "session-failed",
     project_id: "project-001",
@@ -502,13 +606,13 @@ test("pushNewoSessionToErpNext creates one owned urgent-callback incident for a 
     updated_at: "2026-07-18T19:02:00.000Z",
   };
 
-  const result = await pushNewoSessionToErpNext({
+  const result = await pushNewoSessionToErpNext(effectEnv({
     ERPNEXT_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://erp.example.com",
     ERPNEXT_API_KEY: "key",
     ERPNEXT_API_SECRET: "secret",
     NEWO_CALLBACK_OWNER_USER: "owner@example.com",
-  } as never, session, { leadEnvelopeName: "LE-0001", roofJobName: "RJ-0001" });
+  }), session, { leadEnvelopeName: "LE-0001", roofJobName: "RJ-0001" });
 
   assert.deepEqual(result, {
     receptionSessionName: "RS-session-failed",

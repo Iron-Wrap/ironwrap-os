@@ -34,4 +34,4 @@ output/
 .runtime-logs/
 
 # Nested product repo — own remote + branch discipline (see AGENTS.md repo map)
-Facet/
+/Facet/

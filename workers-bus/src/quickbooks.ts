@@ -320,10 +320,13 @@ async function projectOutboxItem(
     });
     return { state: "projected", erp };
   } catch (err) {
-    // Never store upstream body text. Auth, route, and deployment drift are
-    // retryable: only the bounded issuer's explicit immutable-conflict outcome
-    // may be terminally rejected.
+    // Never store upstream body text. Only the bounded issuer's explicit
+    // immutable conflict may be terminally rejected; an unknown ledger outcome
+    // stays pending but requires reconciliation before another provider write.
     const stableBusinessConflict = isStableQuickBooksBusinessConflict(err);
+    const projectionError = String(err).includes("effect_unknown_requires_reconciliation")
+      ? "effect_unknown_requires_reconciliation"
+      : "erpnext_quickbooks_projection_failed";
     let terminalRejected = false;
     const attempts = event.attempt_count + 1;
     const escalated = !stableBusinessConflict && attempts >= QUICKBOOKS_PROJECTION_ESCALATION_ATTEMPTS && !event.escalated_at;
@@ -343,7 +346,7 @@ async function projectOutboxItem(
           env,
           event,
           leaseToken,
-          "erpnext_quickbooks_projection_failed",
+          projectionError,
           releasedAt,
           quickBooksProjectionRetryAt(releasedAt, attempts),
           escalated,
@@ -362,7 +365,7 @@ async function projectOutboxItem(
       result: "error",
       error: terminalRejected
         ? "erpnext_quickbooks_projection_rejected"
-        : "erpnext_quickbooks_projection_failed",
+        : projectionError,
     });
     if (escalated && !terminalRejected) {
       await store.recordAudit(env, {

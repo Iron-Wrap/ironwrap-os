@@ -12,6 +12,7 @@ from ironwrap_roofing.access_control import (
     IRONWRAP_ROLES,
     LAUNCH_PROOF_READER_ROLE,
 )
+from ironwrap_roofing.commercial_migration import CommercialMigrationBlocked
 
 
 INSTALL_PATH = Path(__file__).resolve().parents[1] / "ironwrap_roofing" / "install.py"
@@ -81,6 +82,7 @@ class InstallHookTests(unittest.TestCase):
             commit=lambda: None,
         )
         frappe_module.get_doc = lambda payload: FakeRoleDocument(payload, inserted)
+        frappe_module.get_all = lambda *args, **kwargs: []
         frappe_module.clear_cache = lambda: None
         module = self.load_install_module(frappe_module)
 
@@ -89,6 +91,47 @@ class InstallHookTests(unittest.TestCase):
         self.assertEqual(
             {item[0]["role_name"] for item in inserted}, set(ALL_IRONWRAP_ROLES)
         )
+
+    def test_before_migrate_blocks_before_role_or_commercial_partial_writes(
+        self,
+    ) -> None:
+        writes = []
+        datasets = {
+            "Price Book Rule": [
+                {
+                    "name": "RULE-1",
+                    "status": "Approved",
+                    "unit_price": "12.50",
+                    "minimum_quantity": "0",
+                    "currency": None,
+                    "source_ref": "supplier-sheet:line-1",
+                    "rule_json": (
+                        '{"schema_version":"ironwrap.price-rule.v1",'
+                        '"operation":"quantity_times_unit_price",'
+                        '"rounding":"half_up_cent"}'
+                    ),
+                    "effective_from": "2026-08-01",
+                    "effective_to": "2026-08-31",
+                }
+            ],
+            "Supplier Quote": [],
+            "Supplier Quote Item": [],
+        }
+        frappe_module = types.ModuleType("frappe")
+        frappe_module.db = types.SimpleNamespace(
+            exists=lambda doctype, name: None,
+            set_value=lambda *args, **kwargs: writes.append((args, kwargs)),
+            commit=lambda: None,
+        )
+        frappe_module.get_all = lambda doctype, **kwargs: datasets[doctype]
+        frappe_module.get_doc = lambda payload: FakeRoleDocument(payload, writes)
+        frappe_module.clear_cache = lambda: writes.append("clear_cache")
+        module = self.load_install_module(frappe_module)
+
+        with self.assertRaises(CommercialMigrationBlocked):
+            module.before_migrate()
+
+        self.assertEqual(writes, [])
 
     def test_after_install_commits_and_clears_cache(self) -> None:
         events = []

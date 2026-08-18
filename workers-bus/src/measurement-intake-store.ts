@@ -2,6 +2,7 @@ export type MeasurementIntakeStatus =
   "processing" | "matched" | "unmatched" | "retryable_error";
 
 export const MAX_MEASUREMENT_INTAKE_ATTEMPTS = 12;
+export const MAX_MEASUREMENT_OCR_ATTEMPTS = 3;
 
 export interface MeasurementIntakeReceipt {
   receipt_id: string;
@@ -30,6 +31,18 @@ export interface MeasurementIntakeReceipt {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  report_raw_key: string | null;
+  report_sha256: string | null;
+  report_content_type: string | null;
+  ocr_status: "not_requested" | "processing" | "completed" | "failed";
+  ocr_model: string | null;
+  ocr_result_key: string | null;
+  ocr_result_sha256: string | null;
+  ocr_job_number_candidate: string | null;
+  ocr_job_number_source_ref: string | null;
+  ocr_review_required: 0 | 1;
+  ocr_error: string | null;
+  ocr_completed_at: string | null;
 }
 
 /**
@@ -69,6 +82,8 @@ export interface MeasurementIntakeOwnerException {
   reason:
     | "job_number_missing"
     | "job_match_required"
+    | "ocr_review_required"
+    | "ocr_failed"
     | "drive_not_configured"
     | "report_fetch_failed"
     | "raw_source_missing"
@@ -253,13 +268,23 @@ export async function getMeasurementIntakeReceipt(
     `SELECT receipt_id, idempotency_key_hash, payload_hash, key_strategy, measurement_id, provider,
             job_number, raw_key, content_type, status, lease_token, lease_expires_at, drive_report_url,
             drive_folder_url, frappe_measurement_id, frappe_evidence_id, frappe_error, last_error,
-            attempts, created_at, updated_at, completed_at
+            attempts, created_at, updated_at, completed_at, report_raw_key, report_sha256,
+            report_content_type, ocr_status, ocr_model, ocr_result_key, ocr_result_sha256,
+            ocr_job_number_candidate, ocr_job_number_source_ref, ocr_review_required, ocr_error,
+            ocr_completed_at
      FROM measurement_intake_receipts
      WHERE idempotency_key_hash = ?
      LIMIT 1`,
   )
     .bind(idempotencyKeyHash)
     .first<MeasurementIntakeReceipt>();
+}
+
+export async function getMeasurementIntakeReceiptById(
+  env: Env,
+  receiptId: string,
+): Promise<MeasurementIntakeReceipt | null> {
+  return await getMeasurementReceiptById(env, receiptId);
 }
 
 export async function recordMeasurementDriveFiling(
@@ -287,6 +312,113 @@ export async function recordMeasurementDriveFiling(
     .run();
   if (d1Changes(result) !== 1)
     throw new Error("measurement_receipt_lease_lost");
+}
+
+export async function recordMeasurementReportEvidence(
+  env: Env,
+  input: {
+    receiptId: string;
+    leaseToken: string;
+    rawKey: string;
+    sha256: string;
+    contentType: string;
+    now: string;
+  },
+): Promise<void> {
+  const result = await env.DB.prepare(
+    `UPDATE measurement_intake_receipts
+     SET report_raw_key = ?, report_sha256 = ?, report_content_type = ?, updated_at = ?
+     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ?
+       AND (report_raw_key IS NULL OR (report_raw_key = ? AND report_sha256 = ?))`,
+  )
+    .bind(
+      input.rawKey,
+      input.sha256,
+      input.contentType,
+      input.now,
+      input.receiptId,
+      input.leaseToken,
+      input.rawKey,
+      input.sha256,
+    )
+    .run();
+  if (d1Changes(result) !== 1)
+    throw new Error("measurement_report_evidence_update_lost");
+}
+
+export async function recordMeasurementOcrStarted(
+  env: Env,
+  input: { receiptId: string; leaseToken: string; model: string; now: string },
+): Promise<void> {
+  const result = await env.DB.prepare(
+    `UPDATE measurement_intake_receipts
+     SET ocr_status = 'processing', ocr_model = ?, ocr_error = NULL, updated_at = ?
+     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ?
+       AND ocr_status IN ('not_requested', 'processing', 'failed')`,
+  )
+    .bind(input.model, input.now, input.receiptId, input.leaseToken)
+    .run();
+  if (d1Changes(result) !== 1)
+    throw new Error("measurement_ocr_start_update_lost");
+}
+
+export async function recordMeasurementOcrResult(
+  env: Env,
+  input: {
+    receiptId: string;
+    leaseToken: string;
+    model: string;
+    resultKey: string;
+    resultSha256: string;
+    jobNumberCandidate: string | null;
+    jobNumberSourceRef: string | null;
+    now: string;
+  },
+): Promise<void> {
+  const result = await env.DB.prepare(
+    `UPDATE measurement_intake_receipts
+     SET ocr_status = 'completed', ocr_model = ?, ocr_result_key = ?, ocr_result_sha256 = ?,
+         ocr_job_number_candidate = ?, ocr_job_number_source_ref = ?, ocr_review_required = 1,
+         ocr_error = NULL, ocr_completed_at = ?, updated_at = ?
+     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ?
+       AND ocr_status = 'processing'`,
+  )
+    .bind(
+      input.model,
+      input.resultKey,
+      input.resultSha256,
+      input.jobNumberCandidate,
+      input.jobNumberSourceRef,
+      input.now,
+      input.now,
+      input.receiptId,
+      input.leaseToken,
+    )
+    .run();
+  if (d1Changes(result) !== 1)
+    throw new Error("measurement_ocr_result_update_lost");
+}
+
+export async function recordMeasurementOcrFailure(
+  env: Env,
+  input: { receiptId: string; leaseToken: string; model: string; error: string; now: string },
+): Promise<void> {
+  const result = await env.DB.prepare(
+    `UPDATE measurement_intake_receipts
+     SET ocr_status = 'failed', ocr_model = ?, ocr_review_required = 1, ocr_error = ?,
+         updated_at = ?
+     WHERE receipt_id = ? AND status = 'processing' AND lease_token = ?`,
+  )
+    .bind(
+      input.model,
+      input.error.slice(0, 500),
+      input.now,
+      input.receiptId,
+      input.leaseToken,
+    )
+    .run();
+  if (d1Changes(result) !== 1)
+    throw new Error("measurement_ocr_failure_update_lost");
 }
 
 export async function completeMeasurementIntakeReceipt(
@@ -364,7 +496,10 @@ export async function listMeasurementIntakeExceptions(
     `SELECT receipt_id, idempotency_key_hash, payload_hash, key_strategy, measurement_id, provider,
             job_number, raw_key, content_type, status, lease_token, lease_expires_at, drive_report_url,
             drive_folder_url, frappe_measurement_id, frappe_evidence_id, frappe_error, last_error,
-            attempts, created_at, updated_at, completed_at
+            attempts, created_at, updated_at, completed_at, report_raw_key, report_sha256,
+            report_content_type, ocr_status, ocr_model, ocr_result_key, ocr_result_sha256,
+            ocr_job_number_candidate, ocr_job_number_source_ref, ocr_review_required, ocr_error,
+            ocr_completed_at
      FROM measurement_intake_receipts
      WHERE status IN ('unmatched', 'retryable_error')
      ORDER BY updated_at DESC, receipt_id DESC
@@ -385,14 +520,23 @@ export async function listRetryableMeasurementIntakeReceipts(
     `SELECT receipt_id, idempotency_key_hash, payload_hash, key_strategy, measurement_id, provider,
             job_number, raw_key, content_type, status, lease_token, lease_expires_at, drive_report_url,
             drive_folder_url, frappe_measurement_id, frappe_evidence_id, frappe_error, last_error,
-            attempts, created_at, updated_at, completed_at
+            attempts, created_at, updated_at, completed_at, report_raw_key, report_sha256,
+            report_content_type, ocr_status, ocr_model, ocr_result_key, ocr_result_sha256,
+            ocr_job_number_candidate, ocr_job_number_source_ref, ocr_review_required, ocr_error,
+            ocr_completed_at
      FROM measurement_intake_receipts
-     WHERE (status = 'retryable_error' AND attempts < ?)
+     WHERE (status = 'retryable_error' AND attempts < CASE
+              WHEN last_error GLOB 'measurement_ocr_*' THEN ? ELSE ? END)
         OR (status = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
      ORDER BY updated_at ASC, receipt_id ASC
      LIMIT ?`,
   )
-    .bind(MAX_MEASUREMENT_INTAKE_ATTEMPTS, now, limit)
+    .bind(
+      MAX_MEASUREMENT_OCR_ATTEMPTS,
+      MAX_MEASUREMENT_INTAKE_ATTEMPTS,
+      now,
+      limit,
+    )
     .all<MeasurementIntakeReceipt>();
   return rows.results ?? [];
 }
@@ -436,10 +580,12 @@ function ownerExceptionReason(
   lastError: string | null,
 ): MeasurementIntakeOwnerException["reason"] {
   if (status === "unmatched") {
+    if (lastError === "ocr_review_required") return "ocr_review_required";
     return lastError === "no_job_number"
       ? "job_number_missing"
       : "job_match_required";
   }
+  if (lastError?.startsWith("measurement_ocr_")) return "ocr_failed";
   if (lastError === "drive_not_configured") return "drive_not_configured";
   if (lastError === "raw_source_missing") return "raw_source_missing";
   if (lastError === "frappe_measurement_sync_failed")
@@ -455,14 +601,21 @@ function ownerExceptionRecoveryDisposition(
   attempts: number,
 ): MeasurementIntakeOwnerException["recovery_disposition"] {
   if (status === "unmatched") return "manual_review";
-  if (retryNeedsHumanRecovery(lastError)) return "recovery_blocked";
-  if (attempts >= MAX_MEASUREMENT_INTAKE_ATTEMPTS) return "retry_exhausted";
+  if (measurementRetryNeedsHumanRecovery(lastError)) return "recovery_blocked";
+  if (attempts >= measurementRetryAttemptLimit(lastError)) return "retry_exhausted";
   return "retry_scheduled";
 }
 
-function retryNeedsHumanRecovery(lastError: string | null): boolean {
+export function measurementRetryAttemptLimit(lastError: string | null): number {
+  return lastError?.startsWith("measurement_ocr_")
+    ? MAX_MEASUREMENT_OCR_ATTEMPTS
+    : MAX_MEASUREMENT_INTAKE_ATTEMPTS;
+}
+
+export function measurementRetryNeedsHumanRecovery(lastError: string | null): boolean {
   if (!lastError) return false;
   if (/^report_fetch_status_4\d\d$/.test(lastError)) return true;
+  if (/^measurement_ocr_http_4\d\d$/.test(lastError)) return true;
   return new Set([
     "drive_not_configured",
     "raw_source_missing",
@@ -472,6 +625,22 @@ function retryNeedsHumanRecovery(lastError: string | null): boolean {
     "report_redirect_invalid",
     "report_too_large",
     "report_body_missing",
+    "measurement_report_evidence_incomplete",
+    "measurement_report_evidence_missing",
+    "measurement_report_evidence_hash_mismatch",
+    "measurement_ocr_not_configured",
+    "measurement_ocr_model_not_allowed",
+    "measurement_ocr_pdf_too_large",
+    "measurement_ocr_response_invalid",
+    "measurement_ocr_tool_result_missing",
+    "measurement_ocr_tool_result_invalid",
+    "measurement_ocr_evidence_incomplete",
+    "measurement_ocr_evidence_missing",
+    "measurement_ocr_evidence_too_large",
+    "measurement_ocr_evidence_hash_mismatch",
+    "measurement_ocr_evidence_invalid",
+    "measurement_ocr_evidence_model_mismatch",
+    "measurement_ocr_report_hash_mismatch",
   ]).has(lastError);
 }
 
@@ -512,7 +681,10 @@ async function getMeasurementReceiptById(
     `SELECT receipt_id, idempotency_key_hash, payload_hash, key_strategy, measurement_id, provider,
             job_number, raw_key, content_type, status, lease_token, lease_expires_at, drive_report_url,
             drive_folder_url, frappe_measurement_id, frappe_evidence_id, frappe_error, last_error,
-            attempts, created_at, updated_at, completed_at
+            attempts, created_at, updated_at, completed_at, report_raw_key, report_sha256,
+            report_content_type, ocr_status, ocr_model, ocr_result_key, ocr_result_sha256,
+            ocr_job_number_candidate, ocr_job_number_source_ref, ocr_review_required, ocr_error,
+            ocr_completed_at
      FROM measurement_intake_receipts
      WHERE receipt_id = ?
      LIMIT 1`,

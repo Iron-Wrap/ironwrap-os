@@ -4,9 +4,14 @@ import { test } from "node:test";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
 import { buildEstimatorWorkbenchReadModel } from "../src/app-read-models.ts";
 import { OFFICE_ESTIMATOR_READ_FIELDS } from "../src/frappe-read.ts";
+import {
+  approvedPricingPolicySnapshot,
+  type PriceList,
+} from "../src/pricing.ts";
 import type { AppEnv, AppRole, AuthContext } from "../src/app-types.ts";
 
 const MODIFIED = "2026-07-11T10:00:00.000Z";
+const PRICING_AS_OF = new Date("2026-08-13T12:00:00.000Z");
 const RAW_KEY = "raw/measurements/2026-07-11/ow_01234567-89ab-cdef-0123-456789abcdef.json";
 const RAW_SHA256 = "a".repeat(64);
 const GEOMETRY_XML = [
@@ -19,7 +24,7 @@ const GEOMETRY_XML = [
   '<LINE id="L2" path="P2,P3" type="RIDGE" length="10"/>',
   '<LINE id="L3" path="P3,P4" type="EAVE" length="10"/>',
   '<LINE id="L4" path="P4,P1" type="EAVE" length="12"/>',
-  '<POLYGON id="F1" path="L1,L2,L3,L4" type="Roof" size="100" pitch="6" mat="Asphalt"/>',
+  '<POLYGON id="F1" path="L1,L2,L3,L4" type="Roof" size="100" mat="Asphalt"/>',
   "</APPLICAD_EXPORT>",
 ].join("");
 
@@ -261,6 +266,7 @@ function installFrappeMock(
     name: string | null;
     fields: string[];
     filters: unknown[];
+    limit: number | null;
   }> = [];
   globalThis.fetch = async (input) => {
     const url = new URL(
@@ -272,7 +278,14 @@ function installFrappeMock(
     const name = segments[resource + 2] ?? null;
     const fields = JSON.parse(url.searchParams.get("fields") ?? "[]") as string[];
     const filters = JSON.parse(url.searchParams.get("filters") ?? "[]") as unknown[];
-    requests.push({ doctype, name, fields, filters });
+    const limit = Number(url.searchParams.get("limit_page_length"));
+    requests.push({
+      doctype,
+      name,
+      fields,
+      filters,
+      limit: Number.isSafeInteger(limit) ? limit : null,
+    });
     const source = dataset[doctype] ?? [];
     if (name) {
       const document = options.detailRows?.[`${doctype}/${name}`] ?? source.find((row) => row.name === name);
@@ -388,6 +401,117 @@ test("estimator workbench derives safe measurement geometry and commercial trace
     assert.ok(
       reportDetail,
       "selected report should be read only through the fixed direct-detail contract",
+    );
+  } finally {
+    mock.restore();
+  }
+});
+
+test("estimator economics exposes separated source-bound cents without actor or tax leakage", async () => {
+  const economicsRows = {
+    ...rows,
+    "Customer Quote": [
+      {
+        name: "QUOTE-A",
+        customer_quote_id: "quote_a",
+        roof_job: "JOB-A",
+        quote_version: 3,
+        status: "Accepted",
+        subtotal: "12000.00",
+        tax_amount: "600.00",
+        quote_total: "12600.00",
+        currency: "CAD",
+        modified: MODIFIED,
+      },
+    ],
+    "Supplier Quote": [
+      {
+        name: "SUPPLIER-QUOTE-A",
+        roof_job: "JOB-A",
+        status: "Approved",
+        quote_total: "5000.00",
+        currency: "CAD",
+        modified: MODIFIED,
+      },
+    ],
+    "Supplier Order": [
+      {
+        name: "SUPPLIER-ORDER-A",
+        roof_job: "JOB-A",
+        source_quote: "SUPPLIER-QUOTE-A",
+        status: "Ordered",
+        modified: MODIFIED,
+      },
+    ],
+    "Material Lot": [
+      { name: "LOT-A", roof_job: "JOB-A", status: "Available", modified: MODIFIED },
+    ],
+    "Payment Milestone": [
+      {
+        name: "INVOICE-A",
+        roof_job: "JOB-A",
+        milestone_type: "Invoice",
+        status: "Matched",
+        subtotal: "12000.00",
+        tax_amount: "600.00",
+        total_amount: "12600.00",
+        currency: "CAD",
+        modified: MODIFIED,
+      },
+      {
+        name: "PAYMENT-A",
+        roof_job: "JOB-A",
+        milestone_type: "Payment",
+        status: "Matched",
+        total_amount: "3000.00",
+        currency: "CAD",
+        modified: MODIFIED,
+      },
+    ],
+    "Job Cost Event": [
+      {
+        name: "COST-A",
+        job_cost_event_id: "COST-A",
+        tenant: "ironwrap",
+        roof_job: "JOB-A",
+        event_kind: "cost",
+        category: "Material",
+        quantity: 1,
+        unit: "lot",
+        amount_cents: 450000,
+        amount_basis: "Net of Recoverable Tax",
+        currency: "CAD",
+        source_doctype: "Material Lot",
+        source_name: "LOT-A",
+        source_digest: "a".repeat(64),
+        source_evidence: "EVID-A",
+        accounting_state: "Operational",
+        approved_by: "private-finance@example.com",
+        modified: MODIFIED,
+      },
+    ],
+  };
+  const mock = installFrappeMock(economicsRows);
+  try {
+    const model = await buildEstimatorWorkbenchReadModel(env(), auth("owner"), "JOB-A");
+    assert.ok(model);
+    assert.equal(model.economics.metrics.forecast_revenue.known_cents, 1_200_000);
+    assert.equal(model.economics.metrics.forecast_cost.known_cents, 500_000);
+    assert.equal(model.economics.metrics.committed_cost.known_cents, 500_000);
+    assert.equal(model.economics.metrics.accrued_actual_cost.known_cents, 450_000);
+    assert.equal(model.economics.metrics.invoiced_revenue_ex_tax.known_cents, 1_200_000);
+    assert.equal(model.economics.metrics.cash_collected.known_cents, 300_000);
+    assert.equal(model.economics.metrics.actual_profit.amount_cents, null);
+    const request = mock.requests.find((item) => item.doctype === "Job Cost Event");
+    assert.ok(request);
+    assert.deepEqual(request.filters, [
+      ["Job Cost Event", "tenant", "=", "ironwrap"],
+      ["Job Cost Event", "roof_job", "=", "JOB-A"],
+    ]);
+    assert.equal(request.fields.includes("approved_by"), false);
+    assert.equal(
+      OFFICE_ESTIMATOR_READ_FIELDS["Job Cost Event"].includes("approved_by" as never),
+      false,
     );
   } finally {
     mock.restore();
@@ -1147,12 +1271,17 @@ test("estimator workbench is office-only and the HTTP route is private before it
 });
 
 test("estimator workbench projects a computed takeoff and prices it only when the tenant configures rates", async () => {
-  const mock = installFrappeMock();
+  const dataset = structuredClone(rows);
+  const mock = installFrappeMock(dataset);
   try {
     // Without a price list: takeoff is computed from verified geometry, pricing stays off.
     const model = await buildEstimatorWorkbenchReadModel(env(), auth("ops"), "JOB-A");
     const takeoff = model?.measurements.selected?.computed_takeoff;
     assert.equal(takeoff?.state, "computed");
+    assert.equal(takeoff?.authority, "non_operational_preview");
+    assert.equal(takeoff?.calculation_schema, "legacy_preview/v1");
+    assert.equal(takeoff?.policy_bound, false);
+    assert.equal(takeoff?.approval_eligible, false);
     // 10x10 flat facet, 16in coverage: ceil(10/1.3333) = 8 seams of 10ft.
     assert.equal(takeoff?.panel_count, 8);
     assert.equal(takeoff?.panel_ft, 80);
@@ -1163,6 +1292,7 @@ test("estimator workbench projects a computed takeoff and prices it only when th
     assert.equal(profiles.eave_drip?.sticks, 3);
     assert.equal(profiles.ridge_cap?.sticks, 1);
     assert.equal(model?.measurements.selected?.computed_estimate.state, "unconfigured");
+    assert.equal(model?.measurements.selected?.computed_estimate.mode, null);
 
     // With a tenant price list: exact, source-derived money.
     const priced = await buildEstimatorWorkbenchReadModel(
@@ -1182,12 +1312,202 @@ test("estimator workbench projects a computed takeoff and prices it only when th
     );
     const estimate = priced?.measurements.selected?.computed_estimate;
     assert.equal(estimate?.state, "priced");
+    assert.equal(estimate?.authority, "non_operational_preview");
+    assert.equal(estimate?.calculation_schema, "legacy_preview/v1");
+    assert.equal(estimate?.policy_bound, false);
+    assert.equal(estimate?.approval_eligible, false);
+    assert.equal(estimate?.mode, "read_only_legacy");
+    assert.equal(estimate?.policy_snapshot_sha256, null);
     assert.equal(estimate?.currency, "CAD");
     // panels 80 lf x 5 = 400; eave 3 sticks x 20 = 60; ridge 1 x 30 = 30.
     assert.equal(estimate?.subtotal, 490);
     assert.equal(estimate?.total, 490);
     assert.deepEqual(estimate?.unpriced_profiles, []);
     assert.equal(estimate?.needs_review, true); // takeoff review state propagates
+
+    // The approved policy takes integer cents only and is evaluated at the
+    // exact same trusted instant stamped onto the read model.
+    const approvedConfig: PriceList = {
+      currency: "CAD",
+      panel: {
+        sku: "PNL-26G",
+        unit: "lf",
+        rateCents: 500,
+        sourceRef: "price-book:panel",
+      },
+      trims: {
+        eave_drip: {
+          sku: "TRM-EAVE",
+          rateCents: 2_000,
+          sourceRef: "price-book:eave",
+        },
+        ridge_cap: {
+          sku: "TRM-RIDGE",
+          rateCents: 3_000,
+          sourceRef: "price-book:ridge",
+        },
+      },
+      fasteners: {
+        clips: { sku: "CLIP", rateCents: 0, sourceRef: "assembly:included" },
+        clipScrews: { sku: "CLIP-SCREW", rateCents: 0, sourceRef: "assembly:included" },
+        trimScrews: { sku: "TRIM-SCREW", rateCents: 0, sourceRef: "assembly:included" },
+      },
+      labor: { sku: "LABOR", ratePerSquareCents: 0, sourceRef: "owner:included" },
+      approvedPolicy: {
+        schemaVersion: "ironwrap.pricing-policy.v1",
+        tenantId: "ironwrap",
+        policyId: "retail-metal",
+        revision: 1,
+        effectiveAt: "2026-08-01T00:00:00.000Z",
+        expiresAt: "2026-08-31T23:59:59.999Z",
+        pricing: { method: "markup", rateBps: 1_000 },
+        freightCents: 0,
+        contingencyRateBps: 0,
+        minimumChargeCents: 0,
+        taxRateBps: 500,
+      },
+    };
+    const withoutPersistedAuthority = await buildEstimatorWorkbenchReadModel(
+      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(approvedConfig) } as never,
+      auth("ops"),
+      "JOB-A",
+      PRICING_AS_OF,
+    );
+    assert.equal(
+      withoutPersistedAuthority?.measurements.selected?.computed_estimate.state,
+      "invalid_price_list",
+    );
+
+    const snapshot = await approvedPricingPolicySnapshot(
+      approvedConfig,
+      PRICING_AS_OF.toISOString(),
+    );
+    dataset["Price Book Rule"] = [{
+      name: "POLICY-ANCHOR-1",
+      price_rule_id: "policy-anchor-1",
+      rule_type: "Pricing Policy",
+      status: "Approved",
+      currency: "CAD",
+      source_ref: "owner-approved-policy:retail-metal:1",
+      rule_json: '{"operation":"bind_canonical_pricing_snapshot","schema_version":"ironwrap.price-policy-authority.v1"}',
+      effective_from: "2026-08-01",
+      effective_to: "2026-08-31",
+      approved_by: "owner@example.com",
+      approved_at: "2026-07-31 12:00:00",
+      pricing_policy_id: "retail-metal",
+      pricing_policy_revision: 1,
+      pricing_policy_snapshot_json: snapshot.canonicalSnapshot,
+      pricing_policy_snapshot_sha256: snapshot.snapshotSha256,
+      modified: MODIFIED,
+    }];
+    const approved = await buildEstimatorWorkbenchReadModel(
+      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(approvedConfig) } as never,
+      auth("ops"),
+      "JOB-A",
+      PRICING_AS_OF,
+    );
+    assert.equal(approved?.read_model_generated_at, PRICING_AS_OF.toISOString());
+    assert.equal(approved?.measurements.selected?.computed_estimate.state, "priced");
+    assert.equal(
+      approved?.measurements.selected?.computed_estimate.authority,
+      "non_operational_preview",
+    );
+    assert.equal(
+      approved?.measurements.selected?.computed_estimate.calculation_schema,
+      "legacy_preview/v1",
+    );
+    assert.equal(approved?.measurements.selected?.computed_estimate.policy_bound, false);
+    assert.equal(approved?.measurements.selected?.computed_estimate.approval_eligible, false);
+    assert.equal(approved?.measurements.selected?.computed_estimate.mode, "approved_policy");
+    assert.equal(approved?.measurements.selected?.computed_estimate.policy_id, "retail-metal");
+    assert.equal(approved?.measurements.selected?.computed_estimate.policy_revision, 1);
+    assert.equal(
+      approved?.measurements.selected?.computed_estimate.policy_snapshot_sha256,
+      snapshot.snapshotSha256,
+    );
+    assert.equal(approved?.measurements.selected?.computed_estimate.subtotal, 490);
+    assert.equal(approved?.measurements.selected?.computed_estimate.markup, 49);
+    assert.equal(approved?.measurements.selected?.computed_estimate.tax, 26.95);
+    assert.equal(approved?.measurements.selected?.computed_estimate.total, 565.95);
+    const authorityRead = mock.requests.find(
+      (request) => request.doctype === "Price Book Rule",
+    );
+    assert.deepEqual(authorityRead?.fields, OFFICE_ESTIMATOR_READ_FIELDS["Price Book Rule"]);
+    assert.equal(authorityRead?.limit, 2);
+    assert.deepEqual(authorityRead?.filters, [
+      ["Price Book Rule", "status", "=", "Approved"],
+      ["Price Book Rule", "rule_type", "=", "Pricing Policy"],
+      ["Price Book Rule", "pricing_policy_id", "=", "retail-metal"],
+      ["Price Book Rule", "pricing_policy_revision", "=", 1],
+    ]);
+
+    const staleConfig = structuredClone(approvedConfig);
+    staleConfig.approvedPolicy.expiresAt = "2026-08-12T23:59:59.999Z";
+    const stale = await buildEstimatorWorkbenchReadModel(
+      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(staleConfig) } as never,
+      auth("ops"),
+      "JOB-A",
+      PRICING_AS_OF,
+    );
+    assert.equal(stale?.measurements.selected?.computed_estimate.state, "invalid_price_list");
+
+    dataset["Price Book Rule"] = [
+      dataset["Price Book Rule"][0],
+      { ...dataset["Price Book Rule"][0], name: "POLICY-ANCHOR-DUPLICATE" },
+    ];
+    const duplicate = await buildEstimatorWorkbenchReadModel(
+      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(approvedConfig) } as never,
+      auth("ops"),
+      "JOB-A",
+      PRICING_AS_OF,
+    );
+    assert.equal(duplicate?.measurements.selected?.computed_estimate.state, "invalid_price_list");
+    assert.equal(duplicate?.measurements.selected?.computed_estimate.mode, null);
+    assert.equal(duplicate?.partial_sources.includes("pricing_authority"), true);
+    dataset["Price Book Rule"] = [dataset["Price Book Rule"][0]];
+
+    const tamperedAnchor = dataset["Price Book Rule"][0];
+    tamperedAnchor.pricing_policy_snapshot_sha256 = "0".repeat(64);
+    const tampered = await buildEstimatorWorkbenchReadModel(
+      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(approvedConfig) } as never,
+      auth("ops"),
+      "JOB-A",
+      PRICING_AS_OF,
+    );
+    assert.equal(tampered?.measurements.selected?.computed_estimate.state, "invalid_price_list");
+    tamperedAnchor.pricing_policy_snapshot_sha256 = snapshot.snapshotSha256;
+
+    const crossTenantConfig = structuredClone(approvedConfig);
+    crossTenantConfig.approvedPolicy.tenantId = "another-tenant";
+    const authorityReadsBeforeCrossTenant = mock.requests.filter(
+      (request) => request.doctype === "Price Book Rule",
+    ).length;
+    const crossTenant = await buildEstimatorWorkbenchReadModel(
+      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(crossTenantConfig) } as never,
+      auth("ops"),
+      "JOB-A",
+      PRICING_AS_OF,
+    );
+    assert.equal(crossTenant?.measurements.selected?.computed_estimate.state, "invalid_price_list");
+    assert.equal(
+      mock.requests.filter((request) => request.doctype === "Price Book Rule").length,
+      authorityReadsBeforeCrossTenant,
+    );
+
+    const invalidPolicy = {
+      ...approvedConfig,
+      approvedPolicy: { ...approvedConfig.approvedPolicy, hiddenFeeCents: 1 },
+    };
+    const invalidApproved = await buildEstimatorWorkbenchReadModel(
+      { ...env(), ESTIMATOR_PRICE_LIST_JSON: JSON.stringify(invalidPolicy) } as never,
+      auth("ops"),
+      "JOB-A",
+      PRICING_AS_OF,
+    );
+    assert.equal(
+      invalidApproved?.measurements.selected?.computed_estimate.state,
+      "invalid_price_list",
+    );
 
     // Broken tenant JSON is reported, never thrown.
     const invalid = await buildEstimatorWorkbenchReadModel(

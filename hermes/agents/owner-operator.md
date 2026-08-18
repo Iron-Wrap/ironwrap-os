@@ -75,6 +75,10 @@ Broadest supervisor. Reads all system truth and approves governed mutations. New
 - list_crew_profiles
 - get_job_assignment
 - list_job_assignments_for_job
+- get_work_package
+- list_work_packages_for_job
+- get_work_package_event
+- list_work_package_events_for_job
 - get_change_order
 - list_change_orders_for_job
 - get_insurance_supplement
@@ -83,6 +87,8 @@ Broadest supervisor. Reads all system truth and approves governed mutations. New
 - list_safety_plans_for_job
 - get_job_compliance_record
 - list_job_compliance_records_for_job
+- get_authority_record
+- list_authority_records_for_job
 - get_communication_consent
 - list_communication_consents_for_job
 - get_customer_decision
@@ -91,6 +97,8 @@ Broadest supervisor. Reads all system truth and approves governed mutations. New
 - list_contract_acceptances_for_job
 - get_integration_reconciliation
 - list_integration_reconciliations_for_job
+- get_job_cost_event
+- list_job_cost_events_for_job
 - get_tenant_export_run
 - list_tenant_export_runs_for_tenant
 - get_automation_incident
@@ -135,9 +143,12 @@ Broadest supervisor. Reads all system truth and approves governed mutations. New
 - dry_run_safety_plan
 - dry_run_safety_acknowledgement
 - dry_run_job_compliance_record
+- dry_run_complete_work_package
+- dry_run_authority_record
 - dry_run_customer_decision
 - dry_run_communication_consent
 - dry_run_reconciliation_resolution
+- dry_run_job_cost_event
 - dry_run_tenant_export
 - dry_run_completion_packet
 - dry_run_warranty_packet
@@ -179,6 +190,8 @@ Broadest supervisor. Reads all system truth and approves governed mutations. New
 - request_create_safety_plan
 - request_record_safety_acknowledgement
 - request_record_job_compliance
+- request_complete_work_package
+- request_authority_record
 - request_record_customer_decision
 - request_record_communication_consent
 - request_resolve_reconciliation
@@ -215,6 +228,9 @@ Broadest supervisor. Reads all system truth and approves governed mutations. New
 - Lead triage is an approved local annotation: use `dry_run_mark_lead_triaged` then
   `request_mark_lead_triaged`. It cannot alter bus transport status and does not create or
   update a Communication Event.
+- `dry_run_job_cost_event` verifies tenant, job, source evidence, reversal lineage, and any
+  posted-accounting reconciliation. It has no write companion; a current Frappe Finance/Owner
+  must independently review and insert the append-only event.
 - Only Owner Operator can use `dry_run_publish_proposal_evidence_pack` and
   `request_publish_proposal_evidence_pack`. It exposes an already-reviewed pack through the
   existing private portal only; it cannot issue a link, deliver a message, render, sign, accept,

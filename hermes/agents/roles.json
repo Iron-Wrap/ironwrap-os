@@ -40,14 +40,16 @@
         "get_scope_clause", "list_scope_clauses_for_job",
         "get_crew_profile", "list_crew_profiles",
         "get_job_assignment", "list_job_assignments_for_job",
+        "get_work_package", "list_work_packages_for_job", "get_work_package_event", "list_work_package_events_for_job",
         "get_change_order", "list_change_orders_for_job",
         "get_insurance_supplement", "list_insurance_supplements_for_job",
         "get_safety_plan", "list_safety_plans_for_job",
-        "get_job_compliance_record", "list_job_compliance_records_for_job",
+        "get_job_compliance_record", "list_job_compliance_records_for_job", "get_authority_record", "list_authority_records_for_job",
         "get_communication_consent", "list_communication_consents_for_job",
         "get_customer_decision", "list_customer_decisions_for_job",
         "get_contract_acceptance", "list_contract_acceptances_for_job",
         "get_integration_reconciliation", "list_integration_reconciliations_for_job",
+        "get_job_cost_event", "list_job_cost_events_for_job",
         "get_tenant_export_run", "list_tenant_export_runs_for_tenant",
         "get_automation_incident", "list_automation_incidents",
         "get_white_label_tenant", "list_white_label_tenants",
@@ -61,9 +63,9 @@
         "dry_run_supplier_quote", "dry_run_quote_revision", "dry_run_bind_quote_price_rules", "dry_run_proposal_evidence_pack", "dry_run_publish_proposal_evidence_pack",
         "dry_run_job_assignment", "dry_run_change_order", "dry_run_change_order_transition",
         "dry_run_insurance_supplement", "dry_run_set_insurance_supplement_evidence", "dry_run_insurance_supplement_transition",
-        "dry_run_safety_plan", "dry_run_safety_acknowledgement", "dry_run_job_compliance_record",
+        "dry_run_safety_plan", "dry_run_safety_acknowledgement", "dry_run_job_compliance_record", "dry_run_complete_work_package", "dry_run_authority_record",
         "dry_run_customer_decision", "dry_run_communication_consent",
-        "dry_run_reconciliation_resolution", "dry_run_tenant_export",
+        "dry_run_reconciliation_resolution", "dry_run_job_cost_event", "dry_run_tenant_export",
         "dry_run_completion_packet", "dry_run_warranty_packet", "dry_run_review_request",
         "dry_run_communication_event", "dry_run_mark_lead_triaged", "dry_run_market_watch_item"
       ],
@@ -74,7 +76,7 @@
         "request_create_supplier_quote", "request_create_quote_revision", "request_bind_quote_price_rules", "request_create_proposal_evidence_pack", "request_publish_proposal_evidence_pack",
         "request_create_job_assignment", "request_create_change_order", "request_transition_change_order",
         "request_create_insurance_supplement", "request_set_insurance_supplement_evidence", "request_transition_insurance_supplement",
-        "request_create_safety_plan", "request_record_safety_acknowledgement", "request_record_job_compliance",
+        "request_create_safety_plan", "request_record_safety_acknowledgement", "request_record_job_compliance", "request_complete_work_package", "request_authority_record",
         "request_record_customer_decision", "request_record_communication_consent",
         "request_resolve_reconciliation", "request_tenant_export",
         "request_create_completion_packet", "request_create_warranty_packet", "request_create_review_request",
@@ -125,7 +127,8 @@
         "get_change_order", "list_change_orders_for_job",
         "get_insurance_supplement", "list_insurance_supplements_for_job",
         "get_customer_decision", "list_customer_decisions_for_job",
-        "get_contract_acceptance", "list_contract_acceptances_for_job"
+        "get_contract_acceptance", "list_contract_acceptances_for_job",
+        "get_job_cost_event", "list_job_cost_events_for_job"
       ],
       "dry_run": [
         "dry_run_material_takeoff", "dry_run_update_material_takeoff_status",
@@ -157,20 +160,21 @@
         "get_measurement_report",
         "get_crew_profile", "list_crew_profiles",
         "get_job_assignment", "list_job_assignments_for_job",
+        "get_work_package", "list_work_packages_for_job", "get_work_package_event", "list_work_package_events_for_job",
         "get_change_order", "list_change_orders_for_job",
         "get_safety_plan", "list_safety_plans_for_job",
-        "get_job_compliance_record", "list_job_compliance_records_for_job",
+        "get_job_compliance_record", "list_job_compliance_records_for_job", "get_authority_record", "list_authority_records_for_job",
         "get_visual_property_model", "list_visual_property_models_for_job",
         "get_roof_area", "list_roof_areas_for_job",
         "get_scope_clause", "list_scope_clauses_for_job"
       ],
       "dry_run": [
         "dry_run_update_gate", "dry_run_supplier_order", "dry_run_supplier_order_transition", "dry_run_receive_material_lot", "dry_run_release_shop_order", "dry_run_reserve_shop_order_materials", "dry_run_advance_shop_order_setup", "dry_run_record_first_piece_outcome", "dry_run_record_final_shop_quality", "dry_run_record_shop_handover", "dry_run_record_shop_billing_basis", "dry_run_job_assignment",
-        "dry_run_safety_plan", "dry_run_safety_acknowledgement", "dry_run_job_compliance_record"
+        "dry_run_safety_plan", "dry_run_safety_acknowledgement", "dry_run_job_compliance_record", "dry_run_complete_work_package", "dry_run_authority_record"
       ],
       "approved_write": [
         "request_update_gate", "request_create_supplier_order", "request_transition_supplier_order", "request_receive_material_lot", "request_release_shop_order", "request_reserve_shop_order_materials", "request_advance_shop_order_setup", "request_record_first_piece_outcome", "request_record_final_shop_quality", "request_record_shop_handover", "request_record_shop_billing_basis", "request_create_job_assignment",
-        "request_create_safety_plan", "request_record_safety_acknowledgement", "request_record_job_compliance"
+        "request_create_safety_plan", "request_record_safety_acknowledgement", "request_record_job_compliance", "request_complete_work_package", "request_authority_record"
       ],
       "forbidden": [
         "Starting a job while a required gate is Blocked (gate logic and human approval enforce this)",
@@ -206,9 +210,10 @@
         "get_price_book_rule", "list_price_book_rules",
         "get_option_package", "list_option_packages_for_job",
         "get_change_order", "list_change_orders_for_job",
-        "get_integration_reconciliation", "list_integration_reconciliations_for_job"
+        "get_integration_reconciliation", "list_integration_reconciliations_for_job",
+        "get_job_cost_event", "list_job_cost_events_for_job"
       ],
-      "dry_run": ["dry_run_reconciliation_resolution"],
+      "dry_run": ["dry_run_reconciliation_resolution", "dry_run_job_cost_event"],
       "approved_write": ["request_resolve_reconciliation"],
       "forbidden": [
         "Final invoice or payment mutation (QuickBooks stays accounting truth; the granted resolution tool changes only the reconciliation record)"

@@ -505,7 +505,9 @@ function MeasurementIntakeExceptionRow({
             <p className="font-bold tracking-[-0.015em]">
               {report.provider}{" "}
               {unmatched
-                ? "report needs a job match"
+                ? report.reason === "ocr_review_required"
+                  ? "report needs OCR review"
+                  : "report needs a job match"
                 : retryScheduled
                   ? "report is retrying"
                   : "report needs recovery"}
@@ -561,12 +563,16 @@ function GoogleDriveLink({ href, label }: { href: string; label: string }) {
 
 function measurementExceptionCopy(report: MeasurementIntakeOwnerException): string {
   if (report.status === "unmatched") {
+    if (report.reason === "ocr_review_required") {
+      return "AI extracted candidates with page references. An operator must compare them with the saved report before they become accepted measurements.";
+    }
     if (report.reason === "job_number_missing") {
       return "No job number was supplied. This report waits for an operator to decide its job relationship and is not retried automatically.";
     }
     return "The supplied job did not resolve. This report waits for an operator to decide its job relationship and is not retried automatically.";
   }
   const reason = {
+    ocr_failed: "The AI measurement extraction could not be completed safely.",
     drive_not_configured: "Drive filing is not configured.",
     report_fetch_failed: "The report source could not be fetched.",
     raw_source_missing: "The saved raw source is unavailable.",

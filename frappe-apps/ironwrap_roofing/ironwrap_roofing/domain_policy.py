@@ -7,14 +7,27 @@ controllers call :func:`validate_record` through ``document_validation``.
 
 from __future__ import annotations
 
+import hashlib
 import json
-import math
-from datetime import datetime
-from decimal import Decimal, InvalidOperation
+import re
+from datetime import datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Mapping, Sequence
 
 
 MAX_JSON_BYTES = 1_000_000
+MONEY_QUANTUM = Decimal("0.01")
+PRICE_RULE_SCHEMA_VERSION = "ironwrap.price-rule.v1"
+PRICE_RULE_CONTRACT = {
+    "schema_version": PRICE_RULE_SCHEMA_VERSION,
+    "operation": "quantity_times_unit_price",
+    "rounding": "half_up_cent",
+}
+PRICE_POLICY_AUTHORITY_CONTRACT = {
+    "schema_version": "ironwrap.price-policy-authority.v1",
+    "operation": "bind_canonical_pricing_snapshot",
+}
+MAX_PRICING_POLICY_SNAPSHOT_BYTES = 64 * 1024
 PRODUCTION_GATES = ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
 SCHEDULABLE_PRODUCTION_GATE_STATES = frozenset(("Ready", "Done", "Waived"))
 CLOSEOUT_PRODUCTION_GATE_STATES = frozenset(("Done", "Waived"))
@@ -23,6 +36,9 @@ ACTIVE_SCHEDULED_PRODUCTION_ASSIGNMENT_STATUSES = frozenset(
 )
 RELEASABLE_WORK_PACKAGE_ASSIGNMENT_STATUSES = frozenset(
     ("Assigned", "Accepted", "In Progress")
+)
+GENERIC_PHYSICAL_ASSIGNMENT_TYPES = frozenset(
+    ("Field", "Service", "Shop", "Warehouse", "Delivery", "Fleet", "Facility")
 )
 ACTIVE_SUPPLIER_ORDER_EXCEPTION_STATUSES = frozenset(("Needs Review", "Shortage"))
 SUPPLIER_ORDER_STATUSES = frozenset(
@@ -68,13 +84,32 @@ SUPPLIER_ORDER_ITEM_FROZEN_FIELDS = (
     "needs_review",
 )
 CREW_AUTHORITY_COMPLIANCE_GATES = frozenset(("Crew", "Safety", "Access"))
+EXTERNAL_AUTHORITY_KINDS = frozenset(
+    (
+        "Trade Licence",
+        "WCB Clearance",
+        "Insurance Certificate",
+        "Permit",
+        "Inspection",
+        "Manufacturer Certification",
+        "Manufacturer Bulletin",
+    )
+)
 CURRENT_AUTHORITY_STATUSES = frozenset(("Approved", "Passed", "Waived"))
 CURRENT_COMPLIANCE_GATE_STATES = frozenset(("Ready", "Done", "Waived"))
 WORK_PACKAGE_RELEASE_STATUSES = frozenset(("Released", "Acknowledged", "In Progress"))
+WORK_PACKAGE_PARENT_CONTEXT_FIELDS = (
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
+)
+WORK_PACKAGE_HOLD_RELEASE_PHASES = frozenset(("Pre-start", "In-process", "Completion"))
 WORK_PACKAGE_FROZEN_FIELDS = (
     "roof_job",
     "job_assignment",
     "safety_plan",
+    *WORK_PACKAGE_PARENT_CONTEXT_FIELDS,
     "version",
     "title",
     "objective",
@@ -87,10 +122,12 @@ WORK_PACKAGE_FROZEN_FIELDS = (
     "expires_at",
     "released_by",
     "released_at",
+    "authority_requirements_json",
     "supersedes",
     "correction_reason",
     "steps",
     "hold_points",
+    "assigned_workers",
 )
 WORK_PACKAGE_EVENT_TYPES = frozenset(
     (
@@ -100,6 +137,9 @@ WORK_PACKAGE_EVENT_TYPES = frozenset(
         "Released",
         "Hold Point Evidence",
         "Hold Point Released",
+        "Evidence Captured",
+        "Evidence Reviewed",
+        "Completed",
     )
 )
 SHOP_ORDER_RELEASED_STATUSES = frozenset(
@@ -118,6 +158,39 @@ SHOP_ORDER_RELEASED_STATUSES = frozenset(
 SHOP_ORDER_FINAL_STATUSES = frozenset(
     ("Ready", "Handed Over", "Invoice Ready", "Closed")
 )
+JOB_COST_EVENT_CATEGORIES = frozenset(
+    (
+        "Material",
+        "Labour",
+        "Machine",
+        "Equipment",
+        "Subcontractor",
+        "Freight",
+        "Disposal",
+        "Permit",
+        "Warranty",
+        "Other",
+    )
+)
+JOB_COST_EVENT_SOURCE_DOCTYPES = frozenset(
+    (
+        "Evidence Item",
+        "Material Lot",
+        "Supplier Order",
+        "Shop Order",
+        "Field Check-in",
+        "Integration Reconciliation",
+    )
+)
+JOB_COST_EVENT_KINDS = frozenset(("cost", "reversal"))
+JOB_COST_EVENT_AMOUNT_BASES = frozenset(
+    ("Net of Recoverable Tax", "Includes Non-Recoverable Tax", "No Tax")
+)
+JOB_COST_EVENT_ACCOUNTING_STATES = frozenset(("Operational", "Submitted", "Posted"))
+JOB_COST_EVENT_ACTOR_TYPES = frozenset(
+    ("agent", "worker", "external_authority", "owner")
+)
+JOB_COST_EVENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 class PolicyViolation(ValueError):
@@ -173,6 +246,22 @@ def require_sha256(record: Any, *fields: str) -> None:
         ):
             raise PolicyViolation(
                 "invalid_sha256", "must be 64 lowercase hexadecimal characters", field
+            )
+
+
+def require_quickbooks_id(record: Any, *fields: str) -> None:
+    """Validate exact Intuit numeric identifiers without name-based matching."""
+
+    for field in fields:
+        value = _get(record, field)
+        if _blank(value):
+            continue
+        normalized = value.strip() if isinstance(value, str) else ""
+        if not normalized.isascii() or not normalized.isdigit() or normalized[0] == "0" or len(normalized) > 32:
+            raise PolicyViolation(
+                "invalid_quickbooks_id",
+                "must be a 1 to 32 digit QuickBooks identifier without leading zeroes",
+                field,
             )
 
 
@@ -234,9 +323,46 @@ def _decimal(record: Any, field: str, *, required: bool = False) -> Decimal | No
         number = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError) as exc:
         raise PolicyViolation("invalid_number", "must be numeric", field) from exc
-    if not math.isfinite(float(number)):
+    if not number.is_finite():
         raise PolicyViolation("invalid_number", "must be finite", field)
     return number
+
+
+def _money(value: Decimal) -> Decimal:
+    """Round one named monetary boundary to cents using commercial half-up."""
+
+    return value.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+
+
+def _currency(record: Any, field: str = "currency", *, required: bool = False) -> str | None:
+    value = _get(record, field)
+    if _blank(value):
+        if required:
+            raise PolicyViolation("required_currency", "a currency is required", field)
+        return None
+    normalized = str(value)
+    if len(normalized) != 3 or not normalized.isascii() or not normalized.isalpha() or not normalized.isupper():
+        raise PolicyViolation(
+            "invalid_currency",
+            "must be a three-letter uppercase currency code",
+            field,
+        )
+    return normalized
+
+
+def _iso_date(value: Any, field: str, *, required: bool = False) -> str | None:
+    if _blank(value):
+        if required:
+            raise PolicyViolation("required_date", "a date is required", field)
+        return None
+    normalized = str(value)[:10]
+    try:
+        parsed = datetime.strptime(normalized, "%Y-%m-%d")
+    except ValueError as exc:
+        raise PolicyViolation("invalid_date", "must begin with YYYY-MM-DD", field) from exc
+    if parsed.strftime("%Y-%m-%d") != normalized:
+        raise PolicyViolation("invalid_date", "must begin with YYYY-MM-DD", field)
+    return normalized
 
 
 def require_nonnegative(record: Any, *fields: str, required: bool = False) -> None:
@@ -315,6 +441,7 @@ def require_approval(
 
 IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "appointment_request": ("appointment_request_id",),
+    "authority_record": ("authority_record_id",),
     "automation_incident": ("incident_id",),
     "change_order": ("change_order_id",),
     "communication_event": ("communication_event_id",),
@@ -333,10 +460,12 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "insurance_supplement": ("insurance_supplement_id",),
     "job_assignment": ("assignment_id",),
     "job_compliance_record": ("compliance_record_id",),
+    "job_cost_event": ("job_cost_event_id",),
     "lead_envelope": ("envelope_id",),
     "material_lot": ("material_lot_id",),
     "market_watch_item": ("watch_id",),
     "material_takeoff": ("takeoff_id",),
+    "material_takeoff_policy": ("policy_id",),
     "measurement_report": ("measurement_id",),
     "nonconformance": ("nonconformance_id",),
     "option_package": ("option_package_id",),
@@ -394,6 +523,7 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "supersedes",
     ),
     "communication_event": ("provider_message_id",),
+    "completion_packet": ("roof_job", "packet_version"),
     "communication_consent": (
         "customer",
         "lead_envelope",
@@ -458,6 +588,10 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "customer",
         "quote_version",
         "price_rule_snapshot_json",
+        "qb_item_ref",
+        "qb_tax_code_ref",
+        "qb_terms_ref",
+        "qb_terms_due_days",
         "supersedes",
     ),
     "evidence_item": (
@@ -538,6 +672,7 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "system_name",
         "entity_type",
         "external_entity_id",
+        "realm_id",
         "local_doctype",
         "local_name",
         "direction",
@@ -545,6 +680,14 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "raw_key",
         "source_payload_hash",
         "local_payload_hash",
+        "invoice_intent_id",
+        "billing_basis_sha256",
+        "provider_request_sha256",
+        "provider_create_response_sha256",
+        "provider_created_at",
+        "provider_readback_sha256",
+        "provider_facts_sha256",
+        "provider_read_at",
         "supersedes",
     ),
     "insurance_supplement": (
@@ -560,6 +703,10 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "assignment_type",
         "crew_profile",
         "assigned_user",
+        "authority_user",
+        "authority_role",
+        *WORK_PACKAGE_PARENT_CONTEXT_FIELDS,
+        "assigned_workers",
         "assigned_by",
         "assigned_at",
         "supersedes",
@@ -572,6 +719,38 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "required_before_gate",
         "supersedes",
     ),
+    "job_cost_event": (
+        "tenant",
+        "roof_job",
+        "event_kind",
+        "category",
+        "quantity",
+        "unit",
+        "amount_cents",
+        "amount_basis",
+        "currency",
+        "occurred_at",
+        "source_doctype",
+        "source_name",
+        "source_digest",
+        "source_evidence",
+        "accounting_state",
+        "accounting_system",
+        "accounting_entity_type",
+        "accounting_entity_id",
+        "accounting_digest",
+        "accounting_posted_at",
+        "reconciliation",
+        "reversal_of",
+        "reversal_reason",
+        "actor_type",
+        "actor_id",
+        "authority_ref",
+        "recorded_at",
+        "approved_by",
+        "approved_at",
+        "approval_reference",
+    ),
     "payment_milestone": (
         "roof_job",
         "milestone_type",
@@ -581,6 +760,15 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         "realm_id",
         "raw_key",
         "raw_payload_hash",
+        "invoice_intent_id",
+        "billing_basis_sha256",
+        "billing_basis_json",
+        "provider_request_sha256",
+        "provider_create_response_sha256",
+        "provider_created_at",
+        "provider_readback_sha256",
+        "provider_facts_sha256",
+        "provider_read_at",
         "supersedes",
     ),
     # A gate's job/gate identity is fixed. Letting either move would bypass the
@@ -606,8 +794,10 @@ WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
         # Roof Job creation; it is therefore write-once rather than immutable.
         "jobnimbus_contact_id",
         "jobnimbus_job_id",
+        "qb_realm_id",
         "qb_invoice_ref",
     ),
+    "roofing_customer": ("qb_customer_ref",),
     # A customer-visible clause is quote-owned. Once an operator associates it with a job/quote,
     # it must not be silently repointed to a later commercial revision.
     "scope_clause": ("roof_job", "customer_quote"),
@@ -670,10 +860,16 @@ JSON_FIELDS: dict[str, tuple[str, ...]] = {
     "lead_envelope": ("payload_json",),
     "integration_reconciliation": ("diff_json",),
     "insurance_supplement": ("evidence_manifest_json",),
-    "material_takeoff": ("source_measurements_json",),
+    "material_takeoff": (
+        "source_measurements_json",
+        "options_json",
+        "calculation_json",
+        "review_reasons_json",
+    ),
+    "material_takeoff_policy": ("policy_json",),
     "measurement_report": ("roof_graph_json",),
     "option_package": ("options_json", "scope_clause_ids_json"),
-    "payment_milestone": ("tax_policy_snapshot_json",),
+    "payment_milestone": ("tax_policy_snapshot_json", "billing_basis_json"),
     "price_book_rule": ("rule_json",),
     "proposal_evidence_pack": ("evidence_summary_json",),
     "reception_session": ("structured_json",),
@@ -800,6 +996,380 @@ def _validate_correction(
             )
 
 
+def _validate_job_cost_event(record: Any, context: Mapping[str, Any]) -> None:
+    """Validate an immutable actual-cost fact without promoting it to accounting truth."""
+
+    if context.get("_previous") is not None:
+        raise PolicyViolation(
+            "append_only_cost_event",
+            "Job Cost Events cannot be updated; insert a reversal and corrected cost instead",
+        )
+    require_fields(
+        record,
+        "tenant",
+        "roof_job",
+        "event_kind",
+        "category",
+        "quantity",
+        "unit",
+        "amount_cents",
+        "currency",
+        "occurred_at",
+        "source_doctype",
+        "source_name",
+        "source_digest",
+        "source_evidence",
+        "accounting_state",
+        "actor_type",
+        "actor_id",
+        "authority_ref",
+        "recorded_at",
+        "approved_by",
+        "approved_at",
+        "approval_reference",
+    )
+    for field in (
+        "job_cost_event_id",
+        "tenant",
+        "roof_job",
+        "unit",
+        "source_name",
+        "actor_id",
+        "authority_ref",
+        "approval_reference",
+    ):
+        value = str(_get(record, field) or "")
+        if not JOB_COST_EVENT_ID_PATTERN.fullmatch(value):
+            raise PolicyViolation(
+                "invalid_cost_event_identifier",
+                "must be a bounded stable identifier",
+                field,
+            )
+    category = _get(record, "category")
+    if category not in JOB_COST_EVENT_CATEGORIES:
+        raise PolicyViolation(
+            "invalid_cost_category", "unsupported actual-cost category", "category"
+        )
+    source_doctype = _get(record, "source_doctype")
+    if source_doctype not in JOB_COST_EVENT_SOURCE_DOCTYPES:
+        raise PolicyViolation(
+            "invalid_cost_source", "unsupported source DocType", "source_doctype"
+        )
+    actor_type = _get(record, "actor_type")
+    if actor_type not in JOB_COST_EVENT_ACTOR_TYPES:
+        raise PolicyViolation(
+            "invalid_cost_actor", "unsupported actor type", "actor_type"
+        )
+    quantity = _decimal(record, "quantity", required=True)
+    if quantity is not None and quantity <= 0:
+        raise PolicyViolation(
+            "invalid_cost_quantity", "must be greater than zero", "quantity"
+        )
+    amount = _decimal(record, "amount_cents", required=True)
+    if amount is not None and (
+        amount <= 0
+        or amount > Decimal("2147483647")
+        or amount != amount.to_integral_value()
+    ):
+        raise PolicyViolation(
+            "invalid_cost_amount_cents",
+            "must be a positive 32-bit integer number of cents",
+            "amount_cents",
+        )
+    currency = str(_get(record, "currency") or "")
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise PolicyViolation(
+            "invalid_currency",
+            "must be an uppercase ISO-style currency code",
+            "currency",
+        )
+    if _get(record, "amount_basis") not in JOB_COST_EVENT_AMOUNT_BASES:
+        raise PolicyViolation(
+            "invalid_cost_amount_basis",
+            "must state whether recoverable or non-recoverable tax is included",
+            "amount_basis",
+        )
+    require_sha256(record, "source_digest")
+    occurred_at = _cost_event_datetime(record, "occurred_at")
+    recorded_at = _cost_event_datetime(record, "recorded_at")
+    approved_at = _cost_event_datetime(record, "approved_at")
+    if occurred_at > approved_at or approved_at > recorded_at:
+        raise PolicyViolation(
+            "invalid_cost_event_timeline",
+            "cost occurrence, approval, and recording must be chronological",
+            "occurred_at",
+        )
+
+    event_kind = _get(record, "event_kind")
+    if event_kind not in JOB_COST_EVENT_KINDS:
+        raise PolicyViolation(
+            "invalid_cost_event_kind", "must be cost or reversal", "event_kind"
+        )
+    if event_kind == "cost" and (
+        not _blank(_get(record, "reversal_of"))
+        or not _blank(_get(record, "reversal_reason"))
+    ):
+        raise PolicyViolation(
+            "invalid_cost_reversal",
+            "a cost event cannot carry reversal fields",
+            "event_kind",
+        )
+    if event_kind == "reversal":
+        require_fields(record, "reversal_of", "reversal_reason")
+        if _get(record, "reversal_of") == _get(record, "job_cost_event_id"):
+            raise PolicyViolation(
+                "self_cost_reversal",
+                "a cost event cannot reverse itself",
+                "reversal_of",
+            )
+        target = context.get("reversal_target")
+        if target is None:
+            raise PolicyViolation(
+                "unverified_cost_reversal",
+                "the reversed cost event could not be verified",
+                "reversal_of",
+            )
+        target_ids = {_get(target, "name"), _get(target, "job_cost_event_id")}
+        if _get(record, "reversal_of") not in target_ids:
+            raise PolicyViolation(
+                "invalid_cost_reversal_target",
+                "the loaded reversal target does not match reversal_of",
+                "reversal_of",
+            )
+        if _get(target, "event_kind") != "cost":
+            raise PolicyViolation(
+                "invalid_cost_reversal_target",
+                "a reversal must reference an original cost event",
+                "reversal_of",
+            )
+        for field in (
+            "tenant",
+            "roof_job",
+            "category",
+            "quantity",
+            "unit",
+            "amount_cents",
+            "amount_basis",
+            "currency",
+            "source_doctype",
+            "source_name",
+            "source_digest",
+            "source_evidence",
+        ):
+            if str(_get(target, field)) != str(_get(record, field)):
+                raise PolicyViolation(
+                    "cost_reversal_binding_mismatch",
+                    "a reversal must preserve the original cost and source lineage",
+                    field,
+                )
+        if int(context.get("existing_reversal_count", 0) or 0) > 0:
+            raise PolicyViolation(
+                "cost_event_already_reversed",
+                "the original cost event already has a reversal",
+                "reversal_of",
+            )
+
+    tenant = context.get("tenant_record")
+    if (
+        tenant is None
+        or _get(tenant, "status") != "Active"
+        or _get(tenant, "name") != _get(record, "tenant")
+    ):
+        raise PolicyViolation(
+            "unverified_cost_tenant",
+            "the active site tenant could not be verified",
+            "tenant",
+        )
+    evidence = context.get("source_evidence")
+    if evidence is None:
+        raise PolicyViolation(
+            "unverified_cost_evidence",
+            "the source Evidence Item could not be verified",
+            "source_evidence",
+        )
+    evidence_ids = {_get(evidence, "name"), _get(evidence, "evidence_id")}
+    if _get(record, "source_evidence") not in evidence_ids:
+        raise PolicyViolation(
+            "unverified_cost_evidence",
+            "the loaded evidence does not match source_evidence",
+            "source_evidence",
+        )
+    if _get(evidence, "roof_job") != _get(record, "roof_job"):
+        raise PolicyViolation(
+            "cross_job_cost_evidence",
+            "source evidence must belong to the same Roof Job",
+            "source_evidence",
+        )
+    source_record = context.get("cost_source_record")
+    if (
+        source_record is None
+        or _get(source_record, "name") != _get(record, "source_name")
+        or _get(source_record, "roof_job") != _get(record, "roof_job")
+    ):
+        raise PolicyViolation(
+            "unverified_cost_source",
+            "the named source record must exist on the same Roof Job",
+            "source_name",
+        )
+    if (
+        _get(evidence, "sync_state") != "Verified"
+        or _get(evidence, "checksum_algorithm") != "SHA-256"
+        or _blank(_get(evidence, "verified_at"))
+        or _blank(_get(evidence, "verification_source"))
+        or _get(evidence, "content_checksum") != _get(record, "source_digest")
+    ):
+        raise PolicyViolation(
+            "unverified_cost_evidence",
+            "actual cost requires verified SHA-256-bound source evidence",
+            "source_evidence",
+        )
+    evidence_verified_at = _cost_event_datetime(
+        evidence, "verified_at", code="unverified_cost_evidence"
+    )
+    if evidence_verified_at > recorded_at:
+        raise PolicyViolation(
+            "unverified_cost_evidence",
+            "source evidence cannot be verified after the event was recorded",
+            "source_evidence",
+        )
+
+    accounting_state = _get(record, "accounting_state")
+    if accounting_state not in JOB_COST_EVENT_ACCOUNTING_STATES:
+        raise PolicyViolation(
+            "invalid_accounting_state",
+            "unsupported accounting state",
+            "accounting_state",
+        )
+    accounting_fields = (
+        "accounting_system",
+        "accounting_entity_type",
+        "accounting_entity_id",
+        "accounting_digest",
+        "accounting_posted_at",
+        "reconciliation",
+    )
+    if accounting_state == "Operational" and any(
+        not _blank(_get(record, field)) for field in accounting_fields
+    ):
+        raise PolicyViolation(
+            "premature_accounting_claim",
+            "Operational costs cannot carry posted-accounting fields",
+            "accounting_state",
+        )
+    if accounting_state == "Submitted":
+        require_fields(
+            record,
+            "accounting_system",
+            "accounting_entity_type",
+            "accounting_entity_id",
+        )
+        if any(
+            not _blank(_get(record, field))
+            for field in ("accounting_digest", "accounting_posted_at", "reconciliation")
+        ):
+            raise PolicyViolation(
+                "premature_accounting_claim",
+                "Submitted costs are not yet posted or reconciled",
+                "accounting_state",
+            )
+    if accounting_state == "Posted":
+        require_fields(
+            record,
+            "accounting_system",
+            "accounting_entity_type",
+            "accounting_entity_id",
+            "accounting_digest",
+            "accounting_posted_at",
+            "reconciliation",
+        )
+        require_sha256(record, "accounting_digest")
+        accounting_posted_at = _cost_event_datetime(record, "accounting_posted_at")
+        if accounting_posted_at < occurred_at or accounting_posted_at > recorded_at:
+            raise PolicyViolation(
+                "invalid_cost_event_timeline",
+                "accounting posting must fall between occurrence and recording",
+                "accounting_posted_at",
+            )
+        reconciliation = context.get("accounting_reconciliation")
+        reconciliation_ids = {
+            _get(reconciliation, "name"),
+            _get(reconciliation, "reconciliation_id"),
+        }
+        if (
+            reconciliation is None
+            or _get(record, "reconciliation") not in reconciliation_ids
+            or _get(reconciliation, "roof_job") != _get(record, "roof_job")
+            or _get(reconciliation, "system_name") != _get(record, "accounting_system")
+            or _get(reconciliation, "entity_type")
+            != _get(record, "accounting_entity_type")
+            or _get(reconciliation, "external_entity_id")
+            != _get(record, "accounting_entity_id")
+            or _get(reconciliation, "local_doctype") != "Job Cost Event"
+            or _get(reconciliation, "local_name") != _get(record, "job_cost_event_id")
+            or _get(reconciliation, "status") not in {"Matched", "Resolved"}
+            or _get(reconciliation, "currency") != currency
+            or _get(reconciliation, "source_payload_hash")
+            != _get(record, "accounting_digest")
+            or _blank(_get(reconciliation, "detected_at"))
+        ):
+            raise PolicyViolation(
+                "unverified_cost_reconciliation",
+                "posted cost must bind to matching terminal external accounting evidence",
+                "reconciliation",
+            )
+        detected_at = _cost_event_datetime(
+            reconciliation, "detected_at", code="unverified_cost_reconciliation"
+        )
+        if detected_at < accounting_posted_at or detected_at > recorded_at:
+            raise PolicyViolation(
+                "unverified_cost_reconciliation",
+                "reconciliation evidence must fall between posting and recording",
+                "reconciliation",
+            )
+
+
+def _cost_event_datetime(
+    record: Any,
+    field: str,
+    *,
+    code: str = "invalid_cost_event_timestamp",
+) -> datetime:
+    value = _get(record, field)
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip() and len(value) <= 64:
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise PolicyViolation(code, "must be a valid datetime", field) from exc
+    else:
+        raise PolicyViolation(code, "must be a valid datetime", field)
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _payment_milestone_datetime(
+    record: Any,
+    field: str,
+    *,
+    code: str = "invalid_payment_milestone_timestamp",
+) -> datetime:
+    value = _get(record, field)
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip() and len(value) <= 64:
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise PolicyViolation(code, "must be a valid datetime", field) from exc
+    else:
+        raise PolicyViolation(code, "must be a valid datetime", field)
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
 def _get_identity_values(record: Any) -> set[Any]:
     values = {_get(record, "name")}
     for fields in IDENTITY_FIELDS.values():
@@ -837,6 +1407,47 @@ def _enforce_state_transition(
 def _validate_evidence(record: Any, context: Mapping[str, Any]) -> None:
     require_nonnegative(record, "content_length")
     _validate_location(record)
+    previous = context.get("_previous")
+    if previous is not None and _get(previous, "sync_state") == "Verified":
+        enforce_immutable(
+            record,
+            previous,
+            "evidence_id",
+            "device_action_id",
+            "roof_job",
+            "work_package",
+            "work_package_version",
+            "work_package_release_attempt_id",
+            "evidence_slot_id",
+            "evidence_requirement",
+            "evidence_source",
+            "evidence_device_id",
+            "evidence_type",
+            "proof_owner",
+            "proof_slot",
+            "source_system",
+            "r2_key",
+            "content_checksum",
+            "checksum_algorithm",
+            "content_type",
+            "content_length",
+            "capture_actor",
+            "captured_at",
+            "latitude",
+            "longitude",
+            "location_accuracy_m",
+            "sync_state",
+            "verified_at",
+            "verification_source",
+            "evidence_freshness",
+            "evidence_conflict_state",
+            "evidence_verification",
+            "evidence_disposition",
+            "correction_of",
+            "correction_reason",
+            "customer_safe",
+            "summary",
+        )
     _enforce_state_transition(
         record,
         context,
@@ -870,6 +1481,58 @@ def _validate_evidence(record: Any, context: Mapping[str, Any]) -> None:
             )
         require_sha256(record, "content_checksum")
         _require_one_of(record, "source_uri", "r2_key", "drive_file_id")
+    if not _blank(_get(record, "work_package")) or not _blank(
+        _get(record, "evidence_slot_id")
+    ):
+        require_fields(
+            record,
+            "work_package",
+            "work_package_version",
+            "evidence_slot_id",
+            "evidence_requirement",
+            "evidence_source",
+            "evidence_device_id",
+            "evidence_freshness",
+            "evidence_conflict_state",
+            "evidence_verification",
+            "evidence_disposition",
+        )
+        evidence_version = _decimal(record, "work_package_version", required=True)
+        if evidence_version is not None and evidence_version < 1:
+            raise PolicyViolation(
+                "invalid_evidence_work_package_version",
+                "work_package_version must be at least 1",
+                "work_package_version",
+            )
+        if _get(record, "evidence_freshness") not in {"Current", "Stale", "Unknown"}:
+            raise PolicyViolation(
+                "invalid_evidence_freshness",
+                "evidence_freshness must be Current, Stale, or Unknown",
+                "evidence_freshness",
+            )
+        if _get(record, "evidence_conflict_state") not in {"None", "Detected", "Resolved"}:
+            raise PolicyViolation(
+                "invalid_evidence_conflict_state",
+                "evidence_conflict_state is unsupported",
+                "evidence_conflict_state",
+            )
+        if _get(record, "evidence_verification") not in {"Pending", "Verified", "Rejected"}:
+            raise PolicyViolation(
+                "invalid_evidence_verification",
+                "evidence_verification is unsupported",
+                "evidence_verification",
+            )
+        if _get(record, "evidence_disposition") not in {
+            "Open",
+            "Accepted",
+            "Needs Correction",
+            "Superseded",
+        }:
+            raise PolicyViolation(
+                "invalid_evidence_disposition",
+                "evidence_disposition is unsupported",
+                "evidence_disposition",
+            )
     _validate_correction(record, context, link_field="correction_of")
 
 
@@ -1041,7 +1704,13 @@ def _require_crew_authority_ready(
 
 
 def _require_current_compliance_authority(
-    rows: Sequence[Any], reference_date: str, gates: Sequence[Any]
+    rows: Sequence[Any],
+    reference_date: str,
+    gates: Sequence[Any],
+    *,
+    authority_records: Sequence[Any] | None = None,
+    authority_tenant: str | None = None,
+    authority_readbacks: Mapping[str, Any] | None = None,
 ) -> None:
     required_gates = {
         str(_get(gate, "gate"))
@@ -1075,6 +1744,41 @@ def _require_current_compliance_authority(
                 "current Crew/Safety/Access compliance authority is required before scheduling or release",
                 "required_before_gate",
             )
+        if authority_records is not None:
+            authority_record = _get(row, "authority_record")
+            if _blank(authority_record) or _blank(authority_tenant):
+                raise PolicyViolation(
+                    "missing_compliance_authority_record",
+                    "current compliance authority must link an exact tenant-scoped Authority Record",
+                    "authority_record",
+                )
+            try:
+                from ironwrap_roofing.authority_policy import resolve_authority_record
+
+                resolved_authority = resolve_authority_record(
+                    authority_records,
+                    tenant=str(authority_tenant),
+                    authority_record_id=str(authority_record),
+                    reference_date=reference_date,
+                )
+                if resolved_authority["authority_kind"] in EXTERNAL_AUTHORITY_KINDS:
+                    from ironwrap_roofing.authority_policy import require_issuer_readback
+
+                    require_issuer_readback(
+                        resolved_authority,
+                        (authority_readbacks or {}).get(
+                            resolved_authority["authority_record_id"]
+                        ),
+                    )
+            except Exception as exc:
+                if isinstance(exc, PolicyViolation):
+                    raise
+                code = getattr(exc, "code", "authority_record_block")
+                raise PolicyViolation(
+                    f"compliance_{code}",
+                    "the linked compliance Authority Record is not current, verified, and effective",
+                    "authority_record",
+                ) from exc
         _require_effective_on_or_before(
             row,
             "effective_date",
@@ -1089,6 +1793,89 @@ def _require_current_compliance_authority(
             "expired_compliance_authority",
             "a current Crew/Safety/Access compliance authority expires before the scheduled or released work",
         )
+
+
+def _require_canonical_authorities(
+    record: Any,
+    context: Mapping[str, Any],
+    reference_date: str,
+    *,
+    field: str = "authority_requirements_json",
+) -> bool:
+    """Resolve the exact authority requirements when a tenant snapshot is locked.
+
+    A pure policy caller must opt into the legacy projection explicitly. Frappe
+    release consumers add the canonical snapshot only after locking the active
+    tenant and all Authority Record versions in the same transaction; absence
+    of that snapshot is never a production fallback.
+    """
+
+    if "authority_records" not in context:
+        if context.get("legacy_authority_context") is True:
+            return False
+        raise PolicyViolation(
+            "authority_context_unavailable",
+            "canonical tenant-scoped authority context is required; legacy context must be explicit",
+            field,
+        )
+    requirements = _get(record, field)
+    if _blank(requirements):
+        raise PolicyViolation(
+            "missing_authority_requirements",
+            "this release gate must declare exact tenant-scoped authority requirements",
+            field,
+        )
+    tenant = context.get("authority_tenant")
+    if _blank(tenant):
+        raise PolicyViolation(
+            "authority_tenant_unavailable",
+            "the active tenant could not be locked for authority resolution",
+            "tenant",
+        )
+    try:
+        from ironwrap_roofing.authority_policy import (
+            require_authority_gate,
+            validate_authority_requirements,
+        )
+
+        parsed = validate_authority_requirements(requirements)
+        snapshots = require_authority_gate(
+            context.get("authority_records") or (),
+            parsed,
+            tenant=str(tenant),
+            reference_date=reference_date,
+        )
+        readbacks = context.get("authority_readbacks") or {}
+        for snapshot in snapshots:
+            if snapshot["authority_kind"] in {
+                "Trade Licence",
+                "WCB Clearance",
+                "Insurance Certificate",
+                "Permit",
+                "Inspection",
+                "Manufacturer Certification",
+                "Manufacturer Bulletin",
+            }:
+                readback = readbacks.get(snapshot["authority_record_id"])
+                if readback is None:
+                    raise PolicyViolation(
+                        "missing_issuer_readback",
+                        "external authority release requires an exact issuer readback",
+                        "authority_readbacks",
+                    )
+                from ironwrap_roofing.authority_policy import require_issuer_readback
+
+                require_issuer_readback(snapshot, readback)
+    except Exception as exc:
+        if isinstance(exc, PolicyViolation):
+            raise
+        code = getattr(exc, "code", "authority_gate_block")
+        raise PolicyViolation(
+            f"authority_{code}",
+            "the exact tenant-scoped Authority Record requirements are not satisfied",
+            field,
+        ) from exc
+    return True
 
 
 def _assignment_references(record: Any) -> set[str]:
@@ -1117,6 +1904,87 @@ def _logical_current_scheduled_production_assignments(
     ]
 
 
+def _assignment_datetime(record: Any, field: str) -> datetime:
+    value = _get(record, field)
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip() and len(value) <= 64:
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise PolicyViolation(
+                "invalid_assignment_window",
+                "scheduled start and end must be valid datetimes",
+                field,
+            ) from exc
+    else:
+        raise PolicyViolation(
+            "invalid_assignment_window",
+            "scheduled start and end must be valid datetimes",
+            field,
+        )
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _scheduled_assignment_window(
+    record: Any, *, require_exact_window: bool = False
+) -> tuple[datetime, datetime] | None:
+    start = _get(record, "scheduled_start")
+    end = _get(record, "scheduled_end")
+    if _blank(start):
+        return None
+    if _blank(end):
+        if require_exact_window:
+            raise PolicyViolation(
+                "scheduled_assignment_window_required",
+                "scheduled Production crew assignments require both start and end datetimes",
+                "scheduled_end",
+            )
+        return None
+    start_at = _assignment_datetime(record, "scheduled_start")
+    end_at = _assignment_datetime(record, "scheduled_end")
+    if start_at >= end_at:
+        raise PolicyViolation(
+            "invalid_assignment_window",
+            "scheduled start must precede end",
+            "scheduled_end",
+        )
+    return start_at, end_at
+
+
+def _overlaps_half_open(
+    left: tuple[datetime, datetime], right: tuple[datetime, datetime]
+) -> bool:
+    return left[0] < right[1] and right[0] < left[1]
+
+
+def _validate_same_crew_schedule_overlap(record: Any, current_rows: Sequence[Any]) -> None:
+    crew_profile = _get(record, "crew_profile")
+    if _blank(crew_profile):
+        return
+    record_window = _scheduled_assignment_window(record, require_exact_window=True)
+    assert record_window is not None
+    self_references = _assignment_references(record)
+    supersedes = str(_get(record, "supersedes") or "")
+    for row in current_rows:
+        if self_references.intersection(_assignment_references(row)):
+            continue
+        if not _blank(supersedes) and supersedes in _assignment_references(row):
+            continue
+        if _get(row, "crew_profile") != crew_profile:
+            continue
+        row_window = _scheduled_assignment_window(row, require_exact_window=True)
+        assert row_window is not None
+        if _overlaps_half_open(record_window, row_window):
+            raise PolicyViolation(
+                "overlapping_crew_schedule",
+                "the selected crew already has an overlapping active scheduled Production assignment",
+                "crew_profile",
+            )
+
+
 def _validate_scheduled_production_execution_fences(
     record: Any, context: Mapping[str, Any]
 ) -> None:
@@ -1140,7 +2008,11 @@ def _validate_scheduled_production_execution_fences(
         )
 
     rows = tuple(context.get("job_assignment_rows", ()))
-    current_rows = _logical_current_scheduled_production_assignments(rows)
+    same_job_rows = tuple(
+        row for row in rows if _get(row, "roof_job") == _get(record, "roof_job")
+    )
+    current_rows = _logical_current_scheduled_production_assignments(same_job_rows)
+    all_current_rows = _logical_current_scheduled_production_assignments(rows)
     self_references = _assignment_references(record)
     other_current_rows = [
         row
@@ -1156,6 +2028,7 @@ def _validate_scheduled_production_execution_fences(
                 "duplicate_current_production_assignment",
                 "only one current active scheduled Production assignment may exist per Roof Job",
             )
+        _validate_same_crew_schedule_overlap(record, all_current_rows)
         return
 
     # An existing correction is revalidated during lifecycle updates. Its source is
@@ -1166,6 +2039,7 @@ def _validate_scheduled_production_execution_fences(
                 "duplicate_current_production_assignment",
                 "only one current active scheduled Production assignment may exist per Roof Job",
             )
+        _validate_same_crew_schedule_overlap(record, all_current_rows)
         return
 
     if len(current_rows) > 1:
@@ -1174,6 +2048,7 @@ def _validate_scheduled_production_execution_fences(
             "only one current active scheduled Production assignment may exist per Roof Job",
         )
     if any(str(supersedes) in _assignment_references(row) for row in current_rows):
+        _validate_same_crew_schedule_overlap(record, all_current_rows)
         return
     if any(str(supersedes) in _assignment_references(row) for row in rows):
         raise PolicyViolation(
@@ -1189,11 +2064,42 @@ def _validate_scheduled_production_execution_fences(
 
 
 def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
+    assignment_type = _get(record, "assignment_type")
+    is_generic_physical = assignment_type in GENERIC_PHYSICAL_ASSIGNMENT_TYPES
     has_crew = not _blank(_get(record, "crew_profile"))
     has_user = not _blank(_get(record, "assigned_user"))
-    if has_crew == has_user:
+    has_workers = bool(_rows(record, "assigned_workers"))
+    if is_generic_physical:
+        require_fields(record, *WORK_PACKAGE_PARENT_CONTEXT_FIELDS)
+        if _get(record, "work_object_type") == "Roof Job":
+            raise PolicyViolation(
+                "invalid_physical_assignment_context",
+                "a non-roof physical assignment cannot use the Roof Job adapter",
+                "work_object_type",
+            )
+        if has_crew or has_user or not has_workers:
+            raise PolicyViolation(
+                "assignment_target",
+                "a typed physical assignment must declare exactly one immutable worker roster",
+            )
+        require_fields(record, "authority_user", "authority_role")
+        for expected_sequence, row in enumerate(_rows(record, "assigned_workers"), start=1):
+            if _decimal(row, "sequence", required=True) != expected_sequence:
+                raise PolicyViolation(
+                    "invalid_physical_assignment_roster",
+                    "a physical assignment worker roster must be contiguous",
+                    "assigned_workers",
+                )
+            require_fields(row, "worker_user", "worker_role", "required")
+        if not any(_get(row, "required") in (True, 1, "1") for row in _rows(record, "assigned_workers")):
+            raise PolicyViolation(
+                "invalid_physical_assignment_roster",
+                "a physical assignment requires at least one required worker",
+                "assigned_workers",
+            )
+    elif has_crew == has_user:
         raise PolicyViolation("assignment_target", "assign exactly one crew or user")
-    if _get(record, "assignment_type") == "Production" and has_user:
+    if assignment_type == "Production" and has_user:
         raise PolicyViolation(
             "production_assignment_requires_crew_profile",
             "a Production assignment must target a Crew Profile with current authority",
@@ -1207,8 +2113,8 @@ def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
             "scheduled end requires a scheduled start",
             "scheduled_end",
         )
-    if start and end and str(start) >= str(end):
-        raise PolicyViolation("invalid_assignment_window", "scheduled start must precede end")
+    if not _blank(start) and not _blank(end):
+        _scheduled_assignment_window(record)
     if _get(record, "assignment_type") == "Production" and not _blank(start):
         _require_production_gate_states(
             context.get("gates", ()),
@@ -1219,14 +2125,36 @@ def _validate_job_assignment(record: Any, context: Mapping[str, Any]) -> None:
         if has_crew:
             reference_date = _reference_date(start)
             if reference_date:
-                _require_crew_authority_ready(
-                    context.get("scheduled_assignment_crew_profile"),
+                canonical_authority = _require_canonical_authorities(
+                    record,
+                    context,
                     reference_date,
+                    field="authority_requirements_json",
                 )
+                if not canonical_authority:
+                    _require_crew_authority_ready(
+                        context.get("scheduled_assignment_crew_profile"),
+                        reference_date,
+                    )
                 _require_current_compliance_authority(
                     context.get("job_compliance_rows", ()),
                     reference_date,
                     context.get("gates", ()),
+                    authority_records=(
+                        context.get("authority_records")
+                        if canonical_authority
+                        else None
+                    ),
+                    authority_tenant=(
+                        context.get("authority_tenant")
+                        if canonical_authority
+                        else None
+                    ),
+                    authority_readbacks=(
+                        context.get("authority_readbacks")
+                        if canonical_authority
+                        else None
+                    ),
                 )
     status = _get(record, "status")
     _enforce_state_transition(
@@ -1306,9 +2234,126 @@ def _validate_ordered_work_package_rows(
         require_fields(row, *required_fields)
 
 
+def _validate_work_package_hold_phases(record: Any) -> None:
+    for row in _rows(record, "hold_points"):
+        phase = _get(row, "release_phase") or "Pre-start"
+        if phase not in WORK_PACKAGE_HOLD_RELEASE_PHASES:
+            raise PolicyViolation(
+                "invalid_work_package_hold_release_phase",
+                "a hold point release_phase must be Pre-start, In-process, or Completion",
+                "release_phase",
+            )
+
+
+def _validate_work_package_parent_context(record: Any) -> bool:
+    """Validate the generic physical-work parent/context envelope.
+
+    Roof Job/Production remains the first adapter, but the Work Package
+    aggregate is not allowed to silently reinterpret a different physical
+    work object as a roofing assignment.  The four fields are one bounded
+    parent identity and one bounded physical-context identity; future
+    adapters can add their own authority without changing this envelope.
+    Legacy roofing records with all four fields absent remain readable and
+    are interpreted by the API's explicit Roof Job adapter.
+    """
+
+    values = tuple(_get(record, field) for field in WORK_PACKAGE_PARENT_CONTEXT_FIELDS)
+    if not any(not _blank(value) for value in values):
+        return False
+    require_fields(record, *WORK_PACKAGE_PARENT_CONTEXT_FIELDS)
+    for field, value in zip(WORK_PACKAGE_PARENT_CONTEXT_FIELDS, values):
+        if len(str(value).strip()) > 140:
+            raise PolicyViolation(
+                "invalid_work_package_parent_context",
+                f"{field} exceeds the maximum identifier length",
+                field,
+            )
+    return True
+
+
 def _validate_work_package_release_context(
     record: Any, context: Mapping[str, Any]
 ) -> None:
+    has_parent_context = _validate_work_package_parent_context(record)
+    work_object_type = _get(record, "work_object_type")
+    is_generic_physical = has_parent_context and work_object_type != "Roof Job"
+    if is_generic_physical:
+        assignment = context.get("work_package_assignment")
+        if assignment is None:
+            raise PolicyViolation(
+                "unverified_work_package_assignment",
+                "the linked physical assignment could not be verified",
+                "job_assignment",
+            )
+        if _get(assignment, "roof_job") or _get(record, "roof_job"):
+            raise PolicyViolation(
+                "invalid_physical_assignment_context",
+                "a non-roof physical assignment cannot carry a Roof Job parent",
+                "roof_job",
+            )
+        if any(
+            _get(assignment, field) != _get(record, field)
+            for field in WORK_PACKAGE_PARENT_CONTEXT_FIELDS
+        ):
+            raise PolicyViolation(
+                "physical_assignment_context_mismatch",
+                "the physical assignment must read back the exact Work Package parent/context",
+                "job_assignment",
+            )
+        assignment_type = _get(assignment, "assignment_type")
+        if assignment_type not in GENERIC_PHYSICAL_ASSIGNMENT_TYPES:
+            raise PolicyViolation(
+                "unsupported_work_package_context_adapter",
+                "the declared physical assignment type has no canonical adapter",
+                "job_assignment",
+            )
+        if _get(assignment, "status") not in RELEASABLE_WORK_PACKAGE_ASSIGNMENT_STATUSES:
+            raise PolicyViolation(
+                "inactive_work_package_assignment",
+                "the physical assignment must be active before release",
+                "job_assignment",
+            )
+        if _blank(_get(assignment, "scheduled_start")):
+            raise PolicyViolation(
+                "unscheduled_work_package_assignment",
+                "the physical assignment must be scheduled before release",
+                "job_assignment",
+            )
+        if _blank(_get(assignment, "authority_user")) or _blank(_get(assignment, "authority_role")):
+            raise PolicyViolation(
+                "physical_assignment_authority_required",
+                "a physical assignment requires an explicit authority user and role",
+                "job_assignment",
+            )
+        if not _rows(assignment, "assigned_workers"):
+            raise PolicyViolation(
+                "physical_assignment_roster_required",
+                "a physical assignment requires an immutable worker roster",
+                "job_assignment",
+            )
+        if not _is_current_record(
+            assignment,
+            context.get("job_assignment_rows", ()),
+            identity_field="assignment_id",
+        ):
+            raise PolicyViolation(
+                "stale_work_package_assignment",
+                "the physical assignment has been superseded",
+                "job_assignment",
+            )
+        return
+    if has_parent_context and work_object_type != "Roof Job":
+        raise PolicyViolation(
+            "unsupported_work_package_context_adapter",
+            "this release path supports only the Roof Job/Production adapter; preserve the declared physical context instead of coercing it",
+            "work_object_type",
+        )
+    if has_parent_context and _get(record, "work_object_id") != _get(record, "roof_job"):
+        raise PolicyViolation(
+            "work_package_parent_context_mismatch",
+            "the Roof Job adapter parent must match the Work Package Roof Job",
+            "work_object_id",
+        )
     assignment = context.get("work_package_assignment")
     if assignment is None:
         raise PolicyViolation(
@@ -1363,15 +2408,31 @@ def _validate_work_package_release_context(
         context.get("now") or _get(record, "released_at") or _get(record, "issued_at")
     )
     if reference_date:
-        _require_crew_authority_ready(
-            context.get("work_package_crew_profile"),
+        canonical_authority = _require_canonical_authorities(
+            record,
+            context,
             reference_date,
-            field="job_assignment",
+            field="authority_requirements_json",
         )
+        if not canonical_authority:
+            _require_crew_authority_ready(
+                context.get("work_package_crew_profile"),
+                reference_date,
+                field="job_assignment",
+            )
         _require_current_compliance_authority(
             context.get("job_compliance_rows", ()),
             reference_date,
             context.get("gates", ()),
+            authority_records=(
+                context.get("authority_records") if canonical_authority else None
+            ),
+            authority_tenant=(
+                context.get("authority_tenant") if canonical_authority else None
+            ),
+            authority_readbacks=(
+                context.get("authority_readbacks") if canonical_authority else None
+            ),
         )
 
     safety_plan = context.get("work_package_safety_plan")
@@ -1414,7 +2475,8 @@ def _validate_work_package_release_context(
 
 def _validate_work_package(record: Any, context: Mapping[str, Any]) -> None:
     status = _get(record, "status")
-    require_fields(record, "roof_job", "job_assignment", "safety_plan", "version", "status")
+    require_fields(record, "job_assignment", "version", "status")
+    _validate_work_package_parent_context(record)
     version = _decimal(record, "version", required=True)
     if version is not None and version < 1:
         raise PolicyViolation(
@@ -1445,9 +2507,7 @@ def _validate_work_package(record: Any, context: Mapping[str, Any]) -> None:
     if status in WORK_PACKAGE_RELEASE_STATUSES:
         require_fields(
             record,
-            "roof_job",
             "job_assignment",
-            "safety_plan",
             "version",
             "title",
             "objective",
@@ -1461,6 +2521,11 @@ def _validate_work_package(record: Any, context: Mapping[str, Any]) -> None:
             "released_by",
             "released_at",
         )
+        if not (
+            _validate_work_package_parent_context(record)
+            and _get(record, "work_object_type") != "Roof Job"
+        ):
+            require_fields(record, "roof_job", "safety_plan")
         issued_at = _get(record, "issued_at")
         expires_at = _get(record, "expires_at")
         released_at = _get(record, "released_at")
@@ -1494,6 +2559,20 @@ def _validate_work_package(record: Any, context: Mapping[str, Any]) -> None:
                 "acceptance_criteria",
             ),
         )
+        _validate_work_package_hold_phases(record)
+        # `assigned_workers` was added after the original Work Package
+        # blueprint.  A legacy released package may not have a roster yet;
+        # preserve its immutable record for migration/readability while the
+        # Worker projection treats the missing roster as unknown and refuses
+        # to grant a start capability.  Any roster that is present is held to
+        # the same contiguous, required-field contract as the other tables.
+        if _rows(record, "assigned_workers"):
+            _validate_ordered_work_package_rows(
+                record,
+                "assigned_workers",
+                row_label="assigned worker",
+                required_fields=("worker_user", "worker_role"),
+            )
         if not _is_current_record(
             record,
             context.get("work_package_rows", ()),
@@ -1561,7 +2640,6 @@ def _validate_work_package_event(record: Any, _context: Mapping[str, Any]) -> No
     require_fields(
         record,
         "work_package",
-        "roof_job",
         "job_assignment",
         "work_package_version",
         "event_type",
@@ -1586,6 +2664,7 @@ def _validate_work_package_event(record: Any, _context: Mapping[str, Any]) -> No
             "work_package_version",
         )
     require_sha256(record, "payload_hash")
+    _validate_work_package_parent_context(record)
     hold_point_sequence = _decimal(record, "hold_point_sequence")
     if event_type in {"Hold Point Evidence", "Hold Point Released"}:
         require_fields(record, "hold_point_sequence", "evidence_item")
@@ -1606,6 +2685,104 @@ def _validate_work_package_event(record: Any, _context: Mapping[str, Any]) -> No
         raise PolicyViolation(
             "stale_work_package_blocker",
             "blocker_reason is only valid for a Stop Work event",
+        )
+
+    evidence_fields = (
+        "evidence_slot_id",
+        "evidence_requirement",
+        "evidence_source",
+        "evidence_device_id",
+        "evidence_captured_at",
+        "evidence_freshness",
+        "evidence_conflict_state",
+        "evidence_verification",
+        "evidence_disposition",
+    )
+    if event_type == "Evidence Captured":
+        require_fields(record, "evidence_item", *evidence_fields)
+        if _get(record, "evidence_freshness") not in {"Current", "Stale", "Unknown"}:
+            raise PolicyViolation(
+                "invalid_work_package_evidence_freshness",
+                "evidence_freshness must be Current, Stale, or Unknown",
+                "evidence_freshness",
+            )
+        if _get(record, "evidence_conflict_state") not in {"None", "Detected", "Resolved"}:
+            raise PolicyViolation(
+                "invalid_work_package_evidence_conflict",
+                "evidence_conflict_state must be None, Detected, or Resolved",
+                "evidence_conflict_state",
+            )
+        if _get(record, "evidence_verification") not in {"Pending", "Verified", "Rejected"}:
+            raise PolicyViolation(
+                "invalid_work_package_evidence_verification",
+                "evidence_verification must be Pending, Verified, or Rejected",
+                "evidence_verification",
+            )
+        if _get(record, "evidence_disposition") not in {
+            "Open",
+            "Accepted",
+            "Needs Correction",
+            "Superseded",
+        }:
+            raise PolicyViolation(
+                "invalid_work_package_evidence_disposition",
+                "evidence_disposition is unsupported",
+                "evidence_disposition",
+            )
+        if _get(record, "evidence_disposition") != "Open":
+            raise PolicyViolation(
+                "invalid_work_package_evidence_disposition",
+                "field evidence must start Open and be reviewed by a bounded command",
+                "evidence_disposition",
+            )
+        correction_of = _get(record, "evidence_correction_of")
+        item_correction_of = _get(record, "evidence_item_correction_of")
+        correction_reason = _get(record, "correction_reason")
+        if bool(correction_of) != bool(correction_reason) or bool(correction_of) != bool(item_correction_of):
+            raise PolicyViolation(
+                "invalid_work_package_evidence_correction",
+                "event correction, Evidence Item correction, and correction_reason must be provided together",
+                "evidence_correction_of",
+            )
+        if not _blank(_get(record, "evidence_review_of")):
+            raise PolicyViolation(
+                "stale_work_package_evidence_review",
+                "evidence_review_of is only valid for Evidence Reviewed events",
+            )
+    elif event_type == "Evidence Reviewed":
+        require_fields(record, "evidence_item", "evidence_slot_id", "evidence_disposition", "evidence_review_of")
+        if _get(record, "evidence_disposition") not in {"Accepted", "Needs Correction"}:
+            raise PolicyViolation(
+                "invalid_work_package_evidence_review",
+                "review disposition must be Accepted or Needs Correction",
+                "evidence_disposition",
+            )
+        if _get(record, "evidence_disposition") == "Needs Correction":
+            require_fields(record, "correction_reason")
+        if any(
+            not _blank(_get(record, field))
+            for field in (
+                "evidence_requirement",
+                "evidence_source",
+                "evidence_device_id",
+                "evidence_captured_at",
+                "evidence_freshness",
+                "evidence_conflict_state",
+                "evidence_verification",
+                "evidence_correction_of",
+                "evidence_item_correction_of",
+            )
+        ):
+            raise PolicyViolation(
+                "stale_work_package_evidence_review_fields",
+                "capture and correction fields are only valid for Evidence Captured events",
+            )
+    elif any(not _blank(_get(record, field)) for field in evidence_fields) or not _blank(
+        _get(record, "evidence_correction_of")
+    ) or not _blank(_get(record, "evidence_item_correction_of")) or not _blank(_get(record, "evidence_review_of")) or not _blank(_get(record, "correction_reason")):
+        raise PolicyViolation(
+            "stale_work_package_evidence_fields",
+            "typed evidence fields are only valid for Evidence Captured events",
         )
 
 
@@ -2002,7 +3179,7 @@ def _validate_change_order(record: Any, context: Mapping[str, Any]) -> None:
         parse_json_field(record, "tax_policy_snapshot_json", required=True, container_types=(dict,), non_empty=True)
     if status == "Accepted":
         require_fields(record, "contract_acceptance", "accepted_at")
-    _lock_after_status(record, context, {"Approved", "Presented", "Accepted"}, "currency", "subtotal", "tax_amount", "total_amount", "price_book_version", "tax_policy_snapshot_json", "items")
+    _lock_after_status(record, context, {"Approved", "Presented", "Accepted"}, "currency", "subtotal", "tax_amount", "tax_code", "tax_rate", "total_amount", "price_book_version", "tax_policy_snapshot_json", "items")
     _validate_correction(record, context, version_field="version")
 
 
@@ -2058,6 +3235,10 @@ def _validate_customer_decision(record: Any, context: Mapping[str, Any]) -> None
     _validate_correction(record, context)
 
 
+def _validate_roofing_customer(record: Any, _context: Mapping[str, Any]) -> None:
+    require_quickbooks_id(record, "qb_customer_ref")
+
+
 def _validate_contract_acceptance(record: Any, context: Mapping[str, Any]) -> None:
     has_quote = not _blank(_get(record, "customer_quote"))
     has_change = not _blank(_get(record, "change_order"))
@@ -2098,6 +3279,8 @@ def _validate_reconciliation(record: Any, context: Mapping[str, Any]) -> None:
     status = _get(record, "status")
     system_name = _get(record, "system_name")
     quickbooks = isinstance(system_name, str) and system_name.strip().casefold() == "quickbooks"
+    final_invoice = quickbooks and not _blank(_get(record, "invoice_intent_id"))
+    provider_resolver = bool(context.get("quickbooks_final_invoice_provider_resolver"))
     previous = context.get("_previous")
     # A webhook is only a provider identity signal. It may open Pending work,
     # but cannot assert that provider and local accounting truth are matched or
@@ -2108,7 +3291,7 @@ def _validate_reconciliation(record: Any, context: Mapping[str, Any]) -> None:
             "QuickBooks reconciliation must begin Pending",
             "status",
         )
-    if quickbooks and status in {"Matched", "Resolved"}:
+    if quickbooks and status in {"Matched", "Resolved"} and not provider_resolver:
         raise PolicyViolation(
             "quickbooks_provider_truth_unavailable",
             "QuickBooks Matched and Resolved states require an authenticated provider-side resolver",
@@ -2132,6 +3315,16 @@ def _validate_reconciliation(record: Any, context: Mapping[str, Any]) -> None:
     if status == "Matched":
         require_fields(record, "source_payload_hash", "local_payload_hash")
         require_sha256(record, "source_payload_hash", "local_payload_hash")
+        if final_invoice:
+            require_fields(
+                record,
+                "provider_readback_sha256",
+                "provider_facts_sha256",
+                "provider_read_at",
+            )
+            require_sha256(
+                record, "provider_readback_sha256", "provider_facts_sha256"
+            )
         if _get(record, "source_payload_hash") != _get(record, "local_payload_hash"):
             raise PolicyViolation("unmatched_payload", "matched payload hashes must agree")
         source_amount = _decimal(record, "source_amount")
@@ -2141,6 +3334,7 @@ def _validate_reconciliation(record: Any, context: Mapping[str, Any]) -> None:
     if status in {"Resolved", "Ignored"}:
         require_fields(record, "resolution_action", "resolved_by", "resolved_at", "resolution_evidence")
     if quickbooks:
+        require_quickbooks_id(record, "external_entity_id", "realm_id")
         require_fields(
             record,
             "entity_type",
@@ -2151,10 +3345,28 @@ def _validate_reconciliation(record: Any, context: Mapping[str, Any]) -> None:
             "status",
             "detected_at",
             "source_version",
-            "raw_key",
             "source_payload_hash",
             "local_payload_hash",
         )
+        if final_invoice:
+            require_fields(
+                record,
+                "roof_job",
+                "realm_id",
+                "invoice_intent_id",
+                "billing_basis_sha256",
+                "provider_request_sha256",
+                "provider_create_response_sha256",
+                "provider_created_at",
+            )
+            require_sha256(
+                record,
+                "billing_basis_sha256",
+                "provider_request_sha256",
+                "provider_create_response_sha256",
+            )
+        else:
+            require_fields(record, "raw_key")
         if _get(record, "entity_type") not in QUICKBOOKS_FINANCE_ENTITY_TYPES:
             raise PolicyViolation(
                 "unsupported_quickbooks_entity",
@@ -2173,7 +3385,7 @@ def _validate_reconciliation(record: Any, context: Mapping[str, Any]) -> None:
                 "QuickBooks webhook operation is unsupported",
                 "source_version",
             )
-        if not str(_get(record, "raw_key") or "").startswith("raw/quickbooks/"):
+        if not final_invoice and not str(_get(record, "raw_key") or "").startswith("raw/quickbooks/"):
             raise PolicyViolation(
                 "invalid_quickbooks_raw_key",
                 "QuickBooks reconciliation must point to immutable raw webhook evidence",
@@ -2246,6 +3458,20 @@ def _validate_instant_estimate(record: Any, _context: Mapping[str, Any]) -> None
             "invalid_estimate_range", "range_low must be <= range_high"
         )
     status = _get(record, "status")
+    if status == "Captured":
+        if any(_decimal(record, field) is not None for field in ("range_low", "range_high", "estimate_total")):
+            raise PolicyViolation(
+                "captured_estimate_has_price",
+                "Captured estimate intake cannot contain an unverified price",
+            )
+        require_fields(record, "assumptions", "exclusions")
+        parse_json_field(
+            record, "selected_services_json", required=True, non_empty=True
+        )
+        if not bool(_get(record, "review_required")):
+            raise PolicyViolation(
+                "review_gate", "Captured estimate intake must require review"
+            )
     if status in {"Needs Review", "Approved"}:
         require_fields(record, "range_low", "range_high", "assumptions", "exclusions")
         parse_json_field(
@@ -2377,23 +3603,709 @@ def _validate_measurement(record: Any, _context: Mapping[str, Any]) -> None:
             )
 
 
+TAKEOFF_CALCULATION_VERSION = "material_takeoff/v1"
+TAKEOFF_POLICY_SCHEMA_VERSION = "material_takeoff_policy/v1"
+TAKEOFF_POLICY_STATUSES = frozenset(("Draft", "Needs Review", "Approved", "Retired"))
+TAKEOFF_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+TAKEOFF_POLICY_FROZEN_FIELDS = (
+    "tenant",
+    "brand",
+    "service_type",
+    "material_system",
+    "policy_version",
+    "effective_from",
+    "effective_to",
+    "policy_json",
+    "source_evidence",
+    "approved_by",
+    "approved_at",
+    "approval_note",
+)
+TAKEOFF_POLICY_OPTION_KEYS = frozenset(
+    (
+        "panel_item_id",
+        "coverage_width_ft",
+        "length_increment_ft",
+        "max_panel_length_ft",
+        "mode",
+        "stock_lengths_ft",
+        "min_reusable_offcut_ft",
+        "coil_allowances",
+        "trim_stock_ft",
+        "trim_lap_ft",
+        "trim_profiles",
+        "clip_spacing_ft",
+        "screws_per_clip",
+        "trim_screw_spacing_ft",
+        "fastener_item_ids",
+    )
+)
+
+
+def _require_exact_keys(value: Any, expected: frozenset[str], code: str) -> None:
+    if not isinstance(value, Mapping) or frozenset(value) != expected:
+        raise PolicyViolation(
+            code, "contract keys must match the closed schema exactly"
+        )
+
+
+def _require_takeoff_id(value: Any, field: str) -> str:
+    normalized = value.strip() if isinstance(value, str) else ""
+    if not TAKEOFF_ID_PATTERN.fullmatch(normalized):
+        raise PolicyViolation(
+            "takeoff_policy_id", "must be a bounded stable identifier", field
+        )
+    return normalized
+
+
+def _policy_number(
+    options: Mapping[str, Any],
+    field: str,
+    minimum: Decimal | int,
+    maximum: Decimal | int,
+    *,
+    strictly_positive: bool = False,
+) -> Decimal:
+    number = _decimal(options, field, required=True)
+    assert number is not None
+    if number < Decimal(str(minimum)) or number > Decimal(str(maximum)):
+        raise PolicyViolation(
+            "takeoff_policy_number",
+            f"must be between {minimum} and {maximum}",
+            field,
+        )
+    if strictly_positive and number <= 0:
+        raise PolicyViolation(
+            "takeoff_policy_number", "must be greater than zero", field
+        )
+    return number
+
+
+def _validate_takeoff_policy_payload(record: Any) -> dict[str, Any]:
+    payload = parse_json_field(
+        record,
+        "policy_json",
+        required=True,
+        container_types=(dict,),
+        non_empty=True,
+    )
+    assert isinstance(payload, dict)
+    _require_exact_keys(
+        payload,
+        frozenset(("schema_version", "calculation_version", "options")),
+        "takeoff_policy_keys",
+    )
+    if (
+        payload.get("schema_version") != TAKEOFF_POLICY_SCHEMA_VERSION
+        or payload.get("calculation_version") != TAKEOFF_CALCULATION_VERSION
+    ):
+        raise PolicyViolation(
+            "takeoff_policy_schema",
+            "unsupported policy or calculation schema",
+            "policy_json",
+        )
+    options = payload.get("options")
+    _require_exact_keys(options, TAKEOFF_POLICY_OPTION_KEYS, "takeoff_policy_keys")
+    assert isinstance(options, Mapping)
+    _require_takeoff_id(options.get("panel_item_id"), "panel_item_id")
+    _policy_number(options, "coverage_width_ft", 0, 10, strictly_positive=True)
+    _policy_number(options, "length_increment_ft", 0, 1, strictly_positive=True)
+    _policy_number(options, "max_panel_length_ft", 0, 1000, strictly_positive=True)
+    _policy_number(options, "min_reusable_offcut_ft", 0, 100)
+    trim_stock = _policy_number(
+        options, "trim_stock_ft", 0, 100, strictly_positive=True
+    )
+    trim_lap = _policy_number(options, "trim_lap_ft", 0, 100)
+    if trim_lap >= trim_stock:
+        raise PolicyViolation(
+            "takeoff_policy_trim_lap",
+            "trim lap must be shorter than stock",
+            "trim_lap_ft",
+        )
+    _policy_number(options, "clip_spacing_ft", 0, 20, strictly_positive=True)
+    _policy_number(options, "trim_screw_spacing_ft", 0, 20, strictly_positive=True)
+    screws_per_clip = _decimal(options, "screws_per_clip", required=True)
+    if (
+        screws_per_clip is None
+        or screws_per_clip != screws_per_clip.to_integral_value()
+        or not 1 <= screws_per_clip <= 20
+    ):
+        raise PolicyViolation(
+            "takeoff_policy_fastener_rate",
+            "screws_per_clip must be an integer from one through twenty",
+            "screws_per_clip",
+        )
+
+    trims = options.get("trim_profiles")
+    if not isinstance(trims, Mapping) or not trims or len(trims) > 128:
+        raise PolicyViolation(
+            "takeoff_policy_trim_profiles",
+            "one to 128 exact line-type mappings are required",
+        )
+    for line_type, item_id in trims.items():
+        _require_takeoff_id(line_type, "trim_profiles")
+        _require_takeoff_id(item_id, "trim_profiles")
+
+    fasteners = options.get("fastener_item_ids")
+    _require_exact_keys(
+        fasteners,
+        frozenset(("clip", "clip_screw", "trim_screw")),
+        "takeoff_policy_keys",
+    )
+    assert isinstance(fasteners, Mapping)
+    for key in ("clip", "clip_screw", "trim_screw"):
+        _require_takeoff_id(fasteners.get(key), f"fastener_item_ids.{key}")
+
+    allowances = options.get("coil_allowances")
+    _require_exact_keys(
+        allowances,
+        frozenset(("setup_ft", "tail_ft", "scrap_factor")),
+        "takeoff_policy_keys",
+    )
+    assert isinstance(allowances, Mapping)
+    setup = _policy_number(allowances, "setup_ft", 0, 1000)
+    tail = _policy_number(allowances, "tail_ft", 0, 1000)
+    scrap = _policy_number(allowances, "scrap_factor", 0, 1)
+    stock_lengths = options.get("stock_lengths_ft")
+    if not isinstance(stock_lengths, list) or len(stock_lengths) > 64:
+        raise PolicyViolation(
+            "takeoff_policy_stock_lengths", "stock_lengths_ft must be a bounded array"
+        )
+    mode = options.get("mode")
+    if mode == "coil":
+        if stock_lengths:
+            raise PolicyViolation(
+                "takeoff_policy_stock_lengths", "coil mode cannot declare stock lengths"
+            )
+        if setup + tail + scrap <= 0:
+            raise PolicyViolation(
+                "takeoff_policy_coil_allowance",
+                "coil mode requires explicit non-zero setup, tail, or scrap allowance",
+            )
+    elif mode == "stock":
+        if not stock_lengths:
+            raise PolicyViolation(
+                "takeoff_policy_stock_lengths",
+                "stock mode requires at least one stock length",
+            )
+        for index, value in enumerate(stock_lengths):
+            _policy_number({"value": value}, "value", 0, 1000, strictly_positive=True)
+        if setup != 0 or tail != 0 or scrap != 0:
+            raise PolicyViolation(
+                "takeoff_policy_stock_allowance",
+                "stock mode cannot carry coil allowances",
+            )
+    else:
+        raise PolicyViolation(
+            "takeoff_policy_mode", "mode must be coil or stock", "mode"
+        )
+    return payload
+
+
+def _verified_takeoff_policy_evidence(
+    record: Any, context: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    evidence = context.get("policy_evidence")
+    if not isinstance(evidence, Mapping) or _get(evidence, "name") != _get(
+        record, "source_evidence"
+    ):
+        raise PolicyViolation(
+            "takeoff_policy_evidence_missing",
+            "policy source evidence is missing or mismatched",
+        )
+    if (
+        _get(evidence, "sync_state") != "Verified"
+        or _get(evidence, "checksum_algorithm") != "SHA-256"
+        or _blank(_get(evidence, "verified_at"))
+        or _blank(_get(evidence, "verification_source"))
+    ):
+        raise PolicyViolation(
+            "takeoff_policy_evidence_unverified",
+            "policy source evidence must be verified",
+        )
+    require_sha256(evidence, "content_checksum")
+    return evidence
+
+
+def _validate_takeoff_policy(record: Any, context: Mapping[str, Any]) -> None:
+    status = _get(record, "status")
+    if status not in TAKEOFF_POLICY_STATUSES:
+        raise PolicyViolation(
+            "takeoff_policy_status", "unsupported policy status", "status"
+        )
+    require_fields(
+        record,
+        "tenant",
+        "brand",
+        "service_type",
+        "material_system",
+        "policy_version",
+        "effective_from",
+    )
+    _require_takeoff_id(_get(record, "tenant"), "tenant")
+    _require_takeoff_id(_get(record, "material_system"), "material_system")
+    if _get(record, "brand") not in {"ironwrap", "iroof"}:
+        raise PolicyViolation("takeoff_policy_brand", "unsupported brand", "brand")
+    version = _decimal(record, "policy_version", required=True)
+    if version is None or version != version.to_integral_value() or version < 1:
+        raise PolicyViolation(
+            "takeoff_policy_version", "must be a positive integer", "policy_version"
+        )
+    effective_from = str(_get(record, "effective_from"))[:10]
+    effective_to = str(_get(record, "effective_to") or "")[:10]
+    if effective_to and effective_from > effective_to:
+        raise PolicyViolation(
+            "takeoff_policy_effective_window",
+            "effective_from must not follow effective_to",
+        )
+    if not _blank(_get(record, "policy_json")):
+        _validate_takeoff_policy_payload(record)
+
+    previous = context.get("_previous")
+    previous_status = _get(previous, "status")
+    if previous_status in {"Approved", "Retired"}:
+        for field in TAKEOFF_POLICY_FROZEN_FIELDS:
+            if str(_get(previous, field) or "") != str(_get(record, field) or ""):
+                raise PolicyViolation(
+                    "approved_takeoff_policy_immutable",
+                    "approved policy facts require a new version",
+                    field,
+                )
+        if previous_status == "Retired" and status != "Retired":
+            raise PolicyViolation(
+                "approved_takeoff_policy_immutable",
+                "a retired policy cannot be reactivated",
+                "status",
+            )
+        if previous_status == "Approved" and status not in {"Approved", "Retired"}:
+            raise PolicyViolation(
+                "approved_takeoff_policy_immutable",
+                "an approved policy may only be retired",
+                "status",
+            )
+
+    if status not in {"Approved", "Retired"}:
+        if any(
+            not _blank(_get(record, field))
+            for field in ("approved_by", "approved_at", "approval_note")
+        ):
+            raise PolicyViolation(
+                "takeoff_policy_stale_approval",
+                "non-approved policy cannot retain approval metadata",
+            )
+        return
+    if (
+        previous is None
+        and status == "Retired"
+        and not context.get("historical_proof")
+    ):
+        raise PolicyViolation(
+            "takeoff_policy_initial_state",
+            "a policy cannot be created directly as Retired",
+            "status",
+        )
+    require_approval(record, note="approval_note")
+    require_fields(record, "policy_json", "source_evidence")
+    _validate_takeoff_policy_payload(record)
+    tenant = context.get("tenant_record")
+    if (
+        not isinstance(tenant, Mapping)
+        or _get(tenant, "tenant_id", _get(tenant, "name")) != _get(record, "tenant")
+        or _get(tenant, "status") != "Active"
+    ):
+        raise PolicyViolation(
+            "takeoff_policy_tenant_inactive", "bound tenant must be Active"
+        )
+    _verified_takeoff_policy_evidence(record, context)
+
+
+def _canonical_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _validate_takeoff(record: Any, context: Mapping[str, Any]) -> None:
     if _get(record, "status") != "Approved":
         return
     require_fields(
-        record, "roof_job", "measurement_report", "assumptions", "exclusions"
+        record,
+        "roof_job",
+        "measurement_report",
+        "prepared_at",
+        "tenant",
+        "material_system",
+        "calculation_schema",
+        "calculation_version",
+        "geometry_revision",
+        "source_raw_key",
+        "source_raw_sha256",
+        "takeoff_policy",
+        "policy_version",
+        "policy_source_evidence",
+        "policy_source_sha256",
+        "policy_digest",
+        "options_digest",
+        "calculation_digest",
+        "stock_mode",
+        "waste_basis",
+        "assumptions",
+        "exclusions",
     )
     require_approval(record, note="approval_note")
-    if _context_status(context, "measurement_status") != "Approved":
+    if (
+        _get(record, "calculation_schema") != TAKEOFF_CALCULATION_VERSION
+        or _get(record, "calculation_version") != TAKEOFF_CALCULATION_VERSION
+    ):
+        raise PolicyViolation(
+            "takeoff_calculation_schema", "unsupported calculation schema"
+        )
+    require_sha256(
+        record,
+        "geometry_revision",
+        "source_raw_sha256",
+        "policy_source_sha256",
+        "policy_digest",
+        "options_digest",
+        "calculation_digest",
+    )
+
+    measurement = context.get("measurement")
+    if (
+        not isinstance(measurement, Mapping)
+        or _get(measurement, "review_status") != "Approved"
+    ):
         raise PolicyViolation(
             "unapproved_measurement", "linked Measurement Report must be Approved"
         )
-    parse_json_field(record, "source_measurements_json", required=True, non_empty=True)
-    _require_clean_rows(record, "items", quantity_field="quantity")
+    if (
+        _get(measurement, "name", _get(measurement, "measurement_id"))
+        != _get(record, "measurement_report")
+        or _get(measurement, "roof_job") != _get(record, "roof_job")
+        or _get(measurement, "roof_graph_revision") != _get(record, "geometry_revision")
+        or _get(measurement, "raw_key") != _get(record, "source_raw_key")
+        or _get(record, "source_raw_sha256") != _get(record, "geometry_revision")
+    ):
+        raise PolicyViolation(
+            "takeoff_geometry_binding",
+            "measurement, job, geometry revision, and raw hash must agree",
+        )
+
+    policy = context.get("takeoff_policy")
+    if not isinstance(policy, Mapping) or _get(policy, "status") not in {
+        "Approved",
+        "Retired",
+    }:
+        raise PolicyViolation(
+            "takeoff_policy_unapproved",
+            "linked policy must be Approved or exact Retired historical proof",
+        )
+    if _get(policy, "tenant") != _get(record, "tenant"):
+        raise PolicyViolation(
+            "takeoff_policy_tenant_mismatch", "policy belongs to another tenant"
+        )
+    if _get(policy, "status") == "Retired":
+        previous = context.get("_previous")
+        if not isinstance(previous, Mapping) or _get(previous, "status") != "Approved":
+            raise PolicyViolation(
+                "takeoff_policy_retired_historical_only",
+                "a Retired policy may validate an already-Approved historical takeoff only",
+            )
+    _validate_takeoff_policy(
+        policy,
+        {
+            "tenant_record": context.get("tenant_record"),
+            "policy_evidence": context.get("policy_evidence"),
+            "_previous": None,
+            "historical_proof": _get(policy, "status") == "Retired",
+        },
+    )
+    if _get(policy, "policy_id", _get(policy, "name")) != _get(
+        record, "takeoff_policy"
+    ):
+        raise PolicyViolation(
+            "takeoff_policy_binding", "policy identity does not match"
+        )
+    for record_field, policy_field in (
+        ("tenant", "tenant"),
+        ("material_system", "material_system"),
+        ("policy_version", "policy_version"),
+        ("policy_source_evidence", "source_evidence"),
+    ):
+        if str(_get(record, record_field)) != str(_get(policy, policy_field)):
+            raise PolicyViolation(
+                "takeoff_policy_binding",
+                "takeoff and policy facts do not match",
+                record_field,
+            )
+    roof_job = context.get("roof_job_record")
+    if (
+        not isinstance(roof_job, Mapping)
+        or _get(roof_job, "name", _get(roof_job, "roof_job_id"))
+        != _get(record, "roof_job")
+        or _get(roof_job, "brand") != _get(policy, "brand")
+        or _get(roof_job, "service_type") != _get(policy, "service_type")
+    ):
+        raise PolicyViolation(
+            "takeoff_policy_scope", "policy does not apply to the Roof Job"
+        )
+    evidence = _verified_takeoff_policy_evidence(policy, context)
+    if _get(evidence, "content_checksum") != _get(record, "policy_source_sha256"):
+        raise PolicyViolation(
+            "takeoff_policy_evidence_hash", "policy evidence hash does not match"
+        )
+
+    prepared_date = str(_get(record, "prepared_at"))[:10]
+    effective_from = str(_get(policy, "effective_from"))[:10]
+    effective_to = str(_get(policy, "effective_to") or "")[:10]
+    if prepared_date < effective_from or (
+        effective_to and prepared_date > effective_to
+    ):
+        raise PolicyViolation(
+            "takeoff_policy_not_effective",
+            "policy was not effective at calculation time",
+        )
+
+    source = parse_json_field(
+        record,
+        "source_measurements_json",
+        required=True,
+        container_types=(dict,),
+        non_empty=True,
+    )
+    options = parse_json_field(
+        record, "options_json", required=True, container_types=(dict,), non_empty=True
+    )
+    envelope = parse_json_field(
+        record,
+        "calculation_json",
+        required=True,
+        container_types=(dict,),
+        non_empty=True,
+    )
+    review_reasons = parse_json_field(
+        record, "review_reasons_json", required=True, container_types=(list,)
+    )
+    assert isinstance(source, Mapping)
+    assert isinstance(options, Mapping)
+    assert isinstance(envelope, Mapping)
+    assert isinstance(review_reasons, list)
+    if review_reasons:
+        raise PolicyViolation(
+            "takeoff_review_unresolved",
+            "review reasons must be resolved before approval",
+        )
+    _require_exact_keys(
+        envelope,
+        frozenset(
+            (
+                "schema_version",
+                "source",
+                "policy",
+                "options",
+                "options_digest",
+                "result",
+                "rows",
+                "review_reasons",
+            )
+        ),
+        "takeoff_calculation_keys",
+    )
+    if envelope.get("schema_version") != TAKEOFF_CALCULATION_VERSION:
+        raise PolicyViolation(
+            "takeoff_calculation_schema", "envelope schema does not match"
+        )
+    if (
+        envelope.get("options") != options
+        or envelope.get("review_reasons") != review_reasons
+    ):
+        raise PolicyViolation(
+            "takeoff_calculation_binding", "persisted options or reasons drifted"
+        )
+    if _canonical_sha256(options) != _get(record, "options_digest") or envelope.get(
+        "options_digest"
+    ) != _get(record, "options_digest"):
+        raise PolicyViolation("takeoff_options_digest", "options digest does not match")
+    if _canonical_sha256(envelope) != _get(record, "calculation_digest"):
+        raise PolicyViolation(
+            "takeoff_calculation_digest", "calculation digest does not match"
+        )
+    policy_binding = envelope.get("policy")
+    if not isinstance(policy_binding, Mapping) or _canonical_sha256(
+        policy_binding
+    ) != _get(record, "policy_digest"):
+        raise PolicyViolation("takeoff_policy_digest", "policy digest does not match")
+    policy_payload = _validate_takeoff_policy_payload(policy)
+    if (
+        policy_binding.get("id") != _get(record, "takeoff_policy")
+        or policy_binding.get("tenant") != _get(record, "tenant")
+        or policy_binding.get("brand") != _get(policy, "brand")
+        or policy_binding.get("service_type") != _get(policy, "service_type")
+        or policy_binding.get("material_system") != _get(record, "material_system")
+        or str(policy_binding.get("version")) != str(_get(record, "policy_version"))
+        or str(policy_binding.get("effective_from"))[:10]
+        != str(_get(policy, "effective_from"))[:10]
+        or str(policy_binding.get("effective_to") or "")[:10]
+        != str(_get(policy, "effective_to") or "")[:10]
+        or policy_binding.get("source_evidence")
+        != _get(record, "policy_source_evidence")
+        or policy_binding.get("source_evidence_sha256")
+        != _get(record, "policy_source_sha256")
+        or str(policy_binding.get("source_evidence_verified_at"))
+        != str(_get(evidence, "verified_at"))
+        or policy_binding.get("source_evidence_verification_source")
+        != _get(evidence, "verification_source")
+        or policy_binding.get("approved_by") != _get(policy, "approved_by")
+        or str(policy_binding.get("approved_at")) != str(_get(policy, "approved_at"))
+        or policy_binding.get("policy_payload") != policy_payload
+    ):
+        raise PolicyViolation(
+            "takeoff_policy_binding", "calculation policy binding drifted"
+        )
+    if options != _policy_payload_to_calculator_options(policy_payload):
+        raise PolicyViolation(
+            "takeoff_options_policy_mismatch",
+            "calculation options do not exactly match the approved policy",
+        )
+    envelope_source = envelope.get("source")
+    if (
+        not isinstance(envelope_source, Mapping)
+        or envelope_source.get("measurement_report")
+        != _get(record, "measurement_report")
+        or envelope_source.get("roof_job") != _get(record, "roof_job")
+        or envelope_source.get("geometry_revision") != _get(record, "geometry_revision")
+        or envelope_source.get("raw_key") != _get(record, "source_raw_key")
+        or envelope_source.get("raw_sha256") != _get(record, "source_raw_sha256")
+    ):
+        raise PolicyViolation(
+            "takeoff_geometry_binding", "calculation source binding drifted"
+        )
+    if (
+        source.get("measurement_report") != _get(record, "measurement_report")
+        or source.get("raw_sha256") != _get(record, "source_raw_sha256")
+        or source.get("geometry_revision") != _get(record, "geometry_revision")
+    ):
+        raise PolicyViolation(
+            "takeoff_geometry_binding", "source evidence summary drifted"
+        )
+    result = envelope.get("result")
+    if not isinstance(result, Mapping) or result.get("needsReview") is not False:
+        raise PolicyViolation(
+            "takeoff_review_unresolved", "calculation still needs review"
+        )
+    panel_nest = result.get("panelNest")
+    if not isinstance(panel_nest, Mapping) or panel_nest.get("mode") != _get(
+        record, "stock_mode"
+    ):
+        raise PolicyViolation("takeoff_calculation_binding", "stock mode drifted")
+
+    rows = _require_clean_rows(record, "items", quantity_field="quantity")
+    expected_rows = envelope.get("rows")
+    if not isinstance(expected_rows, list) or len(expected_rows) != len(rows):
+        raise PolicyViolation(
+            "takeoff_row_binding", "computed row count does not match"
+        )
+    for index, (row, expected) in enumerate(zip(rows, expected_rows), start=1):
+        if not isinstance(expected, Mapping):
+            raise PolicyViolation(
+                "takeoff_row_binding", f"row {index} envelope is invalid"
+            )
+        for field in (
+            "category",
+            "item_name",
+            "unit",
+            "source_ref",
+            "confidence",
+            "waste_basis",
+            "stock_mode",
+            "geometry_revision",
+            "policy_digest",
+            "options_digest",
+            "needs_review",
+        ):
+            if str(_get(row, field)) != str(expected.get(field)):
+                raise PolicyViolation(
+                    "takeoff_row_binding", f"row {index} field drifted", field
+                )
+        for field in ("quantity", "waste_factor"):
+            if _decimal(row, field, required=True) != _decimal(
+                expected, field, required=True
+            ):
+                raise PolicyViolation(
+                    "takeoff_row_binding", f"row {index} number drifted", field
+                )
+        require_between(row, "waste_factor", 0, 100, required=True)
+        if _get(row, "calculation_digest") != _get(record, "calculation_digest"):
+            raise PolicyViolation(
+                "takeoff_row_binding",
+                f"row {index} calculation digest drifted",
+                "calculation_digest",
+            )
+
+
+def _policy_payload_to_calculator_options(payload: Mapping[str, Any]) -> dict[str, Any]:
+    raw = payload["options"]
+    return {
+        "panelProfileId": raw["panel_item_id"],
+        "coverageWidthFt": raw["coverage_width_ft"],
+        "lengthIncrementFt": raw["length_increment_ft"],
+        "maxPanelLengthFt": raw["max_panel_length_ft"],
+        "mode": raw["mode"],
+        "stockLengthsFt": raw["stock_lengths_ft"],
+        "minReusableOffcutFt": raw["min_reusable_offcut_ft"],
+        "coilSetupAllowanceFt": raw["coil_allowances"]["setup_ft"],
+        "coilTailAllowanceFt": raw["coil_allowances"]["tail_ft"],
+        "coilScrapFactor": raw["coil_allowances"]["scrap_factor"],
+        "trimStockFt": raw["trim_stock_ft"],
+        "trimLapFt": raw["trim_lap_ft"],
+        "trimProfiles": raw["trim_profiles"],
+        "clipSpacingFt": raw["clip_spacing_ft"],
+        "screwsPerClip": raw["screws_per_clip"],
+        "trimScrewSpacingFt": raw["trim_screw_spacing_ft"],
+        "fastenerItemIds": {
+            "clip": raw["fastener_item_ids"]["clip"],
+            "clipScrew": raw["fastener_item_ids"]["clip_screw"],
+            "trimScrew": raw["fastener_item_ids"]["trim_screw"],
+        },
+    }
 
 
 def _validate_supplier_quote(record: Any, context: Mapping[str, Any]) -> None:
     require_nonnegative(record, "quote_total")
+    _enforce_state_transition(
+        record,
+        context,
+        "status",
+        {
+            "Needs Review": {"Approved", "Rejected", "Expired"},
+            "Approved": {"Expired"},
+            "Rejected": set(),
+            "Expired": set(),
+        },
+    )
+    _lock_after_status(
+        record,
+        context,
+        {"Approved", "Expired"},
+        "roof_job",
+        "material_takeoff",
+        "supplier",
+        "quoted_at",
+        "valid_until",
+        "quote_total",
+        "currency",
+        "substitution_notes",
+        "quote_summary_json",
+        "assumptions",
+        "exclusions",
+        "items",
+        "approved_by",
+        "approved_at",
+    )
     if _get(record, "status") != "Approved":
         return
     require_fields(
@@ -2401,19 +4313,74 @@ def _validate_supplier_quote(record: Any, context: Mapping[str, Any]) -> None:
         "roof_job",
         "material_takeoff",
         "supplier",
+        "quoted_at",
         "valid_until",
+        "quote_total",
+        "currency",
         "assumptions",
         "exclusions",
     )
     require_approval(record)
+    _currency(record, required=True)
+    quoted_date = _iso_date(_get(record, "quoted_at"), "quoted_at", required=True)
+    valid_until = _iso_date(_get(record, "valid_until"), "valid_until", required=True)
+    approved_date = _iso_date(_get(record, "approved_at"), "approved_at", required=True)
+    validation_date = _iso_date(
+        context.get("validation_date"), "validation_date", required=True
+    )
+    if any(
+        date is not None and valid_until is not None and date > valid_until
+        for date in (quoted_date, approved_date, validation_date)
+    ):
+        raise PolicyViolation(
+            "expired_supplier_quote",
+            "an approved Supplier Quote must be current at quote, approval, and validation time",
+            "valid_until",
+        )
     if _context_status(context, "takeoff_status") != "Approved":
         raise PolicyViolation(
             "unapproved_takeoff", "linked Material Takeoff must be Approved"
         )
     parse_json_field(record, "quote_summary_json", required=True, non_empty=True)
     rows = _require_clean_rows(record, "items", quantity_field="quantity")
-    for row in rows:
+    if not rows:
+        raise PolicyViolation(
+            "missing_supplier_quote_items",
+            "an approved Supplier Quote requires at least one item",
+            "items",
+        )
+    expected_total = Decimal("0")
+    for index, row in enumerate(rows, start=1):
+        require_fields(
+            row,
+            "item_name",
+            "quantity",
+            "unit",
+            "unit_price",
+            "line_total",
+            "source_ref",
+        )
         require_nonnegative(row, "unit_price", "line_total", required=True)
+        quantity = _decimal(row, "quantity", required=True)
+        unit_price = _decimal(row, "unit_price", required=True)
+        line_total = _decimal(row, "line_total", required=True)
+        if quantity is None or unit_price is None or line_total is None:
+            continue
+        expected_line_total = _money(quantity * unit_price)
+        if line_total != expected_line_total:
+            raise PolicyViolation(
+                "supplier_quote_line_total_mismatch",
+                f"item {index} line_total must equal quantity x unit_price rounded half-up to cents",
+                "items",
+            )
+        expected_total += expected_line_total
+    quote_total = _decimal(record, "quote_total", required=True)
+    if quote_total is not None and quote_total != _money(expected_total):
+        raise PolicyViolation(
+            "supplier_quote_total_mismatch",
+            "quote_total must equal the sum of recomputed item line totals",
+            "quote_total",
+        )
 
 
 def _validate_supplier_order(record: Any, context: Mapping[str, Any]) -> None:
@@ -3833,6 +5800,21 @@ def _validate_customer_quote(record: Any, context: Mapping[str, Any]) -> None:
         "balance_due",
     )
     status = _get(record, "status")
+    require_quickbooks_id(record, "qb_item_ref", "qb_tax_code_ref", "qb_terms_ref")
+    previous = context.get("_previous")
+    if previous is not None and _get(previous, "status") in {"Approved", "Accepted"}:
+        for field in (
+            "qb_item_ref",
+            "qb_tax_code_ref",
+            "qb_terms_ref",
+            "qb_terms_due_days",
+        ):
+            if str(_get(previous, field) or "") != str(_get(record, field) or ""):
+                raise PolicyViolation(
+                    "quickbooks_mapping_frozen",
+                    "QuickBooks mappings must be set before the quote billing basis is approved",
+                    field,
+                )
     _enforce_state_transition(
         record,
         context,
@@ -3857,6 +5839,18 @@ def _validate_customer_quote(record: Any, context: Mapping[str, Any]) -> None:
     if status not in {"Approved", "Accepted"}:
         _validate_customer_quote_correction(record, context)
         return
+    require_fields(record, "qb_terms_ref", "qb_terms_due_days")
+    due_days = _get(record, "qb_terms_due_days")
+    if (
+        isinstance(due_days, bool)
+        or not isinstance(due_days, int)
+        or not 0 <= due_days <= 365
+    ):
+        raise PolicyViolation(
+            "invalid_quickbooks_terms_due_days",
+            "must be an integer from 0 through 365",
+            "qb_terms_due_days",
+        )
     require_fields(
         record,
         "roof_job",
@@ -3911,6 +5905,8 @@ def _validate_customer_quote(record: Any, context: Mapping[str, Any]) -> None:
         "assumptions",
         "exclusions",
         "quote_summary_json",
+        "qb_terms_ref",
+        "qb_terms_due_days",
     )
     if status == "Accepted":
         require_fields(
@@ -4074,6 +6070,7 @@ def _validate_payment_milestone(record: Any, context: Mapping[str, Any]) -> None
         "amount_paid",
         "balance_due",
     )
+    provider_resolver = bool(context.get("quickbooks_final_invoice_provider_resolver"))
     _enforce_state_transition(
         record,
         context,
@@ -4085,6 +6082,33 @@ def _validate_payment_milestone(record: Any, context: Mapping[str, Any]) -> None
             "Ignored": set(),
         },
     )
+    if (
+        _get(record, "invoice_intent_id")
+        and _get(record, "qb_entity_type") == "Invoice"
+        and _get(record, "status") == "Matched"
+        and not provider_resolver
+    ):
+        raise PolicyViolation(
+            "quickbooks_provider_truth_unavailable",
+            "QuickBooks invoice matching requires the authenticated provider resolver",
+            "status",
+        )
+    require_quickbooks_id(record, "qb_entity_id", "realm_id")
+    if not _blank(_get(record, "invoice_intent_id")):
+        require_fields(
+            record,
+            "billing_basis_sha256",
+            "billing_basis_json",
+            "provider_request_sha256",
+            "provider_create_response_sha256",
+            "provider_created_at",
+        )
+        require_sha256(
+            record,
+            "billing_basis_sha256",
+            "provider_request_sha256",
+            "provider_create_response_sha256",
+        )
     if _get(record, "status") == "Webhook Seen":
         require_fields(
             record,
@@ -4125,7 +6149,7 @@ def _validate_payment_milestone(record: Any, context: Mapping[str, Any]) -> None
                 "raw_key",
             )
         require_sha256(record, "raw_payload_hash")
-        if _get(record, "payment_status") not in {None, "", "Not Due"} or not _blank(_get(record, "truth_source")) or not _blank(_get(record, "truth_at")):
+        if _get(record, "payment_status") not in {None, "", "Unverified"} or not _blank(_get(record, "truth_source")) or not _blank(_get(record, "truth_at")):
             raise PolicyViolation(
                 "webhook_payment_milestone_provider_truth_unavailable",
                 "a webhook receipt cannot establish payment status or provider truth",
@@ -4157,6 +6181,51 @@ def _validate_payment_milestone(record: Any, context: Mapping[str, Any]) -> None
             "truth_source",
             "truth_at",
         )
+        if not _blank(_get(record, "invoice_intent_id")):
+            require_fields(record, "provider_readback_sha256", "provider_facts_sha256", "provider_read_at")
+            require_sha256(record, "provider_readback_sha256", "provider_facts_sha256")
+        payment_status = _get(record, "payment_status")
+        if payment_status not in {
+            "Unverified",
+            "Not Due",
+            "Due",
+            "Partially Paid",
+            "Paid",
+            "Overdue",
+            "Voided",
+        }:
+            raise PolicyViolation(
+                "unsupported_quickbooks_payment_status",
+                "payment status must come from the bounded provider normalization",
+                "payment_status",
+            )
+        total = _decimal(record, "total_amount", required=True)
+        paid = _decimal(record, "amount_paid", required=True)
+        balance = _decimal(record, "balance_due", required=True)
+        if payment_status == "Voided":
+            raise PolicyViolation(
+                "quickbooks_voided_invoice_unmatchable",
+                "a voided provider invoice cannot become Matched",
+                "payment_status",
+            )
+        if payment_status == "Paid" and balance != Decimal("0"):
+            raise PolicyViolation("payment_status_mismatch", "Paid requires zero balance", "balance_due")
+        if payment_status == "Partially Paid" and not (
+            total is not None and balance is not None and Decimal("0") < balance < total
+        ):
+            raise PolicyViolation(
+                "payment_status_mismatch",
+                "Partially Paid requires a balance strictly between zero and total",
+                "balance_due",
+            )
+        if payment_status in {"Unverified", "Due", "Overdue", "Not Due"} and (
+            total is None or balance != total or paid != Decimal("0")
+        ):
+            raise PolicyViolation(
+                "payment_status_mismatch",
+                "an unpaid invoice requires zero paid and full outstanding balance",
+                "balance_due",
+            )
         _require_amount_equation(record, "total_amount", "subtotal", "tax_amount")
         total = _decimal(record, "total_amount", required=True)
         paid = _decimal(record, "amount_paid", required=True)
@@ -4164,6 +6233,80 @@ def _validate_payment_milestone(record: Any, context: Mapping[str, Any]) -> None
         if total is not None and paid is not None and balance is not None and abs(balance - (total - paid)) > Decimal("0.01"):
             raise PolicyViolation("amount_mismatch", "must equal total_amount - amount_paid", "balance_due")
         parse_json_field(record, "tax_policy_snapshot_json", required=True, container_types=(dict,), non_empty=True)
+    recognition_fields = (
+        "recognition_posted_at",
+        "recognition_digest",
+        "recognition_reconciliation",
+    )
+    has_recognition_binding = any(
+        not _blank(_get(record, field)) for field in recognition_fields
+    )
+    if has_recognition_binding:
+        require_fields(record, *recognition_fields)
+        require_sha256(record, "recognition_digest")
+        if _get(record, "status") != "Matched":
+            raise PolicyViolation(
+                "premature_revenue_recognition_claim",
+                "posted revenue recognition requires a Matched provider mirror",
+                "recognition_reconciliation",
+            )
+        if _get(record, "milestone_type") not in {"Invoice", "Credit"}:
+            raise PolicyViolation(
+                "invalid_revenue_recognition_binding",
+                "only invoice and credit milestones may carry posted revenue recognition",
+                "milestone_type",
+            )
+        if _get(record, "truth_source") != "QuickBooks":
+            raise PolicyViolation(
+                "invalid_revenue_recognition_binding",
+                "posted revenue recognition requires QuickBooks provider truth",
+                "truth_source",
+            )
+        posted_at = _payment_milestone_datetime(record, "recognition_posted_at")
+        truth_at = _payment_milestone_datetime(record, "truth_at")
+        if posted_at > truth_at:
+            raise PolicyViolation(
+                "invalid_revenue_recognition_timeline",
+                "recognition_posted_at must not be later than truth_at",
+                "recognition_posted_at",
+            )
+        reconciliation = context.get("recognition_reconciliation")
+        reconciliation_ids = {
+            _get(reconciliation, "name"),
+            _get(reconciliation, "reconciliation_id"),
+        }
+        if (
+            reconciliation is None
+            or _get(record, "recognition_reconciliation") not in reconciliation_ids
+            or _get(reconciliation, "roof_job") != _get(record, "roof_job")
+            or _get(reconciliation, "system_name") != "QuickBooks"
+            or _get(reconciliation, "entity_type") != _get(record, "qb_entity_type")
+            or _get(reconciliation, "external_entity_id") != _get(record, "qb_entity_id")
+            or _get(reconciliation, "local_doctype") != "Payment Milestone"
+            or _get(reconciliation, "local_name")
+            != _get(record, "payment_milestone_id")
+            or _get(reconciliation, "status") not in {"Matched", "Resolved"}
+            or _get(reconciliation, "currency") != _get(record, "currency")
+            or _get(reconciliation, "source_payload_hash")
+            != _get(record, "recognition_digest")
+            or _blank(_get(reconciliation, "detected_at"))
+        ):
+            raise PolicyViolation(
+                "unverified_revenue_recognition",
+                "posted revenue must bind to matching terminal external accounting evidence",
+                "recognition_reconciliation",
+            )
+        detected_at = _payment_milestone_datetime(
+            reconciliation,
+            "detected_at",
+            code="unverified_revenue_recognition",
+        )
+        if detected_at < posted_at or detected_at > truth_at:
+            raise PolicyViolation(
+                "unverified_revenue_recognition",
+                "reconciliation evidence must fall between posting and truth capture",
+                "recognition_reconciliation",
+            )
     _lock_after_status(
         record,
         context,
@@ -4527,9 +6670,63 @@ def _safe_iso_timestamp(value: Any) -> bool:
     return True
 
 
+def _valid_frappe_approver(value: Any) -> bool:
+    normalized = value.strip() if isinstance(value, str) else ""
+    if not normalized or normalized != value or len(normalized) > 254:
+        return False
+    if normalized == "Administrator":
+        return True
+    if any(character.isspace() for character in normalized) or normalized.count("@") != 1:
+        return False
+    local, domain = normalized.split("@", 1)
+    return bool(local and domain and "." in domain and not domain.startswith(".") and not domain.endswith("."))
+
+
+def _canonical_frappe_utc_timestamp(value: Any) -> bool:
+    if isinstance(value, datetime):
+        return value.tzinfo is None and value.microsecond == 0
+    normalized = value if isinstance(value, str) else ""
+    try:
+        parsed = datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    return parsed.strftime("%Y-%m-%d %H:%M:%S") == normalized
+
+
+def validate_pricing_policy_approval_evidence(record: Any) -> None:
+    require_fields(record, "source_ref", "approved_by", "approved_at", "approval_note")
+    if not _valid_frappe_approver(_get(record, "approved_by")):
+        raise PolicyViolation(
+            "invalid_pricing_policy_approver",
+            "must identify the server-attributed Frappe approver",
+            "approved_by",
+        )
+    if not _canonical_frappe_utc_timestamp(_get(record, "approved_at")):
+        raise PolicyViolation(
+            "invalid_pricing_policy_approval_timestamp",
+            "must be the canonical server-issued UTC Datetime value",
+            "approved_at",
+        )
+
+
 def _validate_completion(record: Any, _context: Mapping[str, Any]) -> None:
+    # before_insert supplies version 1 only for genuinely new packets. Legacy
+    # records remain nullable so discovery can fail them closed.
+    version = _get(record, "packet_version")
+    if version is not None and (
+        isinstance(version, bool) or not isinstance(version, int) or version < 1
+    ):
+        raise PolicyViolation(
+            "invalid_completion_version", "packet_version must be a positive integer"
+        )
     if _get(record, "status") != "Approved":
         return
+    if version is None:
+        raise PolicyViolation(
+            "completion_version_required",
+            "Approved Completion Packets require explicit version provenance",
+            "packet_version",
+        )
     require_fields(record, "roof_job", "customer_signoff_ref", "completion_evidence")
     require_approval(record)
     parse_json_field(record, "photo_evidence_json", required=True, non_empty=True)
@@ -4544,6 +6741,25 @@ def _validate_completion(record: Any, _context: Mapping[str, Any]) -> None:
             "open_deficiencies",
             "completion cannot be approved with unresolved deficiencies",
         )
+    _lock_after_status(
+        record,
+        _context,
+        {"Approved"},
+        "packet_version",
+        "roof_job",
+        "prepared_at",
+        "approved_by",
+        "approved_at",
+        "photo_evidence_json",
+        "completion_evidence",
+        "deficiency_list",
+        "deficiencies_resolved",
+        "customer_signoff_ref",
+        "warranty_ready",
+        "evidence_summary_json",
+        "assumptions",
+        "exclusions",
+    )
 
 
 def _validate_warranty(record: Any, context: Mapping[str, Any]) -> None:
@@ -4673,6 +6889,7 @@ def _require_production_gate_states(
 
 
 def _validate_roof_job(record: Any, context: Mapping[str, Any]) -> None:
+    require_quickbooks_id(record, "qb_realm_id", "qb_invoice_ref")
     status = _get(record, "job_status")
     if status in {"Won", "In Production", "Completed", "Closed"}:
         require_fields(
@@ -4837,7 +7054,13 @@ def _validate_hermes_run(record: Any, _context: Mapping[str, Any]) -> None:
     if capability == "Approved-write":
         require_fields(record, "target_doctype", "target_name", "tool_name")
         parse_json_field(record, "tool_args_json", required=True)
-        parse_json_field(record, "dry_run_json", required=True, non_empty=True)
+        dry_run = parse_json_field(
+            record,
+            "dry_run_json",
+            required=True,
+            container_types=(dict,),
+            non_empty=True,
+        )
         if approval in {"Approved", "Executed", "Audit Failed"}:
             policy = parse_json_field(
                 record,
@@ -4868,10 +7091,24 @@ def _validate_hermes_run(record: Any, _context: Mapping[str, Any]) -> None:
                 "before_target_ids",
                 "after_target_ids",
             )
-            if result != "OK" or not mutated:
+            no_op_takeoff_replay = False
+            if not mutated and _get(record, "tool_name") == "request_create_material_takeoff":
+                before_target = parse_json_field(
+                    record, "before_target_ids", required=True
+                )
+                after_target = parse_json_field(
+                    record, "after_target_ids", required=True
+                )
+                no_op_takeoff_replay = (
+                    isinstance(dry_run, Mapping)
+                    and dry_run.get("operation") == "replay"
+                    and dry_run.get("target_mutation") is False
+                    and before_target == after_target
+                )
+            if result != "OK" or (not mutated and not no_op_takeoff_replay):
                 raise PolicyViolation(
                     "audit_state_mismatch",
-                    "Executed write requires result_status=OK and mutation_applied",
+                    "Executed write requires a mutation or an exact bound no-op replay",
                 )
             parse_json_field(record, "result_json", required=True)
         elif approval == "Audit Failed":
@@ -4905,30 +7142,392 @@ def _validate_hermes_run(record: Any, _context: Mapping[str, Any]) -> None:
         parse_json_field(record, "result_json", required=True)
 
 
+def _validate_price_rule_contract(record: Any) -> Mapping[str, Any]:
+    contract = parse_json_field(
+        record,
+        "rule_json",
+        required=True,
+        container_types=(dict,),
+        non_empty=True,
+    )
+    expected = (
+        PRICE_POLICY_AUTHORITY_CONTRACT
+        if _get(record, "rule_type") == "Pricing Policy"
+        else PRICE_RULE_CONTRACT
+    )
+    if not isinstance(contract, Mapping) or set(contract) != set(expected):
+        raise PolicyViolation(
+            "invalid_price_rule_contract",
+            "must use the closed contract for this price rule type with no unknown keys",
+            "rule_json",
+        )
+    if dict(contract) != expected:
+        raise PolicyViolation(
+            "unsupported_price_rule_contract",
+            "only the deterministic contract for this price rule type is supported",
+            "rule_json",
+        )
+    if _get(record, "rule_type") == "Pricing Policy" and _get(
+        record, "rule_json"
+    ) != json.dumps(expected, sort_keys=True, separators=(",", ":")):
+        raise PolicyViolation(
+            "noncanonical_price_rule_contract",
+            "pricing policy authority contract must use canonical JSON bytes",
+            "rule_json",
+        )
+    return contract
+
+
+def _pricing_snapshot_identifier(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= 128
+        and value[0].isalnum()
+        and value[0].isascii()
+        and all(character.isascii() and (character.isalnum() or character in "._:-") for character in value)
+    )
+
+
+def _pricing_snapshot_nonnegative_integer(value: Any) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 <= value <= 9_007_199_254_740_991
+    )
+
+
+def _validate_pricing_rate_snapshot(
+    value: Any,
+    *,
+    path: str,
+    cents_field: str = "rateCents",
+    extra_keys: frozenset[str] = frozenset(),
+) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", f"{path} must be an object", "pricing_policy_snapshot_json"
+        )
+    required = {"sku", cents_field, "sourceRef"}
+    allowed = required | set(extra_keys)
+    if set(value) - allowed or not required <= set(value):
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot",
+            f"{path} must use the closed rate shape",
+            "pricing_policy_snapshot_json",
+        )
+    if not _pricing_snapshot_identifier(value.get("sku")):
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", f"{path}.sku is invalid", "pricing_policy_snapshot_json"
+        )
+    if not _pricing_snapshot_nonnegative_integer(value.get(cents_field)):
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot",
+            f"{path}.{cents_field} must be nonnegative integer cents",
+            "pricing_policy_snapshot_json",
+        )
+    if not _pricing_snapshot_identifier(value.get("sourceRef")):
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", f"{path}.sourceRef is invalid", "pricing_policy_snapshot_json"
+        )
+    return value
+
+
+def validate_pricing_policy_snapshot(record: Any) -> None:
+    raw = _get(record, "pricing_policy_snapshot_json")
+    if not isinstance(raw, str) or len(raw.encode("utf-8")) > MAX_PRICING_POLICY_SNAPSHOT_BYTES:
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot",
+            "canonical pricing policy snapshot is required and limited to 64 KiB",
+            "pricing_policy_snapshot_json",
+        )
+    snapshot = parse_json_field(
+        record,
+        "pricing_policy_snapshot_json",
+        required=True,
+        container_types=(dict,),
+        non_empty=True,
+    )
+    canonical = json.dumps(
+        snapshot,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    if raw != canonical:
+        raise PolicyViolation(
+            "noncanonical_pricing_policy_snapshot",
+            "stored snapshot bytes must be the canonical sorted-key JSON",
+            "pricing_policy_snapshot_json",
+        )
+    expected_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if _get(record, "pricing_policy_snapshot_sha256") != expected_hash:
+        raise PolicyViolation(
+            "pricing_policy_snapshot_hash_mismatch",
+            "stored SHA-256 must match the canonical snapshot bytes",
+            "pricing_policy_snapshot_sha256",
+        )
+    if not isinstance(snapshot, Mapping):
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", "snapshot must be an object", "pricing_policy_snapshot_json"
+        )
+    required_top = {"currency", "panel", "trims", "approvedPolicy"}
+    allowed_top = required_top | {"fasteners", "labor"}
+    if set(snapshot) - allowed_top or not required_top <= set(snapshot):
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot",
+            "snapshot must use the closed price-list shape",
+            "pricing_policy_snapshot_json",
+        )
+    currency = snapshot.get("currency")
+    if currency != _get(record, "currency") or not (
+        isinstance(currency, str)
+        and len(currency) == 3
+        and currency.isascii()
+        and currency.isalpha()
+        and currency.isupper()
+    ):
+        raise PolicyViolation(
+            "pricing_policy_snapshot_currency_mismatch",
+            "snapshot currency must match the approved rule",
+            "pricing_policy_snapshot_json",
+        )
+    panel = _validate_pricing_rate_snapshot(snapshot.get("panel"), path="panel", extra_keys=frozenset({"unit"}))
+    if panel.get("unit") not in {"lf", "sqft"}:
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", "panel.unit must be lf or sqft", "pricing_policy_snapshot_json"
+        )
+    trims = snapshot.get("trims")
+    if not isinstance(trims, Mapping) or len(trims) > 128:
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", "trims must be a bounded object", "pricing_policy_snapshot_json"
+        )
+    for profile, value in trims.items():
+        if not _pricing_snapshot_identifier(profile):
+            raise PolicyViolation(
+                "invalid_pricing_policy_snapshot", "trim profile is invalid", "pricing_policy_snapshot_json"
+            )
+        trim = _validate_pricing_rate_snapshot(
+            value,
+            path=f"trims.{profile}",
+            extra_keys=frozenset({"unit"}),
+        )
+        if trim.get("unit") is not None and trim.get("unit") not in {"stick", "lf"}:
+            raise PolicyViolation(
+                "invalid_pricing_policy_snapshot",
+                f"trims.{profile}.unit is invalid",
+                "pricing_policy_snapshot_json",
+            )
+    fasteners = snapshot.get("fasteners")
+    if fasteners is not None:
+        if not isinstance(fasteners, Mapping) or set(fasteners) - {"clips", "clipScrews", "trimScrews"}:
+            raise PolicyViolation(
+                "invalid_pricing_policy_snapshot", "fasteners must use closed category keys", "pricing_policy_snapshot_json"
+            )
+        for key, value in fasteners.items():
+            rate = _validate_pricing_rate_snapshot(
+                value,
+                path=f"fasteners.{key}",
+                extra_keys=frozenset({"per"}),
+            )
+            if rate.get("per") is not None and not (
+                _pricing_snapshot_nonnegative_integer(rate.get("per")) and rate.get("per") > 0
+            ):
+                raise PolicyViolation(
+                    "invalid_pricing_policy_snapshot", f"fasteners.{key}.per is invalid", "pricing_policy_snapshot_json"
+                )
+    labor = snapshot.get("labor")
+    if labor is not None:
+        _validate_pricing_rate_snapshot(
+            labor,
+            path="labor",
+            cents_field="ratePerSquareCents",
+        )
+    policy = snapshot.get("approvedPolicy")
+    policy_keys = {
+        "schemaVersion",
+        "tenantId",
+        "policyId",
+        "revision",
+        "effectiveAt",
+        "expiresAt",
+        "pricing",
+        "freightCents",
+        "contingencyRateBps",
+        "minimumChargeCents",
+        "taxRateBps",
+    }
+    if not isinstance(policy, Mapping) or set(policy) != policy_keys:
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", "approvedPolicy must use the closed v1 shape", "pricing_policy_snapshot_json"
+        )
+    pricing = policy.get("pricing")
+    if not isinstance(pricing, Mapping) or set(pricing) != {"method", "rateBps"}:
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", "approvedPolicy.pricing is invalid", "pricing_policy_snapshot_json"
+        )
+    if pricing.get("method") not in {"markup", "gross_margin"} or not _pricing_snapshot_nonnegative_integer(
+        pricing.get("rateBps")
+    ):
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", "approvedPolicy pricing method/rate is invalid", "pricing_policy_snapshot_json"
+        )
+    if pricing.get("method") == "gross_margin" and pricing.get("rateBps") >= 10_000:
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", "gross margin must be below 10000 bps", "pricing_policy_snapshot_json"
+        )
+    if policy.get("schemaVersion") != "ironwrap.pricing-policy.v1" or not all(
+        _pricing_snapshot_nonnegative_integer(policy.get(field))
+        for field in ("freightCents", "contingencyRateBps", "minimumChargeCents", "taxRateBps")
+    ):
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", "approvedPolicy values are invalid", "pricing_policy_snapshot_json"
+        )
+    if not _pricing_snapshot_identifier(policy.get("tenantId")) or not _pricing_snapshot_identifier(
+        policy.get("policyId")
+    ) or not _safe_positive_int(policy.get("revision")):
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", "approvedPolicy identity is invalid", "pricing_policy_snapshot_json"
+        )
+    if policy.get("policyId") != _get(record, "pricing_policy_id") or policy.get("revision") != _get(
+        record, "pricing_policy_revision"
+    ):
+        raise PolicyViolation(
+            "pricing_policy_snapshot_identity_mismatch",
+            "snapshot policy ID and revision must match the approved rule",
+            "pricing_policy_snapshot_json",
+        )
+    effective_at = policy.get("effectiveAt")
+    expires_at = policy.get("expiresAt")
+    if not _safe_iso_timestamp(effective_at) or not _safe_iso_timestamp(expires_at):
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", "policy instants must be ISO timestamps", "pricing_policy_snapshot_json"
+        )
+    if str(effective_at) > str(expires_at):
+        raise PolicyViolation(
+            "invalid_pricing_policy_snapshot", "policy effectiveAt must not follow expiresAt", "pricing_policy_snapshot_json"
+        )
+    if str(effective_at)[:10] != str(_get(record, "effective_from"))[:10] or str(expires_at)[:10] != str(
+        _get(record, "effective_to")
+    )[:10]:
+        raise PolicyViolation(
+            "pricing_policy_snapshot_window_mismatch",
+            "snapshot instants must match the rule's inclusive UTC date window",
+            "pricing_policy_snapshot_json",
+        )
+
+
+def evaluate_price_rule(
+    record: Any, quantity: Any, *, effective_at: Any
+) -> dict[str, Any]:
+    """Execute one approved closed price rule with explicit time and Decimal inputs."""
+
+    if _get(record, "status") != "Approved":
+        raise PolicyViolation(
+            "unapproved_price_rule", "only an approved Price Book Rule may execute"
+        )
+    if _get(record, "rule_type") == "Pricing Policy":
+        raise PolicyViolation(
+            "non_executable_pricing_policy_anchor",
+            "a composite pricing policy anchor is evidence, not a unit-price rule",
+            "rule_type",
+        )
+    _validate_price_rule(record, {})
+    effective_date = _iso_date(effective_at, "effective_at", required=True)
+    start = _iso_date(_get(record, "effective_from"), "effective_from", required=True)
+    end = _iso_date(_get(record, "effective_to"), "effective_to", required=True)
+    if (
+        effective_date is None
+        or start is None
+        or end is None
+        or not start <= effective_date <= end
+    ):
+        raise PolicyViolation(
+            "price_rule_not_effective",
+            "Price Book Rule is not effective at the requested date",
+            "effective_at",
+        )
+    requested_quantity = _decimal(
+        {"quantity": quantity}, "quantity", required=True
+    )
+    if requested_quantity is None or requested_quantity < 0:
+        raise PolicyViolation(
+            "invalid_price_rule_quantity",
+            "quantity must be a finite nonnegative Decimal",
+            "quantity",
+        )
+    minimum_quantity = _decimal(record, "minimum_quantity", required=True)
+    unit_price = _decimal(record, "unit_price", required=True)
+    if minimum_quantity is None or unit_price is None:
+        raise PolicyViolation(
+            "invalid_price_rule", "minimum_quantity and unit_price are required"
+        )
+    billable_quantity = max(requested_quantity, minimum_quantity)
+    line_total = _money(billable_quantity * unit_price)
+    return {
+        "schema_version": PRICE_RULE_SCHEMA_VERSION,
+        "price_rule_id": str(_get(record, "price_rule_id")),
+        "effective_at": effective_date,
+        "currency": str(_get(record, "currency")),
+        "requested_quantity": format(requested_quantity, "f"),
+        "billable_quantity": format(billable_quantity, "f"),
+        "unit_price": format(unit_price, "f"),
+        "line_total": format(line_total, ".2f"),
+        "minimum_applied": requested_quantity < minimum_quantity,
+    }
+
+
 def _validate_price_rule(record: Any, context: Mapping[str, Any]) -> None:
     require_nonnegative(record, "unit_cost", "unit_price", "minimum_quantity")
-    start = _get(record, "effective_from")
-    end = _get(record, "effective_to")
-    if start and end and str(start) > str(end):
+    start = _iso_date(_get(record, "effective_from"), "effective_from")
+    end = _iso_date(_get(record, "effective_to"), "effective_to")
+    if start and end and start > end:
         raise PolicyViolation(
             "invalid_effective_window",
             "effective_from must be on or before effective_to",
         )
     if _get(record, "status") == "Approved":
+        is_policy_anchor = _get(record, "rule_type") == "Pricing Policy"
         require_fields(
             record,
             "rule_name",
             "rule_type",
-            "unit",
+            "currency",
             "source_ref",
             "effective_from",
+            "effective_to",
             "assumptions",
             "exclusions",
+            *(
+                (
+                    "pricing_policy_id",
+                    "pricing_policy_revision",
+                    "pricing_policy_snapshot_json",
+                    "pricing_policy_snapshot_sha256",
+                )
+                if is_policy_anchor
+                else ("unit", "unit_price", "minimum_quantity")
+            ),
         )
+        if _get(record, "rule_type") not in {
+            "Material",
+            "Labour",
+            "Service",
+            "Option",
+            "Waste",
+            "Discount",
+            "Pricing Policy",
+        }:
+            raise PolicyViolation(
+                "invalid_price_rule_type", "unsupported rule type", "rule_type"
+            )
+        _currency(record, required=True)
         require_approval(record, note="approval_note")
-        parse_json_field(
-            record, "rule_json", required=True, container_types=(dict,), non_empty=True
-        )
+        _validate_price_rule_contract(record)
+        if is_policy_anchor:
+            validate_pricing_policy_approval_evidence(record)
+            validate_pricing_policy_snapshot(record)
+    elif _get(record, "rule_type") == "Pricing Policy" and _get(record, "status") == "Retired":
+        validate_pricing_policy_approval_evidence(record)
     previous = context.get("_previous")
     if previous is None:
         return
@@ -4961,6 +7560,10 @@ def _validate_price_rule(record: Any, context: Mapping[str, Any]) -> None:
             "currency",
             "source_ref",
             "rule_json",
+            "pricing_policy_id",
+            "pricing_policy_revision",
+            "pricing_policy_snapshot_json",
+            "pricing_policy_snapshot_sha256",
             "effective_from",
             "effective_to",
             "assumptions",
@@ -5296,9 +7899,11 @@ VALIDATORS = {
     "insurance_supplement": _validate_insurance_supplement,
     "job_assignment": _validate_job_assignment,
     "job_compliance_record": _validate_compliance,
+    "job_cost_event": _validate_job_cost_event,
     "lead_envelope": _validate_lead_envelope,
     "material_lot": _validate_material_lot,
     "material_takeoff": _validate_takeoff,
+    "material_takeoff_policy": _validate_takeoff_policy,
     "measurement_report": _validate_measurement,
     "nonconformance": _validate_nonconformance,
     "option_package": _validate_option_package,
@@ -5310,6 +7915,7 @@ VALIDATORS = {
     "review_request": _validate_review_request,
     "roof_area": _validate_roof_area,
     "roof_job": _validate_roof_job,
+    "roofing_customer": _validate_roofing_customer,
     "safety_plan": _validate_safety_plan,
     "shop_order": _validate_shop_order,
     "scope_clause": _validate_scope_clause,
@@ -5340,7 +7946,40 @@ def validate_record(
         )
     require_fields(record, *IDENTITY_FIELDS[kind])
     enforce_immutable(record, previous, *IDENTITY_FIELDS[kind])
-    enforce_write_once(record, previous, *WRITE_ONCE_FIELDS.get(kind, ()))
+    write_once_fields = WRITE_ONCE_FIELDS.get(kind, ())
+    if context and context.get("quickbooks_final_invoice_bind"):
+        if kind == "integration_reconciliation":
+            write_once_fields = tuple(
+                field
+                for field in write_once_fields
+                if field not in {"local_doctype", "local_name"}
+            )
+    if context and context.get("quickbooks_final_invoice_provider_resolver"):
+        if kind == "integration_reconciliation":
+            write_once_fields = tuple(
+                field
+                for field in write_once_fields
+                if field
+                not in {
+                    "source_payload_hash",
+                    "local_payload_hash",
+                    "provider_readback_sha256",
+                    "provider_facts_sha256",
+                    "provider_read_at",
+                }
+            )
+        elif kind == "payment_milestone":
+            write_once_fields = tuple(
+                field
+                for field in write_once_fields
+                if field
+                not in {
+                    "provider_readback_sha256",
+                    "provider_facts_sha256",
+                    "provider_read_at",
+                }
+            )
+    enforce_write_once(record, previous, *write_once_fields)
     enforce_truthy_once(record, previous, *TRUTHY_ONCE_FIELDS.get(kind, ()))
     for field in JSON_FIELDS.get(kind, ()):
         parse_json_field(record, field)

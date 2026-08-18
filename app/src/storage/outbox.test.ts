@@ -71,7 +71,11 @@ describe("offline outbox", () => {
       deviceActionId: "stable-action",
       kind: "work_package_acknowledgement",
       endpoint: "/api/v1/jobs/job-1/work-package/acknowledgements",
-      payload: { work_package_id: "WP-1" },
+      payload: {
+        work_package_id: "WP-1",
+        work_package_version: 1,
+        release_attempt_id: "attempt-1",
+      },
     });
     await queueOutboxAction("stable-action", 2_000);
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
@@ -82,7 +86,11 @@ describe("offline outbox", () => {
       expect(headers.get("X-IronWrap-Device-Proof")).toBe("current-device-proof");
       expect(JSON.parse(String(init?.body))).toEqual({
         device_action_id: "stable-action",
-        payload: { work_package_id: "WP-1" },
+        payload: {
+          work_package_id: "WP-1",
+          work_package_version: 1,
+          release_attempt_id: "attempt-1",
+        },
       });
       return Response.json({
         device_action_id: "stable-action",
@@ -109,13 +117,115 @@ describe("offline outbox", () => {
     expect(JSON.stringify(saved)).not.toContain("current-device-proof");
   });
 
+  it("caches and replays a typed Shop Order acknowledgement without a Roof Job endpoint", async () => {
+    const payload = {
+      work_package_id: "WP-SHOP-1",
+      work_package_version: 4,
+      release_attempt_id: "attempt-shop-1",
+      work_object_type: "Shop Order",
+      work_object_id: "SHOP-001",
+      physical_context_type: "Shop Floor",
+      physical_context_id: "SHOP-FLOOR-1",
+    };
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "typed-shop-ack",
+      kind: "work_package_acknowledgement",
+      endpoint:
+        "/api/v1/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1/work-package/acknowledgements",
+      payload,
+    });
+    await queueOutboxAction("typed-shop-ack", 2_000);
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      expect(String(input)).toContain("/work-objects/Shop%20Order/SHOP-001/");
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        device_action_id: "typed-shop-ack",
+        payload,
+      });
+      return Response.json({
+        device_action_id: "typed-shop-ack",
+        status: "verified",
+        server_ref: "EVENT-SHOP-ACK",
+      });
+    });
+    await expect(
+      flushOutbox({
+        ...principal,
+        fetcher,
+        csrfToken: "current-csrf",
+        now: () => 3_000,
+      }),
+    ).resolves.toMatchObject({ processed: 1, verified: 1 });
+    expect(await getOutboxAction("typed-shop-ack")).toMatchObject({
+      state: "verified",
+      verification: { serverRef: "EVENT-SHOP-ACK" },
+    });
+  });
+
+  it("replays a typed evidence correction through the universal check-in endpoint", async () => {
+    const blob = new Blob(["replacement-photo"], { type: "image/jpeg" });
+    await saveOutboxAction({
+      ...principal,
+      deviceActionId: "typed-shop-correction",
+      kind: "field_checkin",
+      endpoint:
+        "/api/v1/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1/check-ins",
+      payload: {
+        assignment_id: "ASSIGN-SHOP-1",
+        proof_slot: "Production",
+        work_package_id: "WP-SHOP-1",
+        work_package_version: 4,
+        work_package_release_attempt_id: "attempt-shop-1",
+        evidence_slot_id: "step:1",
+        evidence_requirement: "Anchor inspection photo",
+        evidence_source: "field-companion",
+        evidence_correction_of: "EVENT-SHOP-OLD",
+        evidence_item_correction_of: "EVIDENCE-SHOP-OLD",
+        correction_reason: "The first photo missed the guard latch.",
+      },
+      attachments: [{ blob, fileName: "replacement.jpg" }],
+    });
+    await queueOutboxAction("typed-shop-correction", 2_000);
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      expect(String(input)).toContain("/work-objects/Shop%20Order/SHOP-001/");
+      const form = init?.body as FormData;
+      const metadata = JSON.parse(String(form.get("metadata"))) as {
+        payload: Record<string, unknown>;
+      };
+      expect(metadata.payload.evidence_correction_of).toBe("EVENT-SHOP-OLD");
+      expect(metadata.payload.evidence_item_correction_of).toBe("EVIDENCE-SHOP-OLD");
+      expect(form.getAll("attachments")).toHaveLength(1);
+      return Response.json({
+        device_action_id: "typed-shop-correction",
+        status: "verified",
+        server_ref: "FIELD-EVENT-SHOP-CORRECTION",
+      });
+    });
+    await expect(
+      flushOutbox({
+        ...principal,
+        fetcher,
+        csrfToken: "current-csrf",
+        now: () => 3_000,
+      }),
+    ).resolves.toMatchObject({ processed: 1, verified: 1 });
+    expect(await getOutboxAction("typed-shop-correction")).toMatchObject({
+      state: "verified",
+      verification: { serverRef: "FIELD-EVENT-SHOP-CORRECTION" },
+    });
+  });
+
   it("does not upload until a current CSRF token is available", async () => {
     await saveOutboxAction({
       ...principal,
       deviceActionId: "waiting-action",
       kind: "work_package_stop",
       endpoint: "/api/v1/jobs/job-1/work-package/stop-work",
-      payload: { work_package_id: "WP-1", blocker_reason: "Flashing missing" },
+      payload: {
+        work_package_id: "WP-1",
+        work_package_version: 1,
+        blocker_reason: "Flashing missing",
+      },
     });
     await queueOutboxAction("waiting-action", 2_000);
     const fetcher = vi.fn<typeof fetch>();
@@ -137,7 +247,11 @@ describe("offline outbox", () => {
       deviceActionId: "revoked-device-action",
       kind: "work_package_stop",
       endpoint: "/api/v1/jobs/job-1/work-package/stop-work",
-      payload: { work_package_id: "WP-1", blocker_reason: "Weather delay" },
+      payload: {
+        work_package_id: "WP-1",
+        work_package_version: 1,
+        blocker_reason: "Weather delay",
+      },
     });
     await queueOutboxAction("revoked-device-action", 2_000);
     const fetcher = vi
@@ -314,7 +428,11 @@ describe("offline outbox", () => {
       deviceActionId: "retry-action",
       kind: "work_package_stop",
       endpoint: "/api/v1/jobs/job-1/work-package/stop-work",
-      payload: { work_package_id: "WP-1", blocker_reason: "Weather delay" },
+      payload: {
+        work_package_id: "WP-1",
+        work_package_version: 1,
+        blocker_reason: "Weather delay",
+      },
     });
     await queueOutboxAction("retry-action", 2_000);
     const fetcher = vi
@@ -439,7 +557,7 @@ describe("offline outbox", () => {
       deviceActionId: "lease-renewal-action",
       kind: "work_package_stop",
       endpoint: "/api/v1/jobs/JOB-A/work-package/stop-work",
-      payload: { work_package_id: "WP-1", blocker_reason: "Wind delay" },
+      payload: { work_package_id: "WP-1", work_package_version: 1, blocker_reason: "Wind delay" },
     });
     await queueOutboxAction("lease-renewal-action", 1_000);
     const claim = await claimNextQueuedAction(principal, 1_000);

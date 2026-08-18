@@ -54,6 +54,24 @@ const ownerSession = {
   stale_fields: [],
 } satisfies AuthenticatedSession;
 
+const productionSession = {
+  ...ownerSession,
+  user: {
+    ...ownerSession.user,
+    id: "appu_production",
+    email: "production@example.invalid",
+    display_name: "Production",
+    role: "production",
+  },
+  permissions: ["jobs:read:any"],
+  allowed_actions: ["job.read", "production.read"],
+} satisfies AuthenticatedSession;
+
+const salesSession = {
+  ...ownerSession,
+  user: { ...ownerSession.user, role: "sales" },
+} satisfies AuthenticatedSession;
+
 const schedulingGateNames = [
   "Deposit",
   "Materials",
@@ -136,11 +154,11 @@ function model(overrides: Partial<ProductionRunwayResponse> = {}): ProductionRun
   };
 }
 
-function renderRunway() {
+function renderRunway(session: AuthenticatedSession = ownerSession) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <SessionProvider session={ownerSession}>
+      <SessionProvider session={session}>
         <ProductionRunwayPage />
       </SessionProvider>
     </QueryClientProvider>,
@@ -151,6 +169,30 @@ describe("ProductionRunwayPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(loadProductionRunway).mockResolvedValue(model());
+  });
+
+  it("admits the dedicated production role and rejects other least-privilege roles", async () => {
+    const productionView = renderRunway(productionSession);
+
+    expect(await screen.findByRole("heading", { name: "Production runway" })).toBeVisible();
+    expect(loadProductionRunway).toHaveBeenCalledOnce();
+    expect(screen.getByRole("link", { name: "Open IW-1001" })).toHaveAttribute(
+      "href",
+      "/jobs/JOB-A",
+    );
+    expect(
+      screen.queryByRole("link", { name: "Prepare schedule request for IW-1004" }),
+    ).not.toBeInTheDocument();
+
+    productionView.unmount();
+    vi.clearAllMocks();
+    renderRunway(salesSession);
+
+    expect(
+      screen.getByRole("heading", { name: "This work belongs to another role" }),
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: "Return to Now" })).toHaveAttribute("href", "/now");
+    expect(loadProductionRunway).not.toHaveBeenCalled();
   });
 
   it("keeps the runway read-only and links only eligible jobs to a schedule request", async () => {

@@ -36,6 +36,14 @@ export const issueDevicePairingResponseSchema = z.object({
   }),
 });
 
+export const issueHermesDesktopPairingResponseSchema = z.object({
+  pairing_url: z.string().url(),
+  expires_at: z.string().min(1),
+  api_audience: z.string().url(),
+  bound_issuer: z.string().url(),
+  bootstrap_prompt: z.string().min(1).max(8_000),
+});
+
 export const revokeDevicePairingResponseSchema = z.object({
   ok: z.literal(true),
   device_id: z.string().min(1),
@@ -45,3 +53,4 @@ export const revokeDevicePairingResponseSchema = z.object({
 export type FieldUser = z.infer<typeof fieldUserSchema>;
 export type DevicePairing = z.infer<typeof devicePairingSchema>;
 export type IssuedDevicePairing = z.infer<typeof issueDevicePairingResponseSchema>;
+export type IssuedHermesDesktopPairing = z.infer<typeof issueHermesDesktopPairingResponseSchema>;

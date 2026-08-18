@@ -27,16 +27,7 @@ function env(overrides: Partial<PublicEstimatorEnv> = {}) {
     PUBLIC_ESTIMATE_RATE_LIMIT_WINDOW_SECONDS: "900",
     PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX: "2",
     PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX: "2",
-    PUBLIC_ESTIMATE_RANGE_RULES_JSON: JSON.stringify([
-      {
-        rule_id: "ironwrap-metal-ab-v1",
-        brand: "ironwrap",
-        service: "metal_roofing",
-        province: "AB",
-        min_cad: 18000,
-        max_cad: 32000,
-      },
-    ]),
+    PUBLIC_ESTIMATE_RANGE_RULES_JSON: "[]",
     ERPNEXT_ENABLED: "false",
     DB: {
       prepare(sql: string) {
@@ -117,13 +108,13 @@ test("GET config is disabled by default through the Worker route and permits sam
     enabled: false,
     turnstile_site_key: null,
     range_available: false,
-    disclaimer: "This is a non-binding preliminary range. A site review and approved quote are required before final pricing, scope, scheduling, materials, or payment.",
+    disclaimer: "This request does not produce an online price. An estimator must verify measurements, access, materials, and approved pricing before any quote, scope, schedule, material, or payment commitment.",
     review_required: true,
   });
   assert.equal(response.headers.get("access-control-allow-origin"), null);
 });
 
-test("GET config exposes range availability only for the selected allowed brand", async () => {
+test("GET config never advertises an online range", async () => {
   const { env: configured } = env();
   const ironwrap = await handlePublicInstantEstimate(
     new Request("https://bus.example/public/instant-estimate/config?brand=ironwrap"),
@@ -137,7 +128,7 @@ test("GET config exposes range availability only for the selected allowed brand"
     new Request("https://bus.example/public/instant-estimate/config?brand=unknown"),
     configured,
   );
-  assert.equal((await ironwrap.json() as { range_available: boolean }).range_available, true);
+  assert.equal((await ironwrap.json() as { range_available: boolean }).range_available, false);
   assert.equal((await iroof.json() as { range_available: boolean }).range_available, false);
   assert.equal((await unknown.json() as { range_available: boolean }).range_available, false);
 });
@@ -175,7 +166,7 @@ test("public instant estimate rejects invalid input and failed Turnstile before 
   assert.equal(ingested, false);
 });
 
-test("a matched server rule produces a safe non-binding range and persists consent without the Turnstile token", async () => {
+test("public intake persists consent without a price or the Turnstile token", async () => {
   const { env: configured } = env();
   let captured = "";
   const response = await handlePublicInstantEstimate(request(), configured, {
@@ -191,12 +182,12 @@ test("a matched server rule produces a safe non-binding range and persists conse
   assert.deepEqual(body, {
     accepted: true,
     envelope_id: ENVELOPE,
-    range: { min_cad: 18000, max_cad: 32000, currency: "CAD" },
-    disclaimer: "This is a non-binding preliminary range. A site review and approved quote are required before final pricing, scope, scheduling, materials, or payment.",
+    range: null,
+    disclaimer: "This request does not produce an online price. An estimator must verify measurements, access, materials, and approved pricing before any quote, scope, schedule, material, or payment commitment.",
     review_required: true,
   });
   assert.equal(JSON.stringify(body).includes("Ava Customer"), false);
-  assert.equal(JSON.stringify(body).includes("rule_id"), false);
+  assert.equal(JSON.stringify(body).includes("min_cad"), false);
   const raw = JSON.parse(captured) as Record<string, unknown>;
   assert.equal(raw.source_detail, "ironwrap_public_estimator");
   assert.equal(captured.includes("turnstile-token-for-a-real-browser-session"), false);
@@ -208,10 +199,16 @@ test("a matched server rule produces a safe non-binding range and persists conse
     origin: ORIGIN,
   });
   assert.equal(publicEstimator.jurisdiction, "Alberta, Canada");
-  assert.equal((publicEstimator.range as Record<string, unknown>).rule_id, "ironwrap-metal-ab-v1");
+  assert.equal(publicEstimator.version, 2);
+  assert.equal(publicEstimator.pricing_state, "measurement_required");
+  assert.equal(publicEstimator.range, null);
+  assert.equal(raw.instant_estimate, true);
+  assert.equal(raw.estimate_type, "review_intake");
+  assert.equal(Object.hasOwn(raw, "range_low"), false);
+  assert.equal(Object.hasOwn(raw, "range_high"), false);
 });
 
-test("identical retries skip single-use Turnstile, preserve the original range, and replay the durable ingest", async () => {
+test("identical retries skip single-use Turnstile and replay the durable review intake", async () => {
   const { env: configured, submissions } = env();
   let captured = "";
   const first = await handlePublicInstantEstimate(request(), configured, {
@@ -225,20 +222,49 @@ test("identical retries skip single-use Turnstile, preserve the original range, 
   submissions.set(`estimate:project:public:${CLIENT_ONE}`, { payload_json: captured });
   const replay = await handlePublicInstantEstimate(request(), configured, {
     fetch: async () => { throw new Error("a replay must not re-use Turnstile"); },
-    ingest: async () => Response.json({ ok: true, envelope_id: ENVELOPE, idempotent_replay: true }),
+    now: () => new Date("2026-07-19T00:00:00.000Z"),
+    ingest: async (_env, raw) => {
+      assert.equal(raw, captured);
+      return Response.json({ ok: true, envelope_id: ENVELOPE, idempotent_replay: true });
+    },
   });
   assert.equal(replay.status, 200);
   assert.deepEqual(await replay.json(), {
     accepted: true,
     envelope_id: ENVELOPE,
-    range: { min_cad: 18000, max_cad: 32000, currency: "CAD" },
-    disclaimer: "This is a non-binding preliminary range. A site review and approved quote are required before final pricing, scope, scheduling, materials, or payment.",
+    range: null,
+    disclaimer: "This request does not produce an online price. An estimator must verify measurements, access, materials, and approved pricing before any quote, scope, schedule, material, or payment commitment.",
     review_required: true,
     idempotent_replay: true,
   });
 });
 
-test("a configured secondary IP guard blocks excess verified submissions and missing rules fail closed", async () => {
+test("a legacy stored payload cannot be replayed as a v2 public review intake", async () => {
+  const { env: configured, submissions } = env();
+  const key = `estimate:project:public:${CLIENT_ONE}`;
+  const legacyRow = {
+    payload_json: JSON.stringify({
+      public_estimator: {
+        version: 1,
+        submission_fingerprint: "a".repeat(64),
+      },
+    }),
+  };
+  submissions.set(key, legacyRow);
+
+  let ingested = false;
+  const response = await handlePublicInstantEstimate(request(), configured, {
+    fetch: async () => { throw new Error("Turnstile must not run for an idempotency conflict"); },
+    ingest: async () => { ingested = true; return Response.json({ ok: true, envelope_id: ENVELOPE }); },
+  });
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error: "idempotency_conflict" });
+  assert.equal(ingested, false);
+  assert.strictEqual(submissions.get(key), legacyRow);
+});
+
+test("a configured secondary IP guard blocks excess verified submissions and missing range-disable config fails closed", async () => {
   const { env: configured } = env({ PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX: "1" });
   const dependencies = {
     fetch: async () => Response.json({ success: true }),
@@ -256,7 +282,7 @@ test("a configured secondary IP guard blocks excess verified submissions and mis
   assert.deepEqual(await unavailable.json(), { error: "public_estimate_not_configured" });
 });
 
-test("only configured tenant brands can submit or appear in server range rules", async () => {
+test("only configured tenant brands can submit and legacy range rules fail closed", async () => {
   const unknownBrand = { ...submission(), brand: "unapproved-brand" };
   const { env: configured } = env();
   const rejected = await handlePublicInstantEstimate(request(unknownBrand), configured, {
@@ -294,7 +320,7 @@ test("public intake accepts only the tenant service and Canadian province catalo
   }
 });
 
-test("an intentionally empty range catalogue remains review-only and D1 failures are safely unavailable", async () => {
+test("review-only intake remains price-free and D1 failures are safely unavailable", async () => {
   const { env: noRules } = env({ PUBLIC_ESTIMATE_RANGE_RULES_JSON: "[]" });
   const reviewOnly = await handlePublicInstantEstimate(request(), noRules, {
     fetch: successfulTurnstile(),
@@ -305,7 +331,7 @@ test("an intentionally empty range catalogue remains review-only and D1 failures
     accepted: true,
     envelope_id: ENVELOPE,
     range: null,
-    disclaimer: "This is a non-binding preliminary range. A site review and approved quote are required before final pricing, scope, scheduling, materials, or payment.",
+    disclaimer: "This request does not produce an online price. An estimator must verify measurements, access, materials, and approved pricing before any quote, scope, schedule, material, or payment commitment.",
     review_required: true,
   });
 

@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import { createHmac, verify as verifySignature } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import {
+  GOVERNED_TAKEOFF_CALCULATION_VERSION,
+  takeoffFromGeometryWithPolicy,
+} from "../../../workers-bus/src/takeoff.ts";
 import {
   approvedArgs,
   digest,
@@ -13,6 +18,31 @@ import {
   verifyApprovalReceipt,
   verifyDryRunReceipt,
 } from "./approval-contract.mjs";
+import {
+  buildCommunicationEventDraft,
+  buildCommunicationEventDraftFromArgs,
+  checkConsent,
+  checkQuietHours,
+} from "./communication-draft.mjs";
+import {
+  assertJobCostEventSources,
+  buildJobCostEventCandidate,
+  classifyJobCostEventReplay,
+  JobCostEventInputSchema,
+} from "./job-cost-event.mjs";
+
+export {
+  buildCommunicationEventDraft,
+  buildCommunicationEventDraftFromArgs,
+  checkConsent,
+  checkQuietHours,
+};
+export {
+  assertJobCostEventSources,
+  buildJobCostEventCandidate,
+  classifyJobCostEventReplay,
+  JobCostEventInputSchema,
+};
 
 const DEFAULT_ROLE_POLICY_PATH = fileURLToPath(
   new URL("../../../hermes/agents/roles.json", import.meta.url),
@@ -47,6 +77,7 @@ const REQUEST_TO_DRY_RUN = Object.freeze({
   request_create_safety_plan: "dry_run_safety_plan",
   request_record_safety_acknowledgement: "dry_run_safety_acknowledgement",
   request_record_job_compliance: "dry_run_job_compliance_record",
+  request_authority_record: "dry_run_authority_record",
   request_record_customer_decision: "dry_run_customer_decision",
   request_record_communication_consent: "dry_run_communication_consent",
   request_resolve_reconciliation: "dry_run_reconciliation_resolution",
@@ -57,6 +88,7 @@ const REQUEST_TO_DRY_RUN = Object.freeze({
   request_record_communication_event: "dry_run_communication_event",
   request_mark_lead_triaged: "dry_run_mark_lead_triaged",
   request_add_market_watch_item: "dry_run_market_watch_item",
+  request_complete_work_package: "dry_run_complete_work_package",
 });
 
 const FIELD_RECORD_TOOL_REFERENCES = Object.freeze({
@@ -65,6 +97,7 @@ const FIELD_RECORD_TOOL_REFERENCES = Object.freeze({
   get_job_assignment: ["Job Assignment", "assignment_id"],
   get_safety_plan: ["Safety Plan", "safety_plan_id"],
   get_job_compliance_record: ["Job Compliance Record", "compliance_record_id"],
+  get_authority_record: ["Authority Record", "authority_record_id"],
   get_visual_property_model: ["Visual Property Model", "visual_model_id"],
   get_roof_area: ["Roof Area", "roof_area_id"],
 });
@@ -135,6 +168,25 @@ const MEASUREMENT_REPORT_FIELDS = [
   "review_status",
   "approved_by",
   "approved_at",
+  "roof_graph_revision",
+  "modified",
+];
+
+const MATERIAL_TAKEOFF_POLICY_FIELDS = [
+  "name",
+  "policy_id",
+  "tenant",
+  "brand",
+  "service_type",
+  "material_system",
+  "policy_version",
+  "status",
+  "effective_from",
+  "effective_to",
+  "source_evidence",
+  "approved_by",
+  "approved_at",
+  "approval_note",
   "modified",
 ];
 
@@ -148,6 +200,21 @@ const MATERIAL_TAKEOFF_FIELDS = [
   "approved_by",
   "approved_at",
   "approval_note",
+  "tenant",
+  "material_system",
+  "calculation_schema",
+  "calculation_version",
+  "geometry_revision",
+  "source_raw_key",
+  "source_raw_sha256",
+  "takeoff_policy",
+  "policy_version",
+  "policy_source_evidence",
+  "policy_source_sha256",
+  "policy_digest",
+  "options_digest",
+  "calculation_digest",
+  "stock_mode",
   "modified",
 ];
 
@@ -192,6 +259,13 @@ const EVIDENCE_ITEM_FIELDS = [
   "name",
   "evidence_id",
   "roof_job",
+  "work_package",
+  "work_package_version",
+  "work_package_release_attempt_id",
+  "evidence_slot_id",
+  "evidence_requirement",
+  "evidence_source",
+  "evidence_device_id",
   "evidence_type",
   "source_uri",
   "r2_key",
@@ -203,6 +277,82 @@ const EVIDENCE_ITEM_FIELDS = [
   "checksum_algorithm",
   "verified_at",
   "verification_source",
+  "evidence_freshness",
+  "evidence_conflict_state",
+  "evidence_verification",
+  "evidence_disposition",
+  "correction_of",
+  "correction_reason",
+  "modified",
+];
+
+const WORK_PACKAGE_FIELDS = [
+  "name",
+  "work_package_id",
+  "roof_job",
+  "job_assignment",
+  "work_object_type",
+  "work_object_id",
+  "physical_context_type",
+  "physical_context_id",
+  "version",
+  "release_attempt_id",
+  "status",
+  "title",
+  "objective",
+  "boundaries",
+  "prerequisites",
+  "expected_result",
+  "stop_conditions",
+  "make_safe_procedure",
+  "issued_at",
+  "expires_at",
+  "released_at",
+  "completed_at",
+  "assigned_workers",
+  "supersedes",
+  "correction_reason",
+  "modified",
+];
+
+const WORK_PACKAGE_WORKER_FIELDS = [
+  "sequence",
+  "worker_user",
+  "worker_role",
+  "required",
+];
+
+const WORK_PACKAGE_EVENT_FIELDS = [
+  "name",
+  "work_package_event_id",
+  "event_type",
+  "work_package",
+  "roof_job",
+  "job_assignment",
+  "work_object_type",
+  "work_object_id",
+  "physical_context_type",
+  "physical_context_id",
+  "work_package_version",
+  "release_attempt_id",
+  "actor_user",
+  "actor_role",
+  "device_action_id",
+  "occurred_at",
+  "evidence_item",
+  "evidence_slot_id",
+  "evidence_requirement",
+  "evidence_source",
+  "evidence_device_id",
+  "evidence_captured_at",
+  "evidence_freshness",
+  "evidence_conflict_state",
+  "evidence_correction_of",
+  "evidence_item_correction_of",
+  "evidence_review_of",
+  "evidence_verification",
+  "evidence_disposition",
+  "correction_reason",
   "modified",
 ];
 
@@ -238,6 +388,39 @@ const PAYMENT_MILESTONE_FIELDS = [
   "qb_entity_type",
   "qb_entity_id",
   "event_ts",
+  "modified",
+];
+
+const JOB_COST_EVENT_FIELDS = [
+  "name",
+  "job_cost_event_id",
+  "tenant",
+  "roof_job",
+  "event_kind",
+  "category",
+  "quantity",
+  "unit",
+  "amount_cents",
+  "amount_basis",
+  "currency",
+  "occurred_at",
+  "source_doctype",
+  "source_name",
+  "source_digest",
+  "source_evidence",
+  "accounting_state",
+  "accounting_system",
+  "accounting_entity_type",
+  "accounting_entity_id",
+  "accounting_digest",
+  "accounting_posted_at",
+  "reconciliation",
+  "reversal_of",
+  "reversal_reason",
+  "actor_type",
+  "authority_ref",
+  "recorded_at",
+  "approval_reference",
   "modified",
 ];
 
@@ -648,6 +831,7 @@ const JOB_COMPLIANCE_RECORD_FIELDS = [
   "record_type",
   "authority_name",
   "external_reference",
+  "authority_record",
   "status",
   "required_before_gate",
   "applied_at",
@@ -663,6 +847,91 @@ const JOB_COMPLIANCE_RECORD_FIELDS = [
   "supersedes",
   "modified",
 ];
+
+const AUTHORITY_RECORD_FIELDS = [
+  "name",
+  "authority_record_id",
+  "tenant",
+  "subject_type",
+  "subject_role",
+  "person_user",
+  "organization",
+  "authority_kind",
+  "authority_scope",
+  "scope_type",
+  "scope_ref",
+  "roof_job",
+  "scope_json",
+  "issuer_name",
+  "issuer_jurisdiction",
+  "issuer_reference",
+  "source_version",
+  "evidence_refs_json",
+  "evidence_sha256",
+  "issuer_readback_json",
+  "effective_from",
+  "expires_at",
+  "version",
+  "status",
+  "state_digest_sha256",
+  "verification_method",
+  "verified_at",
+  "verification_reference",
+  "verified_by",
+  "revoked_at",
+  "revocation_reference",
+  "revoked_by",
+  "supersedes",
+  "correction_reason",
+  "exception_status",
+  "exception_reason",
+  "modified",
+];
+
+const AUTHORITY_MATERIAL_DIGEST_FIELDS = [
+  "authority_record_id",
+  "tenant",
+  "subject_type",
+  "subject_role",
+  "person_user",
+  "organization",
+  "authority_kind",
+  "authority_scope",
+  "scope_type",
+  "scope_ref",
+  "roof_job",
+  "scope_json",
+  "issuer_name",
+  "issuer_jurisdiction",
+  "issuer_reference",
+  "source_version",
+  "evidence_refs_json",
+  "evidence_sha256",
+  "effective_from",
+  "expires_at",
+  "version",
+  "status",
+  "verification_method",
+  "verified_at",
+  "verification_reference",
+  "verified_by",
+  "revoked_at",
+  "revocation_reference",
+  "revoked_by",
+  "supersedes",
+  "correction_reason",
+  "exception_status",
+  "exception_reason",
+];
+const EXTERNAL_AUTHORITY_KINDS = new Set([
+  "Trade Licence",
+  "WCB Clearance",
+  "Insurance Certificate",
+  "Permit",
+  "Inspection",
+  "Manufacturer Certification",
+  "Manufacturer Bulletin",
+]);
 
 const COMMUNICATION_CONSENT_FIELDS = [
   "name",
@@ -776,6 +1045,10 @@ const TENANT_EXPORT_RUN_FIELDS = [
 
 export function configFromEnv(env = process.env) {
   const baseUrl = normalizeFrappeBaseUrl(env.ERPNEXT_BASE_URL, env.ERPNEXT_ALLOW_INSECURE_LOCAL === "true");
+  const effectRuntimeUrl = env.IRONWRAP_EFFECT_RUNTIME_URL
+    ? normalizeEffectRuntimeBaseUrl(env.IRONWRAP_EFFECT_RUNTIME_URL, env.ERPNEXT_ALLOW_INSECURE_LOCAL === "true")
+    : null;
+  const effectRuntimeToken = env.IRONWRAP_EFFECT_RUNTIME_TOKEN;
   const allowInsecureLocal = env.ERPNEXT_ALLOW_INSECURE_LOCAL === "true";
   const apiKey = env.ERPNEXT_API_KEY;
   const apiSecret = env.ERPNEXT_API_SECRET;
@@ -784,11 +1057,15 @@ export function configFromEnv(env = process.env) {
   const agentRole = env.HERMES_AGENT_ROLE;
   const actorUser = env.HERMES_ACTOR_USER;
   const approverId = env.HERMES_APPROVER_ID;
+  const tenantId = env.ERPNEXT_TENANT_ID;
   const runtimeRole = rolePolicy.roles?.[agentRole];
   if (!apiKey) throw new Error("ERPNEXT_API_KEY is required");
   if (!apiSecret) throw new Error("ERPNEXT_API_SECRET is required");
   if (!runtimeRole) throw new Error("HERMES_AGENT_ROLE must name a role in roles.json");
   if (!actorUser) throw new Error("HERMES_ACTOR_USER is required");
+  if (!tenantId || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(tenantId)) {
+    throw new Error("ERPNEXT_TENANT_ID is required and must be a stable tenant id");
+  }
   if (writeEnabled && (!env.HERMES_DRY_RUN_SIGNING_KEY || env.HERMES_DRY_RUN_SIGNING_KEY.length < 32)) {
     throw new Error("HERMES_DRY_RUN_SIGNING_KEY must be at least 32 characters when writes are enabled");
   }
@@ -801,7 +1078,17 @@ export function configFromEnv(env = process.env) {
   if (writeEnabled && !approverId) {
     throw new Error("HERMES_APPROVER_ID is required when writes are enabled");
   }
+  if (writeEnabled && (!effectRuntimeUrl || !effectRuntimeToken)) {
+    throw new Error("IRONWRAP_EFFECT_RUNTIME_URL and IRONWRAP_EFFECT_RUNTIME_TOKEN are required when writes are enabled");
+  }
+  if (writeEnabled && env.IRONWRAP_EFFECT_RUNTIME_ENABLED === "false") {
+    throw new Error("IRONWRAP_EFFECT_RUNTIME_ENABLED cannot disable the effect runtime when writes are enabled");
+  }
   const requestTimeoutMs = parseRequestTimeout(env.ERPNEXT_REQUEST_TIMEOUT_MS);
+  const authorityBusBaseUrl = env.IRONWRAP_AUTHORITY_BUS_URL
+    ? normalizeAuthorityBusBaseUrl(env.IRONWRAP_AUTHORITY_BUS_URL, allowInsecureLocal)
+    : undefined;
+  const authorityIssuerPublicKeys = parseAuthorityIssuerPublicKeys(env.AUTHORITY_ISSUER_PUBLIC_KEYS_JSON);
   return {
     baseUrl,
     allowInsecureLocal,
@@ -813,10 +1100,56 @@ export function configFromEnv(env = process.env) {
     agentRoleTitle: runtimeRole.title,
     actorUser,
     approverId,
+    tenantId,
+    effectRuntimeUrl,
+    effectRuntimeToken,
+    // A writable MCP must have a configured ledger boundary. The explicit flag is
+    // retained for read-only/preview hosts, while write-enabled hosts are enabled
+    // by configuration and cannot fall back to a direct provider mutation.
+    effectRuntimeEnabled: writeEnabled && !!effectRuntimeUrl && !!effectRuntimeToken,
     allowedTools: roleTools(runtimeRole),
     dryRunSigningKey: env.HERMES_DRY_RUN_SIGNING_KEY,
     approvalPublicKey,
+    authorityBusBaseUrl,
+    authorityBusHmacKey: env.IRONWRAP_AUTHORITY_EXECUTOR_HMAC_KEY,
+    authorityExecutorUserId: env.IRONWRAP_AUTHORITY_EXECUTOR_USER_ID,
+    authorityFrappeActorUserId: env.IRONWRAP_AUTHORITY_FRAPPE_ACTOR_USER_ID ?? actorUser,
+    authorityBusinessRole: env.IRONWRAP_AUTHORITY_BUSINESS_ROLE,
+    authorityIssuerPublicKeys,
   };
+}
+
+function parseAuthorityIssuerPublicKeys(raw) {
+  if (raw === undefined || raw === "") return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("AUTHORITY_ISSUER_PUBLIC_KEYS_JSON must be valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("AUTHORITY_ISSUER_PUBLIC_KEYS_JSON must be an object");
+  }
+  return Object.fromEntries(Object.entries(parsed).filter(([key, value]) =>
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{2,139}$/.test(key) && typeof value === "string" && value.trim(),
+  ));
+}
+
+function normalizeAuthorityBusBaseUrl(raw, allowInsecureLocal = false) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("IRONWRAP_AUTHORITY_BUS_URL must be an absolute URL");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error("IRONWRAP_AUTHORITY_BUS_URL must not contain credentials, query, or fragment");
+  }
+  const local = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(allowInsecureLocal && local && url.protocol === "http:")) {
+    throw new Error("IRONWRAP_AUTHORITY_BUS_URL must use HTTPS (HTTP is allowed only for explicit local development)");
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
 }
 
 export function loadRolePolicy(policyPath = DEFAULT_ROLE_POLICY_PATH) {
@@ -841,6 +1174,13 @@ function roleTools(role) {
 }
 
 export async function erpRequest(config, method, path, body) {
+  if (method !== "GET" && config.__externalEffectContext && config.effectRuntimeEnabled) {
+    return await erpRequestThroughEffectRuntime(config, method, path, body, config.__externalEffectContext);
+  }
+  return await erpRequestDirect(config, method, path, body);
+}
+
+async function erpRequestDirect(config, method, path, body) {
   const timeoutMs = config.requestTimeoutMs ?? 10_000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -875,6 +1215,159 @@ export async function erpRequest(config, method, path, body) {
   }
 }
 
+async function erpRequestThroughEffectRuntime(config, method, path, body, context) {
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const deadlineAt = new Date(now.getTime() + 5 * 60_000).toISOString();
+  const request = { method, path, body: body ?? null };
+  const action = `mcp.${context.toolName}`;
+  const idempotencyKey = `mcp:${context.runId}:${digest(request)}`;
+  const target = context.target;
+  const envelope = {
+    effect: {
+      tenantId: config.tenantId,
+      actor: { type: "agent", id: config.actorUser },
+      taskId: context.runId,
+      authority: {
+        permitRef: `mcp:approval:${context.runId}`,
+        policyRef: action,
+        policyVersion: "v1",
+      },
+      aggregate: { type: target.doctype, id: target.name, version: 0 },
+      intentId: context.runId,
+      action,
+      request,
+      provider: "frappe",
+      idempotencyKey,
+      deadlineAt,
+      expectedReadback: expectedReadbackForEffect(path, body, target),
+      retryLimit: 0,
+      compensationPlan: {},
+      correlationId: context.runId,
+      now: nowIso,
+    },
+    authority: {
+      permitRef: `mcp:approval:${context.runId}`,
+      policyRef: action,
+      policyVersion: "v1",
+      tenantId: config.tenantId,
+      actorType: "agent",
+      actorId: config.actorUser,
+      expiresAt: deadlineAt,
+      allowedActions: [action],
+      maxAttempts: 1,
+    },
+  };
+  const claimed = await effectRuntimeRequest(config, "/admin/effects/claim", envelope);
+  const attemptId = claimed?.attempt?.attempt_id;
+  const effectId = claimed?.effect?.effect_id;
+  if (typeof attemptId !== "string" || typeof effectId !== "string") throw new Error("effect_claim_invalid");
+  let providerResponse;
+  let providerExternalId = target.name;
+  let providerOutcome = "accepted";
+  try {
+    providerResponse = await erpRequestDirect(config, method, path, body);
+    context.mutationApplied = true;
+  } catch (error) {
+    await effectRuntimeRequest(config, "/admin/effects/settle", {
+      effectId,
+      settlement: {
+        attemptId,
+        outcome: "unknown",
+        detailCode: "mcp_provider_request_unknown",
+        now: new Date().toISOString(),
+      },
+    }).catch(() => {});
+    throw error;
+  }
+  const readback = await readbackForEffect(config, target);
+  if (readback.status !== "match") providerOutcome = "unknown";
+  const settled = await effectRuntimeRequest(config, "/admin/effects/settle", {
+    effectId,
+    settlement: {
+      attemptId,
+      outcome: providerOutcome,
+      providerExternalId,
+      providerResponse,
+      readback,
+      detailCode: providerOutcome === "unknown" ? "mcp_provider_readback_required" : null,
+      now: new Date().toISOString(),
+    },
+  });
+  if (settled?.effect?.state !== "succeeded") {
+    throw new Error(settled?.effect?.result_code ?? "effect_outcome_unknown");
+  }
+  return providerResponse;
+}
+
+async function readbackForEffect(config, target) {
+  try {
+    const response = await erpRequestDirect(config, "GET", resourcePath(target.doctype, target.name));
+    const data = response?.data;
+    if (!data || typeof data !== "object" || Array.isArray(data) || data.name !== target.name) {
+      return { status: "conflict", observed: data ?? {}, detailCode: "mcp_provider_readback_conflict" };
+    }
+    return { status: "match", providerExternalId: target.name, observed: data };
+  } catch (error) {
+    const message = String(error);
+    if (message.includes("erpnext_http_404")) return { status: "not_found", detailCode: "mcp_provider_readback_not_found" };
+    return { status: "unavailable", detailCode: "mcp_provider_readback_unavailable" };
+  }
+}
+
+function expectedReadbackForEffect(path, body, target) {
+  const expected = { name: target.name };
+  // Method endpoints have command-specific projections and may not persist
+  // request keys verbatim. Resource writes can safely bind their scalar
+  // requested fields to the provider's authoritative record readback.
+  if (!path.startsWith("/api/resource/") || !body || typeof body !== "object" || Array.isArray(body)) {
+    return expected;
+  }
+  for (const [key, value] of Object.entries(body)) {
+    if (["doctype", "name", "owner", "creation", "modified", "modified_by", "docstatus", "idx"].includes(key)) continue;
+    if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      expected[key] = value;
+    }
+  }
+  return expected;
+}
+
+async function effectRuntimeRequest(config, path, body) {
+  if (!config.effectRuntimeUrl || !config.effectRuntimeToken) throw new Error("effect_runtime_not_configured");
+  const controller = new AbortController();
+  const timeoutMs = config.requestTimeoutMs ?? 10_000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetch(`${config.effectRuntimeUrl}${path}`, {
+      method: "POST",
+      redirect: "error",
+      signal: controller.signal,
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${config.effectRuntimeToken}`,
+        "content-type": "application/json",
+        "user-agent": "ironwrap-erpnext-roofing-mcp/iro38",
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(`effect_runtime_timeout_${timeoutMs}ms`);
+    throw new Error(`effect_runtime_network_error:${String(error).slice(0, 180)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+  const raw = await response.text();
+  let parsed;
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    throw new Error(`effect_runtime_invalid_json_${response.status}`);
+  }
+  if (!response.ok) throw new Error(`effect_runtime_http_${response.status}:${JSON.stringify(parsed).slice(0, 240)}`);
+  return parsed;
+}
+
 export function normalizeFrappeBaseUrl(raw, allowInsecureLocal = false) {
   if (!raw) throw new Error("ERPNEXT_BASE_URL is required");
   let url;
@@ -889,6 +1382,24 @@ export function normalizeFrappeBaseUrl(raw, allowInsecureLocal = false) {
   const local = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
   if (url.protocol !== "https:" && !(allowInsecureLocal && local && url.protocol === "http:")) {
     throw new Error("ERPNEXT_BASE_URL must use HTTPS (HTTP is allowed only for explicit local development)");
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+}
+
+export function normalizeEffectRuntimeBaseUrl(raw, allowInsecureLocal = false) {
+  if (!raw) throw new Error("IRONWRAP_EFFECT_RUNTIME_URL is required");
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("IRONWRAP_EFFECT_RUNTIME_URL must be an absolute URL");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error("IRONWRAP_EFFECT_RUNTIME_URL must not contain credentials, query, or fragment");
+  }
+  const local = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(allowInsecureLocal && local && url.protocol === "http:")) {
+    throw new Error("IRONWRAP_EFFECT_RUNTIME_URL must use HTTPS (HTTP is allowed only for explicit local development)");
   }
   return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
 }
@@ -924,6 +1435,209 @@ export async function erpPost(config, path, body) {
 
 export async function erpPut(config, path, body) {
   return await erpRequest(config, "PUT", path, body);
+}
+
+function assertAuthorityExecutorConfigured(config) {
+  if (!config.authorityBusBaseUrl) throw new Error("authority_executor_bus_url_required");
+  if (typeof config.authorityBusHmacKey !== "string" || config.authorityBusHmacKey.length < 32) {
+    throw new Error("authority_executor_hmac_key_required");
+  }
+  if (!config.authorityExecutorUserId) throw new Error("authority_executor_user_id_required");
+  if (!config.authorityFrappeActorUserId) throw new Error("authority_frappe_actor_user_id_required");
+  if (!config.authorityBusinessRole || !["IronWrap Owner", "IronWrap Production"].includes(config.authorityBusinessRole)) {
+    throw new Error("authority_business_role_required");
+  }
+  if (config.authorityFrappeActorUserId !== config.actorUser) {
+    throw new Error("authority_frappe_actor_user_mismatch");
+  }
+}
+
+async function authorityBusRequest(config, method, path, body) {
+  assertAuthorityExecutorConfigured(config);
+  const rawBody = JSON.stringify(body);
+  const timestamp = String(Date.now());
+  const signature = createHmac("sha256", config.authorityBusHmacKey)
+    .update(`${timestamp}\n${method}\n${path}\n${rawBody}`)
+    .digest("hex");
+  let response;
+  try {
+    response = await fetch(`${config.authorityBusBaseUrl}${path}`, {
+      method,
+      redirect: "error",
+      signal: AbortSignal.timeout(config.requestTimeoutMs ?? 10_000),
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "x-ironwrap-authority-executor-timestamp": timestamp,
+        "x-ironwrap-authority-executor-signature": signature,
+        "user-agent": "ironwrap-erpnext-roofing-mcp/authority-executor",
+      },
+      body: rawBody,
+    });
+  } catch (err) {
+    throw new Error(`authority_bus_network_error:${String(err).slice(0, 240)}`);
+  }
+  const responseText = await response.text();
+  let payload = {};
+  if (responseText) {
+    try {
+      payload = JSON.parse(responseText);
+    } catch {
+      throw new Error(`authority_bus_invalid_json_${response.status}`);
+    }
+  }
+  if (!response.ok) {
+    throw new Error(`authority_bus_http_${response.status}:${payload.error ?? response.statusText ?? "request_failed"}`);
+  }
+  return payload;
+}
+
+export function authorityMaterialMismatch(draft, material) {
+  if (!material || material.tenant !== draft.tenant ||
+      material.authority_record_id !== draft.authority_record_id ||
+      Number(material.version) !== Number(draft.version) ||
+      material.status !== draft.status) return "identity";
+  for (const field of AUTHORITY_MATERIAL_DIGEST_FIELDS) {
+    if (canonicalJson(material[field] ?? "") !== canonicalJson(draft[field] ?? "")) return field;
+  }
+  if (material.state_digest_sha256 !== authorityStateDigest(material)) return "state_digest_sha256";
+  if (material.state_digest_sha256 !== authorityStateDigest(draft)) return "command_state_digest_sha256";
+  if ((draft.issuer_readback_json ?? "") !== (material.issuer_readback_json ?? "")) {
+    return "issuer_readback_json";
+  }
+  return null;
+}
+
+function requireAppliedAuthorityAction(action) {
+  if (action?.status === "applied") return action;
+  const preservedAction = action && typeof action === "object"
+    ? action
+    : { status: action?.status ?? "missing" };
+  const evidence = {
+    action_id: preservedAction.action_id ?? null,
+    status: preservedAction.status ?? null,
+    result_json: preservedAction.result_json ?? null,
+    reconciliation_reason: preservedAction.reconciliation_reason ?? null,
+  };
+  const error = new Error(
+    `authority_terminal_status_not_applied:${preservedAction.status ?? "missing"}:${JSON.stringify(preservedAction)}`,
+  );
+  error.code = "authority_terminal_status_not_applied";
+  // Preserve the exact D1 terminal payload and its evidence on the thrown
+  // error. The audit wrapper must fail the Hermes run, while callers and
+  // incident handling can still retain the reconciliation receipt verbatim.
+  error.d1_action = preservedAction;
+  error.d1_evidence = evidence;
+  throw error;
+}
+
+async function terminalizeAuthorityAction(config, actionId, command, issuerReceipt, material, reason = null) {
+  const payload = await authorityBusRequest(
+    config,
+    "POST",
+    `/internal/v1/authority-records/actions/${actionId}/terminal`,
+    {
+      action_id: actionId,
+      command_json: JSON.stringify(command),
+      issuer_receipt_json: issuerReceipt ? JSON.stringify(issuerReceipt) : null,
+      material_readback_json: material ? JSON.stringify(material) : null,
+      reconciliation_reason: material ? null : reason,
+    },
+  );
+  return requireAppliedAuthorityAction(payload.action ?? payload);
+}
+
+export async function executeAuthorityRecordMutation(config, { args, draft, before, now }) {
+  assertAuthorityExecutorConfigured(config);
+  let issuerReceipt = null;
+  if (draft.issuer_readback_json) {
+    try {
+      issuerReceipt = JSON.parse(draft.issuer_readback_json);
+    } catch {
+      throw new Error("authority_issuer_receipt_invalid");
+    }
+  }
+  // Keep the issuer boundary at the executor as well as at the MCP tool
+  // handler. No alternate caller may turn unsigned metadata into external
+  // legal, regulatory, insurance, or manufacturer authority.
+  assertIssuerReceiptForDraft(config, draft, issuerReceipt);
+  const actionId = `authority:${args.run_id}`;
+  const idempotencyKey = `authority:${args.run_id}`;
+  const commandJson = JSON.stringify(draft);
+  const requestFingerprintSha256 = digest({ command: draft, issuer_receipt: issuerReceipt });
+  const claimedPayload = await authorityBusRequest(config, "POST", "/internal/v1/authority-records/actions", {
+    action_id: actionId,
+    authority_record_id: draft.authority_record_id,
+    expected_version: Number.isInteger(draft.version) ? draft.version : null,
+    idempotency_key: idempotencyKey,
+    operation: args.authority_operation,
+    request_fingerprint_sha256: requestFingerprintSha256,
+    tenant_id: config.tenantId,
+    actor_user_id: config.authorityExecutorUserId,
+    frappe_actor_user_id: config.authorityFrappeActorUserId,
+    business_role: config.authorityBusinessRole,
+    command_json: commandJson,
+    issuer_receipt_json: issuerReceipt ? JSON.stringify(issuerReceipt) : null,
+  });
+  const claimed = claimedPayload.action;
+  if (!claimed) throw new Error("authority_executor_claim_missing");
+  if (claimed.status !== "pending") {
+    return {
+      d1_action: claimed,
+      replayed: true,
+      mutation_response: null,
+      material_readback: null,
+    };
+  }
+
+  const write = args.authority_operation === "verify" && before
+    ? () => erpPut(config, resourcePath("Authority Record", draft.authority_record_id), draft)
+    : () => erpPost(config, "/api/resource/Authority%20Record", draft);
+  let mutationResponse;
+  let responseLost = false;
+  try {
+    mutationResponse = await write();
+  } catch (err) {
+    responseLost = true;
+    let recovered;
+    try {
+      recovered = await readResourceOrNull(config, "Authority Record", draft.authority_record_id);
+    } catch (readErr) {
+      await terminalizeAuthorityAction(config, actionId, draft, issuerReceipt, null, "frappe_response_lost");
+      throw new Error(`authority_frappe_response_lost:${String(err).slice(0, 180)}:${String(readErr).slice(0, 180)}`);
+    }
+    if (!recovered || authorityMaterialMismatch(draft, recovered)) {
+      await terminalizeAuthorityAction(config, actionId, draft, issuerReceipt, null, "frappe_response_lost");
+      throw new Error(`authority_frappe_response_lost:${String(err).slice(0, 240)}`);
+    }
+    const action = await terminalizeAuthorityAction(config, actionId, draft, issuerReceipt, recovered);
+    return {
+      d1_action: action,
+      mutation_response: null,
+      material_readback: recovered,
+      response_lost_recovered: true,
+    };
+  }
+
+  let material;
+  try {
+    material = await readResourceOrNull(config, "Authority Record", draft.authority_record_id);
+  } catch (err) {
+    await terminalizeAuthorityAction(config, actionId, draft, issuerReceipt, null, "frappe_readback_unavailable");
+    throw new Error(`authority_frappe_readback_unavailable:${String(err).slice(0, 240)}`);
+  }
+  const mismatch = authorityMaterialMismatch(draft, material);
+  if (mismatch) {
+    await terminalizeAuthorityAction(config, actionId, draft, issuerReceipt, null, `frappe_readback_mismatch:${mismatch}`);
+    throw new Error(`authority_frappe_readback_mismatch:${mismatch}`);
+  }
+  const action = await terminalizeAuthorityAction(config, actionId, draft, issuerReceipt, material);
+  return {
+    d1_action: action,
+    mutation_response: mutationResponse,
+    material_readback: material,
+    response_lost_recovered: responseLost,
+  };
 }
 
 export function resourcePath(doctype, name) {
@@ -1041,20 +1755,80 @@ export function supplierOrderIdForTakeoff(takeoffId) {
 export function buildMaterialTakeoffDraft({
   roofJobId,
   takeoffId = materialTakeoffIdForRoofJob(roofJobId),
+  tenantId,
+  materialSystem,
+  roofJob = {},
   measurementReport = {},
+  takeoffPolicy,
+  policyEvidence,
   nowIso,
+  policyAuthority = "current_approved",
 } = {}) {
   if (!roofJobId) throw new Error("roof_job_id_required");
-  const measurements = measurementRowsFromReport(measurementReport);
-  if (!measurements.length) throw new Error("measurement_values_required");
+  if (!tenantId) throw new Error("material_takeoff_tenant_required");
+  if (!materialSystem) throw new Error("material_takeoff_material_system_required");
+  if (!takeoffPolicy) throw new Error("material_takeoff_policy_required");
+  if ((roofJob.name ?? roofJob.roof_job_id) !== roofJobId) throw new Error("material_takeoff_roof_job_mismatch");
+  if (measurementReport.roof_job !== roofJobId) throw new Error("material_takeoff_measurement_roof_job_mismatch");
+
+  const graph = parseGovernedRoofGraph(measurementReport);
+  const { options, policyBinding, policyDigest } = parseApprovedTakeoffPolicy({
+    takeoffPolicy,
+    policyEvidence,
+    tenantId,
+    materialSystem,
+    roofJob,
+    nowIso,
+    policyAuthority,
+  });
+  const computed = takeoffFromGeometryWithPolicy({
+    points: graph.points,
+    lines: graph.edges,
+    facets: graph.facets,
+    checks: graph.checks,
+    needsReview: graph.needs_review,
+    measurements: graph.measurements,
+    sourceRefs: graph.source_refs,
+  }, options);
   const measurementReportId = measurementReport.measurement_id ?? measurementReport.name ?? "";
+  if (!measurementReportId) throw new Error("measurement_report_required");
+  const optionsDigest = digest(options);
+  const reviewReasons = materialTakeoffReviewReasons(graph, computed);
+  const baseRows = materialTakeoffRows(computed, options, {
+    geometryRevision: graph.revision,
+    policyDigest,
+    optionsDigest,
+    needsReview: reviewReasons.length > 0,
+  });
+  const calculationEnvelope = {
+    schema_version: GOVERNED_TAKEOFF_CALCULATION_VERSION,
+    source: {
+      measurement_report: measurementReportId,
+      roof_job: roofJobId,
+      geometry_schema_version: graph.schema_version,
+      geometry_revision: graph.revision,
+      raw_key: graph.source.raw_key,
+      raw_sha256: graph.source.raw_sha256,
+      provider: graph.source.provider,
+    },
+    policy: policyBinding,
+    options,
+    options_digest: optionsDigest,
+    result: computed,
+    rows: baseRows,
+    review_reasons: reviewReasons,
+  };
+  const calculationDigest = digest(calculationEnvelope);
   const source = {
     roof_job: roofJobId,
     measurement_report: measurementReportId,
-    provider: measurementReport.provider ?? "",
+    provider: graph.source.provider,
     review_status: measurementReport.review_status ?? "",
-    generated_at: nowIso,
-    measurements,
+    raw_key: graph.source.raw_key,
+    raw_sha256: graph.source.raw_sha256,
+    geometry_revision: graph.revision,
+    geometry_measurements: graph.measurements,
+    provider_measurements: measurementRowsFromReport(measurementReport),
   };
 
   return {
@@ -1063,17 +1837,61 @@ export function buildMaterialTakeoffDraft({
     measurement_report: measurementReportId,
     status: "Needs Review",
     ...(nowIso ? { prepared_at: nowIso } : {}),
+    tenant: tenantId,
+    material_system: materialSystem,
+    calculation_schema: GOVERNED_TAKEOFF_CALCULATION_VERSION,
+    calculation_version: GOVERNED_TAKEOFF_CALCULATION_VERSION,
+    geometry_revision: graph.revision,
+    source_raw_key: graph.source.raw_key,
+    source_raw_sha256: graph.source.raw_sha256,
+    takeoff_policy: takeoffPolicy.policy_id ?? takeoffPolicy.name,
+    policy_version: Number(takeoffPolicy.policy_version),
+    policy_source_evidence: policyBinding.source_evidence,
+    policy_source_sha256: policyBinding.source_evidence_sha256,
+    policy_digest: policyDigest,
+    options_digest: optionsDigest,
+    calculation_digest: calculationDigest,
+    stock_mode: computed.panelNest.mode,
+    waste_basis: computed.sourceRefs.panel_stock_ft,
+    options_json: JSON.stringify(options, null, 2),
+    calculation_json: JSON.stringify(calculationEnvelope, null, 2),
+    review_reasons_json: JSON.stringify(reviewReasons),
     source_measurements_json: JSON.stringify(source, null, 2),
     assumptions: [
-      "Draft takeoff rows are copied from parsed measurement evidence for estimator review.",
-      "Waste, accessories, substitutions, supplier availability, and install details require human approval.",
+      `Draft quantities are computed by ${GOVERNED_TAKEOFF_CALCULATION_VERSION} from canonical roof geometry under an approved Material Takeoff Policy.`,
+      "Source-declared/provider measurement values are retained as comparison evidence only and do not drive material quantities.",
+      "Supplier availability, substitutions, packaging, field conditions, and any review reason require estimator resolution before approval.",
     ].join("\n"),
     exclusions: [
       "This takeoff does not create a final quote, supplier order, purchase order, delivery request, or invoice.",
       "No material quantity is approved until the estimator marks the takeoff approved.",
     ].join("\n"),
-    items: measurements.map(takeoffItemForMeasurement),
+    items: baseRows.map((row) => ({ ...row, calculation_digest: calculationDigest })),
   };
+}
+
+export function assertMaterialTakeoffReplaySafe(existing, draft) {
+  if (!existing) return;
+  if (!["Draft", "Needs Review"].includes(existing.status)) {
+    throw new Error("material_takeoff_existing_state_not_writable");
+  }
+  const required = [
+    "tenant",
+    "material_system",
+    "measurement_report",
+    "geometry_revision",
+    "source_raw_sha256",
+    "takeoff_policy",
+    "policy_digest",
+    "options_digest",
+    "calculation_digest",
+  ];
+  if (required.some((field) => !existing[field])) {
+    throw new Error("material_takeoff_legacy_state_requires_preflight");
+  }
+  if (required.some((field) => existing[field] !== draft[field])) {
+    throw new Error("material_takeoff_existing_binding_mismatch");
+  }
 }
 
 export function buildSupplierOrderDraft({
@@ -1658,79 +2476,6 @@ export function buildReviewRequestDraft({
   };
 }
 
-export function checkConsent({ channel, consentBasis } = {}) {
-  const basis = (consentBasis ?? "").trim().toLowerCase();
-  const express = basis === "express";
-  const ebr = basis === "existing_business_relationship" || basis === "ebr";
-  const reasons = [];
-  if (channel === "Portal") return { allowed: true, channel, consent_basis: basis, reasons };
-  if (!basis) reasons.push("consent_basis_missing");
-  else if (channel === "SMS" && !express) reasons.push("sms_requires_express_consent");
-  else if (!express && !ebr) reasons.push("consent_basis_insufficient");
-  return { allowed: reasons.length === 0, channel, consent_basis: basis, reasons };
-}
-
-export function checkQuietHours({
-  nowUtcIso,
-  timezoneOffsetMinutes = -360,
-  startHour = 9,
-  endHour = 20,
-} = {}) {
-  const ts = Date.parse(nowUtcIso ?? "");
-  if (!Number.isFinite(ts)) throw new Error("now_utc_iso_required");
-  const localHour = new Date(ts + timezoneOffsetMinutes * 60_000).getUTCHours();
-  return {
-    ok: localHour >= startHour && localHour < endHour,
-    local_hour: localHour,
-    start_hour: startHour,
-    end_hour: endHour,
-  };
-}
-
-export function buildCommunicationEventDraft({
-  eventId,
-  roofJobId,
-  leadEnvelopeId,
-  channel,
-  direction = "Outbound",
-  template,
-  consentBasis,
-  bodyPreview,
-  recipientRef,
-  nowUtcIso,
-  timezoneOffsetMinutes,
-  startHour,
-  endHour,
-} = {}) {
-  if (!channel) throw new Error("channel_required");
-  if (!roofJobId && !leadEnvelopeId) throw new Error("roof_job_or_lead_envelope_required");
-  if (!str(recipientRef)) throw new Error("recipient_ref_required");
-  const consent = checkConsent({ channel, consentBasis });
-  const quiet = direction === "Outbound"
-    ? checkQuietHours({ nowUtcIso, timezoneOffsetMinutes, startHour, endHour })
-    : { ok: true, local_hour: null };
-  const reasons = [...consent.reasons, ...(quiet.ok ? [] : ["quiet_hours_blocked"])];
-  const allowed = reasons.length === 0;
-
-  return {
-    communication_event_id: eventId ?? `comm:${slugify([channel, recipientRef, nowUtcIso].join(":"))}`,
-    ...(roofJobId ? { roof_job: roofJobId } : {}),
-    ...(leadEnvelopeId ? { lead_envelope: leadEnvelopeId } : {}),
-    channel,
-    direction,
-    template: template ?? "",
-    consent_basis: consent.consent_basis,
-    policy_result: allowed ? "Allowed" : "Blocked",
-    policy_reasons_json: JSON.stringify({ evaluated_at: nowUtcIso, allowed, reasons, quiet }, null, 2),
-    quiet_hours_ok: quiet.ok ? 1 : 0,
-    status: allowed ? "Draft" : "Blocked",
-    body_preview: bodyPreview ?? "",
-    recipient_ref: recipientRef,
-    event_ts: nowUtcIso,
-    notes: "Policy-gated draft record. No message is sent by this tool.",
-  };
-}
-
 export function buildSupplierQuoteDraft({
   materialTakeoff = {},
   supplierQuoteId = supplierQuoteIdForTakeoff(materialTakeoff.takeoff_id ?? materialTakeoff.name),
@@ -1971,6 +2716,31 @@ export const ProposalEvidencePackPublicationInputSchema = z.object({
 }).strict();
 const IsoDateTimeSchema = z.string().datetime({ offset: true });
 const DateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const AuthorityRequirementSchema = z.object({
+  authority_record_id: IdSchema.optional(),
+  subject_type: z.enum(["Person", "Organization"]),
+  subject_role: z.enum(["Worker", "Subcontractor"]).optional(),
+  subject_ref: IdSchema,
+  authority_kind: z.enum([
+    "Worker Competency",
+    "Trade Licence",
+    "WCB Clearance",
+    "Insurance Certificate",
+    "Permit",
+    "Inspection",
+    "Manufacturer Certification",
+    "Manufacturer Bulletin",
+  ]),
+  authority_scope: z.string().trim().min(1).max(500).optional(),
+  scope_type: z.enum(["Tenant", "Roof Job", "Assignment", "Work Package", "Shop", "Field", "Trade", "Manufacturer System"]),
+  scope_ref: IdSchema,
+  issuer_name: z.string().trim().min(2).max(200).optional(),
+  issuer_jurisdiction: z.string().trim().min(2).max(160).optional(),
+  issuer_reference: z.string().trim().min(3).max(240).optional(),
+  source_version: z.string().trim().min(1).max(120).optional(),
+  version: z.number().int().min(1).max(1000000).optional(),
+  state_digest_sha256: z.string().regex(/^[0-9a-f]{64}$/i).optional(),
+}).strict();
 
 export const CustomerQuoteRevisionInputSchema = z.object({
   roof_job_id: IdSchema,
@@ -1993,10 +2763,28 @@ export const JobAssignmentInputSchema = z.object({
   assigned_user: IdSchema.optional(),
   scheduled_start: IsoDateTimeSchema.optional(),
   scheduled_end: IsoDateTimeSchema.optional(),
+  authority_requirements: z.array(AuthorityRequirementSchema).min(1).max(20).optional(),
   assigned_by: IdSchema,
   supersedes: IdSchema.optional(),
   correction_reason: z.string().min(1).max(2000).optional(),
   notes: z.string().max(2000).optional(),
+}).strict();
+
+const WorkPackageCompletionInputSchema = z.object({
+  work_package_id: IdSchema,
+  // Roof Job is the compatibility adapter. Universal callers identify the
+  // immutable parent and physical context directly and must not invent a
+  // Roof Job id for Shop/Service/Warehouse/Fleet/Facility work.
+  roof_job_id: IdSchema.optional(),
+  work_object_type: IdSchema.optional(),
+  work_object_id: IdSchema.optional(),
+  physical_context_type: IdSchema.optional(),
+  physical_context_id: IdSchema.optional(),
+  job_assignment_id: IdSchema,
+  completion_authority_user: IdSchema,
+  device_action_id: IdSchema,
+  work_package_version: z.number().int().positive(),
+  release_attempt_id: IdSchema,
 }).strict();
 
 const ChangeOrderItemInputSchema = z.object({
@@ -2164,6 +2952,7 @@ export const JobComplianceRecordInputSchema = z.object({
   record_type: z.enum(["Permit", "Licence", "Inspection", "HOA", "Utility", "Other"]),
   authority_name: z.string().min(1).max(140),
   external_reference: z.string().max(140).optional(),
+  authority_record_id: IdSchema.optional(),
   status: z.enum(["Required", "Applied", "Approved", "Passed", "Failed", "Expired", "Waived", "Superseded"]),
   required_before_gate: z.enum(["Proposal", "Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"]),
   applied_at: IsoDateTimeSchema.optional(),
@@ -2177,6 +2966,75 @@ export const JobComplianceRecordInputSchema = z.object({
   supersedes: IdSchema.optional(),
   correction_reason: z.string().min(1).max(2000).optional(),
   notes: z.string().max(2000).optional(),
+}).strict();
+
+const IssuerReceiptInputSchema = z.object({
+  receipt_id: IdSchema,
+  tenant: IdSchema,
+  authority_record_id: IdSchema,
+  authority_version: z.number().int().min(1).max(1000000),
+  issuer_name: z.string().trim().min(2).max(200),
+  issuer_jurisdiction: z.string().trim().min(2).max(160),
+  issuer_reference: z.string().trim().min(3).max(240),
+  issuer_source_version: z.string().trim().min(1).max(120),
+  verification_state: z.enum(["verified", "revoked", "contradictory", "unavailable"]),
+  evidence_refs_json: z.string().min(2).max(20000),
+  evidence_sha256: z.string().regex(/^[0-9a-f]{64}$/i),
+  state_digest_sha256: z.string().regex(/^[0-9a-f]{64}$/i),
+  issuer_key_id: IdSchema,
+  signature: z.string().regex(/^[A-Za-z0-9_-]{40,}$/),
+}).strict();
+
+export const AuthorityRecordInputSchema = z.object({
+  authority_record_id: IdSchema,
+  new_authority_record_id: IdSchema.optional(),
+  authority_operation: z.enum(["record", "verify", "renew", "supersede", "revoke", "resolve_exception"]),
+  subject_type: z.enum(["Person", "Organization"]).optional(),
+  subject_role: z.enum(["Worker", "Subcontractor"]).optional(),
+  person_user: IdSchema.optional(),
+  organization: IdSchema.optional(),
+  authority_kind: z.enum([
+    "Worker Competency",
+    "Trade Licence",
+    "WCB Clearance",
+    "Insurance Certificate",
+    "Permit",
+    "Inspection",
+    "Manufacturer Certification",
+    "Manufacturer Bulletin",
+  ]).optional(),
+  authority_scope: z.string().trim().min(1).max(500).optional(),
+  scope_type: z.enum(["Tenant", "Roof Job", "Assignment", "Work Package", "Shop", "Field", "Trade", "Manufacturer System"]).optional(),
+  scope_ref: IdSchema.optional(),
+  roof_job_id: IdSchema.optional(),
+  scope_json: z.record(z.string(), z.unknown()).optional(),
+  issuer_name: z.string().trim().min(2).max(200).optional(),
+  issuer_jurisdiction: z.string().trim().min(2).max(160).optional(),
+  issuer_reference: z.string().trim().min(3).max(240).optional(),
+  source_version: z.string().trim().min(1).max(120).optional(),
+  evidence_refs: z.array(z.object({
+    ref: z.string().trim().min(1).max(512),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/i),
+  }).strict()).min(1).max(50).optional(),
+  evidence_sha256: z.string().regex(/^[0-9a-f]{64}$/i).optional(),
+  effective_from: DateSchema.optional(),
+  expires_at: DateSchema.optional(),
+  version: z.number().int().min(1).max(1000000).optional(),
+  verification_method: z.enum([
+    "Internal Competency Assessment",
+    "Issuer Portal Readback",
+    "Signed Issuer Record",
+    "Regulator Readback",
+    "Manufacturer Portal Readback",
+  ]).optional(),
+  verification_reference: IdSchema.optional(),
+  revoked_at: IsoDateTimeSchema.optional(),
+  revocation_reference: IdSchema.optional(),
+  exception_status: z.enum(["None", "Open", "Resolved", "Rejected"]).optional(),
+  exception_reason: z.string().trim().min(1).max(2000).optional(),
+  correction_reason: z.string().trim().min(1).max(2000).optional(),
+  notes: z.string().max(2000).optional(),
+  issuer_receipt: IssuerReceiptInputSchema.optional(),
 }).strict();
 
 export const CustomerDecisionInputSchema = z.object({
@@ -2524,6 +3382,7 @@ export function buildJobAssignmentDraft({
   assignedUser,
   scheduledStart,
   scheduledEnd,
+  authorityRequirements,
   assignedBy,
   supersedes,
   correctionReason,
@@ -2537,6 +3396,9 @@ export function buildJobAssignmentDraft({
   if (scheduledEnd && !scheduledStart) throw new Error("scheduled_end_requires_start");
   if (scheduledStart && scheduledEnd && Date.parse(scheduledEnd) <= Date.parse(scheduledStart)) {
     throw new Error("assignment_schedule_invalid");
+  }
+  if (authorityRequirements !== undefined && (!Array.isArray(authorityRequirements) || authorityRequirements.length < 1 || authorityRequirements.length > 20)) {
+    throw new Error("authority_requirements_invalid");
   }
   if (supersedes && !str(correctionReason)) throw new Error("correction_reason_required");
   return {
@@ -2555,6 +3417,7 @@ export function buildJobAssignmentDraft({
     ...(assignedUser ? { assigned_user: assignedUser } : {}),
     ...(scheduledStart ? { scheduled_start: scheduledStart } : {}),
     ...(scheduledEnd ? { scheduled_end: scheduledEnd } : {}),
+    ...(authorityRequirements ? { authority_requirements_json: JSON.stringify(authorityRequirements) } : {}),
     assigned_by: assignedBy,
     assigned_at: nowIso,
     ...(supersedes ? { supersedes, correction_reason: correctionReason.trim() } : {}),
@@ -2945,6 +3808,7 @@ export function buildComplianceRecordDraft({
   recordType,
   authorityName,
   externalReference,
+  authorityRecordId,
   status,
   requiredBeforeGate,
   appliedAt,
@@ -2982,6 +3846,7 @@ export function buildComplianceRecordDraft({
     record_type: recordType,
     authority_name: authorityName.trim(),
     external_reference: externalReference ?? "",
+    ...(authorityRecordId ? { authority_record: authorityRecordId } : {}),
     status,
     required_before_gate: requiredBeforeGate,
     ...(appliedAt ? { applied_at: appliedAt } : {}),
@@ -3288,6 +4153,9 @@ function resolveRuntimeConfig(config = {}) {
   const baseUrl = config.baseUrl
     ? normalizeFrappeBaseUrl(config.baseUrl, config.allowInsecureLocal === true)
     : config.baseUrl;
+  const authorityBusBaseUrl = config.authorityBusBaseUrl
+    ? normalizeAuthorityBusBaseUrl(config.authorityBusBaseUrl, config.allowInsecureLocal === true)
+    : config.authorityBusBaseUrl;
   return {
     ...config,
     baseUrl,
@@ -3297,6 +4165,8 @@ function resolveRuntimeConfig(config = {}) {
     approverId: config.approverId ?? "test-owner@example.com",
     allowedTools: config.allowedTools ?? roleTools(role),
     siteId: config.siteId ?? digest({ frappe_base_url: baseUrl ?? "" }),
+    authorityBusBaseUrl,
+    authorityIssuerPublicKeys: config.authorityIssuerPublicKeys ?? {},
   };
 }
 
@@ -3332,7 +4202,7 @@ async function authorizeToolInvocation(config, toolName, args) {
 }
 
 function assertActorFieldsBound(config, args = {}) {
-  for (const field of ["acknowledged_by", "assigned_by", "captured_by", "prepared_by", "requested_by"]) {
+  for (const field of ["acknowledged_by", "assigned_by", "captured_by", "prepared_by", "requested_by", "completion_authority_user"]) {
     if (args[field] !== undefined && args[field] !== config.actorUser) {
       throw new Error(`actor_field_mismatch:${field}`);
     }
@@ -3854,26 +4724,36 @@ export function buildServer(config) {
     "dry_run_material_takeoff",
     {
       title: "Dry Run Material Takeoff",
-      description: "Preview a review-gated Material Takeoff from IronWrap OS Measurement Report values without writing.",
+      description: "Preview a governed geometry-derived Material Takeoff under an approved tenant policy without writing.",
       inputSchema: {
         roof_job_id: z.string().min(1),
+        material_system: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
         measurement_report_id: z.string().min(1).optional(),
+        takeoff_policy_id: z.string().min(1).optional(),
         takeoff_id: z.string().min(1).optional(),
         limit: z.number().int().min(1).max(100).optional(),
       },
     },
-    async ({ roof_job_id, measurement_report_id, takeoff_id, limit = 25 }) => {
-      const { draft, measurementReport } = await buildMaterialTakeoffDraftFromErp(config, roof_job_id, {
+    async ({ roof_job_id, material_system, measurement_report_id, takeoff_policy_id, takeoff_id, limit = 25 }) => {
+      const plan = await prepareMaterialTakeoffWriteFromErp(config, roof_job_id, {
+        materialSystem: material_system,
         measurementReportId: measurement_report_id,
+        takeoffPolicyId: takeoff_policy_id,
         takeoffId: takeoff_id,
         limit,
       });
+      const { draft, measurementReport } = plan;
       return text({
         would_write: false,
+        operation: plan.operation,
+        target_mutation: plan.targetMutation,
         required_tool: "request_create_material_takeoff",
         target: { doctype: "Material Takeoff", name: draft.takeoff_id },
         source: {
           measurement_report: measurementReport.measurement_id ?? measurementReport.name,
+          geometry_revision: draft.geometry_revision,
+          takeoff_policy: draft.takeoff_policy,
+          policy_digest: draft.policy_digest,
           item_count: draft.items.length,
         },
         draft,
@@ -3885,10 +4765,12 @@ export function buildServer(config) {
     "request_create_material_takeoff",
     {
       title: "Request Create Material Takeoff",
-      description: "Approved-write: create or update one review-gated Material Takeoff and record a Hermes Run audit row.",
+      description: "Approved-write: create or replay one governed geometry-derived Material Takeoff and record a Hermes Run audit row.",
       inputSchema: {
         roof_job_id: z.string().min(1),
+        material_system: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
         measurement_report_id: z.string().min(1).optional(),
+        takeoff_policy_id: z.string().min(1).optional(),
         takeoff_id: z.string().min(1).optional(),
         limit: z.number().int().min(1).max(100).optional(),
         request_text: z.string().min(1).max(4000),
@@ -3902,19 +4784,24 @@ export function buildServer(config) {
       assertWriteApproved(config, args);
       const now = new Date().toISOString();
       const runId = args.run_id ?? newRunId();
-      const { draft, measurementReport } = await buildMaterialTakeoffDraftFromErp(config, args.roof_job_id, {
+      const plan = await prepareMaterialTakeoffWriteFromErp(config, args.roof_job_id, {
+        materialSystem: args.material_system,
         measurementReportId: args.measurement_report_id,
+        takeoffPolicyId: args.takeoff_policy_id,
         takeoffId: args.takeoff_id,
         limit: args.limit ?? 25,
         nowIso: now,
       });
-      const before = await readResourceOrNull(config, "Material Takeoff", draft.takeoff_id);
-      const operation = before ? "update" : "create";
+      const { before, draft, measurementReport, operation } = plan;
       const dryRun = {
         target: { doctype: "Material Takeoff", name: draft.takeoff_id },
         operation,
+        target_mutation: plan.targetMutation,
         source: {
           measurement_report: measurementReport.measurement_id ?? measurementReport.name,
+          geometry_revision: draft.geometry_revision,
+          takeoff_policy: draft.takeoff_policy,
+          policy_digest: draft.policy_digest,
           item_count: draft.items.length,
         },
         draft,
@@ -3929,9 +4816,20 @@ export function buildServer(config) {
         roofJob: args.roof_job_id,
         dryRun,
         beforeSummary: summarizeMaterialTakeoff(before),
-        afterSummary: summarizeMaterialTakeoff({ ...(before ?? {}), ...draft, name: draft.takeoff_id }),
-        execute: upsertDraftExecutor(config, "Material Takeoff", draft.takeoff_id, draft, before),
-        responseExtra: { upserted: true, operation, material_takeoff_id: draft.takeoff_id },
+        afterSummary: operation === "replay"
+          ? summarizeMaterialTakeoff(before)
+          : summarizeMaterialTakeoff({ ...draft, name: draft.takeoff_id }),
+        targetMutation: plan.targetMutation,
+        execute: operation === "replay"
+          ? async () => before
+          : upsertDraftExecutor(config, "Material Takeoff", draft.takeoff_id, draft, null),
+        responseExtra: {
+          upserted: operation === "create",
+          target_replayed: operation === "replay",
+          target_mutated: plan.targetMutation,
+          operation,
+          material_takeoff_id: draft.takeoff_id,
+        },
       }));
     },
   );
@@ -5014,6 +5912,94 @@ export function buildServer(config) {
     orderBy: "assigned_at desc",
   });
   registerStrictJobReadPair(server, config, {
+    doctype: "Work Package",
+    idArg: "work_package_id",
+    getName: "get_work_package",
+    listName: "list_work_packages_for_job",
+    fields: WORK_PACKAGE_FIELDS,
+    childFields: { assigned_workers: WORK_PACKAGE_WORKER_FIELDS },
+  });
+  registerStrictJobReadPair(server, config, {
+    doctype: "Work Package Event",
+    idArg: "event_id",
+    getName: "get_work_package_event",
+    listName: "list_work_package_events_for_job",
+    fields: WORK_PACKAGE_EVENT_FIELDS,
+    orderBy: "occurred_at asc",
+  });
+  server.registerTool(
+    "dry_run_complete_work_package",
+    {
+      title: "Dry Run Complete Work Package",
+      description: "Preview the bounded online completion command. Frappe rechecks every acknowledgement, phased hold, evidence, correction, and authority gate at execution time.",
+      inputSchema: WorkPackageCompletionInputSchema,
+    },
+    async (args) => text(await buildCompleteWorkPackagePreview(config, args)),
+  );
+  server.registerTool(
+    "request_complete_work_package",
+    {
+      title: "Request Complete Work Package",
+      description: "Approved-write: invoke the immutable Work Package completion command. It never bypasses the Frappe lifecycle gates or permits offline completion.",
+      inputSchema: approvedWriteInputSchema(WorkPackageCompletionInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const before = await readResource(config, "Work Package", args.work_package_id);
+      const dryRun = await buildCompleteWorkPackagePreview(config, args);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_complete_work_package",
+        target: { doctype: "Work Package", name: args.work_package_id },
+        roofJob: args.roof_job_id,
+        dryRun,
+        beforeSummary: summarizeRecord(before, [
+          "name",
+          "work_package_id",
+          "roof_job",
+          "work_object_type",
+          "work_object_id",
+          "physical_context_type",
+          "physical_context_id",
+          "job_assignment",
+          "version",
+          "release_attempt_id",
+          "status",
+        ]),
+        afterSummary: (result) => {
+          const outcome = result?.message ?? result ?? {};
+          return {
+            work_package: outcome.work_package ?? {},
+            event: outcome.event ?? {},
+          };
+        },
+        execute: () => erpPost(
+          config,
+          "/api/method/ironwrap_roofing.work_package_api.complete_work_package",
+          {
+            work_package_id: args.work_package_id,
+            ...(args.roof_job_id ? { roof_job_id: args.roof_job_id } : {}),
+            ...(normalizeWorkPackageScopeArgs(args) ?? {}),
+            job_assignment_id: args.job_assignment_id,
+            actor_user: args.completion_authority_user,
+            device_action_id: args.device_action_id,
+            work_package_version: args.work_package_version,
+            release_attempt_id: args.release_attempt_id,
+          },
+        ),
+        responseExtra: {
+          completed: true,
+          work_package_id: args.work_package_id,
+          release_attempt_id: args.release_attempt_id,
+        },
+      }));
+    },
+  );
+  registerStrictJobReadPair(server, config, {
     doctype: "Change Order",
     idArg: "change_order_id",
     getName: "get_change_order",
@@ -5044,6 +6030,38 @@ export function buildServer(config) {
     listName: "list_job_compliance_records_for_job",
     fields: JOB_COMPLIANCE_RECORD_FIELDS,
   });
+  server.registerTool(
+    "get_authority_record",
+    {
+      title: "Get Authority Record",
+      description: "Read one tenant-bound, individually versioned Authority Record with issuer and evidence identity.",
+      inputSchema: z.object({ authority_record_id: IdSchema }).strict(),
+    },
+    async ({ authority_record_id }) => {
+      const record = await readResource(config, "Authority Record", authority_record_id);
+      if (record.tenant !== config.tenantId) throw new Error("authority_record_tenant_mismatch");
+      return text({ data: sanitizeResource(record, AUTHORITY_RECORD_FIELDS) });
+    },
+  );
+  server.registerTool(
+    "list_authority_records_for_job",
+    {
+      title: "List Authority Records For Job",
+      description: "Read bounded tenant-scoped Authority Record versions linked to one Roof Job.",
+      inputSchema: z.object({ roof_job_id: IdSchema, limit: z.number().int().min(1).max(100).optional() }).strict(),
+    },
+    async ({ roof_job_id, limit = 25 }) => text({
+      data: (await listResources(config, "Authority Record", {
+        fields: AUTHORITY_RECORD_FIELDS,
+        filters: [
+          ["Authority Record", "tenant", "=", config.tenantId],
+          ["Authority Record", "roof_job", "=", roof_job_id],
+        ],
+        limit,
+        orderBy: "modified desc",
+      })).map((row) => sanitizeResource(row, AUTHORITY_RECORD_FIELDS)),
+    }),
+  );
   registerStrictJobReadPair(server, config, {
     doctype: "Communication Consent",
     idArg: "consent_id",
@@ -5079,6 +6097,55 @@ export function buildServer(config) {
     fields: INTEGRATION_RECONCILIATION_FIELDS,
     orderBy: "detected_at desc",
   });
+
+  server.registerTool(
+    "get_job_cost_event",
+    {
+      title: "Get Job Cost Event",
+      description: "Read one tenant-bound immutable actual-cost fact without actor or approver identity fields.",
+      inputSchema: z.object({ job_cost_event_id: IdSchema }).strict(),
+    },
+    async ({ job_cost_event_id }) => {
+      const record = await readResource(config, "Job Cost Event", job_cost_event_id);
+      if (record.tenant !== config.tenantId) {
+        throw new Error("job_cost_event_tenant_mismatch");
+      }
+      return text({ data: sanitizeResource(record, JOB_COST_EVENT_FIELDS) });
+    },
+  );
+
+  server.registerTool(
+    "list_job_cost_events_for_job",
+    {
+      title: "List Job Cost Events For Job",
+      description: "Read a bounded tenant-and-job scoped list of immutable actual-cost facts.",
+      inputSchema: z.object({
+        roof_job_id: IdSchema,
+        limit: z.number().int().min(1).max(100).optional(),
+      }).strict(),
+    },
+    async ({ roof_job_id, limit = 25 }) => text({
+      data: (await listResources(config, "Job Cost Event", {
+        fields: JOB_COST_EVENT_FIELDS,
+        filters: [
+          ["Job Cost Event", "tenant", "=", config.tenantId],
+          ["Job Cost Event", "roof_job", "=", roof_job_id],
+        ],
+        limit,
+        orderBy: "occurred_at desc",
+      })).map((row) => sanitizeResource(row, JOB_COST_EVENT_FIELDS)),
+    }),
+  );
+
+  server.registerTool(
+    "dry_run_job_cost_event",
+    {
+      title: "Dry Run Job Cost Event",
+      description: "Prepare a source-verified immutable actual-cost candidate for manual Finance/Owner insertion. This tool has no write companion and never mutates accounting or customer state.",
+      inputSchema: JobCostEventInputSchema,
+    },
+    async (args) => text(await buildJobCostEventPreviewFromErp(config, args)),
+  );
 
   server.registerTool(
     "get_tenant_export_run",
@@ -6077,6 +7144,86 @@ export function buildServer(config) {
           appended: true,
           safety_plan_id: args.safety_plan_id,
           acknowledgement_count: patch.acknowledgements.length,
+        },
+      }));
+    },
+  );
+
+  server.registerTool(
+    "dry_run_authority_record",
+    {
+      title: "Dry Run Authority Record",
+      description: "Preview one tenant-scoped Authority Record record, verification, renewal, revocation, or exception resolution without writing.",
+      inputSchema: AuthorityRecordInputSchema,
+    },
+    async (args) => {
+      const before = args.authority_operation === "record"
+        ? null
+        : await readResourceOrNull(config, "Authority Record", args.authority_record_id);
+      const draft = authorityRecordDraftFromArgs(config, args, before, new Date().toISOString());
+      if (args.roof_job_id && draft.roof_job && draft.roof_job !== args.roof_job_id) {
+        throw new Error("authority_record_roof_job_mismatch");
+      }
+      assertIssuerReceiptForDraft(config, draft, args.issuer_receipt);
+      return text({
+        would_write: false,
+        required_tool: "request_authority_record",
+        target: { doctype: "Authority Record", name: draft.authority_record_id },
+        operation: args.authority_operation,
+        before: summarizeRecord(before, [
+          "name", "authority_record_id", "tenant", "authority_kind", "scope_type", "scope_ref", "version", "status",
+          "issuer_name", "issuer_jurisdiction", "issuer_reference", "evidence_sha256", "supersedes",
+        ]),
+        draft: summarizeRecord(draft, AUTHORITY_RECORD_FIELDS),
+      });
+    },
+  );
+
+  server.registerTool(
+    "request_authority_record",
+    {
+      title: "Request Authority Record Mutation",
+      description: "Approved-write: record or change one tenant-scoped Authority Record while preserving issuer evidence, immutable version history, and Hermes audit proof.",
+      inputSchema: approvedWriteInputSchema(AuthorityRecordInputSchema),
+    },
+    async (args) => {
+      assertWriteApproved(config, args);
+      const now = new Date().toISOString();
+      const before = args.authority_operation === "record"
+        ? null
+        : await readResourceOrNull(config, "Authority Record", args.authority_record_id);
+      const draft = authorityRecordDraftFromArgs(config, args, before, now);
+      if (args.roof_job_id && draft.roof_job && draft.roof_job !== args.roof_job_id) {
+        throw new Error("authority_record_roof_job_mismatch");
+      }
+      assertIssuerReceiptForDraft(config, draft, args.issuer_receipt);
+      return text(await executeAuditedWrite(config, {
+        runId: args.run_id,
+        now,
+        args,
+        agentRole: config.agentRoleTitle,
+        toolName: "request_authority_record",
+        target: { doctype: "Authority Record", name: draft.authority_record_id },
+        roofJob: draft.roof_job || undefined,
+        dryRun: {
+          target: { doctype: "Authority Record", name: draft.authority_record_id },
+          operation: args.authority_operation,
+          before: summarizeRecord(before, ["name", "authority_record_id", "version", "status"]),
+          draft: summarizeRecord(draft, AUTHORITY_RECORD_FIELDS),
+        },
+        beforeSummary: summarizeRecord(before, [
+          "name", "authority_record_id", "version", "status", "issuer_reference", "evidence_sha256",
+        ]),
+        afterSummary: summarizeRecord(draft, [
+          "authority_record_id", "tenant", "authority_kind", "scope_type", "scope_ref", "version", "status",
+          "issuer_reference", "evidence_sha256", "supersedes", "exception_status",
+        ]),
+        execute: () => executeAuthorityRecordMutation(config, { args, draft, before, now }),
+        responseExtra: {
+          upserted: true,
+          operation: args.authority_operation,
+          authority_record_id: draft.authority_record_id,
+          version: draft.version,
         },
       }));
     },
@@ -7536,24 +8683,6 @@ function communicationEventInputSchema() {
   };
 }
 
-async function buildCommunicationEventDraftFromArgs(args, nowIso) {
-  return buildCommunicationEventDraft({
-    eventId: args.communication_event_id,
-    roofJobId: args.roof_job_id,
-    leadEnvelopeId: args.lead_envelope_id,
-    channel: args.channel,
-    direction: args.direction,
-    template: args.template,
-    consentBasis: args.consent_basis,
-    bodyPreview: args.body_preview,
-    recipientRef: args.recipient_ref,
-    nowUtcIso: args.now_utc_iso ?? nowIso ?? new Date().toISOString(),
-    timezoneOffsetMinutes: args.timezone_offset_minutes,
-    startHour: args.quiet_start_hour,
-    endHour: args.quiet_end_hour,
-  });
-}
-
 function supplierQuoteInputSchema() {
   return {
     material_takeoff_id: z.string().min(1),
@@ -7601,6 +8730,7 @@ function jobAssignmentDraftFromArgs(args, nowIso) {
     assignedUser: args.assigned_user,
     scheduledStart: args.scheduled_start,
     scheduledEnd: args.scheduled_end,
+    authorityRequirements: args.authority_requirements,
     assignedBy: args.assigned_by,
     supersedes: args.supersedes,
     correctionReason: args.correction_reason,
@@ -7785,6 +8915,7 @@ function complianceDraftFromArgs(args, nowIso) {
     recordType: args.record_type,
     authorityName: args.authority_name,
     externalReference: args.external_reference,
+    authorityRecordId: args.authority_record_id,
     status: args.status,
     requiredBeforeGate: args.required_before_gate,
     appliedAt: args.applied_at,
@@ -7801,6 +8932,203 @@ function complianceDraftFromArgs(args, nowIso) {
     approvedBy: args.approved_by,
     nowIso,
   });
+}
+
+export function authorityRecordDraftFromArgs(config, args, before, nowIso) {
+  const operation = args.authority_operation;
+  // Frappe stores Datetime fields as MariaDB-compatible UTC text.  Build the
+  // command in that exact representation so its state digest survives the
+  // material Frappe readback instead of failing on an ISO-vs-DATETIME format
+  // difference after a successful write.
+  const frappeNow = frappeDatetimeIso(nowIso);
+  const requireValue = (value, field) => {
+    if (value === undefined || value === null || value === "") throw new Error(`authority_${field}_required`);
+    return value;
+  };
+  if (before && before.tenant && before.tenant !== config.tenantId) {
+    throw new Error("authority_record_tenant_mismatch");
+  }
+  if (operation !== "record" && !before) throw new Error("authority_record_not_found");
+  const priorVersion = Number(before?.version ?? 0);
+  const append = ["renew", "supersede", "revoke", "resolve_exception"].includes(operation);
+  const version = append ? priorVersion + 1 : (before ? priorVersion : 1);
+  const recordId = append
+    ? (args.new_authority_record_id ?? `${args.authority_record_id}:v${version}`)
+    : args.authority_record_id;
+  const base = before ? { ...before } : {};
+  delete base.name;
+  delete base.modified;
+  delete base.state_digest_sha256;
+  delete base.new_authority_record_id;
+  delete base.authority_operation;
+  const draft = {
+    ...base,
+    authority_record_id: recordId,
+    tenant: config.tenantId,
+    version,
+  };
+  if (operation === "record") {
+    for (const field of [
+      "subject_type", "subject_role", "authority_kind", "authority_scope", "scope_type", "scope_ref",
+      "issuer_name", "issuer_jurisdiction", "issuer_reference", "source_version",
+      "evidence_sha256", "effective_from", "expires_at",
+    ]) requireValue(args[field], field);
+    if (args.subject_type === "Person") requireValue(args.person_user, "person_user");
+    if (args.subject_type === "Organization") requireValue(args.organization, "organization");
+    if (!args.evidence_refs?.length) throw new Error("authority_evidence_refs_required");
+    Object.assign(draft, {
+      subject_type: args.subject_type,
+      subject_role: args.subject_role,
+      person_user: args.person_user ?? "",
+      organization: args.organization ?? "",
+      authority_kind: args.authority_kind,
+      authority_scope: args.authority_scope,
+      scope_type: args.scope_type,
+      scope_ref: args.scope_ref,
+      roof_job: args.roof_job_id ?? "",
+      scope_json: args.scope_json ? JSON.stringify(args.scope_json) : "",
+      issuer_name: args.issuer_name,
+      issuer_jurisdiction: args.issuer_jurisdiction,
+      issuer_reference: args.issuer_reference,
+      source_version: args.source_version,
+      evidence_refs_json: JSON.stringify(args.evidence_refs),
+      evidence_sha256: args.evidence_sha256,
+      issuer_readback_json: "",
+      effective_from: args.effective_from,
+      expires_at: args.expires_at,
+      status: "Unverified",
+      verification_method: "",
+      verified_at: "",
+      verification_reference: "",
+      verified_by: "",
+      revoked_at: "",
+      revocation_reference: "",
+      revoked_by: "",
+      supersedes: "",
+      correction_reason: "",
+      exception_status: "None",
+      exception_reason: "",
+      notes: args.notes ?? "",
+    });
+    return draft;
+  }
+  if (append) {
+    if (!args.correction_reason) throw new Error("authority_correction_reason_required");
+    draft.supersedes = before.authority_record_id ?? before.name;
+    draft.correction_reason = args.correction_reason;
+    draft.subject_type = args.subject_type ?? before.subject_type;
+    draft.subject_role = args.subject_role ?? before.subject_role;
+    draft.person_user = args.person_user ?? before.person_user ?? "";
+    draft.organization = args.organization ?? before.organization ?? "";
+    draft.authority_kind = args.authority_kind ?? before.authority_kind;
+    draft.authority_scope = args.authority_scope ?? before.authority_scope;
+    draft.scope_type = args.scope_type ?? before.scope_type;
+    draft.scope_ref = args.scope_ref ?? before.scope_ref;
+    draft.roof_job = args.roof_job_id ?? before.roof_job ?? "";
+    draft.scope_json = args.scope_json ? JSON.stringify(args.scope_json) : before.scope_json ?? "";
+    draft.issuer_name = args.issuer_name ?? before.issuer_name;
+    draft.issuer_jurisdiction = args.issuer_jurisdiction ?? before.issuer_jurisdiction;
+    draft.issuer_reference = args.issuer_reference ?? before.issuer_reference;
+    draft.source_version = args.source_version ?? before.source_version;
+    draft.evidence_refs_json = args.evidence_refs ? JSON.stringify(args.evidence_refs) : before.evidence_refs_json;
+    draft.evidence_sha256 = args.evidence_sha256 ?? before.evidence_sha256;
+    draft.effective_from = args.effective_from ?? before.effective_from;
+    draft.expires_at = args.expires_at ?? before.expires_at;
+  }
+  if (operation === "revoke") {
+    draft.status = "Revoked";
+    draft.verification_method = "";
+    draft.verified_at = "";
+    draft.verification_reference = "";
+    draft.verified_by = "";
+    draft.revoked_at = args.revoked_at ? frappeDatetimeIso(args.revoked_at) : frappeNow;
+    draft.revocation_reference = requireValue(args.revocation_reference, "revocation_reference");
+    draft.revoked_by = config.actorUser;
+    draft.exception_status = "None";
+    draft.exception_reason = "";
+  } else {
+    draft.status = "Verified";
+    draft.verification_method = requireValue(args.verification_method, "verification_method");
+    if (EXTERNAL_AUTHORITY_KINDS.has(draft.authority_kind) && draft.verification_method === "Internal Competency Assessment") {
+      throw new Error("authority_external_issuer_readback_required");
+    }
+    draft.verified_at = frappeNow;
+    draft.verification_reference = requireValue(args.verification_reference, "verification_reference");
+    draft.verified_by = config.actorUser;
+    draft.revoked_at = "";
+    draft.revocation_reference = "";
+    draft.revoked_by = "";
+    draft.exception_status = operation === "resolve_exception" ? "Resolved" : "None";
+    draft.exception_reason = "";
+  }
+  return draft;
+}
+
+export function authorityStateDigest(record) {
+  return digest(Object.fromEntries(
+    AUTHORITY_MATERIAL_DIGEST_FIELDS.map((field) => [field, record[field] ?? ""]),
+  ));
+}
+
+function authorityReadbackExpectedState(status) {
+  if (status === "Verified") return "verified";
+  if (status === "Revoked") return "revoked";
+  if (status === "Contradictory") return "contradictory";
+  return "unavailable";
+}
+
+export function assertIssuerReceiptForDraft(config, draft, receipt) {
+  const requiresIssuer = EXTERNAL_AUTHORITY_KINDS.has(draft.authority_kind)
+    && draft.status !== "Unverified";
+  if (!requiresIssuer) {
+    if (receipt) throw new Error("authority_issuer_receipt_not_applicable");
+    draft.issuer_readback_json = "";
+    return null;
+  }
+  if (!receipt) throw new Error("authority_issuer_receipt_required");
+  if (receipt.tenant !== draft.tenant ||
+      receipt.authority_record_id !== draft.authority_record_id ||
+      receipt.authority_version !== Number(draft.version) ||
+      receipt.issuer_name !== draft.issuer_name ||
+      receipt.issuer_jurisdiction !== draft.issuer_jurisdiction ||
+      receipt.issuer_reference !== draft.issuer_reference ||
+      receipt.issuer_source_version !== draft.source_version ||
+      String(receipt.evidence_sha256).toLowerCase() !== String(draft.evidence_sha256).toLowerCase() ||
+      receipt.verification_state !== authorityReadbackExpectedState(draft.status)) {
+    throw new Error("authority_issuer_receipt_mismatch");
+  }
+  let receiptEvidence;
+  let draftEvidence;
+  try {
+    receiptEvidence = JSON.parse(receipt.evidence_refs_json);
+    draftEvidence = JSON.parse(draft.evidence_refs_json);
+  } catch {
+    throw new Error("authority_issuer_evidence_invalid");
+  }
+  if (canonicalJson(receiptEvidence) !== canonicalJson(draftEvidence)) {
+    throw new Error("authority_issuer_evidence_mismatch");
+  }
+  const expectedDigest = authorityStateDigest(draft);
+  if (receipt.state_digest_sha256.toLowerCase() !== expectedDigest) {
+    throw new Error("authority_issuer_state_digest_mismatch");
+  }
+  const publicKey = config.authorityIssuerPublicKeys?.[receipt.issuer_key_id];
+  if (!publicKey) throw new Error("authority_issuer_public_key_required");
+  const { signature, ...unsignedReceipt } = receipt;
+  let valid = false;
+  try {
+    valid = verifySignature(
+      null,
+      Buffer.from(canonicalJson(unsignedReceipt)),
+      publicKey,
+      Buffer.from(signature, "base64url"),
+    );
+  } catch {
+    valid = false;
+  }
+  if (!valid) throw new Error("authority_issuer_signature_invalid");
+  draft.issuer_readback_json = JSON.stringify(receipt);
+  return receipt;
 }
 
 function customerDecisionDraftFromArgs(args) {
@@ -7854,6 +9182,83 @@ async function assertLinkedResourceForJob(config, doctype, name, roofJobId, labe
   assertLinkedRoofJob(roofJobId, record, label);
   if (doctype === "Evidence Item") assertVerifiedEvidence(record, label, evidencePolicy);
   return record;
+}
+
+async function buildJobCostEventPreviewFromErp(config, args, nowIso = new Date().toISOString()) {
+  const candidate = buildJobCostEventCandidate(args, {
+    tenantId: config.tenantId,
+    actorUser: config.actorUser,
+    approverId: config.approverId,
+    nowIso,
+  });
+  const [tenant, roofJob, sourceRecord, evidence, existing] = await Promise.all([
+    readResource(config, "White-Label Tenant", candidate.tenant),
+    readResource(config, "Roof Job", candidate.roof_job),
+    readResource(config, candidate.source_doctype, candidate.source_name),
+    readResource(config, "Evidence Item", candidate.source_evidence),
+    readResourceOrNull(config, "Job Cost Event", candidate.job_cost_event_id),
+  ]);
+  const [reversalTarget, reversalRows, reconciliation] = await Promise.all([
+    candidate.reversal_of
+      ? readResource(config, "Job Cost Event", candidate.reversal_of)
+      : Promise.resolve(null),
+    candidate.reversal_of
+      ? listResources(config, "Job Cost Event", {
+          fields: ["name", "job_cost_event_id", "reversal_of"],
+          filters: [["Job Cost Event", "reversal_of", "=", candidate.reversal_of]],
+          limit: 2,
+          orderBy: "occurred_at desc",
+        })
+      : Promise.resolve([]),
+    candidate.reconciliation
+      ? readResource(config, "Integration Reconciliation", candidate.reconciliation)
+      : Promise.resolve(null),
+  ]);
+  const existingReversals = reversalRows.filter(
+    (row) => (row.job_cost_event_id ?? row.name) !== candidate.job_cost_event_id,
+  );
+  assertJobCostEventSources(candidate, {
+    tenant,
+    roofJob,
+    sourceRecord,
+    evidence,
+    reversalTarget,
+    existingReversals,
+    reconciliation,
+  });
+  const replayState = classifyJobCostEventReplay(candidate, existing);
+  if (replayState === "id_conflict") throw new Error("job_cost_event_id_conflict");
+
+  return {
+    would_write: false,
+    write_tool_available: false,
+    customer_mutated: false,
+    accounting_mutated: false,
+    target: { doctype: "Job Cost Event", name: candidate.job_cost_event_id },
+    append_only: true,
+    replay_state: replayState,
+    blocked_existing: replayState === "identical_replay",
+    candidate,
+    verified_source: {
+      doctype: candidate.source_doctype,
+      name: candidate.source_name,
+      evidence_item_id: candidate.source_evidence,
+      sha256: candidate.source_digest,
+    },
+    accounting_semantics: {
+      state: candidate.accounting_state,
+      posted_requires_exact_terminal_reconciliation: true,
+      revenue_recognized: false,
+      cash_collected: false,
+      tax_included: false,
+    },
+    human_gate: {
+      action: replayState === "identical_replay" ? "none" : "manual_frappe_insert",
+      required_current_frappe_user: config.approverId,
+      approval_reference: candidate.approval_reference,
+      note: "The current Frappe Finance/Owner must independently review and insert this candidate; this MCP has no Job Cost Event write tool.",
+    },
+  };
 }
 
 export async function assertGateEvidenceForState(config, nextState, evidenceItemId, roofJobId) {
@@ -7999,6 +9404,92 @@ async function previewProductionScheduleGatePreview(config, draft) {
   });
 }
 
+async function buildCompleteWorkPackagePreview(config, args) {
+  const packageRow = await readResource(config, "Work Package", args.work_package_id);
+  const packageName = packageRow?.name ?? args.work_package_id;
+  const packageIdentity = packageRow?.work_package_id;
+  if (packageIdentity && packageIdentity !== args.work_package_id) {
+    throw new Error("work_package_completion_target_mismatch");
+  }
+  const typedScope = normalizeWorkPackageScopeArgs(args);
+  if (typedScope) {
+    if (args.roof_job_id && args.roof_job_id !== typedScope.work_object_id) {
+      throw new Error("work_package_completion_scope_mismatch");
+    }
+    for (const [field, expected] of Object.entries(typedScope)) {
+      if (packageRow?.[field] !== expected) {
+        throw new Error(`work_package_completion_${field}_mismatch`);
+      }
+    }
+    if (packageRow?.roof_job) {
+      throw new Error("work_package_completion_non_roof_scope_mismatch");
+    }
+  } else {
+    if (!args.roof_job_id) throw new Error("work_package_scope_required");
+    if (packageRow?.roof_job && packageRow.roof_job !== args.roof_job_id) {
+      throw new Error("work_package_completion_roof_job_mismatch");
+    }
+  }
+  if (packageRow?.job_assignment && packageRow.job_assignment !== args.job_assignment_id) {
+    throw new Error("work_package_completion_assignment_mismatch");
+  }
+  if (packageRow?.version != null && Number(packageRow.version) !== args.work_package_version) {
+    throw new Error("work_package_completion_version_mismatch");
+  }
+  if (packageRow?.release_attempt_id && packageRow.release_attempt_id !== args.release_attempt_id) {
+    throw new Error("work_package_completion_release_attempt_mismatch");
+  }
+  const eventRows = await listResources(config, "Work Package Event", {
+    fields: WORK_PACKAGE_EVENT_FIELDS,
+    filters: [["Work Package Event", "work_package", "=", packageName]],
+    limit: 100,
+    orderBy: "occurred_at asc",
+  });
+  return {
+    would_write: false,
+    online_only: true,
+    command: "complete_work_package",
+    target: { doctype: "Work Package", name: packageName },
+    package: {
+      status: packageRow?.status ?? null,
+      version: packageRow?.version ?? null,
+      release_attempt_id: packageRow?.release_attempt_id ?? null,
+      work_object_type: packageRow?.work_object_type ?? null,
+      work_object_id: packageRow?.work_object_id ?? null,
+      physical_context_type: packageRow?.physical_context_type ?? null,
+      physical_context_id: packageRow?.physical_context_id ?? null,
+    },
+    requested: {
+      work_package_id: args.work_package_id,
+      ...(args.roof_job_id ? { roof_job_id: args.roof_job_id } : {}),
+      ...(typedScope ?? {}),
+      job_assignment_id: args.job_assignment_id,
+      completion_authority_user: args.completion_authority_user,
+      device_action_id: args.device_action_id,
+      work_package_version: args.work_package_version,
+      release_attempt_id: args.release_attempt_id,
+    },
+    current_event_count: eventRows.length,
+    current_event_types: [...new Set(eventRows.map((row) => row.event_type).filter(Boolean))].sort(),
+    note: "Frappe rechecks roster, release attempt, holds, evidence, reviews, and independent authority at execution time; this preview is not completion proof.",
+  };
+}
+
+function normalizeWorkPackageScopeArgs(args = {}) {
+  const fields = [
+    "work_object_type",
+    "work_object_id",
+    "physical_context_type",
+    "physical_context_id",
+  ];
+  const supplied = fields.filter((field) => args[field] !== undefined);
+  if (supplied.length === 0) return null;
+  if (supplied.length !== fields.length) {
+    throw new Error("work_package_scope_incomplete");
+  }
+  return Object.fromEntries(fields.map((field) => [field, args[field]]));
+}
+
 async function finalizeHermesRun(config, runId, patch) {
   try {
     await erpPut(config, resourcePath("Hermes Run", runId), patch);
@@ -8032,6 +9523,7 @@ export async function executeAuditedWrite(config, {
   dryRun,
   beforeSummary,
   afterSummary,
+  targetMutation = true,
   execute,
   responseExtra = {},
 }) {
@@ -8125,8 +9617,25 @@ export async function executeAuditedWrite(config, {
 
   let mutationApplied = false;
   try {
-    const result = await execute();
-    mutationApplied = true;
+    const externalEffectContext = {
+      runId,
+      toolName,
+      target,
+      mutationApplied: false,
+    };
+    const previousExternalEffectContext = config.__externalEffectContext;
+    let result;
+    try {
+      config.__externalEffectContext = externalEffectContext;
+      result = await execute();
+    } catch (error) {
+      mutationApplied = externalEffectContext.mutationApplied;
+      throw error;
+    } finally {
+      if (previousExternalEffectContext === undefined) delete config.__externalEffectContext;
+      else config.__externalEffectContext = previousExternalEffectContext;
+    }
+    mutationApplied = targetMutation || externalEffectContext.mutationApplied;
     const resolvedAfterSummary = typeof afterSummary === "function"
       ? afterSummary(result)
       : afterSummary;
@@ -8136,12 +9645,15 @@ export async function executeAuditedWrite(config, {
       result_status: "OK",
       after_target_ids: JSON.stringify(resolvedAfterSummary),
       result_json: JSON.stringify(result),
-      mutation_applied: 1,
+      mutation_applied: mutationApplied ? 1 : 0,
       audit_event_id: `audit:${runId}`,
       request_correlation_id: runId,
       completed_at: completedAt,
     });
     if (auditError) {
+      if (!mutationApplied) {
+        throw new Error(`audit_finalize_failed_no_target_mutation:${runId}:${auditError}`);
+      }
       const expectedIncidentId = `incident:audit:${runId}`;
       const incidentId = await recordAuditFinalizationIncident(config, {
         runId,
@@ -8175,12 +9687,21 @@ export async function executeAuditedWrite(config, {
     };
   } catch (err) {
     if (!mutationApplied) {
-      await erpPut(config, resourcePath("Hermes Run", runId), {
+      const failurePatch = {
         approval_status: "Failed",
         result_status: "Error",
         error: String(err).slice(0, 500),
         completed_at: frappeDatetimeIso(new Date().toISOString()),
         mutation_applied: 0,
+      };
+      if (err?.d1_action) {
+        failurePatch.result_json = JSON.stringify({
+          authority_terminal_action: err.d1_action,
+          authority_terminal_evidence: err.d1_evidence ?? null,
+        });
+      }
+      await erpPut(config, resourcePath("Hermes Run", runId), {
+        ...failurePatch,
       }).catch(() => {});
     }
     throw err;
@@ -10194,41 +11715,214 @@ function proposalPublicationPreview(pack, approvedBy) {
   };
 }
 
-async function buildMaterialTakeoffDraftFromErp(config, roofJobId, {
+export async function buildMaterialTakeoffDraftFromErp(config, roofJobId, {
+  materialSystem,
   measurementReportId,
+  takeoffPolicyId,
   takeoffId,
   limit = 25,
   nowIso,
+  policyAuthority = "current_approved",
 } = {}) {
+  if (!materialSystem) throw new Error("material_takeoff_material_system_required");
+  const effectiveAt = nowIso ?? new Date().toISOString();
+  const [tenant, roofJob] = await Promise.all([
+    readResource(config, "White-Label Tenant", config.tenantId),
+    readResource(config, "Roof Job", roofJobId),
+  ]);
+  if ((tenant.tenant_id ?? tenant.name) !== config.tenantId || tenant.status !== "Active") {
+    throw new Error("material_takeoff_tenant_not_active");
+  }
+  if ((roofJob.roof_job_id ?? roofJob.name) !== roofJobId || !roofJob.brand || !roofJob.service_type) {
+    throw new Error("material_takeoff_roof_job_invalid");
+  }
+
   let reportName = measurementReportId;
   let measurementReport;
   if (!reportName) {
     const reports = await listResources(config, "Measurement Report", {
       fields: MEASUREMENT_REPORT_FIELDS,
       filters: [["Measurement Report", "roof_job", "=", roofJobId]],
-      limit,
+      limit: limit + 1,
       orderBy: "parsed_at desc",
     });
     if (!reports.length) throw new Error("measurement_report_required");
-    for (const row of reports) {
-      const candidateName = row.measurement_id ?? row.name;
-      if (!candidateName) continue;
-      const candidate = await readResource(config, "Measurement Report", candidateName);
-      if (measurementRowsFromReport(candidate).length) {
-        measurementReport = candidate;
-        break;
-      }
-    }
-    if (!measurementReport) throw new Error("measurement_values_required");
+    const truncated = reports.length > limit;
+    const candidate = selectUniqueGovernedMeasurementReport(reports.slice(0, limit), {
+      roofJobId,
+      truncated,
+    });
+    reportName = candidate.measurement_id ?? candidate.name;
+    if (!reportName) throw new Error("measurement_report_required");
   }
   measurementReport ??= await readResource(config, "Measurement Report", reportName);
+  const takeoffPolicy = takeoffPolicyId
+    ? await readResource(config, "Material Takeoff Policy", takeoffPolicyId)
+    : await selectEffectiveTakeoffPolicy(config, {
+      tenantId: config.tenantId,
+      brand: roofJob.brand,
+      serviceType: roofJob.service_type,
+      materialSystem,
+      effectiveAt,
+    });
+  const policyEvidence = await readResource(config, "Evidence Item", takeoffPolicy.source_evidence);
   const draft = buildMaterialTakeoffDraft({
     roofJobId,
+    tenantId: config.tenantId,
+    materialSystem,
+    roofJob,
     takeoffId,
     measurementReport,
-    nowIso,
+    takeoffPolicy,
+    policyEvidence,
+    nowIso: effectiveAt,
+    policyAuthority,
   });
-  return { draft, measurementReport };
+  return { draft, measurementReport, roofJob, takeoffPolicy };
+}
+
+export function selectUniqueGovernedMeasurementReport(candidates, { roofJobId, truncated }) {
+  if (!Array.isArray(candidates)) throw new Error("material_takeoff_measurement_selection_invalid");
+  const eligible = candidates.filter((candidate) => (
+    candidate
+    && typeof candidate === "object"
+    && candidate.roof_job === roofJobId
+    && candidate.roof_graph_revision
+  ));
+  if (eligible.length > 1) throw new Error("material_takeoff_measurement_ambiguous");
+  // A sentinel row means uniqueness is unknowable inside the bounded window,
+  // even when one eligible report appeared before the sentinel.
+  if (truncated) throw new Error("material_takeoff_measurement_window_truncated");
+  if (eligible.length === 0) throw new Error("material_takeoff_roof_graph_required");
+  return eligible[0];
+}
+
+export async function prepareMaterialTakeoffWriteFromErp(config, roofJobId, {
+  materialSystem,
+  measurementReportId,
+  takeoffPolicyId,
+  takeoffId = materialTakeoffIdForRoofJob(roofJobId),
+  limit = 25,
+  nowIso = new Date().toISOString(),
+} = {}) {
+  if (!materialSystem) throw new Error("material_takeoff_material_system_required");
+  const before = await readResourceOrNull(config, "Material Takeoff", takeoffId);
+  if (!before) {
+    const built = await buildMaterialTakeoffDraftFromErp(config, roofJobId, {
+      materialSystem,
+      measurementReportId,
+      takeoffPolicyId,
+      takeoffId,
+      limit,
+      nowIso,
+      policyAuthority: "current_approved",
+    });
+    return { ...built, before: null, operation: "create", targetMutation: true };
+  }
+
+  assertMaterialTakeoffHistoricalReplayRequest(before, {
+    roofJobId,
+    takeoffId,
+    tenantId: config.tenantId,
+    materialSystem,
+    measurementReportId,
+    takeoffPolicyId,
+  });
+  const built = await buildMaterialTakeoffDraftFromErp(config, roofJobId, {
+    materialSystem: before.material_system,
+    measurementReportId: before.measurement_report,
+    takeoffPolicyId: before.takeoff_policy,
+    takeoffId,
+    limit,
+    nowIso: before.prepared_at,
+    policyAuthority: "historical_replay",
+  });
+  assertMaterialTakeoffReplaySafe(before, built.draft);
+  return { ...built, before, operation: "replay", targetMutation: false };
+}
+
+function assertMaterialTakeoffHistoricalReplayRequest(before, {
+  roofJobId,
+  takeoffId,
+  tenantId,
+  materialSystem,
+  measurementReportId,
+  takeoffPolicyId,
+}) {
+  if (!before || !["Draft", "Needs Review"].includes(before.status)) {
+    throw new Error("material_takeoff_existing_state_not_writable");
+  }
+  const required = [
+    "prepared_at",
+    "roof_job",
+    "tenant",
+    "material_system",
+    "measurement_report",
+    "takeoff_policy",
+    "geometry_revision",
+    "source_raw_sha256",
+    "policy_digest",
+    "options_digest",
+    "calculation_digest",
+  ];
+  if (required.some((field) => !before[field]) || !Number.isFinite(Date.parse(before.prepared_at))) {
+    throw new Error("material_takeoff_legacy_state_requires_preflight");
+  }
+  const existingId = before.takeoff_id ?? before.name;
+  if (
+    existingId !== takeoffId
+    || before.roof_job !== roofJobId
+    || before.tenant !== tenantId
+    || before.material_system !== materialSystem
+    || (measurementReportId !== undefined && measurementReportId !== before.measurement_report)
+    || (takeoffPolicyId !== undefined && takeoffPolicyId !== before.takeoff_policy)
+  ) {
+    throw new Error("material_takeoff_existing_binding_mismatch");
+  }
+}
+
+async function selectEffectiveTakeoffPolicy(config, {
+  tenantId,
+  brand,
+  serviceType,
+  materialSystem,
+  effectiveAt,
+}) {
+  const rows = await listResources(config, "Material Takeoff Policy", {
+    fields: MATERIAL_TAKEOFF_POLICY_FIELDS,
+    filters: [
+      ["Material Takeoff Policy", "tenant", "=", tenantId],
+      ["Material Takeoff Policy", "brand", "=", brand],
+      ["Material Takeoff Policy", "service_type", "=", serviceType],
+      ["Material Takeoff Policy", "material_system", "=", materialSystem],
+      ["Material Takeoff Policy", "status", "=", "Approved"],
+    ],
+    // Fetch one beyond the bounded authority window so a large policy set can
+    // never be mistaken for a unique result because Frappe truncated the list.
+    limit: 101,
+    orderBy: "policy_version desc",
+  });
+  const policyId = selectUniqueEffectiveTakeoffPolicyId(rows, effectiveAt);
+  return readResource(config, "Material Takeoff Policy", policyId);
+}
+
+export function selectUniqueEffectiveTakeoffPolicyId(rows, effectiveAt) {
+  if (!Array.isArray(rows)) throw new Error("material_takeoff_policy_selection_invalid");
+  if (rows.length >= 101) throw new Error("material_takeoff_policy_selection_window_exceeded");
+  const at = Date.parse(effectiveAt);
+  if (!Number.isFinite(at)) throw new Error("material_takeoff_policy_effective_window_invalid");
+  const effective = rows.filter((row) => {
+    const from = Date.parse(row.effective_from ?? "");
+    const to = row.effective_to
+      ? Date.parse(`${String(row.effective_to).slice(0, 10)}T23:59:59.999Z`)
+      : null;
+    return Number.isFinite(from) && at >= from && (to === null || (Number.isFinite(to) && at <= to));
+  });
+  if (effective.length === 0) throw new Error("material_takeoff_policy_required");
+  if (effective.length > 1) throw new Error("material_takeoff_policy_ambiguous");
+  const policyId = effective[0].policy_id ?? effective[0].name;
+  if (!policyId) throw new Error("material_takeoff_policy_id_invalid");
+  return policyId;
 }
 
 async function buildSupplierOrderDraftFromErp(config, materialTakeoffId, {
@@ -10670,39 +12364,258 @@ function measurementRowsFromReport(report) {
     .filter((row) => row.metric && Number.isFinite(row.value));
 }
 
-function takeoffItemForMeasurement(row) {
-  const category = takeoffCategory(row.metric, row.unit);
-  return {
-    category,
-    item_name: takeoffItemName(row.metric, category),
-    quantity: row.value,
-    unit: row.unit,
-    waste_factor: takeoffWasteFactor(category),
-    source_ref: row.source_ref || row.metric,
-    confidence: row.confidence,
-    needs_review: 1,
-  };
-}
+const TAKEOFF_HASH = /^[a-f0-9]{64}$/;
+const TAKEOFF_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-function takeoffCategory(metric, unit) {
-  const text = `${metric} ${unit}`.toLowerCase();
-  if (text.includes("sqft") || text.includes("square") || text.includes("area")) return "Roof Surface";
-  if (text.includes("ft") || text.includes("perimeter") || text.includes("eave") || text.includes("rake") || text.includes("ridge") || text.includes("valley") || text.includes("edge")) {
-    return "Linear Metal";
+function parseGovernedRoofGraph(measurementReport) {
+  let graph;
+  try {
+    graph = JSON.parse(measurementReport.roof_graph_json);
+  } catch {
+    throw new Error("material_takeoff_roof_graph_required");
   }
-  return "Measurement";
+  if (!graph || typeof graph !== "object" || Array.isArray(graph) || graph.schema_version !== "roof_graph/v1") {
+    throw new Error("material_takeoff_roof_graph_invalid");
+  }
+  if (!TAKEOFF_HASH.test(graph.revision ?? "") || measurementReport.roof_graph_revision !== graph.revision) {
+    throw new Error("material_takeoff_geometry_revision_mismatch");
+  }
+  if (
+    !graph.source
+    || graph.source.raw_sha256 !== graph.revision
+    || !TAKEOFF_HASH.test(graph.source.raw_sha256 ?? "")
+    || !String(graph.source.raw_key ?? "").trim()
+    || !String(graph.source.provider ?? "").trim()
+  ) {
+    throw new Error("material_takeoff_roof_graph_source_invalid");
+  }
+  if (
+    !Array.isArray(graph.points)
+    || graph.points.length === 0
+    || !Array.isArray(graph.edges)
+    || graph.edges.length === 0
+    || !Array.isArray(graph.facets)
+    || graph.facets.length === 0
+    || !Array.isArray(graph.checks)
+    || typeof graph.needs_review !== "boolean"
+    || !graph.measurements
+    || typeof graph.measurements !== "object"
+    || Array.isArray(graph.measurements)
+    || !graph.source_refs
+    || typeof graph.source_refs !== "object"
+    || Array.isArray(graph.source_refs)
+  ) {
+    throw new Error("material_takeoff_roof_graph_invalid");
+  }
+  return graph;
 }
 
-function takeoffItemName(metric, category) {
-  if (category === "Roof Surface") return `Roof surface from ${metric}`;
-  if (category === "Linear Metal") return `Linear metal from ${metric}`;
-  return `Measurement input: ${metric}`;
+function parseApprovedTakeoffPolicy({
+  takeoffPolicy,
+  policyEvidence,
+  tenantId,
+  materialSystem,
+  roofJob,
+  nowIso,
+  policyAuthority,
+}) {
+  const policyId = takeoffPolicy.policy_id ?? takeoffPolicy.name;
+  if (!TAKEOFF_ID.test(policyId ?? "")) throw new Error("material_takeoff_policy_id_invalid");
+  const historicalReplay = policyAuthority === "historical_replay";
+  if (policyAuthority !== "current_approved" && !historicalReplay) {
+    throw new Error("material_takeoff_policy_authority_invalid");
+  }
+  if (
+    (historicalReplay && !["Approved", "Retired"].includes(takeoffPolicy.status))
+    || (!historicalReplay && takeoffPolicy.status !== "Approved")
+  ) {
+    throw new Error("material_takeoff_policy_approved_required");
+  }
+  if (takeoffPolicy.tenant !== tenantId) throw new Error("material_takeoff_policy_tenant_mismatch");
+  if (takeoffPolicy.brand !== roofJob.brand) throw new Error("material_takeoff_policy_brand_mismatch");
+  if (takeoffPolicy.service_type !== roofJob.service_type) throw new Error("material_takeoff_policy_service_mismatch");
+  if (takeoffPolicy.material_system !== materialSystem) throw new Error("material_takeoff_policy_material_system_mismatch");
+  const policyVersion = Number(takeoffPolicy.policy_version);
+  if (!Number.isInteger(policyVersion) || policyVersion < 1) throw new Error("material_takeoff_policy_version_invalid");
+  if (
+    !String(takeoffPolicy.approved_by ?? "").trim()
+    || !Number.isFinite(Date.parse(takeoffPolicy.approved_at ?? ""))
+    || !String(takeoffPolicy.approval_note ?? "").trim()
+  ) {
+    throw new Error("material_takeoff_policy_approval_invalid");
+  }
+  const effectiveAt = Date.parse(nowIso ?? "");
+  const effectiveFrom = Date.parse(takeoffPolicy.effective_from ?? "");
+  const effectiveTo = takeoffPolicy.effective_to
+    ? Date.parse(`${String(takeoffPolicy.effective_to).slice(0, 10)}T23:59:59.999Z`)
+    : null;
+  if (!Number.isFinite(effectiveAt) || !Number.isFinite(effectiveFrom)) {
+    throw new Error("material_takeoff_policy_effective_window_invalid");
+  }
+  if (effectiveAt < effectiveFrom || (effectiveTo !== null && (!Number.isFinite(effectiveTo) || effectiveAt > effectiveTo))) {
+    throw new Error("material_takeoff_policy_not_effective");
+  }
+
+  if (
+    !policyEvidence
+    || policyEvidence.name !== takeoffPolicy.source_evidence
+    || policyEvidence.sync_state !== "Verified"
+    || policyEvidence.checksum_algorithm !== "SHA-256"
+    || !TAKEOFF_HASH.test(policyEvidence.content_checksum ?? "")
+    || !Number.isFinite(Date.parse(policyEvidence.verified_at ?? ""))
+    || !String(policyEvidence.verification_source ?? "").trim()
+  ) {
+    throw new Error("material_takeoff_policy_evidence_invalid");
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(takeoffPolicy.policy_json);
+  } catch {
+    throw new Error("material_takeoff_policy_json_invalid");
+  }
+  assertExactTakeoffKeys(payload, ["calculation_version", "options", "schema_version"], "material_takeoff_policy_json_invalid");
+  if (
+    payload.schema_version !== "material_takeoff_policy/v1"
+    || payload.calculation_version !== GOVERNED_TAKEOFF_CALCULATION_VERSION
+  ) {
+    throw new Error("material_takeoff_policy_schema_invalid");
+  }
+  const raw = payload.options;
+  assertExactTakeoffKeys(raw, [
+    "clip_spacing_ft",
+    "coil_allowances",
+    "coverage_width_ft",
+    "fastener_item_ids",
+    "length_increment_ft",
+    "max_panel_length_ft",
+    "min_reusable_offcut_ft",
+    "mode",
+    "panel_item_id",
+    "screws_per_clip",
+    "stock_lengths_ft",
+    "trim_lap_ft",
+    "trim_profiles",
+    "trim_screw_spacing_ft",
+    "trim_stock_ft",
+  ], "material_takeoff_policy_options_invalid");
+  assertExactTakeoffKeys(raw.coil_allowances, ["scrap_factor", "setup_ft", "tail_ft"], "material_takeoff_policy_coil_allowances_invalid");
+  assertExactTakeoffKeys(raw.fastener_item_ids, ["clip", "clip_screw", "trim_screw"], "material_takeoff_policy_fasteners_invalid");
+  const options = {
+    panelProfileId: raw.panel_item_id,
+    coverageWidthFt: raw.coverage_width_ft,
+    lengthIncrementFt: raw.length_increment_ft,
+    maxPanelLengthFt: raw.max_panel_length_ft,
+    mode: raw.mode,
+    stockLengthsFt: raw.stock_lengths_ft,
+    minReusableOffcutFt: raw.min_reusable_offcut_ft,
+    coilSetupAllowanceFt: raw.coil_allowances.setup_ft,
+    coilTailAllowanceFt: raw.coil_allowances.tail_ft,
+    coilScrapFactor: raw.coil_allowances.scrap_factor,
+    trimStockFt: raw.trim_stock_ft,
+    trimLapFt: raw.trim_lap_ft,
+    trimProfiles: raw.trim_profiles,
+    clipSpacingFt: raw.clip_spacing_ft,
+    screwsPerClip: raw.screws_per_clip,
+    trimScrewSpacingFt: raw.trim_screw_spacing_ft,
+    fastenerItemIds: {
+      clip: raw.fastener_item_ids.clip,
+      clipScrew: raw.fastener_item_ids.clip_screw,
+      trimScrew: raw.fastener_item_ids.trim_screw,
+    },
+  };
+  const policyBinding = {
+    id: policyId,
+    tenant: tenantId,
+    brand: takeoffPolicy.brand,
+    service_type: takeoffPolicy.service_type,
+    material_system: materialSystem,
+    version: policyVersion,
+    effective_from: takeoffPolicy.effective_from,
+    effective_to: takeoffPolicy.effective_to || null,
+    source_evidence: policyEvidence.name,
+    source_evidence_sha256: policyEvidence.content_checksum,
+    source_evidence_verified_at: policyEvidence.verified_at,
+    source_evidence_verification_source: policyEvidence.verification_source,
+    approved_by: takeoffPolicy.approved_by,
+    approved_at: takeoffPolicy.approved_at,
+    policy_payload: payload,
+  };
+  return { options, policyBinding, policyDigest: digest(policyBinding) };
 }
 
-function takeoffWasteFactor(category) {
-  if (category === "Roof Surface") return 10;
-  if (category === "Linear Metal") return 5;
-  return 0;
+function assertExactTakeoffKeys(value, expected, code) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(code);
+  const actual = Object.keys(value).sort();
+  const required = [...expected].sort();
+  if (actual.length !== required.length || actual.some((key, index) => key !== required[index])) throw new Error(code);
+}
+
+function materialTakeoffReviewReasons(graph, computed) {
+  const reasons = [];
+  if (graph.needs_review) reasons.push("geometry_needs_review");
+  for (const check of computed.checks.filter((entry) => !entry.ok)) {
+    reasons.push(`computed_check:${check.check}:${check.target}`);
+  }
+  if (computed.totals.panelCount === 0) reasons.push("panel_schedule_empty");
+  if (computed.totals.skippedFacets > 0) reasons.push("facet_schedule_incomplete");
+  if (computed.panelNest.unplaced.length > 0) reasons.push("panel_cuts_unplaced");
+  if (computed.needsReview && reasons.length === 0) reasons.push("takeoff_engine_needs_review");
+  return [...new Set(reasons)].sort();
+}
+
+function materialTakeoffRows(computed, options, binding) {
+  const common = {
+    policy_digest: binding.policyDigest,
+    options_digest: binding.optionsDigest,
+    geometry_revision: binding.geometryRevision,
+    stock_mode: computed.panelNest.mode,
+    needs_review: binding.needsReview ? 1 : 0,
+    confidence: "computed-governed",
+  };
+  const rows = [{
+    ...common,
+    category: "Panel Material",
+    item_name: options.panelProfileId,
+    quantity: computed.panelNest.stockFt,
+    unit: "ft",
+    waste_factor: roundTakeoffPercent(computed.panelNest.wastePct),
+    waste_basis: computed.sourceRefs.panel_stock_ft,
+    source_ref: `roof_graph:${binding.geometryRevision}#panel_cuts`,
+  }];
+  for (const trim of computed.trims) {
+    rows.push({
+      ...common,
+      category: "Trim Material",
+      item_name: trim.profile,
+      quantity: trim.stockFt,
+      unit: "ft",
+      waste_factor: roundTakeoffPercent(trim.wastePct),
+      waste_basis: `${trim.sticks} x ${computed.sourceRefs[`trim_${trim.profile}_ft`] ?? "governed trim schedule"}`,
+      source_ref: `roof_graph:${binding.geometryRevision}#trim:${trim.profile}`,
+    });
+  }
+  for (const [itemName, quantity, sourceKey] of [
+    [options.fastenerItemIds.clip, computed.fasteners.clips, "clips"],
+    [options.fastenerItemIds.clipScrew, computed.fasteners.clipScrews, "clips"],
+    [options.fastenerItemIds.trimScrew, computed.fasteners.trimScrews, "trim_screws"],
+  ]) {
+    rows.push({
+      ...common,
+      category: "Fastener",
+      item_name: itemName,
+      quantity,
+      unit: "each",
+      waste_factor: 0,
+      waste_basis: computed.sourceRefs[sourceKey],
+      source_ref: `roof_graph:${binding.geometryRevision}#fastener:${itemName}`,
+    });
+  }
+  return rows;
+}
+
+function roundTakeoffPercent(value) {
+  return Math.round(value * 10_000 * 100) / 10_000;
 }
 
 function newRunId() {

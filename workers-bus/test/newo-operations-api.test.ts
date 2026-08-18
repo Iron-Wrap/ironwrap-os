@@ -11,7 +11,9 @@ class SqliteD1 {
 
   constructor() {
     const directory = new URL("../migrations/", import.meta.url);
-    for (const migration of readdirSync(directory).filter((name) => name.endsWith(".sql")).sort()) {
+    for (const migration of readdirSync(directory)
+      .filter((name) => name.endsWith(".sql"))
+      .sort()) {
       this.raw.exec(readFileSync(new URL(migration, directory), "utf8"));
     }
   }
@@ -26,11 +28,7 @@ class SqliteStatement {
   private readonly sql: string;
   private readonly args: unknown[];
 
-  constructor(
-    raw: DatabaseSync,
-    sql: string,
-    args: unknown[],
-  ) {
+  constructor(raw: DatabaseSync, sql: string, args: unknown[]) {
     this.raw = raw;
     this.sql = sql;
     this.args = args;
@@ -227,7 +225,11 @@ test("Newo operations read is office-only, exception-first, and redacts provider
   const runtime = env(db);
   const request = new Request("https://app.example.com/api/v1/newo/operations");
 
-  const response = await handleAuthenticatedRoute(request, runtime as never, auth("ops"));
+  const response = await handleAuthenticatedRoute(
+    request,
+    runtime as never,
+    auth("ops"),
+  );
   const body = (await response.json()) as Record<string, any>;
 
   assert.equal(response.status, 200);
@@ -302,10 +304,18 @@ test("Newo operations read is office-only, exception-first, and redacts provider
     "private dead-letter payload",
     "private reconciliation detail",
   ]) {
-    assert.equal(serialized.includes(privateValue), false, `leaked ${privateValue}`);
+    assert.equal(
+      serialized.includes(privateValue),
+      false,
+      `leaked ${privateValue}`,
+    );
   }
 
-  const field = await handleAuthenticatedRoute(request, runtime as never, auth("field"));
+  const field = await handleAuthenticatedRoute(
+    request,
+    runtime as never,
+    auth("field"),
+  );
   assert.equal(field.status, 403);
   assert.deepEqual(await field.json(), { error: "office_role_required" });
   db.raw.close();
@@ -317,7 +327,11 @@ test("Owner runtime read is office-only and excludes privileged diagnostic detai
   const runtime = env(db);
   const request = new Request("https://app.example.com/api/v1/owner/runtime");
 
-  const response = await handleAuthenticatedRoute(request, runtime as never, auth("ops"));
+  const response = await handleAuthenticatedRoute(
+    request,
+    runtime as never,
+    auth("ops"),
+  );
   const body = (await response.json()) as Record<string, any>;
 
   assert.equal(response.status, 200);
@@ -329,22 +343,26 @@ test("Owner runtime read is office-only and excludes privileged diagnostic detai
     "status",
     "version",
   ]);
-  assert.deepEqual(body.readiness.checks.map((check: { id: string }) => check.id), [
-    "owned_persistence",
-    "queue",
-    "core_auth",
-    "provider_delivery",
-    "office_bff",
-    "customer_portal",
-    "production_schedule",
-    "public_estimate",
-    "newo",
-  ]);
+  assert.deepEqual(
+    body.readiness.checks.map((check: { id: string }) => check.id),
+    [
+      "owned_persistence",
+      "queue",
+      "core_auth",
+      "provider_delivery",
+      "office_bff",
+      "customer_portal",
+      "production_schedule",
+      "public_estimate",
+      "newo",
+    ],
+  );
   assert.deepEqual(Object.keys(body.operations).sort(), [
     "audit_failure_window_hours",
     "audit_failures_observed",
     "counts",
     "heartbeat",
+    "quickbooks_final_invoices",
     "quickbooks_receipts",
     "status",
   ]);
@@ -362,10 +380,18 @@ test("Owner runtime read is office-only and excludes privileged diagnostic detai
     "private dead-letter payload",
     "private reconciliation detail",
   ]) {
-    assert.equal(serialized.includes(privateValue), false, `leaked ${privateValue}`);
+    assert.equal(
+      serialized.includes(privateValue),
+      false,
+      `leaked ${privateValue}`,
+    );
   }
 
-  const field = await handleAuthenticatedRoute(request, runtime as never, auth("field"));
+  const field = await handleAuthenticatedRoute(
+    request,
+    runtime as never,
+    auth("field"),
+  );
   assert.equal(field.status, 403);
   assert.deepEqual(await field.json(), { error: "office_role_required" });
   db.raw.close();

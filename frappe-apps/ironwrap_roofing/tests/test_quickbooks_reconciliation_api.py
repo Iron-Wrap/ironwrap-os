@@ -45,14 +45,16 @@ class FakeDb:
     def __init__(self, fixtures: list[dict]) -> None:
         self.fixtures = fixtures
         self.lock_queries: list[str] = []
+        self.read_queries: list[str] = []
 
     def sql(self, query: str, values: tuple, *, as_dict: bool):
         normalized = " ".join(query.split())
-        if "FOR UPDATE" not in normalized:
-            raise AssertionError(f"expected row lock: {normalized}")
         if "`tabIntegration Reconciliation`" not in normalized:
             raise AssertionError(f"unexpected SQL: {normalized}")
-        self.lock_queries.append(normalized)
+        if "FOR UPDATE" in normalized:
+            self.lock_queries.append(normalized)
+        else:
+            self.read_queries.append(normalized)
         return [
             dict(row)
             for row in self.fixtures
@@ -187,6 +189,27 @@ class QuickBooksReconciliationApiTests(unittest.TestCase):
             FakePermissionError, "quickbooks_reconciliation_issuer_not_configured"
         ):
             unconfigured.check_issuer_readiness()
+
+    def test_readback_is_bounded_and_does_not_require_generic_create_permission(self) -> None:
+        payload = self.payload()
+        api, db, _issuance_calls = self.load_api(
+            [{
+                "name": payload["reconciliation_id"],
+                **payload,
+                "notes": "Webhook identity captured. Provider amount, status, posting, and reconciliation facts require an authenticated QuickBooks read.",
+            }],
+            can_create=False,
+        )
+        result = api.read_pending_reconciliation(payload["reconciliation_id"])
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["reconciliation"]["name"], payload["reconciliation_id"])
+        self.assertEqual(result["reconciliation"]["status"], "Pending")
+        self.assertEqual(db.lock_queries, [])
+        self.assertEqual(len(db.read_queries), 1)
+
+        missing = api.read_pending_reconciliation(f"qbr:{'b' * 64}:0")
+        self.assertEqual(missing, {"found": False, "reconciliation_id": f"qbr:{'b' * 64}:0"})
 
     def test_rejects_caller_supplied_notes_and_sets_the_stable_conflict_status(self) -> None:
         api, _db, issuance_calls = self.load_api()

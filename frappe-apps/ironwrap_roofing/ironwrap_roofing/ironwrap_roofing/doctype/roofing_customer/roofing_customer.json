@@ -15,6 +15,7 @@
     "contact_section",
     "phone",
     "email",
+    "qb_customer_ref",
     "lead_envelope",
     "notes"
   ],
@@ -27,6 +28,7 @@
     { "fieldname": "contact_section", "fieldtype": "Section Break", "label": "Contact" },
     { "fieldname": "phone", "fieldtype": "Data", "in_standard_filter": 1, "label": "Phone" },
     { "fieldname": "email", "fieldtype": "Data", "label": "Email" },
+    { "fieldname": "qb_customer_ref", "fieldtype": "Data", "label": "QuickBooks Customer Ref" },
     { "fieldname": "lead_envelope", "fieldtype": "Link", "in_standard_filter": 1, "label": "Lead Envelope", "options": "Lead Envelope" },
     { "fieldname": "notes", "fieldtype": "Small Text", "label": "Notes" }
   ],

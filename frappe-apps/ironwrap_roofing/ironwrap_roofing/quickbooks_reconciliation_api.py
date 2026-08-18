@@ -57,7 +57,7 @@ REQUIRED_INPUT_FIELDS = frozenset(
         "attempt_count",
     }
 )
-OPTIONAL_INPUT_FIELDS = frozenset({"roof_job"})
+OPTIONAL_INPUT_FIELDS = frozenset({"roof_job", "realm_id"})
 ALLOWED_INPUT_FIELDS = REQUIRED_INPUT_FIELDS | OPTIONAL_INPUT_FIELDS
 REPLAY_FIELDS = (
     "reconciliation_id",
@@ -65,6 +65,7 @@ REPLAY_FIELDS = (
     "system_name",
     "entity_type",
     "external_entity_id",
+    "realm_id",
     "local_doctype",
     "local_name",
     "direction",
@@ -164,7 +165,7 @@ def _parse_reconciliation_json(reconciliation_json: Any) -> dict[str, Any]:
     return payload
 
 
-def _assert_issuer() -> str:
+def _assert_issuer(*, require_create: bool = True) -> str:
     request = getattr(frappe, "request", None)
     method = getattr(request, "method", None)
     if method is not None and str(method).upper() != "POST":
@@ -199,7 +200,7 @@ def _assert_issuer() -> str:
             "the configured Worker user lacks the dedicated QuickBooks issuer role",
             permission=True,
         )
-    if not frappe.has_permission("Integration Reconciliation", ptype="create", user=actor):
+    if require_create and not frappe.has_permission("Integration Reconciliation", ptype="create", user=actor):
         _fail(
             "quickbooks_reconciliation_issuer_permission_denied",
             "the configured Worker integration user cannot create Integration Reconciliation",
@@ -209,16 +210,17 @@ def _assert_issuer() -> str:
 
 
 def _issued_document(payload: Mapping[str, Any]) -> dict[str, Any]:
-    reconciliation_id = _clean_required(payload["reconciliation_id"], "reconciliation_id")
-    if not RECONCILIATION_ID_RE.fullmatch(reconciliation_id):
-        _fail("quickbooks_reconciliation_invalid_input", "reconciliation_id is invalid")
+    reconciliation_id = _clean_reconciliation_id(payload["reconciliation_id"])
     if _clean_required(payload["system_name"], "system_name") != "QuickBooks":
         _fail("quickbooks_reconciliation_invalid_input", "system_name must be QuickBooks")
     entity_type = _clean_required(payload["entity_type"], "entity_type")
     external_entity_id = _clean_required(payload["external_entity_id"], "external_entity_id")
+    realm_id = _clean_optional(payload.get("realm_id"), "realm_id", maximum=32)
     source_version = _clean_required(payload["source_version"], "source_version")
     if entity_type not in QUICKBOOKS_ENTITY_TYPES or not QBO_ID_RE.fullmatch(external_entity_id):
         _fail("quickbooks_reconciliation_invalid_input", "QuickBooks entity identity is unsupported")
+    if realm_id is not None and not QBO_ID_RE.fullmatch(realm_id):
+        _fail("quickbooks_reconciliation_invalid_input", "QuickBooks realm identity is unsupported")
     if source_version not in QUICKBOOKS_OPERATIONS:
         _fail("quickbooks_reconciliation_invalid_input", "QuickBooks operation is unsupported")
     if _clean_required(payload["direction"], "direction") != "Inbound":
@@ -252,6 +254,7 @@ def _issued_document(payload: Mapping[str, Any]) -> dict[str, Any]:
         "system_name": "QuickBooks",
         "entity_type": entity_type,
         "external_entity_id": external_entity_id,
+        "realm_id": realm_id,
         "local_doctype": local_doctype,
         "local_name": _clean_required(payload["local_name"], "local_name"),
         "direction": "Inbound",
@@ -280,6 +283,34 @@ def _lock_existing(reconciliation_id: str) -> dict[str, Any] | None:
     if len(rows) > 1:
         _nonretryable_identity_conflict("reconciliation_id is not unique")
     return dict(rows[0]) if rows else None
+
+
+def _read_existing(reconciliation_id: str) -> dict[str, Any] | None:
+    """Read one issuer-scoped record without granting generic REST access."""
+
+    rows = frappe.db.sql(
+        f"""
+        SELECT {_REPLAY_SELECT}
+        FROM `tabIntegration Reconciliation`
+        WHERE reconciliation_id = %s
+        """,
+        (reconciliation_id,),
+        as_dict=True,
+    )
+    if len(rows) > 1:
+        _nonretryable_identity_conflict("reconciliation_id is not unique")
+    return dict(rows[0]) if rows else None
+
+
+def _clean_reconciliation_id(value: Any) -> str:
+    reconciliation_id = _clean_required(value, "reconciliation_id")
+    if not RECONCILIATION_ID_RE.fullmatch(reconciliation_id):
+        _fail("quickbooks_reconciliation_invalid_input", "reconciliation_id is invalid")
+    return reconciliation_id
+
+
+def _readback_fields(existing: Mapping[str, Any]) -> dict[str, Any]:
+    return {field: existing.get(field) for field in ("name", *REPLAY_FIELDS)}
 
 
 def _same_value(left: Any, right: Any) -> bool:
@@ -316,6 +347,18 @@ def issue_pending_reconciliation(reconciliation_json: str) -> dict[str, Any]:
         # retain its narrow create grant on this DocType.
         document.insert()
     return {"name": document.name, "idempotent_replay": False}
+
+
+@frappe.whitelist()
+def read_pending_reconciliation(reconciliation_id: str) -> dict[str, Any]:
+    """Return bounded provider readback for one issuer-created reconciliation."""
+
+    _assert_issuer(require_create=False)
+    cleaned_id = _clean_reconciliation_id(reconciliation_id)
+    existing = _read_existing(cleaned_id)
+    if not existing:
+        return {"found": False, "reconciliation_id": cleaned_id}
+    return {"found": True, "reconciliation": _readback_fields(existing)}
 
 
 @frappe.whitelist()

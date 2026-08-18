@@ -34,6 +34,12 @@ import {
   buildSafetyPlanDraft,
   buildTenantExportRequestDraft,
   buildServer,
+  authorityStateDigest,
+  authorityMaterialMismatch,
+  authorityRecordDraftFromArgs,
+  executeAuditedWrite,
+  executeAuthorityRecordMutation,
+  assertIssuerReceiptForDraft,
   redactApprovalArgs,
 } from "../src/server.mjs";
 
@@ -75,6 +81,27 @@ const consentInput = {
 test("new command schemas reject unknown keys and unsafe acknowledgement methods", () => {
   assert.equal(JobAssignmentInputSchema.safeParse(assignmentInput).success, true);
   assert.equal(JobAssignmentInputSchema.safeParse({ ...assignmentInput, arbitrary: true }).success, false);
+  const authorityRequirements = [{
+    authority_record_id: "authority:worker:1",
+    subject_type: "Person",
+    subject_role: "Worker",
+    subject_ref: "user:worker-1",
+    authority_kind: "Worker Competency",
+    scope_type: "Field",
+    scope_ref: "field:job-1",
+    issuer_jurisdiction: "Alberta",
+    version: 1,
+  }];
+  assert.equal(JobAssignmentInputSchema.safeParse({
+    ...assignmentInput,
+    authority_requirements: authorityRequirements,
+  }).success, true);
+  const authorityDraft = buildJobAssignmentDraft({
+    ...assignmentDraftInput,
+    authorityRequirements,
+    nowIso: NOW,
+  });
+  assert.deepEqual(JSON.parse(authorityDraft.authority_requirements_json), authorityRequirements);
 
   const safety = {
     safety_plan_id: "safety:1",
@@ -161,7 +188,7 @@ test("strict read tools use bounded schemas and redact sensitive fields", async 
     apiSecret: "secret",
     writeEnabled: false,
   });
-  assert.equal(Object.keys(server._registeredTools).length, 151);
+  assert.equal(Object.keys(server._registeredTools).length, 164);
   assert.ok(server._registeredTools.dry_run_supplier_order_transition);
   assert.ok(server._registeredTools.request_transition_supplier_order);
   assert.ok(server._registeredTools.dry_run_record_final_shop_quality);
@@ -170,6 +197,10 @@ test("strict read tools use bounded schemas and redact sensitive fields", async 
   assert.ok(server._registeredTools.request_record_shop_handover);
   assert.ok(server._registeredTools.dry_run_record_shop_billing_basis);
   assert.ok(server._registeredTools.request_record_shop_billing_basis);
+  assert.ok(server._registeredTools.dry_run_complete_work_package);
+  assert.ok(server._registeredTools.request_complete_work_package);
+  assert.ok(server._registeredTools.dry_run_authority_record);
+  assert.ok(server._registeredTools.request_authority_record);
   assert.equal(server._registeredTools.get_contract_acceptance.inputSchema.safeParse({
     acceptance_id: "acceptance:1",
     unknown: true,
@@ -1276,4 +1307,359 @@ test("tenant export request excludes credentials and creates no archive", () => 
   assert.equal("archive_key" in draft, false);
   assert.equal("encryption_key_ref" in draft, false);
   assert.match(draft.notes, /separate audited worker/);
+});
+
+test("authority executor recovers a lost Frappe response only from an exact material readback", async (t) => {
+  const draft = {
+    authority_record_id: "authority:worker:response-lost",
+    tenant: "tenant:ironwrap",
+    subject_type: "Person",
+    subject_role: "Worker",
+    person_user: "worker@example.invalid",
+    organization: "",
+    authority_kind: "Worker Competency",
+    authority_scope: "field installation",
+    scope_type: "Field",
+    scope_ref: "field:job-1",
+    roof_job: "job-1",
+    scope_json: "{}",
+    issuer_name: "IronWrap Production",
+    issuer_jurisdiction: "AB-CA",
+    issuer_reference: "internal:competency:response-lost",
+    source_version: "assessment:1",
+    evidence_refs_json: JSON.stringify([{ ref: "r2://authority/response-lost", sha256: "c".repeat(64) }]),
+    evidence_sha256: "c".repeat(64),
+    effective_from: "2026-08-17",
+    expires_at: "2026-12-31",
+    version: 1,
+    status: "Verified",
+    verification_method: "Internal Competency Assessment",
+    verified_at: "2026-08-17 12:00:00",
+    verification_reference: "assessment:response-lost",
+    verified_by: "appu_ops_authority_0001",
+    revoked_at: "",
+    revocation_reference: "",
+    revoked_by: "",
+    supersedes: "",
+    correction_reason: "",
+    exception_status: "None",
+    exception_reason: "",
+    issuer_readback_json: "",
+  };
+  const material = {
+    ...draft,
+    name: draft.authority_record_id,
+    state_digest_sha256: authorityStateDigest(draft),
+    modified: "2026-08-17 12:00:00",
+  };
+  assert.equal(authorityMaterialMismatch(draft, material), null);
+  assert.notEqual(authorityMaterialMismatch(draft, { ...material, evidence_sha256: "d".repeat(64) }), null);
+
+  const calls = [];
+  const config = {
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    actorUser: "ops@authority.example.invalid",
+    requestTimeoutMs: 10_000,
+    tenantId: "tenant:ironwrap",
+    authorityBusBaseUrl: "https://bus.example",
+    authorityBusHmacKey: "h".repeat(32),
+    authorityExecutorUserId: "appu_ops_authority_0001",
+    authorityFrappeActorUserId: "ops@authority.example.invalid",
+    authorityBusinessRole: "IronWrap Production",
+  };
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const target = String(url);
+    calls.push({ target, method: init.method });
+    if (target.includes("/internal/v1/authority-records/actions") && target.endsWith("/actions")) {
+      return new Response(JSON.stringify({ action: {
+        action_id: "authority:run-response-lost",
+        status: "pending",
+      } }), { status: 201, headers: { "content-type": "application/json" } });
+    }
+    if (target.includes("/Authority%20Record/authority%3Aworker%3Aresponse-lost") && init.method === "PUT") {
+      throw new Error("socket_closed_after_frappe_write");
+    }
+    if (target.includes("/Authority%20Record/authority%3Aworker%3Aresponse-lost") && init.method === "GET") {
+      return new Response(JSON.stringify({ data: material }), { headers: { "content-type": "application/json" } });
+    }
+    if (target.includes("/internal/v1/authority-records/actions/authority:run-response-lost/terminal")) {
+      return new Response(JSON.stringify({ action: {
+        action_id: "authority:run-response-lost",
+        status: "applied",
+        result_json: JSON.stringify({ authority_state_digest_sha256: material.state_digest_sha256 }),
+      } }), { headers: { "content-type": "application/json" } });
+    }
+    throw new Error(`unexpected authority executor request ${init.method} ${target}`);
+  });
+
+  const result = await executeAuthorityRecordMutation(config, {
+    args: { run_id: "run-response-lost", authority_operation: "verify" },
+    draft,
+    before: { ...draft, name: draft.authority_record_id },
+    now: new Date().toISOString(),
+  });
+  assert.equal(result.response_lost_recovered, true);
+  assert.equal(result.material_readback.state_digest_sha256, material.state_digest_sha256);
+  assert.equal(calls.filter(({ method }) => method === "PUT").length, 1);
+  assert.equal(calls.filter(({ target }) => target.includes("/terminal")).length, 1);
+});
+
+test("authority executor rejects a non-applied terminal receipt and preserves D1 evidence", async (t) => {
+  const draft = {
+    authority_record_id: "authority:worker:terminal-reconciliation",
+    tenant: "tenant:ironwrap",
+    subject_type: "Person",
+    subject_role: "Worker",
+    person_user: "worker@example.invalid",
+    organization: "",
+    authority_kind: "Worker Competency",
+    authority_scope: "field installation",
+    scope_type: "Field",
+    scope_ref: "field:job-1",
+    roof_job: "job-1",
+    scope_json: "{}",
+    issuer_name: "IronWrap Production",
+    issuer_jurisdiction: "AB-CA",
+    issuer_reference: "internal:competency:terminal-reconciliation",
+    source_version: "assessment:1",
+    evidence_refs_json: JSON.stringify([{ ref: "r2://authority/terminal-reconciliation", sha256: "c".repeat(64) }]),
+    evidence_sha256: "c".repeat(64),
+    effective_from: "2026-08-17",
+    expires_at: "2026-12-31",
+    version: 1,
+    status: "Verified",
+    verification_method: "Internal Competency Assessment",
+    verified_at: "2026-08-17 12:00:00",
+    verification_reference: "assessment:terminal-reconciliation",
+    verified_by: "appu_ops_authority_0001",
+    revoked_at: "",
+    revocation_reference: "",
+    revoked_by: "",
+    supersedes: "",
+    correction_reason: "",
+    exception_status: "None",
+    exception_reason: "",
+    issuer_readback_json: "",
+  };
+  const material = {
+    ...draft,
+    name: draft.authority_record_id,
+    state_digest_sha256: authorityStateDigest(draft),
+    modified: "2026-08-17 12:00:00",
+  };
+  const terminalAction = {
+    action_id: "authority:run-terminal-reconciliation",
+    status: "reconciliation_required",
+    result_json: JSON.stringify({ reason: "readback_unavailable", evidence_ref: "r2://authority/terminal-reconciliation" }),
+    reconciliation_reason: "frappe_readback_unavailable",
+  };
+  let hermesFailurePatch;
+  const config = {
+    baseUrl: "https://erp.example",
+    apiKey: "key",
+    apiSecret: "secret",
+    actorUser: "ops@authority.example.invalid",
+    requestTimeoutMs: 10_000,
+    tenantId: "tenant:ironwrap",
+    authorityBusBaseUrl: "https://bus.example",
+    authorityBusHmacKey: "h".repeat(32),
+    authorityExecutorUserId: "appu_ops_authority_0001",
+    authorityFrappeActorUserId: "ops@authority.example.invalid",
+    authorityBusinessRole: "IronWrap Production",
+  };
+  t.mock.method(globalThis, "fetch", async (url, init = {}) => {
+    const target = String(url);
+    if (target.includes("/api/resource/Hermes%20Run/") && init.method === "GET") {
+      return new Response("", { status: 404 });
+    }
+    if (target.endsWith("/api/resource/Hermes%20Run") && init.method === "POST") {
+      return new Response(JSON.stringify({ data: { name: "run-terminal-reconciliation" } }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (target.includes("/api/resource/Hermes%20Run/") && init.method === "PUT") {
+      hermesFailurePatch = JSON.parse(init.body);
+      return new Response(JSON.stringify({ data: { name: "run-terminal-reconciliation" } }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (target.includes("/internal/v1/authority-records/actions") && target.endsWith("/actions")) {
+      return new Response(JSON.stringify({ action: {
+        action_id: "authority:run-terminal-reconciliation",
+        status: "pending",
+      } }), { status: 201, headers: { "content-type": "application/json" } });
+    }
+    if (target.includes("/Authority%20Record/authority%3Aworker%3Aterminal-reconciliation") && init.method === "PUT") {
+      return new Response(JSON.stringify({ data: material }), { headers: { "content-type": "application/json" } });
+    }
+    if (target.includes("/Authority%20Record/authority%3Aworker%3Aterminal-reconciliation") && init.method === "GET") {
+      return new Response(JSON.stringify({ data: material }), { headers: { "content-type": "application/json" } });
+    }
+    if (target.includes("/internal/v1/authority-records/actions/authority:run-terminal-reconciliation/terminal")) {
+      return new Response(JSON.stringify({ action: terminalAction }), { headers: { "content-type": "application/json" } });
+    }
+    throw new Error(`unexpected authority executor request ${init.method} ${target}`);
+  });
+
+  const mutationArgs = { run_id: "run-terminal-reconciliation", authority_operation: "verify" };
+  let thrown;
+  await assert.rejects(
+    executeAuditedWrite(config, {
+      runId: mutationArgs.run_id,
+      now: new Date().toISOString(),
+      args: {
+        ...mutationArgs,
+        approved_by: "owner@authority.example.invalid",
+        request_text: "verify worker competency",
+        dry_run_receipt: "dry-run-receipt",
+        approval_receipt: "approval-receipt",
+      },
+      agentRole: "IronWrap Production",
+      toolName: "request_authority_record",
+      target: { doctype: "Authority Record", name: draft.authority_record_id },
+      roofJob: draft.roof_job,
+      dryRun: { target: { doctype: "Authority Record", name: draft.authority_record_id } },
+      beforeSummary: { authority_record_id: draft.authority_record_id, status: "Unverified" },
+      afterSummary: { authority_record_id: draft.authority_record_id, status: "Verified" },
+      execute: () => executeAuthorityRecordMutation(config, {
+        args: mutationArgs,
+        draft,
+        before: { ...draft, name: draft.authority_record_id },
+        now: new Date().toISOString(),
+      }),
+    }),
+    (error) => {
+      thrown = error;
+      assert.equal(error.code, "authority_terminal_status_not_applied");
+      assert.deepEqual(error.d1_action, terminalAction);
+      assert.deepEqual(error.d1_evidence, {
+        action_id: terminalAction.action_id,
+        status: terminalAction.status,
+        result_json: terminalAction.result_json,
+        reconciliation_reason: terminalAction.reconciliation_reason,
+      });
+      assert.match(error.message, /reconciliation_required/);
+      return true;
+    },
+  );
+  assert.deepEqual(thrown.d1_action, terminalAction);
+  assert.equal(hermesFailurePatch.approval_status, "Failed");
+  assert.equal(hermesFailurePatch.result_status, "Error");
+  assert.equal(hermesFailurePatch.mutation_applied, 0);
+  const preserved = JSON.parse(hermesFailurePatch.result_json);
+  assert.deepEqual(preserved.authority_terminal_action, terminalAction);
+  assert.deepEqual(preserved.authority_terminal_evidence, thrown.d1_evidence);
+});
+
+test("authority lifecycle drafts use Frappe DATETIME text for exact readback digests", () => {
+  const draft = authorityRecordDraftFromArgs(
+    { tenantId: "tenant:ironwrap", actorUser: "ops@authority.example.invalid" },
+    {
+      authority_operation: "verify",
+      authority_record_id: "authority:worker:datetime",
+      verification_method: "Internal Competency Assessment",
+      verification_reference: "assessment:datetime",
+    },
+    {
+      authority_record_id: "authority:worker:datetime",
+      tenant: "tenant:ironwrap",
+      version: 1,
+      status: "Unverified",
+      authority_kind: "Worker Competency",
+      issuer_readback_json: "",
+    },
+    "2026-08-17T12:00:00.000Z",
+  );
+  assert.equal(draft.verified_at, "2026-08-17 12:00:00");
+  assert.equal(draft.revoked_at, "");
+});
+
+test("external authority receipts require a configured genuine issuer signature and exact state", () => {
+  const draft = {
+    authority_record_id: "authority:wcb:1",
+    tenant: "tenant:ironwrap",
+    subject_type: "Organization",
+    subject_role: "Subcontractor",
+    person_user: "",
+    organization: "supplier:roofing",
+    authority_kind: "WCB Clearance",
+    authority_scope: "field installation",
+    scope_type: "Field",
+    scope_ref: "field:job-1",
+    roof_job: "job-1",
+    scope_json: "{}",
+    issuer_name: "Alberta WCB",
+    issuer_jurisdiction: "AB-CA",
+    issuer_reference: "wcb:1",
+    source_version: "wcb:2026",
+    evidence_refs_json: JSON.stringify([{ ref: "r2://authority/wcb-1", sha256: "c".repeat(64) }]),
+    evidence_sha256: "c".repeat(64),
+    effective_from: "2026-08-17",
+    expires_at: "2026-12-31",
+    version: 1,
+    status: "Verified",
+    verification_method: "Issuer Portal Readback",
+    verified_at: "2026-08-17 12:00:00",
+    verification_reference: "wcb:1",
+    verified_by: "appu_ops_authority_0001",
+    revoked_at: "",
+    revocation_reference: "",
+    revoked_by: "",
+    supersedes: "",
+    correction_reason: "",
+    exception_status: "None",
+    exception_reason: "",
+    issuer_readback_json: "",
+  };
+  assert.throws(() => assertIssuerReceiptForDraft({ authorityIssuerPublicKeys: {} }, draft, undefined), /authority_issuer_receipt_required/);
+  const receipt = {
+    receipt_id: "issuer-receipt:wcb:1",
+    tenant: draft.tenant,
+    authority_record_id: draft.authority_record_id,
+    authority_version: draft.version,
+    issuer_name: draft.issuer_name,
+    issuer_jurisdiction: draft.issuer_jurisdiction,
+    issuer_reference: draft.issuer_reference,
+    issuer_source_version: draft.source_version,
+    verification_state: "verified",
+    evidence_refs_json: draft.evidence_refs_json,
+    evidence_sha256: draft.evidence_sha256,
+    state_digest_sha256: authorityStateDigest(draft),
+    issuer_key_id: "issuer-key:missing",
+    signature: "A".repeat(64),
+  };
+  assert.throws(
+    () => assertIssuerReceiptForDraft(
+      { authorityIssuerPublicKeys: {} },
+      draft,
+      { ...receipt, authority_version: 2 },
+    ),
+    /authority_issuer_receipt_mismatch/,
+  );
+  assert.throws(
+    () => assertIssuerReceiptForDraft(
+      { authorityIssuerPublicKeys: {} },
+      draft,
+      { ...receipt, evidence_sha256: "d".repeat(64) },
+    ),
+    /authority_issuer_receipt_mismatch/,
+  );
+  assert.throws(
+    () => assertIssuerReceiptForDraft(
+      { authorityIssuerPublicKeys: {} },
+      draft,
+      {
+        ...receipt,
+        evidence_refs_json: JSON.stringify([
+          { ref: "r2://authority/forged", sha256: "c".repeat(64) },
+        ]),
+      },
+    ),
+    /authority_issuer_evidence_mismatch/,
+  );
+  assert.throws(() => assertIssuerReceiptForDraft({ authorityIssuerPublicKeys: {} }, draft, receipt), /authority_issuer_public_key_required/);
+  assert.throws(() => assertIssuerReceiptForDraft({ authorityIssuerPublicKeys: { "issuer-key:missing": "not-a-key" } }, draft, receipt), /authority_issuer_signature_invalid/);
 });

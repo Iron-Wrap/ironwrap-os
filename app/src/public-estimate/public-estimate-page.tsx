@@ -13,10 +13,10 @@ import {
   submitPublicInstantEstimate,
 } from "./public-estimate-api";
 import {
-  NON_BINDING_ESTIMATE_DISCLAIMER,
+  PUBLIC_ESTIMATE_DISCLAIMER,
   PUBLIC_ESTIMATE_BRANDS,
+  PUBLIC_ESTIMATE_DEFAULT_PROVINCE,
   PUBLIC_ESTIMATE_PROVINCES,
-  PUBLIC_ESTIMATE_RANGE_PROVINCE,
   PUBLIC_ESTIMATE_SERVICES,
   publicEstimateFormSchema,
   publicEstimateBrandFromSearch,
@@ -78,14 +78,6 @@ function errorsForForm(error: ZodError): FormErrors {
   return errors;
 }
 
-function formatCad(value: number): string {
-  return new Intl.NumberFormat("en-CA", {
-    style: "currency",
-    currency: "CAD",
-    maximumFractionDigits: 0,
-  }).format(value);
-}
-
 export function PublicEstimatePage() {
   const brand = publicEstimateBrandFromSearch(window.location.search);
   const brandCopy = PUBLIC_ESTIMATE_BRANDS[brand];
@@ -94,9 +86,8 @@ export function PublicEstimatePage() {
   const [configAttempt, setConfigAttempt] = useState(0);
   const [submissionId, setSubmissionId] = useState(stableClientSubmissionId);
   const [selectedProvince, setSelectedProvince] = useState<PublicEstimateProvince>(
-    PUBLIC_ESTIMATE_RANGE_PROVINCE,
+    PUBLIC_ESTIMATE_DEFAULT_PROVINCE,
   );
-  const [submittedProvince, setSubmittedProvince] = useState<PublicEstimateProvince>();
   const [turnstileToken, setTurnstileToken] = useState("");
   const [challengeVersion, setChallengeVersion] = useState(0);
   const [challengeError, setChallengeError] = useState<string>();
@@ -170,7 +161,6 @@ export function PublicEstimatePage() {
         publicEstimateRequest(parsed.data, turnstileToken, submissionId, brand),
       );
       clearStableClientSubmissionId();
-      setSubmittedProvince(parsed.data.province);
       setResult(response);
     } catch (error) {
       setRequestError(
@@ -191,8 +181,7 @@ export function PublicEstimatePage() {
   function startAnotherRequest() {
     clearStableClientSubmissionId();
     setSubmissionId(stableClientSubmissionId());
-    setSelectedProvince(PUBLIC_ESTIMATE_RANGE_PROVINCE);
-    setSubmittedProvince(undefined);
+    setSelectedProvince(PUBLIC_ESTIMATE_DEFAULT_PROVINCE);
     setTurnstileToken("");
     setChallengeVersion((version) => version + 1);
     setChallengeError(undefined);
@@ -246,12 +235,7 @@ export function PublicEstimatePage() {
   if (result) {
     return (
       <PublicEstimateFrame brand={brand}>
-        <EstimateResult
-          brand={brand}
-          result={result}
-          canShowRange={submittedProvince === PUBLIC_ESTIMATE_RANGE_PROVINCE}
-          onStartAnotherRequest={startAnotherRequest}
-        />
+        <EstimateResult brand={brand} result={result} onStartAnotherRequest={startAnotherRequest} />
       </PublicEstimateFrame>
     );
   }
@@ -259,11 +243,7 @@ export function PublicEstimatePage() {
   return (
     <PublicEstimateFrame brand={brand}>
       <div className="grid gap-8 lg:grid-cols-[0.82fr_1.18fr] lg:items-start lg:gap-12">
-        <EstimateIntroduction
-          rangeAvailable={
-            config.range_available && selectedProvince === PUBLIC_ESTIMATE_RANGE_PROVINCE
-          }
-        />
+        <EstimateIntroduction />
         <Card className="overflow-hidden">
           <div className="border-b border-border bg-surface px-5 py-5 sm:px-7 sm:py-6">
             <p className="text-xs font-bold tracking-[0.14em] text-muted">PROJECT START</p>
@@ -271,8 +251,7 @@ export function PublicEstimatePage() {
               Tell us about the exterior work.
             </h1>
             <p className="mt-3 max-w-xl text-sm leading-6 text-muted">
-              We use these details to prepare a reviewable budget range or route your project to an
-              estimator.
+              We use these details to route your project to an estimator for measurement and review.
             </p>
           </div>
           <CardContent className="p-5 sm:p-7">
@@ -326,7 +305,7 @@ function PublicEstimateFrame({
   );
 }
 
-function EstimateIntroduction({ rangeAvailable }: { rangeAvailable: boolean }) {
+function EstimateIntroduction() {
   return (
     <section className="pt-1 sm:pt-4">
       <p className="text-xs font-bold tracking-[0.15em] text-ok">CLEAR SCOPE. NO SURPRISES.</p>
@@ -341,19 +320,19 @@ function EstimateIntroduction({ rangeAvailable }: { rangeAvailable: boolean }) {
         <span className="h-px flex-1 bg-border" />
       </div>
       <p className="mt-7 max-w-lg text-base leading-7 text-muted">
-        Share the basics. Online ranges are limited to Alberta projects; every other request goes to
-        estimator review without an online price.
+        Share the basics. Every request goes to estimator review without an invented online price.
       </p>
       <dl className="mt-8 grid max-w-lg gap-3 border-y border-border py-5 text-sm">
         <InfoRow label="1" text="We check scope and property details." />
-        <InfoRow label="2" text="You may receive a non-binding range." />
-        <InfoRow label="3" text="An estimator confirms measurements, access, and materials." />
+        <InfoRow label="2" text="An estimator confirms measurements, access, and materials." />
+        <InfoRow
+          label="3"
+          text="Approved pricing is prepared only from verified project evidence."
+        />
       </dl>
-      {!rangeAvailable ? (
-        <p className="mt-5 text-sm leading-6 text-muted">
-          This request will go straight to estimator review. We won’t invent a price online.
-        </p>
-      ) : null}
+      <p className="mt-5 text-sm leading-6 text-muted">
+        This request goes straight to estimator review. We won’t invent a price online.
+      </p>
     </section>
   );
 }
@@ -402,9 +381,7 @@ function EstimateForm({
 }) {
   const fieldId = useId();
   const isChallengePending = Boolean(config.turnstile_site_key && !turnstileToken);
-  const rangeAvailable =
-    config.range_available && selectedProvince === PUBLIC_ESTIMATE_RANGE_PROVINCE;
-  const disclaimer = config.disclaimer || NON_BINDING_ESTIMATE_DISCLAIMER;
+  const disclaimer = config.disclaimer || PUBLIC_ESTIMATE_DISCLAIMER;
   const brandCopy = PUBLIC_ESTIMATE_BRANDS[brand];
 
   return (
@@ -434,7 +411,7 @@ function EstimateForm({
         </FormField>
         <FormField
           label="Project province"
-          hint="Online ranges are available for Alberta only. Other locations are reviewed by an estimator."
+          hint="An estimator reviews the project location before pricing."
           error={errors.province}
           inputId={`${fieldId}-province`}
         >
@@ -560,7 +537,7 @@ function EstimateForm({
         busy={submitting}
         disabled={isChallengePending}
       >
-        {rangeAvailable ? "Request my non-binding range" : "Request estimator review"}
+        Request estimator review
       </Button>
       <p className="text-xs leading-5 text-muted">{disclaimer}</p>
     </form>
@@ -636,50 +613,30 @@ function ConsentField({
 function EstimateResult({
   brand,
   result,
-  canShowRange,
   onStartAnotherRequest,
 }: {
   brand: PublicEstimateBrand;
   result: PublicInstantEstimateResponse;
-  canShowRange: boolean;
   onStartAnotherRequest: () => void;
 }) {
   const brandCopy = PUBLIC_ESTIMATE_BRANDS[brand];
-  const range = result.range;
-  const hasRange = range !== null && result.review_required && canShowRange;
   return (
     <section className="mx-auto max-w-xl py-4 sm:py-10" aria-live="polite">
       <Card className="overflow-hidden">
         <div className="border-b border-border bg-ok-soft px-5 py-6 sm:px-8 sm:py-8">
           <CheckCircle2 className="size-9 text-ok" aria-hidden="true" />
           <h1 className="mt-4 text-3xl font-black tracking-[-0.045em]">
-            {hasRange ? "Your non-binding budget range" : "An estimator will review your project"}
+            An estimator will review your project
           </h1>
           <p className="mt-3 max-w-lg text-sm leading-6 text-muted">
-            {hasRange
-              ? "This range is an early planning guide, not a quote or a promise of final price."
-              : `We received your request. An ${brandCopy.shortName} estimator will review the property and confirm the next step.`}
+            {`We received your request. An ${brandCopy.shortName} estimator will review the property and confirm the next step.`}
           </p>
         </div>
         <CardContent className="p-5 sm:p-8">
-          {hasRange ? (
-            <div className="border-l-4 border-accent bg-surface px-5 py-5">
-              <p className="text-xs font-bold tracking-[0.13em] text-muted">
-                SERVER-REVIEWED BUDGET RANGE
-              </p>
-              <p className="mt-2 text-3xl font-black tracking-[-0.05em] sm:text-4xl">
-                {formatCad(range.min_cad)}–{formatCad(range.max_cad)}
-              </p>
-              <p className="mt-1 text-sm text-muted">CAD, before estimator review.</p>
-            </div>
-          ) : (
-            <div className="flex gap-3 border-l-4 border-info bg-info-soft px-5 py-5 text-sm leading-6">
-              <ClipboardCheck className="mt-0.5 size-5 shrink-0 text-info" aria-hidden="true" />
-              <p>
-                We do not generate a range when the available information cannot support one safely.
-              </p>
-            </div>
-          )}
+          <div className="flex gap-3 border-l-4 border-info bg-info-soft px-5 py-5 text-sm leading-6">
+            <ClipboardCheck className="mt-0.5 size-5 shrink-0 text-info" aria-hidden="true" />
+            <p>Pricing begins only after measurement evidence and estimator review.</p>
+          </div>
           <p className="mt-6 text-sm leading-6 text-muted">{result.disclaimer}</p>
           <Button className="mt-7" variant="outline" fullWidth onClick={onStartAnotherRequest}>
             Start another request

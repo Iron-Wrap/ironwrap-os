@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.ts";
 import type { EnvelopeRecord } from "../src/core.ts";
+import { withTestEffectRuntime } from "./effect-runtime-fixture.ts";
 
 const rec: EnvelopeRecord = {
   envelope_id: "ow_22222222-2222-4222-8222-222222222222",
@@ -28,33 +29,71 @@ const rec: EnvelopeRecord = {
 test("queue: Frappe lead visibility precedes JobNimbus and transport sync marks envelope pushed", async (t) => {
   const fetches: Array<{ url: string; init: RequestInit }> = [];
   let leadCreated = false;
+  const frappeRecords = new Map<string, Record<string, unknown>>();
+  const jobNimbusRecords = new Map<string, Record<string, unknown>>();
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
+    const parsed = new URL(url);
+    const method = init?.method ?? "GET";
     fetches.push({ url, init: init ?? {} });
-    if (url.includes("app.jobnimbus.com/api1") && (init?.method ?? "GET") === "GET") return json({ results: [] });
-    if (url.endsWith("/contacts")) return json({ jnid: "C-1" });
-    if (url.endsWith("/jobs")) return json({ jnid: "J-1", number: "26-0001" });
+    const jobNimbusItem = parsed.pathname.match(/\/api1\/(contacts|jobs)\/([^/]+)$/);
+    if (url.includes("app.jobnimbus.com/api1") && method === "GET" && jobNimbusItem) {
+      return json(jobNimbusRecords.get(`${jobNimbusItem[1]}:${jobNimbusItem[2]}`) ?? {});
+    }
+    if (url.includes("app.jobnimbus.com/api1") && method === "GET") return json({ results: [] });
+    if (url.endsWith("/contacts")) {
+      const value = { ...JSON.parse(String(init?.body)), jnid: "C-1" };
+      jobNimbusRecords.set("contacts:C-1", value);
+      return json(value);
+    }
+    if (url.endsWith("/jobs")) {
+      const value = { ...JSON.parse(String(init?.body)), jnid: "J-1", number: "26-0001" };
+      jobNimbusRecords.set("jobs:J-1", value);
+      return json(value);
+    }
+    const frappeItem = parsed.pathname.match(/^\/api\/resource\/([^/]+)\/([^/]+)$/);
+    if (method === "GET" && frappeItem) {
+      const key = `${decodeURIComponent(frappeItem[1]!)}:${decodeURIComponent(frappeItem[2]!)}`;
+      const value = frappeRecords.get(key);
+      return value ? json({ data: value }) : new Response("not found", { status: 404 });
+    }
     if (url.includes("/api/resource/Lead%20Envelope?")) {
       return json({ data: leadCreated ? [{ name: "LE-0001" }] : [] });
     }
     if (url.endsWith("/api/resource/Lead%20Envelope")) {
       leadCreated = true;
-      return json({ data: { name: "LE-0001" } });
+      const value = { ...JSON.parse(String(init?.body)), name: "LE-0001" };
+      frappeRecords.set("Lead Envelope:LE-0001", value);
+      return json({ data: value });
     }
     if (url.endsWith("/api/resource/Lead%20Envelope/LE-0001") && init?.method === "PUT") {
-      return json({ data: { name: "LE-0001" } });
+      const value = { ...frappeRecords.get("Lead Envelope:LE-0001"), ...JSON.parse(String(init?.body)), name: "LE-0001" };
+      frappeRecords.set("Lead Envelope:LE-0001", value);
+      return json({ data: value });
     }
     if (url.includes("/api/resource/Roofing%20Customer?")) return json({ data: [] });
-    if (url.endsWith("/api/resource/Roofing%20Customer")) return json({ data: { name: "RC-0001" } });
+    if (url.endsWith("/api/resource/Roofing%20Customer")) {
+      const value = { ...JSON.parse(String(init?.body)), name: "RC-0001" };
+      frappeRecords.set("Roofing Customer:RC-0001", value);
+      return json({ data: value });
+    }
     if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [] });
-    if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-0001" } });
+    if (url.endsWith("/api/resource/Roof%20Job")) {
+      const value = { ...JSON.parse(String(init?.body)), name: "RJ-0001" };
+      frappeRecords.set("Roof Job:RJ-0001", value);
+      return json({ data: value });
+    }
     if (url.includes("/api/resource/Production%20Gate%20State?")) return json({ data: [] });
-    if (url.endsWith("/api/resource/Production%20Gate%20State")) return json({ data: { name: "gate" } });
+    if (url.endsWith("/api/resource/Production%20Gate%20State")) {
+      const value = { ...JSON.parse(String(init?.body)), name: "gate" };
+      frappeRecords.set("Production Gate State:gate", value);
+      return json({ data: value });
+    }
     throw new Error(`unexpected fetch ${url}`);
   });
 
   const writes: Array<{ sql: string; args: unknown[] }> = [];
-  const env = {
+  const env = withTestEffectRuntime({
     JOBNIMBUS_ENABLED: "true",
     JOBNIMBUS_API_KEY: "jn-key",
     JN_CONTACT_RECORD_TYPE: "Customer",
@@ -83,7 +122,7 @@ test("queue: Frappe lead visibility precedes JobNimbus and transport sync marks 
         };
       },
     },
-  };
+  });
   let acked = 0, retried = 0;
   const batch = {
     queue: "ironwrap-jn-push",
@@ -107,7 +146,9 @@ test("queue: Frappe lead visibility precedes JobNimbus and transport sync marks 
   assert.ok(initialLeadWrite >= 0 && initialLeadWrite < firstJobNimbusCall, "Frappe must exist before bridge delivery");
   const initialLead = JSON.parse(String(fetches[initialLeadWrite]?.init.body));
   assert.equal(initialLead.triage_status, "Untriaged");
-  const transportSync = fetches.find((f) => f.url.endsWith("/api/resource/Lead%20Envelope/LE-0001"));
+  const transportSync = fetches.find((f) =>
+    f.url.endsWith("/api/resource/Lead%20Envelope/LE-0001") && f.init.method === "PUT"
+  );
   assert.equal(transportSync?.init.method, "PUT");
   const transportBody = JSON.parse(String(transportSync?.init.body));
   assert.equal(transportBody.status, "pushed");

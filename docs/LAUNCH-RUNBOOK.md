@@ -169,8 +169,11 @@ Prove HTTPS from outside the host before storing the URL in Worker or MCP config
 
 ## 7. Migrate And Deploy The Worker
 
-Set Frappe credentials with `wrangler secret put`, enable the Frappe consumer, apply every D1
-migration, and deploy from the release commit:
+Set Frappe credentials with `wrangler secret put`, enable the Frappe consumer, and apply every
+D1 migration from the release commit. The normal production path is the automatic
+`.github/workflows/deploy.yml` `workflow_run` lane; it does not require a routine release click
+and it does not invoke the direct `npm run deploy` path. The commands below are local preflight
+and migration preparation only:
 
 ```bash
 npm ci --prefix app
@@ -184,8 +187,84 @@ npm run deploy -- --dry-run
 npx wrangler secret put ERPNEXT_API_KEY --env=""
 npx wrangler secret put ERPNEXT_API_SECRET --env=""
 npm run db:migrate
-npm run deploy
 ```
+
+### Signed Permit And Immutable Promotion
+
+The release workflow fails closed unless all of the following are available for the exact
+successful pull-request CI merge commit, open PR head/base, and tested tree:
+
+- `RELEASE_REVIEW_PUBLIC_KEY` from an independent reviewer whose source-addressed signed GO is
+  retrieved from `.release/reviews/<source-commit>.json` on the `release-review/<source-commit>`
+  ref, is bound to the complete source/tree/diff, and has no unresolved P0/P1 findings. The
+  receipt is durable review evidence, not a per-release GitHub secret;
+- `RELEASE_INDEPENDENT_ISSUER_URL` and its trigger-only
+  `RELEASE_INDEPENDENT_ISSUER_TOKEN`; the authenticated issuer must acknowledge its distinct
+  principal/task/run/key identity for the exact GitHub artifact digest before the bounded wait;
+- `RELEASE_PERMIT_PRIVATE_KEY` and `RELEASE_PERMIT_PUBLIC_KEY`, plus separate
+  `RELEASE_POLICY_LEDGER_API_TOKEN`, `RELEASE_STAGING_CLOUDFLARE_API_TOKEN`, and
+  `RELEASE_PRODUCTION_CLOUDFLARE_API_TOKEN` credentials with non-overlapping authority;
+- a separately signed full-surface evidence receipt covering reception, sales, field, production,
+  shop, finance, customer, agent, Facet, provider reconciliation, and genuine IRO-7 actor/business
+  evidence; a skipped scope requires signed non-applicability evidence and the provider scope may
+  not be skipped;
+- staging and production authenticated launch-proof/Frappe credentials, plus the HTTPS Frappe
+  release-adapter URL, bearer token, public key, and separately held provider private key; and
+- every expected Worker secret name in each Cloudflare environment. Secret values are never
+  placed in the permit or receipts.
+
+The complete name-only inventory and custody split is in `deploy/release.env.example`. The
+independent review/evidence issuer receives neither the permit private key nor provider mutation
+credentials. The Frappe adapter receives neither GitHub merge authority nor the Cloudflare token.
+
+Generation N enforcement is loaded from the PR base, not from candidate source, so a candidate
+cannot weaken and approve its own release boundary. That predecessor enforcer atomically
+bootstraps generation `0` at
+`release-policy:Iron-Wrap/ironwrap-os` in the existing `dedup_claims` table using the canonical
+policy-and-executable-enforcement hash, or reads the existing state. The first installation of
+this workflow therefore requires the reviewed predecessor enforcer to exist on the protected base;
+repository source does not claim that external bootstrap is already installed. A malformed or
+conflicting genesis row, changed PR/base/tree identity, missing exact CI run/job identity, changed migration set, source/tree/diff drift, missing
+secret inventory, provider DNS/readiness failure, or absent external credential stops admission.
+No release-specific migration or process-memory replay map may replace this boundary.
+Before any secret-bearing Wrangler invocation, that predecessor policy also rejects candidate
+custom builds and local-file/module discovery controls, validates the candidate service/database/
+bucket/queue/route coordinates, and runs the pinned predecessor Wrangler installation. Staging and
+production credentials must be distinct and incapable of cross-environment mutation.
+Before the first migration or upload, a second static readiness preflight requires every top-level
+variable to be repeated in a named environment, nonempty notification sender/recipient variables,
+the exact Cloudflare secret-name inventory, and an allowed OCR model plus OCR secret whenever OCR
+is enabled. It does not weaken `/ready`; a missing value or secret stops before mutation.
+Any failed staging step after traffic deployment restores the captured previous staging revision
+and accepts cleanup only after exact active-deployment readback; that cleanup receipt is not the
+successful compatibility drill. A production deploy that returns failure after changing traffic is
+also treated as attempted: recovery forces the captured previous version and trusts only readback.
+
+CI creates one deterministic aggregate containing the Worker bundle, PWA assets, and Frappe wheel,
+records each component digest, and uploads the aggregate once. Wrangler uploads
+the same bytes separately to the distinct staging and production Worker services; their provider
+version IDs are therefore different and both IDs, version readbacks, environment config digests,
+and secret-name inventory digests are bound into the permit. Staging must first prove active
+revision identity, `/health`, `/ready?scope=core`, authenticated affected-workflow smoke, an
+explicit nonempty export plus structured `d1 execute --json` schema/row-count/sentinel manifest
+restore into a `$RUNNER_TEMP`-persisted local target, and a previous-version rollback readback
+against the migrated schema with health/readiness/smoke proof. Only then is the short-lived permit
+assembled and consumed once through D1; the exact admitted PR is machine-merged and read back
+before production migrations or traffic promotion. Production promotes the prepared Frappe
+artifact through the authenticated adapter, promotes the pre-uploaded Worker/PWA version, re-reads
+both identities after smoke, and advances the durable generation only after the exact authenticated
+launch-proof step set is bound into an immutable production-promotion receipt. Failure after a
+Frappe promotion attempt invokes idempotent Frappe/Worker rollback, then verifies the restored
+Worker/PWA/Frappe identities and health/readiness before atomically persisting the rollback outcome.
+An expired permit may record that emergency rollback only when its original durable single-use
+admission claim is read back exactly. If an admitted D1 migration fails before Frappe or Worker/PWA
+promotion, no down migration or false rollback is attempted: the durable ledger records an exact
+`production_recovery_required` outcome bound to the source merge, pre-migration D1 recovery point,
+and prior Worker/PWA/Frappe identities for operator recovery.
+
+Repository tests prove the source contract only. A successful workflow is not live provider,
+DNS, readiness, credential, business acceptance, or production proof until its redacted receipts
+are independently read back.
 
 ### Facet-to-Frappe Review-Projection Gate
 
@@ -338,10 +417,9 @@ Before setting `PUBLIC_ESTIMATE_ENABLED=true` in the intended Cloudflare account
    canonical lead must agree. Set `PUBLIC_ESTIMATE_CONSENT_JURISDICTION` to the tenant's explicit
    governing jurisdiction (`Alberta, Canada` here); never derive either value from an untrusted
    `Referer` or free-form field.
-5. Set bounded rate controls and a valid JSON rule array. Leave
-   `PUBLIC_ESTIMATE_RANGE_RULES_JSON=[]` until the owner has loaded real, supplier-reviewed,
-   versioned ranges using those brand keys and the tenant service ids. An empty array safely
-   accepts a review request but returns no range; never deploy illustrative prices.
+5. Set bounded rate controls and keep `PUBLIC_ESTIMATE_RANGE_RULES_JSON=[]`. Public intake never
+   returns a price before measurement evidence and an approved pricing policy. Any non-empty value
+   fails readiness; do not deploy illustrative or static ranges.
 6. Set `ERPNEXT_INTEGRATION_USER` to the exact dedicated Worker Frappe user. When Frappe is
    enabled, the public route stays disabled until this identity is present: explicit follow-up
    consent is mirrored as append-only channel records linked to the raw R2 evidence.
@@ -349,8 +427,8 @@ Before setting `PUBLIC_ESTIMATE_ENABLED=true` in the intended Cloudflare account
    returns a disabled form rather than accepting unauditable browser intake.
 
 Use a real Turnstile test submission from the live `/estimate` route to prove the full path:
-the public response must contain only acceptance, an opaque envelope id, an optional non-binding
-range, and `review_required=true`. In D1/R2 and Frappe, prove the corresponding raw record,
+the public response must contain only acceptance, an opaque envelope id, `range=null`, the fixed
+no-online-price disclaimer, and `review_required=true`. In D1/R2 and Frappe, prove the corresponding raw record,
 Lead Envelope, Roof Job, Instant Estimate Session, source Evidence Item, and one
 `Communication Consent` record per supplied follow-up channel. Also prove a rejected challenge,
 wrong Origin, mismatched idempotency key, and rate-limited request create no accepted estimate.
@@ -358,10 +436,21 @@ Archive only redacted request ids and the release evidence.
 
 ## 8. Configure Hermes And MCP
 
-Install Hermes at the tag and commit in `deploy/runtime-lock.json`. Register only the three MCP
-servers in `hermes/mcp-servers.json`; role tool filters come from
-`hermes/agents/roles.json`. MCP base URLs must be production HTTPS URLs. Plain HTTP is accepted
-only for explicit localhost development.
+Install Hermes at the tag and commit in `deploy/runtime-lock.json`. Register the four entries in
+`hermes/mcp-servers.json`. The bus, Frappe, and Newo tool filters come from
+`hermes/agents/roles.json`; the separate desktop pilot server is outside that inventory and must
+remain fixed at `hermes_next_tasks`, `hermes_stage_context`, and `hermes_submit_draft`. MCP base
+URLs must be production HTTPS URLs. Plain HTTP is accepted only for explicit localhost development.
+
+Keep `APP_HERMES_DESKTOP_ENABLED=false` during the broad role smoke test. For first pairing, issue
+the one-time fragment link from PWA Settings and pass it only as
+`IRONWRAP_HERMES_DESKTOP_PAIRING_URL` to the local desktop MCP child process; it removes the link
+after parsing and retains the 15-minute credentials only in memory. A native launcher may instead
+resolve the paired access token and device proof from desktop OS secure storage. Never give this
+server an admin/write token or native connector credential. Enabling the flag is not launch proof:
+separately prove one owner/ops pairing, the device-bound task envelope, optional untrusted context
+staging, and a draft submission that returns a handoff without sending, booking, or creating
+downstream authority.
 
 Keep the Frappe, bus, and Newo MCP/Worker write flags false for the first read-only smoke test:
 
@@ -403,7 +492,7 @@ Before enabling the BFF in the intended Cloudflare account:
 
 1. Apply the exact D1 migration sequence remotely, including `0028_work_package_actions.sql`, then
    run the Frappe app migration so legacy Lead Envelopes become explicit `Unknown` triage rows.
-   Verify `/ready` against the intended database. The migration-derived 52-table/72-trigger
+   Verify `/ready` against the intended database. The migration-derived 58-table/95-index/86-trigger
    backup-and-restore inventory must be deployed with the same release.
 2. In the controlled production Worker configuration, set `APP_BFF_ENABLED=true`, exact tenant
    presentation fields, `APP_PUBLIC_ORIGIN` to the canonical HTTPS PWA origin, and
@@ -641,8 +730,8 @@ CRON_TZ=UTC
 `backup-d1-to-r2.sh` is bound to Cloudflare account
 `7ee5775bc1ba46f05c5a65235b60e939`, database `ironwrap-bus`, and UUID
 `f0674848-13df-4422-9896-8ba2719663b8`. It runs locked Wrangler `d1 export --remote`, imports
-the SQL into isolated SQLite, checks integrity and all 52 release-state tables,
-plus the 72 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
+the SQL into isolated SQLite, checks integrity and all 58 release-state tables, 95 indexes,
+plus the 86 release-state invariant trigger bindings, packages manifest plus SQL, encrypts
 locally, uploads immutably, remotely checks the objects, and publishes
 `IRONWRAP-D1-BACKUP-COMPLETE` last. Its success line records the exact
 `d1/ironwrap-bus/<timestamp-pid-random>` prefix. Never discover or infer `latest`.
@@ -669,7 +758,8 @@ For the launch remote drill, create a fresh empty D1 database named
 `ironwrap-restore-drill-<label>` in the same committed account and record its exact UUID. The
 name and UUID must both differ from production. Bind one approval to that exact pair; the script
 generates a target-only Wrangler config, rechecks emptiness, imports, then compares the complete
-table-to-row-count map for all 52 required tables and the exact 72 trigger-to-table bindings
+table-to-row-count map for all 58 required tables, the exact 95-index inventory, and the exact
+86 trigger-to-table bindings
 with the locally verified SQLite export:
 
 ```bash
@@ -686,7 +776,7 @@ export D1_RESTORE_MODE=verify
 
 Any new D1 migration that adds a persistent table must update the required-table allowlist in
 both D1 scripts and their recovery tests before deployment; the readiness checker derives all
-52 tables and 72 trigger bindings from the migration chain and rejects any drift. The inventory
+58 tables, 95 indexes, and 86 trigger bindings from the migration chain and rejects any drift. The inventory
 includes QuickBooks, customer acceptance, Newo, measurement, Facet evidence/association, approval,
 governed-transition, and field Work Package ledgers. Approval binding rewrites must raise
 `ABORT, 'approval_request_binding_immutable'`; approval event updates/deletes must raise
@@ -711,7 +801,7 @@ artifact checksums. A successful upload without this restore drill is not backup
 | Gate | Repository evidence | Required live evidence |
 | --- | --- | --- |
 | Intake spine | Worker tests, typecheck, dry-run bundle | Real source reaches R2, D1, Frappe, ack, bridge, reconcile |
-| Operating core | 64 DocTypes (48 top-level + 16 child), policy/RBAC tests, Workspace/Control Center package proof | App installed on plain Frappe; fixture, per-role cockpit, empty/error/readiness, and source-navigation checks pass |
+| Operating core | 68 DocTypes (51 top-level + 17 child), policy/RBAC tests, Workspace/Control Center package proof | App installed on plain Frappe; fixture, per-role cockpit, empty/error/readiness, and source-navigation checks pass |
 | Read-only Hermes | Role/manifest and MCP tests | Owner query uses live truth with zero writes |
 | Approved write | Dry-run/request contracts and idempotency tests | One human-approved mutation and complete `Hermes Run` audit |
 | Recovery | Readiness/status/replay plus encrypted Frappe/D1 backup tests | Targeted replay, alerts, exact-prefix local verification, isolated Frappe and D1 restores, table row-count, trigger-inventory, and receipt-semantics parity, and live R2 denied-delete proof |

@@ -38,7 +38,7 @@ Assume the new tenant id is `<tenant>` (example already in repo: `demo-exteriors
 3. Secrets stay out: the config carries env var NAMES only (`*_env` fields).
 4. Validate: `node tools/validate-tenant-config.mjs` must print
    `ok N tenant configs validated`. The validator enforces id uniqueness, sender-domain
-   isolation, CASL consent, quiet hours sanity, non-binding instant estimates, the 7
+   isolation, CASL consent, quiet hours sanity, price-free public estimator intake, the 7
    production gates, the approval policy, runtime tenant naming, and a no-secret-values scan.
 
 ### 2. Cloudflare namespace (Worker + data plane)

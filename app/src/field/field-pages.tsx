@@ -32,11 +32,17 @@ import {
   hasCachedJobPacket,
   cacheToday,
   loadJob,
+  loadWorkObject,
   loadProofPage,
   loadToday,
   prefetchAssignedPackets,
 } from "./field-cache";
-import type { JobResponse, ProofStreamItem, TodayResponse } from "./field-contracts";
+import type {
+  JobResponse,
+  ProofStreamItem,
+  TodayResponse,
+  WorkObjectResponse,
+} from "./field-contracts";
 import { GateChip } from "./gate-chip";
 import { ProofStream } from "./proof-stream";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
@@ -80,6 +86,7 @@ const BLOCKER_CATEGORIES = [
 
 type PacketAvailability = "checking" | "saving" | "saved" | "not_saved" | "unavailable";
 type TodayJob = TodayResponse["jobs"][number];
+type TodayWorkObject = TodayResponse["work_objects"][number];
 type FieldDateOptions = { locale?: string; timeZone?: string };
 
 export function TodayPage() {
@@ -186,12 +193,13 @@ export function TodayPage() {
   const fieldCaptureAllowed =
     session.user.role === "field" && today.allowed_actions.includes("field.checkin.create");
   const dataLimits = today.stale_fields.filter((field) => field !== "offline.cached_packet");
+  const assignmentCount = today.jobs.length + today.work_objects.length;
 
   return (
     <section className="mx-auto max-w-5xl space-y-7 pb-4">
       <TodayDispatchHeader
         date={today.date}
-        jobCount={today.jobs.length}
+        jobCount={assignmentCount}
         offline={offline}
         generatedAt={today.read_model_generated_at}
         dateOptions={dateOptions}
@@ -208,7 +216,7 @@ export function TodayPage() {
           offline={offline}
         />
       ) : null}
-      {today.jobs.length === 0 ? (
+      {assignmentCount === 0 ? (
         <EmptyState
           title={
             session.user.role === "field"
@@ -234,7 +242,7 @@ export function TodayPage() {
               </h2>
             </div>
             <p className="text-sm font-semibold text-muted">
-              {today.jobs.length} {today.jobs.length === 1 ? "assignment" : "assignments"}
+              {assignmentCount} {assignmentCount === 1 ? "assignment" : "assignments"}
             </p>
           </header>
           <ol className="divide-y divide-border">
@@ -250,6 +258,22 @@ export function TodayPage() {
               />
             ))}
           </ol>
+          {today.work_objects.length > 0 ? (
+            <>
+              <h3 className="mt-8 border-b border-border pb-4 text-lg font-black">
+                Typed physical work
+              </h3>
+              <ol className="divide-y divide-border">
+                {today.work_objects.map((workObject) => (
+                  <TodayWorkObjectRow
+                    key={`${workObject.work_object_type}:${workObject.work_object_id}:${workObject.physical_context_type}:${workObject.physical_context_id}`}
+                    workObject={workObject}
+                    dateOptions={dateOptions}
+                  />
+                ))}
+              </ol>
+            </>
+          ) : null}
         </section>
       )}
     </section>
@@ -479,6 +503,68 @@ function TodayJobRow({
   );
 }
 
+function TodayWorkObjectRow({
+  workObject,
+  dateOptions,
+}: {
+  workObject: TodayWorkObject;
+  dateOptions: FieldDateOptions;
+}) {
+  const params = {
+    workObjectType: workObject.work_object_type,
+    workObjectId: workObject.work_object_id,
+    physicalContextType: workObject.physical_context_type,
+    physicalContextId: workObject.physical_context_id,
+  };
+  const assignment = [workObject.assignment?.type, workObject.assignment?.status]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <li className="py-5 sm:py-6">
+      <article className="grid gap-5 lg:grid-cols-[8rem_minmax(0,1fr)_15rem] lg:items-start">
+        <div className="border-b border-border pb-3 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-5">
+          <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">Scheduled</p>
+          <p className="mt-1 text-base font-black leading-6">
+            {formatFieldSchedule(workObject.scheduled_start, dateOptions)}
+          </p>
+          {workObject.scheduled_end ? (
+            <p className="mt-1 text-sm leading-5 text-muted">
+              to {formatFieldSchedule(workObject.scheduled_end, dateOptions)}
+            </p>
+          ) : null}
+        </div>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <p className="font-black tracking-[-0.02em]">{workObject.work_object_id}</p>
+            <p className="text-sm font-semibold text-muted">{workObject.work_object_type}</p>
+          </div>
+          <h3 className="mt-1 text-xl font-black leading-7 tracking-[-0.025em] text-pretty sm:text-2xl">
+            {workObject.physical_context_type} · {workObject.physical_context_id}
+          </h3>
+          <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+            <DispatchFact
+              label="Assignment"
+              value={assignment || "Assignment detail unavailable"}
+            />
+            <DispatchFact label="Status note" value={workObject.next_action} />
+          </dl>
+        </div>
+        <div className="space-y-3 lg:pt-1">
+          <Button asChild size="field" fullWidth variant="accent">
+            <Link
+              to="/work-objects/$workObjectType/$workObjectId/physical-contexts/$physicalContextType/$physicalContextId"
+              params={params}
+            >
+              Open typed work packet
+              <ChevronRight aria-hidden="true" />
+            </Link>
+          </Button>
+        </div>
+      </article>
+    </li>
+  );
+}
+
 function DispatchFact({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -549,6 +635,128 @@ export function JobPage() {
   );
 }
 
+export function WorkObjectPage() {
+  const session = useSession();
+  const params = useParams({ strict: false }) as {
+    workObjectType?: string;
+    workObjectId?: string;
+    physicalContextType?: string;
+    physicalContextId?: string;
+  };
+  const scope: WorkObjectResponse["work_object"] | null =
+    params.workObjectType &&
+    params.workObjectId &&
+    params.physicalContextType &&
+    params.physicalContextId
+      ? {
+          workObjectType: params.workObjectType,
+          workObjectId: params.workObjectId,
+          physicalContextType: params.physicalContextType,
+          physicalContextId: params.physicalContextId,
+        }
+      : null;
+  const query = useQuery({
+    queryKey: scope
+      ? [
+          "work-object",
+          session.tenant.id,
+          session.user.id,
+          scope.workObjectType,
+          scope.workObjectId,
+          scope.physicalContextType,
+          scope.physicalContextId,
+        ]
+      : ["work-object", session.tenant.id, session.user.id, "missing"],
+    enabled: scope !== null,
+    queryFn: () => loadWorkObject(session, scope!),
+  });
+  if (!scope) return <ErrorState message="This typed work link is incomplete." />;
+  if (query.isPending) return <LoadingState label="Loading typed field packet…" />;
+  if (query.isError)
+    return <ErrorState message={messageFor(query.error)} onRetry={() => void query.refetch()} />;
+  return (
+    <WorkObjectSurface
+      key={query.data.read_model_generated_at}
+      model={query.data}
+      offline={query.data.stale_fields.includes("offline.cached_packet")}
+    />
+  );
+}
+
+function WorkObjectSurface({ model, offline }: { model: WorkObjectResponse; offline: boolean }) {
+  const session = useSession();
+  const workPackage = model.work_package;
+  const panelModel: WorkPackagePanelModel = {
+    job: { id: model.work_object.workObjectId },
+    assignment: model.assignment,
+    allowed_actions: model.allowed_actions,
+    packet: { work_package: workPackage },
+  };
+  const captureAllowed =
+    session.user.role === "field" && model.allowed_actions.includes("field.checkin.create");
+  return (
+    <RoleGuard surface="field">
+      <section className="mx-auto max-w-5xl space-y-7 pb-8 lg:pb-4">
+        <Button asChild variant="ghost" size="compact">
+          <Link to="/today">
+            <ChevronLeft aria-hidden="true" />
+            Today
+          </Link>
+        </Button>
+        <WorkObjectPacketHeader model={model} offline={offline} />
+        <WorkPackagePanel
+          model={panelModel}
+          offline={offline}
+          dateOptions={{ locale: session.tenant.locale, timeZone: session.tenant.time_zone }}
+          captureAllowed={captureAllowed}
+        />
+        <CaptureProofPanel
+          jobId={model.work_object.workObjectId}
+          workObjectScope={workPackage ? workObjectScopeForPackage(workPackage) : null}
+          blocked={false}
+          fieldCaptureAllowed={captureAllowed}
+          fieldRole={session.user.role === "field"}
+        />
+      </section>
+    </RoleGuard>
+  );
+}
+
+function WorkObjectPacketHeader({
+  model,
+  offline,
+}: {
+  model: WorkObjectResponse;
+  offline: boolean;
+}) {
+  const assignment = [model.assignment?.type, model.assignment?.status].filter(Boolean).join(" · ");
+  return (
+    <header className="border-b border-border pb-5 sm:pb-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-muted">{model.work_object.workObjectType}</p>
+          <h1 className="mt-1 text-3xl font-black tracking-[-0.04em] text-pretty sm:text-4xl">
+            {model.work_object.workObjectId}
+          </h1>
+          <p className="mt-2 text-base leading-6 text-muted">
+            {model.work_object.physicalContextType} · {model.work_object.physicalContextId}
+          </p>
+        </div>
+        <p className="border border-border bg-surface-raised px-3 py-2 text-sm font-bold text-muted">
+          {offline ? "Offline packet" : "Typed packet read"}
+        </p>
+      </div>
+      <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
+        <JobFact label="Assignment" value={assignment || "Assignment detail unavailable"} />
+        <JobFact
+          label="Packet"
+          value={model.work_package ? `v${model.work_package.version}` : "Unavailable"}
+        />
+      </dl>
+    </header>
+  );
+}
+
 function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }) {
   const session = useSession();
   const [proof, setProof] = useState<ProofStreamItem[]>(model.proof_stream);
@@ -575,23 +783,38 @@ function JobSurface({ model, offline }: { model: JobResponse; offline: boolean }
   }
 
   return (
-    <RoleGuard surface="field">
+    <RoleGuard surface="job">
       <section className="mx-auto max-w-5xl space-y-7 pb-8 lg:pb-4">
         <Button asChild variant="ghost" size="compact">
-          <Link to="/today">
-            <ChevronLeft aria-hidden="true" />
-            Today
-          </Link>
+          {session.user.role === "production" ? (
+            <Link to="/production">
+              <ChevronLeft aria-hidden="true" />
+              Production
+            </Link>
+          ) : (
+            <Link to="/today">
+              <ChevronLeft aria-hidden="true" />
+              Today
+            </Link>
+          )}
         </Button>
         <JobPacketHeader model={model} offline={offline} dateOptions={dateOptions} />
         {offline ? (
           <JobOfflineNotice generatedAt={model.read_model_generated_at} dateOptions={dateOptions} />
         ) : null}
         {dataLimits.length > 0 ? <JobDataLimits fields={dataLimits} /> : null}
-        <WorkPackagePanel model={model} offline={offline} dateOptions={dateOptions} />
+        <WorkPackagePanel
+          model={model}
+          offline={offline}
+          dateOptions={dateOptions}
+          captureAllowed={fieldCaptureAllowed}
+        />
         <WorkStatus model={model} blockedGates={blockedGates} dateOptions={dateOptions} />
         <CaptureProofPanel
           jobId={model.job.id}
+          workObjectScope={
+            model.packet.work_package ? workObjectScopeForPackage(model.packet.work_package) : null
+          }
           blocked={blockedGates.length > 0}
           fieldCaptureAllowed={fieldCaptureAllowed}
           fieldRole={session.user.role === "field"}
@@ -701,14 +924,86 @@ function JobDataLimits({ fields }: { fields: string[] }) {
   );
 }
 
+type WorkPackagePanelModel = {
+  job: Pick<JobResponse["job"], "id">;
+  assignment: JobResponse["assignment"];
+  allowed_actions: string[];
+  packet: Pick<JobResponse["packet"], "work_package">;
+};
+
+type FieldWorkPackage = NonNullable<JobResponse["packet"]["work_package"]>;
+type TypedWorkObjectScope = {
+  work_object_type: string;
+  work_object_id: string;
+  physical_context_type: string;
+  physical_context_id: string;
+};
+
+function workObjectScopeForPackage(workPackage: FieldWorkPackage): TypedWorkObjectScope | null {
+  if (
+    workPackage.work_object_type === "Roof Job" ||
+    !workPackage.work_object_type ||
+    !workPackage.work_object_id ||
+    !workPackage.physical_context_type ||
+    !workPackage.physical_context_id
+  ) {
+    return null;
+  }
+  return {
+    work_object_type: workPackage.work_object_type,
+    work_object_id: workPackage.work_object_id,
+    physical_context_type: workPackage.physical_context_type,
+    physical_context_id: workPackage.physical_context_id,
+  };
+}
+
+function workPackageActionPayload(
+  workPackage: FieldWorkPackage,
+  payload: Record<string, JsonValue>,
+): JsonValue {
+  const scope = workObjectScopeForPackage(workPackage);
+  return {
+    ...payload,
+    ...(scope
+      ? {
+          work_object_type: scope.work_object_type,
+          work_object_id: scope.work_object_id,
+          physical_context_type: scope.physical_context_type,
+          physical_context_id: scope.physical_context_id,
+        }
+      : {}),
+  };
+}
+
+function fieldPacketQueryKey(
+  session: ReturnType<typeof useSession>,
+  jobId: string,
+  workPackage: FieldWorkPackage,
+) {
+  const scope = workObjectScopeForPackage(workPackage);
+  return scope
+    ? [
+        "work-object",
+        session.tenant.id,
+        session.user.id,
+        scope.work_object_type,
+        scope.work_object_id,
+        scope.physical_context_type,
+        scope.physical_context_id,
+      ]
+    : ["job", session.tenant.id, session.user.id, jobId];
+}
+
 function WorkPackagePanel({
   model,
   offline,
   dateOptions,
+  captureAllowed,
 }: {
-  model: JobResponse;
+  model: WorkPackagePanelModel;
   offline: boolean;
   dateOptions: FieldDateOptions;
+  captureAllowed: boolean;
 }) {
   const session = useSession();
   const queryClient = useQueryClient();
@@ -722,6 +1017,7 @@ function WorkPackagePanel({
   const [savedAction, setSavedAction] = useState<OutboxAction | null>(null);
   const [stopInstructionActive, setStopInstructionActive] = useState(false);
   const [startingWork, setStartingWork] = useState(false);
+  const [completingWork, setCompletingWork] = useState(false);
 
   useEffect(() => {
     if (!savedAction || savedAction.state === "verified" || savedAction.state === "needs_attention")
@@ -753,8 +1049,17 @@ function WorkPackagePanel({
   }
 
   const activeWorkPackage = workPackage;
+  const currentWorkerUser = session.user.frappe_user_id ?? session.user.id;
+  const currentWorkerInFrozenRoster = activeWorkPackage.acknowledgement.workers.some(
+    (worker) =>
+      worker.required && worker.worker_user.toLowerCase() === currentWorkerUser.toLowerCase(),
+  );
+  const canCaptureEvidence =
+    captureAllowed && Boolean(activeWorkPackage.release_attempt_id) && currentWorkerInFrozenRoster;
   const canAcknowledge =
     model.allowed_actions.includes("work_package.acknowledge") &&
+    Boolean(activeWorkPackage.release_attempt_id) &&
+    currentWorkerInFrozenRoster &&
     !workPackage.acknowledgement.current_user_acknowledged;
   const canStop = model.allowed_actions.includes("work_package.stop_work");
   const canAttemptSync = navigator.onLine && !isOfflineSession(session);
@@ -763,22 +1068,40 @@ function WorkPackagePanel({
     !stopInstructionActive &&
     canAttemptSync &&
     workPackage.status === "Acknowledged" &&
-    workPackage.hold_points.every((holdPoint) => holdPoint.released) &&
+    Boolean(activeWorkPackage.release_attempt_id) &&
+    currentWorkerInFrozenRoster &&
+    workPackage.hold_points
+      .filter((holdPoint) => holdPoint.release_phase === "Pre-start")
+      .every((holdPoint) => holdPoint.released) &&
     model.allowed_actions.includes("work_package.start");
+  const completionAllowed = model.allowed_actions.includes("work_package.complete");
+  const canComplete = completionAllowed && !offline && canAttemptSync;
 
   async function saveWorkPackageAction(kind: "work_package_acknowledgement" | "work_package_stop") {
     setSavingAction(kind);
     setActionError(null);
     try {
-      const payload: JsonValue =
+      const payload =
         kind === "work_package_acknowledgement"
-          ? { work_package_id: activeWorkPackage.id }
-          : { work_package_id: activeWorkPackage.id, blocker_reason: stopReason.trim() };
+          ? workPackageActionPayload(activeWorkPackage, {
+              work_package_id: activeWorkPackage.id,
+              work_package_version: activeWorkPackage.version,
+              release_attempt_id: activeWorkPackage.release_attempt_id,
+            })
+          : workPackageActionPayload(activeWorkPackage, {
+              work_package_id: activeWorkPackage.id,
+              work_package_version: activeWorkPackage.version,
+              blocker_reason: stopReason.trim(),
+            });
       const action = await saveOutboxAction({
         tenantId: session.tenant.id,
         userId: session.user.id,
         kind,
-        endpoint: workPackageActionEndpoint(model.job.id, kind),
+        endpoint: workPackageActionEndpoint(
+          model.job.id,
+          kind,
+          workObjectScopeForPackage(activeWorkPackage),
+        ),
         payload,
       });
       setSavedAction(action);
@@ -794,7 +1117,7 @@ function WorkPackagePanel({
       const latest = await getOutboxAction(action.deviceActionId);
       if (latest) setSavedAction(latest);
       await queryClient.invalidateQueries({
-        queryKey: ["job", session.tenant.id, session.user.id, model.job.id],
+        queryKey: fieldPacketQueryKey(session, model.job.id, activeWorkPackage),
       });
     } catch (error) {
       setActionError(messageFor(error));
@@ -827,10 +1150,14 @@ function WorkPackagePanel({
     const deviceActionId = crypto.randomUUID();
     try {
       await apiCommand({
-        path: workPackageStartEndpoint(model.job.id),
+        path: workPackageStartEndpoint(model.job.id, workObjectScopeForPackage(activeWorkPackage)),
         body: {
           device_action_id: deviceActionId,
-          payload: { work_package_id: activeWorkPackage.id },
+          payload: workPackageActionPayload(activeWorkPackage, {
+            work_package_id: activeWorkPackage.id,
+            work_package_version: activeWorkPackage.version,
+            release_attempt_id: activeWorkPackage.release_attempt_id,
+          }),
         },
         csrfToken: session.csrf_token,
         idempotencyKey: deviceActionId,
@@ -838,12 +1165,46 @@ function WorkPackagePanel({
         deviceProof: getDeviceSecret,
       });
       await queryClient.invalidateQueries({
-        queryKey: ["job", session.tenant.id, session.user.id, model.job.id],
+        queryKey: fieldPacketQueryKey(session, model.job.id, activeWorkPackage),
       });
     } catch (error) {
       setActionError(messageFor(error));
     } finally {
       setStartingWork(false);
+    }
+  }
+
+  async function completeWork() {
+    if (!canComplete) return;
+    setCompletingWork(true);
+    setActionError(null);
+    const deviceActionId = crypto.randomUUID();
+    try {
+      await apiCommand({
+        path: workPackageCompleteEndpoint(
+          model.job.id,
+          workObjectScopeForPackage(activeWorkPackage),
+        ),
+        body: {
+          device_action_id: deviceActionId,
+          payload: workPackageActionPayload(activeWorkPackage, {
+            work_package_id: activeWorkPackage.id,
+            work_package_version: activeWorkPackage.version,
+            release_attempt_id: activeWorkPackage.release_attempt_id,
+          }),
+        },
+        csrfToken: session.csrf_token,
+        idempotencyKey: deviceActionId,
+        deviceActionId,
+        deviceProof: getDeviceSecret,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: fieldPacketQueryKey(session, model.job.id, activeWorkPackage),
+      });
+    } catch (error) {
+      setActionError(messageFor(error));
+    } finally {
+      setCompletingWork(false);
     }
   }
 
@@ -878,6 +1239,16 @@ function WorkPackagePanel({
             value={formatFieldTimestamp(workPackage.expires_at, dateOptions)}
           />
         </dl>
+        <dl className="mt-4 grid gap-4 border-t border-border pt-4 text-sm sm:grid-cols-2">
+          <JobFact
+            label="Work object"
+            value={`${workPackage.work_object_type} · ${workPackage.work_object_id}`}
+          />
+          <JobFact
+            label="Physical context"
+            value={`${workPackage.physical_context_type} · ${workPackage.physical_context_id}`}
+          />
+        </dl>
       </header>
 
       {offline ? (
@@ -903,6 +1274,29 @@ function WorkPackagePanel({
           <JobFact label="Stop conditions" value={workPackage.stop_conditions} />
           <JobFact label="Make safe" value={workPackage.make_safe_procedure} />
         </dl>
+
+        {workPackage.supersession ? (
+          <section
+            className="border-2 border-warning/45 bg-warning-soft p-4"
+            aria-labelledby="work-package-change-heading"
+          >
+            <p className="text-sm font-semibold text-warning">Changed condition</p>
+            <h3 id="work-package-change-heading" className="mt-1 text-lg font-black">
+              This package supersedes {workPackage.supersession.prior_id}
+            </h3>
+            <p className="mt-2 leading-6">{workPackage.supersession.reason}</p>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              Changed steps:{" "}
+              {workPackage.supersession.changed_steps.length
+                ? workPackage.supersession.changed_steps.join(", ")
+                : "none"}{" "}
+              · Changed holds:{" "}
+              {workPackage.supersession.changed_hold_points.length
+                ? workPackage.supersession.changed_hold_points.join(", ")
+                : "none"}
+            </p>
+          </section>
+        ) : null}
 
         <section aria-labelledby="work-package-steps-heading">
           <h3 id="work-package-steps-heading" className="font-black">
@@ -950,12 +1344,201 @@ function WorkPackagePanel({
                     : `Pending independent release by ${holdPoint.release_authority}. Field evidence can be captured, but this app cannot release the hold point.`}
                 </p>
                 <p className="mt-1 text-sm leading-6 text-muted">
-                  Evidence: {holdPoint.required_evidence} · Acceptance:{" "}
-                  {holdPoint.acceptance_criteria}
+                  Phase: {holdPoint.release_phase} · Evidence: {holdPoint.required_evidence} ·
+                  Acceptance: {holdPoint.acceptance_criteria}
                 </p>
               </li>
             ))}
           </ol>
+        </section>
+
+        <section
+          className="border border-border p-4"
+          aria-labelledby="work-package-workers-heading"
+        >
+          <h3 id="work-package-workers-heading" className="font-black">
+            Assigned workers
+          </h3>
+          {workPackage.acknowledgement.workers.length > 0 ? (
+            <ul className="mt-3 space-y-2">
+              {workPackage.acknowledgement.workers.map((worker) => (
+                <li
+                  key={worker.worker_user}
+                  className={
+                    worker.acknowledged
+                      ? "border border-ok/35 bg-ok-soft p-3"
+                      : "border border-warning/35 bg-warning-soft p-3"
+                  }
+                >
+                  <p className="font-bold">
+                    {worker.worker_user} · {worker.worker_role}
+                    {worker.required ? " · required" : " · optional"}
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-muted">
+                    {worker.acknowledged
+                      ? `Acknowledged${worker.acknowledged_at ? ` at ${formatFieldTimestamp(worker.acknowledged_at, dateOptions)}` : ""}.`
+                      : "Awaiting acknowledgement of this exact package version."}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-sm leading-6 text-warning">
+              The assigned-worker roster is unavailable in this packet. Starting work remains fail
+              closed.
+            </p>
+          )}
+        </section>
+
+        <section
+          className="border border-border p-4"
+          aria-labelledby="work-package-evidence-heading"
+        >
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <h3 id="work-package-evidence-heading" className="font-black">
+              Evidence slots
+            </h3>
+            <span className="text-sm font-semibold text-muted">
+              {workPackage.evidence_slots.length} captured event
+              {workPackage.evidence_slots.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            Captures are append-only and tied to this package version, slot, actor, device, and
+            capture time. Corrections add a linked event; they do not erase the prior fact.
+          </p>
+          <ul className="mt-3 space-y-2">
+            {workPackage.steps.map((step) => {
+              const slotId = `step:${step.sequence}`;
+              const latest = [...workPackage.evidence_slots]
+                .reverse()
+                .find((item) => item.slot_id === slotId && !item.superseded);
+              return (
+                <li
+                  key={slotId}
+                  className="flex flex-wrap items-center justify-between gap-3 border border-border p-3"
+                >
+                  <div>
+                    <p className="font-bold">
+                      Step {step.sequence} · {step.required_evidence}
+                    </p>
+                    <p className="mt-1 text-sm text-muted">
+                      {latest
+                        ? `${latest.disposition} · ${latest.freshness} · ${latest.conflict_state}`
+                        : "No capture recorded yet"}
+                    </p>
+                  </div>
+                  {canCaptureEvidence ? (
+                    <div className="flex flex-wrap gap-2">
+                      <a
+                        className="inline-flex min-h-11 items-center justify-center border border-foreground px-3 text-sm font-black underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-info focus-visible:outline-offset-3"
+                        aria-label={`Capture evidence for step ${step.sequence}`}
+                        href={workPackageEvidenceHref(
+                          model.job.id,
+                          workPackage.id,
+                          workPackage.version,
+                          workPackage.release_attempt_id ?? "",
+                          slotId,
+                          step.required_evidence,
+                          undefined,
+                          workObjectScopeForPackage(workPackage),
+                        )}
+                      >
+                        Capture evidence
+                      </a>
+                      {latest && sameFieldActor(latest.actor_user, currentWorkerUser) ? (
+                        <a
+                          className="inline-flex min-h-11 items-center justify-center border border-warning/60 px-3 text-sm font-black text-warning underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-info focus-visible:outline-offset-3"
+                          aria-label={`Correct evidence for step ${step.sequence}`}
+                          href={workPackageEvidenceHref(
+                            model.job.id,
+                            workPackage.id,
+                            workPackage.version,
+                            workPackage.release_attempt_id ?? "",
+                            slotId,
+                            step.required_evidence,
+                            { eventId: latest.event_id, evidenceItem: latest.evidence_item },
+                            workObjectScopeForPackage(workPackage),
+                          )}
+                        >
+                          Correct evidence
+                        </a>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <span className="text-sm font-semibold text-muted">
+                      Current field capture permission required
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+            {workPackage.hold_points.map((holdPoint) => {
+              const slotId = `hold:${holdPoint.sequence}`;
+              const latest = [...workPackage.evidence_slots]
+                .reverse()
+                .find((item) => item.slot_id === slotId && !item.superseded);
+              return (
+                <li
+                  key={slotId}
+                  className="flex flex-wrap items-center justify-between gap-3 border border-border p-3"
+                >
+                  <div>
+                    <p className="font-bold">
+                      Hold {holdPoint.sequence} · {holdPoint.required_evidence}
+                    </p>
+                    <p className="mt-1 text-sm text-muted">
+                      {latest
+                        ? `${latest.disposition} · ${latest.freshness} · ${latest.conflict_state}`
+                        : "No capture recorded yet"}
+                    </p>
+                  </div>
+                  {canCaptureEvidence ? (
+                    <div className="flex flex-wrap gap-2">
+                      <a
+                        className="inline-flex min-h-11 items-center justify-center border border-foreground px-3 text-sm font-black underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-info focus-visible:outline-offset-3"
+                        aria-label={`Capture evidence for hold ${holdPoint.sequence}`}
+                        href={workPackageEvidenceHref(
+                          model.job.id,
+                          workPackage.id,
+                          workPackage.version,
+                          workPackage.release_attempt_id ?? "",
+                          slotId,
+                          holdPoint.required_evidence,
+                          undefined,
+                          workObjectScopeForPackage(workPackage),
+                        )}
+                      >
+                        Capture evidence
+                      </a>
+                      {latest && sameFieldActor(latest.actor_user, currentWorkerUser) ? (
+                        <a
+                          className="inline-flex min-h-11 items-center justify-center border border-warning/60 px-3 text-sm font-black text-warning underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-3 focus-visible:outline-info focus-visible:outline-offset-3"
+                          aria-label={`Correct evidence for hold ${holdPoint.sequence}`}
+                          href={workPackageEvidenceHref(
+                            model.job.id,
+                            workPackage.id,
+                            workPackage.version,
+                            workPackage.release_attempt_id ?? "",
+                            slotId,
+                            holdPoint.required_evidence,
+                            { eventId: latest.event_id, evidenceItem: latest.evidence_item },
+                            workObjectScopeForPackage(workPackage),
+                          )}
+                        >
+                          Correct evidence
+                        </a>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <span className="text-sm font-semibold text-muted">
+                      Current field capture permission required
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         </section>
 
         <section
@@ -1036,6 +1619,42 @@ function WorkPackagePanel({
             </p>
           )}
         </section>
+
+        {completionAllowed ? (
+          <section
+            className="border-2 border-ok/45 bg-ok-soft p-4"
+            aria-labelledby="work-package-completion-heading"
+          >
+            <h3 id="work-package-completion-heading" className="font-black text-ok">
+              Complete work package
+            </h3>
+            {canComplete ? (
+              <>
+                <p className="mt-2 text-sm leading-6 text-muted">
+                  All current worker acknowledgements, hold releases, and independently accepted
+                  evidence gates are present. Completion is an online production-authority action.
+                </p>
+                <Button
+                  type="button"
+                  size="field"
+                  fullWidth
+                  className="mt-4"
+                  variant="accent"
+                  busy={completingWork}
+                  onClick={() => void completeWork()}
+                >
+                  <Check aria-hidden="true" />
+                  Complete from current ledger
+                </Button>
+              </>
+            ) : (
+              <p className="mt-2 text-sm leading-6 text-muted">
+                Completion stays unavailable until the current online packet proves every required
+                gate. No offline or client-only completion is allowed.
+              </p>
+            )}
+          </section>
+        ) : null}
 
         <section
           className="border-2 border-danger/55 bg-danger-soft/45 p-4"
@@ -1197,11 +1816,13 @@ function WorkStatus({
 
 function CaptureProofPanel({
   jobId,
+  workObjectScope,
   blocked,
   fieldCaptureAllowed,
   fieldRole,
 }: {
   jobId: string;
+  workObjectScope: TypedWorkObjectScope | null;
   blocked: boolean;
   fieldCaptureAllowed: boolean;
   fieldRole: boolean;
@@ -1247,10 +1868,10 @@ function CaptureProofPanel({
           variant={blocked ? "outline" : "accent"}
           className="fixed inset-x-4 bottom-[calc(6rem+env(safe-area-inset-bottom))] z-40 lg:static lg:min-w-72"
         >
-          <Link to="/check-in/$jobId" params={{ jobId }}>
+          <a href={fieldCheckInHref(jobId, workObjectScope)}>
             <Camera aria-hidden="true" />
             {blocked ? "Capture blocker proof" : "Capture job proof"}
-          </Link>
+          </a>
         </Button>
       </div>
     </section>
@@ -1490,16 +2111,92 @@ function joinKnown(values: Array<string | null>): string | null {
   return known.length > 0 ? known.join(" · ") : null;
 }
 
+function sameFieldActor(left: string | null, right: string | null): boolean {
+  if (!left || !right) return false;
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
 function workPackageActionEndpoint(
   jobId: string,
   kind: "work_package_acknowledgement" | "work_package_stop",
+  scope: TypedWorkObjectScope | null = null,
 ): string {
-  const base = `/api/v1/jobs/${encodeURIComponent(jobId)}/work-package`;
+  const base = workPackageEndpointBase(jobId, scope);
   return kind === "work_package_acknowledgement" ? `${base}/acknowledgements` : `${base}/stop-work`;
 }
 
-function workPackageStartEndpoint(jobId: string): string {
-  return `/api/v1/jobs/${encodeURIComponent(jobId)}/work-package/start`;
+function workPackageStartEndpoint(
+  jobId: string,
+  scope: TypedWorkObjectScope | null = null,
+): string {
+  return `${workPackageEndpointBase(jobId, scope)}/start`;
+}
+
+function workPackageCompleteEndpoint(
+  jobId: string,
+  scope: TypedWorkObjectScope | null = null,
+): string {
+  return `${workPackageEndpointBase(jobId, scope)}/complete`;
+}
+
+function workPackageEndpointBase(jobId: string, scope: TypedWorkObjectScope | null): string {
+  if (!scope) return `/api/v1/jobs/${encodeURIComponent(jobId)}/work-package`;
+  return `/api/v1/work-objects/${encodeURIComponent(scope.work_object_type)}/${encodeURIComponent(scope.work_object_id)}/physical-contexts/${encodeURIComponent(scope.physical_context_type)}/${encodeURIComponent(scope.physical_context_id)}/work-package`;
+}
+
+function fieldCheckInHref(jobId: string, scope: TypedWorkObjectScope | null): string {
+  if (!scope) return `/check-in/${encodeURIComponent(jobId)}`;
+  const query = new URLSearchParams({
+    work_object_type: scope.work_object_type,
+    work_object_id: scope.work_object_id,
+    physical_context_type: scope.physical_context_type,
+    physical_context_id: scope.physical_context_id,
+  });
+  return `/check-in/${encodeURIComponent(jobId)}?${query.toString()}`;
+}
+
+function fieldCheckInEndpoint(jobId: string, scope: TypedWorkObjectScope | null): string {
+  if (!scope) return `/api/v1/jobs/${encodeURIComponent(jobId)}/check-ins`;
+  return `${workObjectEndpointBase(scope)}/check-ins`;
+}
+
+function workObjectEndpointBase(scope: TypedWorkObjectScope): string {
+  return `/api/v1/work-objects/${encodeURIComponent(scope.work_object_type)}/${encodeURIComponent(scope.work_object_id)}/physical-contexts/${encodeURIComponent(scope.physical_context_type)}/${encodeURIComponent(scope.physical_context_id)}`;
+}
+
+function workPackageEvidenceHref(
+  jobId: string,
+  workPackageId: string,
+  version: number,
+  releaseAttemptId: string,
+  slotId: string,
+  requirement: string,
+  correction?: { eventId: string; evidenceItem: string },
+  scope: TypedWorkObjectScope | null = null,
+): string {
+  const query = new URLSearchParams({
+    work_package_id: workPackageId,
+    work_package_version: String(version),
+    evidence_slot_id: slotId,
+    evidence_requirement: requirement,
+    evidence_source: "field-companion",
+    work_package_release_attempt_id: releaseAttemptId,
+    ...(correction
+      ? {
+          evidence_correction_of: correction.eventId,
+          evidence_item_correction_of: correction.evidenceItem,
+        }
+      : {}),
+    ...(scope
+      ? {
+          work_object_type: scope.work_object_type,
+          work_object_id: scope.work_object_id,
+          physical_context_type: scope.physical_context_type,
+          physical_context_id: scope.physical_context_id,
+        }
+      : {}),
+  });
+  return `/check-in/${encodeURIComponent(jobId)}?${query.toString()}`;
 }
 
 export function CheckInPage() {
@@ -1522,14 +2219,130 @@ export function CheckInPage() {
   return <CheckInFlow key={jobId} jobId={jobId} />;
 }
 
+type EvidenceCaptureContext = {
+  workPackageId: string;
+  workPackageVersion: number;
+  workPackageReleaseAttemptId: string;
+  evidenceSlotId: string;
+  evidenceRequirement: string;
+  evidenceSource: string;
+  evidenceCorrectionOf: string | null;
+  evidenceItemCorrectionOf: string | null;
+};
+
+function workObjectScopeFromLocation(): TypedWorkObjectScope | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const values = {
+    work_object_type: params.get("work_object_type")?.trim() ?? "",
+    work_object_id: params.get("work_object_id")?.trim() ?? "",
+    physical_context_type: params.get("physical_context_type")?.trim() ?? "",
+    physical_context_id: params.get("physical_context_id")?.trim() ?? "",
+  };
+  const present = Object.values(values).some(Boolean);
+  if (!present) return null;
+  if (Object.values(values).some((value) => !value)) return null;
+  if (values.work_object_type === "Roof Job") return null;
+  return values;
+}
+
+function toCheckInJobResponse(model: WorkObjectResponse): JobResponse {
+  return {
+    version: model.version,
+    source_updated_at: model.source_updated_at,
+    read_model_generated_at: model.read_model_generated_at,
+    stale_fields: model.stale_fields,
+    permissions: model.permissions,
+    allowed_actions: model.allowed_actions,
+    job: {
+      id: model.work_object.workObjectId,
+      roof_job_id: null,
+      job_number: null,
+      brand: null,
+      service_type: model.work_object.workObjectType,
+      status: model.work_package?.status ?? null,
+      address: `${model.work_object.physicalContextType} · ${model.work_object.physicalContextId}`,
+      current_gate_state: null,
+    },
+    assignment: model.assignment,
+    gates: [],
+    packet: {
+      scope_clauses: [],
+      measurements: [],
+      materials: { takeoffs: [], supplier_orders: [] },
+      change_orders: [],
+      safety_plan: null,
+      contact: null,
+      work_package: model.work_package,
+    },
+    proof_stream: [],
+    proof_page: { next_cursor: null, page_size: 100 },
+    required_proof: [],
+  };
+}
+
+function evidenceCaptureContext(): EvidenceCaptureContext | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const workPackageId = params.get("work_package_id")?.trim() ?? "";
+  const evidenceSlotId = params.get("evidence_slot_id")?.trim() ?? "";
+  const evidenceRequirement = params.get("evidence_requirement")?.trim() ?? "";
+  const workPackageVersion = Number(params.get("work_package_version"));
+  const workPackageReleaseAttemptId = params.get("work_package_release_attempt_id")?.trim() ?? "";
+  const evidenceCorrectionOf = params.get("evidence_correction_of")?.trim() || null;
+  const evidenceItemCorrectionOf = params.get("evidence_item_correction_of")?.trim() || null;
+  if (
+    !workPackageId ||
+    !evidenceSlotId ||
+    !evidenceRequirement ||
+    !workPackageReleaseAttemptId ||
+    !Number.isInteger(workPackageVersion) ||
+    workPackageVersion < 1
+  ) {
+    return null;
+  }
+  if (Boolean(evidenceCorrectionOf) !== Boolean(evidenceItemCorrectionOf)) return null;
+  return {
+    workPackageId,
+    workPackageVersion,
+    workPackageReleaseAttemptId,
+    evidenceSlotId,
+    evidenceRequirement,
+    evidenceSource: params.get("evidence_source")?.trim() || "field-companion",
+    evidenceCorrectionOf,
+    evidenceItemCorrectionOf,
+  };
+}
+
 function CheckInFlow({ jobId }: { jobId: string }) {
   const session = useSession();
   const queryClient = useQueryClient();
   const stepPanelRef = useRef<HTMLElement>(null);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
+  const typedScope = workObjectScopeFromLocation();
   const jobQuery = useQuery({
-    queryKey: ["job", session.tenant.id, session.user.id, jobId],
-    queryFn: () => loadJob(session, jobId),
+    queryKey: typedScope
+      ? [
+          "work-object",
+          session.tenant.id,
+          session.user.id,
+          typedScope.work_object_type,
+          typedScope.work_object_id,
+          typedScope.physical_context_type,
+          typedScope.physical_context_id,
+        ]
+      : ["job", session.tenant.id, session.user.id, jobId],
+    queryFn: async () =>
+      typedScope
+        ? toCheckInJobResponse(
+            await loadWorkObject(session, {
+              workObjectType: typedScope.work_object_type,
+              workObjectId: typedScope.work_object_id,
+              physicalContextType: typedScope.physical_context_type,
+              physicalContextId: typedScope.physical_context_id,
+            }),
+          )
+        : loadJob(session, jobId),
   });
   const startedAt = useRef(new Date().toISOString());
   const [step, setStep] = useState(1);
@@ -1537,6 +2350,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
   const [voice, setVoice] = useState<File | null>(null);
   const [proofSlot, setProofSlot] = useState("Production");
   const [notes, setNotes] = useState("");
+  const [correctionReason, setCorrectionReason] = useState("");
   const [blocker, setBlocker] = useState(false);
   const [blockerCategory, setBlockerCategory] = useState("Safety");
   const [blockerSummary, setBlockerSummary] = useState("");
@@ -1552,6 +2366,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
   const [saving, setSaving] = useState(false);
   const [savedAction, setSavedAction] = useState<OutboxAction | null>(null);
   const lastScrollStep = useRef(step);
+  const typedEvidence = evidenceCaptureContext();
 
   useEffect(() => {
     if (!savedAction || savedAction.state === "verified" || savedAction.state === "needs_attention")
@@ -1665,8 +2480,16 @@ function CheckInFlow({ jobId }: { jobId: string }) {
     if (mediaError) return setFormError(mediaError);
     if (files.length === 0 && !notes.trim() && !blocker)
       return setFormError("Add a photo, voice note, field note, or blocker before saving.");
+    if (typedEvidence && files.length === 0)
+      return setFormError(
+        "A Work Package evidence slot requires at least one photo or voice attachment.",
+      );
     if (blocker && !blockerSummary.trim())
       return setFormError("Describe what is blocked so the office can act.");
+    if (typedEvidence?.evidenceCorrectionOf && !correctionReason.trim())
+      return setFormError("Describe why this capture corrects the prior evidence.");
+    if (typedEvidence?.evidenceCorrectionOf && files.length !== 1)
+      return setFormError("A correction must contain exactly one attachment.");
     setSaving(true);
     setFormError(null);
     try {
@@ -1674,7 +2497,7 @@ function CheckInFlow({ jobId }: { jobId: string }) {
         tenantId: session.tenant.id,
         userId: session.user.id,
         kind: "field_checkin",
-        endpoint: `/api/v1/jobs/${encodeURIComponent(jobId)}/check-ins`,
+        endpoint: fieldCheckInEndpoint(jobId, typedScope),
         payload: {
           assignment_id: activeAssignmentId,
           proof_slot: proofSlot,
@@ -1689,9 +2512,26 @@ function CheckInFlow({ jobId }: { jobId: string }) {
           location_accuracy_m: location?.accuracy ?? null,
           location_permission_state: locationPermissionState,
           correction_of: null,
-          correction_reason: null,
-          evidence_correction_of: null,
+          correction_reason: typedEvidence?.evidenceCorrectionOf ? correctionReason.trim() : null,
+          evidence_correction_of: typedEvidence?.evidenceCorrectionOf ?? null,
+          evidence_item_correction_of: typedEvidence?.evidenceItemCorrectionOf ?? null,
+          work_package_release_attempt_id: typedEvidence
+            ? typedEvidence.workPackageReleaseAttemptId
+            : null,
           customer_safe_requested: false,
+          ...(typedEvidence
+            ? {
+                work_package_id: typedEvidence.workPackageId,
+                work_package_version: typedEvidence.workPackageVersion,
+                evidence_slot_id: typedEvidence.evidenceSlotId,
+                evidence_requirement: typedEvidence.evidenceRequirement,
+                evidence_source: typedEvidence.evidenceSource,
+                evidence_freshness: "Current",
+                evidence_conflict_state: "None",
+                evidence_verification: "Verified",
+                evidence_disposition: "Open",
+              }
+            : {}),
         },
         attachments: files.map((file) => ({
           blob: file,
@@ -1713,7 +2553,17 @@ function CheckInFlow({ jobId }: { jobId: string }) {
         const latest = await getOutboxAction(action.deviceActionId);
         if (latest) setSavedAction(latest);
         await queryClient.invalidateQueries({
-          queryKey: ["job", session.tenant.id, session.user.id, jobId],
+          queryKey: typedScope
+            ? [
+                "work-object",
+                session.tenant.id,
+                session.user.id,
+                typedScope.work_object_type,
+                typedScope.work_object_id,
+                typedScope.physical_context_type,
+                typedScope.physical_context_id,
+              ]
+            : ["job", session.tenant.id, session.user.id, jobId],
         });
       }
     } catch (error) {
@@ -1865,6 +2715,32 @@ function CheckInFlow({ jobId }: { jobId: string }) {
               </h2>
             </header>
             <div className="space-y-4 p-4 sm:p-5">
+              {typedEvidence?.evidenceCorrectionOf ? (
+                <section
+                  className="border-2 border-warning/45 bg-warning-soft p-4"
+                  aria-labelledby="evidence-correction-heading"
+                >
+                  <p className="text-sm font-semibold text-warning">Correction of prior evidence</p>
+                  <h3 id="evidence-correction-heading" className="mt-1 font-black">
+                    This single attachment will supersede the linked capture.
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-muted">
+                    The prior event and Evidence Item identities are preserved. Explain the changed
+                    condition before saving.
+                  </p>
+                  <label className="mt-3 block font-bold" htmlFor="evidence-correction-reason">
+                    Why is this a correction? <span aria-hidden="true">*</span>
+                  </label>
+                  <textarea
+                    id="evidence-correction-reason"
+                    className="mt-2 min-h-28 w-full border bg-surface p-4"
+                    maxLength={1000}
+                    required
+                    value={correctionReason}
+                    onChange={(event) => setCorrectionReason(event.target.value)}
+                  />
+                </section>
+              ) : null}
               <Button
                 type="button"
                 size="field"

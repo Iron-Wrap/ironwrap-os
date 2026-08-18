@@ -87,6 +87,7 @@ import {
 } from "./production-schedule-approval-store.ts";
 import {
   activeAssignmentForJob,
+  activeAssignmentForWorkObject,
   buildEstimatorWorkbenchReadModel,
   buildJobProofReadModel,
   buildJobReadModel,
@@ -94,11 +95,20 @@ import {
   buildProductionRunwayReadModel,
   buildSalesReadModel,
   buildTodayReadModel,
+  buildUniversalWorkPackageReadModel,
 } from "./app-read-models.ts";
+import { buildNowReadModel } from "./now-read-model.ts";
 import { handleCustomerPortalLinks } from "./customer-portal.ts";
-import { APP_API_VERSION, type AppEnv, type AuthContext } from "./app-types.ts";
+import {
+  APP_API_VERSION,
+  type AppEnv,
+  type AuthContext,
+  type WorkObjectScope,
+} from "./app-types.ts";
 import { handleFieldAction } from "./field-actions.ts";
 import { handleWorkPackageAction, type WorkPackageActionKind } from "./work-package-actions.ts";
+import { hasPhysicalAssignmentAuthority } from "./work-package.ts";
+import { handleAuthorityRecordRoute } from "./authority-record-api.ts";
 import { handleProposalDocAction } from "./proposal-doc-action.ts";
 import {
   listMeasurementIntakeExceptions,
@@ -107,11 +117,39 @@ import {
 import { buildNewoOperationsReadModel } from "./newo-operations-read-model.ts";
 import { buildOwnerRuntimeReadModel } from "./operations.ts";
 import {
-  createFacetDesignAssociation,
-  listFacetDesignEvidenceRequiringAssociation,
-  parseFacetDesignAssociationInput,
-  resolveFacetDesignAssociation,
-} from "./facet-design-association.ts";
+  listFacetV2IntakeExceptions,
+  listFacetV2WorkflowEvidence,
+} from "./facet-v2-evidence.ts";
+import { issueFacetLaunch } from "./facet-launch.ts";
+import {
+  handleHermesDesktopNativeRoute,
+  handleHermesDesktopPairingIssue,
+  isHermesDesktopNativeRoute,
+} from "./hermes-desktop.ts";
+import {
+  POSTIZ_PROVIDERS,
+  approvePostizIntent,
+  getPostizIntent,
+  postizIntentEnvelope,
+  reconcilePostizIntent,
+  rejectPostizIntent,
+  requestPostizConnect,
+  stopPostizIntent,
+  type PostizProvider,
+} from "./postiz.ts";
+import {
+  QUICKBOOKS_REJECTION_REASONS,
+  approveQuickBooksFinalInvoice,
+  getQuickBooksFinalInvoice,
+  quickBooksConnectionEnvelope,
+  quickBooksFinalInvoiceEnvelope,
+  rejectQuickBooksFinalInvoice,
+  removeQuickBooksFromIronWrap,
+  requestQuickBooksConnect,
+  requestQuickBooksFinalInvoiceReconciliation,
+  validQuickBooksIntentId,
+  type QuickBooksRejectionReason,
+} from "./quickbooks-final-invoice.ts";
 
 const MAX_ADMIN_BODY_BYTES = 8 * 1024;
 
@@ -125,6 +163,11 @@ export async function handleAppApi(
     return unavailableAppRoute();
   if (!appBffConfigured(appEnv))
     return unavailableAppRoute();
+
+  // Native desktop requests prove their own short-lived bearer + device
+  // binding and intentionally do not depend on a browser Origin header.
+  if (isHermesDesktopNativeRoute(req))
+    return await handleHermesDesktopNativeRoute(req, appEnv);
 
   const url = new URL(req.url);
   const mutation = req.method === "POST";
@@ -252,6 +295,12 @@ export async function handleAuthenticatedRoute(
   auth: AuthContext,
 ): Promise<Response> {
   const url = new URL(req.url);
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/hermes/desktop-pairings"
+  ) {
+    return await handleHermesDesktopPairingIssue(req, env, auth);
+  }
   if (req.method === "POST" && url.pathname === "/api/v1/admin/app-users") {
     return await handleAdminAppUserProvision(req, env, auth);
   }
@@ -261,6 +310,8 @@ export async function handleAuthenticatedRoute(
     return response;
   }
   if (req.method === "GET" && url.pathname === "/api/v1/field/bootstrap") {
+    if (!hasPermission(auth, "today:read"))
+      return privateAppJson({ error: "today_read_required" }, 403);
     try {
       return privateAppJson({
         version: APP_API_VERSION,
@@ -274,50 +325,104 @@ export async function handleAuthenticatedRoute(
   if (req.method === "POST" && url.pathname === "/api/v1/auth/logout") {
     return await logoutAppSession(req, env, auth);
   }
+  if (url.pathname.startsWith("/api/v1/authority-records")) {
+    const authorityResponse = await handleAuthorityRecordRoute(req, env, auth);
+    if (authorityResponse) return authorityResponse;
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/now") {
+    if (!hasPermission(auth, "now:read"))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    return privateAppJson(await buildNowReadModel(env, auth));
+  }
+  if (url.pathname === "/api/v1/quickbooks/connection") {
+    return req.method === "GET"
+      ? await handleQuickBooksConnectionRead(env, auth)
+      : privateAppJson({ error: "not_found" }, 404);
+  }
+  if (url.pathname === "/api/v1/quickbooks/connect") {
+    return req.method === "POST"
+      ? await handleQuickBooksConnect(req, env, auth)
+      : privateAppJson({ error: "not_found" }, 404);
+  }
+  if (url.pathname === "/api/v1/quickbooks/disconnect") {
+    return req.method === "POST"
+      ? await handleQuickBooksDisconnect(req, env, auth)
+      : privateAppJson({ error: "not_found" }, 404);
+  }
+  const quickBooksFinalInvoiceRoute = url.pathname.match(
+    /^\/api\/v1\/quickbooks\/final-invoices\/([^/]+)(?:\/(approve|reject|reconcile))?$/,
+  );
+  if (quickBooksFinalInvoiceRoute) {
+    const intentId = decodedQuickBooksIntentId(quickBooksFinalInvoiceRoute[1] ?? "");
+    if (!intentId) return privateAppJson({ error: "not_found" }, 404);
+    const action = quickBooksFinalInvoiceRoute[2] as
+      | "approve" | "reject" | "reconcile" | undefined;
+    if (req.method === "GET" && !action)
+      return await handleQuickBooksFinalInvoiceRead(env, auth, intentId);
+    if (req.method === "POST" && action)
+      return await handleQuickBooksFinalInvoiceCommand(req, env, auth, intentId, action);
+    return privateAppJson({ error: "not_found" }, 404);
+  }
+  if (url.pathname === "/api/v1/postiz/connect") {
+    return req.method === "POST"
+      ? await handlePostizConnect(req, env, auth)
+      : privateAppJson({ error: "not_found" }, 404);
+  }
+  const postizIntentRoute = url.pathname.match(
+    /^\/api\/v1\/postiz\/intents\/([^/]+)(?:\/(approve|reject|stop|reconcile))?$/,
+  );
+  if (postizIntentRoute) {
+    const intentId = decodedPostizIntentId(postizIntentRoute[1] ?? "");
+    if (!intentId) return privateAppJson({ error: "not_found" }, 404);
+    const action = postizIntentRoute[2] as
+      | "approve"
+      | "reject"
+      | "stop"
+      | "reconcile"
+      | undefined;
+    if (req.method === "GET" && !action)
+      return await handlePostizIntentRead(env, auth, intentId);
+    if (req.method === "POST" && action)
+      return await handlePostizIntentCommand(req, env, auth, intentId, action);
+    return privateAppJson({ error: "not_found" }, 404);
+  }
   if (url.pathname.startsWith("/api/v1/customer-portal/links")) {
     return await handleCustomerPortalLinks(req, env, auth);
   }
   if (
     req.method === "GET" &&
-    url.pathname === "/api/v1/facet-design-evidence/association-ready"
+    url.pathname === "/api/v1/facet-design-evidence"
   ) {
-    if (!officeRole(auth))
-      return privateAppJson({ error: "office_role_required" }, 403);
+    if (!hasPermission(auth, "facet:read"))
+      return privateAppJson({ error: "facet_read_required" }, 403);
     try {
+      const limit = parsedListLimit(url.searchParams.get("limit"));
+      const [evidence, intakeExceptions] = await Promise.all([
+        listFacetV2WorkflowEvidence(env, auth.session.tenant_id, limit),
+        listFacetV2IntakeExceptions(env, auth.session.tenant_id, limit),
+      ]);
       return privateAppJson({
-        evidence: await listFacetDesignEvidenceRequiringAssociation(
-          env,
-          auth.session.tenant_id,
-          parsedListLimit(url.searchParams.get("limit")),
-        ),
+        version: 2,
+        read_model_generated_at: new Date().toISOString(),
+        permissions: auth.permissions,
+        allowed_actions: ["facet_design.read"],
+        evidence,
+        intake_exceptions: intakeExceptions,
       });
     } catch {
       return privateAppJson(
-        { error: "facet_design_association_store_unavailable" },
+        { error: "facet_v2_evidence_store_unavailable" },
         502,
       );
     }
   }
-  if (
-    req.method === "POST" &&
-    url.pathname === "/api/v1/facet-design-evidence/associations"
-  ) {
-    return await handleFacetDesignAssociation(req, env, auth);
-  }
-  const facetQuoteRevisionMatch = url.pathname.match(
-    /^\/api\/v1\/facet-design-evidence\/associations\/([^/]+)\/quote-revision-approvals$/,
-  );
-  if (req.method === "POST" && facetQuoteRevisionMatch) {
-    const eventId = decodedPathSegment(facetQuoteRevisionMatch[1] ?? "");
-    return eventId
-      ? await prepareFacetQuoteRevisionApproval(req, env, auth, eventId)
-      : privateAppJson({ error: "not_found" }, 404);
-  }
+  if (url.pathname.startsWith("/api/v1/facet-design-evidence/"))
+    return privateAppJson({ error: "not_found" }, 404);
   if (
     req.method === "GET" &&
     url.pathname === "/api/v1/quote-revision-approvals"
   ) {
-    if (!officeRole(auth))
+    if (!hasPermission(auth, "approvals:read"))
       return privateAppJson({ error: "office_role_required" }, 403);
     try {
       const approvals = await listQuoteRevisionApprovalRequests(
@@ -368,7 +473,7 @@ export async function handleAuthenticatedRoute(
     /^\/api\/v1\/quote-revision-approvals\/([^/]+)$/,
   );
   if (req.method === "GET" && quoteRevisionDetailMatch) {
-    if (!officeRole(auth))
+    if (!hasPermission(auth, "approvals:read"))
       return privateAppJson({ error: "office_role_required" }, 403);
     const requestId = decodedQuoteRevisionApprovalId(
       quoteRevisionDetailMatch[1],
@@ -474,7 +579,7 @@ export async function handleAuthenticatedRoute(
     }
   }
   if (req.method === "GET" && url.pathname === "/api/v1/approvals") {
-    if (!officeRole(auth))
+    if (!hasPermission(auth, "approvals:read"))
       return privateAppJson({ error: "office_role_required" }, 403);
     try {
       const approvals = await listApprovalRequests(
@@ -514,7 +619,7 @@ export async function handleAuthenticatedRoute(
     /^\/api\/v1\/approvals\/([^/]+)$/,
   );
   if (req.method === "GET" && approvalDetailMatch) {
-    if (!officeRole(auth))
+    if (!hasPermission(auth, "approvals:read"))
       return privateAppJson({ error: "office_role_required" }, 403);
     const requestId = decodedApprovalRequestId(approvalDetailMatch[1]);
     if (!requestId) return privateAppJson({ error: "not_found" }, 404);
@@ -587,6 +692,8 @@ export async function handleAuthenticatedRoute(
       : appJson({ error: result.error }, result.status);
   }
   if (req.method === "GET" && url.pathname === "/api/v1/today") {
+    if (!hasPermission(auth, "today:read"))
+      return privateAppJson({ error: "today_read_required" }, 403);
     try {
       return appJson(await buildTodayReadModel(env, auth));
     } catch {
@@ -595,6 +702,8 @@ export async function handleAuthenticatedRoute(
   }
   const proofMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)\/proof$/);
   if (req.method === "GET" && proofMatch) {
+    if (!canReadJobs(auth))
+      return privateAppJson({ error: "job_read_required" }, 403);
     const jobName = decodedPathSegment(proofMatch[1]);
     if (!jobName) return appJson({ error: "not_found" }, 404);
     try {
@@ -628,6 +737,32 @@ export async function handleAuthenticatedRoute(
       return appJson({ error: "upstream_unavailable" }, 502);
     }
   }
+  const universalCheckInMatch = url.pathname.match(
+    /^\/api\/v1\/work-objects\/([^/]+)\/([^/]+)\/physical-contexts\/([^/]+)\/([^/]+)\/check-ins$/,
+  );
+  if (req.method === "POST" && universalCheckInMatch) {
+    if (auth.session.role !== "field")
+      return appJson({ error: "field_role_required" }, 403);
+    if (!validAppCsrf(req, auth)) return appJson({ error: "csrf_failed" }, 403);
+    const scope = decodeWorkObjectScope(universalCheckInMatch);
+    if (!scope) return appJson({ error: "not_found" }, 404);
+    try {
+      const assignment = await activeAssignmentForWorkObject(env, auth, scope);
+      const assignmentName =
+        typeof assignment?.name === "string" ? assignment.name : null;
+      if (!assignmentName) return appJson({ error: "not_found" }, 404);
+      return await handleFieldAction(
+        req,
+        env,
+        auth,
+        scope.workObjectId,
+        assignmentName,
+        scope,
+      );
+    } catch {
+      return appJson({ error: "upstream_unavailable" }, 502);
+    }
+  }
   const workPackageAcknowledgementMatch = url.pathname.match(
     /^\/api\/v1\/jobs\/([^/]+)\/work-package\/acknowledgements$/,
   );
@@ -655,12 +790,83 @@ export async function handleAuthenticatedRoute(
     // lost response safe to retry over the active connection.
     return await handleFieldWorkPackageRoute(req, env, auth, workPackageStartMatch[1], "start_work");
   }
+  const workPackageCompleteMatch = url.pathname.match(
+    /^\/api\/v1\/jobs\/([^/]+)\/work-package\/complete$/,
+  );
+  if (req.method === "POST" && workPackageCompleteMatch) {
+    return await handleProductionWorkPackageRoute(
+      req,
+      env,
+      auth,
+      workPackageCompleteMatch[1],
+      "complete_work",
+    );
+  }
+  const universalWorkPackageMatch = url.pathname.match(
+    /^\/api\/v1\/work-objects\/([^/]+)\/([^/]+)\/physical-contexts\/([^/]+)\/([^/]+)\/work-package\/(acknowledgements|stop-work|start|complete)$/,
+  );
+  if (universalWorkPackageMatch) {
+    const scope = decodeWorkObjectScope(universalWorkPackageMatch);
+    if (!scope) return appJson({ error: "not_found" }, 404);
+    const routeKind = universalWorkPackageMatch[5];
+    const kind =
+      routeKind === "acknowledgements"
+        ? "acknowledge"
+        : routeKind === "stop-work"
+          ? "stop_work"
+          : routeKind === "start"
+            ? "start_work"
+            : "complete_work";
+    if (req.method !== "POST") return appJson({ error: "method_not_allowed" }, 405);
+    if (kind === "complete_work") {
+      return await handleProductionWorkPackageRoute(
+        req,
+        env,
+        auth,
+        scope.workObjectId,
+        kind,
+        scope,
+      );
+    }
+    return await handleFieldWorkPackageRoute(
+      req,
+      env,
+      auth,
+      scope.workObjectId,
+      kind,
+      scope,
+    );
+  }
+  const universalWorkObjectMatch = url.pathname.match(
+    /^\/api\/v1\/work-objects\/([^/]+)\/([^/]+)\/physical-contexts\/([^/]+)\/([^/]+)$/,
+  );
+  if (req.method === "GET" && universalWorkObjectMatch) {
+    if (!canReadJobs(auth))
+      return privateAppJson({ error: "job_read_required" }, 403);
+    const scope = decodeWorkObjectScope(universalWorkObjectMatch);
+    if (!scope) return appJson({ error: "not_found" }, 404);
+    try {
+      const model = await buildUniversalWorkPackageReadModel(env, auth, scope);
+      return model ? appJson(model) : appJson({ error: "not_found" }, 404);
+    } catch {
+      return appJson({ error: "upstream_unavailable" }, 502);
+    }
+  }
   const jobMatch = url.pathname.match(/^\/api\/v1\/jobs\/([^/]+)$/);
+  const facetLaunchMatch = url.pathname.match(
+    /^\/api\/v1\/estimator\/jobs\/([^/]+)\/facet-launches$/,
+  );
+  if (req.method === "POST" && facetLaunchMatch) {
+    const jobName = decodedPathSegment(facetLaunchMatch[1]);
+    return jobName
+      ? await handleFacetLaunch(req, env, auth, jobName)
+      : privateAppJson({ error: "not_found" }, 404);
+  }
   const estimatorJobMatch = url.pathname.match(
     /^\/api\/v1\/estimator\/jobs\/([^/]+)$/,
   );
   if (req.method === "GET" && estimatorJobMatch) {
-    if (auth.session.role !== "owner" && auth.session.role !== "ops") {
+    if (!hasPermission(auth, "estimator:read")) {
       return privateAppJson({ error: "office_role_required" }, 403);
     }
     const jobName = decodedPathSegment(estimatorJobMatch[1]);
@@ -675,6 +881,8 @@ export async function handleAuthenticatedRoute(
     }
   }
   if (req.method === "GET" && jobMatch) {
+    if (!canReadJobs(auth))
+      return privateAppJson({ error: "job_read_required" }, 403);
     const jobName = decodedPathSegment(jobMatch[1]);
     if (!jobName) return appJson({ error: "not_found" }, 404);
     try {
@@ -743,7 +951,7 @@ export async function handleAuthenticatedRoute(
     }
   }
   if (req.method === "GET" && url.pathname === "/api/v1/production") {
-    if (auth.session.role !== "owner" && auth.session.role !== "ops") {
+    if (!hasPermission(auth, "production:read")) {
       return privateAppJson({ error: "office_role_required" }, 403);
     }
     try {
@@ -753,7 +961,7 @@ export async function handleAuthenticatedRoute(
     }
   }
   if (req.method === "GET" && url.pathname === "/api/v1/sales") {
-    if (auth.session.role !== "owner" && auth.session.role !== "ops") {
+    if (!hasPermission(auth, "sales:read")) {
       return privateAppJson({ error: "office_role_required" }, 403);
     }
     try {
@@ -765,112 +973,289 @@ export async function handleAuthenticatedRoute(
   return appJson({ error: "not_found" }, 404);
 }
 
-async function handleFacetDesignAssociation(
+async function handleFacetLaunch(
   req: Request,
   env: AppEnv,
   auth: AuthContext,
+  jobName: string,
 ): Promise<Response> {
-  if (!officeRole(auth))
-    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!hasPermission(auth, "facet:launch") || auth.session.role !== "owner")
+    return privateAppJson({ error: "facet_launch_owner_required" }, 403);
   if (!validAppCsrf(req, auth))
     return privateAppJson({ error: "csrf_failed" }, 403);
   const requestIdempotencyKey = idempotencyKey(req);
   if (!requestIdempotencyKey)
     return privateAppJson({ error: "idempotency_key_required" }, 400);
-  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  const parsed = await readJson(req, 1_024);
   if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
-  const input = parseFacetDesignAssociationInput(parsed.value);
-  if (!input)
-    return privateAppJson({ error: "invalid_facet_design_association" }, 400);
+  if (!isRecord(parsed.value) || Object.keys(parsed.value).length !== 0)
+    return privateAppJson({ error: "invalid_facet_launch_request" }, 400);
   try {
-    const result = await createFacetDesignAssociation(env, {
-      ...input,
+    const result = await issueFacetLaunch(env, {
       tenantId: auth.session.tenant_id,
+      jobName,
       actorUserId: auth.session.user_id,
+      actorRole: auth.session.role,
       idempotencyKey: requestIdempotencyKey,
-      associatedAt: new Date().toISOString(),
     });
-    if (result.kind === "rejected") {
+    if (result.kind === "rejected")
       return privateAppJson({ error: result.code }, result.status);
-    }
-    return privateAppJson(
-      {
-        association: result.association,
-        ...(result.kind === "replayed" ? { replayed: true } : {}),
-      },
-      result.kind === "created" ? 201 : 200,
-    );
+    return privateAppJson({
+      version: 1,
+      read_model_generated_at: new Date().toISOString(),
+      permissions: auth.permissions,
+      allowed_actions: ["facet_launch.create"],
+      launch: result.launch,
+      ...(result.kind === "replayed" ? { replayed: true } : {}),
+    }, result.kind === "created" ? 201 : 200);
   } catch {
-    return privateAppJson(
-      { error: "facet_design_association_store_unavailable" },
-      502,
-    );
+    return privateAppJson({ error: "facet_launch_unavailable" }, 502);
   }
 }
 
-async function prepareFacetQuoteRevisionApproval(
+async function handleQuickBooksConnectionRead(
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!hasPermission(auth, "quickbooks:read"))
+    return privateAppJson({ error: "quickbooks_read_required" }, 403);
+  try {
+    return privateAppJson(await quickBooksConnectionEnvelope(
+      env,
+      auth.session.tenant_id,
+      auth.session.role,
+    ));
+  } catch {
+    return privateAppJson({ error: "quickbooks_store_unavailable" }, 502);
+  }
+}
+
+async function handleQuickBooksConnect(
   req: Request,
   env: AppEnv,
   auth: AuthContext,
-  eventId: string,
 ): Promise<Response> {
-  if (!officeRole(auth))
-    return privateAppJson({ error: "office_role_required" }, 403);
+  if (auth.session.role !== "owner")
+    return privateAppJson({ error: "owner_role_required" }, 403);
   if (!validAppCsrf(req, auth))
     return privateAppJson({ error: "csrf_failed" }, 403);
-  if (String(env.APP_FACET_QUOTE_REVISION_PREPARE_ENABLED) !== "true") {
-    return privateAppJson(
-      { error: "facet_quote_revision_prepare_disabled" },
-      403,
-    );
+  const key = quickBooksIdempotencyKey(req);
+  if (!key) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, 1_024);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const returnPath = quickBooksConnectBody(parsed.value);
+  if (!returnPath)
+    return privateAppJson({ error: "invalid_quickbooks_connect_request" }, 400);
+  try {
+    const result = await requestQuickBooksConnect(env, {
+      tenantId: auth.session.tenant_id,
+      actorUserId: auth.session.user_id,
+      returnPath,
+      idempotencyKey: key,
+    });
+    return result.kind === "rejected"
+      ? privateAppJson({ error: result.code }, result.status)
+      : privateAppJson({ version: 1, ...result.value }, 201);
+  } catch {
+    return privateAppJson({ error: "quickbooks_store_unavailable" }, 502);
   }
+}
+
+async function handleQuickBooksDisconnect(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (auth.session.role !== "owner")
+    return privateAppJson({ error: "owner_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const key = quickBooksIdempotencyKey(req);
+  if (!key) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, 1_024);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const version = quickBooksVersionBody(parsed.value);
+  if (!version)
+    return privateAppJson({ error: "invalid_quickbooks_disconnect_request" }, 400);
+  try {
+    const result = await removeQuickBooksFromIronWrap(env, {
+      tenantId: auth.session.tenant_id,
+      actorUserId: auth.session.user_id,
+      expectedVersion: version,
+      idempotencyKey: key,
+    });
+    return result.kind === "rejected"
+      ? privateAppJson({ error: result.code }, result.status)
+      : privateAppJson(await quickBooksConnectionEnvelope(
+          env,
+          auth.session.tenant_id,
+          auth.session.role,
+        ));
+  } catch {
+    return privateAppJson({ error: "quickbooks_store_unavailable" }, 502);
+  }
+}
+
+async function handleQuickBooksFinalInvoiceRead(
+  env: AppEnv,
+  auth: AuthContext,
+  intentId: string,
+): Promise<Response> {
+  if (!hasPermission(auth, "quickbooks:read"))
+    return privateAppJson({ error: "quickbooks_read_required" }, 403);
+  try {
+    const intent = await getQuickBooksFinalInvoice(env, auth.session.tenant_id, intentId);
+    return intent
+      ? privateAppJson(await quickBooksFinalInvoiceEnvelope(env, intent, auth.session.role))
+      : privateAppJson({ error: "not_found" }, 404);
+  } catch {
+    return privateAppJson({ error: "quickbooks_store_unavailable" }, 502);
+  }
+}
+
+async function handleQuickBooksFinalInvoiceCommand(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  intentId: string,
+  action: "approve" | "reject" | "reconcile",
+): Promise<Response> {
+  const requiredPermission = action === "reconcile" ? "quickbooks:reconcile" : "quickbooks:review";
+  if (!hasPermission(auth, requiredPermission))
+    return privateAppJson({ error: `${requiredPermission.replace(":", "_")}_required` }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const key = quickBooksIdempotencyKey(req);
+  if (!key) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, 1_024);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const command = action === "reject"
+    ? quickBooksRejectBody(parsed.value)
+    : quickBooksExpectedVersionBody(parsed.value);
+  if (!command)
+    return privateAppJson({ error: "invalid_quickbooks_final_invoice_command" }, 400);
+  try {
+    const common = {
+      tenantId: auth.session.tenant_id,
+      intentId,
+      actorRole: auth.session.role,
+      expectedVersion: typeof command === "number" ? command : command.version,
+      idempotencyKey: key,
+    };
+    const result = action === "approve"
+      ? await approveQuickBooksFinalInvoice(env, {
+          ...common,
+          actorUserId: auth.session.user_id,
+        })
+      : action === "reject"
+        ? await rejectQuickBooksFinalInvoice(env, {
+            ...common,
+            actorUserId: auth.session.user_id,
+            reasonCode: (command as { version: number; reasonCode: QuickBooksRejectionReason }).reasonCode,
+          })
+        : await requestQuickBooksFinalInvoiceReconciliation(env, {
+            ...common,
+            actorUserId: auth.session.user_id,
+          });
+    return result.kind === "rejected"
+      ? privateAppJson({ error: result.code }, result.status)
+      : privateAppJson(await quickBooksFinalInvoiceEnvelope(env, result.value, auth.session.role),
+          action === "approve" || action === "reconcile" ? 202 : 200);
+  } catch {
+    return privateAppJson({ error: "quickbooks_store_unavailable" }, 502);
+  }
+}
+
+async function handlePostizIntentRead(
+  env: AppEnv,
+  auth: AuthContext,
+  intentId: string,
+): Promise<Response> {
+  if (auth.session.role !== "owner")
+    return privateAppJson({ error: "owner_role_required" }, 403);
+  try {
+    const intent = await getPostizIntent(env, auth.session.tenant_id, intentId);
+    return intent
+      ? privateAppJson(postizIntentEnvelope(env, intent))
+      : privateAppJson({ error: "not_found" }, 404);
+  } catch {
+    return privateAppJson({ error: "postiz_store_unavailable" }, 502);
+  }
+}
+
+async function handlePostizConnect(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (auth.session.role !== "owner")
+    return privateAppJson({ error: "owner_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const key = postizIdempotencyKey(req);
+  if (!key) return privateAppJson({ error: "idempotency_key_required" }, 400);
   const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
   if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
-  const requested = parseFacetQuoteRevisionApprovalPreparation(parsed.value);
-  if (!requested) {
-    return privateAppJson(
-      { error: "invalid_facet_quote_revision_approval_request" },
-      400,
-    );
-  }
-
-  let resolved;
+  const provider = postizProviderBody(parsed.value);
+  if (!provider) return privateAppJson({ error: "invalid_postiz_connect_request" }, 400);
   try {
-    resolved = await resolveFacetDesignAssociation(
-      env,
-      auth.session.tenant_id,
-      eventId,
-    );
+    const result = await requestPostizConnect(env, {
+      tenantId: auth.session.tenant_id,
+      actorUserId: auth.session.user_id,
+      provider,
+      idempotencyKey: key,
+    });
+    return result.kind === "rejected"
+      ? privateAppJson({ error: result.code }, result.status)
+      : privateAppJson({
+          version: 1,
+          connect_url: result.connectUrl,
+          callback_origin: result.callbackOrigin,
+          provider: result.provider,
+        }, 201);
   } catch {
-    return privateAppJson(
-      { error: "facet_design_association_store_unavailable" },
-      502,
-    );
+    return privateAppJson({ error: "postiz_store_unavailable" }, 502);
   }
-  if (resolved.kind === "missing")
-    return privateAppJson({ error: "not_found" }, 404);
-  if (resolved.kind === "invalid") {
-    return privateAppJson(
-      { error: "facet_design_association_anchor_mismatch" },
-      409,
-    );
-  }
+}
 
-  const association = resolved.association;
-  return await prepareQuoteRevisionApprovalRequest(
-    env,
-    auth,
-    `facet-quote-revision:${association.association_anchor_sha256}`,
-    {
-      roofJobId: association.roof_job_id,
-      customerQuoteId: association.customer_quote_id,
-      correctionReason: facetQuoteRevisionCorrectionReason(
-        association.event_id,
-        association.association_anchor_sha256,
-        requested.correctionReason,
-      ),
-    },
-  );
+async function handlePostizIntentCommand(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  intentId: string,
+  action: "approve" | "reject" | "stop" | "reconcile",
+): Promise<Response> {
+  if (auth.session.role !== "owner")
+    return privateAppJson({ error: "owner_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const key = postizIdempotencyKey(req);
+  if (!key) return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const expectedVersion = postizExpectedVersionBody(parsed.value);
+  if (!expectedVersion)
+    return privateAppJson({ error: "invalid_postiz_intent_command" }, 400);
+  try {
+    const common = {
+      tenantId: auth.session.tenant_id,
+      intentId,
+      expectedVersion,
+      idempotencyKey: key,
+    };
+    const result = action === "approve"
+      ? await approvePostizIntent(env, { ...common, actorUserId: auth.session.user_id })
+      : action === "reject"
+        ? await rejectPostizIntent(env, { ...common, actorUserId: auth.session.user_id })
+        : action === "stop"
+          ? await stopPostizIntent(env, { ...common, actorUserId: auth.session.user_id })
+          : await reconcilePostizIntent(env, { ...common, triggerKind: "manual" });
+    return result.kind === "rejected"
+      ? privateAppJson({ error: result.code }, result.status)
+      : privateAppJson(postizIntentEnvelope(env, result.intent));
+  } catch {
+    return privateAppJson({ error: "postiz_store_unavailable" }, 502);
+  }
 }
 
 async function handleFieldWorkPackageRoute(
@@ -879,21 +1264,81 @@ async function handleFieldWorkPackageRoute(
   auth: AuthContext,
   encodedJobName: string | undefined,
   kind: WorkPackageActionKind,
+  scope?: WorkObjectScope,
 ): Promise<Response> {
   if (auth.session.role !== "field") return appJson({ error: "field_role_required" }, 403);
   if (!validAppCsrf(req, auth)) return appJson({ error: "csrf_failed" }, 403);
-  const jobName = decodedPathSegment(encodedJobName ?? "");
+  const jobName = scope?.workObjectId ?? decodedPathSegment(encodedJobName ?? "");
   if (!jobName) return appJson({ error: "not_found" }, 404);
   try {
     // Do not trust a job or assignment identifier from the browser. The BFF
     // derives an active assignment for the authenticated, paired field user;
     // the Frappe service command repeats that scope check under its own lock.
-    const assignment = await activeAssignmentForJob(env, auth, jobName);
-    const assignmentName = typeof assignment?.name === "string" ? assignment.name : null;
-    if (!assignmentName) return appJson({ error: "not_found" }, 404);
-    return await handleWorkPackageAction(req, env, auth, jobName, assignmentName, kind);
+    const assignment = scope
+      ? await activeAssignmentForWorkObject(env, auth, scope)
+      : await activeAssignmentForJob(env, auth, jobName);
+    if (typeof assignment?.name !== "string") return appJson({ error: "not_found" }, 404);
+    return await handleWorkPackageAction(
+      req,
+      env,
+      auth,
+      jobName,
+      assignment,
+      kind,
+      scope,
+    );
   } catch {
     return appJson({ error: "upstream_unavailable" }, 502);
+  }
+}
+
+async function handleProductionWorkPackageRoute(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  encodedJobName: string | undefined,
+  kind: WorkPackageActionKind,
+  scope?: WorkObjectScope,
+): Promise<Response> {
+  if (
+    auth.session.role !== "owner" &&
+    auth.session.role !== "ops" &&
+    auth.session.role !== "production"
+  )
+    return privateAppJson({ error: "production_role_required" }, 403);
+  if (!validAppCsrf(req, auth)) return privateAppJson({ error: "csrf_failed" }, 403);
+  const jobName = scope?.workObjectId ?? decodedPathSegment(encodedJobName ?? "");
+  if (!jobName) return privateAppJson({ error: "not_found" }, 404);
+  try {
+    const assignment = scope
+      ? await activeAssignmentForWorkObject(env, auth, scope)
+      : await activeAssignmentForJob(env, auth, jobName);
+    if (typeof assignment?.name !== "string")
+      return privateAppJson({ error: "not_found" }, 404);
+    if (
+      scope &&
+      !hasPhysicalAssignmentAuthority(
+        assignment,
+        auth.session.frappe_user_id,
+        auth.session.role,
+      )
+    ) {
+      return privateAppJson(
+        { error: "work_package_completion_authority_required" },
+        403,
+      );
+    }
+    return await handleWorkPackageAction(
+      req,
+      env,
+      auth,
+      jobName,
+      assignment,
+      kind,
+      scope,
+    );
+  } catch {
+    return privateAppJson({ error: "upstream_unavailable" }, 502);
   }
 }
 
@@ -902,7 +1347,7 @@ async function prepareQuoteRevisionApproval(
   env: AppEnv,
   auth: AuthContext,
 ): Promise<Response> {
-  if (!officeRole(auth))
+  if (!hasPermission(auth, "approvals:prepare"))
     return privateAppJson({ error: "office_role_required" }, 403);
   if (!validAppCsrf(req, auth))
     return privateAppJson({ error: "csrf_failed" }, 403);
@@ -1723,7 +2168,7 @@ async function prepareLeadTriageApproval(
   env: AppEnv,
   auth: AuthContext,
 ): Promise<Response> {
-  if (!officeRole(auth))
+  if (!hasPermission(auth, "approvals:prepare"))
     return privateAppJson({ error: "office_role_required" }, 403);
   if (!validAppCsrf(req, auth))
     return privateAppJson({ error: "csrf_failed" }, 403);
@@ -2168,6 +2613,15 @@ function officeRole(auth: AuthContext): boolean {
   return auth.session.role === "owner" || auth.session.role === "ops";
 }
 
+function hasPermission(auth: AuthContext, permission: string): boolean {
+  return auth.permissions.includes(permission);
+}
+
+function canReadJobs(auth: AuthContext): boolean {
+  return hasPermission(auth, "jobs:read:any") ||
+    hasPermission(auth, "jobs:read:assigned");
+}
+
 async function validateProductionSchedulePreparation(
   env: AppEnv,
   auth: AuthContext,
@@ -2546,10 +3000,14 @@ function productionScheduleApprovalReadEnvelope(
 }
 
 function approvalAllowedActions(env: AppEnv, auth: AuthContext): string[] {
-  if (!officeRole(auth)) return [];
+  if (!hasPermission(auth, "approvals:read")) return [];
   const actions = ["approval.read"];
   const config = approvalBrokerConfig(env);
-  if (config && auth.session.frappe_user_id?.trim())
+  if (
+    hasPermission(auth, "approvals:prepare") &&
+    config &&
+    auth.session.frappe_user_id?.trim()
+  )
     actions.push("approval.prepare");
   if (approvalDecisionIdentity(env, auth).ok) actions.push("approval.reject");
   if (approvalDecisionIdentity(env, auth).ok)
@@ -2563,10 +3021,11 @@ function quoteRevisionApprovalAllowedActions(
   env: AppEnv,
   auth: AuthContext,
 ): string[] {
-  if (!officeRole(auth)) return [];
+  if (!hasPermission(auth, "approvals:read")) return [];
   const actions = ["quote_revision_approval.read"];
   const broker = quoteRevisionApprovalBrokerConfig(env);
   if (
+    hasPermission(auth, "approvals:prepare") &&
     broker &&
     approvalDecisionConfig(env) &&
     auth.session.frappe_user_id?.trim()
@@ -2643,23 +3102,6 @@ function parseQuoteRevisionApprovalPreparation(value: unknown): {
 
 function quoteRevisionRequestText(correctionReason: string): string {
   return `Prepare an append-only Draft Customer Quote revision shell after human review. Reason: ${correctionReason}`;
-}
-
-function parseFacetQuoteRevisionApprovalPreparation(value: unknown): {
-  correctionReason: string;
-} | null {
-  if (!isRecord(value) || !onlyKeys(value, ["correction_reason"]))
-    return null;
-  const correctionReason = boundedText(value.correction_reason, 8, 1_600);
-  return correctionReason ? { correctionReason } : null;
-}
-
-function facetQuoteRevisionCorrectionReason(
-  eventId: string,
-  associationSha256: string,
-  operatorReason: string,
-): string {
-  return `Facet bearer-capability design event ${eventId} is bound by association ${associationSha256}. ${operatorReason}`;
 }
 
 function parseProductionScheduleApprovalPreparation(value: unknown): {
@@ -2775,6 +3217,71 @@ function validVersion(value: unknown): number | null {
 function idempotencyKey(req: Request): string | null {
   const value = req.headers.get("idempotency-key")?.trim() ?? "";
   return /^[A-Za-z0-9._:-]{8,140}$/.test(value) ? value : null;
+}
+
+function postizIdempotencyKey(req: Request): string | null {
+  const value = req.headers.get("idempotency-key")?.trim() ?? "";
+  return /^[A-Za-z0-9._:-]{16,160}$/.test(value) ? value : null;
+}
+
+function quickBooksIdempotencyKey(req: Request): string | null {
+  const value = req.headers.get("idempotency-key")?.trim() ?? "";
+  return /^[A-Za-z0-9._:-]{16,160}$/.test(value) ? value : null;
+}
+
+function quickBooksConnectBody(value: unknown): "/accounting/quickbooks" | null {
+  return isRecord(value) && Object.keys(value).length === 1 &&
+      value.return_path === "/accounting/quickbooks"
+    ? value.return_path
+    : null;
+}
+
+function quickBooksVersionBody(value: unknown): number | null {
+  if (!isRecord(value) || !onlyKeys(value, ["version"]) || Object.keys(value).length !== 1)
+    return null;
+  return validVersion(value.version);
+}
+
+function quickBooksExpectedVersionBody(value: unknown): number | null {
+  return quickBooksVersionBody(value);
+}
+
+function quickBooksRejectBody(value: unknown): {
+  version: number;
+  reasonCode: QuickBooksRejectionReason;
+} | null {
+  if (!isRecord(value) || !onlyKeys(value, ["version", "reason_code"]) ||
+      Object.keys(value).length !== 2) return null;
+  const version = validVersion(value.version);
+  const reasonCode = (QUICKBOOKS_REJECTION_REASONS as readonly unknown[]).includes(value.reason_code)
+    ? value.reason_code as QuickBooksRejectionReason
+    : null;
+  return version && reasonCode ? { version, reasonCode } : null;
+}
+
+function decodedQuickBooksIntentId(value: string): string | null {
+  const decoded = decodedPathSegment(value);
+  return decoded && validQuickBooksIntentId(decoded) ? decoded : null;
+}
+
+function postizProviderBody(value: unknown): PostizProvider | null {
+  if (!isRecord(value) || !onlyKeys(value, ["provider"])) return null;
+  return (POSTIZ_PROVIDERS as readonly unknown[]).includes(value.provider)
+    ? value.provider as PostizProvider
+    : null;
+}
+
+function postizExpectedVersionBody(value: unknown): number | null {
+  if (!isRecord(value) || !onlyKeys(value, ["expected_version"])) return null;
+  return validVersion(value.expected_version);
+}
+
+function decodedPostizIntentId(value: string): string | null {
+  const decoded = decodedPathSegment(value);
+  return decoded &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(decoded)
+    ? decoded
+    : null;
 }
 
 function decodedApprovalRequestId(value: string): string | null {
@@ -2905,6 +3412,29 @@ function decodedPathSegment(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+function decodeWorkObjectScope(
+  match: RegExpMatchArray,
+): WorkObjectScope | null {
+  const values = match.slice(1, 5).map((value) => decodedPathSegment(value));
+  if (values.some((value): value is null => value === null)) return null;
+  const [workObjectType, workObjectId, physicalContextType, physicalContextId] =
+    values as [string, string, string, string];
+  if (
+    !workObjectType ||
+    !workObjectId ||
+    !physicalContextType ||
+    !physicalContextId
+  ) {
+    return null;
+  }
+  return {
+    workObjectType,
+    workObjectId,
+    physicalContextType,
+    physicalContextId,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

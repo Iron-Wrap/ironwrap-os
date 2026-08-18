@@ -52,6 +52,17 @@ describe("sessionResponseSchema", () => {
     ).toBe(false);
   });
 
+  it("accepts the intended accounting office role", () => {
+    const accountingSession = {
+      ...authenticatedSession,
+      user: { ...authenticatedSession.user, role: "accounting" },
+      permissions: ["quickbooks:read"],
+      allowed_actions: ["quickbooks:read"],
+    } as const;
+
+    expect(sessionResponseSchema.parse(accountingSession)).toEqual(accountingSession);
+  });
+
   it("accepts the Worker public tenant for an unauthenticated session", () => {
     expect(
       sessionResponseSchema.parse({

@@ -401,6 +401,31 @@ export async function recordDeadLetter(env: Env, e: DeadLetterEntry): Promise<vo
   ).bind(nowIso(), e.envelope_id, e.stage, e.error, redactedDeadLetterPayload(e)).run();
 }
 
+/** Idempotent operator incident for an exhausted measurement Queue message. */
+export async function recordMeasurementDeadLetter(
+  env: Env,
+  receiptId: string,
+  error: string,
+): Promise<boolean> {
+  const entry: DeadLetterEntry = {
+    envelope_id: receiptId,
+    stage: "measurement_processing",
+    error,
+    payload_json: JSON.stringify({ measurement_receipt_id: receiptId }),
+  };
+  const result = await env.DB.prepare(
+    `INSERT OR IGNORE INTO dead_letter (ts, envelope_id, stage, error, payload_json, recovered)
+     VALUES (?,?,?,?,?,0)`,
+  ).bind(
+    nowIso(),
+    entry.envelope_id,
+    entry.stage,
+    entry.error,
+    redactedDeadLetterPayload(entry),
+  ).run();
+  return d1Changes(result) === 1;
+}
+
 function redactedDeadLetterPayload(e: DeadLetterEntry): string {
   let keys: string[] = [];
   try {
@@ -642,13 +667,16 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'customer_portal_links','customer_portal_access_throttles',
           'measurement_intake_receipts','public_estimate_rate_limits',
           'newo_event_receipts','newo_sessions','newo_control_actions','newo_slot_reservations',
-          'newo_reconciliation_runs') THEN 1 ELSE 0 END), 0) AS table_count,
+          'newo_reconciliation_runs','hermes_desktop_pairings','hermes_desktop_devices',
+          'hermes_desktop_envelopes','hermes_desktop_contexts','hermes_desktop_submissions',
+          'hermes_desktop_events') THEN 1 ELSE 0 END), 0) AS table_count,
        COALESCE(SUM(CASE WHEN type = 'index' AND name IN
          ('idx_dead_letter_open_envelope','idx_audit_result_ts','idx_envelopes_operational',
           'idx_envelopes_erpnext_error_open','idx_heartbeat_ran_at','idx_qb_receipts_last_seen',
           'idx_qb_projection_outbox_pending',
           'idx_audit_run_id','idx_replay_requests_status_updated',
-          'idx_app_users_tenant_role_active','idx_app_magic_links_user_expiry',
+          'idx_app_users_tenant_role_active','idx_app_users_tenant_access_role_active',
+          'idx_app_magic_links_user_expiry',
           'idx_app_sessions_user_expiry','idx_app_auth_throttles_expiry',
           'idx_app_auth_audit_tenant_created','idx_field_actions_job_created',
           'idx_field_actions_recovery','idx_field_action_media_evidence',
@@ -672,12 +700,17 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'idx_customer_portal_links_tenant_job_active',
           'idx_customer_portal_access_throttles_expiry',
           'idx_measurement_intake_receipts_exception_updated',
+          'idx_measurement_intake_receipts_ocr_review',
+          'idx_dead_letter_open_measurement',
           'idx_public_estimate_rate_limits_expiry',
           'idx_newo_receipts_session','idx_newo_receipts_status',
           'idx_newo_sessions_status','idx_newo_sessions_sync','idx_newo_sessions_phone',
           'idx_newo_sessions_appointment','idx_newo_sessions_verified_job',
           'idx_newo_control_status','idx_newo_slots_expiry',
-          'idx_newo_sessions_missing_report','idx_newo_reconciliation_runs_at')
+          'idx_newo_sessions_missing_report','idx_newo_reconciliation_runs_at',
+          'idx_hermes_desktop_pairings_user_expiry','idx_hermes_desktop_devices_binding_active',
+          'idx_hermes_desktop_envelopes_device_state_expiry',
+          'idx_hermes_desktop_events_tenant_created')
          THEN 1 ELSE 0 END), 0) AS index_count,
        COALESCE(SUM(CASE WHEN type = 'trigger' AND name IN
          ('validate_source_count_insert','validate_source_count_update',
@@ -714,9 +747,54 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'append_production_schedule_approval_reconciliation_event',
           'prevent_production_schedule_approval_event_update',
           'prevent_production_schedule_approval_event_delete',
-          'prevent_production_schedule_approval_delete') THEN 1 ELSE 0 END), 0) AS trigger_count
+          'prevent_production_schedule_approval_delete',
+          'facet_design_evidence_associations_validate_insert',
+          'hermes_desktop_contexts_immutable_delete','hermes_desktop_contexts_immutable_update',
+          'hermes_desktop_devices_binding_immutable','hermes_desktop_envelopes_binding_immutable',
+          'hermes_desktop_envelopes_state_transition','hermes_desktop_events_immutable_delete',
+          'hermes_desktop_events_immutable_update','hermes_desktop_pairings_binding_immutable',
+          'hermes_desktop_submissions_immutable_delete',
+          'hermes_desktop_submissions_immutable_update') THEN 1 ELSE 0 END), 0) AS trigger_count
      FROM sqlite_master`,
   ).first<{ table_count: number; index_count: number; trigger_count: number }>();
+
+  const authority = await env.DB.prepare(
+    `SELECT
+       (SELECT sql FROM sqlite_master
+         WHERE type = 'index' AND name = 'idx_app_users_tenant_access_role_active')
+         AS access_role_index_sql,
+       (SELECT sql FROM sqlite_master
+         WHERE type = 'trigger' AND name = 'facet_design_evidence_associations_validate_insert')
+         AS facet_association_trigger_sql,
+       (SELECT COUNT(*) FROM app_users WHERE active = 1 AND access_role IS NULL)
+         AS unresolved_access_roles`,
+  ).first<{
+    access_role_index_sql: string | null;
+    facet_association_trigger_sql: string | null;
+    unresolved_access_roles: number;
+  }>();
+  const accessRoleIndexSql = normalizeSchemaSql(authority?.access_role_index_sql);
+  const facetAssociationTriggerSql = normalizeSchemaSql(
+    authority?.facet_association_trigger_sql,
+  );
+  const authoritySchemaReady =
+    accessRoleIndexSql.includes(
+      "createindexidx_app_users_tenant_access_role_activeonapp_users(tenant_id,active,access_role,updated_at)",
+    ) &&
+    [
+      "beforeinsertonfacet_design_evidence_associations",
+      "event.event_type='facet.design.customer_approved.v2'",
+      "event.schema_version=2",
+      "event.approval_actor_type='customer_capability'",
+      "event.identity_assurance='bearer_capability_only'",
+      "actor.user_id=new.associated_by_user_id",
+      "actor.tenant_id=new.tenant_id",
+      "actor.active=1",
+      "actor.access_rolein('owner','ops')",
+      "raise(abort,'facet_design_association_office_actor_required')",
+    ].every((fragment) => facetAssociationTriggerSql.includes(fragment)) &&
+    !facetAssociationTriggerSql.includes("coalesce(") &&
+    Number(authority?.unresolved_access_roles ?? -1) === 0;
 
   // This zero-row join proves every table/column used by readiness, status, and replay queries
   // exists without reading customer data.
@@ -733,7 +811,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             c.dedup_key,
             rr.run_id AS replay_run_id, rr.selection AS replay_selection,
             rr.status AS replay_status, rr.attempt_count AS replay_attempt_count,
-            au.user_id AS app_user_id, au.tenant_id AS app_tenant_id, au.role AS app_role,
+            au.user_id AS app_user_id, au.tenant_id AS app_tenant_id,
+            au.role AS app_role, au.access_role AS app_access_role,
             ml.token_hash AS magic_link_hash, ml.expires_at AS magic_link_expires_at,
             aps.session_hash AS app_session_hash, aps.expires_at AS app_session_expires_at,
             dp.token_hash AS device_pairing_hash, dp.expires_at AS device_pairing_expires_at,
@@ -768,6 +847,11 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             mir.receipt_id AS measurement_receipt_id,
             mir.status AS measurement_receipt_status,
             mir.measurement_id AS measurement_receipt_measurement_id,
+            mir.report_raw_key AS measurement_report_raw_key,
+            mir.report_sha256 AS measurement_report_sha256,
+            mir.ocr_status AS measurement_ocr_status,
+            mir.ocr_result_key AS measurement_ocr_result_key,
+            mir.ocr_review_required AS measurement_ocr_review_required,
             perl.scope AS public_estimate_rate_limit_scope,
             perl.attempts AS public_estimate_rate_limit_attempts,
             ner.event_id AS newo_event_id, ner.payload_hash AS newo_event_payload_hash,
@@ -781,7 +865,25 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
             nca.consumed_at AS newo_control_consumed_at,
             nsr.reservation_id AS newo_slot_reservation_id,
             nrr.run_id AS newo_reconciliation_run_id,
-            nrr.usage_status AS newo_usage_status
+            nrr.usage_status AS newo_usage_status,
+            hdp.pairing_id AS hermes_desktop_pairing_id,
+            hdp.token_sha256 AS hermes_desktop_pairing_token_sha256,
+            hdp.consumed_at AS hermes_desktop_pairing_consumed_at,
+            hdd.device_id AS hermes_desktop_device_id,
+            hdd.access_token_sha256 AS hermes_desktop_access_token_sha256,
+            hdd.revoked_at AS hermes_desktop_device_revoked_at,
+            hde.envelope_id AS hermes_desktop_envelope_id,
+            hde.context_sha256 AS hermes_desktop_envelope_context_sha256,
+            hde.state AS hermes_desktop_envelope_state,
+            hdc.context_id AS hermes_desktop_context_id,
+            hdc.context_sha256 AS hermes_desktop_staged_context_sha256,
+            hdc.staged_at AS hermes_desktop_context_staged_at,
+            hds.submission_id AS hermes_desktop_submission_id,
+            hds.governed_handoff_json AS hermes_desktop_governed_handoff_json,
+            hds.submitted_at AS hermes_desktop_submission_submitted_at,
+            hdev.event_id AS hermes_desktop_event_id,
+            hdev.detail_sha256 AS hermes_desktop_event_detail_sha256,
+            hdev.created_at AS hermes_desktop_event_created_at
      FROM envelopes e
      LEFT JOIN audit_log a ON 1 = 0
      LEFT JOIN dead_letter d ON 1 = 0
@@ -821,11 +923,22 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
      LEFT JOIN newo_control_actions nca ON 1 = 0
      LEFT JOIN newo_slot_reservations nsr ON 1 = 0
      LEFT JOIN newo_reconciliation_runs nrr ON 1 = 0
+     LEFT JOIN hermes_desktop_pairings hdp ON 1 = 0
+     LEFT JOIN hermes_desktop_devices hdd ON 1 = 0
+     LEFT JOIN hermes_desktop_envelopes hde ON 1 = 0
+     LEFT JOIN hermes_desktop_contexts hdc ON 1 = 0
+     LEFT JOIN hermes_desktop_submissions hds ON 1 = 0
+     LEFT JOIN hermes_desktop_events hdev ON 1 = 0
      LIMIT 0`,
   ).all();
-  return Number(artifacts?.table_count ?? 0) === 39 &&
-    Number(artifacts?.index_count ?? 0) === 56 &&
-    Number(artifacts?.trigger_count ?? 0) === 43;
+  return Number(artifacts?.table_count ?? 0) === 45 &&
+    Number(artifacts?.index_count ?? 0) === 63 &&
+    Number(artifacts?.trigger_count ?? 0) === 54 &&
+    authoritySchemaReady;
+}
+
+function normalizeSchemaSql(sql: string | null | undefined): string {
+  return (sql ?? "").toLowerCase().replace(/\s+/g, "").replaceAll("ifnotexists", "");
 }
 
 /** Envelopes still pending past the threshold — the retry sweep re-drives these. */

@@ -13,6 +13,7 @@ import { MagicLinkConsume } from "./auth/magic-link-consume";
 import { takeMagicLinkTokenFromWindow } from "./auth/magic-link-fragment";
 import { takePairingTokenFromWindow } from "./auth/pairing-fragment";
 import { AppShell } from "./components/app-shell";
+import { RoleGuard } from "./components/role-guard";
 import { NotFoundPage, SettingsPage } from "./pages/placeholders";
 
 const loadCustomerPortalPage = () => import("./portal/customer-portal-page");
@@ -25,6 +26,9 @@ const CustomerContractAcceptancePage = lazy(async () => ({
 }));
 const PublicEstimatePage = lazy(async () => ({
   default: (await import("./public-estimate/public-estimate-page")).PublicEstimatePage,
+}));
+const NowPage = lazy(async () => ({
+  default: (await import("./now/now-page")).NowPage,
 }));
 
 const OwnerNowPage = lazy(async () => ({
@@ -41,6 +45,18 @@ const ProductionRunwayPage = lazy(async () => ({
 }));
 const NewoOperationsPage = lazy(async () => ({
   default: (await import("./newo/newo-operations-page")).NewoOperationsPage,
+}));
+const PostizPage = lazy(async () => ({
+  default: (await import("./postiz/postiz-page")).PostizPage,
+}));
+const QuickBooksSettingsPage = lazy(async () => ({
+  default: (await import("./accounting/quickbooks-page")).QuickBooksSettingsPage,
+}));
+const QuickBooksFinalInvoicePage = lazy(async () => ({
+  default: (await import("./accounting/quickbooks-page")).QuickBooksFinalInvoicePage,
+}));
+const FacetDesignPage = lazy(async () => ({
+  default: (await import("./facet/facet-design-page")).FacetDesignPage,
 }));
 const ProductionScheduleApprovalPreparePage = lazy(async () => ({
   default: (await import("./production/production-schedule-approval-page"))
@@ -71,6 +87,9 @@ const TodayPage = lazy(async () => ({
 const JobPage = lazy(async () => ({
   default: (await loadFieldPages()).JobPage,
 }));
+const WorkObjectPage = lazy(async () => ({
+  default: (await loadFieldPages()).WorkObjectPage,
+}));
 const CheckInPage = lazy(async () => ({
   default: (await loadFieldPages()).CheckInPage,
 }));
@@ -87,6 +106,7 @@ function isFieldPath(pathname: string): boolean {
     pathname === "/" ||
     pathname === "/today" ||
     pathname.startsWith("/jobs/") ||
+    pathname.startsWith("/work-objects/") ||
     pathname.startsWith("/check-in")
   );
 }
@@ -100,7 +120,7 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   beforeLoad: () => {
-    throw redirect({ to: "/today" });
+    throw redirect({ to: "/now" });
   },
 });
 
@@ -200,6 +220,20 @@ const authenticatedRoute = createRoute({
   component: AuthenticatedLayout,
 });
 
+const nowRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/now",
+  component: NowRoute,
+});
+
+function NowRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <NowPage />
+    </Suspense>
+  );
+}
+
 function AuthenticatedLayout() {
   return (
     <AuthBoundary>
@@ -220,6 +254,12 @@ const jobRoute = createRoute({
   component: JobRoute,
 });
 
+const workObjectRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/work-objects/$workObjectType/$workObjectId/physical-contexts/$physicalContextType/$physicalContextId",
+  component: WorkObjectRoute,
+});
+
 const checkInRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/check-in",
@@ -234,25 +274,41 @@ const jobCheckInRoute = createRoute({
 
 function TodayRoute() {
   return (
-    <Suspense fallback={<FieldRouteSkeleton label="Loading assigned work" />}>
-      <TodayPage />
-    </Suspense>
+    <RoleGuard surface="field">
+      <Suspense fallback={<FieldRouteSkeleton label="Loading assigned work" />}>
+        <TodayPage />
+      </Suspense>
+    </RoleGuard>
   );
 }
 
 function JobRoute() {
   return (
-    <Suspense fallback={<FieldRouteSkeleton label="Loading field packet" />}>
-      <JobPage />
-    </Suspense>
+    <RoleGuard surface="job">
+      <Suspense fallback={<FieldRouteSkeleton label="Loading field packet" />}>
+        <JobPage />
+      </Suspense>
+    </RoleGuard>
+  );
+}
+
+function WorkObjectRoute() {
+  return (
+    <RoleGuard surface="field">
+      <Suspense fallback={<FieldRouteSkeleton label="Loading typed field packet" />}>
+        <WorkObjectPage />
+      </Suspense>
+    </RoleGuard>
   );
 }
 
 function CheckInRoute() {
   return (
-    <Suspense fallback={<FieldRouteSkeleton label="Loading field check-in" />}>
-      <CheckInPage />
-    </Suspense>
+    <RoleGuard surface="field">
+      <Suspense fallback={<FieldRouteSkeleton label="Loading field check-in" />}>
+        <CheckInPage />
+      </Suspense>
+    </RoleGuard>
   );
 }
 
@@ -336,6 +392,30 @@ const newoOperationsRoute = createRoute({
   component: NewoOperationsRoute,
 });
 
+const postizIntentRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/marketing/postiz/$intentId",
+  component: PostizIntentRoute,
+});
+
+const quickBooksSettingsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/accounting/quickbooks",
+  component: QuickBooksSettingsRoute,
+});
+
+const quickBooksFinalInvoiceRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/accounting/quickbooks/final-invoices/$intentId",
+  component: QuickBooksFinalInvoiceRoute,
+});
+
+const facetDesignsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/facet-designs",
+  component: FacetDesignsRoute,
+});
+
 const productionScheduleApprovalPrepareRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/production/schedule/$jobId",
@@ -392,6 +472,38 @@ function NewoOperationsRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
       <NewoOperationsPage />
+    </Suspense>
+  );
+}
+
+function PostizIntentRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <PostizPage />
+    </Suspense>
+  );
+}
+
+function QuickBooksSettingsRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <QuickBooksSettingsPage />
+    </Suspense>
+  );
+}
+
+function QuickBooksFinalInvoiceRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <QuickBooksFinalInvoicePage />
+    </Suspense>
+  );
+}
+
+function FacetDesignsRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <FacetDesignPage />
     </Suspense>
   );
 }
@@ -458,13 +570,19 @@ const routeTree = rootRoute.addChildren([
   customerContractAcceptanceRoute,
   publicEstimateRoute,
   authenticatedRoute.addChildren([
+    nowRoute,
     todayRoute,
     jobRoute,
+    workObjectRoute,
     checkInRoute,
     jobCheckInRoute,
     ownerRoute,
     approvalsRoute,
     newoOperationsRoute,
+    postizIntentRoute,
+    quickBooksSettingsRoute,
+    quickBooksFinalInvoiceRoute,
+    facetDesignsRoute,
     productionRoute,
     productionScheduleApprovalPrepareRoute,
     salesRoute,

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
-import { consumeDevicePairing, issueDevicePairing } from "./pairing-api";
+import { consumeDevicePairing, issueDevicePairing, issueHermesDesktopPairing } from "./pairing-api";
 
 const officeSession: AuthenticatedSession = {
   version: 1,
@@ -78,6 +78,27 @@ describe("device pairing API client", () => {
     const init = fetcher.mock.calls[0]?.[1];
     expect(JSON.parse(String(init?.body))).toEqual({ token, device_proof: deviceProof });
     expect(new Headers(init?.headers).get("X-IronWrap-Device-Proof")).toBeNull();
+  });
+
+  it("accepts only a complete server-bound Hermes bootstrap contract", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        pairing_url: "https://app.example.test/auth/hermes-pair#token=" + "t".repeat(43),
+        expires_at: "2026-07-10T12:10:00.000Z",
+        api_audience: "https://app.example.test",
+        bound_issuer: "https://app.example.test",
+        bootstrap_prompt: "Use the exact bound audience and one-time link.",
+      }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+
+    const result = await issueHermesDesktopPairing(officeSession);
+
+    expect(result.api_audience).toBe("https://app.example.test");
+    expect(result.bootstrap_prompt).toContain("bound audience");
+    const init = fetcher.mock.calls[0]?.[1];
+    expect(JSON.parse(String(init?.body))).toEqual({});
+    expect(new Headers(init?.headers).get("X-CSRF-Token")).toBe("office-csrf");
   });
 
   it("rejects a schema-valid response that does not create a field session", async () => {

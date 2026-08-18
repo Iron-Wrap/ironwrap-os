@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -31,9 +32,18 @@ vi.mock("@tanstack/react-router", () => ({
   }: {
     children: ReactNode;
     to: string;
-    params?: { jobId?: string };
+    params?: Record<string, string>;
   } & AnchorHTMLAttributes<HTMLAnchorElement>) => (
-    <a {...props} href={to === "/jobs/$jobId" && params?.jobId ? `/jobs/${params.jobId}` : to}>
+    <a
+      {...props}
+      href={
+        to === "/jobs/$jobId" && params?.jobId
+          ? `/jobs/${params.jobId}`
+          : to.startsWith("/work-objects/") && params
+            ? `/work-objects/${encodeURIComponent(params.workObjectType ?? "")}/${encodeURIComponent(params.workObjectId ?? "")}/physical-contexts/${encodeURIComponent(params.physicalContextType ?? "")}/${encodeURIComponent(params.physicalContextId ?? "")}`
+            : to
+      }
+    >
       {children}
     </a>
   ),
@@ -120,6 +130,7 @@ function todayModel(overrides: Partial<TodayResponse> = {}): TodayResponse {
         },
       },
     ],
+    work_objects: [],
     ...overrides,
   };
 }
@@ -150,6 +161,46 @@ describe("TodayPage", () => {
   afterEach(() => {
     Object.defineProperty(navigator, "onLine", { configurable: true, value: originalOnline });
     vi.restoreAllMocks();
+  });
+
+  it("makes an assigned Shop Order discoverable from Today through its typed packet route", async () => {
+    const user = userEvent.setup();
+    renderToday(
+      todayModel({
+        jobs: [],
+        work_objects: [
+          {
+            work_object_type: "Shop Order",
+            work_object_id: "SHOP-001",
+            physical_context_type: "Shop Floor",
+            physical_context_id: "SHOP-FLOOR-1",
+            scheduled_start: "2026-07-10T16:00:00.000Z",
+            scheduled_end: null,
+            next_action: "Open the typed physical work package",
+            assignment: {
+              id: "ASSIGN-SHOP-1",
+              assignment_id: "assignment_shop_1",
+              type: "Shop",
+              status: "Assigned",
+              crew_profile: null,
+              scheduled_start: "2026-07-10T16:00:00.000Z",
+              scheduled_end: null,
+              blocker_reason: null,
+            },
+          },
+        ],
+      }),
+    );
+
+    const link = await screen.findByRole("link", { name: "Open typed work packet" });
+    expect(link).toHaveAttribute(
+      "href",
+      "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
+    );
+    await user.click(link);
+    expect(window.location.pathname).toBe(
+      "/work-objects/Shop%20Order/SHOP-001/physical-contexts/Shop%20Floor/SHOP-FLOOR-1",
+    );
   });
 
   it("turns assigned work into a truthful run sheet with a distinct blocked-work action", async () => {

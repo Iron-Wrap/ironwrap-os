@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -11,6 +12,12 @@ from unittest.mock import patch
 from ironwrap_roofing.access_control import (
     CUSTOMER_ACCEPTANCE_SERVICE_ROLE,
     FACET_DESIGN_PROJECTION_SERVICE_ROLE,
+)
+from ironwrap_roofing.domain_policy import PolicyViolation
+from tests.test_domain_policy import (
+    governed_policy_context,
+    governed_takeoff_policy,
+    job_cost_event,
 )
 
 
@@ -121,6 +128,14 @@ SHOP_ORDER_CONTROLLER_PATH = (
     / "shop_order"
     / "shop_order.py"
 )
+JOB_COST_EVENT_CONTROLLER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+    / "job_cost_event"
+    / "job_cost_event.py"
+)
 
 
 class FakeValidationError(Exception):
@@ -197,6 +212,60 @@ def current_compliance_authorities(roof_job: str) -> list[dict]:
     ]
 
 
+def pricing_policy_rule(status: str = "Draft", **overrides: object) -> dict[str, object]:
+    snapshot = {
+        "approvedPolicy": {
+            "schemaVersion": "ironwrap.pricing-policy.v1",
+            "tenantId": "ironwrap",
+            "policyId": "retail-metal",
+            "revision": 1,
+            "effectiveAt": "2026-08-01T00:00:00.000Z",
+            "expiresAt": "2026-08-31T23:59:59.999Z",
+            "pricing": {"method": "markup", "rateBps": 1000},
+            "freightCents": 0,
+            "contingencyRateBps": 0,
+            "minimumChargeCents": 0,
+            "taxRateBps": 500,
+        },
+        "currency": "CAD",
+        "panel": {
+            "sku": "PANEL",
+            "unit": "lf",
+            "rateCents": 500,
+            "sourceRef": "price-book:panel",
+        },
+        "trims": {},
+    }
+    canonical = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    record: dict[str, object] = {
+        "price_rule_id": "policy-anchor-1",
+        "rule_name": "Retail metal pricing policy",
+        "rule_type": "Pricing Policy",
+        "status": status,
+        "currency": "CAD",
+        "source_ref": "owner-approved-policy:retail-metal:1",
+        "rule_json": (
+            '{"operation":"bind_canonical_pricing_snapshot",'
+            '"schema_version":"ironwrap.price-policy-authority.v1"}'
+        ),
+        "pricing_policy_id": "retail-metal",
+        "pricing_policy_revision": 1,
+        "pricing_policy_snapshot_json": canonical,
+        "pricing_policy_snapshot_sha256": hashlib.sha256(
+            canonical.encode("utf-8")
+        ).hexdigest(),
+        "effective_from": "2026-08-01",
+        "effective_to": "2026-08-31",
+        "assumptions": "Exact closed snapshot only.",
+        "exclusions": "No unlisted cost categories.",
+        "approved_by": None,
+        "approved_at": None,
+        "approval_note": "Owner reviewed exact canonical snapshot.",
+    }
+    record.update(overrides)
+    return record
+
+
 class DocumentValidationAdapterTests(unittest.TestCase):
     def load_adapter(
         self,
@@ -206,6 +275,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         rows=None,
         session_user="owner@example.com",
         roles=None,
+        allow_legacy_authority_context=True,
     ):
         values = values or {}
         counts = counts or {}
@@ -219,6 +289,10 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         def sql(query, values, *, as_dict):
             normalized = " ".join(query.split())
             lock_calls.append((normalized, values, as_dict))
+            if "`tabWhite-Label Tenant`" in normalized:
+                return [dict(row) for row in rows.get("White-Label Tenant", [])]
+            if "`tabAuthority Record`" in normalized:
+                return [dict(row) for row in rows.get("Authority Record", [])]
             if "`tabRoof Job`" in normalized:
                 return [{"name": values[0]}] if values[0] else []
             if "`tabProduction Gate State`" in normalized:
@@ -236,6 +310,16 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                     if row.get("name") in requested_names
                 ]
             if "`tabJob Assignment`" in normalized:
+                if "crew_profile IN" in normalized:
+                    requested_crews = set(values)
+                    return [
+                        dict(row)
+                        for row in rows.get(
+                            "Job Assignment Crew Window",
+                            rows.get("Job Assignment", []),
+                        )
+                        if row.get("crew_profile") in requested_crews
+                    ]
                 return [
                     dict(row)
                     for row in rows.get("Job Assignment", [])
@@ -276,6 +360,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
 
         frappe_module.db = types.SimpleNamespace(
             get_value=lambda doctype, name, field, **_kwargs: values.get((doctype, name, field)),
+            exists=lambda doctype, name: values.get((doctype, name, "exists"), bool(name)),
             count=lambda doctype, filters=None: counts.get(doctype, 0),
             sql=sql,
         )
@@ -283,6 +368,9 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             now_datetime=lambda: "2026-07-10 10:00:00"
         )
         frappe_module.session = types.SimpleNamespace(user=session_user)
+        frappe_module.flags = types.SimpleNamespace(
+            allow_legacy_authority_context=allow_legacy_authority_context
+        )
         frappe_module.get_roles = lambda _user: (
             roles if roles is not None else ["IronWrap Owner"]
         )
@@ -304,12 +392,95 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         module._test_lock_calls = lock_calls
         return module, calls
 
+    def test_release_context_fails_closed_without_active_tenant(self) -> None:
+        adapter, _ = self.load_adapter(allow_legacy_authority_context=False)
+        with self.assertRaisesRegex(PolicyViolation, "authority_tenant_unavailable"):
+            adapter._locked_authority_records()
+
     def test_policy_violations_become_frappe_validation_errors(self) -> None:
         adapter, _ = self.load_adapter()
         with self.assertRaisesRegex(FakeValidationError, "required_fields"):
             adapter.validate_business_document(FakeDocument({}), "lead_envelope")
 
-    def test_quickbooks_reconciliation_creation_requires_the_private_issuer_context(self) -> None:
+    def test_job_cost_event_requires_finance_approval_and_db_bound_evidence(
+        self,
+    ) -> None:
+        event = job_cost_event()
+        values = {
+            (
+                "Evidence Item",
+                "evidence:cost:001",
+                (
+                    "name",
+                    "evidence_id",
+                    "roof_job",
+                    "sync_state",
+                    "content_checksum",
+                    "checksum_algorithm",
+                    "verified_at",
+                    "verification_source",
+                ),
+            ): {
+                "name": "evidence:cost:001",
+                "evidence_id": "evidence:cost:001",
+                "roof_job": "job-1",
+                "sync_state": "Verified",
+                "content_checksum": "a" * 64,
+                "checksum_algorithm": "SHA-256",
+                "verified_at": "2026-08-12 10:04:00",
+                "verification_source": "worker-checksum",
+            },
+            (
+                "White-Label Tenant",
+                "tenant:ironwrap",
+                ("name", "tenant_id", "status"),
+            ): {
+                "name": "tenant:ironwrap",
+                "tenant_id": "tenant:ironwrap",
+                "status": "Active",
+            },
+            (
+                "Material Lot",
+                "lot:cost:001",
+                ("name", "roof_job"),
+            ): {
+                "name": "lot:cost:001",
+                "roof_job": "job-1",
+            },
+            ("User", "finance@example.com", "exists"): True,
+        }
+        adapter, _ = self.load_adapter(
+            values=values,
+            session_user="finance@example.com",
+            roles=["IronWrap Finance"],
+        )
+        adapter.validate_business_document(FakeDocument(event), "job_cost_event")
+        self.assertTrue(
+            any(
+                "tabRoof Job" in query
+                for query, _values, _as_dict in adapter._test_lock_calls
+            )
+        )
+
+        unauthorized, _ = self.load_adapter(
+            values=values,
+            session_user="estimator@example.com",
+            roles=["IronWrap Estimator"],
+        )
+        with self.assertRaisesRegex(
+            FakePermissionError, "Finance, Owner, or System Manager"
+        ):
+            unauthorized.validate_business_document(
+                FakeDocument({**event, "approved_by": "estimator@example.com"}),
+                "job_cost_event",
+            )
+
+        controller = JOB_COST_EVENT_CONTROLLER_PATH.read_text(encoding="utf-8")
+        self.assertIn('validate_business_document(self, "job_cost_event")', controller)
+
+    def test_quickbooks_reconciliation_creation_requires_the_private_issuer_context(
+        self,
+    ) -> None:
         adapter, _ = self.load_adapter()
         issued = FakeDocument(
             {
@@ -345,6 +516,78 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         with adapter.quickbooks_reconciliation_issuance_context(issued):
             with self.assertRaisesRegex(FakePermissionError, "dedicated Worker command"):
                 adapter.validate_business_document(forged, "integration_reconciliation")
+
+    def test_payment_milestone_recognition_uses_db_bound_reconciliation_context(
+        self,
+    ) -> None:
+        payment = FakeDocument(
+            {
+                "payment_milestone_id": "pay-1",
+                "roof_job": "job-1",
+                "milestone_type": "Invoice",
+                "milestone_version": 1,
+                "status": "Matched",
+                "currency": "CAD",
+                "subtotal": 1000,
+                "tax_amount": 50,
+                "total_amount": 1050,
+                "amount_due": 1050,
+                "amount_paid": 250,
+                "balance_due": 800,
+                "payment_status": "Partially Paid",
+                "tax_code": "GST",
+                "tax_rate": 5,
+                "tax_policy_snapshot_json": '{"rate":5}',
+                "truth_source": "QuickBooks",
+                "truth_at": "2026-07-10 11:00:00",
+                "qb_entity_type": "Invoice",
+                "qb_entity_id": "42",
+                "recognition_posted_at": "2026-07-10 10:30:00",
+                "recognition_digest": "a" * 64,
+                "recognition_reconciliation": "recon:pay-1",
+            }
+        )
+        values = {
+            (
+                "Integration Reconciliation",
+                "recon:pay-1",
+                (
+                    "name",
+                    "reconciliation_id",
+                    "roof_job",
+                    "system_name",
+                    "entity_type",
+                    "external_entity_id",
+                    "local_doctype",
+                    "local_name",
+                    "status",
+                    "currency",
+                    "source_payload_hash",
+                    "detected_at",
+                ),
+            ): {
+                "name": "recon:pay-1",
+                "reconciliation_id": "recon:pay-1",
+                "roof_job": "job-1",
+                "system_name": "QuickBooks",
+                "entity_type": "Invoice",
+                "external_entity_id": "42",
+                "local_doctype": "Payment Milestone",
+                "local_name": "pay-1",
+                "status": "Matched",
+                "currency": "CAD",
+                "source_payload_hash": "a" * 64,
+                "detected_at": "2026-07-10 10:45:00",
+            },
+        }
+        adapter, _ = self.load_adapter(values=values)
+        adapter.validate_business_document(payment, "payment_milestone")
+        self.assertTrue(
+            any(
+                "tabRoof Job" in query
+                for query, _values, _as_dict in adapter._test_lock_calls
+            )
+        )
 
     def test_waivers_require_the_current_owner_actor(self) -> None:
         compliance = FakeDocument(
@@ -395,6 +638,141 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 "production_gate_state",
             )
 
+    def test_takeoff_policy_approval_requires_current_existing_owner_identity(
+        self,
+    ) -> None:
+        policy = governed_takeoff_policy()
+        policy_context = governed_policy_context()
+        values = {
+            (
+                "White-Label Tenant",
+                "ironwrap",
+                ("tenant_id", "status"),
+            ): policy_context["tenant_record"],
+            (
+                "Evidence Item",
+                "evidence:mtp:ss16:v1",
+                (
+                    "name",
+                    "sync_state",
+                    "checksum_algorithm",
+                    "content_checksum",
+                    "verified_at",
+                    "verification_source",
+                ),
+            ): policy_context["policy_evidence"],
+        }
+        adapter, _ = self.load_adapter(values=values)
+        adapter.validate_business_document(
+            FakeDocument(policy), "material_takeoff_policy"
+        )
+
+        estimator_adapter, _ = self.load_adapter(
+            values=values,
+            session_user="estimator@example.com",
+            roles=["IronWrap Estimator"],
+        )
+        with self.assertRaisesRegex(FakePermissionError, "Owner or System Manager"):
+            estimator_adapter.validate_business_document(
+                FakeDocument({**policy, "approved_by": "estimator@example.com"}),
+                "material_takeoff_policy",
+            )
+
+        missing_user_adapter, _ = self.load_adapter(
+            values={**values, ("User", "owner@example.com", "exists"): False}
+        )
+        with self.assertRaisesRegex(FakePermissionError, "existing Frappe user"):
+            missing_user_adapter.validate_business_document(
+                FakeDocument(policy), "material_takeoff_policy"
+            )
+
+    def test_pricing_policy_approval_is_server_attributed_and_owner_only(self) -> None:
+        draft = pricing_policy_rule()
+        forged = FakeDocument(
+            pricing_policy_rule(
+                "Approved",
+                approved_by="forged@example.com",
+                approved_at="1999-01-01 00:00:00",
+            ),
+            previous=draft,
+        )
+        estimator_adapter, _ = self.load_adapter(
+            session_user="estimator@example.com", roles=["IronWrap Estimator"]
+        )
+        with self.assertRaisesRegex(FakePermissionError, "Owner or System Manager"):
+            estimator_adapter.validate_business_document(forged, "price_book_rule")
+
+        owner_document = FakeDocument(dict(forged), previous=draft)
+        owner_adapter, _ = self.load_adapter(
+            session_user="owner@example.com", roles=["IronWrap Owner"]
+        )
+        owner_adapter._server_approval_utc_timestamp = (
+            lambda: "2026-08-13 12:00:00"
+        )
+        owner_adapter.validate_business_document(owner_document, "price_book_rule")
+        self.assertEqual(owner_document["approved_by"], "owner@example.com")
+        self.assertEqual(owner_document["approved_at"], "2026-08-13 12:00:00")
+
+        manager_document = FakeDocument(
+            pricing_policy_rule("Approved"), previous=draft
+        )
+        manager_adapter, _ = self.load_adapter(
+            session_user="Administrator", roles=["System Manager"]
+        )
+        manager_adapter._server_approval_utc_timestamp = (
+            lambda: "2026-08-13 12:00:01"
+        )
+        manager_adapter.validate_business_document(manager_document, "price_book_rule")
+        self.assertEqual(manager_document["approved_by"], "Administrator")
+        self.assertEqual(manager_document["approved_at"], "2026-08-13 12:00:01")
+
+    def test_pricing_policy_rejects_forged_draft_and_freezes_approval_evidence(self) -> None:
+        estimator_adapter, _ = self.load_adapter(
+            session_user="estimator@example.com", roles=["IronWrap Estimator"]
+        )
+        estimator_adapter.validate_business_document(
+            FakeDocument(pricing_policy_rule()), "price_book_rule"
+        )
+        with self.assertRaisesRegex(FakeValidationError, "server-owned"):
+            estimator_adapter.validate_business_document(
+                FakeDocument(
+                    pricing_policy_rule(
+                        approved_by="estimator@example.com",
+                        approved_at="2026-08-13 12:00:00",
+                    )
+                ),
+                "price_book_rule",
+            )
+
+        approved = pricing_policy_rule(
+            "Approved",
+            approved_by="owner@example.com",
+            approved_at="2026-08-13 12:00:00",
+        )
+        malformed = FakeDocument(
+            {**approved, "approved_at": "2026-08-13T12:00:00.000Z"},
+            previous={**approved, "approved_at": "2026-08-13T12:00:00.000Z"},
+        )
+        owner_adapter, _ = self.load_adapter()
+        with self.assertRaisesRegex(
+            FakeValidationError, "invalid_pricing_policy_approval_timestamp"
+        ):
+            owner_adapter.validate_business_document(malformed, "price_book_rule")
+
+        changed = FakeDocument(
+            {**approved, "approved_by": "other-owner@example.com"},
+            previous=approved,
+        )
+        with self.assertRaisesRegex(FakeValidationError, "immutable_field"):
+            owner_adapter.validate_business_document(changed, "price_book_rule")
+
+        changed_at = FakeDocument(
+            {**approved, "approved_at": "2026-08-13 12:00:01"},
+            previous=approved,
+        )
+        with self.assertRaisesRegex(FakeValidationError, "immutable_field"):
+            owner_adapter.validate_business_document(changed_at, "price_book_rule")
+
     def test_previous_document_is_passed_to_immutable_policy(self) -> None:
         adapter, _ = self.load_adapter()
         document = FakeDocument(
@@ -443,6 +821,12 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             adapter.validate_evidence_verification_mutation(
                 FakeDocument(
                     dict(issued), previous={**issued, "sync_state": "Uploaded"}
+                )
+            )
+        with self.assertRaisesRegex(FakeValidationError, "immutable"):
+            adapter.validate_evidence_verification_mutation(
+                FakeDocument(
+                    {**issued, "sync_state": "Superseded"}, previous=dict(issued)
                 )
             )
 
@@ -584,6 +968,47 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             service_adapter.validate_evidence_verification_mutation(
                 FakeDocument({"evidence_id": "forged", "sync_state": "Local"})
             )
+
+        draft_quote = FakeDocument(
+            {
+                "name": "facet-quote-revision:proof-1",
+                "customer_quote_id": "facet-quote-revision:proof-1",
+                "roof_job": "job-1",
+                "customer": "customer-1",
+                "quote_version": 2,
+                "status": "Draft",
+                "supersedes": "quote-1",
+                "correction_reason": "Facet customer decision event-1 requires estimator rebuild from current evidence.",
+            }
+        )
+        invalidated_quote = FakeDocument(
+            {**dict(draft_quote), "status": "Rejected"},
+            previous=dict(draft_quote),
+        )
+        for document in (draft_quote, invalidated_quote):
+            with self.assertRaisesRegex(
+                FakePermissionError, "Facet design projection service users"
+            ):
+                service_adapter.validate_customer_quote_acceptance_mutation(document)
+        with service_adapter.facet_design_projection_issuance_context(
+            evidence,
+            reconciliation,
+            draft_quote,
+            invalidated_quote,
+        ):
+            service_adapter.validate_customer_quote_acceptance_mutation(draft_quote)
+            service_adapter.validate_customer_quote_acceptance_mutation(
+                invalidated_quote
+            )
+            with self.assertRaisesRegex(
+                FakePermissionError, "Facet design projection service users"
+            ):
+                service_adapter.validate_customer_quote_acceptance_mutation(
+                    FakeDocument(
+                        {**dict(invalidated_quote), "correction_reason": "forged hold"},
+                        previous=dict(draft_quote),
+                    )
+                )
 
         evidence_controller = EVIDENCE_ITEM_CONTROLLER_PATH.read_text(encoding="utf-8")
         reconciliation_controller = INTEGRATION_RECONCILIATION_CONTROLLER_PATH.read_text(
@@ -1193,12 +1618,19 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             "currency": "CAD",
             "source_ref": "supplier-sheet-2026-07",
             "effective_from": "2026-07-01",
-            "effective_to": "",
+            "effective_to": "2026-08-31",
             "assumptions": "Standard colour.",
             "exclusions": "Freight.",
             "approved_by": "owner@example.com",
             "approved_at": "2026-07-10 10:00:00",
-            "rule_json": '{"unit_price":12.5}',
+            "rule_json": json.dumps(
+                {
+                    "schema_version": "ironwrap.price-rule.v1",
+                    "operation": "quantity_times_unit_price",
+                    "rounding": "half_up_cent",
+                },
+                separators=(",", ":"),
+            ),
         }
         snapshot = json.dumps(
             {
@@ -1438,6 +1870,83 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(FakeValidationError, "unverified_gate_evidence"):
             invalid_adapter.validate_business_document(document, "roof_job")
 
+    def test_typed_assignment_mutations_require_a_superseding_document(self) -> None:
+        assignment = {
+            "assignment_id": "assignment-shop-1",
+            "roof_job": "",
+            "assignment_type": "Shop",
+            "status": "Assigned",
+            "crew_profile": "",
+            "assigned_user": "",
+            "authority_user": "production@example.com",
+            "authority_role": "IronWrap Production",
+            "assigned_by": "dispatcher@example.com",
+            "assigned_at": "2026-07-10 08:00:00",
+            "work_object_type": "Shop Order",
+            "work_object_id": "SHOP-001",
+            "physical_context_type": "Shop Floor",
+            "physical_context_id": "SHOP-FLOOR-1",
+            "scheduled_start": "2026-07-11 08:00:00",
+            "assigned_workers": [
+                {
+                    "sequence": 1,
+                    "worker_user": "operator@example.com",
+                    "worker_role": "Shop Operator",
+                    "required": 1,
+                }
+            ],
+        }
+        adapter, _ = self.load_adapter(
+            values={
+                (
+                    "Job Assignment",
+                    assignment["assignment_id"],
+                    ("roof_job",),
+                ): {"roof_job": ""}
+            }
+        )
+
+        for mutation in (
+            {**assignment, "authority_user": "owner@example.com"},
+            {
+                **assignment,
+                "assigned_workers": [
+                    {
+                        **assignment["assigned_workers"][0],
+                        "worker_user": "other@example.com",
+                    }
+                ],
+            },
+        ):
+            with self.subTest(mutation=mutation):
+                with self.assertRaisesRegex(FakeValidationError, "write_once_field"):
+                    adapter.validate_business_document(
+                        FakeDocument(mutation, previous=assignment),
+                        "job_assignment",
+                    )
+
+        adapter.validate_business_document(
+            FakeDocument(
+                {
+                    **assignment,
+                    "assignment_id": "assignment-shop-2",
+                    "authority_user": "owner@example.com",
+                    "authority_role": "IronWrap Owner",
+                    "assigned_workers": [
+                        {
+                            "sequence": 1,
+                            "worker_user": "other@example.com",
+                            "worker_role": "Shop Operator",
+                            "required": 1,
+                        }
+                    ],
+                    "supersedes": assignment["assignment_id"],
+                    "correction_reason": "Issue a replacement authority and roster.",
+                }
+            ),
+            "job_assignment",
+        )
+
     def test_scheduled_production_assignment_uses_current_database_gate_context(self) -> None:
         gates = [
             {
@@ -1460,6 +1969,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 "assigned_by": "production@example.com",
                 "assigned_at": "2026-07-10 08:00:00",
                 "scheduled_start": "2026-07-11 08:00:00",
+                "scheduled_end": "2026-07-11 16:00:00",
             }
         )
         adapter, calls = self.load_adapter(
@@ -1472,14 +1982,16 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         )
         adapter.validate_business_document(document, "job_assignment")
         self.assertEqual(calls, [])
-        self.assertEqual(len(adapter._test_lock_calls), 7)
+        self.assertEqual(len(adapter._test_lock_calls), 9)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
         self.assertIn("`tabEvidence Item`", adapter._test_lock_calls[2][0])
         self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[3][0])
         self.assertIn("`tabSupplier Order`", adapter._test_lock_calls[4][0])
         self.assertIn("`tabCrew Profile`", adapter._test_lock_calls[5][0])
-        self.assertIn("`tabJob Compliance Record`", adapter._test_lock_calls[6][0])
+        self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[6][0])
+        self.assertIn("crew_profile IN", adapter._test_lock_calls[6][0])
+        self.assertIn("`tabJob Compliance Record`", adapter._test_lock_calls[7][0])
         self.assertIn("FOR UPDATE", adapter._test_lock_calls[2][0])
         self.assertTrue(
             all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
@@ -1501,7 +2013,14 @@ class DocumentValidationAdapterTests(unittest.TestCase):
 
         unscheduled_adapter, unscheduled_calls = self.load_adapter()
         unscheduled_adapter.validate_business_document(
-            FakeDocument({**document, "assignment_id": "assignment-unscheduled", "scheduled_start": ""}),
+            FakeDocument(
+                {
+                    **document,
+                    "assignment_id": "assignment-unscheduled",
+                    "scheduled_start": "",
+                    "scheduled_end": "",
+                }
+            ),
             "job_assignment",
         )
         self.assertEqual(unscheduled_calls, [])
@@ -1596,6 +2115,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             "status": "Assigned",
             "crew_profile": "crew-1",
             "scheduled_start": "2026-07-10 12:00:00",
+            "scheduled_end": "2026-07-10 18:00:00",
         }
         safety_plan = {
             "name": "safety:job-1:v1",
@@ -1654,7 +2174,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         )
         adapter.validate_business_document(document, "work_package")
         self.assertEqual(calls, [])
-        self.assertEqual(len(adapter._test_lock_calls), 8)
+        self.assertEqual(len(adapter._test_lock_calls), 9)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabProduction Gate State`", adapter._test_lock_calls[1][0])
         self.assertIn("`tabEvidence Item`", adapter._test_lock_calls[2][0])
@@ -1714,6 +2234,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             "assignment_type": "Production",
             "status": "Assigned",
             "scheduled_start": "2026-07-11 08:00:00",
+            "scheduled_end": "2026-07-11 16:00:00",
         }
         correction = FakeDocument(
             {
@@ -1725,6 +2246,7 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 "assigned_by": "production@example.com",
                 "assigned_at": "2026-07-10 08:00:00",
                 "scheduled_start": "2026-07-12 08:00:00",
+                "scheduled_end": "2026-07-12 16:00:00",
                 "supersedes": "assignment:current",
                 "correction_reason": "Access moved the production window.",
             }
@@ -1740,12 +2262,14 @@ class DocumentValidationAdapterTests(unittest.TestCase):
             },
         )
         adapter.validate_business_document(correction, "job_assignment")
-        self.assertEqual(len(adapter._test_lock_calls), 7)
+        self.assertEqual(len(adapter._test_lock_calls), 9)
         self.assertIn("`tabRoof Job`", adapter._test_lock_calls[0][0])
         self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[3][0])
         self.assertIn("`tabSupplier Order`", adapter._test_lock_calls[4][0])
         self.assertIn("`tabCrew Profile`", adapter._test_lock_calls[5][0])
-        self.assertIn("`tabJob Compliance Record`", adapter._test_lock_calls[6][0])
+        self.assertIn("`tabJob Assignment`", adapter._test_lock_calls[6][0])
+        self.assertIn("crew_profile IN", adapter._test_lock_calls[6][0])
+        self.assertIn("`tabJob Compliance Record`", adapter._test_lock_calls[7][0])
         self.assertTrue(
             all("FOR UPDATE" in query for query, _, _ in adapter._test_lock_calls)
         )
@@ -1798,10 +2322,85 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                         "assigned_by": "production@example.com",
                         "assigned_at": "2026-07-10 08:00:00",
                         "scheduled_start": "2026-07-12 08:00:00",
+                        "scheduled_end": "2026-07-12 16:00:00",
                     }
                 ),
                 "job_assignment",
             )
+
+    def test_scheduled_production_assignment_locks_same_crew_windows_across_jobs(self) -> None:
+        gates = [
+            {
+                "roof_job": "job-2",
+                "gate": gate,
+                "state": "Done",
+                "evidence_item": f"ev-{gate.lower()}",
+                "owner_user": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+            }
+            for gate in ("Deposit", "Materials", "Safety", "Access", "Weather", "Crew")
+        ]
+        document = FakeDocument(
+            {
+                "assignment_id": "assignment:new",
+                "roof_job": "job-2",
+                "assignment_type": "Production",
+                "status": "Assigned",
+                "crew_profile": "crew-2",
+                "assigned_by": "production@example.com",
+                "assigned_at": "2026-07-10 08:00:00",
+                "scheduled_start": "2026-07-12 09:00:00",
+                "scheduled_end": "2026-07-12 12:00:00",
+            }
+        )
+        crew_window_row = {
+            "name": "assignment:other-job",
+            "assignment_id": "assignment:other-job",
+            "roof_job": "job-9",
+            "assignment_type": "Production",
+            "status": "Accepted",
+            "crew_profile": "crew-2",
+            "scheduled_start": "2026-07-12 10:00:00",
+            "scheduled_end": "2026-07-12 13:00:00",
+        }
+        overlapping_adapter, _ = self.load_adapter(
+            rows={
+                "Production Gate State": gates,
+                "Evidence Item": gate_evidence_rows(gates),
+                "Crew Profile": [current_crew_authority("crew-2")],
+                "Job Compliance Record": current_compliance_authorities("job-2"),
+                "Job Assignment Crew Window": [crew_window_row],
+            }
+        )
+        with self.assertRaisesRegex(FakeValidationError, "overlapping_crew_schedule"):
+            overlapping_adapter.validate_business_document(document, "job_assignment")
+        self.assertEqual(len(overlapping_adapter._test_lock_calls), 9)
+        self.assertIn("crew_profile IN", overlapping_adapter._test_lock_calls[6][0])
+
+        adjacent_adapter, _ = self.load_adapter(
+            rows={
+                "Production Gate State": gates,
+                "Evidence Item": gate_evidence_rows(gates),
+                "Crew Profile": [current_crew_authority("crew-2")],
+                "Job Compliance Record": current_compliance_authorities("job-2"),
+                "Job Assignment Crew Window": [
+                    {**crew_window_row, "scheduled_start": "2026-07-12 12:00:00"}
+                ],
+            }
+        )
+        adjacent_adapter.validate_business_document(document, "job_assignment")
+
+        malformed_adapter, _ = self.load_adapter(
+            rows={
+                "Production Gate State": gates,
+                "Evidence Item": gate_evidence_rows(gates),
+                "Crew Profile": [current_crew_authority("crew-2")],
+                "Job Compliance Record": current_compliance_authorities("job-2"),
+                "Job Assignment Crew Window": [{**crew_window_row, "scheduled_end": ""}],
+            }
+        )
+        with self.assertRaisesRegex(FakeValidationError, "scheduled_assignment_window_required"):
+            malformed_adapter.validate_business_document(document, "job_assignment")
 
     def test_supplier_order_shares_the_roof_job_lock_with_scheduling(self) -> None:
         order = FakeDocument(

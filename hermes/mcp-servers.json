@@ -1,6 +1,6 @@
 {
   "version": "0.2.0",
-  "note": "Launch/config manifest for the three MCP servers Hermes connects to. tool_filter arrays are the UNION across roles only for host discovery; each server requires HERMES_AGENT_ROLE and registers only that canonical roles.json allowlist. The Frappe server also requires HERMES_ACTOR_USER, and its Frappe API pair must belong to exactly that actor rather than a shared service principal; it assignment-scopes Field Companion calls. Frappe approved writes require ERPNEXT_WRITE_ENABLED plus a short-lived server-issued dry_run_receipt and separately signed human approval_receipt; HERMES_DRY_RUN_SIGNING_KEY stays in the MCP host, HERMES_APPROVAL_PUBLIC_KEY_FILE verifies the approval broker's signature, and HERMES_APPROVER_ID binds that key to the approved human identity. The bus retains its separate IRONWRAP_BUS_WRITE_ENABLED + HERMES_WRITE_TOKEN replay gate. Newo MCP never receives the provider API key; NEWO_MCP_WRITE_ENABLED gates its approval tools while the Worker independently enforces signed one-time receipts, NEWO_CONTROL_WRITE_ENABLED, protected resources, and NEWO_OUTBOUND_ENABLED. env values are placeholders resolved from the Hermes host environment; never commit real secret values.",
+  "note": "Launch/config manifest for three role-filtered MCP servers plus one fixed desktop text-pilot server. The broad-server tool_filter arrays are the UNION across roles only for host discovery; each broad server requires HERMES_AGENT_ROLE and registers only that canonical roles.json allowlist. The desktop server is outside roles.json and exposes exactly three tenant/user/current-role/device-bound read/draft tools. The Frappe server also requires HERMES_ACTOR_USER, and its Frappe API pair must belong to exactly that actor rather than a shared service principal; it assignment-scopes Field Companion calls. Frappe approved writes require ERPNEXT_WRITE_ENABLED plus a short-lived server-issued dry_run_receipt and separately signed human approval_receipt; HERMES_DRY_RUN_SIGNING_KEY stays in the MCP host, HERMES_APPROVAL_PUBLIC_KEY_FILE verifies the approval broker's signature, and HERMES_APPROVER_ID binds that key to the approved human identity. The bus retains its separate IRONWRAP_BUS_WRITE_ENABLED + HERMES_WRITE_TOKEN replay gate. Newo MCP never receives the provider API key; NEWO_MCP_WRITE_ENABLED gates its approval tools while the Worker independently enforces signed one-time receipts, NEWO_CONTROL_WRITE_ENABLED, protected resources, and NEWO_OUTBOUND_ENABLED. env values are placeholders resolved from the Hermes host environment; never commit real secret values.",
   "mcpServers": {
     "ironwrap-bus-mcp": {
       "command": "node",
@@ -30,6 +30,28 @@
         "HERMES_WRITE_TOKEN": "${HERMES_WRITE_TOKEN}",
         "HERMES_AGENT_ROLE": "${HERMES_AGENT_ROLE}",
         "HERMES_ROLE_POLICY_PATH": "${HERMES_ROLE_POLICY_PATH}"
+      }
+    },
+    "ironwrap-hermes-desktop-mcp": {
+      "command": "node",
+      "args": ["mcp/ironwrap-bus-mcp/src/desktop-server.mjs"],
+      "description": "Fixed owner/ops desktop text pilot: device-bound task reads, untrusted context staging, and governed draft handoff only.",
+      "tool_filter": {
+        "read": [
+          "hermes_next_tasks"
+        ],
+        "draft": [
+          "hermes_stage_context",
+          "hermes_submit_draft"
+        ]
+      },
+      "env": {
+        "IRONWRAP_BUS_BASE_URL": "${IRONWRAP_BUS_BASE_URL}",
+        "IRONWRAP_HERMES_DESKTOP_PAIRING_URL": "${IRONWRAP_HERMES_DESKTOP_PAIRING_URL}",
+        "IRONWRAP_HERMES_DESKTOP_ACCESS_TOKEN": "${IRONWRAP_HERMES_DESKTOP_ACCESS_TOKEN}",
+        "IRONWRAP_HERMES_DESKTOP_DEVICE_PROOF": "${IRONWRAP_HERMES_DESKTOP_DEVICE_PROOF}",
+        "IRONWRAP_BUS_ALLOW_INSECURE_LOCAL": "${IRONWRAP_BUS_ALLOW_INSECURE_LOCAL}",
+        "IRONWRAP_BUS_REQUEST_TIMEOUT_MS": "${IRONWRAP_BUS_REQUEST_TIMEOUT_MS}"
       }
     },
     "erpnext-roofing-mcp": {
@@ -86,6 +108,10 @@
           "list_crew_profiles",
           "get_job_assignment",
           "list_job_assignments_for_job",
+          "get_work_package",
+          "list_work_packages_for_job",
+          "get_work_package_event",
+          "list_work_package_events_for_job",
           "get_change_order",
           "list_change_orders_for_job",
           "get_insurance_supplement",
@@ -94,6 +120,8 @@
           "list_safety_plans_for_job",
           "get_job_compliance_record",
           "list_job_compliance_records_for_job",
+          "get_authority_record",
+          "list_authority_records_for_job",
           "get_communication_consent",
           "list_communication_consents_for_job",
           "get_customer_decision",
@@ -102,6 +130,8 @@
           "list_contract_acceptances_for_job",
           "get_integration_reconciliation",
           "list_integration_reconciliations_for_job",
+          "get_job_cost_event",
+          "list_job_cost_events_for_job",
           "get_tenant_export_run",
           "list_tenant_export_runs_for_tenant",
           "get_automation_incident",
@@ -143,9 +173,12 @@
           "dry_run_safety_plan",
           "dry_run_safety_acknowledgement",
           "dry_run_job_compliance_record",
+          "dry_run_complete_work_package",
+          "dry_run_authority_record",
           "dry_run_customer_decision",
           "dry_run_communication_consent",
           "dry_run_reconciliation_resolution",
+          "dry_run_job_cost_event",
           "dry_run_tenant_export",
           "dry_run_completion_packet",
           "dry_run_warranty_packet",
@@ -183,6 +216,8 @@
           "request_create_safety_plan",
           "request_record_safety_acknowledgement",
           "request_record_job_compliance",
+          "request_complete_work_package",
+          "request_authority_record",
           "request_record_customer_decision",
           "request_record_communication_consent",
           "request_resolve_reconciliation",
@@ -199,14 +234,24 @@
         "ERPNEXT_BASE_URL": "${ERPNEXT_BASE_URL}",
         "ERPNEXT_API_KEY": "${ERPNEXT_API_KEY}",
         "ERPNEXT_API_SECRET": "${ERPNEXT_API_SECRET}",
+        "ERPNEXT_TENANT_ID": "${ERPNEXT_TENANT_ID}",
         "ERPNEXT_WRITE_ENABLED": "${ERPNEXT_WRITE_ENABLED}",
+        "IRONWRAP_EFFECT_RUNTIME_ENABLED": "${IRONWRAP_EFFECT_RUNTIME_ENABLED}",
+        "IRONWRAP_EFFECT_RUNTIME_URL": "${IRONWRAP_EFFECT_RUNTIME_URL}",
+        "IRONWRAP_EFFECT_RUNTIME_TOKEN": "${IRONWRAP_EFFECT_RUNTIME_TOKEN}",
         "ERPNEXT_REQUEST_TIMEOUT_MS": "${ERPNEXT_REQUEST_TIMEOUT_MS}",
         "HERMES_AGENT_ROLE": "${HERMES_AGENT_ROLE}",
         "HERMES_ACTOR_USER": "${HERMES_ACTOR_USER}",
         "HERMES_APPROVER_ID": "${HERMES_APPROVER_ID}",
         "HERMES_ROLE_POLICY_PATH": "${HERMES_ROLE_POLICY_PATH}",
         "HERMES_DRY_RUN_SIGNING_KEY": "${HERMES_DRY_RUN_SIGNING_KEY}",
-        "HERMES_APPROVAL_PUBLIC_KEY_FILE": "${HERMES_APPROVAL_PUBLIC_KEY_FILE}"
+        "HERMES_APPROVAL_PUBLIC_KEY_FILE": "${HERMES_APPROVAL_PUBLIC_KEY_FILE}",
+        "IRONWRAP_AUTHORITY_BUS_URL": "${IRONWRAP_AUTHORITY_BUS_URL}",
+        "IRONWRAP_AUTHORITY_EXECUTOR_HMAC_KEY": "${IRONWRAP_AUTHORITY_EXECUTOR_HMAC_KEY}",
+        "IRONWRAP_AUTHORITY_EXECUTOR_USER_ID": "${IRONWRAP_AUTHORITY_EXECUTOR_USER_ID}",
+        "IRONWRAP_AUTHORITY_FRAPPE_ACTOR_USER_ID": "${IRONWRAP_AUTHORITY_FRAPPE_ACTOR_USER_ID}",
+        "IRONWRAP_AUTHORITY_BUSINESS_ROLE": "${IRONWRAP_AUTHORITY_BUSINESS_ROLE}",
+        "AUTHORITY_ISSUER_PUBLIC_KEYS_JSON": "${AUTHORITY_ISSUER_PUBLIC_KEYS_JSON}"
       }
     },
     "newo-mcp": {

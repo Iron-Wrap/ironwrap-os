@@ -4,55 +4,135 @@ import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
-import {
-  facetDesignAssociationAnchorSha256,
-  type FacetDesignAssociationAnchor,
-} from "../src/facet-design-association.ts";
+import { canonicalJson } from "../src/facet-design-v2-protocol.ts";
 import { reconcileFacetDesignFrappeProjections } from "../src/facet-design-projection.ts";
 
-const HMAC_SECRET = "facet-projection-test-secret-longer-than-thirty-two-characters";
-const EVENT = {
-  event_id: "facet-event-v2-0001",
-  event_type: "facet.design.customer_approved.v2",
-  schema_version: 2,
-  tenant_id: "ironwrap",
+const HMAC_SECRET =
+  "facet-projection-test-secret-longer-than-thirty-two-characters";
+const EVENT_ID = "44444444-4444-4444-8444-444444444444";
+const SOURCE_TENANT_ID = "22222222-2222-4222-8222-222222222222";
+const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
+const PROJECT_LINK = `ironwrap-project-v1:${"2".repeat(64)}`;
+const PRODUCER_LINK = `ironwrap-identity-v1:${"3".repeat(64)}`;
+const CUSTOMER_LINK = `facet-customer-oidc-v1:${"b".repeat(64)}`;
+const ASSOCIATION = {
   brand_id: "ironwrap",
-  approval_actor_type: "customer_capability",
-  capability_fingerprint: "d".repeat(64),
-  identity_assurance: "bearer_capability_only",
-  facet_project_id: "facet-project-0001",
-  design_revision_sha256: "a".repeat(64),
-  frozen_evidence_sha256: "b".repeat(64),
-  raw_key: "facet-design/v2/facet-event-v2-0001.json",
-  raw_sha256: "c".repeat(64),
-  raw_content_length: 512,
-  occurred_at: "2026-08-10T12:00:00.000Z",
-  received_at: "2026-08-10T12:01:00.000Z",
+  customer_party_ref: "a".repeat(64),
+  customer_quote_id: "customer-quote-0001",
+  destination_tenant_id: "ironwrap",
+  external_customer_identity_link_id: CUSTOMER_LINK,
+  external_project_link_id: PROJECT_LINK,
+  facet_project_id: PROJECT_ID,
+  producer_identity_link_id: PRODUCER_LINK,
+  roof_job_id: "roof-job-0001",
+  source_tenant_id: SOURCE_TENANT_ID,
 };
-const DESIGN_REVISION_ID = `facet-json-v1:${EVENT.design_revision_sha256}`;
+const ASSOCIATION_SHA256 = sha256(canonicalJson(ASSOCIATION));
+const BLANK_QUOTE_FIELDS = [
+  "price_book_version",
+  "pricing_effective_at",
+  "price_rule_snapshot_json",
+  "subtotal",
+  "tax_amount",
+  "tax_code",
+  "tax_rate",
+  "tax_policy_snapshot_json",
+  "quote_total",
+  "currency",
+  "deposit_amount",
+  "amount_due",
+  "amount_paid",
+  "balance_due",
+  "payment_status",
+  "payment_due_date",
+  "payment_truth_source",
+  "payment_truth_at",
+  "qb_item_ref",
+  "qb_tax_code_ref",
+  "qb_terms_ref",
+  "qb_terms_due_days",
+  "valid_until",
+  "approved_by",
+  "approved_at",
+  "acceptance_evidence",
+  "contract_acceptance",
+  "accepted_at",
+  "scope_summary",
+  "assumptions",
+  "exclusions",
+  "quote_summary_json",
+  "notes",
+] as const;
 
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
 
   constructor() {
     this.raw.exec("PRAGMA foreign_keys = ON");
-    for (const migration of [
-      "0011_app_bff_auth.sql",
-      "0030_facet_design_ingest.sql",
-      "0032_facet_design_frappe_projection.sql",
-      "0034_facet_customer_approval_ingest.sql",
-      "0035_facet_design_evidence_associations.sql",
-    ]) {
-      this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
-    }
-    const now = "2026-08-10T11:00:00.000Z";
-    this.raw.prepare(
-      `INSERT INTO app_users
-         (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
-          active, created_by, created_at, updated_at)
-       VALUES ('appu_owner_0001', 'ironwrap', 'owner@example.com', 'Owner', 'owner',
-               'owner@example.com', 1, 'seed', ?, ?)`,
-    ).run(now, now);
+    this.raw.exec(
+      readFileSync(
+        new URL("../migrations/0011_app_bff_auth.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    this.raw.exec(
+      readFileSync(
+        new URL(
+          "../migrations/0042_external_effect_runtime.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    this.raw.exec(
+      readFileSync(
+        new URL(
+          "../migrations/0043_facet_v2_signed_identity.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    const now = "2027-01-15T07:59:00.000Z";
+    this.raw
+      .prepare(
+        `INSERT INTO app_users
+       (user_id, tenant_id, email_normalized, display_name, role, active,
+        created_by, created_at, updated_at)
+       VALUES ('owner-user-0001', 'ironwrap', 'owner@example.invalid', 'Owner', 'owner', 1,
+               'test-fixture', ?, ?)`,
+      )
+      .run(now, now);
+    this.raw
+      .prepare(
+        `INSERT INTO facet_v2_producer_identity_links
+       (producer_identity_link_id, destination_tenant_id, source_tenant_id, issuer,
+        source_product, source_environment, proof_sha256,
+        created_from_project_id, created_at)
+       VALUES (?, 'ironwrap', ?, 'facet', 'facet', 'production', ?, ?, ?)`,
+      )
+      .run(PRODUCER_LINK, SOURCE_TENANT_ID, "6".repeat(64), PROJECT_ID, now);
+    this.raw
+      .prepare(
+        `INSERT INTO facet_v2_project_links
+       (external_project_link_id, producer_identity_link_id, destination_tenant_id,
+        source_tenant_id, brand_id, facet_project_id, customer_party_ref,
+        external_customer_identity_link_id, roof_job_id, customer_quote_id,
+        project_claim_sha256, association_sha256, created_by_user_id, created_at)
+       VALUES (?, ?, 'ironwrap', ?, 'ironwrap', ?, ?, ?, 'roof-job-0001',
+               'customer-quote-0001', ?, ?, 'owner-user-0001', ?)`,
+      )
+      .run(
+        PROJECT_LINK,
+        PRODUCER_LINK,
+        SOURCE_TENANT_ID,
+        PROJECT_ID,
+        "a".repeat(64),
+        CUSTOMER_LINK,
+        "7".repeat(64),
+        ASSOCIATION_SHA256,
+        now,
+      );
   }
 
   prepare(sql: string): SqliteStatement {
@@ -83,310 +163,638 @@ class SqliteStatement {
     const result = this.raw.prepare(this.sql).run(...this.args);
     return { success: true, meta: { changes: Number(result.changes ?? 0) } };
   }
+
+  async first<T>(): Promise<T | null> {
+    return (
+      (this.raw.prepare(this.sql).get(...this.args) as T | undefined) ?? null
+    );
+  }
 }
 
-function seedCustomerApproval(db: SqliteD1): void {
-  db.raw.prepare(
-    `INSERT INTO facet_customer_approval_events
-       (event_id, event_type, schema_version, occurred_at, tenant_id, brand_id,
-        facet_project_id, design_revision_id, design_revision_sha256,
-        frozen_evidence_sha256, approval_actor_type, capability_fingerprint, identity_assurance,
-        raw_key, raw_sha256, raw_content_length, received_at)
-     VALUES (?, 'facet.design.customer_approved.v2', 2, ?, ?, ?, ?, ?, ?, ?,
-             'customer_capability', ?, 'bearer_capability_only', ?, ?, ?, ?)`,
-  ).run(
-    EVENT.event_id,
-    EVENT.occurred_at,
-    EVENT.tenant_id,
-    EVENT.brand_id,
-    EVENT.facet_project_id,
-    DESIGN_REVISION_ID,
-    EVENT.design_revision_sha256,
-    EVENT.frozen_evidence_sha256,
-    EVENT.capability_fingerprint,
-    EVENT.raw_key,
-    EVENT.raw_sha256,
-    EVENT.raw_content_length,
-    EVENT.received_at,
-  );
+function seedDecision(
+  db: SqliteD1,
+  input: {
+    eventId?: string;
+    decision?: "approved" | "corrected" | "superseded" | "withdrawn";
+    previousEventId?: string | null;
+    occurredAt?: string;
+  } = {},
+): string {
+  const eventId = input.eventId ?? EVENT_ID;
+  const decision = input.decision ?? "approved";
+  const previous = input.previousEventId ?? null;
+  const eventHash = sha256(eventId);
+  const reason = decision === "approved" ? null : "8".repeat(64);
+  db.raw
+    .prepare(
+      `INSERT INTO facet_v2_customer_decisions
+     (event_id, event_type, schema_version, event_body_sha256, issuer, source_product,
+      source_environment, source_tenant_id, destination_tenant_id, brand_id,
+      facet_project_id, external_project_link_id, producer_identity_link_id,
+      association_sha256, roof_job_id, customer_quote_id, customer_party_ref,
+      external_customer_identity_link_id, oidc_issuer, oidc_subject_sha256,
+      identity_assurance, attestation_version, decision_kind, previous_event_id,
+      reason_sha256, approval_receipt_id, approval_receipt_sha256, design_revision_id,
+      design_revision_sha256, frozen_evidence_sha256, raw_key, raw_sha256,
+      raw_content_length, occurred_at, received_at)
+     VALUES (?, 'facet.design.customer_approved.v2', 2, ?, 'facet', 'facet', 'production',
+             ?, 'ironwrap', 'ironwrap', ?, ?, ?, ?, 'roof-job-0001',
+             'customer-quote-0001', ?, ?, 'https://accounts.google.com', ?, 'oidc',
+             'facet-customer-approval-v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 512, ?, ?)`,
+    )
+    .run(
+      eventId,
+      eventHash,
+      SOURCE_TENANT_ID,
+      PROJECT_ID,
+      PROJECT_LINK,
+      PRODUCER_LINK,
+      ASSOCIATION_SHA256,
+      "a".repeat(64),
+      CUSTOMER_LINK,
+      "b".repeat(64),
+      decision,
+      previous,
+      reason,
+      eventId,
+      sha256(`approval:${eventId}`),
+      `facet-json-v1:${"e".repeat(64)}`,
+      "e".repeat(64),
+      "c".repeat(64),
+      `facet-design/v2/raw/${eventHash}.json`,
+      eventHash,
+      input.occurredAt ?? "2027-01-15T08:00:00.000Z",
+      input.occurredAt ?? "2027-01-15T08:00:01.000Z",
+    );
+  return eventId;
 }
 
-function seedLegacyEvent(db: SqliteD1): void {
-  db.raw.prepare(
-    `INSERT INTO facet_design_events
-       (event_id, event_type, schema_version, occurred_at, tenant_id, facet_project_id,
-        design_revision_id, design_revision_sha256, frozen_evidence_sha256, raw_key,
-        raw_sha256, raw_content_length, received_at)
-     VALUES ('facet-event-v1-legacy', 'facet.design.approved.v1', 1, ?, 'ironwrap',
-             'facet-project-legacy', ?, ?, ?, 'facet-design/v1/facet-event-v1-legacy.json',
-             ?, 256, ?)`,
-  ).run(
-    EVENT.occurred_at,
-    DESIGN_REVISION_ID,
-    EVENT.design_revision_sha256,
-    EVENT.frozen_evidence_sha256,
-    "9".repeat(64),
-    EVENT.received_at,
-  );
-}
-
-async function seedAssociation(db: SqliteD1): Promise<void> {
-  const anchor: FacetDesignAssociationAnchor = {
-    event_id: EVENT.event_id,
-    tenant_id: EVENT.tenant_id,
-    brand_id: EVENT.brand_id,
-    facet_project_id: EVENT.facet_project_id,
-    design_revision_id: DESIGN_REVISION_ID,
-    design_revision_sha256: EVENT.design_revision_sha256,
-    frozen_evidence_sha256: EVENT.frozen_evidence_sha256,
-    roof_job_id: "roof-job-0001",
-    customer_quote_id: "customer-quote-0001",
-  };
-  db.raw.prepare(
-    `INSERT INTO facet_design_evidence_associations
-       (event_id, tenant_id, brand_id, facet_project_id, design_revision_id,
-        design_revision_sha256, frozen_evidence_sha256, roof_job_id, customer_quote_id,
-        associated_by_user_id, reason, idempotency_key_sha256, association_intent_sha256,
-        association_anchor_sha256, associated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'appu_owner_0001', ?, ?, ?, ?, ?)`,
-  ).run(
-    anchor.event_id,
-    anchor.tenant_id,
-    anchor.brand_id,
-    anchor.facet_project_id,
-    anchor.design_revision_id,
-    anchor.design_revision_sha256,
-    anchor.frozen_evidence_sha256,
-    anchor.roof_job_id,
-    anchor.customer_quote_id,
-    "Operator matched the approved design to the current quote.",
-    "e".repeat(64),
-    "f".repeat(64),
-    await facetDesignAssociationAnchorSha256(anchor),
-    "2026-08-10T12:02:00.000Z",
-  );
-}
-
-function testEnv(db: SqliteD1): Env {
+function env(db: SqliteD1, effectRuntime = true): Env {
   return {
     DB: db as never,
-    FACET_DESIGN_FRAPPE_PROJECTION_ENABLED: "true",
+    EFFECT_RUNTIME_ENABLED: effectRuntime ? "true" : "false",
+    FACET_V2_FRAPPE_PROJECTION_ENABLED: "true",
     FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY: HMAC_SECRET,
     FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY: "facet-projection-key",
     FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET: "facet-projection-secret",
-    // Retained for rollout compatibility, but deliberately not consulted by projection.
-    FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON: JSON.stringify({
-      schema_version: 1,
-      associations: [{ event_id: EVENT.event_id, tenant_id: "foreign-tenant" }],
-    }),
-    ERPNEXT_BASE_URL: "https://frappe.example",
+    ERPNEXT_BASE_URL: "https://frappe.example.invalid",
     APP_FRAPPE_REQUEST_TIMEOUT_MS: "8000",
   } as Env;
 }
 
 function count(db: SqliteD1, outcome: string): number {
-  return Number((db.raw.prepare(
-    `SELECT COUNT(*) AS count
-     FROM facet_customer_approval_projection_attempts
-     WHERE outcome = ?`,
-  ).get(outcome) as { count: number }).count);
+  return Number(
+    (
+      db.raw
+        .prepare(
+          `SELECT COUNT(*) AS count FROM facet_v2_projection_attempts WHERE outcome = ?`,
+        )
+        .get(outcome) as { count: number }
+    ).count,
+  );
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function installFrappeMock(status = 200, unsigned = false): {
+function installFrappeMock(
+  input: {
+    status?: number;
+    tamperReceipt?: boolean;
+    idempotentReplay?: boolean;
+    missingEvidence?: boolean;
+    mutatedReconciliationHash?: boolean;
+    populatedDraft?: boolean;
+    responseLostOnce?: boolean;
+  } = {},
+): {
   calls: Array<{ claim: Record<string, unknown>; headers: Headers }>;
+  readbacks: string[];
   restore(): void;
 } {
   const originalFetch = globalThis.fetch;
   const calls: Array<{ claim: Record<string, unknown>; headers: Headers }> = [];
-  globalThis.fetch = async (_input, init) => {
-    const request = init as RequestInit;
-    const body = JSON.parse(String(request.body)) as { facet_claim_json: string };
+  const readbacks: string[] = [];
+  let responseLost = false;
+  globalThis.fetch = async (request, init) => {
+    const url = String(request);
+    if (init?.method === "GET") {
+      readbacks.push(url);
+      const id = decodeURIComponent(url.split("/").pop() ?? "");
+      const claim = calls.at(-1)?.claim;
+      if (!claim) return Response.json({ error: "not_found" }, { status: 404 });
+      const eventHash = sha256(String(claim.event_id));
+      const active =
+        claim.decision_kind === "approved" ||
+        claim.decision_kind === "corrected";
+      const previousHash = claim.previous_event_id
+        ? sha256(String(claim.previous_event_id))
+        : null;
+      const draftId = `facet-quote-revision:${active ? eventHash : previousHash}`;
+      const evidenceId = `facet-design:${eventHash}`;
+      const reconciliationId = `facet-design-projection:${eventHash}`;
+      const roofJob = "JOB-001";
+      const diff = {
+        association_sha256: claim.association_sha256,
+        blank_commercial_revision: active,
+        customer_party_ref: claim.customer_party_ref,
+        customer_safe: false,
+        decision_kind: claim.decision_kind,
+        destination_tenant_id: claim.destination_tenant_id,
+        draft_customer_quote_id: draftId,
+        event_id: claim.event_id,
+        external_customer_identity_link_id:
+          claim.external_customer_identity_link_id,
+        external_project_link_id: claim.external_project_link_id,
+        facet_project_id: claim.facet_project_id,
+        identity_assurance: "oidc",
+        oidc_issuer: claim.oidc_issuer,
+        oidc_subject_sha256: claim.oidc_subject_sha256,
+        previous_draft_customer_quote_id: previousHash
+          ? `facet-quote-revision:${previousHash}`
+          : null,
+        previous_event_id: claim.previous_event_id,
+        producer_identity_link_id: claim.producer_identity_link_id,
+        schema: "ironwrap.facet-design-projection.v2",
+        source_tenant_id: claim.source_tenant_id,
+        state: active
+          ? "pending_estimator_rebuild"
+          : claim.decision_kind === "withdrawn"
+            ? "customer_withdrew_design"
+            : "customer_superseded_design",
+      };
+      if (url.includes("Integration%20Reconciliation")) {
+        const localPayloadHash = sha256(
+          canonicalJson({
+            association_sha256: claim.association_sha256,
+            draft_customer_quote_id: draftId,
+            event_id: claim.event_id,
+            roof_job: roofJob,
+            source_customer_quote_id: claim.customer_quote_id,
+          }),
+        );
+        return Response.json({
+          data: {
+            correction_reason: claim.reason_sha256
+              ? `Facet ${claim.decision_kind} reason SHA-256: ${claim.reason_sha256}`
+              : null,
+            diff_json: canonicalJson(diff),
+            direction: "Inbound",
+            entity_type: "Design Revision",
+            external_entity_id: `facet-event:${eventHash}`,
+            local_doctype: "Customer Quote",
+            local_name: draftId,
+            local_payload_hash: input.mutatedReconciliationHash
+              ? "0".repeat(64)
+              : localPayloadHash,
+            name: id,
+            reconciliation_id: id,
+            raw_key: claim.raw_key,
+            roof_job: roofJob,
+            source_payload_hash: claim.frozen_evidence_sha256,
+            source_version: claim.design_revision_id,
+            status: active ? "Pending" : "Superseded",
+            supersedes: previousHash
+              ? `facet-design-projection:${previousHash}`
+              : null,
+            system_name: "Facet",
+          },
+        });
+      }
+      if (url.includes("Evidence%20Item")) {
+        if (input.missingEvidence)
+          return Response.json({ error: "not_found" }, { status: 404 });
+        return Response.json({
+          data: {
+            checksum_algorithm: "SHA-256",
+            content_checksum: claim.raw_sha256,
+            content_length: claim.raw_content_length,
+            content_type: "application/json",
+            customer_safe: 0,
+            device_action_id: `facet-v2-projection:${eventHash}`,
+            evidence_id: evidenceId,
+            evidence_type: "Other",
+            name: evidenceId,
+            proof_slot: "Estimate",
+            r2_key: claim.raw_key,
+            roof_job: roofJob,
+            source_system: "ironwrap-facet-design",
+            sync_state: "Verified",
+            verification_source: "ironwrap-worker-r2-facet-design-projection",
+          },
+        });
+      }
+      if (url.includes("Customer%20Quote")) {
+        return Response.json({
+          data: {
+            ...Object.fromEntries(
+              BLANK_QUOTE_FIELDS.map((field) => [field, null]),
+            ),
+            customer: "CUSTOMER-001",
+            customer_quote_id: id,
+            correction_reason: active
+              ? `Facet customer decision ${claim.event_id} requires estimator rebuild from current evidence.`
+              : `Facet customer decision ${claim.previous_event_id} requires estimator rebuild from current evidence.`,
+            quote_total: input.populatedDraft ? 1 : null,
+            quote_version: active ? 3 : 2,
+            roof_job: roofJob,
+            status: active ? "Draft" : "Rejected",
+            supersedes:
+              claim.decision_kind === "corrected" && previousHash
+                ? `facet-quote-revision:${previousHash}`
+                : "QUOTE-001",
+          },
+        });
+      }
+      return Response.json({ error: "not_found" }, { status: 404 });
+    }
+    const body = JSON.parse(String(init?.body)) as { facet_claim_json: string };
     const claim = JSON.parse(body.facet_claim_json) as Record<string, unknown>;
-    const headers = new Headers(request.headers);
-    calls.push({ claim, headers });
-    if (status !== 200) {
-      return new Response(JSON.stringify({ error: "rejected" }), { status });
-    }
-    const eventId = String(claim.event_id);
-    const eventHash = createHash("sha256").update(eventId).digest("hex");
-    if (unsigned) {
-      return Response.json({
-        message: {
-          event_id: eventId,
-          evidence_id: `facet-design:${eventHash}`,
-          reconciliation_id: `facet-design-projection:${eventHash}`,
-        },
-      });
-    }
+    calls.push({ claim, headers: new Headers(init?.headers) });
+    if (input.status && input.status !== 200)
+      return Response.json({ error: "rejected" }, { status: input.status });
+    const eventHash = sha256(String(claim.event_id));
+    const active =
+      claim.decision_kind === "approved" || claim.decision_kind === "corrected";
+    const targetHash = active
+      ? eventHash
+      : sha256(String(claim.previous_event_id));
     const evidenceId = `facet-design:${eventHash}`;
     const reconciliationId = `facet-design-projection:${eventHash}`;
+    const draftId = `facet-quote-revision:${targetHash}`;
     const receipt = {
-      schema: "ironwrap.facet-design-projection-receipt.v1",
-      claim_sha256: createHash("sha256").update(canonicalJson(claim)).digest("hex"),
-      event_id: eventId,
-      event_type: claim.event_type,
-      schema_version: claim.schema_version,
-      tenant_id: claim.tenant_id,
-      facet_project_id: claim.facet_project_id,
+      actor_identity_assurance: "oidc",
+      approval_receipt_sha256: claim.approval_receipt_sha256,
+      association_sha256: claim.association_sha256,
+      blank_commercial_revision: active,
+      claim_sha256: sha256(body.facet_claim_json),
+      customer_safe: false,
+      decision_kind: claim.decision_kind,
       design_revision_id: claim.design_revision_id,
       design_revision_sha256: claim.design_revision_sha256,
+      destination_tenant_id: claim.destination_tenant_id,
+      draft_customer_quote_id: draftId,
+      draft_quote_status: active ? "Draft" : "Rejected",
+      draft_quote_version: active ? 3 : 2,
+      event_id: claim.event_id,
+      event_type: claim.event_type,
+      evidence_id: evidenceId,
+      facet_project_id: claim.facet_project_id,
       frozen_evidence_sha256: claim.frozen_evidence_sha256,
+      idempotent_replay: input.idempotentReplay ?? false,
+      occurred_at: claim.occurred_at,
+      raw_content_length: claim.raw_content_length,
       raw_key: claim.raw_key,
       raw_sha256: claim.raw_sha256,
-      raw_content_length: claim.raw_content_length,
-      occurred_at: claim.occurred_at,
       received_at: claim.received_at,
-      roof_job_id: claim.roof_job_id,
-      customer_quote_id: claim.customer_quote_id,
-      roof_job: "ROOF-JOB-0001",
-      roof_job_brand: claim.brand_id,
-      roof_job_current_quote: "CUST-QUOTE-0001",
-      customer_quote: "CUST-QUOTE-0001",
-      customer_quote_status: "Approved",
-      evidence_id: evidenceId,
       reconciliation_id: reconciliationId,
-      local_payload_hash: "f".repeat(64),
-      provenance: {
-        status: "customer_approved",
-        brand_id: claim.brand_id,
-        approval_actor_type: claim.approval_actor_type,
-        capability_fingerprint: claim.capability_fingerprint,
-        identity_assurance: claim.identity_assurance,
-      },
-      commercial_state: "none",
-      customer_safe: false,
-      idempotent_replay: false,
+      roof_job_id: claim.roof_job_id,
+      schema: "ironwrap.facet-design-projection-receipt.v2",
+      schema_version: 2,
+      source_customer_quote_id: claim.customer_quote_id,
     };
-    const receiptSha256 = createHash("sha256").update(canonicalJson(receipt)).digest("hex");
+    if (input.tamperReceipt) receipt.draft_quote_status = "Approved";
+    const receiptSha256 = sha256(canonicalJson(receipt));
+    if (input.responseLostOnce && !responseLost) {
+      responseLost = true;
+      throw new TypeError("simulated response loss after Frappe commit");
+    }
     return Response.json({
       message: {
-        event_id: eventId,
+        draft_customer_quote_id: draftId,
+        draft_quote_version: active ? 3 : 2,
+        event_id: claim.event_id,
         evidence_id: evidenceId,
-        reconciliation_id: reconciliationId,
-        idempotent_replay: false,
+        idempotent_replay: input.idempotentReplay ?? false,
         receipt,
         receipt_sha256: receiptSha256,
-        receipt_signature_algorithm: "HMAC-SHA256",
         receipt_signature: createHmac("sha256", HMAC_SECRET)
-          .update(`ironwrap.facet-design-projection.receipt.v1\n${receiptSha256}`)
+          .update(
+            `ironwrap.facet-design-projection.receipt.v2\n${receiptSha256}`,
+          )
           .digest("base64url"),
+        receipt_signature_algorithm: "HMAC-SHA256",
+        reconciliation_id: reconciliationId,
       },
     });
   };
-  return { calls, restore: () => { globalThis.fetch = originalFetch; } };
+  return {
+    calls,
+    readbacks,
+    restore: () => {
+      globalThis.fetch = originalFetch;
+    },
+  };
 }
 
-test("Facet projection trusts only the durable v2 ledger and remains terminal after success", async () => {
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+test("projects only the exact OIDC v2 chain head to a signed blank Draft receipt", async () => {
   const db = new SqliteD1();
-  seedCustomerApproval(db);
-  seedLegacyEvent(db);
-  await seedAssociation(db);
+  seedDecision(db);
   const mock = installFrappeMock();
   try {
     await reconcileFacetDesignFrappeProjections(
-      testEnv(db),
-      new Date("2026-08-10T12:03:00.000Z"),
+      env(db),
+      new Date("2027-01-15T08:01:00.000Z"),
+    );
+  } finally {
+    mock.restore();
+  }
+  assert.equal(mock.calls.length, 1);
+  const claim = mock.calls[0]!.claim;
+  assert.equal(claim.event_type, "facet.design.customer_approved.v2");
+  assert.equal(claim.identity_assurance, "oidc");
+  assert.equal(claim.association_sha256, ASSOCIATION_SHA256);
+  assert.equal("capability_fingerprint" in claim, false);
+  assert.equal(count(db, "projected_blank_draft"), 1);
+  const attempt = db.raw
+    .prepare(
+      `SELECT draft_customer_quote_id, draft_quote_version, evidence_id, reconciliation_id
+       FROM facet_v2_projection_attempts`,
+    )
+    .get() as Record<string, unknown>;
+  const eventHash = sha256(EVENT_ID);
+  assert.deepEqual(
+    { ...attempt },
+    {
+      draft_customer_quote_id: `facet-quote-revision:${eventHash}`,
+      draft_quote_version: 3,
+      evidence_id: `facet-design:${eventHash}`,
+      reconciliation_id: `facet-design-projection:${eventHash}`,
+    },
+  );
+});
+
+test("withdrawal and supersession project a terminal Frappe hold while authority revocation fails closed", async () => {
+  const withdrawnDb = new SqliteD1();
+  seedDecision(withdrawnDb);
+  seedDecision(withdrawnDb, {
+    eventId: "55555555-5555-4555-8555-555555555555",
+    decision: "withdrawn",
+    previousEventId: EVENT_ID,
+    occurredAt: "2027-01-15T08:02:00.000Z",
+  });
+  const withdrawnMock = installFrappeMock();
+  try {
+    await reconcileFacetDesignFrappeProjections(env(withdrawnDb));
+  } finally {
+    withdrawnMock.restore();
+  }
+  assert.equal(withdrawnMock.calls.length, 1);
+  assert.equal(withdrawnMock.calls[0]!.claim.decision_kind, "withdrawn");
+  assert.equal(count(withdrawnDb, "projected_terminal_hold"), 1);
+
+  const supersededDb = new SqliteD1();
+  seedDecision(supersededDb);
+  seedDecision(supersededDb, {
+    eventId: "66666666-6666-4666-8666-666666666666",
+    decision: "superseded",
+    previousEventId: EVENT_ID,
+    occurredAt: "2027-01-15T08:03:00.000Z",
+  });
+  const supersededMock = installFrappeMock();
+  try {
+    await reconcileFacetDesignFrappeProjections(env(supersededDb));
+  } finally {
+    supersededMock.restore();
+  }
+  assert.equal(supersededMock.calls.length, 1);
+  assert.equal(supersededMock.calls[0]!.claim.decision_kind, "superseded");
+  assert.equal(count(supersededDb, "projected_terminal_hold"), 1);
+
+  const revokedDb = new SqliteD1();
+  seedDecision(revokedDb);
+  revokedDb.raw
+    .prepare(
+      `INSERT INTO facet_v2_link_revocations
+     (revocation_id, link_kind, link_id, reason_code, revoked_by_user_id,
+      destination_tenant_id, revoked_at)
+     VALUES ('revocation-0001', 'project', ?, 'customer_request', 'owner-user-0001',
+             'ironwrap', '2027-01-15T08:00:30.000Z')`,
+    )
+    .run(PROJECT_LINK);
+  const revokedMock = installFrappeMock();
+  try {
+    await reconcileFacetDesignFrappeProjections(env(revokedDb));
+  } finally {
+    revokedMock.restore();
+  }
+  assert.equal(revokedMock.calls.length, 0);
+  assert.equal(count(revokedDb, "rejected_frappe"), 1);
+});
+
+test("a corrected chain projects only its latest immutable decision", async () => {
+  const db = new SqliteD1();
+  seedDecision(db);
+  const correctionId = "55555555-5555-4555-8555-555555555555";
+  seedDecision(db, {
+    eventId: correctionId,
+    decision: "corrected",
+    previousEventId: EVENT_ID,
+    occurredAt: "2027-01-15T08:02:00.000Z",
+  });
+  const mock = installFrappeMock({ idempotentReplay: true });
+  try {
+    await reconcileFacetDesignFrappeProjections(env(db));
+  } finally {
+    mock.restore();
+  }
+  assert.deepEqual(
+    mock.calls.map((call) => call.claim.event_id),
+    [correctionId],
+  );
+  assert.equal(count(db, "reconciled"), 1);
+  assert.equal(
+    db.raw
+      .prepare(
+        `SELECT COUNT(*) AS count FROM facet_v2_projection_attempts WHERE event_id = ?`,
+      )
+      .get(EVENT_ID)?.count,
+    0,
+  );
+});
+
+test("signed-response tamper recovers only by exact readback and Frappe 409 is terminal rejected", async () => {
+  const tamperDb = new SqliteD1();
+  seedDecision(tamperDb);
+  const tamper = installFrappeMock({ tamperReceipt: true });
+  try {
+    await reconcileFacetDesignFrappeProjections(env(tamperDb));
+  } finally {
+    tamper.restore();
+  }
+  assert.equal(tamper.readbacks.length, 3);
+  assert.equal(count(tamperDb, "reconciled"), 1);
+  const rejectedDb = new SqliteD1();
+  seedDecision(rejectedDb);
+  const rejected = installFrappeMock({ status: 409 });
+  try {
+    await reconcileFacetDesignFrappeProjections(env(rejectedDb));
+  } finally {
+    rejected.restore();
+  }
+  assert.equal(count(rejectedDb, "rejected_frappe"), 1);
+});
+
+test("legacy projection flag cannot enable v2 or cause a Frappe request", async () => {
+  const db = new SqliteD1();
+  seedDecision(db);
+  const testEnv = env(db);
+  testEnv.FACET_V2_FRAPPE_PROJECTION_ENABLED = "false";
+  testEnv.FACET_DESIGN_FRAPPE_PROJECTION_ENABLED = "true";
+  const mock = installFrappeMock();
+  try {
+    await reconcileFacetDesignFrappeProjections(testEnv);
+  } finally {
+    mock.restore();
+  }
+  assert.equal(mock.calls.length, 0);
+  assert.equal(
+    db.raw
+      .prepare(`SELECT COUNT(*) AS count FROM facet_v2_projection_attempts`)
+      .get()?.count,
+    0,
+  );
+});
+
+test("v2 projection cannot bypass a disabled shared effect runtime", async () => {
+  const db = new SqliteD1();
+  seedDecision(db);
+  const mock = installFrappeMock();
+  try {
+    await reconcileFacetDesignFrappeProjections(env(db, false));
+  } finally {
+    mock.restore();
+  }
+  assert.equal(mock.calls.length, 0);
+  assert.equal(count(db, "uncertain"), 1);
+  assert.equal(
+    db.raw.prepare(`SELECT COUNT(*) AS count FROM external_effects`).get()
+      ?.count,
+    0,
+  );
+});
+
+test("v2 projection uses the shared effect ledger and replays from provider readback", async () => {
+  const db = new SqliteD1();
+  seedDecision(db);
+  const mock = installFrappeMock();
+  try {
+    await reconcileFacetDesignFrappeProjections(
+      env(db, true),
+      new Date("2027-01-15T08:01:00.000Z"),
     );
     assert.equal(mock.calls.length, 1);
-    const call = mock.calls[0]!;
-    assert.equal(call.claim.event_id, EVENT.event_id);
-    assert.equal(call.claim.event_type, EVENT.event_type);
-    assert.equal(call.claim.schema_version, EVENT.schema_version);
-    assert.equal(call.claim.brand_id, EVENT.brand_id);
-    assert.equal(call.claim.approval_actor_type, EVENT.approval_actor_type);
-    assert.equal(call.claim.capability_fingerprint, EVENT.capability_fingerprint);
-    assert.equal(call.claim.identity_assurance, EVENT.identity_assurance);
-    assert.equal(call.claim.raw_key, EVENT.raw_key);
-    assert.equal(call.claim.roof_job_id, "roof-job-0001");
-    assert.equal(call.claim.customer_quote_id, "customer-quote-0001");
-    assert.equal(call.headers.get("authorization"), "token facet-projection-key:facet-projection-secret");
-    for (const forbidden of [
-      "price",
-      "contract",
-      "acceptance",
-      "proposal_pack",
-    ]) assert.equal(forbidden in call.claim, false, `claim must not carry ${forbidden}`);
-    assert.equal(count(db, "projected"), 1);
+    assert.equal(mock.readbacks.length, 3);
+    const effect = db.raw
+      .prepare(
+        `SELECT state, provider_external_id, result_code
+         FROM external_effects
+        WHERE action = 'facet.design.v2.projection'`,
+      )
+      .get() as {
+      state: string;
+      provider_external_id: string;
+      result_code: string | null;
+    };
+    assert.equal(effect.state, "succeeded", JSON.stringify(effect));
     assert.equal(
-      Number((db.raw.prepare("SELECT COUNT(*) AS count FROM facet_design_projection_attempts").get() as { count: number }).count),
-      0,
-      "legacy v1 projection history must remain separate",
+      effect.provider_external_id,
+      `facet-design-projection:${sha256(EVENT_ID)}`,
     );
 
+    // Model a Worker isolate ending after the effect ledger settled but before
+    // the domain projection attempt was appended. Production keeps the table
+    // immutable; the test removes that append-only trigger only to recreate the
+    // exact interrupted boundary.
+    db.raw.exec(`DROP TRIGGER facet_v2_projection_attempts_append_only_delete`);
+    db.raw
+      .prepare(`DELETE FROM facet_v2_projection_attempts WHERE event_id = ?`)
+      .run(EVENT_ID);
     await reconcileFacetDesignFrappeProjections(
-      testEnv(db),
-      new Date("2026-08-10T12:10:00.000Z"),
+      env(db, true),
+      new Date("2027-01-15T08:02:00.000Z"),
     );
     assert.equal(mock.calls.length, 1);
+    assert.equal(mock.readbacks.length, 6);
+    assert.equal(count(db, "reconciled"), 1);
   } finally {
     mock.restore();
   }
 });
 
-test("Facet projection holds an unassociated v2 receipt once and resumes after an operator binding", async () => {
+test("response loss succeeds only after the exact Frappe projection trio reads back", async () => {
   const db = new SqliteD1();
-  seedCustomerApproval(db);
-  const mock = installFrappeMock();
+  seedDecision(db);
+  const mock = installFrappeMock({ responseLostOnce: true });
   try {
-    await reconcileFacetDesignFrappeProjections(testEnv(db));
-    await reconcileFacetDesignFrappeProjections(testEnv(db));
-    assert.equal(mock.calls.length, 0);
-    assert.equal(count(db, "held_missing_association"), 1);
-
-    await seedAssociation(db);
-    await reconcileFacetDesignFrappeProjections(testEnv(db));
-    assert.equal(mock.calls.length, 1);
-    assert.equal(count(db, "projected"), 1);
+    await reconcileFacetDesignFrappeProjections(
+      env(db, true),
+      new Date("2027-01-15T08:01:00.000Z"),
+    );
   } finally {
     mock.restore();
   }
+  assert.equal(mock.calls.length, 1);
+  assert.equal(mock.readbacks.length, 3);
+  assert.equal(count(db, "reconciled"), 1);
+  const effect = db.raw
+    .prepare(
+      `SELECT state, provider_external_id, result_code
+       FROM external_effects
+      WHERE action = 'facet.design.v2.projection'`,
+    )
+    .get() as {
+    state: string;
+    provider_external_id: string;
+    result_code: string | null;
+  };
+  assert.equal(effect.state, "succeeded", JSON.stringify(effect));
+  assert.equal(
+    effect.provider_external_id,
+    `facet-design-projection:${sha256(EVENT_ID)}`,
+  );
 });
 
-test("Facet projection retries transient Frappe uncertainty without inventing success", async () => {
-  const db = new SqliteD1();
-  seedCustomerApproval(db);
-  await seedAssociation(db);
-  const mock = installFrappeMock(503);
-  try {
-    await reconcileFacetDesignFrappeProjections(
-      testEnv(db),
-      new Date("2026-08-10T12:00:00.000Z"),
-    );
-    await reconcileFacetDesignFrappeProjections(
-      testEnv(db),
-      new Date("2026-08-10T12:00:30.000Z"),
-    );
+for (const scenario of [
+  { name: "missing evidence", option: { missingEvidence: true } },
+  {
+    name: "a mutated reconciliation hash",
+    option: { mutatedReconciliationHash: true },
+  },
+  { name: "a populated commercial draft", option: { populatedDraft: true } },
+] as const) {
+  test(`response loss remains uncertain when readback has ${scenario.name}`, async () => {
+    const db = new SqliteD1();
+    seedDecision(db);
+    const mock = installFrappeMock({
+      responseLostOnce: true,
+      ...scenario.option,
+    });
+    try {
+      await reconcileFacetDesignFrappeProjections(
+        env(db, true),
+        new Date("2027-01-15T08:01:00.000Z"),
+      );
+    } finally {
+      mock.restore();
+    }
     assert.equal(mock.calls.length, 1);
+    assert.equal(mock.readbacks.length, 3);
     assert.equal(count(db, "uncertain"), 1);
-    assert.equal(count(db, "projected"), 0);
-  } finally {
-    mock.restore();
-  }
-});
-
-test("Facet projection treats an unsigned success response as uncertain", async () => {
-  const db = new SqliteD1();
-  seedCustomerApproval(db);
-  await seedAssociation(db);
-  const mock = installFrappeMock(200, true);
-  try {
-    await reconcileFacetDesignFrappeProjections(
-      testEnv(db),
-      new Date("2026-08-10T12:03:00.000Z"),
-    );
-    assert.equal(mock.calls.length, 1);
-    assert.equal(count(db, "uncertain"), 1);
-    assert.equal(count(db, "projected"), 0);
-  } finally {
-    mock.restore();
-  }
-});
+    assert.equal(count(db, "reconciled"), 0);
+    assert.equal(count(db, "projected_blank_draft"), 0);
+    const effect = db.raw
+      .prepare(
+        `SELECT state, provider_external_id, result_code
+         FROM external_effects
+        WHERE action = 'facet.design.v2.projection'`,
+      )
+      .get() as {
+      state: string;
+      provider_external_id: string | null;
+      result_code: string | null;
+    };
+    assert.notEqual(effect.state, "succeeded", JSON.stringify(effect));
+  });
+}

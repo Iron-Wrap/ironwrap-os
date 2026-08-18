@@ -94,6 +94,11 @@ jobs:
       - name: Install PWA dependencies
         run: npm ci --prefix app
       - name: Validate and build PWA assets
+        # The default `run:` shell is `bash -e {0}`, which does not set pipefail:
+        # piping the suite through tee would make this step report the exit
+        # status of tee, so a failing test could not fail the step. `shell: bash`
+        # runs `bash --noprofile --norc -eo pipefail {0}`.
+        shell: bash
         run: |
           npm run typecheck --prefix app
           npm run lint --prefix app
@@ -115,6 +120,10 @@ jobs:
       - name: Apply every Worker migration to an isolated local D1 state
         run: npm run db:migrate:local --prefix workers-bus -- --persist-to "$RUNNER_TEMP/ironwrap-d1"
       - name: Test Worker bus
+        # Same reason as the PWA step: keep the TAP capture, but let a failing
+        # worker test fail here instead of surfacing later as a missing-evidence
+        # error from validate-documentation.
+        shell: bash
         run: npm test --prefix workers-bus 2>&1 | tee "$RUNNER_TEMP/ironwrap-worker-tests.tap"
       - name: Typecheck Worker bus
         run: npm run typecheck --prefix workers-bus

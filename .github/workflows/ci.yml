@@ -44,6 +44,10 @@ jobs:
         run: node tools/validate-lead-triage-shadow-authority.mjs
       - name: Validate documentation authority, privacy, and links
         run: node tools/validate-documentation.mjs
+      - name: Validate every bounded-rail issuer key is provisioned and documented
+        run: node tools/validate-site-config-pins.mjs
+      - name: Test site-config pin validator
+        run: node --test tools/validate-site-config-pins.test.mjs
       - name: Test stale capability evidence rejection
         run: node --test tools/validate-documentation.test.mjs
       - name: Test Newo production gate refusal while provider evidence is pending

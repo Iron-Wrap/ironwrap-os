@@ -495,10 +495,18 @@ def record_asset_inspection(
         if result in ASSET_INSPECTION_PASSING_RESULTS
         else None
     )
+    # `Asset Inspection` autonames from `asset_inspection_id`, so the row's own
+    # name is knowable before the insert.  Pin it here: the trust context below
+    # stamps the name it can see, `insert()` names the document before
+    # `validate` runs, and a context opened against an unnamed document would
+    # authorize nothing -- the guard would refuse the very bounded command it
+    # exists to admit.  Same pinning as the bounded Shop commands use.
+    inspection_id = f"inspection:{device_action}"
     document = frappe.get_doc(
         {
             "doctype": "Asset Inspection",
-            "asset_inspection_id": f"inspection:{device_action}",
+            "name": inspection_id,
+            "asset_inspection_id": inspection_id,
             "status": "Submitted",
             "sync_state": "Uploaded",
             "capture_actor": actor,

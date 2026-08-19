@@ -102,11 +102,35 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    Reconciliation Issuer role and its own API key/secret. Set
    `ironwrap_quickbooks_reconciliation_issuer_user` to that exact user. Do not grant it a
    human finance role, System Manager, or the general bus/MCP roles.
-6. Bind the exact bus API user as the verified Field Companion evidence issuer:
-   `bench --site <tenant-site> set-config ironwrap_field_evidence_issuer_user
-   '<worker-api-user-email>'`. The Frappe app rejects `Verified` evidence through
-   ordinary Desk/REST writes, so this site-local configuration is required before
-   field evidence can become gate-eligible.
+6. Pin every bounded-rail issuer identity in the site config. Each rail refuses to run
+   until its own key is set, so a key left unset is a rail that is dead on this tenant
+   even though the app ships it and CI is green — this is how fleet capture reached a
+   real site broken (IRO-54). `node tools/validate-site-config-pins.mjs` fails when a
+   key the app reads is missing from this list.
+
+   The Worker BFF authenticates every one of its rails with the single bus API pair from
+   step 4, so all three of its issuer keys name that same bus user:
+
+   ```
+   bench --site <tenant-site> set-config ironwrap_field_evidence_issuer_user '<worker-api-user-email>'
+   bench --site <tenant-site> set-config ironwrap_fleet_capture_issuer_user  '<worker-api-user-email>'
+   bench --site <tenant-site> set-config ironwrap_work_package_issuer_user   '<worker-api-user-email>'
+   ```
+
+   The Frappe app rejects `Verified` evidence, submitted pre/post-trip inspections and
+   field-issued Work Package events through ordinary Desk/REST writes, so these
+   site-local pins are required before any of those can become gate-eligible.
+
+   The remaining identities are deliberately NOT the bus user — each holds its own
+   least-privilege role and its own API key/secret pair:
+
+   | site config key | identity | provisioned in |
+   |---|---|---|
+   | `ironwrap_customer_acceptance_service_user` | IronWrap Customer Acceptance Service | step 3.4 pair, dedicated user |
+   | `ironwrap_quickbooks_reconciliation_issuer_user` | IronWrap QuickBooks Reconciliation Issuer | step 3.5 |
+   | `ironwrap_facet_design_projection_service_user` | IronWrap Facet Design Projection Service | set with `FACET_DESIGN_FRAPPE_PROJECTION_*` in step 2.7 |
+   | `ironwrap_launch_proof_reader_user` | IronWrap Launch Proof Reader | release-time only, for `tools/launch-proof.mjs` |
+
 7. Never adopt frappe/press (AGPL, Frappe Cloud's control plane): per-tenant provisioning
    stays on IronWrap's own scripts (`config/tenants/` + validators + this playbook).
 
@@ -180,8 +204,11 @@ recovery boundaries.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
 - [ ] All 31 D1 migrations through `0031_quickbooks_projection_outbox.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
-  `ironwrap_field_evidence_issuer_user` bound to that dedicated Worker user, and a separate
+  `ironwrap_field_evidence_issuer_user`, `ironwrap_fleet_capture_issuer_user` and
+  `ironwrap_work_package_issuer_user` all bound to that dedicated Worker user, and a separate
   QuickBooks issuer user/role/key pair bound through `ironwrap_quickbooks_reconciliation_issuer_user`.
+  Every key in the step 3.6 table is either set or consciously deferred; `node
+  tools/validate-site-config-pins.mjs` passes.
 - [ ] Tenant Shared Drives + R2 bucket receive a test job's files.
 - [ ] Tenant QuickBooks expected realm and signed webhook verified: receipt/outbox and exactly one Pending Frappe reconciliation exist; provider accounting facts are still read-back/reconciliation work.
 - [ ] Tenant Hermes profile answers a read-only question from tenant data via all granted MCP servers.

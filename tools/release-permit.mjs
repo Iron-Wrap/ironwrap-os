@@ -229,7 +229,10 @@ function validateChecks(checks, { repository, sourceCommit } = {}) {
     commit(check.head_sha, "ci_head_sha_invalid");
     positiveInteger(check.workflow_id, "ci_workflow_id_invalid");
     equal(CI_WORKFLOW_PATH, check.workflow_path, "ci_workflow_path_invalid");
-    equal("pull_request", check.event, "ci_event_invalid");
+    // A release is validated either by the PR's own CI run or by the push-to-main
+    // run that validated the merged tree; the surrounding manifest binds which
+    // commit that was, so both events carry the same exact-source guarantee.
+    if (check.event !== "pull_request" && check.event !== "push") fail("ci_event_invalid");
     equal("completed", check.status, "ci_status_invalid");
     positiveInteger(check.run_attempt, "ci_run_attempt_invalid");
     if (repository !== undefined) equal(repository, check.repository, "ci_repository_drift");
@@ -862,7 +865,11 @@ function validateReleaseManifest(manifest, permit) {
   delete mergePolicyFields.readback_digest;
   equal(sha256(canonicalJson(mergePolicyFields)), manifest.pr.merge_policy.readback_digest, "release_manifest_pr_merge_policy_digest_mismatch");
   hash(manifest.pr.provider_readback_digest, "release_manifest_pr_readback_invalid");
-  equal("open", manifest.pr.status, "release_manifest_pr_status_invalid");
+  // A release is admitted either before its merge (the pull_request-sourced
+  // train merges the PR itself, status "open") or after it (a push-sourced run
+  // on main, where the squash commit is already the tip, status "merged").
+  // Both are exact, readback-verified source states; no other PR state is.
+  if (manifest.pr.status !== "open" && manifest.pr.status !== "merged") fail("release_manifest_pr_status_invalid");
   exactKeys(manifest.source, ["commit", "git_tree", "tree_manifest_sha256", "diff_sha256", "component_digests"], "release_manifest_source_shape_invalid");
   equal(permit.source_commit, manifest.source.commit, "release_manifest_source_commit_drift");
   equal(permit.source_git_tree, manifest.source.git_tree, "release_manifest_source_tree_drift");

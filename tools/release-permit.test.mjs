@@ -517,6 +517,29 @@ test("validates, signs, and verifies the complete source-to-recovery permit", ()
   assert.equal(verified.production.readback.status, "matched");
 });
 
+test("admits an open or merged source state and no other PR status", () => {
+  const { privateKey, publicKey } = keyPair();
+  const withStatus = (status) => {
+    const { evidence_digest: _replaced, ...fields } = releaseManifest();
+    const restated = { ...fields, pr: { ...fields.pr, status } };
+    return { ...restated, evidence_digest: sha(canonicalJson(restated)) };
+  };
+  // A pull_request-sourced release is admitted before its merge; a push-sourced
+  // one after it. Both are exact, readback-verified states.
+  const permit = signReleasePermit(privateKey, payload({ release_manifest: withStatus("merged") }), { now: NOW });
+  assert.equal(
+    verifyReleasePermit(publicKey, permit, {}, { now: NOW }).release_manifest.pr.status,
+    "merged",
+  );
+  for (const status of ["closed", "draft", "open ", ""]) {
+    assert.throws(
+      () => validateReleasePermitPayload(payload({ release_manifest: withStatus(status) }), { now: NOW }),
+      /release_permit_release_manifest_pr_status_invalid/,
+      status,
+    );
+  }
+});
+
 test("rejects payload and signature tampering", () => {
   const { privateKey, publicKey } = keyPair();
   const permit = signReleasePermit(privateKey, payload(), { now: NOW });
@@ -1255,7 +1278,7 @@ test("source evidence binds a pristine checkout's commit, tree, and binary diff"
   assert.equal(evidence.worktree_clean, true);
 });
 
-test("supply-chain evidence is deterministic and bound to exact pull-request CI", async (t) => {
+test("supply-chain evidence is deterministic and bound to exact release-source CI", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ironwrap-release-supply-chain-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, "app"), { recursive: true });
@@ -1272,7 +1295,12 @@ test("supply-chain evidence is deterministic and bound to exact pull-request CI"
   const first = await computeSupplyChainEvidence({ repoRoot: root, sourceCommit: source, ciChecks: checks });
   assert.deepEqual(await computeSupplyChainEvidence({ repoRoot: root, sourceCommit: source, ciChecks: checks }), first);
   assert.equal(first.result, "passed");
-  await assert.rejects(() => computeSupplyChainEvidence({ repoRoot: root, sourceCommit: source, ciChecks: [{ ...checks[0], event: "push" }] }), /release_permit_ci_event_invalid/);
+  // Both release sources are admissible: the PR's own CI run, and the
+  // push-to-main run that validated the merged tree.
+  assert.equal((await computeSupplyChainEvidence({ repoRoot: root, sourceCommit: source, ciChecks: [{ ...checks[0], event: "push" }] })).result, "passed");
+  for (const event of ["workflow_dispatch", "schedule", "workflow_run", ""]) {
+    await assert.rejects(() => computeSupplyChainEvidence({ repoRoot: root, sourceCommit: source, ciChecks: [{ ...checks[0], event }] }), /release_permit_ci_event_invalid/, event);
+  }
 });
 
 test("migration inventory is ordered and expand-contract only", async () => {

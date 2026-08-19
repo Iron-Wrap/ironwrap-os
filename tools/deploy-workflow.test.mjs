@@ -33,7 +33,15 @@ function validateWorkflow(workflow) {
     workflow,
     /workflow_run:\n\s+workflows: \[CI\]\n\s+types: \[completed\]/,
   );
+  // Exactly two source events are admissible: a pre-merge pull_request run, and
+  // a post-merge push run pinned to main. The push arm must stay paired with the
+  // branch pin, and both arms stay behind the head_repository pin so a fork's CI
+  // (including a fork whose own default branch is named main) is never admitted.
   assert.match(admission, /workflow_run\.event == 'pull_request'/);
+  assert.match(
+    admission,
+    /workflow_run\.event == 'push' &&\n\s+github\.event\.workflow_run\.head_branch == 'main'/,
+  );
   assert.match(
     admission,
     /workflow_run\.head_repository\.full_name == github\.repository/,
@@ -60,7 +68,9 @@ function validateWorkflow(workflow) {
     workflow,
     /environment:\s*production|required_reviewers|RELEASE_REVIEW_RECEIPT/,
   );
-  assert.doesNotMatch(workflow, /branches:\s*\[main\]|head_branch == 'main'/);
+  // Deploy still never triggers on a raw push: every admissible source is a
+  // completed CI run, so unvalidated code cannot reach the pipeline.
+  assert.doesNotMatch(workflow, /branches:\s*\[main\]/);
 
   assert.match(
     admission,
@@ -79,6 +89,18 @@ function validateWorkflow(workflow) {
   assert.match(admission, /--repo-root "\$RUNNER_TEMP\/policy-enforcer"/);
   assert.match(workflow, /RELEASE_RULESET_ID: 20652124/);
   assert.match(admission, /pr-context[\s\S]*--ruleset-id "\$RELEASE_RULESET_ID"/);
+  // The push-sourced arm derives generation N from the squash commit's single
+  // parent and hands both commits to the enforcer, which re-reads the same
+  // lineage from the provider before admitting anything.
+  assert.match(
+    admission,
+    /lineage="\$\(git rev-list --parents --max-count=1 "\$RELEASE_SOURCE_COMMIT"\)"[\s\S]*-ne 2[\s\S]*release_admission_push_not_linear/,
+  );
+  assert.match(
+    admission,
+    /push-context[\s\S]*--head-commit "\$RELEASE_SOURCE_COMMIT" --base-commit "\$RELEASE_BASE_COMMIT"/,
+  );
+  assert.match(admission, /push-context[\s\S]*--ruleset-id "\$RELEASE_RULESET_ID"/);
   assert.match(admission, /\$\{\{ runner\.temp \}\}\/pr-context\.json/);
   assert.match(workflow, /node "\$RELEASE_ENFORCER"/);
   assert.doesNotMatch(workflow, /node tools\/release-promotion\.mjs/);
@@ -186,6 +208,17 @@ function validateWorkflow(workflow) {
   assert.match(
     production,
     /admit[\s\S]*merge-pr[\s\S]*d1 migrations apply ironwrap-bus[\s\S]*"\$WRANGLER_BIN" versions deploy/,
+  );
+  // A push-sourced release is already on main, so the merge step reads the same
+  // source-merge receipt back instead of merging again. It branches on the
+  // admitted, permit-bound context status rather than the live event.
+  assert.match(
+    production,
+    /source_status="\$\(jq -er '\.status \| select\(\. == "open" or \. == "merged"\)' "\$RUNNER_TEMP\/context-download\/pr-context\.json"\)"/,
+  );
+  assert.match(
+    production,
+    /admit[\s\S]*merged-source[\s\S]*merge-pr[\s\S]*d1 migrations apply ironwrap-bus/,
   );
   assert.match(production, /npm ci --ignore-scripts --prefix "\$RUNNER_TEMP\/policy-enforcer\/workers-bus"/);
   assert.match(production, /provider-targets[\s\S]*--policy-root "\$RUNNER_TEMP\/policy-enforcer"[\s\S]*--environment production/);
@@ -333,6 +366,70 @@ test("workflow rejects candidate toolchain and cross-environment provider creden
   );
   assert.throws(() =>
     validateWorkflow(workflow.replace("--issuer-ack", "--unbound-issuer-ack")),
+  );
+});
+
+test("workflow validation rejects an unpinned or unverified push-sourced admission", async () => {
+  const workflow = await readFile(workflowUrl, "utf8");
+  // Dropping the branch pin would admit any push-triggered CI success, not only
+  // the run that validated main.
+  assert.throws(() =>
+    validateWorkflow(
+      workflow.replace(
+        "github.event.workflow_run.head_branch == 'main'",
+        "github.event.workflow_run.head_branch != ''",
+      ),
+    ),
+  );
+  // Dropping the fork pin would let a fork-owned head repository through.
+  assert.throws(() =>
+    validateWorkflow(
+      workflow.replace(
+        "github.event.workflow_run.head_repository.full_name == github.repository",
+        "github.event.workflow_run.head_repository.full_name != ''",
+      ),
+    ),
+  );
+  // Deploy must stay behind CI: a direct push trigger would promote unvalidated code.
+  assert.throws(() =>
+    validateWorkflow(
+      workflow.replace(
+        "  workflow_run:\n    workflows: [CI]",
+        "  push:\n    branches: [main]\n  workflow_run:\n    workflows: [CI]",
+      ),
+    ),
+  );
+  assert.throws(() =>
+    validateWorkflow(
+      workflow.replace(
+        '"$RELEASE_ENFORCER" push-context',
+        '"$RELEASE_ENFORCER" unbound-context',
+      ),
+    ),
+  );
+  assert.throws(() =>
+    validateWorkflow(
+      workflow.replace(
+        '--head-commit "$RELEASE_SOURCE_COMMIT" --base-commit "$RELEASE_BASE_COMMIT"',
+        '--head-commit "$RELEASE_SOURCE_COMMIT"',
+      ),
+    ),
+  );
+  assert.throws(() =>
+    validateWorkflow(
+      workflow.replace("release_admission_push_not_linear", "release_admission_push_assumed_linear"),
+    ),
+  );
+  assert.throws(() =>
+    validateWorkflow(workflow.replace("merged-source", "merge-skipped")),
+  );
+  assert.throws(() =>
+    validateWorkflow(
+      workflow.replace(
+        `'.status | select(. == "open" or . == "merged")'`,
+        "'.status'",
+      ),
+    ),
   );
 });
 

@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS field_work_package_actions (
     length(work_package_id) BETWEEN 1 AND 140
     AND work_package_id NOT GLOB '*[^A-Za-z0-9._:-]*'
   ),
-  action_kind TEXT NOT NULL CHECK (action_kind IN ('acknowledge', 'stop_work', 'start_work', 'complete_work')),
+  action_kind TEXT NOT NULL CHECK (action_kind IN ('acknowledge', 'stop_work', 'start_work')),
   payload_hash TEXT NOT NULL CHECK (
     length(payload_hash) = 64 AND payload_hash NOT GLOB '*[^0-9a-f]*'
   ),

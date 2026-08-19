@@ -39,12 +39,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 47,
-      "latest": "0047_safety_lifecycle.sql"
+      "count": 48,
+      "latest": "0057_work_package_completion_action_kind.sql"
     },
     "tests": {
       "pwa": 376,
-      "worker": 619
+      "worker": 621
     }
   },
   "proof_state_policy": {
@@ -178,6 +178,21 @@ IRO-44 branch-local safety substrate:
 - This branch has repository tests, including one emergency drill covering rescue, failed PPE, a
   duplicate offline report, a late corrective action, and independent release. It has no deployment,
   runtime, business-acceptance, or real-device proof.
+
+IRO-62 shipped-migration remediation:
+
+- `0028_work_package_actions.sql` shipped on 2026-07-30 and the one successful Deploy
+  (`987ccbc6`, 2026-08-13) applied it in production. The reviewed assembly later edited that file
+  in place to widen its `action_kind` CHECK with `complete_work`. Wrangler keys the D1 migration
+  ledger by filename, so the edit can never reach a database that already applied `0028`: every
+  `complete_work` receipt insert aborts there on the CHECK.
+- `0028` is restored to its shipped bytes and the widening is delivered forward by
+  `0057_work_package_completion_action_kind.sql`, a bounded copy-preserving rebuild of the single
+  `field_work_package_actions` table. A database that already applied `0028` and a database built
+  from a clean chain converge on the same table, index set, and constraint text.
+- Proof is branch-local repository proof only: the applied chain, the production starting state,
+  and the row-preserving rebuild are asserted in `workers-bus/test/app-migration.test.ts`. Nothing
+  here claims the remediation has been deployed.
 
 Missing for autonomous target:
 

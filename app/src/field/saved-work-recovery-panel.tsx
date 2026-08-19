@@ -5,6 +5,7 @@ import { getDeviceSecret } from "../auth/device-credential";
 import type { AuthenticatedSession } from "../auth/session";
 import { OutboxStateBadge } from "../components/outbox-state-badge";
 import { Button } from "../components/ui/button";
+import { dateTimeFormatter } from "../lib/intl-cache";
 import { isOutboxActionSafeToRetry, retryOutboxAction } from "../storage/outbox";
 import { flushOutbox } from "../storage/outbox-processor";
 import type { OutboxAction } from "../storage/outbox-types";
@@ -196,7 +197,7 @@ function pathSegment(endpoint: string, pattern: RegExp): string | undefined {
 
 function formatSavedAt(value: number, locale: string): string {
   try {
-    return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(
+    return dateTimeFormatter(locale, { dateStyle: "medium", timeStyle: "short" }).format(
       new Date(value),
     );
   } catch {

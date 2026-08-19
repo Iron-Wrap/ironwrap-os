@@ -5,11 +5,31 @@
   const BOOTSTRAP_PATH = "/api/v1/field/bootstrap";
   const TIMEOUT_MS = 12_000;
 
-  if (
-    !["/today", "/now"].includes(window.location.pathname) ||
-    typeof indexedDB.databases !== "function"
-  )
-    return;
+  // Replaced at build time with the hashed route chunks; left as the literal
+  // placeholders in dev, where Vite serves modules unbundled.
+  const TODAY_ROUTE_CHUNK = "__IRONWRAP_TODAY_ROUTE_CHUNK__";
+  const FIELD_ROUTE_CHUNK = "__IRONWRAP_FIELD_ROUTE_CHUNK__";
+
+  const pathname = window.location.pathname;
+
+  // A route chunk is otherwise discovered only after the entry bundle has downloaded,
+  // parsed and executed, which serialises a second round trip directly in front of the
+  // largest paint. This script already runs ahead of the entry, so it can start that
+  // fetch in parallel — and only the chunk the current path actually renders.
+  const routeChunk = isTodayPath(pathname)
+    ? TODAY_ROUTE_CHUNK
+    : isFieldRoutePath(pathname)
+      ? FIELD_ROUTE_CHUNK
+      : undefined;
+  if (routeChunk && routeChunk.slice(0, 2) !== "__") {
+    const link = document.createElement("link");
+    link.rel = "modulepreload";
+    link.crossOrigin = "";
+    link.href = routeChunk;
+    document.head.appendChild(link);
+  }
+
+  if (!["/today", "/now"].includes(pathname) || typeof indexedDB.databases !== "function") return;
 
   const preload = readStoredDeviceProof().then((deviceProof) => {
     if (!deviceProof) throw new Error("field_device_proof_unavailable");
@@ -20,6 +40,19 @@
   // request. Mark a cold/offline rejection handled until that consumer attaches.
   preload.catch(() => undefined);
   window.__ironwrapFieldBootstrapResponse = preload;
+
+  function isTodayPath(path) {
+    return path === "/" || path === "/today";
+  }
+
+  function isFieldRoutePath(path) {
+    return (
+      isTodayPath(path) ||
+      path.indexOf("/jobs/") === 0 ||
+      path.indexOf("/work-objects/") === 0 ||
+      path.indexOf("/check-in") === 0
+    );
+  }
 
   async function readStoredDeviceProof() {
     const databases = await indexedDB.databases();

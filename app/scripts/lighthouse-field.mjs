@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { get as httpsGet } from "node:https";
 import { spawn } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -11,6 +12,7 @@ const lighthouse = require("lighthouse").default;
 const puppeteer = require("puppeteer-core");
 const config = require("../lighthouserc.cjs");
 const { seedPairedFieldDevice } = require("./lhci-field-device.cjs");
+const { certificateSpkiFingerprint } = await import("./acceptance-certificate.mjs");
 
 export function median(values) {
   if (!values.length) throw new Error("Cannot calculate a median for an empty set");
@@ -52,14 +54,25 @@ async function waitForServer(url, child) {
     if (child.exitCode !== null)
       throw new Error(`Acceptance server exited with code ${child.exitCode}`);
     try {
-      const response = await fetch(`${url}/healthz`);
-      if (response.ok) return;
+      if (await isServerReady(`${url}/healthz`)) return;
     } catch {
       // The server may still be binding its port.
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`Acceptance server did not become ready at ${url}`);
+}
+
+// The loopback certificate is self-signed, so Node's fetch rejects it. Only Chrome's
+// view of the certificate affects the measurement, and that is pinned by SPKI digest.
+function isServerReady(url) {
+  return new Promise((resolve) => {
+    const request = httpsGet(url, { rejectUnauthorized: false }, (response) => {
+      response.resume();
+      resolve(response.statusCode === 200);
+    });
+    request.on("error", () => resolve(false));
+  });
 }
 
 async function stopProcess(child) {
@@ -69,10 +82,10 @@ async function stopProcess(child) {
   if (child.exitCode === null) child.kill("SIGKILL");
 }
 
-async function runLighthouse(url, runNumber, outputDir) {
+async function runLighthouse(url, runNumber, outputDir, chromeFlags) {
   const chrome = await chromeLauncher.launch({
     chromePath: config.chromePath,
-    chromeFlags: ["--headless", "--disable-gpu", ...(process.env.CI ? ["--no-sandbox"] : [])],
+    chromeFlags,
   });
   let browser;
   try {
@@ -108,11 +121,26 @@ async function runLighthouse(url, runNumber, outputDir) {
 export async function run() {
   const outputDir = resolve(config.outputDir);
   const baseUrl = new URL(config.baseUrl);
+
+  // Mint the certificate before the server starts. Both this process and the server
+  // ensure it exists, so leaving it to chance let them race: each minted its own, and
+  // Chrome then pinned a digest the server never served.
+  const chromeFlags = [
+    "--headless",
+    "--disable-gpu",
+    // Trust this one certificate rather than disabling certificate checking wholesale:
+    // an origin Chrome still considers insecure is not a secure context, and the PWA
+    // under measurement would register no service worker.
+    `--ignore-certificate-errors-spki-list=${await certificateSpkiFingerprint()}`,
+    ...(process.env.CI ? ["--no-sandbox"] : []),
+  ];
+
   const server = spawn(process.execPath, ["scripts/acceptance-server.mjs"], {
     cwd: process.cwd(),
     env: {
       ...process.env,
       ACCEPTANCE_MODE: "field",
+      ACCEPTANCE_PROTOCOL: config.protocol,
       HOST: baseUrl.hostname,
       PORT: String(baseUrl.port),
     },
@@ -128,7 +156,7 @@ export async function run() {
     const results = [];
     for (let runNumber = 1; runNumber <= config.numberOfRuns; runNumber += 1) {
       process.stdout.write(`Lighthouse run ${runNumber}/${config.numberOfRuns}\n`);
-      results.push(await runLighthouse(config.url, runNumber, outputDir));
+      results.push(await runLighthouse(config.url, runNumber, outputDir, chromeFlags));
     }
 
     const { aggregate, failures } = evaluateAssertions(results, config.assertions);

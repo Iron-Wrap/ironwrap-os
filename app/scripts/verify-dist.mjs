@@ -94,6 +94,38 @@ if (
   throw new Error("field bootstrap preloader must preserve safe paired-device proof lookup");
 }
 
+// Two paired-device boot invariants. Both are produced by the build rather than written
+// by hand, so nothing in the source tree fails when they regress — only `/today`'s
+// Lighthouse budget does, one release later.
+const stylesheetIndex = indexHtml.indexOf('<link rel="stylesheet"');
+const entryScriptIndex = indexHtml.search(/<script type="module"[^>]*src="\/assets\//);
+if (stylesheetIndex === -1 || entryScriptIndex === -1) {
+  throw new Error("dist/index.html must link a stylesheet and a module entry script");
+}
+if (stylesheetIndex > entryScriptIndex) {
+  throw new Error(
+    "dist/index.html must discover its render-blocking stylesheet before the module graph; " +
+      "behind it, first paint waits for every modulepreload to clear the connection pool",
+  );
+}
+
+for (const [constant, chunk] of [
+  ["TODAY_ROUTE_CHUNK", "today-page"],
+  ["FIELD_ROUTE_CHUNK", "field-pages"],
+]) {
+  const match = bootstrapPreload.match(new RegExp(`${constant}\\s*=\\s*"([^"]+)"`));
+  if (!match) {
+    throw new Error(`field bootstrap preloader must declare ${constant} to preload`);
+  }
+  if (!new RegExp(`^/assets/${chunk}-[^/]+\\.js$`).test(match[1])) {
+    throw new Error(
+      `field bootstrap preloader kept the unsubstituted placeholder ${match[1]} for ${constant}; ` +
+        "that route would fall back to a serialised second round trip before its first paint",
+    );
+  }
+  await stat(resolve(`dist${match[1]}`));
+}
+
 console.log(
   "dist contract verified: manifest, install icons, paired-device bootstrap, private crawler controls, and security headers are present",
 );

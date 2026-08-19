@@ -10,7 +10,7 @@ import type { NowResponse } from "./now-contracts";
 import { NowPage } from "./now-page";
 
 vi.mock("./now-api", () => ({ loadNow: vi.fn() }));
-vi.mock("../field/field-pages", () => ({
+vi.mock("../field/today-page", () => ({
   TodayPage: () => <h1>Field run sheet</h1>,
 }));
 

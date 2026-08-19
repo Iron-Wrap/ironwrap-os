@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 .lighthouseci/
+.acceptance-tls/
 playwright-report/
 test-results/
 *.local

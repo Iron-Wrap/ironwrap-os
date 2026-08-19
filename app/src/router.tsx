@@ -87,8 +87,9 @@ const QuoteRevisionApprovalPreparePage = lazy(async () => ({
     .QuoteRevisionApprovalPreparePage,
 }));
 const loadFieldPages = () => import("./field/field-pages");
+const loadTodayPage = () => import("./field/today-page");
 const TodayPage = lazy(async () => ({
-  default: (await loadFieldPages()).TodayPage,
+  default: (await loadTodayPage()).TodayPage,
 }));
 const JobPage = lazy(async () => ({
   default: (await loadFieldPages()).JobPage,
@@ -103,14 +104,23 @@ const CheckInPage = lazy(async () => ({
 // Field Companion is the PWA's default entry point. Start loading its module while the
 // session boundary verifies the device instead of serializing the authenticated read
 // model behind a second route-bundle round trip. Other role surfaces remain lazy.
-if (typeof window !== "undefined" && isFieldPath(window.location.pathname)) {
-  void loadFieldPages();
+//
+// The run sheet warms only its own module: the job packet, work object and check-in
+// surfaces are five times its size, and `/today` cannot paint until whatever it warms
+// has been evaluated.
+if (typeof window !== "undefined") {
+  const { pathname } = window.location;
+  if (isTodayPath(pathname)) void loadTodayPage();
+  else if (isFieldPath(pathname)) void loadFieldPages();
+}
+
+function isTodayPath(pathname: string): boolean {
+  return pathname === "/" || pathname === "/today";
 }
 
 function isFieldPath(pathname: string): boolean {
   return (
-    pathname === "/" ||
-    pathname === "/today" ||
+    isTodayPath(pathname) ||
     pathname.startsWith("/jobs/") ||
     pathname.startsWith("/work-objects/") ||
     pathname.startsWith("/check-in")

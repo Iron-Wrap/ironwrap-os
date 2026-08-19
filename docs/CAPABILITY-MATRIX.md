@@ -43,7 +43,7 @@ implication.
       "latest": "0057_work_package_completion_action_kind.sql"
     },
     "tests": {
-      "pwa": 398,
+      "pwa": 403,
       "worker": 660
     }
   },
@@ -140,7 +140,7 @@ deployment, runtime, or business-acceptance evidence.
 | Worker | 660 tests and typecheck passed; every migration applied through Wrangler and the Worker bundled with `--dry-run` |
 | Frappe | 337 unit tests, Ruff, and compileall passed |
 | Deployment/recovery tools | 106 readiness tests and 12 launch-proof tests passed |
-| PWA | 398 tests, typecheck, lint, Prettier, and build passed |
+| PWA | 403 tests, typecheck, lint, Prettier, and build passed |
 | PWA browser (Playwright), MCP | Not re-run locally on this branch; prior evidence is not current-head proof |
 
 The lifecycle is reachable from the running product: `workers-bus/src/service-cases.ts` owns the

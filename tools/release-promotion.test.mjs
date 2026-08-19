@@ -491,6 +491,40 @@ test("CI receipt binds the completed pull-request run identity as well as its jo
   assert.equal(checks[0].workflow_path, ".github/workflows/ci.yml");
   assert.equal(checks[0].run_attempt, 2);
   assert.equal(checks[0].head_sha, COMMIT);
+  assert.equal(checks[0].event, "pull_request");
+
+  const invoke = () => collectCiChecks(new Map([
+    ["repository", "Iron-Wrap/ironwrap-os"],
+    ["run-id", "99"],
+    ["job-names", "validate-and-test"],
+    ["output", output],
+  ]));
+  const withRun = (overrides) => async (url) => (String(url).endsWith("/actions/runs/99")
+    ? new Response(JSON.stringify({
+      id: 99,
+      repository: { full_name: "Iron-Wrap/ironwrap-os" },
+      head_repository: { full_name: "Iron-Wrap/ironwrap-os" },
+      head_sha: COMMIT,
+      path: ".github/workflows/ci.yml",
+      status: "completed",
+      conclusion: "success",
+      workflow_id: 456,
+      run_attempt: 2,
+      ...overrides,
+    }), { status: 200 })
+    : stableFetch(url));
+
+  // The push-to-main run that validated the merged tree is an equally exact
+  // release source, and its event is recorded rather than assumed.
+  globalThis.fetch = withRun({ event: "push", head_branch: "main" });
+  await invoke();
+  assert.equal(JSON.parse(await readFile(output, "utf8"))[0].event, "push");
+
+  // Nothing else is: a push to another branch, or a non-source event.
+  globalThis.fetch = withRun({ event: "push", head_branch: "release/candidate" });
+  await assert.rejects(() => invoke(), /release_promotion_ci_run_contract_invalid/);
+  globalThis.fetch = withRun({ event: "workflow_dispatch", head_branch: "main" });
+  await assert.rejects(() => invoke(), /release_promotion_ci_run_contract_invalid/);
 });
 
 test("PR context binds current base, source head, tested merge commit, and exact tree", async (t) => {
@@ -550,6 +584,136 @@ test("PR context binds current base, source head, tested merge commit, and exact
     ? new Response(JSON.stringify({ full_name: "Iron-Wrap/ironwrap-os", default_branch: "main", allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true }), { status: 200 })
     : stableFetch(url);
   await assert.rejects(() => main(["pr-context", "--repository", "Iron-Wrap/ironwrap-os", "--run-id", "99", "--ruleset-id", "20652124", "--output", output]), /release_promotion_merge_policy_invalid/);
+});
+
+test("push context admits the merged squash commit that is still main's tip", async (t) => {
+  const root = await tempRoot(t);
+  const output = path.join(root, "push.json");
+  const previousFetch = globalThis.fetch;
+  const previousToken = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = "github-read-token";
+  const pushRun = {
+    id: 101,
+    event: "push",
+    head_branch: "main",
+    path: ".github/workflows/ci.yml",
+    status: "completed",
+    conclusion: "success",
+    repository: { full_name: "Iron-Wrap/ironwrap-os" },
+    head_repository: { full_name: "Iron-Wrap/ironwrap-os" },
+    head_sha: COMMIT,
+    run_attempt: 1,
+    pull_requests: [],
+  };
+  const mergedPr = {
+    number: 43,
+    state: "closed",
+    merged: true,
+    base: { ref: "main", sha: BASE, repo: { full_name: "Iron-Wrap/ironwrap-os" } },
+    head: { ref: "codex/iro-41-release-permit", sha: HEAD, repo: { full_name: "Iron-Wrap/ironwrap-os" } },
+    merge_commit_sha: COMMIT,
+  };
+  const respond = ({ run = pushRun, commit = { sha: COMMIT, tree: { sha: GIT_TREE }, parents: [{ sha: BASE }] }, main: mainCommit = { sha: COMMIT }, associated = [{ number: 43, merge_commit_sha: COMMIT }], pr = mergedPr } = {}) => async (url) => {
+    const value = String(url);
+    if (value.endsWith("/actions/runs/101")) return new Response(JSON.stringify(run), { status: 200 });
+    if (value.endsWith(`/commits/${COMMIT}/pulls`)) return new Response(JSON.stringify(associated), { status: 200 });
+    if (value.endsWith(`/git/commits/${COMMIT}`)) return new Response(JSON.stringify(commit), { status: 200 });
+    if (value.endsWith("/commits/main")) return new Response(JSON.stringify(mainCommit), { status: 200 });
+    if (value.endsWith("/pulls/43")) return new Response(JSON.stringify(pr), { status: 200 });
+    if (value.endsWith("/rulesets/20652124")) return new Response(JSON.stringify({ id: 20652124, target: "branch", enforcement: "active", rules: [{ type: "pull_request", parameters: { allowed_merge_methods: ["squash", "rebase"] } }] }), { status: 200 });
+    if (value.endsWith("/repos/Iron-Wrap/ironwrap-os")) return new Response(JSON.stringify({ full_name: "Iron-Wrap/ironwrap-os", default_branch: "main", allow_merge_commit: false, allow_squash_merge: true, allow_rebase_merge: true }), { status: 200 });
+    return new Response("{}", { status: 404 });
+  };
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    if (previousToken === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = previousToken;
+  });
+  const invoke = (base = BASE) => main(["push-context", "--repository", "Iron-Wrap/ironwrap-os", "--run-id", "101", "--ruleset-id", "20652124", "--head-commit", COMMIT, "--base-commit", base, "--output", output]);
+
+  globalThis.fetch = respond();
+  await invoke();
+  const context = JSON.parse(await readFile(output, "utf8"));
+  assert.equal(context.schema, "ironwrap_pr_admission_v1");
+  assert.equal(context.status, "merged");
+  assert.equal(context.number, 43);
+  assert.equal(context.base_commit, BASE);
+  assert.equal(context.head_commit, HEAD);
+  assert.equal(context.ci_merge_commit, COMMIT);
+  assert.equal(context.ci_merge_tree, GIT_TREE);
+  assert.equal(context.merge_method, "squash");
+  assert.equal(context.base_ref, "main");
+
+  // Another release landed while this one was being promoted: fail closed
+  // instead of promoting a tree production has already moved past.
+  globalThis.fetch = respond({ main: { sha: MERGE_COMMIT } });
+  await assert.rejects(() => invoke(), /release_promotion_push_source_superseded/);
+
+  // Generation N must be the squash commit's one parent, and the workflow's
+  // git-derived base must be the same commit the provider reports.
+  globalThis.fetch = respond({ commit: { sha: COMMIT, tree: { sha: GIT_TREE }, parents: [{ sha: BASE }, { sha: MERGE_COMMIT }] } });
+  await assert.rejects(() => invoke(), /release_promotion_push_commit_not_linear_squash/);
+  globalThis.fetch = respond();
+  await assert.rejects(() => invoke(HEAD), /release_promotion_push_commit_not_linear_squash/);
+
+  // Only a push that CI validated on main is admissible.
+  globalThis.fetch = respond({ run: { ...pushRun, head_branch: "release/candidate" } });
+  await assert.rejects(() => invoke(), /release_promotion_push_run_identity_invalid/);
+  globalThis.fetch = respond({ run: { ...pushRun, event: "pull_request" } });
+  await assert.rejects(() => invoke(), /release_promotion_push_run_identity_invalid/);
+  globalThis.fetch = respond({ run: { ...pushRun, head_repository: { full_name: "fork/ironwrap-os" } } });
+  await assert.rejects(() => invoke(), /release_promotion_push_run_identity_invalid/);
+
+  // The source must be exactly one merged, same-repository PR.
+  globalThis.fetch = respond({ associated: [] });
+  await assert.rejects(() => invoke(), /release_promotion_push_pr_association_invalid/);
+  globalThis.fetch = respond({ associated: [{ number: 43, merge_commit_sha: COMMIT }, { number: 44, merge_commit_sha: COMMIT }] });
+  await assert.rejects(() => invoke(), /release_promotion_push_pr_association_invalid/);
+  globalThis.fetch = respond({ pr: { ...mergedPr, merged: false } });
+  await assert.rejects(() => invoke(), /release_promotion_push_pr_contract_invalid/);
+  globalThis.fetch = respond({ pr: { ...mergedPr, head: { ...mergedPr.head, repo: { full_name: "fork/ironwrap-os" } } } });
+  await assert.rejects(() => invoke(), /release_promotion_push_pr_contract_invalid/);
+
+  // The pre-merge derivation cannot be pointed at a push-sourced run.
+  globalThis.fetch = respond();
+  await assert.rejects(
+    () => main(["pr-context", "--repository", "Iron-Wrap/ironwrap-os", "--run-id", "101", "--ruleset-id", "20652124", "--output", output]),
+    /release_promotion_pr_run_identity_invalid/,
+  );
+});
+
+test("pre-merge and post-merge source admission reject each other's context", async (t) => {
+  const root = await tempRoot(t);
+  const contextFile = path.join(root, "pr-context.json");
+  const output = path.join(root, "source-merge-receipt.json");
+  const context = {
+    schema: "ironwrap_pr_admission_v1",
+    repository: "Iron-Wrap/ironwrap-os",
+    number: 43,
+    base_ref: "main",
+    base_commit: BASE,
+    head_ref: "codex/iro-41-release-permit",
+    head_commit: HEAD,
+    ci_run_id: "101",
+    ci_merge_commit: COMMIT,
+    ci_merge_tree: GIT_TREE,
+    merge_method: "squash",
+    merge_policy: mergePolicyFixture(),
+    provider_readback_digest: sha("push-readback"),
+    status: "merged",
+  };
+  // Both commands settle the source contract before reading the permit, so an
+  // unreadable permit path proves the rejection happens first.
+  const permit = path.join(root, "absent-permit.txt");
+  const invoke = (command) => main([command, "--pr-context", contextFile, "--permit", permit, "--permit-public-key", permit, "--admission", permit, "--output", output]);
+
+  await writeFile(contextFile, JSON.stringify(context));
+  await assert.rejects(() => invoke("merge-pr"), /release_promotion_pr_context_contract_invalid/);
+  await writeFile(contextFile, JSON.stringify({ ...context, status: "open" }));
+  await assert.rejects(() => invoke("merged-source"), /release_promotion_pr_context_contract_invalid/);
+  await writeFile(contextFile, JSON.stringify({ ...context, status: "closed" }));
+  await assert.rejects(() => invoke("merge-pr"), /release_promotion_pr_context_contract_invalid/);
+  await assert.rejects(() => invoke("merged-source"), /release_promotion_pr_context_contract_invalid/);
 });
 
 test("merge-time provider policy drift fails before any mutation", async () => {

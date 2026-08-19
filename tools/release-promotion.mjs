@@ -153,7 +153,11 @@ async function collectCiChecks(args) {
   if (!runResponse?.ok) fail("ci_run_readback_unavailable");
   const run = await runResponse.json().catch(() => null);
   if (!run || String(run.id) !== runId || !isRecord(run.repository) || run.repository.full_name !== repository || run.head_repository?.full_name !== repository) fail("ci_run_identity_invalid");
-  if (!COMMIT_RE.test(run.head_sha) || run.path !== CI_WORKFLOW_PATH || run.event !== "pull_request" || run.status !== "completed" || run.conclusion !== "success" || !Number.isSafeInteger(run.workflow_id) || run.workflow_id < 1 || !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1) fail("ci_run_contract_invalid");
+  // The same two source events admission accepts, and no others: a
+  // pull_request-sourced CI run, or a push-sourced one pinned to main. Any other
+  // push - a release branch, a tag build - is not a release source.
+  const sourceEventAdmissible = run.event === "pull_request" || (run.event === "push" && run.head_branch === "main");
+  if (!COMMIT_RE.test(run.head_sha) || run.path !== CI_WORKFLOW_PATH || !sourceEventAdmissible || run.status !== "completed" || run.conclusion !== "success" || !Number.isSafeInteger(run.workflow_id) || run.workflow_id < 1 || !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1) fail("ci_run_contract_invalid");
   const response = await fetch(`https://api.github.com/repos/${repository}/actions/runs/${encodeURIComponent(runId)}/jobs?per_page=100`, {
     headers,
   }).catch(() => null);
@@ -185,6 +189,14 @@ async function githubJson(url, headers, code, fetchImpl = fetch) {
   if (!response?.ok) fail(code);
   const body = await response.json().catch(() => null);
   if (!isRecord(body)) fail(code);
+  return body;
+}
+
+async function githubList(url, headers, code, fetchImpl = fetch) {
+  const response = await fetchImpl(url, { headers }).catch(() => null);
+  if (!response?.ok) fail(code);
+  const body = await response.json().catch(() => null);
+  if (!Array.isArray(body)) fail(code);
   return body;
 }
 
@@ -301,6 +313,93 @@ async function prContext(args) {
       merge_policy: mergePolicy,
     })),
     status: "open",
+  };
+  await writeJson(arg(args, "output"), fields);
+}
+
+/**
+ * Push-sourced admission context.
+ *
+ * `prContext` above admits a release *before* its merge: the pipeline is the
+ * thing that merges the PR. This one admits the same release *after* the merge,
+ * from the push-triggered CI run that validated `main`. Every field the release
+ * manifest binds is still read back exactly from the provider; only where three
+ * of them come from changes:
+ *
+ *   base_commit      the squash commit's single parent — i.e. `main` immediately
+ *                    before this release — not `pr.base.sha`, which lags whenever
+ *                    another PR landed while this one was open.
+ *   ci_merge_commit  `run.head_sha`, the squash commit itself.
+ *   status           "merged" rather than "open".
+ *
+ * The staleness guard changes shape but not strength. The pull_request path
+ * requires `main` to still sit at the PR base (nothing landed since CI); this
+ * one requires `main` to still sit at the pushed commit (nothing landed since
+ * the merge). A superseded push fails closed rather than promoting a tree that
+ * production has already moved past.
+ */
+async function pushContext(args) {
+  const repository = arg(args, "repository");
+  const runId = arg(args, "run-id");
+  if (!REPOSITORY_RE.test(repository)) fail("repository_invalid");
+  const headCommit = requireCommit(arg(args, "head-commit"), "push_head_commit_invalid");
+  const claimedBase = requireCommit(arg(args, "base-commit"), "push_base_commit_invalid");
+  const headers = reviewHeaders(env("GH_TOKEN"));
+  const run = await githubJson(`https://api.github.com/repos/${repository}/actions/runs/${encodeURIComponent(runId)}`, headers, "push_run_readback_unavailable");
+  if (String(run.id) !== runId
+    || run.event !== "push"
+    || run.head_branch !== "main"
+    || run.path !== CI_WORKFLOW_PATH
+    || run.status !== "completed"
+    || run.conclusion !== "success"
+    || run.repository?.full_name !== repository
+    || run.head_repository?.full_name !== repository
+    || run.head_sha !== headCommit) fail("push_run_identity_invalid");
+  const mergeCommit = await githubJson(`https://api.github.com/repos/${repository}/git/commits/${headCommit}`, headers, "push_commit_readback_unavailable");
+  if (mergeCommit.sha !== headCommit
+    || !COMMIT_RE.test(mergeCommit.tree?.sha)
+    || !Array.isArray(mergeCommit.parents)
+    || mergeCommit.parents.length !== 1
+    || mergeCommit.parents[0]?.sha !== claimedBase) fail("push_commit_not_linear_squash");
+  const currentMain = await githubJson(`https://api.github.com/repos/${repository}/commits/main`, headers, "push_main_readback_unavailable");
+  if (currentMain.sha !== headCommit) fail("push_source_superseded");
+  const associated = await githubList(`https://api.github.com/repos/${repository}/commits/${headCommit}/pulls`, headers, "push_pr_association_unavailable");
+  const sourcePrs = associated.filter((entry) => isRecord(entry) && entry.merge_commit_sha === headCommit);
+  if (sourcePrs.length !== 1 || !Number.isSafeInteger(sourcePrs[0]?.number)) fail("push_pr_association_invalid");
+  const number = sourcePrs[0].number;
+  const pr = await githubJson(`https://api.github.com/repos/${repository}/pulls/${number}`, headers, "push_pr_readback_unavailable");
+  if (pr.number !== number
+    || pr.state !== "closed"
+    || pr.merged !== true
+    || pr.base?.ref !== "main"
+    || pr.base?.repo?.full_name !== repository
+    || pr.head?.repo?.full_name !== repository
+    || !COMMIT_RE.test(pr.base?.sha)
+    || !COMMIT_RE.test(pr.head?.sha)
+    || typeof pr.head?.ref !== "string"
+    || pr.merge_commit_sha !== headCommit) fail("push_pr_contract_invalid");
+  const mergePolicy = await readMergePolicy(repository, headers, arg(args, "ruleset-id"));
+  const fields = {
+    schema: "ironwrap_pr_admission_v1",
+    repository,
+    number,
+    base_ref: "main",
+    base_commit: claimedBase,
+    head_ref: pr.head.ref,
+    head_commit: pr.head.sha,
+    ci_run_id: runId,
+    ci_merge_commit: headCommit,
+    ci_merge_tree: mergeCommit.tree.sha,
+    merge_method: "squash",
+    merge_policy: mergePolicy,
+    provider_readback_digest: sha256(canonicalJson({
+      run: { id: String(run.id), event: run.event, path: run.path, status: run.status, conclusion: run.conclusion, head_branch: run.head_branch, head_sha: run.head_sha, run_attempt: run.run_attempt },
+      pr: { number: pr.number, state: pr.state, merged: pr.merged, base: { ref: pr.base.ref, sha: pr.base.sha }, head: { ref: pr.head.ref, sha: pr.head.sha }, merge_commit_sha: pr.merge_commit_sha },
+      merge: { sha: mergeCommit.sha, tree: mergeCommit.tree.sha, parent: claimedBase },
+      main: { sha: currentMain.sha },
+      merge_policy: mergePolicy,
+    })),
+    status: "merged",
   };
   await writeJson(arg(args, "output"), fields);
 }
@@ -2087,6 +2186,89 @@ async function mergePr(args) {
   await writeJson(arg(args, "output"), receipt);
 }
 
+/**
+ * Post-merge counterpart to `mergePr`.
+ *
+ * A push-sourced release is admitted once its squash commit is already `main`'s
+ * tip, so there is nothing left to merge — this reads the same source-merge
+ * receipt back out of the provider instead of producing it by mutation. Every
+ * field the permit, service adapter, rollback, and recovery receipts consume is
+ * identical in shape and meaning; only the `PUT .../merge` call is absent, and
+ * the readbacks that `mergePr` performs *after* merging are performed here as
+ * the admission itself.
+ */
+async function mergedSource(args) {
+  const context = exactObjectKeys(await readJson(arg(args, "pr-context"), "pr_context_invalid"), [
+    "schema",
+    "repository",
+    "number",
+    "base_ref",
+    "base_commit",
+    "head_ref",
+    "head_commit",
+    "ci_run_id",
+    "ci_merge_commit",
+    "ci_merge_tree",
+    "merge_method",
+    "merge_policy",
+    "provider_readback_digest",
+    "status",
+  ], "pr_context_shape_invalid");
+  if (context.schema !== "ironwrap_pr_admission_v1" || context.status !== "merged" || context.merge_method !== "squash") fail("pr_context_contract_invalid");
+  validateMergePolicy(context.merge_policy, "pr_context_merge_policy_invalid");
+  const permit = (await readFile(arg(args, "permit"), "utf8")).trim();
+  const permitDigest = releasePermitDigest(permit);
+  const payload = verifyReleasePermit(await readFile(arg(args, "permit-public-key"), "utf8"), permit, {
+    repository: context.repository,
+    source_commit: context.ci_merge_commit,
+    base_commit: context.base_commit,
+    source_git_tree: context.ci_merge_tree,
+  });
+  if (payload.release_manifest.pr.number !== context.number || payload.release_manifest.pr.head_commit !== context.head_commit) fail("pr_context_permit_drift");
+  const admission = exactObjectKeys(await readJson(arg(args, "admission"), "admission_receipt_invalid"), ["ok", "status", "permit_digest", "generation"], "admission_receipt_shape_invalid");
+  if (admission.ok !== true || admission.status !== "claimed" || admission.permit_digest !== permitDigest || admission.generation !== payload.generation) fail("admission_receipt_drift");
+  const token = env("GH_TOKEN");
+  const headers = reviewHeaders(token);
+  await assertMergePolicyUnchanged({ repository: context.repository, expected: context.merge_policy, token });
+  const pr = await githubJson(`https://api.github.com/repos/${context.repository}/pulls/${context.number}`, headers, "merged_source_pr_readback_unavailable");
+  const mergeCommit = await githubJson(`https://api.github.com/repos/${context.repository}/git/commits/${context.ci_merge_commit}`, headers, "merged_source_commit_readback_unavailable");
+  const mainReadback = await githubJson(`https://api.github.com/repos/${context.repository}/commits/main`, headers, "merged_source_main_readback_unavailable");
+  if (pr.state !== "closed"
+    || pr.merged !== true
+    || pr.base?.ref !== "main"
+    || pr.head?.sha !== context.head_commit
+    || pr.merge_commit_sha !== context.ci_merge_commit
+    || mergeCommit.sha !== context.ci_merge_commit
+    || mergeCommit.tree?.sha !== context.ci_merge_tree
+    || !Array.isArray(mergeCommit.parents)
+    || mergeCommit.parents.length !== 1
+    || mergeCommit.parents[0]?.sha !== context.base_commit
+    || mainReadback.sha !== context.ci_merge_commit) fail("merged_source_drift");
+  const fields = {
+    schema: "ironwrap_source_admission_merge_v1",
+    repository: context.repository,
+    pr_number: context.number,
+    head_commit: context.head_commit,
+    base_commit: context.base_commit,
+    ci_merge_commit: context.ci_merge_commit,
+    expected_tree: context.ci_merge_tree,
+    merge_method: context.merge_method,
+    provider_settings_digest: context.merge_policy.readback_digest,
+    merge_commit: context.ci_merge_commit,
+    merge_tree: mergeCommit.tree.sha,
+    main_commit: mainReadback.sha,
+    permit_digest: permitDigest,
+    admission_digest: sha256(canonicalJson(admission)),
+    status: "merged",
+  };
+  const receipt = validateSourceMergeReceipt({
+    ...fields,
+    evidence_digest: sha256(canonicalJson(fields)),
+    observed_at: new Date().toISOString(),
+  }, payload, { permitDigest });
+  await writeJson(arg(args, "output"), receipt);
+}
+
 async function admit(args, advance = false) {
   const boundary = createCloudflareD1ReplayBoundary({
     accountId: arg(args, "account-id"),
@@ -2139,6 +2321,7 @@ async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
   const args = argsFrom(rest);
   if (command === "pr-context") return prContext(args);
+  if (command === "push-context") return pushContext(args);
   if (command === "source-evidence") return sourceEvidence(args);
   if (command === "issuer-request") return issuerRequest(args);
   if (command === "review-receipt") return reviewReceipt(args);
@@ -2180,6 +2363,7 @@ async function main(argv = process.argv.slice(2)) {
   if (command === "assemble") return assemblePermit(args);
   if (command === "admit") return admit(args, false);
   if (command === "merge-pr") return mergePr(args);
+  if (command === "merged-source") return mergedSource(args);
   if (command === "advance") return admit(args, true);
   if (command === "persist-rollback") return persistRollback(args);
   if (command === "persist-recovery-required") return persistRecoveryRequired(args);

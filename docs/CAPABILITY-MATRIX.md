@@ -70,10 +70,13 @@ exact-source and tested-checkout repository/CI observation, not a release permit
 
 IRO-41 branch-local implementation:
 
-- a protected-PR `workflow_run` contract uses generation N enforcement from the PR base, binds the
-  exact PR/head/base/merge tree and CI run/check IDs, publishes exact-digest candidate artifacts to
-  an independently permissioned issuer trigger, waits for the acknowledged issuer run's signed
-  review/full-surface evidence, and rejects unresolved P0/P1 findings;
+- a protected-source `workflow_run` contract admits exactly two events - a pull_request-sourced CI
+  success (the release is admitted before its merge, which the pipeline performs) and a push-sourced
+  CI success pinned to `main` (the release is admitted after its merge, from the squash commit that
+  is still the tip); both use generation N enforcement from the predecessor commit, bind the exact
+  PR/head/base/merge tree and CI run/check IDs, publish exact-digest candidate artifacts to an
+  independently permissioned issuer trigger, wait for the acknowledged issuer run's signed
+  review/full-surface evidence, and reject unresolved P0/P1 findings;
 - one aggregate artifact binds Worker, PWA, and Frappe component identities; isolated staging must
   prove config/secret-name readback, authenticated smoke, content-complete D1 restore, and the prior
   Worker operating against migrated schema before a short-lived permit can be assembled;

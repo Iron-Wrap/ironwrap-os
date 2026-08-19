@@ -101,6 +101,7 @@ import {
 } from "./app-read-models.ts";
 import { buildNowReadModel } from "./now-read-model.ts";
 import { handleCustomerPortalLinks } from "./customer-portal.ts";
+import { handleServiceCaseRoute } from "./service-cases.ts";
 import {
   APP_API_VERSION,
   type AppEnv,
@@ -400,6 +401,14 @@ export async function handleAuthenticatedRoute(
   }
   if (url.pathname.startsWith("/api/v1/customer-portal/links")) {
     return await handleCustomerPortalLinks(req, env, auth);
+  }
+  // The complaint/warranty/service lifecycle owns its own path space; the module behind it holds
+  // the authority checks and the store, exactly as the customer-portal rail above does.
+  if (
+    url.pathname === "/api/v1/service-cases" ||
+    url.pathname.startsWith("/api/v1/service-cases/")
+  ) {
+    return await handleServiceCaseRoute(req, env, auth);
   }
   if (
     req.method === "GET" &&

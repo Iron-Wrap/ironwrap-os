@@ -1808,7 +1808,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     )
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 48);
+    // The chain starts at 0001 and is unique and increasing, but it is not contiguous: the
+    // service lane takes 0056 and the IRO-62 forward repair takes 0057, each above every number
+    // in flight on an open head when it was numbered. #54 kept 0046 and #48 kept 0047, both of
+    // which landed on `main`, so the gap from 0048 to 0055 is expected and not a missing
+    // migration.
+    assert.equal(migrations.length, 49);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -1857,7 +1862,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
        FROM sqlite_master`,
       )
       .get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 97, indexes: 139, triggers: 196 });
+    assert.deepEqual({ ...counts }, { tables: 104, indexes: 148, triggers: 219 });
     // The applied chain — not the text of any single file — is what production
     // ends up running, so the complete_work receipt kind is asserted here.
     // 0028 is frozen at its shipped three-member CHECK and 0057 widens it
@@ -2332,6 +2337,60 @@ test("0032 keeps Facet projection outcomes append-only, anchored, and commercial
     schema,
     /price|amount|contract_acceptance|proposal_evidence_pack|customer_name|address/i,
   );
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
+test("0056 keeps the service lifecycle versioned, human-authored, append-only, and provider-free", async () => {
+  const sql = await readFile(new URL("../migrations/0056_service_case_lifecycle.sql", import.meta.url), "utf8");
+  const schema = sql.replace(/^--.*$/gm, "");
+  for (const table of [
+    "service_cases",
+    "service_case_events",
+    "service_case_triage",
+    "service_case_diagnoses",
+    "service_case_remedies",
+    "service_cost_recovery_claims",
+    "service_cost_recovery_events",
+  ]) assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+
+  // The complaint binds the whole subject: customer, property, job, asset, warranty, and the
+  // consent that authorizes contacting the customer at all.
+  for (const field of [
+    "customer_id", "property_key", "roof_job_id", "asset_ref", "warranty_packet_id",
+    "origin_work_package_ref", "consent_ref", "intake_evidence_digest", "response_due_at",
+  ]) assert.match(sql, new RegExp(`${field}\\s+TEXT`));
+
+  // No model-only final authority: the triage authority column admits exactly one value.
+  assert.match(sql, /authority_kind TEXT NOT NULL CHECK \(authority_kind = 'human'\)/);
+  assert.match(sql, /decided_by_user_id TEXT NOT NULL/);
+  assert.match(sql, /advisory_source TEXT NOT NULL CHECK \(advisory_source IN \('model', 'rule', 'none'\)\)/);
+  assert.match(sql, /final_category != 'unknown' OR responsibility = 'undetermined'/);
+
+  // Every case step is one version step by a named actor, and history is never rewritten.
+  assert.match(sql, /SELECT RAISE\(ABORT, 'service_case_version_step_required'\)\s+WHERE/);
+  assert.match(sql, /SELECT RAISE\(ABORT, 'service_case_transition_not_allowed'\)\s+WHERE/);
+  assert.match(sql, /SELECT RAISE\(ABORT, 'service_case_reopen_must_preserve_history'\)\s+WHERE/);
+  for (const guard of [
+    "service_cases_append_only",
+    "service_case_events_append_only",
+    "service_case_events_immutable",
+    "service_case_triage_immutable",
+    "service_case_diagnoses_immutable",
+    "service_cost_recovery_events_immutable",
+  ]) assert.match(sql, new RegExp(`RAISE\\(ABORT, '${guard}'\\)`));
+
+  // Remedy work is only ever issued as a governed Work Package, and only off an actionable triage.
+  assert.match(sql, /work_package_ref TEXT NOT NULL/);
+  assert.match(sql, /service_case_diagnosis_requires_actionable_triage/);
+
+  // Cost recovery carries the canonical one-attempt effect shape.
+  assert.match(sql, /state IN \('pending', 'leased', 'succeeded', 'failed', 'uncertain', 'reconciled'\)/);
+  assert.match(sql, /attempt_count INTEGER NOT NULL DEFAULT 0 CHECK \(attempt_count BETWEEN 0 AND 1\)/);
+  assert.match(sql, /service_cost_recovery_invalid_uncertain_transition/);
+  assert.match(sql, /service_cost_recovery_responsibility_required/);
+
+  // The spine stores bounded codes, references, and digests: never customer content or secrets.
+  assert.doesNotMatch(schema, /contact_email|phone_number|address_line|photo|transcript|recording|payload_json|access_token/i);
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 

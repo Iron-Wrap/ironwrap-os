@@ -5565,5 +5565,205 @@ class DomainPolicyTests(unittest.TestCase):
         )
 
 
+    def test_service_case_lifecycle_binds_evidence_authority_and_recovery(self) -> None:
+        intake = {
+            "service_case_id": "svc-1",
+            "roofing_customer": "cust-1",
+            "roofing_property": "prop-1",
+            "roof_job": "job-1",
+            "warranty_packet": "wp-1",
+            "status": "Intake",
+            "severity": "Standard",
+            "symptom_code": "interior_water_stain",
+            "reported_channel": "Phone",
+            "reported_at": "2026-08-18T10:00:00.000Z",
+            "communication_consent": "consent-1",
+            "response_due_at": "2026-08-19T10:00:00.000Z",
+        }
+        validate_record("service_case", intake)
+
+        # A complaint without recorded consent to contact the customer is not intake.
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "service_case",
+            {**intake, "communication_consent": None},
+        )
+
+        # An emergency callback cannot be parked behind a routine response window.
+        self.assert_policy(
+            "emergency_response_window_exceeded",
+            validate_record,
+            "service_case",
+            {**intake, "severity": "Emergency"},
+        )
+        validate_record(
+            "service_case",
+            {
+                **intake,
+                "severity": "Emergency",
+                "response_due_at": "2026-08-18T12:00:00.000Z",
+            },
+        )
+
+        # Triage is a human decision and an unknown outcome may never assign blame.
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "service_case",
+            {**intake, "status": "Triaged", "triage_category": "Workmanship"},
+            previous=intake,
+        )
+        self.assert_policy(
+            "unknown_triage_cannot_assign_blame",
+            validate_record,
+            "service_case",
+            {
+                **intake,
+                "status": "Triaged",
+                "triage_category": "Unknown",
+                "responsibility": "Manufacturer",
+                "triaged_by": "ops@example.invalid",
+                "triaged_at": "2026-08-18T11:00:00.000Z",
+            },
+            previous=intake,
+        )
+
+        triaged = {
+            **intake,
+            "status": "Triaged",
+            "triage_category": "Material or Manufacturer",
+            "responsibility": "Manufacturer",
+            "triaged_by": "ops@example.invalid",
+            "triaged_at": "2026-08-18T11:00:00.000Z",
+        }
+        validate_record("service_case", triaged, previous=intake)
+
+        # Remedy work is only ever issued as a governed service Work Package.
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "service_case",
+            {**triaged, "status": "Diagnosed", "root_cause_code": "granule_loss"},
+            previous=triaged,
+        )
+        diagnosed = {
+            **triaged,
+            "status": "Diagnosed",
+            "root_cause_code": "granule_loss",
+            "corrective_action_code": "replace_field_shingles",
+            "service_work_package": "wp-service-1",
+        }
+        validate_record("service_case", diagnosed, previous=triaged)
+
+        # The lifecycle cannot skip verification straight into customer acceptance.
+        self.assert_policy(
+            "invalid_state_transition",
+            validate_record,
+            "service_case",
+            {**diagnosed, "status": "Customer Accepted"},
+            previous=diagnosed,
+        )
+
+        issued = {**diagnosed, "status": "Remedy Issued"}
+        verified = {
+            **issued,
+            "status": "Remedy Verified",
+            "remedy_verified_by": "ops@example.invalid",
+            "remedy_verified_at": "2026-08-19T19:30:00.000Z",
+            "remedy_evidence": "evidence-1",
+        }
+        validate_record("service_case", verified, previous=issued)
+
+        # Cost recovery requires responsibility outside IronWrap's own crews.
+        self.assert_policy(
+            "recovery_requires_external_responsibility",
+            validate_record,
+            "service_case",
+            {
+                **verified,
+                "responsibility": "IronWrap Workmanship",
+                "recovery_counterparty": "sup-1",
+                "recovered_amount": 1100,
+            },
+            previous=verified,
+        )
+        validate_record(
+            "service_case",
+            {**verified, "recovery_counterparty": "sup-1", "recovered_amount": 1100},
+            previous=verified,
+        )
+
+        accepted = {
+            **verified,
+            "status": "Customer Accepted",
+            "customer_accepted_at": "2026-08-20T09:00:00.000Z",
+            "customer_acceptance": "decision-1",
+        }
+        validate_record("service_case", accepted, previous=verified)
+        validate_record(
+            "service_case",
+            {
+                **accepted,
+                "status": "Closed",
+                "closure_reason": "Remedied and Accepted",
+                "closed_at": "2026-08-20T09:05:00.000Z",
+            },
+            previous=accepted,
+        )
+
+        # A disputed case can never be closed as remedied and accepted without the acceptance.
+        disputed = {
+            **verified,
+            "status": "Disputed",
+        }
+        self.assert_policy(
+            "required_fields",
+            validate_record,
+            "service_case",
+            {
+                **disputed,
+                "status": "Closed",
+                "closure_reason": "Remedied and Accepted",
+                "closed_at": "2026-08-20T10:00:00.000Z",
+            },
+            previous=disputed,
+        )
+
+        # Closure fields belong to a closed case only.
+        self.assert_policy(
+            "closure_requires_closed_status",
+            validate_record,
+            "service_case",
+            {**triaged, "closure_reason": "Excluded", "closed_at": "2026-08-18T12:00:00.000Z"},
+            previous=triaged,
+        )
+
+        # Reopening is a forward correction of a closed case, not a fresh intake.
+        closed = {
+            **accepted,
+            "status": "Closed",
+            "closure_reason": "Remedied and Accepted",
+            "closed_at": "2026-08-20T09:05:00.000Z",
+        }
+        self.assert_policy(
+            "invalid_state_transition",
+            validate_record,
+            "service_case",
+            {**closed, "status": "Intake"},
+            previous=closed,
+        )
+        validate_record(
+            "service_case",
+            {
+                **accepted,
+                "status": "Reopened",
+                "closure_reason": None,
+                "closed_at": None,
+            },
+            previous=closed,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

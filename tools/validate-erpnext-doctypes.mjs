@@ -776,6 +776,31 @@ specs.push(
     requiredFields: ["material_lot_id", "roof_job", "controlled_item", "source_kind", "supplier_order", "source_shop_order", "source_evidence", "lot_number", "certificate_reference", "condition_status", "received_quantity", "available_quantity", "reserved_quantity", "consumed_quantity", "unit", "received_at", "status"],
   },
   {
+    name: "Service Case",
+    dir: "service_case",
+    idField: "service_case_id",
+    requiredFields: [
+      "service_case_id", "roofing_customer", "roofing_property", "roof_job", "warranty_packet",
+      "roof_area", "origin_work_package", "status", "severity", "symptom_code", "reported_channel",
+      "reported_at", "communication_consent", "intake_evidence", "response_due_at",
+      "triage_category", "responsibility", "triaged_by", "triaged_at", "root_cause_code",
+      "corrective_action_code", "service_work_package", "remedy_verified_by", "remedy_verified_at",
+      "remedy_evidence", "customer_accepted_at", "customer_acceptance", "recurrence_of_case",
+      "warranty_reserve_amount", "recovery_counterparty", "recovered_amount", "closure_reason",
+      "closed_at", "notes",
+    ],
+    fieldContracts: {
+      status: {
+        fieldtype: "Select",
+        options: "Intake\nTriaged\nDiagnosed\nRemedy Issued\nRemedy Verified\nCustomer Accepted\nDisputed\nClosed\nReopened",
+      },
+      severity: { fieldtype: "Select", options: "Emergency\nUrgent\nStandard\nMonitor" },
+      communication_consent: { fieldtype: "Link", options: "Communication Consent" },
+      service_work_package: { fieldtype: "Link", options: "Work Package" },
+      recurrence_of_case: { fieldtype: "Link", options: "Service Case" },
+    },
+  },
+  {
     name: "Nonconformance", dir: "nonconformance", idField: "nonconformance_id",
     requiredFields: ["nonconformance_id", "shop_order", "material_lot", "status", "detected_at", "reported_by", "description", "evidence_item", "containment", "disposition", "disposition_by", "disposition_at", "closed_by", "closed_at", "closure_evidence"],
   },
@@ -918,12 +943,12 @@ const discoveredDirs = readdirSync(doctypePath, { withFileTypes: true })
   .filter((dir) => existsSync(join(doctypePath, dir, `${dir}.json`)))
   .sort();
 
-assert.equal(specs.length, 78, "the product contract must contain exactly 78 DocTypes");
+assert.equal(specs.length, 79, "the product contract must contain exactly 79 DocTypes");
 assert.equal(specs.filter((spec) => spec.child).length, 19, "expected nineteen child-table DocTypes");
-assert.equal(specs.filter((spec) => !spec.child).length, 59, "expected 59 top-level DocTypes");
+assert.equal(specs.filter((spec) => !spec.child).length, 60, "expected 60 top-level DocTypes");
 assert.equal(new Set(specs.map((spec) => spec.name)).size, specs.length, "duplicate DocType name in validator");
 assert.equal(new Set(expectedDirs).size, specs.length, "duplicate DocType directory in validator");
-assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 78-type product contract");
+assert.deepEqual(discoveredDirs, expectedDirs, "on-disk DocTypes must exactly match the 79-type product contract");
 
 const pythonContracts = readPythonContracts();
 assert.deepEqual(

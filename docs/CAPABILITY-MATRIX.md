@@ -44,7 +44,7 @@ implication.
     },
     "tests": {
       "pwa": 418,
-      "worker": 662
+      "worker": 664
     }
   },
   "proof_state_policy": {
@@ -137,7 +137,7 @@ deployment, runtime, or business-acceptance evidence.
 | D1 migration chain | 49 migrations applied in order to an isolated local database; this lane takes `0056` and the IRO-62 forward repair on `main` takes `0057`, each above every number in flight on an open PR head when it was numbered, so `0048`-`0055` is a deliberate gap |
 | D1 backup/restore contract | All 104 migration-defined production tables, 154 indexes, and 219 trigger bindings validated by the deployment verifier |
 | Deployment contract | 267 checks passed, 0 failed |
-| Worker | 662 tests and typecheck passed; every migration applied through Wrangler and the Worker bundled with `--dry-run` |
+| Worker | 664 tests and typecheck passed; every migration applied through Wrangler and the Worker bundled with `--dry-run` |
 | Frappe | 337 unit tests, Ruff, and compileall passed |
 | Deployment/recovery tools | 106 readiness tests and 12 launch-proof tests passed |
 | PWA | 418 tests, typecheck, lint, Prettier, and build passed |

@@ -17,6 +17,7 @@ import {
   reconcileDiff,
   parseBody,
   validateSourceCount,
+  isOn,
 } from "./core.ts";
 import * as store from "./store.ts";
 import {
@@ -644,7 +645,7 @@ async function handleIngest(
 async function handlePush(env: Env, envelopeId: string): Promise<void> {
   const rec = await store.getEnvelope(env, envelopeId);
   if (!rec) throw new Error("envelope_missing");
-  if (rec.status === "pushed" || rec.status === "reconciled") {
+  if (rec.status === "pushed" || rec.status === "reconciled" || rec.status === "jn_skipped") {
     await store.markDeadLettersRecovered(env, envelopeId);
     return; // idempotent re-delivery also closes any stale open recovery row for this envelope only
   }
@@ -693,6 +694,23 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
       recovery_owner: env.OWNER_ALERT_EMAIL,
     });
     throw err; // retry preserves the owned business record as a hard prerequisite for the bridge
+  }
+
+  // Kill switch: a disabled JobNimbus write is a terminal skip, never a retry/DLQ.
+  // Do not stamp status=pushed — that would fake a CRM landing.
+  if (!isOn(env.JOBNIMBUS_ENABLED)) {
+    await store.recordAudit(env, {
+      automation: "jn_push",
+      trigger: "queue",
+      envelope_id: envelopeId,
+      action: "skip",
+      result: "ok",
+      error: "jobnimbus_disabled",
+    });
+    await store.setStatus(env, envelopeId, "jn_skipped", {
+      last_error: "jobnimbus_disabled",
+    });
+    return;
   }
 
   let r: Awaited<ReturnType<typeof pushToJobNimbus>>;

@@ -27,6 +27,7 @@ export type Status =
   | "received"        // raw stored + envelope written
   | "pending_jn_push" // queued for JobNimbus
   | "pushed"          // landed in JobNimbus
+  | "jn_skipped"      // JOBNIMBUS_ENABLED=false: honest skip, not a fake push
   | "reconciled"      // confirmed by daily reconcile
   | "duplicate"       // deduped against an earlier envelope
   | "dead";           // exhausted retries → dead-letter

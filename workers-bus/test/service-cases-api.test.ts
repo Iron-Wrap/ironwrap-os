@@ -22,6 +22,41 @@ const DIGEST_FIELD = "e".repeat(64);
 const DIGEST_CUSTOMER = "f".repeat(64);
 const DIGEST_RECOVERY = "1".repeat(64);
 
+/** Extended SQLite result codes D1 names in its wrapper; the low byte of each is `SQLITE_CONSTRAINT`. */
+const SQLITE_EXTENDED_CONSTRAINT: Record<number, string> = {
+  787: "SQLITE_CONSTRAINT_FOREIGNKEY",
+  1299: "SQLITE_CONSTRAINT_NOTNULL",
+  1555: "SQLITE_CONSTRAINT_PRIMARYKEY",
+  1811: "SQLITE_CONSTRAINT_TRIGGER",
+  2067: "SQLITE_CONSTRAINT_UNIQUE",
+};
+
+/**
+ * Real D1 never surfaces SQLite's bare text. It wraps every failure as
+ * `D1_ERROR: <message>: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_TRIGGER)`, and it says
+ * `SQLITE_CONSTRAINT` where `node:sqlite` says `constraint failed`. Forwarding the bare message is
+ * precisely what let the 502-for-409 mapping defect ship green -- every one of `0056`'s 38
+ * `RAISE(ABORT, ...)` refusals answered `502 service_case_store_unavailable` in production while
+ * this suite saw a clean `409` (Multica ELEC-22 §5). So the fake speaks production's dialect: the
+ * refusal codes asserted below are now reached through the same string the Worker really catches.
+ */
+function asD1Error(error: unknown): unknown {
+  if (!(error instanceof Error)) return error;
+  const errcode = (error as { errcode?: number }).errcode ?? 0;
+  if ((errcode & 0xff) !== 19) return new Error(`D1_ERROR: ${error.message}: SQLITE_ERROR`);
+  const extended = SQLITE_EXTENDED_CONSTRAINT[errcode];
+  const detail = extended ? `SQLITE_CONSTRAINT (extended: ${extended})` : "SQLITE_CONSTRAINT";
+  return new Error(`D1_ERROR: ${error.message}: ${detail}`);
+}
+
+function throughD1<T>(call: () => T): T {
+  try {
+    return call();
+  } catch (error) {
+    throw asD1Error(error);
+  }
+}
+
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
 
@@ -59,15 +94,18 @@ class SqliteD1 {
     this.onPrepare?.(sql);
     return {
       bind: (...args: unknown[]) => {
-        const statement = this.raw.prepare(sql);
+        const statement = throughD1(() => this.raw.prepare(sql));
         return {
-          first: async <T>() => (statement.get(...(args as never[])) ?? null) as T | null,
-          all: async <T>() => ({ results: statement.all(...(args as never[])) as T[] }),
-          run: async () => {
-            const before = this.totalChanges();
-            statement.run(...(args as never[]));
-            return { success: true, meta: { changes: this.totalChanges() - before } };
-          },
+          first: async <T>() =>
+            throughD1(() => (statement.get(...(args as never[])) ?? null) as T | null),
+          all: async <T>() =>
+            throughD1(() => ({ results: statement.all(...(args as never[])) as T[] })),
+          run: async () =>
+            throughD1(() => {
+              const before = this.totalChanges();
+              statement.run(...(args as never[]));
+              return { success: true, meta: { changes: this.totalChanges() - before } };
+            }),
         };
       },
     };
@@ -625,4 +663,66 @@ test("a transition whose version another writer already took is still refused wi
     (detail.body.events as { event_type: string }[]).map((event) => event.event_type),
     ["case_opened"],
   );
+});
+
+test("D1's error wrapper does not turn a refused transition into a server fault", async () => {
+  // The exact string the Worker catches in production. `node:sqlite` reports SQLite's bare message,
+  // real D1 wraps it, and a start-anchored match on the rule code saw only the former -- which is
+  // how all 38 of `0056`'s refusals reached callers as `502` (Multica ELEC-22 §5).
+  const wrapped = asD1Error(
+    Object.assign(new Error("service_case_closure_reason_not_allowed"), { errcode: 1811 }),
+  ) as Error;
+  assert.equal(
+    wrapped.message,
+    "D1_ERROR: service_case_closure_reason_not_allowed: SQLITE_CONSTRAINT " +
+      "(extended: SQLITE_CONSTRAINT_TRIGGER)",
+  );
+
+  const appEnv = env();
+  const opened = await call(appEnv, "ops", "POST", "/api/v1/service-cases", intakeBody());
+  const id = caseId(opened.body);
+
+  const withdrawn = await call(appEnv, "ops", "POST", `/api/v1/service-cases/${id}/closure`, {
+    closure_reason: "withdrawn",
+  });
+  assert.equal(withdrawn.status, 200);
+
+  // Triage on a closed case -- ELEC-22 §5's fourth probe, which answered `502` on real D1. The
+  // closure already took the case to its next version, so `0056`'s triage guard is the trigger that
+  // refuses it; the refusal only ever reaches the route through D1's wrapper, and it is the
+  // caller's mistake, so it must read as one.
+  const late = await call(appEnv, "ops", "POST", `/api/v1/service-cases/${id}/triage`, {
+    advisory_source: "none",
+    final_category: "material_manufacturer",
+    responsibility: "manufacturer",
+    evidence_digest: DIGEST_TRIAGE,
+  });
+  assert.equal(late.status, 409);
+  assert.equal(late.body.error, "service_case_triage_case_version_mismatch");
+
+  // It fails closed, exactly as the trigger intends: no state moved, no event appended.
+  const detail = await call(appEnv, "ops", "GET", `/api/v1/service-cases/${id}`);
+  assert.equal((detail.body.service_case as Record<string, unknown>).state, "closed");
+  assert.deepEqual(
+    (detail.body.events as { event_type: string }[]).map((event) => event.event_type),
+    ["case_opened", "closed"],
+  );
+});
+
+test("a genuine store fault is still answered as a server fault, not as a refused transition", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  const opened = await call(appEnv, "ops", "POST", "/api/v1/service-cases", intakeBody());
+  const id = caseId(opened.body);
+
+  // A missing table carries a token shaped exactly like a lifecycle rule code but no constraint
+  // marker. Widening the 409 branch must not let that masquerade as a business outcome.
+  db.onPrepare = (sql) => {
+    if (!sql.includes("service_case_events")) return;
+    throw new Error("D1_ERROR: no such table: service_case_events: SQLITE_ERROR");
+  };
+
+  const broken = await call(appEnv, "ops", "GET", `/api/v1/service-cases/${id}`);
+  assert.equal(broken.status, 502);
+  assert.equal(broken.body.error, "service_case_store_unavailable");
 });

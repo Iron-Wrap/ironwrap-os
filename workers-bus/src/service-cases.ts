@@ -895,16 +895,38 @@ function storeError(error: unknown): Response {
   if (message === "service_cost_recovery_claim_not_found") {
     return json({ error: "not_found" }, 404);
   }
-  if (/^service_case_|^service_cost_recovery_|constraint failed/i.test(message)) {
-    return json({ error: conflictCode(message) }, 409);
-  }
+  const refusal = conflictCode(message);
+  if (refusal !== null) return json({ error: refusal }, 409);
   return json({ error: "service_case_store_unavailable" }, 502);
 }
 
-function conflictCode(message: string): string {
-  const raised = message.match(/(?:ABORT|constraint failed):?\s*([a-z0-9_]+)/i);
-  const code = raised?.[1] ?? message;
-  return /^[a-z0-9_]{3,120}$/.test(code) ? code : "service_case_transition_refused";
+/** A lifecycle rule code as `0056`'s triggers raise it, and as the store's own guards throw it. */
+const DOMAIN_RULE_CODE = /^(?:service_case|service_cost_recovery)_[a-z0-9_]{2,100}$/;
+
+/**
+ * Real D1 does not hand back the bare SQLite message. It wraps it -- `D1_ERROR:
+ * service_case_event_type_mismatch: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_TRIGGER)` -- and
+ * says `SQLITE_CONSTRAINT`, never SQLite's own `constraint failed` wording. A start-anchored match
+ * on the rule code therefore missed every one of `0056`'s 38 `RAISE(ABORT, ...)` refusals in
+ * production, and each answered `502 service_case_store_unavailable` instead of the rule that
+ * refused it (Multica ELEC-22 §5). Only the in-repo fake, which forwarded `node:sqlite`'s bare
+ * message, ever matched -- which is exactly why CI stayed green over the defect.
+ *
+ * So the shape decides, not the prefix: a constraint marker anywhere means the caller was refused,
+ * and a bare rule code on its own is the store's own JS-thrown guard. Anything else really is a
+ * fault -- `no such table: service_case_events` carries a rule-code-looking token but no constraint
+ * marker, and must stay a 502 rather than being dressed up as a business outcome.
+ *
+ * @returns the rule code to answer `409` with, or `null` when this is a genuine server fault.
+ */
+function conflictCode(message: string): string | null {
+  const bare = message.trim();
+  if (DOMAIN_RULE_CODE.test(bare)) return bare;
+  if (!/SQLITE_CONSTRAINT|constraint failed|\bABORT\b/i.test(bare)) return null;
+  const raised = bare.match(/(?:D1_ERROR|ABORT|constraint failed):?\s*([a-z0-9_]+)/i);
+  if (raised && DOMAIN_RULE_CODE.test(raised[1])) return raised[1];
+  const anywhere = bare.match(/(?:service_case|service_cost_recovery)_[a-z0-9_]{2,100}/);
+  return anywhere?.[0] ?? "service_case_transition_refused";
 }
 
 function newId(prefix: string): string {

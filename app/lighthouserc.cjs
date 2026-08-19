@@ -15,7 +15,14 @@ module.exports = {
   baseUrl,
   protocol,
   url: `${baseUrl}/today`,
-  numberOfRuns: 3,
+  // Five runs, not three. The GitHub runner's own noise is wide enough that a median of three
+  // straddles the blocking-time bar on an unchanged artifact: CI run 32250637973 measured
+  // total-blocking-time medians of 242.234 ms and 200.504 ms across two attempts on the very same
+  // build (Multica ELEC-22 §4), and `main` alternated green and red on the same commit range.
+  // A wider sample narrows the median's own variance so the gate reports the page rather than the
+  // runner. The bars below are deliberately unchanged -- mobile-first is a gating product rule and
+  // 0.9 / 200 ms stay exactly where they were; making `/today` genuinely fast is a separate lane.
+  numberOfRuns: 5,
   chromePath: process.env.LHCI_CHROME_PATH ?? chromium.executablePath(),
   settings: {
     // Match Lighthouse's built-in `perf` preset explicitly. The programmatic API

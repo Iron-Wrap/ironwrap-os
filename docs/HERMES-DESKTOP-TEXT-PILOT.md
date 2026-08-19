@@ -80,7 +80,7 @@ The handoff is not an approval or execution receipt. The pilot never directly se
 books a calendar event, or writes Frappe, QuickBooks, Newo, Facet, or any D1/R2
 approval/outbox/projection authority. `request_record_communication_event` remains separately
 role-filtered, receipt-bound, and record-only; it never means a provider sent or delivered text.
-The immutable `hermes_desktop_submissions` and `hermes_desktop_events` rows are the pilot's
+The immutable `hermes_desktop_results` and `hermes_desktop_events` rows are the pilot's
 append-only ledger. The existing Frappe Communication Event rail remains an audited Draft/Blocked
 upsert and is not described as append-only.
 

@@ -651,6 +651,127 @@ export async function countPendingQuickBooksProjectionOutbox(env: Env, payloadHa
   return Number(row?.pending_count ?? 0);
 }
 
+export type ReadinessColumnProbe = { table: string; columns: readonly string[] };
+
+/**
+ * Every table and column the readiness, status, and replay queries read. Held as
+ * data, not as one join, because D1 refuses any result set wider than 100 columns:
+ * the single zero-row join this replaced had grown to 122 and failed outright with
+ * `too many columns in result set`, which took `/ready` red on every fresh stack.
+ */
+export const READINESS_COLUMN_PROBES: readonly ReadinessColumnProbe[] = [
+  {
+    table: "envelopes",
+    columns: ["envelope_id", "status", "updated_at", "erpnext_error", "estimate_submission_key"],
+  },
+  { table: "audit_log", columns: ["ts", "result", "run_id", "approved_by", "reason"] },
+  { table: "dead_letter", columns: ["envelope_id", "recovered"] },
+  { table: "source_counts", columns: ["day", "channel", "count"] },
+  { table: "heartbeat", columns: ["ran_at", "reconciled", "dead_letter_open"] },
+  {
+    table: "quickbooks_webhook_receipts",
+    columns: ["last_seen_at", "events_count", "replay_count"],
+  },
+  { table: "quickbooks_projection_outbox", columns: ["projection_status", "attempt_count"] },
+  { table: "lead_ack_receipts", columns: ["receipt_id", "outcome"] },
+  { table: "dedup_claims", columns: ["dedup_key"] },
+  { table: "replay_requests", columns: ["run_id", "selection", "status", "attempt_count"] },
+  { table: "app_users", columns: ["user_id", "tenant_id", "role", "access_role"] },
+  { table: "app_magic_links", columns: ["token_hash", "expires_at"] },
+  { table: "app_sessions", columns: ["session_hash", "expires_at"] },
+  { table: "app_device_pairings", columns: ["token_hash", "expires_at"] },
+  { table: "app_devices", columns: ["device_id", "paired_at"] },
+  { table: "app_auth_throttles", columns: ["key_hash", "attempts"] },
+  { table: "app_auth_audit", columns: ["event", "outcome"] },
+  { table: "field_actions", columns: ["device_action_id", "payload_hash"] },
+  { table: "field_action_media", columns: ["attachment_id", "checksum_sha256"] },
+  { table: "field_work_package_actions", columns: ["device_action_id", "work_package_id"] },
+  { table: "app_action_throttles", columns: ["scope", "attempts"] },
+  { table: "approval_requests", columns: ["approval_request_id", "state", "run_id"] },
+  { table: "approval_request_events", columns: ["event_type", "request_version"] },
+  { table: "governed_transitions", columns: ["transition_id", "subject_ref"] },
+  { table: "governed_transition_outbox", columns: ["outbox_id", "state", "attempt_count"] },
+  { table: "governed_transition_outbox_events", columns: ["event_type"] },
+  {
+    table: "quote_revision_approval_requests",
+    columns: ["quote_revision_approval_id", "state", "run_id"],
+  },
+  { table: "quote_revision_approval_request_events", columns: ["event_type", "request_version"] },
+  {
+    table: "production_schedule_approval_requests",
+    columns: ["production_schedule_approval_id", "state", "run_id"],
+  },
+  {
+    table: "production_schedule_approval_request_events",
+    columns: ["event_type", "request_version"],
+  },
+  { table: "customer_portal_links", columns: ["link_id", "expires_at"] },
+  { table: "customer_portal_access_throttles", columns: ["ip_hash", "attempts"] },
+  {
+    table: "measurement_intake_receipts",
+    columns: ["receipt_id", "status", "measurement_id", "report_raw_key", "report_sha256",
+      "ocr_status", "ocr_result_key", "ocr_review_required"],
+  },
+  { table: "public_estimate_rate_limits", columns: ["scope", "attempts"] },
+  { table: "newo_event_receipts", columns: ["event_id", "payload_hash"] },
+  {
+    table: "newo_sessions",
+    columns: ["session_id", "verification_status", "report_expected_at", "report_received_at",
+      "report_event_id", "missing_report_detected_at", "sync_updated_at"],
+  },
+  { table: "newo_control_actions", columns: ["action_id", "approval_reason", "consumed_at"] },
+  { table: "newo_slot_reservations", columns: ["reservation_id"] },
+  { table: "newo_reconciliation_runs", columns: ["run_id", "usage_status"] },
+  { table: "hermes_desktop_pairings", columns: ["pairing_id", "token_sha256", "consumed_at"] },
+  { table: "hermes_desktop_devices", columns: ["device_id", "access_token_sha256", "revoked_at"] },
+  { table: "hermes_desktop_envelopes", columns: ["envelope_id", "context_sha256", "state"] },
+  { table: "hermes_desktop_contexts", columns: ["context_id", "context_sha256", "staged_at"] },
+  { table: "hermes_desktop_results", columns: ["result_id", "result_json", "recorded_at"] },
+  { table: "hermes_desktop_events", columns: ["event_id", "detail_sha256", "created_at"] },
+];
+
+/**
+ * Columns per probe statement. Deliberately far below D1's 100-column ceiling so
+ * that adding a table to the list above cannot walk the probe back over the limit.
+ */
+export const READINESS_PROBE_COLUMN_BUDGET = 64;
+
+/**
+ * Group the probes into zero-row selects that each stay inside the budget. A probe
+ * wider than the budget on its own still gets its own statement rather than being
+ * silently dropped — the budget is enforced by test, not by truncating coverage.
+ */
+export function buildReadinessColumnProbeSql(
+  probes: readonly ReadinessColumnProbe[] = READINESS_COLUMN_PROBES,
+  budget: number = READINESS_PROBE_COLUMN_BUDGET,
+): string[] {
+  const groups: ReadinessColumnProbe[][] = [];
+  let current: ReadinessColumnProbe[] = [];
+  let width = 0;
+  for (const probe of probes) {
+    if (current.length > 0 && width + probe.columns.length > budget) {
+      groups.push(current);
+      current = [];
+      width = 0;
+    }
+    current.push(probe);
+    width += probe.columns.length;
+  }
+  if (current.length > 0) groups.push(current);
+  return groups.map(renderReadinessProbeSql);
+}
+
+/** One zero-row select: every listed column, no row, no customer data read. */
+function renderReadinessProbeSql(group: readonly ReadinessColumnProbe[]): string {
+  const columns = group.flatMap((probe, index) =>
+    probe.columns.map((column) => `p${index}.${column} AS p${index}_${column}`),
+  );
+  const sources = group.map((probe, index) =>
+    index === 0 ? `${probe.table} p0` : `LEFT JOIN ${probe.table} p${index} ON 1 = 0`,
+  );
+  return `SELECT ${columns.join(", ")} FROM ${sources.join(" ")} LIMIT 0`;
+}
+
 /** Non-mutating D1/schema probe used by the public readiness route. */
 export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
   const artifacts = await env.DB.prepare(
@@ -668,7 +789,7 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'measurement_intake_receipts','public_estimate_rate_limits',
           'newo_event_receipts','newo_sessions','newo_control_actions','newo_slot_reservations',
           'newo_reconciliation_runs','hermes_desktop_pairings','hermes_desktop_devices',
-          'hermes_desktop_envelopes','hermes_desktop_contexts','hermes_desktop_submissions',
+          'hermes_desktop_envelopes','hermes_desktop_contexts','hermes_desktop_results',
           'hermes_desktop_events') THEN 1 ELSE 0 END), 0) AS table_count,
        COALESCE(SUM(CASE WHEN type = 'index' AND name IN
          ('idx_dead_letter_open_envelope','idx_audit_result_ts','idx_envelopes_operational',
@@ -753,8 +874,8 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
           'hermes_desktop_devices_binding_immutable','hermes_desktop_envelopes_binding_immutable',
           'hermes_desktop_envelopes_state_transition','hermes_desktop_events_immutable_delete',
           'hermes_desktop_events_immutable_update','hermes_desktop_pairings_binding_immutable',
-          'hermes_desktop_submissions_immutable_delete',
-          'hermes_desktop_submissions_immutable_update') THEN 1 ELSE 0 END), 0) AS trigger_count
+          'hermes_desktop_results_append_only_delete',
+          'hermes_desktop_results_append_only_update') THEN 1 ELSE 0 END), 0) AS trigger_count
      FROM sqlite_master`,
   ).first<{ table_count: number; index_count: number; trigger_count: number }>();
 
@@ -796,141 +917,9 @@ export async function checkDatabaseReadiness(env: Env): Promise<boolean> {
     !facetAssociationTriggerSql.includes("coalesce(") &&
     Number(authority?.unresolved_access_roles ?? -1) === 0;
 
-  // This zero-row join proves every table/column used by readiness, status, and replay queries
-  // exists without reading customer data.
-  await env.DB.prepare(
-    `SELECT e.envelope_id, e.status, e.updated_at, e.erpnext_error, e.estimate_submission_key,
-            a.ts AS audit_ts, a.result AS audit_result, a.run_id, a.approved_by, a.reason,
-            d.envelope_id AS dead_envelope_id, d.recovered,
-            s.day AS source_day, s.channel, s.count AS source_count,
-            h.ran_at, h.reconciled, h.dead_letter_open,
-            q.last_seen_at, q.events_count, q.replay_count,
-            qpo.projection_status AS quickbooks_projection_status,
-            qpo.attempt_count AS quickbooks_projection_attempt_count,
-            lar.receipt_id AS lead_ack_receipt_id, lar.outcome AS lead_ack_outcome,
-            c.dedup_key,
-            rr.run_id AS replay_run_id, rr.selection AS replay_selection,
-            rr.status AS replay_status, rr.attempt_count AS replay_attempt_count,
-            au.user_id AS app_user_id, au.tenant_id AS app_tenant_id,
-            au.role AS app_role, au.access_role AS app_access_role,
-            ml.token_hash AS magic_link_hash, ml.expires_at AS magic_link_expires_at,
-            aps.session_hash AS app_session_hash, aps.expires_at AS app_session_expires_at,
-            dp.token_hash AS device_pairing_hash, dp.expires_at AS device_pairing_expires_at,
-            ad.device_id AS app_device_id, ad.paired_at AS app_device_paired_at,
-            at.key_hash AS auth_throttle_hash, at.attempts AS auth_throttle_attempts,
-            aa.event AS auth_audit_event, aa.outcome AS auth_audit_outcome,
-            fa.device_action_id AS field_action_id, fa.payload_hash AS field_payload_hash,
-            fam.attachment_id AS field_attachment_id, fam.checksum_sha256 AS field_media_checksum,
-            fwpa.device_action_id AS field_work_package_action_id,
-            fwpa.work_package_id AS field_work_package_id,
-            aat.scope AS action_throttle_scope, aat.attempts AS action_throttle_attempts,
-            ar.approval_request_id, ar.state AS approval_state, ar.run_id AS approval_run_id,
-            are.event_type AS approval_event_type, are.request_version AS approval_event_version,
-            gt.transition_id AS governed_transition_id, gt.subject_ref AS governed_transition_subject_ref,
-            gto.outbox_id AS governed_outbox_id, gto.state AS governed_outbox_state,
-            gto.attempt_count AS governed_outbox_attempt_count,
-            gtoe.event_type AS governed_outbox_event_type,
-            qrar.quote_revision_approval_id,
-            qrar.state AS quote_revision_approval_state,
-            qrar.run_id AS quote_revision_approval_run_id,
-            qrare.event_type AS quote_revision_approval_event_type,
-            qrare.request_version AS quote_revision_approval_event_version,
-            psar.production_schedule_approval_id,
-            psar.state AS production_schedule_approval_state,
-            psar.run_id AS production_schedule_approval_run_id,
-            psare.event_type AS production_schedule_approval_event_type,
-            psare.request_version AS production_schedule_approval_event_version,
-            cpl.link_id AS customer_portal_link_id,
-            cpl.expires_at AS customer_portal_expires_at,
-            cpat.ip_hash AS customer_portal_throttle_ip_hash,
-            cpat.attempts AS customer_portal_throttle_attempts,
-            mir.receipt_id AS measurement_receipt_id,
-            mir.status AS measurement_receipt_status,
-            mir.measurement_id AS measurement_receipt_measurement_id,
-            mir.report_raw_key AS measurement_report_raw_key,
-            mir.report_sha256 AS measurement_report_sha256,
-            mir.ocr_status AS measurement_ocr_status,
-            mir.ocr_result_key AS measurement_ocr_result_key,
-            mir.ocr_review_required AS measurement_ocr_review_required,
-            perl.scope AS public_estimate_rate_limit_scope,
-            perl.attempts AS public_estimate_rate_limit_attempts,
-            ner.event_id AS newo_event_id, ner.payload_hash AS newo_event_payload_hash,
-            ns.session_id AS newo_session_id, ns.verification_status AS newo_verification_status,
-            ns.report_expected_at AS newo_report_expected_at,
-            ns.report_received_at AS newo_report_received_at,
-            ns.report_event_id AS newo_report_event_id,
-            ns.missing_report_detected_at AS newo_missing_report_detected_at,
-            ns.sync_updated_at AS newo_sync_updated_at,
-            nca.action_id AS newo_control_action_id, nca.approval_reason AS newo_approval_reason,
-            nca.consumed_at AS newo_control_consumed_at,
-            nsr.reservation_id AS newo_slot_reservation_id,
-            nrr.run_id AS newo_reconciliation_run_id,
-            nrr.usage_status AS newo_usage_status,
-            hdp.pairing_id AS hermes_desktop_pairing_id,
-            hdp.token_sha256 AS hermes_desktop_pairing_token_sha256,
-            hdp.consumed_at AS hermes_desktop_pairing_consumed_at,
-            hdd.device_id AS hermes_desktop_device_id,
-            hdd.access_token_sha256 AS hermes_desktop_access_token_sha256,
-            hdd.revoked_at AS hermes_desktop_device_revoked_at,
-            hde.envelope_id AS hermes_desktop_envelope_id,
-            hde.context_sha256 AS hermes_desktop_envelope_context_sha256,
-            hde.state AS hermes_desktop_envelope_state,
-            hdc.context_id AS hermes_desktop_context_id,
-            hdc.context_sha256 AS hermes_desktop_staged_context_sha256,
-            hdc.staged_at AS hermes_desktop_context_staged_at,
-            hds.submission_id AS hermes_desktop_submission_id,
-            hds.governed_handoff_json AS hermes_desktop_governed_handoff_json,
-            hds.submitted_at AS hermes_desktop_submission_submitted_at,
-            hdev.event_id AS hermes_desktop_event_id,
-            hdev.detail_sha256 AS hermes_desktop_event_detail_sha256,
-            hdev.created_at AS hermes_desktop_event_created_at
-     FROM envelopes e
-     LEFT JOIN audit_log a ON 1 = 0
-     LEFT JOIN dead_letter d ON 1 = 0
-     LEFT JOIN source_counts s ON 1 = 0
-     LEFT JOIN heartbeat h ON 1 = 0
-     LEFT JOIN quickbooks_webhook_receipts q ON 1 = 0
-     LEFT JOIN quickbooks_projection_outbox qpo ON 1 = 0
-     LEFT JOIN lead_ack_receipts lar ON 1 = 0
-     LEFT JOIN dedup_claims c ON 1 = 0
-     LEFT JOIN replay_requests rr ON 1 = 0
-     LEFT JOIN app_users au ON 1 = 0
-     LEFT JOIN app_magic_links ml ON 1 = 0
-     LEFT JOIN app_sessions aps ON 1 = 0
-     LEFT JOIN app_device_pairings dp ON 1 = 0
-     LEFT JOIN app_devices ad ON 1 = 0
-     LEFT JOIN app_auth_throttles at ON 1 = 0
-     LEFT JOIN app_auth_audit aa ON 1 = 0
-     LEFT JOIN field_actions fa ON 1 = 0
-     LEFT JOIN field_action_media fam ON 1 = 0
-     LEFT JOIN field_work_package_actions fwpa ON 1 = 0
-     LEFT JOIN app_action_throttles aat ON 1 = 0
-     LEFT JOIN approval_requests ar ON 1 = 0
-     LEFT JOIN approval_request_events are ON 1 = 0
-     LEFT JOIN governed_transitions gt ON 1 = 0
-     LEFT JOIN governed_transition_outbox gto ON 1 = 0
-     LEFT JOIN governed_transition_outbox_events gtoe ON 1 = 0
-     LEFT JOIN quote_revision_approval_requests qrar ON 1 = 0
-     LEFT JOIN quote_revision_approval_request_events qrare ON 1 = 0
-     LEFT JOIN production_schedule_approval_requests psar ON 1 = 0
-     LEFT JOIN production_schedule_approval_request_events psare ON 1 = 0
-     LEFT JOIN customer_portal_links cpl ON 1 = 0
-     LEFT JOIN customer_portal_access_throttles cpat ON 1 = 0
-     LEFT JOIN measurement_intake_receipts mir ON 1 = 0
-     LEFT JOIN public_estimate_rate_limits perl ON 1 = 0
-     LEFT JOIN newo_event_receipts ner ON 1 = 0
-     LEFT JOIN newo_sessions ns ON 1 = 0
-     LEFT JOIN newo_control_actions nca ON 1 = 0
-     LEFT JOIN newo_slot_reservations nsr ON 1 = 0
-     LEFT JOIN newo_reconciliation_runs nrr ON 1 = 0
-     LEFT JOIN hermes_desktop_pairings hdp ON 1 = 0
-     LEFT JOIN hermes_desktop_devices hdd ON 1 = 0
-     LEFT JOIN hermes_desktop_envelopes hde ON 1 = 0
-     LEFT JOIN hermes_desktop_contexts hdc ON 1 = 0
-     LEFT JOIN hermes_desktop_submissions hds ON 1 = 0
-     LEFT JOIN hermes_desktop_events hdev ON 1 = 0
-     LIMIT 0`,
-  ).all();
+  // The zero-row probes prove every table and column readiness, status, and replay
+  // depend on, without reading a single customer row.
+  for (const sql of buildReadinessColumnProbeSql()) await env.DB.prepare(sql).all();
   return Number(artifacts?.table_count ?? 0) === 45 &&
     Number(artifacts?.index_count ?? 0) === 63 &&
     Number(artifacts?.trigger_count ?? 0) === 54 &&

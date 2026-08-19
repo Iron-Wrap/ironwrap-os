@@ -4,6 +4,7 @@ import {
   CircleGauge,
   ClipboardCheck,
   Headphones,
+  LifeBuoy,
   Palette,
   Settings,
   ShieldCheck,
@@ -27,6 +28,7 @@ export interface NavigationItem {
     | "/approvals"
     | "/production"
     | "/sales"
+    | "/service"
     | "/newo"
     | "/accounting/quickbooks"
     | "/settings";
@@ -55,6 +57,13 @@ const officeNavigation = [
     mobileLabel: "Approve",
     to: "/approvals",
     icon: ShieldCheck,
+    activeColor: "warning",
+  },
+  {
+    label: "Service",
+    mobileLabel: "Callbacks",
+    to: "/service",
+    icon: LifeBuoy,
     activeColor: "warning",
   },
   { label: "Today", to: "/today", icon: ClipboardCheck, activeColor: "accent" },

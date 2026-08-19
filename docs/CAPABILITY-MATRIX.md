@@ -34,17 +34,17 @@ implication.
   "schema": "ironwrap_capability_contract_v1",
   "expected": {
     "frappe_doctypes": {
-      "total": 78,
-      "top_level": 59,
+      "total": 79,
+      "top_level": 60,
       "child": 19
     },
     "d1_migrations": {
-      "count": 48,
+      "count": 49,
       "latest": "0057_work_package_completion_action_kind.sql"
     },
     "tests": {
-      "pwa": 376,
-      "worker": 626
+      "pwa": 398,
+      "worker": 660
     }
   },
   "proof_state_policy": {
@@ -124,6 +124,37 @@ The fence's perimeter is the Cargo Load, which is the only record that binds a F
 Roof Job. It engages from the planned (`Draft`) load onward, so scheduling is fenced before the
 truck is loaded; the driver, weight, and custody comparisons apply from `Loaded`, when those facts
 first exist. A job that binds no asset through a Cargo Load has nothing for the fence to check.
+
+### Service lifecycle delta (IRO-56 branch, 2026-08-19, after merging `main` @ 394de9b)
+
+Repository-only checks re-run on the IRO-56 service-lifecycle branch **with `main` merged in**, so
+every number below is the union of this lane and everything already on `main`. This is not
+deployment, runtime, or business-acceptance evidence.
+
+| Contract | Result |
+|---|---|
+| Frappe model | 79 DocTypes: 60 top-level and 19 child |
+| D1 migration chain | 49 migrations applied in order to an isolated local database; this lane takes `0056` and the IRO-62 forward repair on `main` takes `0057`, each above every number in flight on an open PR head when it was numbered, so `0048`-`0055` is a deliberate gap |
+| D1 backup/restore contract | All 104 migration-defined production tables, 154 indexes, and 219 trigger bindings validated by the deployment verifier |
+| Deployment contract | 267 checks passed, 0 failed |
+| Worker | 660 tests and typecheck passed; every migration applied through Wrangler and the Worker bundled with `--dry-run` |
+| Frappe | 337 unit tests, Ruff, and compileall passed |
+| Deployment/recovery tools | 106 readiness tests and 12 launch-proof tests passed |
+| PWA | 398 tests, typecheck, lint, Prettier, and build passed |
+| PWA browser (Playwright), MCP | Not re-run locally on this branch; prior evidence is not current-head proof |
+
+The lifecycle is reachable from the running product: `workers-bus/src/service-cases.ts` owns the
+`/api/v1/service-cases` office routes wired into `workers-bus/src/app-api.ts`, and the PWA serves
+them at `/service` (callback desk) and `/service/$caseId` (one case end to end). Cost recovery
+records intent and an operator-observed result only; no supplier, manufacturer, or insurer is
+called from any code path.
+
+End-to-end evidence (Multica ELEC-21) drove that journey from a real browser against a local stack
+and returned two defects, both fixed on this branch and both now covered by tests: every lifecycle
+transition answered `409 Conflict` after committing, because D1 counts trigger-written rows in
+`meta.changes` and the write guards read that count; and the callback desk listed a single case,
+because an absent `?limit=` parsed as `0` rather than as the default. Neither was visible to the
+lane's route tests until the fake D1 in those tests was aligned with D1's `meta.changes` semantics.
 
 ## Implemented substrate
 
@@ -298,7 +329,7 @@ Target gaps:
 - employee/competency/training and subcontractor clearance;
 - fleet incident/collision lifecycle and shop-machine work-centre tooling;
 - safety incident, emergency, NCR, quarantine, and corrective action;
-- customer complaint/warranty service case;
+- customer complaint/warranty service surfaces in the portal and mobile field app;
 - compliance/licence/permit/claims calendars;
 - finance/cash/tax exception views;
 - accessible human escalation and relationship-sensitive handoff across every customer surface;
@@ -352,7 +383,7 @@ Target gaps:
 | Quality | Partial: signed independent first-piece/final inspection, Quality Hold, NCR/quarantine, and verified evidence | ITP, disposition workflow, and live proof | seeded defect containment and final-inspection regression |
 | Change | change order/supplement | full design/work-package/order/schedule propagation | hidden-condition scenario |
 | Closeout | completion/warranty/review records | inspection, as-built, registration, accounting and archive loop | real closeout and recovery |
-| Warranty/service | warranty packet | service case, diagnosis, responsibility, remedy, recovery | callback end to end |
+| Warranty/service | Partial: versioned Service Case bound to customer/property/job/asset/warranty/consent, duplicate-linked intake, human-authority triage, diagnosis-issued service Work Package, separate remedy verification and customer acceptance, evidence-bound supplier/manufacturer/insurer recovery on the one-attempt effect shape, history-preserving reopen, and an office BFF surface (`/api/v1/service-cases`) reachable from the PWA at `/service` | dispatch/scheduling integration, customer portal and mobile service surfaces, re-seat onto the IRO-38 canonical effect runtime, and live recovery settlement | callback end to end |
 | Finance | Partial: raw-backed immutable QuickBooks webhook identity ledger and Pending reconciliation work; no webhook-only provider payment, posting, or reconciliation truth | authenticated provider detail, provider-issued invoice/holdback/payment/refund/tax/payroll contracts, and accountant-approved reconciliation | provider sandbox, linked mirror, and accountant signoff |
 | Workforce | Crew Profile/Crew Member projections plus individually versioned worker/subcontractor competency, trade, WCB, permit, inspection, insurance, and manufacturer Authority Records consumed by schedule/field/shop gates | HR, apprenticeship, time, accommodation, and live issuer readback continuity | worker lifecycle |
 | Fleet/equipment | Partial: versioned asset/driver/inspection/defect/maintenance/usage/cargo/custody records, offline pre/post-trip and defect capture bound to an actor who holds or drives the asset, and a release fence that blocks unsafe, overdue, unlicensed, overloaded, or wrong-custody assets carried on a job's Cargo Load | telematics/sensor identity, collision and fleet incident lifecycle, shop machine and work-centre tooling, facility assets, and real-vehicle proof | unsafe asset release blocked on a real vehicle day |

@@ -67,6 +67,26 @@ export const API_PATHS = {
     `/api/v1/quote-revision-approvals/${encodeURIComponent(approvalId)}/reject`,
   quoteRevisionApprovalReconcile: (approvalId: string) =>
     `/api/v1/quote-revision-approvals/${encodeURIComponent(approvalId)}/reconcile`,
+  serviceCases: "/api/v1/service-cases",
+  serviceCase: (caseId: string) => `/api/v1/service-cases/${encodeURIComponent(caseId)}`,
+  serviceCaseTriage: (caseId: string) =>
+    `/api/v1/service-cases/${encodeURIComponent(caseId)}/triage`,
+  serviceCaseDiagnoses: (caseId: string) =>
+    `/api/v1/service-cases/${encodeURIComponent(caseId)}/diagnoses`,
+  serviceCaseRemedies: (caseId: string) =>
+    `/api/v1/service-cases/${encodeURIComponent(caseId)}/remedies`,
+  serviceCaseRemedyVerification: (caseId: string, remedyId: string) =>
+    `/api/v1/service-cases/${encodeURIComponent(caseId)}/remedies/${encodeURIComponent(remedyId)}/verification`,
+  serviceCaseCustomerDecision: (caseId: string, remedyId: string) =>
+    `/api/v1/service-cases/${encodeURIComponent(caseId)}/remedies/${encodeURIComponent(remedyId)}/customer-decision`,
+  serviceCaseClosure: (caseId: string) =>
+    `/api/v1/service-cases/${encodeURIComponent(caseId)}/closure`,
+  serviceCaseReopen: (caseId: string) =>
+    `/api/v1/service-cases/${encodeURIComponent(caseId)}/reopen`,
+  serviceCaseCostRecoveryClaims: (caseId: string) =>
+    `/api/v1/service-cases/${encodeURIComponent(caseId)}/cost-recovery-claims`,
+  serviceCaseCostRecoveryReconcile: (caseId: string, claimId: string) =>
+    `/api/v1/service-cases/${encodeURIComponent(caseId)}/cost-recovery-claims/${encodeURIComponent(claimId)}/reconcile`,
   approvals: "/api/v1/approvals",
   approvalLeadTriagePrepare: "/api/v1/approvals/lead-triage",
   approvalApprove: (approvalId: string) =>

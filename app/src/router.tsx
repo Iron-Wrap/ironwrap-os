@@ -46,6 +46,12 @@ const ProductionRunwayPage = lazy(async () => ({
 const NewoOperationsPage = lazy(async () => ({
   default: (await import("./newo/newo-operations-page")).NewoOperationsPage,
 }));
+const ServiceDeskPage = lazy(async () => ({
+  default: (await import("./service/service-desk-page")).ServiceDeskPage,
+}));
+const ServiceCasePage = lazy(async () => ({
+  default: (await import("./service/service-case-page")).ServiceCasePage,
+}));
 const PostizPage = lazy(async () => ({
   default: (await import("./postiz/postiz-page")).PostizPage,
 }));
@@ -392,6 +398,18 @@ const newoOperationsRoute = createRoute({
   component: NewoOperationsRoute,
 });
 
+const serviceDeskRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/service",
+  component: ServiceDeskRoute,
+});
+
+const serviceCaseRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/service/$caseId",
+  component: ServiceCaseRoute,
+});
+
 const postizIntentRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/marketing/postiz/$intentId",
@@ -476,10 +494,26 @@ function NewoOperationsRoute() {
   );
 }
 
+function ServiceDeskRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <ServiceDeskPage />
+    </Suspense>
+  );
+}
+
 function PostizIntentRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
       <PostizPage />
+    </Suspense>
+  );
+}
+
+function ServiceCaseRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <ServiceCasePage />
     </Suspense>
   );
 }
@@ -579,6 +613,8 @@ const routeTree = rootRoute.addChildren([
     ownerRoute,
     approvalsRoute,
     newoOperationsRoute,
+    serviceDeskRoute,
+    serviceCaseRoute,
     postizIntentRoute,
     quickBooksSettingsRoute,
     quickBooksFinalInvoiceRoute,

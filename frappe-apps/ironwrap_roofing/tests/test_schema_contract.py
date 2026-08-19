@@ -82,6 +82,7 @@ TOP_LEVEL_DOCTYPES = {
     "Safety Plan",
     "Shop Order",
     "Scope Clause",
+    "Service Case",
     "Supplier Order",
     "Supplier Profile",
     "Supplier Quote",
@@ -329,9 +330,9 @@ class DocTypeContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.doctypes = load_doctypes()
 
-    def test_complete_78_doctype_blueprint(self) -> None:
+    def test_complete_79_doctype_blueprint(self) -> None:
         self.assertEqual(set(self.doctypes), TOP_LEVEL_DOCTYPES | CHILD_DOCTYPES)
-        self.assertEqual(len(self.doctypes), 78)
+        self.assertEqual(len(self.doctypes), 79)
 
         for name, (_, document) in self.doctypes.items():
             with self.subTest(doctype=name):

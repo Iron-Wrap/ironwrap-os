@@ -554,6 +554,7 @@ IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
     "roofing_customer": ("customer_id",),
     "roofing_property": ("property_key",),
     "safety_plan": ("safety_plan_id",),
+    "service_case": ("service_case_id",),
     "shop_order": ("shop_order_id",),
     "scope_clause": ("scope_clause_id",),
     "supplier_order": ("supplier_order_id",),
@@ -6933,6 +6934,157 @@ def _validate_warranty(record: Any, context: Mapping[str, Any]) -> None:
         require_fields(record, "issued_at", "issued_evidence")
 
 
+
+SERVICE_CASE_STATUSES = (
+    "Intake",
+    "Triaged",
+    "Diagnosed",
+    "Remedy Issued",
+    "Remedy Verified",
+    "Customer Accepted",
+    "Disputed",
+    "Closed",
+    "Reopened",
+)
+SERVICE_CASE_TRIAGED_STATUSES = frozenset(SERVICE_CASE_STATUSES) - {"Intake", "Reopened"}
+# The bus owns the lifecycle (D1 migration 0056) and lets an untriaged intake case close as
+# excluded, withdrawn, or as a linked duplicate.  Those closures carry no triage attribution
+# because no triage ever happened; demanding it here would make a fact the bus accepts
+# unrepresentable in the Desk.  Every other closure follows a triage decision and must name it.
+SERVICE_CASE_UNTRIAGED_CLOSURES = frozenset(("Excluded", "Duplicate", "Withdrawn"))
+SERVICE_CASE_DIAGNOSED_STATUSES = frozenset(
+    ("Diagnosed", "Remedy Issued", "Remedy Verified", "Customer Accepted", "Disputed")
+)
+SERVICE_CASE_VERIFIED_STATUSES = frozenset(
+    ("Remedy Verified", "Customer Accepted", "Disputed")
+)
+SERVICE_CASE_EXTERNAL_RESPONSIBILITIES = frozenset(
+    ("Manufacturer", "Supplier", "Third Party")
+)
+SERVICE_CASE_TRANSITIONS: dict[str, set[str]] = {
+    "Intake": {"Triaged", "Closed"},
+    "Triaged": {"Diagnosed", "Closed"},
+    "Diagnosed": {"Diagnosed", "Remedy Issued", "Closed"},
+    "Remedy Issued": {"Remedy Verified", "Diagnosed"},
+    "Remedy Verified": {"Customer Accepted", "Disputed"},
+    "Customer Accepted": {"Closed"},
+    "Disputed": {"Diagnosed", "Closed"},
+    "Closed": {"Reopened"},
+    "Reopened": {"Triaged"},
+}
+SERVICE_CASE_EMERGENCY_RESPONSE_CEILING_MINUTES = 240
+
+
+def _minutes_between(record: Any, start_field: str, end_field: str) -> Decimal | None:
+    start = _get(record, start_field)
+    end = _get(record, end_field)
+    if not _safe_iso_timestamp(start) or not _safe_iso_timestamp(end):
+        return None
+    started = datetime.fromisoformat(str(start).strip().replace("Z", "+00:00"))
+    ended = datetime.fromisoformat(str(end).strip().replace("Z", "+00:00"))
+    return Decimal((ended - started).total_seconds()) / Decimal(60)
+
+
+def _validate_service_case(record: Any, context: Mapping[str, Any]) -> None:
+    """Complaint, warranty, service, diagnosis, remedy, and cost-recovery record rules.
+
+    The bus owns the versioned lifecycle and its evidence digests (D1 migration 0056); this
+    validator is the Frappe-side contract for the same facts, so a record written by hand can
+    never claim a state its evidence does not support.
+    """
+
+    _enforce_state_transition(record, context, "status", SERVICE_CASE_TRANSITIONS)
+    status = _get(record, "status")
+    require_fields(
+        record,
+        "roofing_customer",
+        "roofing_property",
+        "roof_job",
+        "severity",
+        "symptom_code",
+        "reported_channel",
+        "reported_at",
+        "communication_consent",
+        "response_due_at",
+    )
+
+    response_window = _minutes_between(record, "reported_at", "response_due_at")
+    if response_window is not None and response_window <= 0:
+        raise PolicyViolation(
+            "invalid_service_response_window",
+            "response_due_at must be after reported_at",
+            "response_due_at",
+        )
+    if (
+        _get(record, "severity") == "Emergency"
+        and response_window is not None
+        and response_window > SERVICE_CASE_EMERGENCY_RESPONSE_CEILING_MINUTES
+    ):
+        raise PolicyViolation(
+            "emergency_response_window_exceeded",
+            "an emergency callback cannot carry a routine response window",
+            "response_due_at",
+        )
+
+    if _get(record, "recurrence_of_case") and _get(record, "recurrence_of_case") == _get(
+        record, "service_case_id"
+    ):
+        raise PolicyViolation(
+            "self_referential_recurrence",
+            "a case cannot be a recurrence of itself",
+            "recurrence_of_case",
+        )
+
+    closed_without_triage = status == "Closed" and _get(
+        record, "closure_reason"
+    ) in SERVICE_CASE_UNTRIAGED_CLOSURES
+    if status in SERVICE_CASE_TRIAGED_STATUSES and not closed_without_triage:
+        # Triage is a human decision: an unattributed category is not a decision at all.
+        require_fields(record, "triage_category", "responsibility", "triaged_by", "triaged_at")
+    if _get(record, "triage_category") == "Unknown" and _get(record, "responsibility") not in (
+        None,
+        "",
+        "Undetermined",
+    ):
+        raise PolicyViolation(
+            "unknown_triage_cannot_assign_blame",
+            "an unknown triage category must leave responsibility undetermined",
+            "responsibility",
+        )
+
+    if status in SERVICE_CASE_DIAGNOSED_STATUSES:
+        require_fields(
+            record, "root_cause_code", "corrective_action_code", "service_work_package"
+        )
+    if status in SERVICE_CASE_VERIFIED_STATUSES:
+        require_fields(record, "remedy_verified_by", "remedy_verified_at", "remedy_evidence")
+    if status == "Customer Accepted":
+        require_fields(record, "customer_accepted_at", "customer_acceptance")
+
+    require_nonnegative(record, "warranty_reserve_amount", "recovered_amount")
+    if _get(record, "recovered_amount") not in (None, "") and _decimal(
+        record, "recovered_amount"
+    ):
+        require_fields(record, "recovery_counterparty")
+        if _get(record, "responsibility") not in SERVICE_CASE_EXTERNAL_RESPONSIBILITIES:
+            raise PolicyViolation(
+                "recovery_requires_external_responsibility",
+                "cost recovery requires responsibility outside IronWrap's own crews",
+                "responsibility",
+            )
+
+    if status == "Closed":
+        require_fields(record, "closure_reason", "closed_at")
+        if _get(record, "closure_reason") == "Remedied and Accepted":
+            require_fields(record, "customer_accepted_at", "customer_acceptance")
+    elif _get(record, "closure_reason") or _get(record, "closed_at"):
+        raise PolicyViolation(
+            "closure_requires_closed_status",
+            "closure_reason and closed_at belong to a Closed case",
+            "closure_reason",
+        )
+
+
 def _validate_gate_evidence(record: Any, context: Mapping[str, Any]) -> None:
     evidence_id = _get(record, "evidence_item")
     sources = context.get("gate_evidence")
@@ -9104,6 +9256,7 @@ VALIDATORS = {
     "roof_job": _validate_roof_job,
     "roofing_customer": _validate_roofing_customer,
     "safety_plan": _validate_safety_plan,
+    "service_case": _validate_service_case,
     "shop_order": _validate_shop_order,
     "scope_clause": _validate_scope_clause,
     "supplier_order": _validate_supplier_order,

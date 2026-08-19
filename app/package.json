@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "test:pwa": "npm run build && playwright test",
     "test:lighthouse": "npm run build && node scripts/lighthouse-field.mjs",
+    "test:lighthouse:ab": "npm run build && node scripts/lighthouse-protocol-ab.mjs",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint .",
     "format": "prettier --write .",

@@ -1,10 +1,13 @@
 import { once } from "node:events";
+import { get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
 import { spawn } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { median } from "./lighthouse-statistics.mjs";
 
 const require = createRequire(import.meta.url);
 const chromeLauncher = require("chrome-launcher");
@@ -14,11 +17,7 @@ const config = require("../lighthouserc.cjs");
 const { seedPairedFieldDevice } = require("./lhci-field-device.cjs");
 const { certificateSpkiFingerprint } = await import("./acceptance-certificate.mjs");
 
-export function median(values) {
-  if (!values.length) throw new Error("Cannot calculate a median for an empty set");
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
-}
+export { median };
 
 export function evaluateAssertions(results, assertions) {
   const failures = [];
@@ -65,9 +64,14 @@ async function waitForServer(url, child) {
 
 // The loopback certificate is self-signed, so Node's fetch rejects it. Only Chrome's
 // view of the certificate affects the measurement, and that is pinned by SPKI digest.
+// The A/B profile serves the retired HTTP/1.1 path over plain HTTP, which needs the
+// other client: `https.get` against it never connects, and the readiness poll would
+// spend its whole budget failing before the leg started.
 function isServerReady(url) {
+  const secure = url.startsWith("https:");
+  const get = secure ? httpsGet : httpGet;
   return new Promise((resolve) => {
-    const request = httpsGet(url, { rejectUnauthorized: false }, (response) => {
+    const request = get(url, secure ? { rejectUnauthorized: false } : {}, (response) => {
       response.resume();
       resolve(response.statusCode === 200);
     });
@@ -82,34 +86,31 @@ async function stopProcess(child) {
   if (child.exitCode === null) child.kill("SIGKILL");
 }
 
-async function runLighthouse(url, runNumber, outputDir, chromeFlags) {
+async function runLighthouse(profile, runFileName, outputDir, chromeFlags) {
   const chrome = await chromeLauncher.launch({
-    chromePath: config.chromePath,
+    chromePath: profile.chromePath,
     chromeFlags,
   });
   let browser;
   try {
     browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${chrome.port}` });
     const setupPage = await browser.newPage();
-    await seedPairedFieldDevice(setupPage, new URL(url).origin);
+    await seedPairedFieldDevice(setupPage, new URL(profile.url).origin);
     await setupPage.close();
     const page = await browser.newPage();
     const result = await lighthouse(
-      url,
+      profile.url,
       {
         port: chrome.port,
         output: "json",
         logLevel: "error",
         disableStorageReset: true,
       },
-      { extends: "lighthouse:default", settings: config.settings },
+      { extends: "lighthouse:default", settings: profile.settings },
       page,
     );
     if (!result?.lhr) throw new Error("Lighthouse returned no result");
-    await writeFile(
-      resolve(outputDir, `lighthouse-run-${runNumber}.json`),
-      `${JSON.stringify(result.lhr, null, 2)}\n`,
-    );
+    await writeFile(resolve(outputDir, runFileName), `${JSON.stringify(result.lhr, null, 2)}\n`);
     await page.close();
     return result.lhr;
   } finally {
@@ -118,9 +119,18 @@ async function runLighthouse(url, runNumber, outputDir, chromeFlags) {
   }
 }
 
-export async function run() {
-  const outputDir = resolve(config.outputDir);
-  const baseUrl = new URL(config.baseUrl);
+/**
+ * Runs one profile's full sample and reduces it, without deciding anything. The gate turns
+ * the result into a verdict below; the protocol A/B deliberately does not, because a leg
+ * that misses a bar is the datapoint it went looking for rather than a failure.
+ */
+export async function measure({
+  profile = config,
+  runFilePrefix = "lighthouse-run",
+  clean = true,
+} = {}) {
+  const outputDir = resolve(profile.outputDir);
+  const baseUrl = new URL(profile.baseUrl);
 
   // Mint the certificate before the server starts. Both this process and the server
   // ensure it exists, so leaving it to chance let them race: each minted its own, and
@@ -140,7 +150,7 @@ export async function run() {
     env: {
       ...process.env,
       ACCEPTANCE_MODE: "field",
-      ACCEPTANCE_PROTOCOL: config.protocol,
+      ACCEPTANCE_PROTOCOL: profile.protocol,
       HOST: baseUrl.hostname,
       PORT: String(baseUrl.port),
     },
@@ -150,36 +160,53 @@ export async function run() {
   server.stderr.on("data", (chunk) => process.stderr.write(chunk));
 
   try {
-    await waitForServer(config.baseUrl, server);
-    await rm(outputDir, { recursive: true, force: true });
+    await waitForServer(profile.baseUrl, server);
+    if (clean) await rm(outputDir, { recursive: true, force: true });
     await mkdir(outputDir, { recursive: true });
     const results = [];
-    for (let runNumber = 1; runNumber <= config.numberOfRuns; runNumber += 1) {
-      process.stdout.write(`Lighthouse run ${runNumber}/${config.numberOfRuns}\n`);
-      results.push(await runLighthouse(config.url, runNumber, outputDir, chromeFlags));
+    const runFiles = [];
+    for (let runNumber = 1; runNumber <= profile.numberOfRuns; runNumber += 1) {
+      process.stdout.write(
+        `Lighthouse ${profile.protocol} run ${runNumber}/${profile.numberOfRuns}\n`,
+      );
+      const runFile = `${runFilePrefix}-${runNumber}.json`;
+      results.push(await runLighthouse(profile, runFile, outputDir, chromeFlags));
+      runFiles.push(runFile);
     }
 
-    const { aggregate, failures } = evaluateAssertions(results, config.assertions);
-    const evidence = {
-      version: 1,
-      tool: "lighthouse@13.4.1",
-      url: config.url,
-      runs: config.numberOfRuns,
-      thresholds: config.assertions,
+    const { aggregate, failures } = evaluateAssertions(results, profile.assertions);
+    return {
       aggregate,
-      runFiles: results.map((_, index) => `lighthouse-run-${index + 1}.json`),
+      failures,
+      outputDir,
+      evidence: {
+        version: 1,
+        tool: "lighthouse@13.4.1",
+        url: profile.url,
+        protocol: profile.protocol,
+        runs: profile.numberOfRuns,
+        thresholds: profile.assertions,
+        aggregate,
+        runFiles,
+      },
     };
-    await writeFile(
-      resolve(outputDir, "lighthouse-summary.json"),
-      `${JSON.stringify(evidence, null, 2)}\n`,
-    );
-    await writeFile(resolve(outputDir, "manifest.json"), `${JSON.stringify(evidence, null, 2)}\n`);
-    if (failures.length)
-      throw new Error(`Lighthouse assertions failed:\n- ${failures.join("\n- ")}`);
-    process.stdout.write(`Lighthouse assertions passed; JSON evidence is in ${outputDir}\n`);
   } finally {
     await stopProcess(server);
   }
+}
+
+export async function run() {
+  const { evidence, failures, outputDir } = await measure();
+
+  // Written before the throw on purpose: the gate reports only what it failed, so a red run
+  // would otherwise hide how much headroom every other metric had.
+  await writeFile(
+    resolve(outputDir, "lighthouse-summary.json"),
+    `${JSON.stringify(evidence, null, 2)}\n`,
+  );
+  await writeFile(resolve(outputDir, "manifest.json"), `${JSON.stringify(evidence, null, 2)}\n`);
+  if (failures.length) throw new Error(`Lighthouse assertions failed:\n- ${failures.join("\n- ")}`);
+  process.stdout.write(`Lighthouse assertions passed; JSON evidence is in ${outputDir}\n`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

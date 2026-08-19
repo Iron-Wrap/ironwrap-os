@@ -14,6 +14,9 @@ from unittest.mock import patch
 API_PATH = (
     Path(__file__).resolve().parents[1] / "ironwrap_roofing" / "fleet_operations_api.py"
 )
+VALIDATION_PATH = (
+    Path(__file__).resolve().parents[1] / "ironwrap_roofing" / "document_validation.py"
+)
 ISSUER = "worker@ironwrapexteriors.invalid"
 DRIVER = "driver@example.invalid"
 MANIFEST_KEY = "fleet/v1/abcdef0123456789abcdef01/pre_trip_inspection/device-fleet-0001/manifest.json"
@@ -715,6 +718,182 @@ class InspectionCurrencyTests(FleetOperationsApiTestCase):
             fixtures["assets"]["asset-truck-1"]["next_inspection_due"], "2026-07-12"
         )
         self.assertEqual(fixtures["assets"]["asset-truck-1"]["status"], "Active")
+
+
+class RealTrustGuardInspectionTests(unittest.TestCase):
+    """Run the real transition context against the real lifecycle guard.
+
+    Every other test in this suite substitutes a no-op transition context, so
+    the ordering between Frappe's naming step and the guard is never observed.
+    On a real Frappe core ``insert()`` autonames ``Asset Inspection`` from
+    ``asset_inspection_id`` *before* ``validate`` runs, and the guard compares
+    the name it then sees against the name the context was opened with.  A
+    context opened against an unnamed document therefore authorizes nothing and
+    the guard refuses the very bounded command it exists to admit.
+    """
+
+    def load_validation(self):
+        frappe_module = types.ModuleType("frappe")
+        frappe_module.ValidationError = FakeValidationError
+        frappe_module.PermissionError = FakePermissionError
+        frappe_module.throw = lambda message, *, exc: (_ for _ in ()).throw(
+            exc(message)
+        )
+        spec = importlib.util.spec_from_file_location(
+            "ironwrap_document_validation_for_fleet_capture", VALIDATION_PATH
+        )
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"frappe": frappe_module}):
+            spec.loader.exec_module(module)
+        return module
+
+    def load_api(self, validation_module, fixtures: dict):
+        db = FakeDb(fixtures)
+        validated: list[dict] = []
+
+        class NamedDocument(FakeDocument):
+            """A document that names itself on insert, the way Frappe does."""
+
+            def get_doc_before_save(self):
+                return None
+
+            def insert(self, *, ignore_permissions: bool = False) -> None:
+                if not ignore_permissions:
+                    raise AssertionError(
+                        "a bounded fleet capture must not use generic writes"
+                    )
+                self.insert_count += 1
+                if self.get("doctype") == "Asset Inspection":
+                    # `autoname: field:asset_inspection_id` discards whatever
+                    # `name` the caller supplied and derives it from the field,
+                    # then `validate` runs against the named document.
+                    self["name"] = self["asset_inspection_id"]
+                    validated.append(dict(self))
+                    validation_module.validate_asset_inspection_runtime_mutation(self)
+                else:
+                    self["name"] = self.get("asset_defect_id")
+                self._on_write("insert", self)
+
+        frappe_module = types.ModuleType("frappe")
+        frappe_module.ValidationError = FakeValidationError
+        frappe_module.PermissionError = FakePermissionError
+        frappe_module.db = db
+        frappe_module.conf = {"ironwrap_fleet_capture_issuer_user": ISSUER}
+        frappe_module.session = types.SimpleNamespace(user=ISSUER)
+        frappe_module.request = types.SimpleNamespace(method="POST")
+        frappe_module.utils = types.SimpleNamespace(
+            now_datetime=lambda: "2026-07-11 07:00:00"
+        )
+        frappe_module.has_permission = lambda *args, **kwargs: True
+        frappe_module.whitelist = lambda: lambda function: function
+
+        def on_write(action: str, document) -> None:
+            if document.get("doctype") == "Asset Inspection":
+                fixtures["inspections"].append(dict(document))
+            elif document.get("doctype") == "Asset Defect":
+                fixtures["defects"].append(dict(document))
+            else:
+                fixtures["assets"][document["name"]] = dict(document)
+
+        def get_doc(*args):
+            if len(args) == 2:
+                doctype, name = args
+                if doctype != "Fleet Asset":
+                    raise AssertionError(f"unexpected doctype: {doctype}")
+                return NamedDocument(dict(fixtures["assets"][name]), on_write)
+            if len(args) == 1 and isinstance(args[0], dict):
+                return NamedDocument(dict(args[0]), on_write)
+            raise AssertionError(f"unexpected get_doc args: {args!r}")
+
+        frappe_module.get_doc = get_doc
+        frappe_module.throw = lambda message, *, exc: (_ for _ in ()).throw(
+            exc(message)
+        )
+        spec = importlib.util.spec_from_file_location(
+            "ironwrap_fleet_operations_api_with_real_guard", API_PATH
+        )
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(
+            sys.modules,
+            {"frappe": frappe_module, "ironwrap_roofing.document_validation": validation_module},
+        ):
+            spec.loader.exec_module(module)
+        return module, validated
+
+    def test_a_bounded_capture_is_admitted_by_the_real_lifecycle_guard(self) -> None:
+        validation_module = self.load_validation()
+        fixtures = FleetOperationsApiTestCase().fixtures()
+        module, validated = self.load_api(validation_module, fixtures)
+
+        result = module.record_asset_inspection(
+            fleet_asset_id="asset-truck-1",
+            actor_user=DRIVER,
+            device_action_id="device-fleet-0001",
+            manifest_key=MANIFEST_KEY,
+            inspection_type="Pre-Trip",
+            inspection=FleetOperationsApiTestCase.inspection(),
+        )
+
+        self.assertEqual(result["record"]["status"], "Submitted")
+        self.assertEqual(result["record"]["name"], "inspection:device-fleet-0001")
+        # The guard saw the named document, and the row actually landed.
+        self.assertEqual(len(validated), 1)
+        self.assertEqual(validated[0]["name"], "inspection:device-fleet-0001")
+        self.assertEqual(len(fixtures["inspections"]), 1)
+        self.assertEqual(
+            fixtures["inspections"][0]["name"], "inspection:device-fleet-0001"
+        )
+
+    def test_an_out_of_service_capture_is_admitted_and_stops_the_asset(self) -> None:
+        validation_module = self.load_validation()
+        fixtures = FleetOperationsApiTestCase().fixtures()
+        module, _validated = self.load_api(validation_module, fixtures)
+
+        result = module.record_asset_inspection(
+            fleet_asset_id="asset-truck-1",
+            actor_user=DRIVER,
+            device_action_id="device-fleet-0002",
+            manifest_key=MANIFEST_KEY,
+            inspection_type="Post-Trip",
+            inspection=FleetOperationsApiTestCase.inspection(
+                items=[
+                    {
+                        "sequence": 1,
+                        "check_point": "Brakes",
+                        "result": "Fail",
+                        "severity": "Out of Service",
+                        "observation": "Air leak at the rear chamber.",
+                    }
+                ]
+            ),
+        )
+
+        self.assertEqual(result["record"]["result"], "Fail")
+        self.assertEqual(len(fixtures["inspections"]), 1)
+        self.assertEqual(fixtures["assets"]["asset-truck-1"]["status"], "Out of Service")
+
+    def test_a_submitted_inspection_outside_the_command_is_still_refused(self) -> None:
+        validation_module = self.load_validation()
+        unbounded = FakeDocument(
+            {
+                "doctype": "Asset Inspection",
+                "name": "inspection:forged-0001",
+                "asset_inspection_id": "inspection:forged-0001",
+                "status": "Submitted",
+                "result": "Pass",
+                "performed_by": DRIVER,
+                "performed_at": "2026-07-11 06:30:00",
+                "defect_count": 0,
+                "sync_state": "Uploaded",
+                "verified_at": None,
+                "evidence_item": None,
+            },
+            lambda *args: None,
+        )
+        unbounded.get_doc_before_save = lambda: None
+
+        with self.assertRaisesRegex(FakeValidationError, "Asset Inspection lifecycle"):
+            validation_module.validate_asset_inspection_runtime_mutation(unbounded)
 
 
 if __name__ == "__main__":

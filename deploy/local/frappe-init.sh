@@ -21,10 +21,34 @@ STAMP="$BENCH_DIR/sites/.ironwrap_init_done"
 
 log() { printf '\n\033[1;34m[ironwrap-init]\033[0m %s\n' "$*"; }
 
+# Every bounded capture rail refuses to run until its issuer is pinned in the
+# site config, so a key that shipped in the app but never reached this function
+# leaves that rail dead on a freshly provisioned site (fleet capture did,
+# IRO-54).  `tools/validate-site-config-pins.mjs` fails CI when a new key skips
+# it, and the pins are re-applied on every start so a volume provisioned before
+# a rail shipped heals itself instead of staying dead until it is destroyed.
+#
+# The field-evidence, fleet-capture and work-package rails are all issued by the
+# Worker BFF, which authenticates with the single ERPNEXT_API_KEY/SECRET pair, so
+# all three pin the same integration user created in step 8.  The customer
+# acceptance and QuickBooks rails hold their own least-privilege identities and
+# their own key pairs.
+pin_service_identities() {
+  log "pinning Worker BFF and service issuer site config"
+  bench --site "$SITE" set-config ironwrap_field_evidence_issuer_user ironwrap-bus@ironwrap.local
+  bench --site "$SITE" set-config ironwrap_fleet_capture_issuer_user ironwrap-bus@ironwrap.local
+  bench --site "$SITE" set-config ironwrap_work_package_issuer_user ironwrap-bus@ironwrap.local
+  bench --site "$SITE" set-config ironwrap_customer_acceptance_service_user ironwrap-customer-acceptance@ironwrap.local
+  bench --site "$SITE" set-config ironwrap_quickbooks_reconciliation_issuer_user ironwrap-quickbooks-issuer@ironwrap.local
+}
+
 cd "$BENCH_DIR" 2>/dev/null || { mkdir -p "$BENCH_DIR"; cd "$BENCH_DIR"; }
 
 if [ -f "$STAMP" ]; then
-  log "already provisioned ($STAMP present) - nothing to do"
+  log "already provisioned ($STAMP present) - re-applying service identity pins"
+  # A pin failure here must not take down a bench that was already serving:
+  # report it loudly and leave the stack up.
+  pin_service_identities || log "WARNING - could not re-apply service identity pins"
   exit 0
 fi
 
@@ -170,10 +194,7 @@ PYEOF
 fi
 
 # 11. pinned service identities -------------------------------------------------
-log "pinning field-evidence issuer site config"
-bench --site "$SITE" set-config ironwrap_field_evidence_issuer_user ironwrap-bus@ironwrap.local
-bench --site "$SITE" set-config ironwrap_customer_acceptance_service_user ironwrap-customer-acceptance@ironwrap.local
-bench --site "$SITE" set-config ironwrap_quickbooks_reconciliation_issuer_user ironwrap-quickbooks-issuer@ironwrap.local
+pin_service_identities
 
 touch "$STAMP"
 log "DONE - site '$SITE' ready (admin: Administrator / $ADMIN_PW)"

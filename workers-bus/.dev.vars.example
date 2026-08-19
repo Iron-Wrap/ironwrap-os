@@ -20,6 +20,11 @@ GOOGLE_SERVICE_ACCOUNT_JSON=""
 # QuickBooks webhook verifier token (Intuit)
 QB_WEBHOOK_TOKEN=""
 
+# Anthropic key for measurement-report OCR. Required whenever MEASUREMENT_OCR_ENABLED is
+# "true" — which wrangler.jsonc sets in every environment, including local — otherwise
+# `/ready` reports measurement_ocr_configuration false on a fresh checkout.
+MEASUREMENT_OCR_API_KEY=""
+
 # ERPNext/Frappe API token pair (optional; only used when ERPNEXT_ENABLED=true)
 ERPNEXT_API_KEY=""
 ERPNEXT_API_SECRET=""

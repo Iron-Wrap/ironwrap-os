@@ -453,10 +453,17 @@ test("0028 keeps work-package commands bounded and independently recoverable", a
     "utf8",
   );
   assert.match(sql, /CREATE TABLE IF NOT EXISTS field_work_package_actions\b/);
+  // 0028 shipped on 2026-07-30 and production applied it on 2026-08-13, so its
+  // bytes are frozen: the action_kind CHECK here must stay the three-member one
+  // that is live in production. complete_work is widened forward by
+  // 0057_work_package_completion_action_kind.sql, and the applied-chain test
+  // below is what asserts the end state. Asserting the widened list here is what
+  // let the edited migration pass review in the first place (Linear IRO-62).
   assert.match(
     sql,
-    /action_kind IN \('acknowledge', 'stop_work', 'start_work', 'complete_work'\)/,
+    /action_kind IN \('acknowledge', 'stop_work', 'start_work'\)/,
   );
+  assert.doesNotMatch(sql, /complete_work/);
   assert.match(
     sql,
     /status IN \('processing', 'r2_stored', 'verified', 'retryable_error'\)/,
@@ -1801,9 +1808,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     )
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    assert.equal(migrations.length, 47);
+    assert.equal(migrations.length, 48);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0047_safety_lifecycle.sql");
+    assert.equal(
+      migrations.at(-1),
+      "0057_work_package_completion_action_kind.sql",
+    );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -1848,6 +1858,20 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
       )
       .get() as { tables: number; indexes: number; triggers: number };
     assert.deepEqual({ ...counts }, { tables: 97, indexes: 139, triggers: 196 });
+    // The applied chain — not the text of any single file — is what production
+    // ends up running, so the complete_work receipt kind is asserted here.
+    // 0028 is frozen at its shipped three-member CHECK and 0057 widens it
+    // forward (Linear IRO-62).
+    assert.match(
+      (
+        db
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'field_work_package_actions'",
+          )
+          .get() as { sql: string }
+      ).sql,
+      /action_kind IN \('acknowledge', 'stop_work', 'start_work', 'complete_work'\)/,
+    );
     assert.equal(
       (
         db
@@ -2309,4 +2333,203 @@ test("0032 keeps Facet projection outcomes append-only, anchored, and commercial
     /price|amount|contract_acceptance|proposal_evidence_pack|customer_name|address/i,
   );
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
+test("0057 widens the work-package receipt kinds forward without editing the shipped 0028", async () => {
+  const sql = await readFile(
+    new URL(
+      "../migrations/0057_work_package_completion_action_kind.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  // A CHECK cannot be altered in place in SQLite, so this migration is a
+  // bounded copy-preserving rebuild of one table: staging copy, drop, recreate
+  // with the shipped DDL plus complete_work, copy back, recreate both indexes
+  // under their original names. Every one of those steps is asserted so the
+  // rebuild can never silently lose the copy-back or an index.
+  assert.match(
+    sql,
+    /CREATE TABLE _mig0057_field_work_package_actions_staging\b/,
+  );
+  assert.match(
+    sql,
+    /INSERT INTO _mig0057_field_work_package_actions_staging[\s\S]*FROM field_work_package_actions;/,
+  );
+  assert.match(sql, /DROP TABLE field_work_package_actions;/);
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS field_work_package_actions\b/);
+  assert.match(
+    sql,
+    /action_kind TEXT NOT NULL CHECK \(action_kind IN \('acknowledge', 'stop_work', 'start_work', 'complete_work'\)\)/,
+  );
+  assert.match(
+    sql,
+    /INSERT INTO field_work_package_actions[\s\S]*FROM _mig0057_field_work_package_actions_staging;/,
+  );
+  assert.match(
+    sql,
+    /DROP TABLE _mig0057_field_work_package_actions_staging;/,
+  );
+  assert.match(sql, /idx_field_work_package_actions_job_created/);
+  assert.match(sql, /idx_field_work_package_actions_recovery/);
+  assert.match(sql, /REFERENCES app_users\(user_id\) ON DELETE RESTRICT/);
+  // The rebuild is the only DROP TABLE this migration is allowed to perform.
+  assert.equal(sql.match(/DROP TABLE/g)?.length, 2);
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|REPLACE INTO/i);
+});
+
+test("a database that already applied the shipped 0028 reaches complete_work through 0057 with every row intact", async () => {
+  // This is the production starting state: 0028 was applied on 2026-08-13 in its
+  // original three-member form, wrangler keys the ledger by filename, and rows
+  // exist. The test proves the receipt kind is rejected before the forward
+  // migration and accepted after it, with no row lost in the rebuild.
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    const migrations = (
+      await readdir(new URL("../migrations/", import.meta.url))
+    )
+      .filter((name) => /^\d{4}_.+\.sql$/.test(name))
+      .sort();
+    const shippedIndex = migrations.indexOf("0028_work_package_actions.sql");
+    assert.notEqual(shippedIndex, -1);
+
+    const seedOperator = () =>
+      db
+        .prepare(
+          `INSERT OR IGNORE INTO app_users
+            (user_id, tenant_id, email_normalized, display_name, role, active,
+             created_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'ops', 1, ?, ?, ?)`,
+        )
+        .run(
+          "appu_legacy_ops_0001",
+          "ironwrap",
+          "legacy-ops@example.com",
+          "Legacy Operations",
+          "owner@example.com",
+          "2026-08-13T11:59:00.000Z",
+          "2026-08-13T11:59:00.000Z",
+        );
+
+    const apply = async (name: string) => {
+      if (name === "0038_app_access_roles.sql") seedOperator();
+      db.exec(
+        await readFile(
+          new URL(`../migrations/${name}`, import.meta.url),
+          "utf8",
+        ),
+      );
+    };
+
+    for (const name of migrations.slice(0, shippedIndex + 1)) await apply(name);
+    seedOperator();
+
+    const insertReceipt = (deviceActionId: string, kind: string) =>
+      db
+        .prepare(
+          `INSERT INTO field_work_package_actions
+            (device_action_id, tenant_id, user_id, job_id, assignment_id,
+             work_package_id, action_kind, payload_hash, status,
+             created_at, updated_at)
+           VALUES (?, 'ironwrap', 'appu_legacy_ops_0001', 'JOB-A', 'ASSIGN-A',
+                   'WP-A', ?, ?, 'processing', ?, ?)`,
+        )
+        .run(
+          deviceActionId,
+          kind,
+          "a".repeat(64),
+          "2026-08-13T12:00:00.000Z",
+          "2026-08-13T12:00:00.000Z",
+        );
+
+    for (const [index, kind] of [
+      "acknowledge",
+      "start_work",
+      "stop_work",
+    ].entries()) {
+      insertReceipt(`dact_shipped_000${index + 1}`, kind);
+    }
+    const rowsBefore = (
+      db
+        .prepare("SELECT COUNT(*) AS count FROM field_work_package_actions")
+        .get() as { count: number }
+    ).count;
+    assert.equal(rowsBefore, 3);
+
+    // The live defect: production cannot record a work-package completion.
+    assert.throws(
+      () => insertReceipt("dact_shipped_complete_pre", "complete_work"),
+      /CHECK constraint failed/,
+    );
+
+    for (const name of migrations.slice(shippedIndex + 1)) await apply(name);
+
+    const rowsAfter = (
+      db
+        .prepare("SELECT COUNT(*) AS count FROM field_work_package_actions")
+        .get() as { count: number }
+    ).count;
+    assert.equal(rowsAfter, rowsBefore);
+    assert.deepEqual(
+      (
+        db
+          .prepare(
+            "SELECT device_action_id, action_kind FROM field_work_package_actions ORDER BY device_action_id",
+          )
+          .all() as Array<{ device_action_id: string; action_kind: string }>
+      ).map(({ device_action_id, action_kind }) => `${device_action_id}:${action_kind}`),
+      [
+        "dact_shipped_0001:acknowledge",
+        "dact_shipped_0002:start_work",
+        "dact_shipped_0003:stop_work",
+      ],
+    );
+
+    insertReceipt("dact_shipped_complete_post", "complete_work");
+    assert.equal(
+      (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM field_work_package_actions WHERE action_kind = 'complete_work'",
+          )
+          .get() as { count: number }
+      ).count,
+      1,
+    );
+    // Widening is bounded: it admits complete_work and nothing else.
+    assert.throws(
+      () => insertReceipt("dact_shipped_bogus_0001", "field_checkin"),
+      /CHECK constraint failed/,
+    );
+
+    // The rebuild keeps both named indexes, which the D1 backup and restore
+    // inventories in deploy/ require by name.
+    assert.deepEqual(
+      (
+        db
+          .prepare(
+            `SELECT name FROM sqlite_master
+              WHERE type = 'index' AND tbl_name = 'field_work_package_actions'
+                AND name LIKE 'idx_%' ORDER BY name`,
+          )
+          .all() as Array<{ name: string }>
+      ).map(({ name }) => name),
+      [
+        "idx_field_work_package_actions_job_created",
+        "idx_field_work_package_actions_recovery",
+      ],
+    );
+    assert.equal(
+      (
+        db.prepare("PRAGMA integrity_check").get() as {
+          integrity_check: string;
+        }
+      ).integrity_check,
+      "ok",
+    );
+    assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+  } finally {
+    db.close();
+  }
 });

@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate-and-test:
+  build-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -110,9 +110,6 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Run app Playwright e2e (PWA suite)
         run: npm run test:pwa --prefix app
-      - name: Run paired-device Lighthouse thresholds
-        run: npm run test:lighthouse --prefix app
-
       - name: Install Worker dependencies
         run: npm ci --ignore-scripts --prefix workers-bus
       - name: Generate Worker binding types
@@ -169,3 +166,71 @@ jobs:
             --app-test-output "$RUNNER_TEMP/ironwrap-app-tests.log" \
             --worker-test-output "$RUNNER_TEMP/ironwrap-worker-tests.tap" \
             --evidence "$RUNNER_TEMP/ironwrap-capability-evidence.json"
+
+  # The paired-device budget is a timing measurement, so it gets a runner of its own.
+  # Sharing one with the validator, unit, Playwright and Python suites left ~10 minutes
+  # of prior work on the machine before Lighthouse started and pushed the job into its
+  # own 20-minute timeout on slower runners. Thresholds, run count and the emulated
+  # device/CPU/network profile are unchanged — only the isolation.
+  paired-device-lighthouse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install app dependencies
+        run: npm ci --prefix app
+      - name: Install Playwright Chromium
+        working-directory: app
+        run: npx playwright install --with-deps chromium
+      - name: Run paired-device Lighthouse thresholds
+        run: npm run test:lighthouse --prefix app
+      # The gate reports only the assertions it failed, so a run that fails on one
+      # metric hides how much headroom the others had — and a run that passes reports
+      # nothing at all. The readings are already on disk; print them either way.
+      - name: Report paired-device Lighthouse readings
+        if: always()
+        shell: bash
+        run: |
+          summary=app/.lighthouseci/lighthouse-summary.json
+          if [ ! -f "$summary" ]; then
+            echo "no Lighthouse summary was produced"
+            exit 0
+          fi
+          node -e '
+            const summary = require("./" + process.argv[1]);
+            const round = (value) => Math.round(value * 1000) / 1000;
+            console.log(`url ${summary.url} over ${summary.runs} runs`);
+            for (const [audit, reading] of Object.entries(summary.aggregate)) {
+              console.log(
+                `${audit.padEnd(28)} median ${String(round(reading.median)).padEnd(10)}` +
+                  ` runs ${reading.values.map(round).join(", ")}`,
+              );
+            }
+          ' "$summary"
+
+  # Splitting the work into two jobs must not quietly stop the mobile-first budget from
+  # blocking a merge: `validate-and-test` is the branch ruleset's required check and the
+  # name the release-admission gate reads back. It keeps that name and now passes only
+  # when both real jobs did.
+  validate-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [build-and-test, paired-device-lighthouse]
+    if: always()
+    steps:
+      - name: Require every CI job to have succeeded
+        env:
+          BUILD_AND_TEST: ${{ needs.build-and-test.result }}
+          PAIRED_DEVICE_LIGHTHOUSE: ${{ needs.paired-device-lighthouse.result }}
+        run: |
+          echo "build-and-test: $BUILD_AND_TEST"
+          echo "paired-device-lighthouse: $PAIRED_DEVICE_LIGHTHOUSE"
+          if [ "$BUILD_AND_TEST" != "success" ] || [ "$PAIRED_DEVICE_LIGHTHOUSE" != "success" ]; then
+            echo "a required CI job did not succeed" >&2
+            exit 1
+          fi

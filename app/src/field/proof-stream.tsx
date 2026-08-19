@@ -2,6 +2,7 @@ import { useMemo, useState, type UIEvent } from "react";
 
 import { Button } from "../components/ui/button";
 import { EmptyState } from "../components/ui/state-panel";
+import { dateTimeFormatter } from "../lib/intl-cache";
 import type { ProofStreamItem } from "./field-contracts";
 
 const ROW_HEIGHT = 116;
@@ -125,13 +126,13 @@ export function ProofStream({
 function formatTime(value: string | null, locale?: string, timeZone?: string): string {
   if (!value || Number.isNaN(Date.parse(value))) return "Time unavailable";
   try {
-    return new Intl.DateTimeFormat(locale, {
+    return dateTimeFormatter(locale, {
       dateStyle: "medium",
       timeStyle: "short",
       timeZone,
     }).format(new Date(value));
   } catch {
-    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
+    return dateTimeFormatter(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
       new Date(value),
     );
   }

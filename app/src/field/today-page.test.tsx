@@ -10,7 +10,7 @@ import { useOutboxActionsNeedingAttention } from "../storage/use-outbox";
 import type { OutboxAction } from "../storage/outbox-types";
 import type { TodayResponse } from "./field-contracts";
 import { cacheToday, hasCachedJobPacket, loadToday, prefetchAssignedPackets } from "./field-cache";
-import { TodayPage } from "./field-pages";
+import { TodayPage } from "./today-page";
 
 vi.mock("./field-cache", () => ({
   cacheToday: vi.fn().mockResolvedValue(undefined),

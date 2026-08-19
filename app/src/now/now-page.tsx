@@ -14,7 +14,7 @@ import type { NowAction, NowCard, NowResponse, QuickBooksNowCard } from "./now-c
 type NowCitation = NowCard["citations"][number];
 
 const FieldTodayPage = lazy(async () => ({
-  default: (await import("../field/field-pages")).TodayPage,
+  default: (await import("../field/today-page")).TodayPage,
 }));
 
 const cardTone = {

@@ -1,13 +1,17 @@
 import { createServer } from "node:http";
+import { createSecureServer } from "node:http2";
 import { readFile, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { ensureAcceptanceCertificate } from "./acceptance-certificate.mjs";
 import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 
 const DIST_DIR = resolve(fileURLToPath(new URL("../dist/", import.meta.url)));
 const HOST = process.env.HOST ?? "127.0.0.1";
 const PORT = Number(process.env.PORT ?? "4173");
 const ACCEPTANCE_MODE = process.env.ACCEPTANCE_MODE ?? "field";
+const ACCEPTANCE_PROTOCOL = process.env.ACCEPTANCE_PROTOCOL ?? "http1";
 const FIXTURE_FIELD_DEVICE_PROOF = "a".repeat(43);
 
 if (!new Set(["field", "estimator"]).has(ACCEPTANCE_MODE)) {
@@ -493,7 +497,7 @@ const fixtureEstimatorWorkbench = {
   ],
 };
 
-const server = createServer(async (request, response) => {
+const requestListener = async (request, response) => {
   const method = request.method ?? "GET";
   const requestUrl = new URL(request.url ?? "/", `http://${HOST}:${PORT}`);
 
@@ -558,10 +562,28 @@ const server = createServer(async (request, response) => {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("Not found");
   }
-});
+};
+
+// Browsers negotiate HTTP/2 only over TLS. Behaviour suites keep the plain HTTP/1.1
+// server — the protocol does not change what the app does — while the paired-device
+// Lighthouse profile serves over TLS/HTTP/2, because Cloudflare does in production and
+// HTTP/1.1's six-connection cap otherwise queues this app's subresources into extra
+// round trips the real device never pays. `allowHTTP1` keeps a plain client working
+// against the same server, and the compatibility API means one request listener serves
+// both.
+const server =
+  ACCEPTANCE_PROTOCOL === "h2"
+    ? createSecureServer(
+        { ...(await ensureAcceptanceCertificate()), allowHTTP1: true },
+        requestListener,
+      )
+    : createServer(requestListener);
 
 server.listen(PORT, HOST, () => {
-  console.log(`IronWrap ${ACCEPTANCE_MODE} acceptance server listening at http://${HOST}:${PORT}`);
+  const scheme = ACCEPTANCE_PROTOCOL === "h2" ? "https" : "http";
+  console.log(
+    `IronWrap ${ACCEPTANCE_MODE} acceptance server listening at ${scheme}://${HOST}:${PORT}`,
+  );
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

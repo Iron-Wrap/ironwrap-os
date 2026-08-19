@@ -1,0 +1,73 @@
+# Measures the same build over both acceptance-server protocols and prints the readings side
+# by side. It exists because the paired-device budget's fidelity is a claim about the harness,
+# and a claim that cannot be re-measured is an assertion.
+#
+# This is evidence, never a gate. It is intentionally absent from `validate-and-test` and from
+# the deploy workflow's `--job-names`: a merge must not depend on it, and a leg that misses a
+# bar is the datapoint it went looking for rather than a failure. The budget that does block a
+# merge stays `paired-device-lighthouse` in ci.yml, with its thresholds untouched.
+name: Lighthouse harness A/B
+
+on:
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: Mirrored A/B rounds; each round is one leg per protocol, 5 runs per leg
+        required: false
+        default: "2"
+  # Only when the harness itself moves. Every other pull request would pay ~10 minutes of
+  # runner time for a measurement about code it did not touch.
+  pull_request:
+    paths:
+      - app/lighthouserc.cjs
+      - app/scripts/acceptance-certificate.mjs
+      - app/scripts/acceptance-server.mjs
+      - app/scripts/lighthouse-field.mjs
+      - app/scripts/lighthouse-protocol-ab.mjs
+      - app/scripts/lighthouse-statistics.mjs
+      - .github/workflows/lighthouse-harness-ab.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lighthouse-ab-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  protocol-ab:
+    runs-on: ubuntu-latest
+    # Four legs of five Lighthouse runs, plus install and build. The paired-device budget's own
+    # job needs 20; this one measures twice as much on the same class of runner.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install app dependencies
+        run: npm ci --prefix app
+      - name: Install Playwright Chromium
+        working-directory: app
+        run: npx playwright install --with-deps chromium
+      - name: Measure the same build over HTTP/2 and HTTP/1.1
+        working-directory: app
+        env:
+          LIGHTHOUSE_AB_ROUNDS: ${{ inputs.rounds || '2' }}
+        run: npm run test:lighthouse:ab
+      - name: Upload A/B readings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lighthouse-protocol-ab-${{ github.sha }}
+          path: app/.lighthouseci/
+          # `.lighthouseci` is a dot directory, and the action skips hidden files by default:
+          # without this it matched nothing, warned, and the job still went green having
+          # uploaded no evidence at all.
+          include-hidden-files: true
+          # An A/B that produced no readings is a result worth keeping, so a missing file is
+          # an error rather than a shrug.
+          if-no-files-found: error
+          retention-days: 14

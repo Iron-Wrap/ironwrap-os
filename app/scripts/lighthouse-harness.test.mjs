@@ -1,0 +1,162 @@
+import { createRequire } from "node:module";
+
+import { describe, expect, it } from "vitest";
+
+import {
+  comparableAudits,
+  formatProtocolAbTable,
+  legPlan,
+  summarizeProtocolAb,
+} from "./lighthouse-protocol-ab.mjs";
+import { median } from "./lighthouse-statistics.mjs";
+
+const require = createRequire(import.meta.url);
+const config = require("../lighthouserc.cjs");
+
+describe("paired-device gate profile", () => {
+  // The bars, the run count and the throttle profile are the product rule; the harness
+  // change that made this configurable at all was explicitly not allowed to move them.
+  // This test is what makes a later drift a failing build rather than a quiet edit.
+  it("asserts the unchanged mobile budget", () => {
+    expect(config.numberOfRuns).toBe(5);
+    expect(config.settings.throttlingMethod).toBe("devtools");
+    expect(config.assertions["categories:performance"][1].minScore).toBe(0.9);
+    expect(config.assertions["total-blocking-time"][1].maxNumericValue).toBe(200);
+    expect(config.assertions["first-contentful-paint"][1].maxNumericValue).toBe(2000);
+    expect(config.assertions["largest-contentful-paint"][1].maxNumericValue).toBe(4000);
+    expect(config.assertions["cumulative-layout-shift"][1].maxNumericValue).toBe(0.1);
+  });
+
+  it("measures the protocol production serves", () => {
+    expect(config.GATE_PROTOCOL).toBe("h2");
+    expect(config.protocol).toBe("h2");
+    expect(config.baseUrl.startsWith("https://")).toBe(true);
+    expect(config.url.endsWith("/today")).toBe(true);
+  });
+});
+
+describe("profileFor", () => {
+  it("serves HTTP/2 over TLS, because browsers negotiate it no other way", () => {
+    const profile = config.profileFor("h2");
+
+    expect(profile.protocol).toBe("h2");
+    expect(profile.baseUrl.startsWith("https://")).toBe(true);
+  });
+
+  it("reproduces the retired HTTP/1.1 acceptance server over plain HTTP", () => {
+    const profile = config.profileFor("http1");
+
+    expect(profile.protocol).toBe("http1");
+    expect(profile.baseUrl.startsWith("http://")).toBe(true);
+    expect(profile.url.endsWith("/today")).toBe(true);
+  });
+
+  // Without this the A/B could compare two different budgets and report the difference as a
+  // protocol effect.
+  it("gives every protocol the same bars, run count and throttle", () => {
+    const h2 = config.profileFor("h2");
+    const http1 = config.profileFor("http1");
+
+    expect(http1.assertions).toBe(h2.assertions);
+    expect(http1.settings).toBe(h2.settings);
+    expect(http1.numberOfRuns).toBe(h2.numberOfRuns);
+  });
+
+  it("refuses a protocol it cannot serve", () => {
+    expect(() => config.profileFor("h3")).toThrow(/Unsupported acceptance protocol/);
+  });
+});
+
+describe("legPlan", () => {
+  it("mirrors leg order so runner drift lands in both arms", () => {
+    expect(legPlan(2)).toEqual(["h2", "http1", "http1", "h2"]);
+    expect(legPlan(1)).toEqual(["h2", "http1"]);
+    expect(legPlan(3)).toEqual(["h2", "http1", "http1", "h2", "h2", "http1"]);
+  });
+
+  it("rejects a round count that cannot be measured", () => {
+    expect(() => legPlan(0)).toThrow(/positive integer/);
+    expect(() => legPlan(1.5)).toThrow(/positive integer/);
+  });
+});
+
+describe("summarizeProtocolAb", () => {
+  const legs = [
+    {
+      leg: 1,
+      protocol: "h2",
+      aggregate: { "total-blocking-time": { median: 170, values: [160, 170, 180] } },
+    },
+    {
+      leg: 2,
+      protocol: "http1",
+      aggregate: { "total-blocking-time": { median: 240, values: [230, 240, 250] } },
+    },
+    {
+      leg: 3,
+      protocol: "http1",
+      aggregate: { "total-blocking-time": { median: 260, values: [255, 260, 265] } },
+    },
+    {
+      leg: 4,
+      protocol: "h2",
+      aggregate: { "total-blocking-time": { median: 190, values: [185, 190, 195] } },
+    },
+  ];
+
+  it("pools every run of a protocol before taking its median", () => {
+    const summary = summarizeProtocolAb(legs);
+    const reading = summary.comparison["total-blocking-time"];
+
+    expect(reading.h2.values).toEqual([160, 170, 180, 185, 190, 195]);
+    expect(reading.h2.median).toBe(median([160, 170, 180, 185, 190, 195]));
+    expect(reading.http1.median).toBe(median([230, 240, 250, 255, 260, 265]));
+    expect(reading.delta).toBe(reading.h2.median - reading.http1.median);
+  });
+
+  it("renders both protocols side by side", () => {
+    const table = formatProtocolAbTable(summarizeProtocolAb(legs));
+
+    expect(table).toContain("h2 (new)");
+    expect(table).toContain("http1 (old)");
+    expect(table).toContain("total-blocking-time");
+    expect(table).toContain("-70");
+  });
+
+  it("refuses to summarize nothing", () => {
+    expect(() => summarizeProtocolAb([])).toThrow(/empty A\/B/);
+  });
+});
+
+describe("comparableAudits", () => {
+  it("counts only audits both arms measured", () => {
+    const summary = summarizeProtocolAb([
+      { leg: 1, protocol: "h2", aggregate: { "total-blocking-time": { values: [170] } } },
+      { leg: 2, protocol: "http1", aggregate: { "total-blocking-time": { values: [240] } } },
+      { leg: 3, protocol: "h2", aggregate: { "largest-contentful-paint": { values: [2900] } } },
+    ]);
+
+    expect(comparableAudits(summary)).toEqual(["total-blocking-time"]);
+  });
+
+  // A Lighthouse run that returns no numeric value still produces a well-formed summary and a
+  // table of empty cells. Reporting that as a successful A/B would be a green job proving nothing.
+  it("finds nothing comparable when Lighthouse returned no readings", () => {
+    const summary = summarizeProtocolAb([
+      { leg: 1, protocol: "h2", aggregate: {} },
+      { leg: 2, protocol: "http1", aggregate: {} },
+    ]);
+
+    expect(comparableAudits(summary)).toEqual([]);
+  });
+});
+
+describe("median", () => {
+  it("orders before it picks", () => {
+    expect(median([0.98, 0.9, 0.95])).toBe(0.95);
+  });
+
+  it("refuses an empty set", () => {
+    expect(() => median([])).toThrow(/empty set/);
+  });
+});

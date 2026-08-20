@@ -849,6 +849,23 @@ export const CUSTOMER_PORTAL_READ_FIELDS = {
     "issued_at",
     "modified",
   ],
+  // Curated material/colour options a customer may compare. The office-only approval block
+  // (approved_by/approved_at/approval_note), internal notes, payment assumptions, and the
+  // scope-clause id list are deliberately absent: a customer sees the offer, not its workflow.
+  "Option Package": [
+    "name",
+    "option_package_id",
+    "roof_job",
+    "package_name",
+    "tier",
+    "status",
+    "material_system",
+    "price_delta",
+    "currency",
+    "options_json",
+    "warranty_summary",
+    "modified",
+  ],
 } as const;
 
 /** Fixed receptionist verification contract. Financials, notes, disputes, and evidence are absent. */
@@ -1271,6 +1288,7 @@ const CUSTOMER_PORTAL_FILTER_FIELDS: Readonly<
   "Evidence Item": new Set(["roof_job", "customer_safe", "sync_state"]),
   "Completion Packet": new Set(["roof_job", "status"]),
   "Warranty Packet": new Set(["roof_job", "status"]),
+  "Option Package": new Set(["roof_job", "status"]),
 };
 
 const RECEPTION_LOOKUP_FILTER_FIELDS: Readonly<

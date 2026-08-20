@@ -5,6 +5,7 @@ import { takeMagicLinkTokenFromWindow } from "../auth/magic-link-fragment";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { MaterialComparisonSection } from "./material-comparison-section";
 import { loadCustomerPortal, requestCustomerContractAcceptanceChallenge } from "./portal-api";
 import type { CustomerPortalResponse } from "./portal-contracts";
 
@@ -89,6 +90,12 @@ export function CustomerPortalView({
 
         {quote || model.proposal ? <ProposalCard model={model} portalToken={portalToken} /> : null}
         <ScopeCard model={model} />
+        {/* Materials sit below the published scope and above progress: what the project will be
+            made of is decided after the scope is agreed and before any of it gets built. Silent
+            until the office approves at least one Option Package. */}
+        {model.option_packages.length > 0 ? (
+          <MaterialComparisonSection model={model} portalToken={portalToken} />
+        ) : null}
         <ProgressCard model={model} />
         {model.closeout || model.warranty ? <CloseoutCard model={model} /> : null}
       </div>

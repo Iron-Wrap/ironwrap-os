@@ -39,6 +39,7 @@ pin_service_identities() {
   bench --site "$SITE" set-config ironwrap_fleet_capture_issuer_user ironwrap-bus@ironwrap.local
   bench --site "$SITE" set-config ironwrap_work_package_issuer_user ironwrap-bus@ironwrap.local
   bench --site "$SITE" set-config ironwrap_customer_acceptance_service_user ironwrap-customer-acceptance@ironwrap.local
+  bench --site "$SITE" set-config ironwrap_customer_decision_service_user ironwrap-customer-decision@ironwrap.local
   bench --site "$SITE" set-config ironwrap_quickbooks_reconciliation_issuer_user ironwrap-quickbooks-issuer@ironwrap.local
   bench --site "$SITE" set-config ironwrap_facet_design_projection_service_user ironwrap-facet-projection@ironwrap.local
 }
@@ -168,6 +169,32 @@ frappe.db.commit()
 print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
 PYEOF
   grep -o 'CREDS:{.*}' /tmp/customer_acceptance_raw.json | sed 's/^CREDS://' > "sites/$SITE/.customer_acceptance_credentials"
+fi
+
+# 9b. dedicated customer material-decision service identity --------------------
+# Separate from the acceptance identity above: this one may record a provisional
+# customer preference and its receipt evidence, and can never sign a contract.
+if [ ! -s "sites/$SITE/.customer_decision_credentials" ] || ! grep -q '^{' "sites/$SITE/.customer_decision_credentials"; then
+  log "creating scoped customer-decision service user with API keys"
+  bench --site "$SITE" console > /tmp/customer_decision_raw.json <<'PYEOF'
+import frappe, json
+email = "ironwrap-customer-decision@ironwrap.local"
+role = "IronWrap Customer Decision Service"
+if not frappe.db.exists("User", email):
+    u = frappe.get_doc({"doctype": "User", "email": email, "first_name": "Customer Decision Service",
+                        "send_welcome_email": 0, "roles": [{"role": role}]})
+    u.insert(ignore_permissions=True)
+else:
+    u = frappe.get_doc("User", email)
+    if role not in {entry.role for entry in u.roles}:
+        u.append("roles", {"role": role})
+        u.save(ignore_permissions=True)
+frappe.core.doctype.user.user.generate_keys(email)
+u = frappe.get_doc("User", email)
+frappe.db.commit()
+print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
+PYEOF
+  grep -o 'CREDS:{.*}' /tmp/customer_decision_raw.json | sed 's/^CREDS://' > "sites/$SITE/.customer_decision_credentials"
 fi
 
 # 10. dedicated QuickBooks reconciliation issuer ------------------------------

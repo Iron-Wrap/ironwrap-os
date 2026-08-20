@@ -11,6 +11,7 @@ export const API_PATHS = {
   customerPortalResolve: "/api/v1/customer-portal/resolve",
   customerPortalAcceptanceChallenge: "/api/v1/customer-portal/acceptance/challenge",
   customerPortalAcceptanceConfirm: "/api/v1/customer-portal/acceptance/confirm",
+  customerPortalDecision: "/api/v1/customer-portal/decision",
   customerPortalLinks: "/api/v1/customer-portal/links",
   customerPortalLinkRevoke: (linkId: string) =>
     `/api/v1/customer-portal/links/${encodeURIComponent(linkId)}/revoke`,

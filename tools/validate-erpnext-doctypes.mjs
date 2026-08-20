@@ -23,6 +23,7 @@ const canonicalIronWrapRoles = [
 ];
 const canonicalServiceRoles = [
   "IronWrap Customer Acceptance Service",
+  "IronWrap Customer Decision Service",
   "IronWrap QuickBooks Reconciliation Issuer",
   "IronWrap Facet Design Projection Service",
   "IronWrap Launch Proof Reader",

@@ -94,6 +94,10 @@ import {
   handleCustomerPortalAcceptanceConfirm,
   reconcileCustomerContractAcceptanceAttempts,
 } from "./customer-contract-acceptance.ts";
+import {
+  handleCustomerPortalDecision,
+  reconcileCustomerPortalDecisionAttempts,
+} from "./customer-portal-decision.ts";
 import { pruneCustomerPortalRecords } from "./customer-portal-store.ts";
 import {
   listMeasurementIntakeExceptions,
@@ -320,6 +324,9 @@ export default {
           reconcileCustomerContractAcceptanceAttempts(env).catch((error) =>
             log({ at: "customer_contract_acceptance_reconcile", error: String(error) }),
           ),
+          reconcileCustomerPortalDecisionAttempts(env).catch((error) =>
+            log({ at: "customer_portal_decision_reconcile", error: String(error) }),
+          ),
           reconcileFacetV2ThenFrappe(env).catch((error) =>
             log({ at: "facet_design_frappe_projection_reconcile", error: String(error) }),
           ),
@@ -520,6 +527,15 @@ async function routeRequest(
   }
   if (url.pathname === "/api/v1/customer-portal/acceptance/confirm") {
     return await handleCustomerPortalAcceptanceConfirm(
+      req,
+      env as import("./app-types.ts").AppEnv,
+    );
+  }
+  // Recording which curated option a customer prefers. Same capability and origin discipline as
+  // resolve, plus an Idempotency-Key; it is separately enabled and stays dark without its own
+  // Frappe service credentials.
+  if (url.pathname === "/api/v1/customer-portal/decision") {
+    return await handleCustomerPortalDecision(
       req,
       env as import("./app-types.ts").AppEnv,
     );

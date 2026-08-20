@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   confirmCustomerContractAcceptance,
   loadCustomerPortal,
+  recordCustomerPortalDecision,
   requestCustomerContractAcceptanceChallenge,
 } from "./portal-api";
 
@@ -10,11 +11,13 @@ const portal = {
   version: 1,
   brand: "IronWrap Exteriors",
   contract_acceptance_available: false,
+  material_decision_available: false,
   source_updated_at: "2026-07-16T10:00:00.000Z",
   read_model_generated_at: "2026-07-16T10:01:00.000Z",
   job: { job_number: "IW-100", service_type: "Roofing", status: "In Production" },
   proposal: null,
   scope: [],
+  option_packages: [],
   progress: [],
   closeout: null,
   warranty: null,
@@ -80,6 +83,35 @@ describe("customer portal API", () => {
           signer_name: "Customer Example",
           accepted: true,
         }),
+      }),
+    );
+  });
+
+  it("records a material decision on its own fixed path with an idempotency key", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ status: "recorded", decision_id: "decision_abc12345" }));
+
+    const result = await recordCustomerPortalDecision(
+      {
+        token: "d".repeat(43),
+        optionPackageId: "OPT-BETTER",
+        idempotencyKey: "portal-decision:OPT-BETTER:0001",
+      },
+      fetcher,
+    );
+
+    expect(result).toEqual({ status: "recorded", decision_id: "decision_abc12345" });
+    expect(fetcher.mock.calls[0]?.[0]).toBe("/api/v1/customer-portal/decision");
+    const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("Idempotency-Key")).toBe("portal-decision:OPT-BETTER:0001");
+    expect(fetcher.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        // The decision route is a customer capability, never an office session.
+        credentials: "omit",
+        cache: "no-store",
+        body: JSON.stringify({ token: "d".repeat(43), option_package_id: "OPT-BETTER" }),
       }),
     );
   });

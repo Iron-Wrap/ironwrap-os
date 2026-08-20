@@ -35,6 +35,10 @@ export type AppEnv = Env & {
   // Customer contract signing is a distinct, false-by-default capability. It requires its own
   // enablement in addition to a portal, email transport, Frappe service auth, and HMAC secret.
   APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED?: string;
+  // Recording a customer's material/colour preference is a third, separately activated
+  // capability. It is provisional -- an estimator still confirms it before pricing moves -- so it
+  // is deliberately not folded into the contract-acceptance flag.
+  APP_CUSTOMER_PORTAL_DECISION_ENABLED?: string;
   APP_TENANT_ID?: string;
   APP_TENANT_NAME?: string;
   APP_TENANT_BRAND?: string;
@@ -56,6 +60,12 @@ export type AppEnv = Env & {
   // must not fall back to the broad ERPNEXT_API_KEY/ERPNEXT_API_SECRET used by the app BFF.
   APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY?: string;
   APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET?: string;
+  // Dedicated shared secret and Frappe service credentials for the customer material-decision
+  // command. Separate from the acceptance pair on purpose: the decision service identity may
+  // create a Customer Decision and its receipt evidence, and can never sign a contract.
+  APP_CUSTOMER_DECISION_HMAC_KEY?: string;
+  APP_CUSTOMER_DECISION_FRAPPE_API_KEY?: string;
+  APP_CUSTOMER_DECISION_FRAPPE_API_SECRET?: string;
   APP_FRAPPE_REQUEST_TIMEOUT_MS?: string;
   // Exact Frappe identities authorized to see restricted insurance-proof state in the app BFF.
   // This is deliberately separate from broad `ops` access and defaults to no estimator access.

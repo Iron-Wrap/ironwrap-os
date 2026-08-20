@@ -1979,16 +1979,18 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // challenge without Gmail, exactly as it already completes magic-link sign-in. 0068 is the
     // fourth approval vertical: the owner-facing Draft -> Approved Proposal Evidence Pack
     // publication ledger, kept isolated from 0016/0017/0020 exactly as those are from each
-    // other; it took 0068 because #60 claimed 0067 while this branch was open. #54 kept
+    // other; it took 0068 because #60 claimed 0067 while this branch was open. 0069 is the
+    // provisional customer material-decision ledger, numbered above `main`'s 0068 and above the
+    // 0067 still held by open head #60. #54 kept
     // 0046 and #48 kept 0047, both of which landed on `main`, so the gap from 0048 to 0055 is
     // expected and not a missing migration. 0067 is the IRO-45 inventory ledger: it was
     // numbered 0046 while that number was still free on its own head, and was renumbered
     // above every shipped migration once `main` landed 0046 elsewhere.
-    assert.equal(migrations.length, 60);
+    assert.equal(migrations.length, 61);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0068_proposal_publication_approval_requests.sql",
+      "0069_customer_portal_decision_intents.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
@@ -2042,8 +2044,10 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // (including the partial unique index that permits only one live intent per pack), and nine
     // triggers - binding immutability, the state and reconciliation fences, the three event
     // appenders, and the three append-only guards. 0067 adds the IRO-45 inventory-control
-    // ledger on top of both.
-    assert.deepEqual({ ...counts }, { tables: 144, indexes: 205, triggers: 333 });
+    // ledger on top of both. 0069 adds the customer material-decision vertical: its intent
+    // and event tables, three indexes, and eight triggers - intent immutability, the
+    // state-transition fence, the three event appenders, and the three append-only guards.
+    assert.deepEqual({ ...counts }, { tables: 146, indexes: 208, triggers: 341 });
     // The applied chain — not the text of any single file — is what production
     // ends up running, so the complete_work receipt kind is asserted here.
     // 0028 is frozen at its shipped three-member CHECK and 0057 widens it

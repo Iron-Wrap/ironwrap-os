@@ -8,6 +8,7 @@ export const customerPortalResponseSchema = z
     version: z.literal(1),
     brand: z.string(),
     contract_acceptance_available: z.boolean(),
+    material_decision_available: z.boolean(),
     source_updated_at: nullableText,
     read_model_generated_at: z.string(),
     job: z
@@ -51,6 +52,23 @@ export const customerPortalResponseSchema = z
           title: nullableText,
           text: nullableText,
           version: nullableText,
+        })
+        .strict(),
+    ),
+    option_packages: z.array(
+      z
+        .object({
+          id: z.string(),
+          package_name: nullableText,
+          tier: nullableText,
+          material_system: nullableText,
+          price_delta: nullableNumber,
+          currency: nullableText,
+          // Office-authored and deliberately unconstrained beyond "a JSON object". The section
+          // renders it as text pairs only, so a shape it has not seen before degrades to a plain
+          // list rather than to a crash.
+          options: z.record(z.string(), z.unknown()).nullable(),
+          warranty_summary: nullableText,
         })
         .strict(),
     ),
@@ -102,6 +120,16 @@ export const customerContractAcceptanceConfirmResponseSchema = z
     acceptance_id: z.string().min(8).max(140),
   })
   .strict();
+
+export const customerPortalDecisionResponseSchema = z
+  .object({
+    status: z.union([z.literal("recorded"), z.literal("uncertain")]),
+    decision_id: z.string().min(8).max(140),
+  })
+  .strict();
+
+export type CustomerPortalOptionPackage = CustomerPortalResponse["option_packages"][number];
+export type CustomerPortalDecisionResponse = z.infer<typeof customerPortalDecisionResponseSchema>;
 
 export type CustomerContractAcceptanceChallengeResponse = z.infer<
   typeof customerContractAcceptanceChallengeResponseSchema

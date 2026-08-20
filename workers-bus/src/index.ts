@@ -778,9 +778,32 @@ async function handleIngest(
 async function handlePush(env: Env, envelopeId: string): Promise<void> {
   const rec = await store.getEnvelope(env, envelopeId);
   if (!rec) throw new Error("envelope_missing");
-  if (rec.status === "pushed" || rec.status === "reconciled" || rec.status === "jn_skipped") {
+  if (
+    rec.status === "pushed" ||
+    rec.status === "reconciled" ||
+    rec.status === "jn_skipped" ||
+    rec.status === "erpnext_no_token"
+  ) {
     await store.markDeadLettersRecovered(env, envelopeId);
     return; // idempotent re-delivery also closes any stale open recovery row for this envelope only
+  }
+  // Config hole: ERPNEXT_ENABLED is on but the API pair is missing. Retry cannot mint
+  // credentials, so this is a terminal fail-closed skip — never a DLQ storm, never a
+  // dummy token, never a fake pushed landing. pushToErpNext still throws if called.
+  if (isOn(env.ERPNEXT_ENABLED) && (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET)) {
+    await store.setErpNextError(env, envelopeId, "erpnext_no_token").catch(() => {});
+    await store.recordAudit(env, {
+      automation: "erpnext_push",
+      trigger: "queue",
+      envelope_id: envelopeId,
+      action: "skip",
+      result: "ok",
+      error: "erpnext_no_token",
+    });
+    await store.setStatus(env, envelopeId, "erpnext_no_token", {
+      last_error: "erpnext_no_token",
+    });
+    return;
   }
   // The owned operating record must exist before the temporary JobNimbus bridge. A bridge outage
   // is an Automation Incident, never a reason to hide a fresh lead from the operator queue.

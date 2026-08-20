@@ -28,6 +28,7 @@ export type Status =
   | "pending_jn_push" // queued for JobNimbus
   | "pushed"          // landed in JobNimbus
   | "jn_skipped"      // JOBNIMBUS_ENABLED=false: honest skip, not a fake push
+  | "erpnext_no_token" // ERPNEXT_ENABLED=true but API key/secret missing: fail-closed, no retry/DLQ
   | "reconciled"      // confirmed by daily reconcile
   | "duplicate"       // deduped against an earlier envelope
   | "dead";           // exhausted retries → dead-letter

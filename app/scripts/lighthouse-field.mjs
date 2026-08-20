@@ -48,6 +48,25 @@ export function evaluateAssertions(results, assertions) {
   return { aggregate, failures };
 }
 
+/**
+ * The reading depends on the machine that took it, and until now nothing recorded which
+ * machine that was. Lighthouse measures `benchmarkIndex` — a synthetic CPU/GC score, taken
+ * unthrottled, independent of the page — at the start of every run, so the evidence can
+ * carry the runner's speed next to the numbers it produced. Without it, a job that reads
+ * 214 ms and a job that reads 34 ms on the same bytes are indistinguishable after the fact,
+ * which is exactly the position ELEC-106 had to reconstruct from CI logs.
+ */
+export function describeRunner(results) {
+  const values = results
+    .map((result) => result.environment?.benchmarkIndex)
+    .filter(Number.isFinite);
+  if (!values.length) return undefined;
+  return {
+    benchmarkIndex: { median: median(values), values },
+    hostUserAgent: results[0].environment?.hostUserAgent,
+  };
+}
+
 async function waitForServer(url, child) {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     if (child.exitCode !== null)
@@ -180,13 +199,14 @@ export async function measure({
       failures,
       outputDir,
       evidence: {
-        version: 1,
+        version: 2,
         tool: "lighthouse@13.4.1",
         url: profile.url,
         protocol: profile.protocol,
         runs: profile.numberOfRuns,
         thresholds: profile.assertions,
         aggregate,
+        runner: describeRunner(results),
         runFiles,
       },
     };

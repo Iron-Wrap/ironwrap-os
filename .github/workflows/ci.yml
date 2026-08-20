@@ -184,18 +184,35 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Depth 2 so HEAD^ resolves. For a pull request that is the base branch tip
+      # `actions/checkout` merged into, and for a push it is the previous commit on the
+      # branch, which is the comparison the scope decision below wants in both cases.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 2
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: app/package-lock.json
+      # Nine of the nine budget failures in the 58 jobs surveyed for ELEC-106 were on
+      # commits that changed nothing under `app/`: the bundle was byte-identical to one the
+      # parent commit had already measured green, so the red was runner noise and nothing
+      # else. Deciding scope before measuring is what stops the gate re-rolling that dice.
+      # The rationale, and why this does not weaken the budget, is in
+      # app/scripts/lighthouse-scope.mjs.
+      - name: Decide whether the PWA bundle can have changed
+        id: scope
+        run: node app/scripts/lighthouse-scope.mjs
       - name: Install app dependencies
+        if: steps.scope.outputs.measure == 'true'
         run: npm ci --prefix app
       - name: Install Playwright Chromium
+        if: steps.scope.outputs.measure == 'true'
         working-directory: app
         run: npx playwright install --with-deps chromium
       - name: Run paired-device Lighthouse thresholds
+        if: steps.scope.outputs.measure == 'true'
         run: npm run test:lighthouse --prefix app
       # The gate reports only the assertions it failed, so a run that fails on one
       # metric hides how much headroom the others had — and a run that passes reports
@@ -203,7 +220,10 @@ jobs:
       - name: Report paired-device Lighthouse readings
         if: always()
         shell: bash
+        env:
+          SCOPE_REASON: ${{ steps.scope.outputs.reason }}
         run: |
+          echo "scope: ${SCOPE_REASON:-the scope step did not run}"
           summary=app/.lighthouseci/lighthouse-summary.json
           if [ ! -f "$summary" ]; then
             echo "no Lighthouse summary was produced"
@@ -217,6 +237,16 @@ jobs:
               console.log(
                 `${audit.padEnd(28)} median ${String(round(reading.median)).padEnd(10)}` +
                   ` runs ${reading.values.map(round).join(", ")}`,
+              );
+            }
+            // The runner is part of the reading. Printing its speed next to the numbers is
+            // what lets a later comparison of two jobs on the same bytes say which machine
+            // each ran on, instead of reconstructing it from the metrics themselves.
+            const runner = summary.runner;
+            if (runner) {
+              console.log(
+                `${"benchmarkIndex".padEnd(28)} median ${String(round(runner.benchmarkIndex.median)).padEnd(10)}` +
+                  ` runs ${runner.benchmarkIndex.values.map(round).join(", ")}`,
               );
             }
           ' "$summary"

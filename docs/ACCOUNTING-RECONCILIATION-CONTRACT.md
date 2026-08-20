@@ -11,8 +11,13 @@ path and line. Nothing in this document is Deployed, Runtime-verified, or Busine
 
 ## 0. Implementation status
 
-Repository facts as of 2026-08-20, on `main` plus the S2+S3 branch. Source-green only: nothing here
+Repository facts as of 2026-08-20, on `main` plus the S4+S5 branch. Source-green only: nothing here
 is deployed, runtime-verified, or business-accepted, and slice S12 remains the only route to those.
+
+S4 and S5 add no migration. Section 7.1 reserves the next free numbers for S6 and S7, and neither
+slice needs a table: a reversal is an ordinary `accounting_intents` row carrying
+`compensates_intent_id` and `compensates_effect_id`, and a compensation plan is the remedy set
+`0061` already stores on the exception.
 
 | Slice | State | Where |
 |---|---|---|
@@ -20,7 +25,9 @@ is deployed, runtime-verified, or business-accepted, and slice S12 remains the o
 | S1 | **Implemented** | `workers-bus/migrations/0058_accounting_money_intents.sql`, `workers-bus/src/accounting-intents.ts` |
 | S2 | **Implemented** | `workers-bus/migrations/0059_tax_policy_snapshots.sql`, `workers-bus/src/accounting-tax-snapshots.ts` |
 | S3 | **Implemented** | `workers-bus/migrations/0060_accounting_provider_observations.sql`, `workers-bus/migrations/0061_accounting_exceptions.sql`, `workers-bus/src/accounting-normalizers.ts`, `workers-bus/src/accounting-reconciliation.ts`, `workers-bus/src/accounting-exceptions.ts`, `workers-bus/src/accounting-provider-read.ts` |
-| S4–S12 | Target | — |
+| S4 | **Implemented** | `workers-bus/src/accounting-submission.ts`, `workers-bus/src/accounting-payments.ts` |
+| S5 | **Implemented** | `workers-bus/src/accounting-compensation.ts` |
+| S6–S12 | Target | — |
 
 Two deviations from this document, both deliberate and both argued at the point they occur:
 
@@ -424,6 +431,28 @@ rather than being described.
 | Provider drift | new observation supersedes → `reconciliation_required` | "a previously reconciled entity that changed is drift: the new observation supersedes" |
 | Identity conflict | `provider_identity_conflict`, compensation refused in both layers | "an entity id that is not the one we created is `identity_conflict`, and it blocks compensation" |
 
+Slices S4 and S5 add the path that reaches those verdicts from a live dispatch rather than from a
+hand-recorded observation, and the reversal path out of them. Each row names the code and the test
+that executes it; every test runs the real 0058–0062 SQL and the real in-memory ledger.
+
+| Behaviour | Enforced by | Test |
+|---|---|---|
+| Approved intent dispatches through the port, reaching `submitted` and no further | `accounting-submission.ts` → `submitAccountingIntent` | `test/accounting-submission.test.ts` "an approved deposit invoice dispatches once and reaches `submitted`, never `reconciled`" |
+| Payments are observed, never created | `ACCOUNTING_PROVIDER_ACTIONS.payment = null` → `accounting_payment_observe_only` | "a payment intent refuses to dispatch: IronWrap observes Payments, it does not create them" |
+| Tax remittance is proposed, never filed | `ACCOUNTING_PROVIDER_ACTIONS.tax_remittance_proposal = null` → `accounting_tax_remittance_propose_only` | same test |
+| The ledger's expectation is the one the intent bound | `expected_sha256` re-checked before dispatch → `accounting_intent_expected_readback_mismatch` | "an expectation that is not the one the intent bound is refused before dispatch" |
+| Duplicate create, and envelope changed on retry | port replay on the business idempotency key; `effect_idempotency_conflict` | "a retried dispatch with the same envelope replays; a changed one is an idempotency conflict" |
+| Tax preflight blocks a submission before the ledger sees it | `preflightAccountingIntentTax` in the dispatch path | "a stale tax snapshot blocks the submission, and nothing reaches the ledger" |
+| Payment ingest re-reads the invoice it settles | `accounting-payments.ts` → `ingestObservedPayment` | `test/accounting-payments.test.ts` "a partial payment settles the invoice partially, with no exception and the invariant holding" |
+| Duplicate, partial and over-payment reached end to end | ingest → `reconcileAccountingIntent` | "two payments against one invoice are `duplicate_provider_payment`…", "the remainder after a partial reaches `reconciled` only once the balance is zero", "an over-sized single payment is `provider_overpayment`, a mismatch and not a partial" |
+| A payment line split across two invoices is refused, not attributed | `linkedInvoiceIds` → `provider_payment_line_ambiguous` | "a payment line split across two invoices is refused rather than attributed by guess" |
+| Compensation is proposed, never automatic | `accounting-compensation.ts` → `planAccountingCompensation` writes nothing | `test/accounting-compensation.test.ts` "a plan proposes exactly the surplus, and names the exception it answers" |
+| Only a remedy the exception offered, and only a reversing one, may be planned | `offeredRemedies` → `accounting_compensation_remedy_not_offered` / `_not_reversal` | "a remedy the exception never offered, and one that is not a reversal, are both refused" |
+| A reversal may not exceed what was posted | magnitude compare → `accounting_compensation_amount_exceeds_original` | "a reversal larger than what was posted is refused on magnitude, not on sign" |
+| Money ceilings compare magnitudes, so a reversal cannot sign its way under one | `magnitudeCents` on every port authority; `abs()` in `deriveAccountingIntent` and in `0058`'s owner-authority trigger | `test/accounting-submission.test.ts` "the authority the port receives carries magnitudes…", "a reversal above the ceiling is refused on magnitude, at derivation and at the ledger" |
+| A reversal that did not reach the provider closes nothing | `submitAccountingCompensation` resolves only on `submitted` | "a reversal that does not reach the provider leaves the exception open and the original uncompensated" |
+| Refund race: refund intent and payment observation, either order | one invariant over recorded facts; the compensated original is reported, not reopened | "a refund and a payment observed in either order produce one deterministic outcome" |
+
 **Target, not implemented.** Refund after holdback release (`holdback_over_released`) waits on the
 holdback ledger in S6, and payroll correction waits on S7 and PR #55. Their reason codes are already
 declared by `0061_accounting_exceptions.sql` so neither slice has to edit a shipped migration.
@@ -615,7 +644,8 @@ Project rule 5 forbids live provider credentials. The mocked contract test is th
 
 **Harness.** Extend `workers-bus/test/effect-runtime-fixture.ts:41` — its `EffectLedgerTestD1` runs
 real migration SQL in an in-memory `node:sqlite` database behind a D1-shaped facade — into
-`workers-bus/test/accounting-fixture.ts`, loading migrations 0057–0062. Tests run under
+`workers-bus/test/accounting-fixture.ts`, loading migrations 0058–0061 (the money plane's own),
+with `workers-bus/test/accounting-scenario-fixture.ts` adding the S4/S5 lifecycle choreography. Tests run under
 `node --test` (`workers-bus/package.json`), so the D1 CHECKs and triggers are executed, not mocked.
 PWA tests run under `vitest` in `app/`.
 
@@ -681,8 +711,8 @@ Dependency order. S0–S10 are provable against `main` today. Every slice ends g
 | S1 | Migration **0058** + intent state machine + command receipts + D1 invariant tests | S0 | **Implemented.** The core aggregate. |
 | S2 | Migration **0059** + tax snapshot binding, staleness and drift detection | S1 | **Implemented.** Cheap, and every other slice binds a snapshot. |
 | S3 | Migrations **0060 + 0061** + the reconciliation engine (normalizers, expected/observed hashing, verdicts, exception raising) | S1, S2 | **Implemented.** The heart of the issue. |
-| S4 | Payment and deposit intents through the port + fixtures + duplicate/partial/over-payment scenarios | S3 | First end-to-end money path. |
-| S5 | Credit memo and refund intents + compensation plans + refund-race scenario + ceiling enforcement | S4 | First reversal path. |
+| S4 | Payment and deposit intents through the port + fixtures + duplicate/partial/over-payment scenarios | S3 | **Implemented.** First end-to-end money path. No migration. |
+| S5 | Credit memo and refund intents + compensation plans + refund-race scenario + ceiling enforcement | S4 | **Implemented.** First reversal path. No migration. |
 | S6 | Next free migration + holdback ledger, entitlement computation, release preconditions, refund-after-release | S5 | The domain-specific slice; largest design surface. |
 | S7 | Next free migration + `PayrollAccountingAdapter` implementation + payroll correction scenario | S3, **PR #55** | Gated on IRO-53 landing. Posting target per open question 2. |
 | S8 | Bus BFF routes + permissions + cron sweeps | S3 | Backend surface. |
@@ -733,7 +763,10 @@ parallel once the envelope shapes in section 8.1 are fixed.
    off, and what is the initial version?
 4. **Does IronWrap ever create Payments in QuickBooks**, or only observe them? Section 4.1 defaults
    to observe-only, with creation reserved for payments IronWrap itself captured (portal deposit,
-   card capture). Confirm, because it changes S4's scope materially.
+   card capture). Confirm, because it changes S4's scope materially. **S4 shipped on the default**:
+   `accounting-payments.ts` is an observation path with no create, and a `payment`-kind dispatch is
+   refused outright with `accounting_payment_observe_only`. Answering this "yes" is additive — a
+   provider action for `payment` plus its executor — and does not unwind anything built.
 5. **Tax scope.** Confirmed out of scope: no CRA filing, propose-and-reconcile only. Please confirm
    that the accountant accepts a reconciled remittance figure as the deliverable.
 6. **Accountant identity.** Is the accountant an `app_users` row with `access_role = 'accounting'`,

@@ -207,6 +207,11 @@ export const QUICKBOOKS_FIXTURES: ReadonlyArray<{ file: string; entityType: stri
   { file: "payment-overpaid-1500.json", entityType: "Payment" },
   { file: "credit-memo.json", entityType: "CreditMemo" },
   { file: "refund-receipt.json", entityType: "RefundReceipt" },
+  // Slice S5: the reversal that exactly matches the 240.00 surplus an over-payment of 1500.00
+  // leaves against a 1260.00 invoice, so a compensation scenario reverses a real number rather
+  // than an amount chosen to fit whichever fixture already existed.
+  { file: "credit-memo-240.json", entityType: "CreditMemo" },
+  { file: "refund-receipt-240.json", entityType: "RefundReceipt" },
   { file: "journal-entry.json", entityType: "JournalEntry" },
   { file: "time-activity.json", entityType: "TimeActivity" },
   { file: "tax-rate-gst-5.json", entityType: "TaxRate" },

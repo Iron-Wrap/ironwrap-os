@@ -461,6 +461,41 @@ export async function blockAccountingIntent(
 }
 
 /**
+ * Close out a compensation: the reversal reconciled, so the intent it reverses is `compensated`.
+ *
+ * Added by slice S5. Separate from `recordAccountingIntentSubmission` because the outcome that
+ * settles here belongs to a *different* intent - the reversal's - and feeding one intent's ledger
+ * outcome into another intent's submission recorder would write the reversal's provider identity
+ * onto the original. Section 5.4's rule is that both remain visible, each with its own identity.
+ *
+ * `compensated` is not terminal: the state graph admits `compensated -> reconciliation_required`,
+ * so a later drift on the original entity is still reportable.
+ */
+export async function recordAccountingIntentCompensated(
+  env: AppEnv,
+  input: { tenantId: string; intentId: string; reasonCode?: string | null },
+  now: Date = new Date(),
+): Promise<AccountingIntentRecord> {
+  const intent = await readAccountingIntent(env, input.tenantId, input.intentId);
+  if (!intent) throw new AccountingIntentError("accounting_intent_missing");
+  assertTransition(intent.state, "compensated");
+
+  const timestamp = now.toISOString();
+  await env.DB.prepare(
+    `UPDATE accounting_intents
+        SET state = 'compensated', version = version + 1,
+            reason_code = COALESCE(?, reason_code), updated_at = ?
+      WHERE intent_id = ? AND tenant_id = ? AND version = ?`,
+  ).bind(
+    input.reasonCode ?? null, timestamp, input.intentId, input.tenantId, intent.version,
+  ).run();
+
+  const applied = await readAccountingIntent(env, input.tenantId, input.intentId);
+  if (!applied) throw new AccountingIntentError("accounting_intent_missing");
+  return applied;
+}
+
+/**
  * Apply a reconciliation verdict (section 5.3).
  *
  * `unavailable` is deliberately a no-op: the provider being unreachable is not a statement about

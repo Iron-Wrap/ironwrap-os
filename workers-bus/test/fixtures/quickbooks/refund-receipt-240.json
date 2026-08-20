@@ -1,0 +1,32 @@
+{
+  "RefundReceipt": {
+    "Id": "5002",
+    "SyncToken": "0",
+    "MetaData": {
+      "CreateTime": "2026-08-19T12:00:00-07:00",
+      "LastUpdatedTime": "2026-08-19T12:00:00-07:00"
+    },
+    "TxnDate": "2026-08-22",
+    "CustomerRef": {
+      "value": "42",
+      "name": "Synthetic Customer"
+    },
+    "DepositToAccountRef": {
+      "value": "35",
+      "name": "Chequing - synthetic"
+    },
+    "Line": [
+      {
+        "Amount": 240.0,
+        "DetailType": "SalesItemLineDetail",
+        "SalesItemLineDetail": {
+          "ItemRef": {
+            "value": "7"
+          }
+        }
+      }
+    ],
+    "TotalAmt": 240.0
+  },
+  "time": "2026-08-19T12:00:00.000-07:00"
+}

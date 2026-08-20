@@ -62,6 +62,11 @@ export class TestMoneyEffectPort implements MoneyEffectPort {
   private readonly attempts: AttemptRow[] = [];
   /** Every dispatch the port actually made, so a test can assert a provider was not called twice. */
   readonly dispatches: Array<{ effectId: string; attemptId: string; businessIdempotencyKey: string }> = [];
+  /**
+   * Every request the port was handed, accepted or refused. Slice S4 uses it to assert what the
+   * money plane actually put in the envelope - notably that the authority amounts are magnitudes.
+   */
+  readonly requests: MoneyEffectRequest[] = [];
   ready = true;
   private sequence = 0;
 
@@ -116,6 +121,7 @@ export class TestMoneyEffectPort implements MoneyEffectPort {
     now: Date = new Date(),
   ): Promise<MoneyEffectOutcome<T>> {
     this.assertReady();
+    this.requests.push(input);
     const projected = toExternalEffectShape(input);
     const requestHash = await sha256Hex(canonicalJson(input.request));
     const key = `${input.tenantId}\0${input.idempotencyKey}`;

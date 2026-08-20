@@ -127,6 +127,7 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    | site config key | identity | provisioned in |
    |---|---|---|
    | `ironwrap_customer_acceptance_service_user` | IronWrap Customer Acceptance Service | step 3.4 pair, dedicated user |
+   | `ironwrap_customer_decision_service_user` | IronWrap Customer Decision Service | step 3.4 pair, dedicated user |
    | `ironwrap_quickbooks_reconciliation_issuer_user` | IronWrap QuickBooks Reconciliation Issuer | step 3.5 |
    | `ironwrap_facet_design_projection_service_user` | IronWrap Facet Design Projection Service | set with `FACET_DESIGN_FRAPPE_PROJECTION_*` in step 2.7 |
    | `ironwrap_launch_proof_reader_user` | IronWrap Launch Proof Reader | release-time only, for `tools/launch-proof.mjs` |

@@ -1497,6 +1497,131 @@ function fleetCaptureRoute(pathname) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Customer-portal fixtures (option-package comparison + material decision) -- ELEC-94
+//
+// `/portal` had no fixture handlers at all before this, so the customer half of
+// the product had zero e2e coverage. These mirror the real routes'
+// fixed-shape body, exact-key validation, Idempotency-Key requirement and
+// success envelope from workers-bus/src/customer-portal.ts and
+// workers-bus/src/customer-portal-decision.ts. Deliberate divergences: no
+// D1-backed intent lease, no R2 receipt, no origin check (Playwright's page
+// origin is the server's own), and no throttle. Replay is an in-memory map for
+// the process lifetime.
+// ---------------------------------------------------------------------------
+
+const FIXTURE_PORTAL_TOKEN = "p".repeat(43);
+
+const fixtureOptionPackages = [
+  {
+    id: "opt-good",
+    package_name: "Weathered slate asphalt",
+    tier: "Good",
+    material_system: "Architectural asphalt shingle",
+    price_delta: 0,
+    currency: "CAD",
+    options: { colour: "Weathered slate", panel_profile: "Laminated shingle" },
+    warranty_summary: "25-year limited material warranty",
+  },
+  {
+    id: "opt-better",
+    package_name: "Charcoal standing seam",
+    tier: "Better",
+    material_system: "26ga standing seam steel",
+    price_delta: 2400,
+    currency: "CAD",
+    options: { colour: "Charcoal", panel_profile: "1.5in nail strip" },
+    warranty_summary: "40-year finish warranty",
+  },
+  {
+    id: "opt-best",
+    package_name: "Matte black snap-lock",
+    tier: "Best",
+    material_system: "24ga snap-lock steel",
+    price_delta: 6100,
+    currency: "CAD",
+    options: { colour: "Matte black", panel_profile: "1.75in snap-lock" },
+    warranty_summary: "50-year finish warranty",
+  },
+];
+
+const customerPortalState = { decisions: [], byIdempotencyKey: new Map() };
+
+function resetCustomerPortalState() {
+  customerPortalState.decisions = [];
+  customerPortalState.byIdempotencyKey = new Map();
+}
+
+function fixtureCustomerPortalModel() {
+  return {
+    version: 1,
+    brand: "IronWrap Exteriors",
+    contract_acceptance_available: false,
+    material_decision_available: true,
+    source_updated_at: "2026-08-20T07:00:00.000Z",
+    read_model_generated_at: "2026-08-20T07:05:00.000Z",
+    job: { job_number: "IW-2026-100", service_type: "Roofing", status: "In Production" },
+    proposal: null,
+    scope: [
+      {
+        id: "scope-1",
+        type: "Included",
+        title: "Tear-off and re-roof",
+        text: "Remove the existing roof system and install the selected assembly.",
+        version: "1",
+      },
+    ],
+    option_packages: fixtureOptionPackages,
+    progress: [],
+    closeout: null,
+    warranty: null,
+  };
+}
+
+/** The shared exactKeys() assumes an object; a portal body arrives straight off the wire. */
+function exactObjectKeys(body, keys) {
+  return !!body && typeof body === "object" && !Array.isArray(body) && exactKeys(body, keys);
+}
+
+async function routeCustomerPortal(request, requestUrl) {
+  if (requestUrl.pathname === "/api/v1/customer-portal/resolve") {
+    const body = await readJsonBody(request);
+    if (!exactObjectKeys(body, ["token"]) || body.token !== FIXTURE_PORTAL_TOKEN) {
+      return { status: 404, body: { error: "not_found" } };
+    }
+    return { status: 200, body: fixtureCustomerPortalModel() };
+  }
+  if (requestUrl.pathname === "/api/v1/customer-portal/decision") {
+    const idempotencyKey = request.headers["idempotency-key"];
+    const body = await readJsonBody(request);
+    if (typeof idempotencyKey !== "string" || idempotencyKey.length < 8) {
+      return { status: 400, body: { error: "idempotency_key_required" } };
+    }
+    if (
+      !exactObjectKeys(body, ["token", "option_package_id"]) ||
+      body.token !== FIXTURE_PORTAL_TOKEN
+    ) {
+      return { status: 404, body: { error: "not_found" } };
+    }
+    if (!fixtureOptionPackages.some((option) => option.id === body.option_package_id)) {
+      return { status: 404, body: { error: "not_found" } };
+    }
+    const replayed = customerPortalState.byIdempotencyKey.get(idempotencyKey);
+    if (replayed) return { status: 200, body: replayed };
+    const recorded = {
+      status: "recorded",
+      decision_id: `decision_${customerPortalState.decisions.length + 1}0000000`,
+    };
+    customerPortalState.decisions.push({
+      option_package_id: body.option_package_id,
+      idempotency_key: idempotencyKey,
+    });
+    customerPortalState.byIdempotencyKey.set(idempotencyKey, recorded);
+    return { status: 200, body: recorded };
+  }
+  return null;
+}
+
 async function readJsonBody(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
@@ -1526,6 +1651,19 @@ const requestListener = async (request, response) => {
   if (method === "POST" && requestUrl.pathname === "/__acceptance/fleet/reset") {
     resetFleetCaptureState();
     return sendJson(response, method, 200, { ok: true });
+  }
+  if (method === "POST" && requestUrl.pathname === "/__acceptance/customer-portal/reset") {
+    resetCustomerPortalState();
+    return sendJson(response, method, 200, { ok: true });
+  }
+  if (method === "GET" && requestUrl.pathname === "/__acceptance/customer-portal/decisions") {
+    return sendJson(response, method, 200, { decisions: customerPortalState.decisions });
+  }
+  // The portal is a customer surface, not one of the three office/field profiles, so it is
+  // served in every mode rather than gated behind one.
+  if (method === "POST" && requestUrl.pathname.startsWith("/api/v1/customer-portal/")) {
+    const portal = await routeCustomerPortal(request, requestUrl);
+    if (portal) return sendJson(response, method, portal.status, portal.body);
   }
   const captureKind =
     ACCEPTANCE_MODE === "field" && method === "POST"

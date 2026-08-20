@@ -349,6 +349,66 @@ function installFrappeMock() {
         modified: NOW,
       },
     ],
+    "Option Package": [
+      {
+        name: "OPT-BETTER",
+        option_package_id: "opt-better",
+        roof_job: "JOB-A",
+        package_name: "Charcoal standing seam",
+        tier: "Better",
+        status: "Approved",
+        material_system: "26ga standing seam steel",
+        price_delta: 2_400,
+        currency: "CAD",
+        options_json: '{"colour":"Charcoal","panel_profile":"1.5in nail strip"}',
+        warranty_summary: "40-year finish warranty",
+        payment_assumptions: "internal payment assumption",
+        approval_note: "internal approval note",
+        scope_clause_ids_json: '["internal"]',
+        notes: "internal estimator note",
+        modified: NOW,
+      },
+      {
+        name: "OPT-GOOD",
+        option_package_id: "opt-good",
+        roof_job: "JOB-A",
+        package_name: "Weathered slate asphalt",
+        tier: "Good",
+        status: "Approved",
+        material_system: "Architectural asphalt",
+        price_delta: 0,
+        currency: "CAD",
+        options_json: "not json at all",
+        warranty_summary: null,
+        modified: NOW,
+      },
+      {
+        name: "OPT-DRAFT",
+        option_package_id: "opt-draft",
+        roof_job: "JOB-A",
+        package_name: "Copper accent (in progress)",
+        tier: "Custom",
+        status: "Draft",
+        material_system: "Copper",
+        price_delta: 41_000,
+        currency: "CAD",
+        options_json: "{}",
+        modified: NOW,
+      },
+      {
+        name: "OPT-OTHER-JOB",
+        option_package_id: "opt-other-job",
+        roof_job: "JOB-B",
+        package_name: "Another customer's option",
+        tier: "Best",
+        status: "Approved",
+        material_system: "Not this job",
+        price_delta: 9_999,
+        currency: "CAD",
+        options_json: "{}",
+        modified: NOW,
+      },
+    ],
   };
   const original = globalThis.fetch;
   globalThis.fetch = async (input) => {
@@ -788,6 +848,91 @@ test("customer portal withholds contract acceptance when the HMAC secret is too 
     assert.equal(resolved.status, 200);
     const model = (await resolved.json()) as Record<string, unknown>;
     assert.equal(model.contract_acceptance_available, false);
+  } finally {
+    frappe.restore();
+  }
+});
+
+
+test("customer portal projects only approved option packages for this job, with internals stripped", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  const frappe = installFrappeMock();
+  try {
+    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
+    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
+    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
+
+    const resolved = await worker.fetch(resolveRequest(token), appEnv as never, {} as never);
+    assert.equal(resolved.status, 200);
+    const model = (await resolved.json()) as {
+      option_packages: Array<Record<string, unknown>>;
+    };
+
+    // Good sorts before Better by the DocType's own tier order, not alphabetically.
+    assert.deepEqual(
+      model.option_packages.map((option) => option.id),
+      ["opt-good", "opt-better"],
+    );
+    assert.deepEqual(model.option_packages[1], {
+      id: "opt-better",
+      package_name: "Charcoal standing seam",
+      tier: "Better",
+      material_system: "26ga standing seam steel",
+      price_delta: 2_400,
+      currency: "CAD",
+      options: { colour: "Charcoal", panel_profile: "1.5in nail strip" },
+      warranty_summary: "40-year finish warranty",
+    });
+    // Unparseable office JSON degrades to no detail list rather than failing the whole read.
+    assert.equal(model.option_packages[0]!.options, null);
+
+    const projected = JSON.stringify(model.option_packages);
+    for (const internal of [
+      "internal payment assumption",
+      "internal approval note",
+      "internal estimator note",
+      "Copper accent (in progress)",
+      "Another customer's option",
+    ]) {
+      assert.equal(projected.includes(internal), false, `leaked: ${internal}`);
+    }
+
+    // The customer read contract asked Frappe for the Approved filter too: a Draft package is
+    // never fetched, not merely dropped after the fact.
+    const optionRequest = frappe.requests.find(
+      (request) => request.doctype === "Option Package",
+    );
+    assert.ok(optionRequest);
+    assert.deepEqual(optionRequest.filters, [
+      ["Option Package", "roof_job", "=", "JOB-A"],
+      ["Option Package", "status", "=", "Approved"],
+    ]);
+    for (const field of ["approval_note", "payment_assumptions", "notes", "scope_clause_ids_json"]) {
+      assert.equal(optionRequest.fields.includes(field), false, `requested: ${field}`);
+    }
+  } finally {
+    frappe.restore();
+  }
+});
+
+
+test("customer portal stays silent about materials when no option package is approved", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  const frappe = installFrappeMock();
+  frappe.rows["Option Package"] = [];
+  try {
+    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
+    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
+    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
+
+    const resolved = await worker.fetch(resolveRequest(token), appEnv as never, {} as never);
+    assert.equal(resolved.status, 200);
+    const model = (await resolved.json()) as Record<string, unknown>;
+    assert.deepEqual(model.option_packages, []);
+    // No decision credentials in this env, so the write half must advertise itself as unavailable.
+    assert.equal(model.material_decision_available, false);
   } finally {
     frappe.restore();
   }

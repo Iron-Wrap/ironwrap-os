@@ -39,12 +39,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 60,
-      "latest": "0068_proposal_publication_approval_requests.sql"
+      "count": 61,
+      "latest": "0069_customer_portal_decision_intents.sql"
     },
     "tests": {
-      "pwa": 492,
-      "worker": 960
+      "pwa": 500,
+      "worker": 971
     }
   },
   "proof_state_policy": {
@@ -264,6 +264,35 @@ ELEC-86 Facet v2 chain and customer portal switch-on (2026-08-20):
   Draft → Approved by the Owner Operator MCP command `request_publish_proposal_evidence_pack`;
   no Worker/PWA route published one, so the portal read model returned `proposal: null` and the
   acceptance challenge answered 404.
+
+ELEC-94 customer-facing option comparison and material decision (2026-08-20):
+
+- Step 3 of the core workflow ("apply materials, products, and colors") now exists as a
+  traversable path inside IronWrap's own customer surface. `Option Package` and
+  `Customer Decision` were both exist-only DocTypes with zero callers; the portal read model now
+  projects Approved-only `Option Package` rows for the bound job, and
+  `POST /api/v1/customer-portal/decision` records the customer's choice as a `Customer Decision`.
+- The comparison is built natively in the PWA from `options_json`, not embedded from Facet. Facet
+  remains evidence-only: its signed v2 producer contract deliberately strips share capability from
+  the evidence it emits, and it ships no viewer-only build that could be embedded inside a
+  paired-device budget. See ELEC-89 for the rejected embed and deep-link alternatives.
+- Migration `0069_customer_portal_decision_intents.sql` is 0029's acceptance-intent machine minus
+  the email challenge: one row per `Idempotency-Key`, an immutable R2 receipt written before the
+  Frappe effect is attempted, a single-attempt lease, and a terminal result replayed verbatim.
+  The challenge is absent on purpose — a material preference is provisional, not a legal act.
+- A portal-originated `Customer Decision` never moves a `Customer Quote`. It is a signal an
+  estimator confirms, matching the human-verification-in-the-loop rule and the fact that
+  `Customer Decision` carries no approval state of its own.
+- Frappe-side authority is a dedicated `IronWrap Customer Decision Service` role that may create a
+  `Customer Decision` and its receipt `Evidence Item` and read the three anchors it binds — it can
+  never sign a contract or write a quote, unlike the acceptance service identity.
+- Fail-closed by default. `APP_CUSTOMER_PORTAL_DECISION_ENABLED` mirrors the acceptance flag, and
+  the route additionally requires its own HMAC secret and Frappe service credentials, so a
+  deployed environment stays dark until an operator provisions them. The read half degrades to a
+  read-only comparison rather than disappearing.
+- `/portal` had no e2e coverage of any kind before this lane. `app/e2e/customer-portal-materials.spec.ts`
+  drives the comparison and the decision POST on a Pixel 5 viewport with no-horizontal-scroll and
+  44px-target assertions, and the acceptance server gained the portal fixture handlers it lacked.
 
 ELEC-92 owner-facing proposal publication (2026-08-20):
 

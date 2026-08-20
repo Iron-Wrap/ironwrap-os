@@ -3,9 +3,11 @@ import { API_PATHS } from "../lib/api-paths";
 import {
   customerContractAcceptanceChallengeResponseSchema,
   customerContractAcceptanceConfirmResponseSchema,
+  customerPortalDecisionResponseSchema,
   customerPortalResponseSchema,
   type CustomerContractAcceptanceChallengeResponse,
   type CustomerContractAcceptanceConfirmResponse,
+  type CustomerPortalDecisionResponse,
   type CustomerPortalResponse,
 } from "./portal-contracts";
 
@@ -50,6 +52,26 @@ export async function confirmCustomerContractAcceptance(
     body: { token: input.token, signer_name: input.signerName, accepted: true },
     idempotencyKey: input.idempotencyKey,
     schema: customerContractAcceptanceConfirmResponseSchema,
+    credentials: "omit",
+    fetcher,
+  });
+}
+
+/**
+ * Record which curated option the customer prefers. Unlike acceptance this needs no email
+ * round-trip -- a preference is provisional and an estimator confirms it before pricing moves --
+ * but it still carries an idempotency key so a flaky phone connection cannot double-record a tap.
+ */
+export async function recordCustomerPortalDecision(
+  input: { token: string; optionPackageId: string; idempotencyKey: string },
+  fetcher?: typeof fetch,
+): Promise<CustomerPortalDecisionResponse> {
+  return await apiRequest({
+    path: API_PATHS.customerPortalDecision,
+    method: "POST",
+    body: { token: input.token, option_package_id: input.optionPackageId },
+    idempotencyKey: input.idempotencyKey,
+    schema: customerPortalDecisionResponseSchema,
     credentials: "omit",
     fetcher,
   });

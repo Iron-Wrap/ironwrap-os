@@ -25,17 +25,34 @@ import {
 } from "./frappe-read.ts";
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import { customerAcceptanceBackendConfigured } from "./customer-acceptance-config.ts";
+import { customerDecisionBackendConfigured } from "./customer-decision-config.ts";
 
 const MAX_PORTAL_BODY_BYTES = 1024;
 const PORTAL_ACCESS_WINDOW_MS = 15 * 60 * 1000;
 const PORTAL_ACCESS_IP_LIMIT = 120;
 const PORTAL_MIN_TTL_MS = 60 * 60 * 1000;
 const PORTAL_MAX_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const MAX_OPTION_PAYLOAD_BYTES = 16_000;
+/** `Option Package.tier`'s own Select order; anything else is projected as an untiered card. */
+const OPTION_TIER_ORDER = ["Good", "Better", "Best", "Custom"];
+
+export interface CustomerPortalOptionPackage {
+  id: string;
+  package_name: string | null;
+  tier: string | null;
+  material_system: string | null;
+  price_delta: number | null;
+  currency: string | null;
+  /** Parsed `options_json`; `null` whenever the office left it empty or it is not an object. */
+  options: Record<string, unknown> | null;
+  warranty_summary: string | null;
+}
 
 export interface CustomerPortalReadModel {
   version: 1;
   brand: string;
   contract_acceptance_available: boolean;
+  material_decision_available: boolean;
   source_updated_at: string | null;
   read_model_generated_at: string;
   job: {
@@ -70,6 +87,7 @@ export interface CustomerPortalReadModel {
     text: string | null;
     version: string | null;
   }>;
+  option_packages: CustomerPortalOptionPackage[];
   progress: Array<{
     id: string;
     type: string | null;
@@ -342,6 +360,7 @@ export async function buildCustomerPortalReadModel(
     evidence,
     completionPackets,
     warrantyPackets,
+    optionPackages,
   ] = await Promise.all([
     listCustomerPortalFrappeResource(
       env,
@@ -377,6 +396,17 @@ export async function buildCustomerPortalReadModel(
       env,
       "Warranty Packet",
       [["Warranty Packet", "roof_job", "=", link.roof_job_id]],
+      10,
+    ),
+    // Approved-only, filtered again below. Draft and Needs Review packages are office work in
+    // progress; a portal capability must not expose an option the office has not published.
+    listCustomerPortalFrappeResource(
+      env,
+      "Option Package",
+      [
+        ["Option Package", "roof_job", "=", link.roof_job_id],
+        ["Option Package", "status", "=", "Approved"],
+      ],
       10,
     ),
   ]);
@@ -441,6 +471,31 @@ export async function buildCustomerPortalReadModel(
     .sort((left, right) =>
       (right.captured_at ?? "").localeCompare(left.captured_at ?? ""),
     );
+  const optionRows = optionPackages.filter(
+    (row) =>
+      text(row.roof_job, 140) === link.roof_job_id &&
+      text(row.status, 80) === "Approved",
+  );
+  const options = optionRows
+    .map((row) => ({
+      id: text(row.option_package_id, 140) ?? text(row.name, 140) ?? "",
+      package_name: text(row.package_name, 200),
+      tier: customerOptionTier(text(row.tier, 40)),
+      material_system: text(row.material_system, 300),
+      price_delta: number(row.price_delta),
+      currency: text(row.currency, 8),
+      options: optionPayload(row.options_json),
+      warranty_summary: text(row.warranty_summary, 2_000),
+    }))
+    .filter((row) => row.id)
+    .sort(
+      (left, right) =>
+        OPTION_TIER_ORDER.indexOf(left.tier ?? "") -
+          OPTION_TIER_ORDER.indexOf(right.tier ?? "") ||
+        (left.package_name ?? left.id).localeCompare(
+          right.package_name ?? right.id,
+        ),
+    );
   const completion = newest(
     completionPackets.filter(
       (row) =>
@@ -463,12 +518,14 @@ export async function buildCustomerPortalReadModel(
     ...evidence,
     ...completionPackets,
     ...warrantyPackets,
+    ...optionRows,
   ];
 
   return {
     version: 1,
     brand: customerPortalBrand(job, env),
     contract_acceptance_available: customerContractAcceptanceAvailable(env),
+    material_decision_available: customerMaterialDecisionAvailable(env),
     source_updated_at: latestModified(rowsUsed),
     read_model_generated_at: new Date().toISOString(),
     job: {
@@ -502,6 +559,7 @@ export async function buildCustomerPortalReadModel(
           }
         : null,
     scope,
+    option_packages: options,
     progress,
     closeout: completion
       ? {
@@ -552,6 +610,35 @@ function customerContractAcceptanceAvailable(env: AppEnv): boolean {
   return customerPortalEnabled(env) &&
     customerPortalConfigured(env) &&
     customerAcceptanceBackendConfigured(env);
+}
+
+function customerMaterialDecisionAvailable(env: AppEnv): boolean {
+  return customerPortalEnabled(env) &&
+    customerPortalConfigured(env) &&
+    customerDecisionBackendConfigured(env);
+}
+
+/**
+ * The office may leave `options_json` empty, half-written, or holding a bare array. None of those
+ * is an error worth failing a whole portal read over — the card simply renders without a detail
+ * list. A parsed value is projected as-is and never trusted as markup by the PWA.
+ */
+function optionPayload(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string") return null;
+  const raw = value.trim();
+  if (!raw || raw.length > MAX_OPTION_PAYLOAD_BYTES) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function customerOptionTier(value: string | null): string | null {
+  return value && OPTION_TIER_ORDER.includes(value) ? value : null;
 }
 
 function publicLink(link: CustomerPortalLinkRecord): Record<string, unknown> {

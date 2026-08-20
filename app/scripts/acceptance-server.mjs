@@ -7,6 +7,41 @@ import { fileURLToPath } from "node:url";
 import { ensureAcceptanceCertificate } from "./acceptance-certificate.mjs";
 import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 
+// ---------------------------------------------------------------------------
+// Field mutation fixtures (work package + safety) -- ELEC-88
+//
+// Until this change, the server only ever answered GET, so field-mutation
+// e2e was structurally impossible: /acknowledgements, /stop-work, /start,
+// /complete, /check-ins (evidence-slot capture), and /api/v1/safety/actions
+// had no handlers at all. The handlers added below mirror the real routes'
+// request envelope, exact-key validation, error codes/status, and the
+// `{device_action_id, status:"verified", server_ref, cursor}` success shape
+// from workers-bus/src/work-package-actions.ts and
+// workers-bus/src/safety-actions.ts closely enough to exercise the real
+// frontend code paths end to end. Known, deliberate divergences:
+//
+//   - Single actor drives the whole work-package journey. Production gates
+//     `/complete` to a distinct owner/ops/production actor who is NOT one of
+//     the acknowledging workers (see `completionReady` in
+//     workers-bus/src/work-package.ts) and that role is never device-paired.
+//     This fixture only ever pairs one field-role device, so it lets that
+//     same session drive acknowledge -> start -> evidence -> complete. A
+//     handoff to a second production actor is not exercised here.
+//   - No persistence, leases, retries, or lease timeouts. The real backend
+//     claims a durable per-device-action-id lease in D1; this fixture keeps
+//     an in-memory idempotency map for the process lifetime.
+//   - Evidence-slot capture validates the shape the real PWA actually sends
+//     (typed-evidence fields, attachment presence, exact key sets) but skips
+//     MIME magic-byte verification, upload rate limiting, and multi-file
+//     size accounting.
+//   - Safety `make_safe`/`equipment_defect` accept any referenced
+//     occurrence/equipment id instead of 404ing on an unknown one.
+//
+// State resets per acceptance-server process. Tests needing isolation
+// between cases call `POST /__acceptance__/reset` (test-only, not a real
+// `/api/` route) in a beforeEach.
+// ---------------------------------------------------------------------------
+
 const DIST_DIR = resolve(fileURLToPath(new URL("../dist/", import.meta.url)));
 const HOST = process.env.HOST ?? "127.0.0.1";
 const PORT = Number(process.env.PORT ?? "4173");
@@ -204,6 +239,15 @@ const fixtureJob = {
           sequence: 1,
           hold_point: "Deck condition review",
           release_authority: "Production manager",
+          // Deliberately not "Pre-start" (field-contracts.ts's zod default for an
+          // omitted release_phase): a Pre-start hold with no release UI in this
+          // app would permanently block `work_package.start`, which is exactly
+          // the state the offline test at field-pwa.spec.ts:86 exercises. This
+          // fixture's happy-path journey (ELEC-88) needs `start` reachable, so
+          // the hold is modeled as a completion-phase hold instead -- still
+          // unreleased, still "this app cannot release the hold point", just not
+          // a start-time blocker.
+          release_phase: "Completion",
           required_evidence: "Deck condition photo.",
           acceptance_criteria: "Production manager independently releases the hold.",
           released: false,
@@ -223,6 +267,656 @@ const fixtureJob = {
     },
   ],
 };
+
+const FIXTURE_CSRF_TOKEN = fixtureSession.csrf_token;
+const FIXTURE_ASSIGNMENT_ID = "ASSIGNMENT-ACCEPTANCE";
+const FIXTURE_WORK_PACKAGE_ID = "WP-ACCEPTANCE-3";
+const FIXTURE_WORK_PACKAGE_VERSION = 3;
+const FIXTURE_RELEASE_ATTEMPT_ID = "wpe_acceptance_release_00000003";
+const FIXTURE_WORKER_USER = fixtureSession.user.frappe_user_id;
+
+function freshFieldMutableState() {
+  return {
+    workPackage: {
+      status: "Released",
+      currentUserAcknowledged: false,
+      acknowledgedAt: null,
+      blockerReason: null,
+      evidenceSlots: [],
+    },
+    safety: {
+      equipment: [
+        {
+          equipment_id: "eq_harness_0001",
+          equipment_kind: "fall_arrest_harness",
+          serial_number: "SN-ACCEPTANCE-0001",
+          status: "in_service",
+          inspection_due_at: null,
+        },
+      ],
+      occurrences: [],
+    },
+    workPackageActions: new Map(),
+    safetyActions: new Map(),
+    evidenceCounter: 0,
+    occurrenceCounter: 0,
+  };
+}
+
+let fieldMutableState = freshFieldMutableState();
+
+function resetFieldMutableState() {
+  fieldMutableState = freshFieldMutableState();
+}
+
+function isoNow() {
+  return new Date().toISOString();
+}
+
+async function readRequestBuffer(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
+
+function jsonFixtureResponse(status, value, headers = {}) {
+  return {
+    status,
+    body: JSON.stringify(value),
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "private, no-store",
+      ...headers,
+    },
+  };
+}
+
+function fixtureError(status, error, message, headers) {
+  return jsonFixtureResponse(status, message ? { error, message } : { error }, headers);
+}
+
+function isRecord(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function exactKeys(value, allowed) {
+  const keys = Object.keys(value).sort();
+  const wanted = [...allowed].sort();
+  return keys.length === wanted.length && keys.every((key, index) => key === wanted[index]);
+}
+
+function checkCsrf(request) {
+  return request.headers["x-csrf-token"] === FIXTURE_CSRF_TOKEN;
+}
+
+function checkDeviceProof(request) {
+  return request.headers["x-ironwrap-device-proof"] === FIXTURE_FIELD_DEVICE_PROOF;
+}
+
+function checkActionIdHeaders(request, deviceActionId) {
+  const headerActionId = request.headers["x-device-action-id"];
+  const idempotencyKey = request.headers["idempotency-key"];
+  if (headerActionId !== undefined && headerActionId !== deviceActionId) return false;
+  if (idempotencyKey !== undefined && idempotencyKey !== deviceActionId) return false;
+  return true;
+}
+
+// ---- Work package actions (acknowledgements / stop-work / start / complete) ----
+
+const WORK_PACKAGE_REQUIRED_KEYS = {
+  acknowledge: ["work_package_id", "work_package_version", "release_attempt_id"],
+  start_work: ["work_package_id", "work_package_version", "release_attempt_id"],
+  complete_work: ["work_package_id", "work_package_version", "release_attempt_id"],
+  stop_work: ["work_package_id", "work_package_version", "blocker_reason"],
+};
+
+const WORK_PACKAGE_ALLOWED_KEYS = {
+  acknowledge: ["work_package_id", "work_package_version", "release_attempt_id"],
+  start_work: ["work_package_id", "work_package_version", "release_attempt_id"],
+  complete_work: ["work_package_id", "work_package_version", "release_attempt_id"],
+  stop_work: ["work_package_id", "work_package_version", "release_attempt_id", "blocker_reason"],
+};
+
+function invalidWorkPackageAction() {
+  return fixtureError(400, "invalid_work_package_action", "The work-package action is invalid.");
+}
+
+async function handleWorkPackageActionRoute(request, kind) {
+  if (!checkDeviceProof(request)) return fixtureError(401, "unauthorized");
+  if (!checkCsrf(request)) return fixtureError(403, "csrf_failed");
+  if (!(request.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+    return invalidWorkPackageAction();
+  }
+  const buffer = await readRequestBuffer(request);
+  let decoded;
+  try {
+    decoded = JSON.parse(buffer.toString("utf8"));
+  } catch {
+    return invalidWorkPackageAction();
+  }
+  if (!isRecord(decoded) || !exactKeys(decoded, ["device_action_id", "payload"])) {
+    return invalidWorkPackageAction();
+  }
+  const deviceActionId = decoded.device_action_id;
+  if (
+    typeof deviceActionId !== "string" ||
+    deviceActionId.length < 8 ||
+    deviceActionId.length > 80
+  ) {
+    return invalidWorkPackageAction();
+  }
+  if (!checkActionIdHeaders(request, deviceActionId)) return invalidWorkPackageAction();
+  const payload = decoded.payload;
+  if (!isRecord(payload)) return invalidWorkPackageAction();
+  const required = WORK_PACKAGE_REQUIRED_KEYS[kind];
+  const allowed = WORK_PACKAGE_ALLOWED_KEYS[kind];
+  const suppliedKeys = Object.keys(payload);
+  if (
+    !required.every((key) => suppliedKeys.includes(key)) ||
+    suppliedKeys.some((key) => !allowed.includes(key))
+  ) {
+    return invalidWorkPackageAction();
+  }
+  if (payload.work_package_id !== FIXTURE_WORK_PACKAGE_ID) {
+    return fixtureError(
+      404,
+      "work_package_not_available",
+      "No current work package is available for this assignment.",
+    );
+  }
+  if (
+    typeof payload.work_package_version !== "number" ||
+    !Number.isInteger(payload.work_package_version) ||
+    payload.work_package_version !== FIXTURE_WORK_PACKAGE_VERSION
+  ) {
+    return fixtureError(
+      404,
+      "work_package_not_available",
+      "No current work package is available for this assignment.",
+    );
+  }
+  if (kind === "stop_work") {
+    if (typeof payload.blocker_reason !== "string" || payload.blocker_reason.trim().length < 1) {
+      return invalidWorkPackageAction();
+    }
+  } else if (
+    typeof payload.release_attempt_id !== "string" ||
+    payload.release_attempt_id !== FIXTURE_RELEASE_ATTEMPT_ID
+  ) {
+    return invalidWorkPackageAction();
+  }
+
+  const payloadHash = JSON.stringify(payload);
+  const existing = fieldMutableState.workPackageActions.get(deviceActionId);
+  if (existing) {
+    if (existing.payloadHash !== payloadHash) {
+      return fixtureError(
+        409,
+        "idempotency_conflict",
+        "This device action id is already bound to a different work-package action.",
+      );
+    }
+    return jsonFixtureResponse(200, existing.response);
+  }
+
+  const wp = fieldMutableState.workPackage;
+  const notAllowed = () =>
+    fixtureError(
+      409,
+      "work_package_action_not_allowed",
+      "That work-package action is no longer allowed.",
+    );
+
+  if (kind === "acknowledge") {
+    if (wp.currentUserAcknowledged || !["Released", "Acknowledged"].includes(wp.status))
+      return notAllowed();
+    wp.currentUserAcknowledged = true;
+    wp.acknowledgedAt = isoNow();
+    if (wp.status === "Released") wp.status = "Acknowledged";
+  } else if (kind === "start_work") {
+    if (wp.status !== "Acknowledged" || !wp.currentUserAcknowledged) return notAllowed();
+    wp.status = "In Progress";
+  } else if (kind === "complete_work") {
+    const hasEvidence = wp.evidenceSlots.some((item) => !item.superseded);
+    if (wp.status !== "In Progress" || !hasEvidence) return notAllowed();
+    wp.status = "Completed";
+  } else {
+    if (!["Released", "Acknowledged", "In Progress"].includes(wp.status)) return notAllowed();
+    wp.status = "Blocked";
+    wp.blockerReason = payload.blocker_reason;
+  }
+
+  const response = {
+    device_action_id: deviceActionId,
+    status: "verified",
+    server_ref: FIXTURE_WORK_PACKAGE_ID,
+    cursor: `wpe_${kind}_${fieldMutableState.workPackageActions.size + 1}`,
+  };
+  fieldMutableState.workPackageActions.set(deviceActionId, { payloadHash, response });
+  return jsonFixtureResponse(200, response);
+}
+
+// ---- Safety actions ----
+
+const SAFETY_ACTION_KINDS = [
+  "report_occurrence",
+  "make_safe",
+  "equipment_defect",
+  "rescue_request",
+];
+const SAFETY_SCOPE_TYPES = ["tenant", "roof_job", "work_package", "shop", "vehicle"];
+const SAFETY_OCCURRENCE_KINDS = ["injury", "near_miss", "hazard", "environmental", "emergency"];
+const SAFETY_SEVERITIES = ["low", "moderate", "high", "critical"];
+const SAFETY_REQUIRED_PAYLOAD_KEYS = {
+  report_occurrence: ["detail", "occurrence_kind", "severity"],
+  make_safe: ["detail", "occurrence_id"],
+  equipment_defect: ["detail", "equipment_id"],
+  rescue_request: ["detail"],
+};
+
+function invalidSafetyAction() {
+  return fixtureError(400, "invalid_safety_action", "The safety action is invalid.");
+}
+
+async function handleSafetyActionRoute(request) {
+  if (!checkDeviceProof(request)) return fixtureError(401, "unauthorized");
+  if (!checkCsrf(request)) return fixtureError(403, "csrf_failed");
+  if (!(request.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+    return invalidSafetyAction();
+  }
+  const buffer = await readRequestBuffer(request);
+  let decoded;
+  try {
+    decoded = JSON.parse(buffer.toString("utf8"));
+  } catch {
+    return invalidSafetyAction();
+  }
+  if (!isRecord(decoded) || !exactKeys(decoded, ["device_action_id", "payload"]))
+    return invalidSafetyAction();
+  const deviceActionId = decoded.device_action_id;
+  if (
+    typeof deviceActionId !== "string" ||
+    deviceActionId.length < 8 ||
+    deviceActionId.length > 80
+  ) {
+    return invalidSafetyAction();
+  }
+  if (!checkActionIdHeaders(request, deviceActionId)) return invalidSafetyAction();
+  const payload = decoded.payload;
+  if (!isRecord(payload)) return invalidSafetyAction();
+  const kind = payload.kind;
+  if (typeof kind !== "string" || !SAFETY_ACTION_KINDS.includes(kind)) return invalidSafetyAction();
+  const scopeType = payload.scope_type;
+  if (typeof scopeType !== "string" || !SAFETY_SCOPE_TYPES.includes(scopeType))
+    return invalidSafetyAction();
+  if (typeof payload.scope_id !== "string" || payload.scope_id.length < 1)
+    return invalidSafetyAction();
+  if (typeof payload.captured_at !== "string" || Number.isNaN(Date.parse(payload.captured_at))) {
+    return invalidSafetyAction();
+  }
+  const envelopeKeys = ["kind", "scope_type", "scope_id", "captured_at"];
+  const required = SAFETY_REQUIRED_PAYLOAD_KEYS[kind];
+  const allowed = [...envelopeKeys, ...required];
+  const suppliedKeys = Object.keys(payload);
+  if (
+    !required.every((key) => suppliedKeys.includes(key)) ||
+    suppliedKeys.some((key) => !allowed.includes(key))
+  ) {
+    return invalidSafetyAction();
+  }
+  if (
+    typeof payload.detail !== "string" ||
+    payload.detail.trim().length < 3 ||
+    payload.detail.length > 4000
+  ) {
+    return invalidSafetyAction();
+  }
+  if (kind === "report_occurrence") {
+    if (
+      typeof payload.occurrence_kind !== "string" ||
+      !SAFETY_OCCURRENCE_KINDS.includes(payload.occurrence_kind) ||
+      typeof payload.severity !== "string" ||
+      !SAFETY_SEVERITIES.includes(payload.severity)
+    ) {
+      return invalidSafetyAction();
+    }
+  }
+  if (
+    kind === "make_safe" &&
+    (typeof payload.occurrence_id !== "string" || payload.occurrence_id.length < 3)
+  ) {
+    return invalidSafetyAction();
+  }
+  if (
+    kind === "equipment_defect" &&
+    (typeof payload.equipment_id !== "string" || payload.equipment_id.length < 3)
+  ) {
+    return invalidSafetyAction();
+  }
+
+  const payloadHash = JSON.stringify(payload);
+  const existing = fieldMutableState.safetyActions.get(deviceActionId);
+  if (existing) {
+    if (existing.payloadHash !== payloadHash) {
+      return fixtureError(
+        409,
+        "idempotency_conflict",
+        "This device action id is already bound to a different safety action.",
+      );
+    }
+    return jsonFixtureResponse(200, existing.response);
+  }
+
+  let serverRef;
+  const safety = fieldMutableState.safety;
+  if (kind === "report_occurrence" || kind === "rescue_request") {
+    fieldMutableState.occurrenceCounter += 1;
+    const occurrenceId = `so_acceptance_${fieldMutableState.occurrenceCounter}`;
+    const occurrenceKind = kind === "rescue_request" ? "emergency" : payload.occurrence_kind;
+    const severity = kind === "rescue_request" ? "critical" : payload.severity;
+    safety.occurrences.push({
+      occurrence_id: occurrenceId,
+      occurrence_kind: occurrenceKind,
+      severity,
+      state: "reported",
+      stop_active: kind === "rescue_request" || severity === "critical",
+      scope_type: scopeType,
+      scope_id: payload.scope_id,
+      summary: payload.detail,
+    });
+    serverRef = occurrenceId;
+  } else if (kind === "make_safe") {
+    const occurrence = safety.occurrences.find(
+      (item) => item.occurrence_id === payload.occurrence_id,
+    );
+    if (occurrence) {
+      occurrence.state = "made_safe";
+      occurrence.stop_active = false;
+    }
+    serverRef = payload.occurrence_id;
+  } else {
+    let equipment = safety.equipment.find((item) => item.equipment_id === payload.equipment_id);
+    if (!equipment) {
+      equipment = {
+        equipment_id: payload.equipment_id,
+        equipment_kind: "unspecified",
+        serial_number: "unspecified",
+        status: "defective",
+        inspection_due_at: null,
+      };
+      safety.equipment.push(equipment);
+    } else {
+      equipment.status = "defective";
+    }
+    serverRef = payload.equipment_id;
+  }
+
+  const response = {
+    device_action_id: deviceActionId,
+    status: "verified",
+    server_ref: serverRef,
+    cursor: `${serverRef}:1`,
+  };
+  fieldMutableState.safetyActions.set(deviceActionId, { payloadHash, response });
+  return jsonFixtureResponse(200, response);
+}
+
+function buildSafetyPanelPayload() {
+  return {
+    version: 1,
+    panel: {
+      version: 1,
+      actor_role: fixtureSession.user.role,
+      assigned_equipment: fieldMutableState.safety.equipment,
+      open_occurrences: fieldMutableState.safety.occurrences.filter(
+        (item) => item.state !== "closed",
+      ),
+      my_corrective_actions: [],
+      allowed_actions: [
+        "safety.report_occurrence",
+        "safety.make_safe",
+        "safety.equipment_defect",
+        "safety.rescue_request",
+      ],
+    },
+  };
+}
+
+// ---- Evidence-slot capture (check-ins) ----
+
+async function handleCheckInRoute(request) {
+  if (!checkDeviceProof(request)) return fixtureError(401, "unauthorized");
+  if (!checkCsrf(request)) return fixtureError(403, "csrf_failed");
+  const contentType = request.headers["content-type"] ?? "";
+  if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
+    return fixtureError(415, "multipart_required", "Field actions require multipart form data.");
+  }
+  const buffer = await readRequestBuffer(request);
+  let form;
+  try {
+    const fetchRequest = new Request("http://acceptance.local/check-ins", {
+      method: "POST",
+      headers: { "content-type": contentType },
+      body: buffer,
+    });
+    form = await fetchRequest.formData();
+  } catch {
+    return fixtureError(400, "invalid_multipart", "The field action could not be read.");
+  }
+  const metadataRaw = form.get("metadata");
+  if (typeof metadataRaw !== "string") return fixtureError(400, "invalid_metadata");
+  let decoded;
+  try {
+    decoded = JSON.parse(metadataRaw);
+  } catch {
+    return fixtureError(400, "invalid_metadata");
+  }
+  // The real outbox-processor.ts metadata envelope also carries an `attachments`
+  // array (blobKey stripped) alongside device_action_id/payload -- unlike the
+  // two-key JSON envelope every other mutation route uses.
+  if (!isRecord(decoded) || !exactKeys(decoded, ["device_action_id", "payload", "attachments"])) {
+    return fixtureError(400, "invalid_metadata");
+  }
+  const deviceActionId = decoded.device_action_id;
+  if (typeof deviceActionId !== "string" || deviceActionId.length < 8) {
+    return fixtureError(400, "invalid_metadata");
+  }
+  if (!checkActionIdHeaders(request, deviceActionId)) return fixtureError(400, "invalid_metadata");
+  const payload = decoded.payload;
+  if (!isRecord(payload)) return fixtureError(400, "invalid_metadata");
+  if (payload.assignment_id !== FIXTURE_ASSIGNMENT_ID) {
+    return fixtureError(
+      409,
+      "assignment_changed",
+      "This check-in is bound to a different assignment.",
+    );
+  }
+  const attachments = form.getAll("attachments");
+  const typedEvidence = payload.work_package_id != null || payload.evidence_slot_id != null;
+  if (typedEvidence) {
+    if (
+      !payload.work_package_id ||
+      !payload.evidence_slot_id ||
+      !payload.work_package_version ||
+      !payload.work_package_release_attempt_id ||
+      !payload.evidence_requirement ||
+      !payload.evidence_source
+    ) {
+      return fixtureError(400, "invalid_metadata");
+    }
+    if (payload.work_package_release_attempt_id !== FIXTURE_RELEASE_ATTEMPT_ID) {
+      return fixtureError(
+        409,
+        "evidence_release_attempt_missing",
+        "The work package has been re-released since this evidence link was issued.",
+      );
+    }
+    if (attachments.length === 0) {
+      return fixtureError(
+        400,
+        "evidence_attachment_required",
+        "A Work Package evidence slot requires at least one photo or voice attachment.",
+      );
+    }
+    if (payload.evidence_correction_of && attachments.length !== 1) {
+      return fixtureError(
+        400,
+        "evidence_correction_attachment_count",
+        "A correction must contain exactly one attachment.",
+      );
+    }
+  } else if (attachments.length === 0 && !payload.notes && !payload.blocker) {
+    return fixtureError(400, "invalid_metadata");
+  }
+
+  const payloadHash = JSON.stringify({ payload, attachmentCount: attachments.length });
+  const existing = fieldMutableState.workPackageActions.get(deviceActionId);
+  if (existing) {
+    if (existing.payloadHash !== payloadHash) {
+      return fixtureError(
+        409,
+        "idempotency_conflict",
+        "This device action id is already bound to a different check-in.",
+      );
+    }
+    return jsonFixtureResponse(200, existing.response);
+  }
+
+  const checkinId = `fci_acceptance_${fieldMutableState.workPackageActions.size + 1}`;
+  const media = [];
+  for (const attachment of attachments) {
+    fieldMutableState.evidenceCounter += 1;
+    media.push({
+      attachment_id: `att-${fieldMutableState.evidenceCounter}`,
+      evidence_id: `evi_acceptance_${fieldMutableState.evidenceCounter}`,
+      checksum_sha256: "0".repeat(64),
+      content_length: typeof attachment.size === "number" ? attachment.size : 0,
+    });
+  }
+
+  if (typedEvidence) {
+    const eventId = `WPE-EVIDENCE-${fieldMutableState.workPackage.evidenceSlots.length + 1}`;
+    const evidenceItem = `EVIDENCE-ITEM-${fieldMutableState.workPackage.evidenceSlots.length + 1}`;
+    if (payload.evidence_correction_of) {
+      const prior = fieldMutableState.workPackage.evidenceSlots.find(
+        (item) => item.event_id === payload.evidence_correction_of,
+      );
+      if (prior) prior.superseded = true;
+    }
+    fieldMutableState.workPackage.evidenceSlots.push({
+      event_id: eventId,
+      evidence_item: evidenceItem,
+      slot_id: payload.evidence_slot_id,
+      requirement: payload.evidence_requirement,
+      source: payload.evidence_source,
+      actor_user: FIXTURE_WORKER_USER,
+      device_id: "device-acceptance-0001",
+      captured_at: payload.capture_completed_at ?? isoNow(),
+      freshness: "Current",
+      conflict_state: "None",
+      correction_of: payload.evidence_correction_of ?? null,
+      evidence_item_correction_of: payload.evidence_item_correction_of ?? null,
+      review_reason: null,
+      verification: "Verified",
+      disposition: "Open",
+      correction_reason: payload.correction_reason ?? null,
+      superseded: false,
+    });
+  }
+
+  const response = {
+    device_action_id: deviceActionId,
+    status: "verified",
+    server_ref: checkinId,
+    cursor: checkinId,
+    checkin_id: checkinId,
+    media,
+  };
+  fieldMutableState.workPackageActions.set(deviceActionId, { payloadHash, response });
+  return jsonFixtureResponse(200, response);
+}
+
+// ---- Dynamic job read model ----
+
+function computeWorkPackageAllowedActions() {
+  const wp = fieldMutableState.workPackage;
+  const actions = ["field.checkin.create"];
+  if ((wp.status === "Released" || wp.status === "Acknowledged") && !wp.currentUserAcknowledged) {
+    actions.push("work_package.acknowledge");
+  }
+  if (wp.status === "Acknowledged" && wp.currentUserAcknowledged) {
+    actions.push("work_package.start");
+  }
+  if (["Released", "Acknowledged", "In Progress"].includes(wp.status)) {
+    actions.push("work_package.stop_work");
+  }
+  if (wp.status === "In Progress" && wp.evidenceSlots.some((item) => !item.superseded)) {
+    actions.push("work_package.complete");
+  }
+  return actions;
+}
+
+// field-contracts.ts's workPackageSchema only accepts status "Released" |
+// "Acknowledged" | "In Progress" (workers-bus/src/frappe-read.ts
+// FIELD_WORK_PACKAGE_CURRENT_STATUSES): the "current work package" query
+// backing this read model excludes terminal packages entirely. A completed
+// or stopped-to-blocked package therefore does not read back with its
+// status intact -- it reads back as no current package at all, same as the
+// "No current released Work Package" branch this app already renders.
+const CURRENT_WORK_PACKAGE_STATUSES = ["Released", "Acknowledged", "In Progress"];
+
+function buildFixtureJobResponse() {
+  const model = structuredClone(fixtureJob);
+  const wp = fieldMutableState.workPackage;
+  if (!CURRENT_WORK_PACKAGE_STATUSES.includes(wp.status)) {
+    model.packet.work_package = null;
+    model.allowed_actions = ["field.checkin.create"];
+    return model;
+  }
+  const workPackage = model.packet.work_package;
+  workPackage.status = wp.status;
+  workPackage.acknowledgement.current_user_acknowledged = wp.currentUserAcknowledged;
+  workPackage.acknowledgement.acknowledged_at = wp.acknowledgedAt;
+  workPackage.acknowledgement.workers[0].acknowledged = wp.currentUserAcknowledged;
+  workPackage.acknowledgement.workers[0].acknowledged_at = wp.acknowledgedAt;
+  workPackage.evidence_slots = wp.evidenceSlots;
+  model.allowed_actions = computeWorkPackageAllowedActions();
+  return model;
+}
+
+// ---- POST route dispatch for the fixtures above ----
+
+async function routeFieldMutation(request, requestUrl) {
+  if (requestUrl.pathname === "/__acceptance__/reset") {
+    resetFieldMutableState();
+    return jsonFixtureResponse(200, { ok: true });
+  }
+  if (requestUrl.pathname === "/api/v1/jobs/JOB-ACCEPTANCE/work-package/acknowledgements") {
+    return handleWorkPackageActionRoute(request, "acknowledge");
+  }
+  if (requestUrl.pathname === "/api/v1/jobs/JOB-ACCEPTANCE/work-package/stop-work") {
+    return handleWorkPackageActionRoute(request, "stop_work");
+  }
+  if (requestUrl.pathname === "/api/v1/jobs/JOB-ACCEPTANCE/work-package/start") {
+    return handleWorkPackageActionRoute(request, "start_work");
+  }
+  if (requestUrl.pathname === "/api/v1/jobs/JOB-ACCEPTANCE/work-package/complete") {
+    return handleWorkPackageActionRoute(request, "complete_work");
+  }
+  if (requestUrl.pathname === "/api/v1/jobs/JOB-ACCEPTANCE/check-ins") {
+    return handleCheckInRoute(request);
+  }
+  if (requestUrl.pathname === "/api/v1/safety/actions") {
+    return handleSafetyActionRoute(request);
+  }
+  return null;
+}
+
+function sendPreparedJson(response, method, prepared) {
+  response.writeHead(prepared.status, prepared.headers);
+  if (method !== "HEAD") response.end(prepared.body);
+  else response.end();
+}
 
 // Test-only: mirrors the browser-safe estimator read contract, never source storage identifiers.
 const fixtureEstimatorEnvelope = {
@@ -736,6 +1430,18 @@ const requestListener = async (request, response) => {
   if (requestUrl.pathname === "/healthz") {
     return sendJson(response, method, 200, { ok: true });
   }
+
+  if (ACCEPTANCE_MODE === "field" && method === "POST") {
+    const mutation = await routeFieldMutation(request, requestUrl);
+    if (mutation) return sendPreparedJson(response, method, mutation);
+    if (
+      requestUrl.pathname.startsWith("/api/") ||
+      requestUrl.pathname === "/__acceptance__/reset"
+    ) {
+      return sendJson(response, method, 404, { error: "not_found" });
+    }
+  }
+
   if (method !== "GET" && method !== "HEAD") {
     return sendJson(response, method, 405, { error: "method_not_allowed" });
   }
@@ -782,7 +1488,10 @@ const requestListener = async (request, response) => {
     return sendJson(response, method, 200, fixtureToday);
   }
   if (requestUrl.pathname === "/api/v1/jobs/JOB-ACCEPTANCE") {
-    return sendJson(response, method, 200, fixtureJob);
+    return sendJson(response, method, 200, buildFixtureJobResponse());
+  }
+  if (requestUrl.pathname === "/api/v1/safety/panel") {
+    return sendJson(response, method, 200, buildSafetyPanelPayload());
   }
   if (
     ACCEPTANCE_MODE === "estimator" &&

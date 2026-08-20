@@ -379,6 +379,9 @@ Target gaps:
 Implemented or represented:
 
 - JobNimbus bridge;
+- JobNimbus one-way migration readiness (read-only snapshot export, jnid-keyed idempotent import
+  into a local Frappe, reconciliation verdict; see `docs/JOBNIMBUS-MIGRATION-MAP.md`) — proven
+  against the synthetic fixture only; live snapshot and any system-of-record change remain gated;
 - Google email/Drive paths;
 - QuickBooks raw webhook receipts, immutable Webhook Seen projections for exact invoice-to-job links, and Pending reconciliation work;
 - Newo inbound/control/reconciliation;

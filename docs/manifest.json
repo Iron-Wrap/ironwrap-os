@@ -88,6 +88,14 @@
       "authority": []
     },
     {
+      "path": "docs/JOBNIMBUS-MIGRATION-MAP.md",
+      "class": "runbook",
+      "authority": [
+        "docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md",
+        "docs/CAPABILITY-MATRIX.md"
+      ]
+    },
+    {
       "path": "docs/LAUNCH-PROOF-SIDE-EFFECTS.md",
       "class": "runbook",
       "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]

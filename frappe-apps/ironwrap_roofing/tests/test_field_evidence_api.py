@@ -81,6 +81,8 @@ class FieldEvidenceApiTests(unittest.TestCase):
             "content_length": 1024,
             "capture_actor": "crew@example.com",
             "captured_at": "2026-07-10 10:00:00",
+            "latitude": 53.5461,
+            "longitude": -113.4938,
             "customer_safe": 0,
             "summary": "Deck complete",
         }
@@ -318,6 +320,37 @@ class FieldEvidenceApiTests(unittest.TestCase):
                 },
             )
         self.assertEqual(fixtures["evidence"], [])
+
+    def test_issuer_rejects_missing_where(self) -> None:
+        api, fixtures, _, _ = self.load_api()
+        missing_lat = dict(self.payload())
+        del missing_lat["latitude"]
+        with self.assertRaisesRegex(FakeValidationError, "missing or unsupported"):
+            self.call(api, missing_lat)
+        missing_lng = dict(self.payload())
+        del missing_lng["longitude"]
+        with self.assertRaisesRegex(FakeValidationError, "missing or unsupported"):
+            self.call(api, missing_lng)
+        with self.assertRaisesRegex(FakeValidationError, "latitude is required"):
+            self.call(api, {**self.payload(), "latitude": None})
+        with self.assertRaisesRegex(FakeValidationError, "longitude is required"):
+            self.call(api, {**self.payload(), "longitude": None})
+        self.assertEqual(fixtures["evidence"], [])
+
+    def test_issuer_rejects_non_numeric_and_out_of_range_where(self) -> None:
+        api, fixtures, _, _ = self.load_api()
+        with self.assertRaisesRegex(FakeValidationError, "latitude must be numeric"):
+            self.call(api, {**self.payload(), "latitude": "53.5461"})
+        with self.assertRaisesRegex(FakeValidationError, "longitude must be numeric"):
+            self.call(api, {**self.payload(), "longitude": True})
+        with self.assertRaisesRegex(FakeValidationError, "latitude is out of range"):
+            self.call(api, {**self.payload(), "latitude": 90.1})
+        with self.assertRaisesRegex(FakeValidationError, "longitude is out of range"):
+            self.call(api, {**self.payload(), "longitude": -180.1})
+        issued = self.call(api)
+        self.assertFalse(issued["idempotent_replay"])
+        self.assertEqual(fixtures["evidence"][0]["latitude"], 53.5461)
+        self.assertEqual(fixtures["evidence"][0]["longitude"], -113.4938)
 
 
 if __name__ == "__main__":

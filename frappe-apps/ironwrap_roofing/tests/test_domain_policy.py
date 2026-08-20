@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from ironwrap_roofing.domain_policy import (
     PolicyViolation,
@@ -1931,6 +1932,78 @@ class DomainPolicyTests(unittest.TestCase):
             {**proposal, "status": "Signed"},
             context=proposal_context(quote_status="Accepted"),
         )
+
+    def test_proposal_measurement_matches_a_real_frappe_datetime_column(self) -> None:
+        """A stored Datetime arrives as ``datetime``, not as its REST string form.
+
+        Every dict-built fixture in this file supplies the string, so a raw
+        ``!=`` against the source row passed here while rejecting every real
+        record on a live site. Pin the real column type -- and specifically the
+        *naive* datetime ``frappe.get_all`` actually returns, because a naive
+        and an aware datetime never compare equal in Python, so an aware-only
+        fixture would pass over the same bug it exists to catch.
+        """
+
+        draft = {
+            "pack_id": "proposal:cq-1",
+            "status": "Draft",
+            "roof_job": "job-1",
+            "quotation": "cq-1",
+            "evidence_summary_json": proposal_evidence_summary(),
+        }
+        # The summary always carries "2026-07-10T12:00:00.000Z". Each of these is
+        # the same instant in the shape some real caller hands over: the naive
+        # column read, the same read as an aware value, and the REST string.
+        for stored in (
+            datetime(2026, 7, 10, 12, 0),
+            datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc),
+            datetime(2026, 7, 10, 6, 0, tzinfo=timezone(timedelta(hours=-6))),
+            "2026-07-10 12:00:00",
+            "2026-07-10T12:00:00.000Z",
+        ):
+            with self.subTest(stored=stored):
+                validate_record(
+                    "proposal_evidence_pack",
+                    draft,
+                    context=proposal_context(
+                        proposal_measurements={
+                            "measurement-1": {
+                                "roof_job": "job-1",
+                                "provider": "RoofRuler",
+                                "review_status": "Approved",
+                                "approved_by": "owner@example.com",
+                                "approved_at": stored,
+                            }
+                        },
+                    ),
+                )
+
+        # A different instant, in either form, is still a mismatch.
+        for stored in (
+            datetime(2026, 7, 10, 12, 5),
+            datetime(2026, 7, 10, 12, 5, tzinfo=timezone.utc),
+            "2026-07-10T12:05:00.000Z",
+            None,
+            "",
+        ):
+            with self.subTest(stored=stored):
+                self.assert_policy(
+                    "unverified_proposal_measurement",
+                    validate_record,
+                    "proposal_evidence_pack",
+                    draft,
+                    context=proposal_context(
+                        proposal_measurements={
+                            "measurement-1": {
+                                "roof_job": "job-1",
+                                "provider": "RoofRuler",
+                                "review_status": "Approved",
+                                "approved_by": "owner@example.com",
+                                "approved_at": stored,
+                            }
+                        },
+                    ),
+                )
 
     def test_proposal_evidence_pack_anchor_is_required_verified_and_immutable_from_draft(self) -> None:
         draft = {

@@ -7,6 +7,7 @@ import importlib.util
 import json
 import sys
 import time
+from datetime import datetime
 import types
 import unittest
 from contextlib import contextmanager
@@ -325,6 +326,32 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
             "challenge_id": "challenge-000001",
         }
 
+    def test_prepare_reads_real_frappe_datetime_columns(self) -> None:
+        """A stored Datetime arrives as ``datetime``, not as its REST string form.
+
+        Every fixture here supplies the string, so ``_text`` on a Datetime column
+        passed in this suite while refusing every real record on a live site.
+        """
+
+        api, fixtures, _db, _issuance_calls, frappe_module = self.load_api()
+        fixtures["quotes"]["cq-1"]["pricing_effective_at"] = datetime(2026, 7, 31, 9, 0)
+        fixtures["packs"]["proposal:cq-1"]["prepared_at"] = datetime(2026, 7, 31, 9, 1)
+        fixtures["packs"]["proposal:cq-1"]["approved_at"] = datetime(2026, 7, 31, 9, 2)
+
+        prepared = api.prepare_customer_portal_contract_acceptance(
+            self.signed_claim(
+                api,
+                frappe_module,
+                api.PREPARE_PATH,
+                self.prepare_claim(),
+                nonce="prepare-nonce-datetime-1",
+            )
+        )
+
+        self.assertEqual(prepared["terms"]["quote"]["pricing_effective_at"], "2026-07-31 09:00:00")
+        self.assertEqual(prepared["terms"]["proposal"]["prepared_at"], "2026-07-31 09:01:00")
+        self.assertEqual(prepared["terms"]["proposal"]["published_at"], "2026-07-31 09:02:00")
+
     def test_prepare_and_commit_lock_exact_offer_and_replay_idempotently(self) -> None:
         api, fixtures, db, issuance_calls, frappe_module = self.load_api()
         prepare_json = self.signed_claim(
@@ -437,7 +464,11 @@ class CustomerContractAcceptanceApiTests(unittest.TestCase):
         self.assertEqual(quote["status"], "Accepted")
         self.assertEqual(quote["acceptance_evidence"], evidence["name"])
         self.assertEqual(quote["contract_acceptance"], acceptance["name"])
-        self.assertEqual(quote["accepted_at"], commit_claim["accepted_at"])
+        # The claim carries RFC 3339 text; what is stored is the Frappe datetime
+        # for the same instant, because MariaDB rejects the ``Z`` form outright.
+        self.assertEqual(quote["accepted_at"], "2026-07-31 10:00:00")
+        self.assertEqual(acceptance["accepted_at"], "2026-07-31 10:00:00")
+        self.assertEqual(evidence["captured_at"], "2026-07-31 10:00:01")
         self.assertEqual(len(issuance_calls), 1)
 
         replay_json = self.signed_claim(

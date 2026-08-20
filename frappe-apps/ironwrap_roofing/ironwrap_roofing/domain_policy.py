@@ -6091,7 +6091,9 @@ def _validate_quote_price_rule_snapshot(
         quote["customer_quote_id"] != _get(record, "customer_quote_id")
         or quote["quote_version"] != _get(record, "quote_version")
         or quote["price_book_version"] != _get(record, "price_book_version")
-        or quote["pricing_effective_at"] != _get(record, "pricing_effective_at")
+        or not _same_timestamp(
+            quote["pricing_effective_at"], _get(record, "pricing_effective_at")
+        )
         or not _safe_positive_int(quote["quote_version"])
         or _blank(quote["price_book_version"])
         or not _safe_iso_timestamp(quote["pricing_effective_at"])
@@ -6746,7 +6748,7 @@ def _validate_proposal_evidence_summary(
             or source.get("review_status") != "Approved"
             or _blank(source.get("approved_by"))
             or source.get("provider") != measurement["provider"]
-            or source.get("approved_at") != measurement["approved_at"]
+            or not _same_timestamp(source.get("approved_at"), measurement["approved_at"])
         ):
             raise PolicyViolation(
                 "unverified_proposal_measurement",
@@ -6806,6 +6808,48 @@ def _safe_proposal_summary_label(value: Any) -> bool:
 
 def _safe_positive_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _timestamp_value(value: Any) -> datetime | None:
+    """Normalize either shape of the same instant to one aware UTC datetime.
+
+    ``frappe.get_all`` hands back a Frappe Datetime column as a *naive*
+    ``datetime``; the summary carries the same instant as an offset-bearing REST
+    string. Python compares a naive and an aware datetime as unequal whatever
+    they mean, so both shapes have to land on one representation before ``==``
+    means anything. A naive value is UTC here, which is this app's stated
+    convention for Frappe's timezone-free Datetime (see
+    ``quickbooks_final_invoice_api._timestamp_value`` and
+    ``document_validation._server_approval_utc_timestamp``).
+    """
+
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        normalized = value.strip() if isinstance(value, str) else ""
+        if not normalized or len(normalized) > 64:
+            return None
+        try:
+            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _same_timestamp(left: Any, right: Any) -> bool:
+    """Compare a stored timestamp with the redacted copy in a summary.
+
+    A Frappe Datetime column arrives from ``frappe.get_all`` as a ``datetime``
+    while the summary carries the REST string form of the same instant, so a raw
+    ``!=`` rejects every real record and accepts every dict-built fixture. Both
+    sides must still be a real timestamp; a blank or unparseable value is never
+    a match.
+    """
+
+    parsed_left = _timestamp_value(left)
+    return parsed_left is not None and parsed_left == _timestamp_value(right)
 
 
 def _safe_iso_timestamp(value: Any) -> bool:

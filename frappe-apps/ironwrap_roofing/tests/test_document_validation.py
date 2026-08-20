@@ -6,6 +6,7 @@ import json
 import sys
 import types
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1703,6 +1704,25 @@ class DocumentValidationAdapterTests(unittest.TestCase):
         )
         adapter, _ = self.load_adapter(rows={"Price Book Rule": [rule]})
         adapter.validate_business_document(draft, "customer_quote")
+
+        # A saved quote carries pricing_effective_at as a datetime, not as the
+        # text its own snapshot records. The snapshot must still bind to it.
+        stored = FakeDocument(
+            {
+                **draft.as_dict(),
+                "pricing_effective_at": datetime(2026, 7, 10, 11, 30),
+            }
+        )
+        adapter.validate_business_document(stored, "customer_quote")
+
+        drifted = FakeDocument(
+            {
+                **draft.as_dict(),
+                "pricing_effective_at": datetime(2026, 7, 10, 11, 31),
+            }
+        )
+        with self.assertRaisesRegex(FakeValidationError, "price_rule_snapshot_quote_mismatch"):
+            adapter.validate_business_document(drifted, "customer_quote")
 
         missing_adapter, _ = self.load_adapter()
         with self.assertRaisesRegex(FakeValidationError, "unverified_price_rule_snapshot"):

@@ -44,7 +44,7 @@ implication.
     },
     "tests": {
       "pwa": 507,
-      "worker": 971
+      "worker": 980
     }
   },
   "proof_state_policy": {

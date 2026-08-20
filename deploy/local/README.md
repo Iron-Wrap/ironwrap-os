@@ -14,6 +14,9 @@ cd workers-bus && npm run dev
    `http://localhost:8000` (the committed DocType contract is provisioned by `frappe-init.sh`)
 4. `workers-bus/.dev.vars` carries the local Frappe integration API key/secret
 5. every D1 migration is applied to the local Miniflare database
+6. the bench copy of `ironwrap_roofing` matches the repo (a stale volume is resynced
+   and the container restarted; see "App source edits vs the bench copy" below)
+7. `deploy/local/keys/*-broker.env` exist for the two scripted approval brokers
 
 Then `wrangler dev --env local --port 7100 --test-scheduled` starts: the Worker serves
 the built PWA and every API route. The `local` env keeps all bridge rails OFF
@@ -62,65 +65,114 @@ The owner action that opens the chain is `POST /api/v1/estimator/jobs/{job}/face
 
 ## Approval brokers (Hermes approved writes)
 
-The four private brokers run against the local Frappe stack on `127.0.0.1:9101-9104`.
-Each needs its own Frappe identity (the API token's user must equal the actor user -
-`frappe_service_principal_mismatch` otherwise) and the shared key material in
-`deploy/local/keys/`. Provision once per fresh site:
+Steps 5 and 6 of the six-step workflow (publish a proposal to the customer portal,
+schedule production) are approved writes: the Worker never touches Frappe for them,
+it calls a private broker that holds the Hermes signing material and its own Frappe
+operator identity. **Both of those brokers are started by script.** Nothing has to be
+provisioned or hand-written first:
 
 ```bash
-# role users (owner@, crew@ are only needed for BFF/field flows)
-docker exec -i ironwrap-local-frappe-1 bash -lc \
-  'cd /home/frappe/frappe-bench && bench --site ironwrap.localhost console' <<'PYEOF'
-import frappe
-for email in ["lead-concierge@ironwrap.local", "estimator-assistant@ironwrap.local",
-              "production-controller@ironwrap.local", "owner-operator@ironwrap.local",
-              "owner@ironwrap.local", "crew@ironwrap.local"]:
-    if not frappe.db.exists("User", email):
-        u = frappe.get_doc({"doctype": "User", "email": email, "first_name": email.split("@")[0],
-                            "send_welcome_email": 0, "roles": [{"role": "System Manager"}]})
-        u.insert(ignore_permissions=True)
-for email in ["lead-concierge@ironwrap.local", "estimator-assistant@ironwrap.local",
-              "production-controller@ironwrap.local", "owner-operator@ironwrap.local"]:
-    frappe.core.doctype.user.user.generate_keys(email)
-frappe.db.commit()
-print("users ok")
-PYEOF
+cd workers-bus && npm run dev          # predev provisions identities + writes broker env
+deploy/local/start-approval-brokers.sh # starts 9104 + 9103, waits until both answer
 ```
 
-Broker env (one file per broker, secrets sourced from `workers-bus/.dev.vars`; keep
-them out of git - `*.env` is ignored):
+`start-local-runtime.sh` starts them too, as one supervised child, so a full local
+runtime needs no separate command. Set `IRONWRAP_LOCAL_APPROVAL_BROKERS=off` to skip
+them (steps 5 and 6 then have no path to Frappe).
 
-- common: `ERPNEXT_BASE_URL=http://localhost:8000`, `ERPNEXT_ALLOW_INSECURE_LOCAL=true`,
-  `ERPNEXT_WRITE_ENABLED=true`, `HERMES_ROLE_POLICY_PATH=<repo>/hermes/agents/roles.json`,
-  `HERMES_DRY_RUN_SIGNING_KEY=$(cat deploy/local/keys/dry-run-signing-key.txt)`,
-  `HERMES_APPROVAL_PUBLIC_KEY_FILE` / `HERMES_APPROVAL_PRIVATE_KEY_FILE` (deploy/local/keys),
-  `HERMES_APPROVER_ID=owner@ironwrap.local`
-- lead-triage (`src/approval-broker.mjs`, port 9101): role `lead-concierge`,
+What makes that work:
+
+- `frappe-init.sh` provisions the four broker actor identities
+  (`lead-concierge@`, `estimator-assistant@`, `production-controller@`,
+  `owner-operator@ironwrap.local`) with their own API key pairs, plus the
+  `owner@ironwrap.local` approver and `crew@ironwrap.local` field login. A broker
+  refuses to start when its API token resolves to any user other than its configured
+  actor (`frappe_service_principal_mismatch`), so these are not optional.
+- `predev.mjs` generates the two Worker-to-broker shared secrets and writes
+  `deploy/local/keys/proposal-publication-broker.env` and
+  `production-schedule-broker.env` with matching key ids and ports for
+  `wrangler.jsonc`'s `local` env (`127.0.0.1:9104` and `127.0.0.1:9103`). The keys
+  directory is gitignored; every value in those files is throwaway.
+- `start-approval-brokers.sh start|stop|status` manages both processes, logging to
+  `.runtime-logs/<broker>-broker.log` with pids in `.runtime-logs/<broker>-broker.pid`.
+
+The other two brokers (lead-triage on 9101, quote-revision on 9102) still need a
+hand-written env file; their actor identities and API keys are provisioned for them,
+so only the env file and `node src/<broker>.mjs` remain:
+
+- lead-triage (`src/approval-broker.mjs`): role `lead-concierge`,
   `APPROVAL_BROKER_{TENANT_ID=ironwrap,KEY_ID=local-approval-broker,SHARED_SECRET,PORT}`
-- quote-revision (`src/quote-revision-approval-broker.mjs`, port 9102): role
+- quote-revision (`src/quote-revision-approval-broker.mjs`): role
   `estimator-assistant`, `QUOTE_REVISION_BROKER_*`
-- production-schedule (`src/production-schedule-approval-broker.mjs`, port 9103): role
-  `production-controller`, `PRODUCTION_SCHEDULE_BROKER_*`
-- proposal-publication (`src/proposal-publication-approval-broker.mjs`, port 9104): role
-  `owner-operator`, `PROPOSAL_PUBLICATION_BROKER_*`. This is the one that turns a Draft
-  Proposal Evidence Pack into a customer-visible proposal, so the local stack also needs
-  `APP_PROPOSAL_PUBLICATION_ENABLED=true` (already set for `--env local`) and an
-  `owner-operator@ironwrap.local` Frappe user with generated API keys.
 
-Start: `cd mcp/erpnext-roofing-mcp && set -a && source <env-file> && set +a && node src/<broker>.mjs`
+Read a generated env file for the exact common shape (`ERPNEXT_*`, `HERMES_*`,
+`IRONWRAP_EFFECT_RUNTIME_*`); `deploy/*-approval-broker.env.example` is the production
+shape and names production hosts and users, not local ones.
 
-## App source edits vs the bench copy
+### Reading a broker failure
 
-`frappe-init.sh` copies `frappe-apps/ironwrap_roofing` into the bench at provision time
-(pip editable install of that copy). After editing the app's Python/JSON, sync + restart:
+A broker answers `4xx` when it decided against the request and is unreachable when it
+did not answer at all. The Worker keeps that distinction: a signature-verified `422`
+surfaces the broker's own code (for example `broker_proposal_evidence_pack_not_draft`)
+with HTTP 422, other verified `4xx` codes surface with 502, and only a network failure
+or a `5xx` reads `*_broker_unavailable`. Before this, every non-2xx collapsed into
+`*_broker_unavailable`, and finding the real reason meant instrumenting broker source
+(ELEC-95).
+
+## App source edits vs the bench copy (stale volumes)
+
+The bench runs a **copy** of `frappe-apps/ironwrap_roofing`, not the repo mount: the
+init container tars the source into `apps/ironwrap_roofing` and pip-installs that copy
+as editable. A volume therefore keeps serving whatever the copy held when it was made,
+which is how a seven-hour-old volume once ran a bench missing a Role that had shipped
+hours earlier, with nothing in the boot output saying so (ELEC-95).
+
+`frappe-init.sh` now compares the two trees on every start and says what it found:
+
+- hashes agree: `app source in sync (<hash>) - no resync needed`
+- hashes differ: a `STALE VOLUME DETECTED` banner naming both hashes, then a full
+  resync (recopy, `pip install -e`, `bench migrate`, re-pin service identities) and a
+  `RESYNC COMPLETE` banner. `predev.mjs` restarts the `frappe` container afterwards so
+  the running bench actually loads the new code.
+
+Controls, all through `IRONWRAP_LOCAL_APP_RESYNC`:
 
 ```bash
-docker cp frappe-apps/ironwrap_roofing/ironwrap_roofing/<file> \
-  ironwrap-local-frappe-1:/home/frappe/frappe-bench/apps/ironwrap_roofing/ironwrap_roofing/<file>
-docker restart ironwrap-local-frappe-1
+docker compose -f deploy/local/docker-compose.yml up -d frappe-init                      # detect + resync (default)
+IRONWRAP_LOCAL_APP_RESYNC=force docker compose -f deploy/local/docker-compose.yml up -d frappe-init   # resync regardless
+IRONWRAP_LOCAL_APP_RESYNC=off   docker compose -f deploy/local/docker-compose.yml up -d frappe-init   # refuse to boot on drift
 ```
 
-(DocType schema changes additionally need `bench --site ironwrap.localhost migrate`.)
+`off` is for a run that must never have its bench changed underneath it: on drift the
+init container exits 1 with a `REFUSING TO BOOT` banner and `frappe` does not start.
+A boot that sees drift either fixes it or says so; it never continues quietly.
+
+Any claim of the form "verified against a real site" is only as fresh as the boot that
+produced it. Reading `app source in sync` or `RESYNC COMPLETE` in the `frappe-init` log
+is what makes it a claim about the checkout under test:
+
+```bash
+docker compose -f deploy/local/docker-compose.yml logs frappe-init | tail -20
+```
+
+For a single-file iteration loop during debugging, `docker cp` plus
+`docker restart ironwrap-local-frappe-1` is still faster - just expect the next start
+to detect that edit as drift and put the bench back on the repo revision.
+
+## Two stacks on one machine
+
+The compose project name and the host port are both overridable, so a second stack gets
+its own containers and its own volumes instead of resyncing a bench another run is
+mid-proof on:
+
+```bash
+export COMPOSE_PROJECT_NAME=ironwrap-scratch IRONWRAP_LOCAL_FRAPPE_PORT=8001
+docker compose -f deploy/local/docker-compose.yml up -d
+```
+
+`predev.mjs` and `start-approval-brokers.sh` both read `IRONWRAP_LOCAL_FRAPPE_PORT`
+(and `IRONWRAP_LOCAL_FRAPPE_URL` respectively). Defaults are unchanged: one stack,
+project `ironwrap-local`, port 8000.
 
 ## Reset
 

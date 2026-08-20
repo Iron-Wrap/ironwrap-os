@@ -2247,11 +2247,16 @@ async function finalizeProposalPublicationBrokerFailure(
   decisionIdempotencyKey: string,
   error: unknown,
 ): Promise<Response> {
-  const errorCode =
-    error instanceof ProposalPublicationApprovalBrokerError &&
-    error.code === "proposal_publication_broker_unavailable"
-      ? "proposal_publication_broker_unavailable"
-      : "proposal_publication_broker_response_unverified";
+  // The recorded code is what a later reconciliation reads to decide what happened.
+  // A signature-verified 4xx is neither an outage nor an unverified response, so it
+  // records the broker's own reason; the state stays `execution_uncertain` either
+  // way, because only the broker knows whether it got as far as the Frappe write.
+  const errorCode = brokerFailureErrorCode(
+    error,
+    ProposalPublicationApprovalBrokerError,
+    "proposal_publication_broker_unavailable",
+    "proposal_publication_broker_response_unverified",
+  );
   try {
     const finalized = await finalizeProposalPublicationApprovalExecution(env, {
       tenantId: auth.session.tenant_id,
@@ -2688,11 +2693,12 @@ async function finalizeProductionScheduleBrokerFailure(
   decisionIdempotencyKey: string,
   error: unknown,
 ): Promise<Response> {
-  const errorCode =
-    error instanceof ProductionScheduleApprovalBrokerError &&
-    error.code === "production_schedule_broker_unavailable"
-      ? "production_schedule_broker_unavailable"
-      : "production_schedule_broker_response_unverified";
+  const errorCode = brokerFailureErrorCode(
+    error,
+    ProductionScheduleApprovalBrokerError,
+    "production_schedule_broker_unavailable",
+    "production_schedule_broker_response_unverified",
+  );
   try {
     const finalized = await finalizeProductionScheduleApprovalExecution(env, {
       tenantId: auth.session.tenant_id,
@@ -4193,38 +4199,60 @@ function proposalPublicationApprovalBrokerDecisionIdentity(
   return { ok: true, config, frappeUserId: decision.frappeUserId };
 }
 
+// Shared by both execute rails: classify a broker call that threw into the code the
+// approval ledger records for it.
+function brokerFailureErrorCode(
+  error: unknown,
+  errorClass: typeof ProposalPublicationApprovalBrokerError | typeof ProductionScheduleApprovalBrokerError,
+  unavailableCode: string,
+  unverifiedCode: string,
+): string {
+  if (!(error instanceof errorClass)) return unverifiedCode;
+  if (error.code.endsWith("_rejected")) return error.brokerErrorCode ?? unverifiedCode;
+  if (error.code.endsWith("_unavailable")) return unavailableCode;
+  return unverifiedCode;
+}
+
+// A broker that answers 4xx has made a decision; a broker that cannot be reached
+// has not. Reporting both as `_unavailable` told the owner to retry a request the
+// broker had already refused on its merits, and told whoever read the response
+// nothing about which of the two happened (ELEC-95 process risk 3). The broker's
+// code is passed through in both cases; only the status class distinguishes a
+// business rejection (422) from an integration fault (502).
 function proposalPublicationBrokerPrepareError(error: unknown): string {
-  if (
-    error instanceof ProposalPublicationApprovalBrokerError &&
-    error.code === "proposal_publication_broker_not_configured"
-  ) {
-    return error.code;
+  if (!(error instanceof ProposalPublicationApprovalBrokerError)) {
+    return "proposal_publication_broker_unavailable";
+  }
+  if (error.code === "proposal_publication_broker_not_configured") return error.code;
+  if (error.code === "proposal_publication_broker_rejected") {
+    return error.brokerErrorCode ?? error.code;
   }
   return "proposal_publication_broker_unavailable";
 }
 
 function proposalPublicationBrokerPrepareStatus(error: unknown): number {
-  return error instanceof ProposalPublicationApprovalBrokerError &&
-    error.code === "proposal_publication_broker_not_configured"
-    ? 503
-    : 502;
+  if (!(error instanceof ProposalPublicationApprovalBrokerError)) return 502;
+  if (error.code === "proposal_publication_broker_not_configured") return 503;
+  if (error.code === "proposal_publication_broker_rejected" && error.brokerStatus === 422) return 422;
+  return 502;
 }
 
 function productionScheduleBrokerPrepareError(error: unknown): string {
-  if (
-    error instanceof ProductionScheduleApprovalBrokerError &&
-    error.code === "production_schedule_broker_not_configured"
-  ) {
-    return error.code;
+  if (!(error instanceof ProductionScheduleApprovalBrokerError)) {
+    return "production_schedule_broker_unavailable";
+  }
+  if (error.code === "production_schedule_broker_not_configured") return error.code;
+  if (error.code === "production_schedule_broker_rejected") {
+    return error.brokerErrorCode ?? error.code;
   }
   return "production_schedule_broker_unavailable";
 }
 
 function productionScheduleBrokerPrepareStatus(error: unknown): number {
-  return error instanceof ProductionScheduleApprovalBrokerError &&
-    error.code === "production_schedule_broker_not_configured"
-    ? 503
-    : 502;
+  if (!(error instanceof ProductionScheduleApprovalBrokerError)) return 502;
+  if (error.code === "production_schedule_broker_not_configured") return 503;
+  if (error.code === "production_schedule_broker_rejected" && error.brokerStatus === 422) return 422;
+  return 502;
 }
 
 function withCors(response: Response, origin: string | null): Response {

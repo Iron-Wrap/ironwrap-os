@@ -39,6 +39,12 @@ ERPNEXT_API_SECRET=""
 # browser/PWA sessions cannot claim terminal outcomes or issuer readbacks.
 AUTHORITY_RECORD_EXECUTOR_HMAC_KEY="replace-with-a-separate-32-byte-secret"
 
+# Bearer token for the Worker's /admin/effects/* ledger endpoints (index.ts). The MCP
+# hosts and approval brokers present it as IRONWRAP_EFFECT_RUNTIME_TOKEN; it is a
+# separate authority from ADMIN_TOKEN. `npm run dev` generates one into
+# deploy/local/keys/ and writes it here, so a local approved write is not a 401.
+EFFECT_RUNTIME_TOKEN=""
+
 # Dedicated customer-contract acceptance channel. These credentials must belong to the
 # `IronWrap Customer Acceptance Service` role, never the broad Worker BFF identity.
 APP_CUSTOMER_ACCEPTANCE_HMAC_KEY="replace-with-a-separate-32-byte-secret"

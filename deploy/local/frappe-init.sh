@@ -17,9 +17,22 @@ ADMIN_PW="${ADMIN_PASSWORD:-ironwrap-local-admin}"
 DB_ROOT_PW="${DB_ROOT_PASSWORD:-ironwrap-local-dbroot}"
 FRAPPE_BRANCH="${FRAPPE_VERSION:-v15.114.0}"
 APP_SRC=/opt/ironwrap_roofing
+APP_DEST="$BENCH_DIR/apps/ironwrap_roofing"
 STAMP="$BENCH_DIR/sites/.ironwrap_init_done"
+# Written by a resync so `predev.mjs` knows the running bench is serving code it
+# loaded before the resync and has to be restarted.  The marker lives in the
+# volume, not in this process, because the restart happens outside it.
+RESYNC_MARKER="$BENCH_DIR/sites/.ironwrap_app_resync_pending"
+# on: resync a drifted bench copy (default).  off: refuse to boot on drift.
+# force: resync unconditionally, even when the hashes already agree.
+APP_RESYNC="${IRONWRAP_LOCAL_APP_RESYNC:-on}"
 
 log() { printf '\n\033[1;34m[ironwrap-init]\033[0m %s\n' "$*"; }
+loud() {
+  printf '\n\033[1;33m========================================================================\033[0m\n'
+  printf '\033[1;33m[ironwrap-init] %s\033[0m\n' "$*"
+  printf '\033[1;33m========================================================================\033[0m\n'
+}
 
 # Every bounded capture rail refuses to run until its issuer is pinned in the
 # site config, so a key that shipped in the app but never reached this function
@@ -44,6 +57,100 @@ pin_service_identities() {
   bench --site "$SITE" set-config ironwrap_facet_design_projection_service_user ironwrap-facet-projection@ironwrap.local
 }
 
+# The bench runs a COPY of the app (pip editable install of the copy), not the
+# repo mount, so a volume that survives a code change keeps serving whatever the
+# copy held when it was made.  ELEC-95 lost a capstone traverse to exactly that:
+# a seven-hour-old volume was missing a Role that had shipped hours earlier, with
+# nothing in the boot output saying so.  Hashing both trees with the same filter
+# turns that silence into a comparison the fast path can make on every start.
+#
+# The filter mirrors the tar excludes in `sync_app_source`, so a clean copy hashes
+# identical to its source; anything else is real drift (stale volume, or a file
+# hand-copied into the bench during debugging).
+app_tree_hash() {
+  local root="$1"
+  [ -d "$root" ] || { echo "missing"; return 0; }
+  (
+    cd "$root" &&
+      find . -type f \
+        -not -path '*/__pycache__/*' -not -name '*.pyc' \
+        -not -path './.git/*' -not -path '*.egg-info/*' \
+        -not -path './build/*' -not -path './dist/*' -not -path '*/.pytest_cache/*' \
+        -print0 |
+      LC_ALL=C sort -z |
+      xargs -0 -r sha256sum |
+      sha256sum |
+      cut -c1-64
+  )
+}
+
+# Destructive on purpose: a plain overlay copy never removes a file the repo
+# deleted, so the bench copy could never converge back onto the source hash.
+sync_app_source() {
+  rm -rf "$APP_DEST"
+  mkdir -p "$APP_DEST"
+  (cd "$APP_SRC" && tar cf - \
+    --exclude '__pycache__' --exclude '*.pyc' --exclude '.pytest_cache' \
+    --exclude 'build' --exclude 'dist' --exclude '*.egg-info' .) | (cd "$APP_DEST" && tar xf -)
+  ./env/bin/pip install --quiet --disable-pip-version-check -e "apps/ironwrap_roofing"
+}
+
+# Broker actor identities.  Unlike the least-privilege service identities below,
+# each of these is the local stand-in for a human operator login a broker process
+# authenticates as: `attestFrappeServicePrincipal` refuses to start a broker whose
+# API token resolves to any user other than its configured HERMES_ACTOR_USER
+# (`mcp/erpnext-roofing-mcp/src/server.mjs`, frappe_service_principal_mismatch).
+# Before this existed, `deploy/*-approval-broker.env.example` named actors nothing
+# provisioned, so steps 5 and 6 of the six-step workflow could only be reached by
+# hand-creating users first (ELEC-95 process risk 3).
+provision_broker_identity() {
+  local email="$1" first_name="$2" creds_file="$3"
+  local target="$BENCH_DIR/sites/$SITE/$creds_file"
+  if [ -s "$target" ] && grep -q '^{' "$target" 2>/dev/null; then return 0; fi
+  log "creating broker actor identity $email with API keys"
+  bench --site "$SITE" console > "/tmp/${creds_file#.}_raw.json" <<PYEOF
+import frappe, json
+email = "$email"
+if not frappe.db.exists("User", email):
+    u = frappe.get_doc({"doctype": "User", "email": email, "first_name": "$first_name",
+                        "send_welcome_email": 0, "roles": [{"role": "System Manager"}]})
+    u.insert(ignore_permissions=True)
+frappe.core.doctype.user.user.generate_keys(email)
+u = frappe.get_doc("User", email)
+frappe.db.commit()
+print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
+PYEOF
+  grep -o 'CREDS:{.*}' "/tmp/${creds_file#.}_raw.json" | sed 's/^CREDS://' > "$target"
+}
+
+# The approver the brokers name in every receipt (HERMES_APPROVER_ID) and the
+# crew login the field surfaces use.  Neither holds broker credentials; they only
+# have to exist as real users for the approval and BFF paths to resolve them.
+provision_operator_users() {
+  local marker="$BENCH_DIR/sites/$SITE/.operator_users_provisioned"
+  [ -f "$marker" ] && return 0
+  log "creating owner-approver and crew operator users"
+  bench --site "$SITE" console >/dev/null <<'PYEOF'
+import frappe
+for email, first_name in [("owner@ironwrap.local", "Owner Approver"),
+                          ("crew@ironwrap.local", "Field Crew")]:
+    if not frappe.db.exists("User", email):
+        frappe.get_doc({"doctype": "User", "email": email, "first_name": first_name,
+                        "send_welcome_email": 0,
+                        "roles": [{"role": "System Manager"}]}).insert(ignore_permissions=True)
+frappe.db.commit()
+PYEOF
+  touch "$marker"
+}
+
+provision_broker_identities() {
+  provision_operator_users
+  provision_broker_identity lead-concierge@ironwrap.local "Lead Concierge" .lead_triage_broker_credentials
+  provision_broker_identity estimator-assistant@ironwrap.local "Estimator Assistant" .quote_revision_broker_credentials
+  provision_broker_identity production-controller@ironwrap.local "Production Controller" .production_schedule_broker_credentials
+  provision_broker_identity owner-operator@ironwrap.local "Owner Operator" .proposal_publication_broker_credentials
+}
+
 cd "$BENCH_DIR" 2>/dev/null || { mkdir -p "$BENCH_DIR"; cd "$BENCH_DIR"; }
 
 if [ -f "$STAMP" ]; then
@@ -51,6 +158,41 @@ if [ -f "$STAMP" ]; then
   # A pin failure here must not take down a bench that was already serving:
   # report it loudly and leave the stack up.
   pin_service_identities || log "WARNING - could not re-apply service identity pins"
+  provision_broker_identities || log "WARNING - could not provision broker actor identities"
+
+  source_hash="$(app_tree_hash "$APP_SRC")"
+  installed_hash="$(app_tree_hash "$APP_DEST")"
+  if [ "$APP_RESYNC" != "force" ] && [ "$source_hash" = "$installed_hash" ]; then
+    log "app source in sync (${source_hash:0:12}) - no resync needed"
+    exit 0
+  fi
+  if [ "$APP_RESYNC" = "off" ]; then
+    loud "REFUSING TO BOOT: this bench is serving STALE app code."
+    echo "  repo  ${source_hash:0:12}  ($APP_SRC)"
+    echo "  bench ${installed_hash:0:12}  ($APP_DEST)"
+    echo "  Anything proven against this volume would be proven against the bench hash,"
+    echo "  not the checkout you are testing. Resync with:"
+    echo "    IRONWRAP_LOCAL_APP_RESYNC=on docker compose -f deploy/local/docker-compose.yml up -d frappe-init"
+    exit 1
+  fi
+  if [ "$APP_RESYNC" = "force" ]; then
+    loud "FORCED RESYNC requested (IRONWRAP_LOCAL_APP_RESYNC=force)"
+  else
+    loud "STALE VOLUME DETECTED: bench app code differs from the repo. Resyncing."
+    echo "  repo  ${source_hash:0:12}  ($APP_SRC)"
+    echo "  bench ${installed_hash:0:12}  ($APP_DEST)"
+  fi
+  sync_app_source
+  log "bench migrate (applies DocType, Role and permission changes the resync brought in)"
+  bench --site "$SITE" migrate
+  pin_service_identities || log "WARNING - could not re-apply service identity pins after resync"
+  touch "$RESYNC_MARKER"
+  resynced_hash="$(app_tree_hash "$APP_DEST")"
+  if [ "$resynced_hash" != "$source_hash" ]; then
+    loud "RESYNC DID NOT CONVERGE: bench ${resynced_hash:0:12} still differs from repo ${source_hash:0:12}"
+    exit 1
+  fi
+  loud "RESYNC COMPLETE - bench now runs repo revision ${source_hash:0:12}"
   exit 0
 fi
 
@@ -86,11 +228,7 @@ EOF
 # 3. install the proprietary app into the bench env ---------------------------
 if ! grep -q '^ironwrap_roofing$' sites/apps.txt 2>/dev/null; then
   log "installing ironwrap_roofing app into bench (editable, from repo mount)"
-  mkdir -p apps/ironwrap_roofing
-  (cd "$APP_SRC" && tar cf - \
-    --exclude '__pycache__' --exclude '*.pyc' --exclude '.pytest_cache' \
-    --exclude 'build' --exclude 'dist' --exclude '*.egg-info' .) | (cd apps/ironwrap_roofing && tar xf -)
-  ./env/bin/pip install --quiet --disable-pip-version-check -e "apps/ironwrap_roofing"
+  sync_app_source
 fi
 # apps.txt is written canonically (bench init may leave no trailing newline, so appending
 # would glue names together).
@@ -249,6 +387,9 @@ print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_pas
 PYEOF
   grep -o 'CREDS:{.*}' /tmp/facet_design_projection_raw.json | sed 's/^CREDS://' > "sites/$SITE/.facet_design_projection_credentials"
 fi
+
+# 10c. broker actor identities --------------------------------------------------
+provision_broker_identities
 
 # 11. pinned service identities -------------------------------------------------
 pin_service_identities

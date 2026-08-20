@@ -44,7 +44,7 @@ implication.
     },
     "tests": {
       "pwa": 492,
-      "worker": 958
+      "worker": 960
     }
   },
   "proof_state_policy": {
@@ -242,17 +242,24 @@ ELEC-86 Facet v2 chain and customer portal switch-on (2026-08-20):
   signed customer-decision event is accepted at `POST /ingest/facet-design` with
   `result: accepted_associated` and `detail_code: exact_identity_project_association_verified`, and
   a signed IronWrap receipt is returned.
-- **Open defect, blocking step 4.** The Frappe projection cannot create the blank Draft Customer
-  Quote against a real site. `Customer Quote` defaults `currency` to `CAD` and `payment_status` to
-  `Not Due`; `Document.insert()` applies those defaults before `validate` runs, but
-  `facet_design_projection_api` captures its trusted snapshot before `insert()`, so
-  `validate_customer_quote_acceptance_mutation` sees a different document than
-  `facet_design_projection_issuance_context` authorized and raises
-  `Facet design projection service users may only mutate records through the bounded projection
-  command` (HTTP 403 → `facet_projection_readback_id_missing`). The same two defaulted fields are in
-  `BLANK_QUOTE_FIELDS`, so the idempotent-replay path would then fail its "Draft contains commercial
-  data" check as well. The Python unit tests do not reach this because they do not run against a
-  DocType that applies defaults.
+- **Step 4 defect closed in ELEC-91.** The projection now creates the blank Draft Customer Quote
+  against a real Frappe v15 site. Four faults sat in series, all of the same class — a fixture that
+  returns literally empty values described a site that does not exist:
+  1. `Customer Quote` defaults `currency` to `CAD` and `payment_status` to `Not Due`, and
+     `Document.insert()` applies defaults before `validate` runs, so the trusted snapshot taken
+     before `insert()` described a document the guard never saw. The bounded command now resolves
+     the DocType's own `frappe.new_doc()` defaults into the payload up front, so `insert()` changes
+     nothing and the trusted tuple stays exact — the guard itself is unchanged.
+  2. Blankness is now commercial, not literal, on both sides: a schema default and a numeric column's
+     stored `0` are the schema speaking, and a value that merely *differs* from the default is still
+     refused.
+  3. The Worker's readback treated an absent key as populated, but Frappe's REST response omits NULL
+     fields entirely, so it could never be satisfied by a real site.
+  4. `received_at` is `new Date().toISOString()`; MariaDB rejects that shape, so claim timestamps
+     drop the offset marker — and only the marker: they are stored as naive UTC, the convention the
+     rest of this app reads Frappe Datetimes by, not moved onto the site clock.
+  `tools/validate-facet-blank-quote-contract.mjs` holds the Worker's blank-quote table, the Frappe
+  app's `BLANK_QUOTE_FIELDS` and `customer_quote.json` to one description in CI.
 - **Step-5 gap, closed by ELEC-92 (below).** A Proposal Evidence Pack could only be promoted
   Draft → Approved by the Owner Operator MCP command `request_publish_proposal_evidence_pack`;
   no Worker/PWA route published one, so the portal read model returned `proposal: null` and the

@@ -58,40 +58,64 @@ const RECEIPT_KEYS = [
   "schema_version",
   "source_customer_quote_id",
 ] as const;
-const BLANK_QUOTE_READBACK_FIELDS = [
-  "price_book_version",
-  "pricing_effective_at",
-  "price_rule_snapshot_json",
-  "subtotal",
-  "tax_amount",
-  "tax_code",
-  "tax_rate",
-  "tax_policy_snapshot_json",
-  "quote_total",
-  "currency",
-  "deposit_amount",
-  "amount_due",
-  "amount_paid",
-  "balance_due",
-  "payment_status",
-  "payment_due_date",
-  "payment_truth_source",
-  "payment_truth_at",
-  "qb_item_ref",
-  "qb_tax_code_ref",
-  "qb_terms_ref",
-  "qb_terms_due_days",
-  "valid_until",
-  "approved_by",
-  "approved_at",
-  "acceptance_evidence",
-  "contract_acceptance",
-  "accepted_at",
-  "scope_summary",
-  "assumptions",
-  "exclusions",
-  "quote_summary_json",
-  "notes",
+/**
+ * A projected Draft is *commercially* blank, not literally empty.
+ *
+ * Frappe hands back two kinds of value for a field the bounded projection
+ * command wrote as NULL, and neither is commercial data:
+ *
+ *  - a DocType `default` that `insert()` applies before `validate` runs
+ *    (`currency` -> "CAD", `payment_status` -> "Not Due");
+ *  - `0`, because Currency/Float/Int columns are stored NOT NULL DEFAULT 0.
+ *
+ * Reading either as "the Draft contains commercial data" is what made this
+ * readback report a conflict against every real Frappe site while the local
+ * fixtures - which return literal nulls - stayed green. Anything else in these
+ * fields is still a conflict, including a value that merely differs from the
+ * default, so a hand-edited `currency` or any populated total still fails.
+ *
+ * `tools/validate-facet-blank-quote-contract.mjs` proves this table against
+ * `customer_quote.json` and the Frappe app's own BLANK_QUOTE_FIELDS in CI, so
+ * it cannot drift into a second, staler description of the same schema.
+ */
+const BLANK_QUOTE_READBACK_FIELDS: ReadonlyArray<{
+  readonly field: string;
+  readonly schemaDefault: string | null;
+  readonly numeric: boolean;
+}> = [
+  { field: "price_book_version", schemaDefault: null, numeric: false },
+  { field: "pricing_effective_at", schemaDefault: null, numeric: false },
+  { field: "price_rule_snapshot_json", schemaDefault: null, numeric: false },
+  { field: "subtotal", schemaDefault: null, numeric: true },
+  { field: "tax_amount", schemaDefault: null, numeric: true },
+  { field: "tax_code", schemaDefault: null, numeric: false },
+  { field: "tax_rate", schemaDefault: null, numeric: true },
+  { field: "tax_policy_snapshot_json", schemaDefault: null, numeric: false },
+  { field: "quote_total", schemaDefault: null, numeric: true },
+  { field: "currency", schemaDefault: "CAD", numeric: false },
+  { field: "deposit_amount", schemaDefault: null, numeric: true },
+  { field: "amount_due", schemaDefault: null, numeric: true },
+  { field: "amount_paid", schemaDefault: null, numeric: true },
+  { field: "balance_due", schemaDefault: null, numeric: true },
+  { field: "payment_status", schemaDefault: "Not Due", numeric: false },
+  { field: "payment_due_date", schemaDefault: null, numeric: false },
+  { field: "payment_truth_source", schemaDefault: null, numeric: false },
+  { field: "payment_truth_at", schemaDefault: null, numeric: false },
+  { field: "qb_item_ref", schemaDefault: null, numeric: false },
+  { field: "qb_tax_code_ref", schemaDefault: null, numeric: false },
+  { field: "qb_terms_ref", schemaDefault: null, numeric: false },
+  { field: "qb_terms_due_days", schemaDefault: null, numeric: true },
+  { field: "valid_until", schemaDefault: null, numeric: false },
+  { field: "approved_by", schemaDefault: null, numeric: false },
+  { field: "approved_at", schemaDefault: null, numeric: false },
+  { field: "acceptance_evidence", schemaDefault: null, numeric: false },
+  { field: "contract_acceptance", schemaDefault: null, numeric: false },
+  { field: "accepted_at", schemaDefault: null, numeric: false },
+  { field: "scope_summary", schemaDefault: null, numeric: false },
+  { field: "assumptions", schemaDefault: null, numeric: false },
+  { field: "exclusions", schemaDefault: null, numeric: false },
+  { field: "quote_summary_json", schemaDefault: null, numeric: false },
+  { field: "notes", schemaDefault: null, numeric: false },
 ] as const;
 
 type DecisionKind = "approved" | "corrected" | "superseded" | "withdrawn";
@@ -787,8 +811,8 @@ async function facetProjectionReadback(
         `Facet customer decision ${claim.event_id} requires estimator rebuild from current evidence.` &&
         typeof draft.supersedes === "string" &&
         !!draft.supersedes &&
-        BLANK_QUOTE_READBACK_FIELDS.every((field) =>
-          blankFrappeValue(draft[field]),
+        BLANK_QUOTE_READBACK_FIELDS.every((rule) =>
+          blankQuoteReadbackValue(rule, draft[rule.field]),
         )));
   const evidenceIsExact =
     evidence.evidence_id === expectedEvidenceId &&
@@ -981,7 +1005,21 @@ async function projectionTargetQuoteId(
 }
 
 function blankFrappeValue(value: unknown): boolean {
-  return value === null || value === "";
+  // Frappe's REST readback omits a field whose stored value is NULL rather than
+  // returning it as null, so an absent key is the *most* common shape of blank
+  // on a real site and the least visible one in a fixture that spells every
+  // field out. Reading `undefined` as "populated" made the readback unsatisfiable
+  // against any real Frappe response (ELEC-91).
+  return value === null || value === undefined || value === "";
+}
+
+function blankQuoteReadbackValue(
+  rule: { schemaDefault: string | null; numeric: boolean },
+  value: unknown,
+): boolean {
+  if (blankFrappeValue(value)) return true;
+  if (rule.schemaDefault !== null && String(value) === rule.schemaDefault) return true;
+  return rule.numeric && Number(value) === 0;
 }
 
 function blankEquivalent(value: unknown, expected: string | null): boolean {

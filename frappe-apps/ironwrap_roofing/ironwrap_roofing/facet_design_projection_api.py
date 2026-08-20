@@ -16,7 +16,7 @@ import math
 import re
 import time
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import frappe
@@ -140,6 +140,9 @@ BLANK_QUOTE_FIELDS = (
     "quote_summary_json",
     "notes",
 )
+# Frappe stores these column kinds NOT NULL DEFAULT 0, so a field written as
+# NULL reads back as 0 rather than empty.  See ``_unpopulated_quote_values``.
+NUMERIC_FIELDTYPES = frozenset({"Currency", "Float", "Int", "Percent", "Check"})
 RECONCILIATION_REPLAY_FIELDS = (
     "reconciliation_id",
     "roof_job",
@@ -567,9 +570,33 @@ def _same(left: Any, right: Any) -> bool:
     return (left in {None, ""} and right in {None, ""}) or str(left) == str(right)
 
 
-def _assert_replay(existing: Mapping[str, Any], expected: Mapping[str, Any]) -> None:
-    if not all(_same(existing.get(field), value) for field, value in expected.items()):
-        _fail("facet_design_projection_conflict", "immutable projection facts drifted")
+def _assert_replay(
+    existing: Mapping[str, Any],
+    expected: Mapping[str, Any],
+    *,
+    doctype: str | None = None,
+) -> None:
+    """Compare a stored projection row against the facts this claim projects.
+
+    A numeric column Frappe stores NOT NULL DEFAULT 0 reads back as ``0`` for a
+    field the command wrote as ``NULL`` -- ``Integration Reconciliation`` does
+    this to ``source_amount`` and ``local_amount`` on every projection.  That is
+    the column's storage, not a changed projection fact, so treating it as drift
+    refused every legitimate re-delivery.  It is the same distinction the blank
+    Draft check makes, and it is deliberately narrow: only ``NULL`` may match a
+    stored zero, so a reconciliation that gained a real amount is still drift.
+    """
+
+    numeric = _numeric_fields(doctype) if doctype is not None else frozenset()
+    for field, value in expected.items():
+        if _same(existing.get(field), value):
+            continue
+        if field in numeric and value is None and _numeric_zero(existing.get(field)):
+            continue
+        _fail(
+            "facet_design_projection_conflict",
+            f"immutable projection facts drifted: {field}",
+        )
 
 
 def _chain_identity(claim: Mapping[str, Any]) -> dict[str, Any]:
@@ -671,6 +698,81 @@ def _assert_predecessor_projection(
         )
 
 
+def _schema_defaults(doctype: str) -> dict[str, Any]:
+    """The exact values ``insert()`` will fill in for fields left unset.
+
+    ``Document.insert()`` resolves defaults by calling
+    ``frappe.new_doc(doctype, as_dict=True)`` and copying every value whose field
+    is still ``None`` (``_set_defaults`` -> ``update_if_missing``).  Asking Frappe
+    for that same dict here is definitionally in step with the DocType, whatever
+    the default is written as -- a literal, ``Today``, ``__user``, or a session
+    default -- and stays in step when a field gains a default later.  Never
+    hard-code the list: the whole class of defect this closes came from a
+    second, staler description of the same schema.
+    """
+
+    return {
+        field: value
+        for field, value in dict(frappe.new_doc(doctype, as_dict=True)).items()
+        if value is not None and not field.startswith("_")
+    }
+
+
+def _frappe_datetime(value: str) -> str:
+    """Render one ISO-8601 instant as the naive UTC string this app stores.
+
+    The Worker stamps the claim's ``received_at`` with ``new Date().toISOString()``,
+    so it arrives as ``2026-08-20T11:57:32.013Z``.  MariaDB rejects that outright
+    (``1292 Incorrect datetime value``) and the first insert dies, which is the
+    second half of the step-4 break: it was unreachable while the trust guard
+    refused the command before any row was written.  Only the offset marker has to
+    go; the instant itself must not move.
+
+    This app's stated convention is that a naive Frappe Datetime *is* UTC --
+    written down in ``quickbooks_final_invoice_api._timestamp_value`` and stored
+    that way by ``document_validation._server_approval_utc_timestamp``.  So the
+    site clock is deliberately not consulted here: converting to system time would
+    put Facet-sourced ``captured_at``/``detected_at`` on a different clock from
+    every consumer that reads these columns as UTC, and would silently skew them on
+    any site whose timezone is not UTC (this tenant's is ``America/Edmonton``).
+    """
+
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    naive_utc = (
+        parsed.replace(tzinfo=None)
+        if parsed.tzinfo is None
+        else parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    )
+    return str(naive_utc)
+
+
+def _resolve_schema_defaults(payload: dict[str, Any]) -> dict[str, Any]:
+    """Pin the DocType's own insert-time defaults into the payload up front.
+
+    ``insert()`` applies those defaults *before* ``validate`` runs, but the
+    bounded command opens ``facet_design_projection_issuance_context`` around the
+    pre-insert document -- so the trusted tuple described a document that never
+    reached the guard, and the guard correctly refused a document it had not
+    authorized (``Customer Quote`` alone defaults ``currency`` -> ``CAD`` and
+    ``payment_status`` -> ``Not Due``).
+
+    Resolving the same defaults into the payload makes the pre-insert document
+    identical to the one ``validate`` will see: ``update_if_missing`` only fills
+    fields that are still ``None``, so once they are pinned ``insert()`` changes
+    nothing and the two snapshots agree by construction.  This *narrows* the
+    trusted tuple rather than widening it -- every field stays exactly specified
+    and the guard keeps comparing full equality -- and it is the same up-front
+    pinning the fleet inspection guard needed when ``autoname`` renamed the
+    document between the context and ``validate`` (ELEC-40 / IRO-54).
+    """
+
+    resolved = dict(payload)
+    for field, value in _schema_defaults(payload["doctype"]).items():
+        if field in resolved and resolved[field] is None:
+            resolved[field] = value
+    return resolved
+
+
 def _blank_draft(
     claim: Mapping[str, Any], anchors: Mapping[str, Any], draft_id: str, now: str
 ) -> dict[str, Any]:
@@ -692,18 +794,89 @@ def _blank_draft(
         "prepared_at": now,
     }
     draft.update({field: None for field in BLANK_QUOTE_FIELDS})
-    return draft
+    return _resolve_schema_defaults(draft)
+
+
+def _numeric_zero(value: Any) -> bool:
+    try:
+        return float(value) == 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _numeric_fields(doctype: str) -> frozenset[str]:
+    """Fields of ``doctype`` whose column stores 0 rather than NULL."""
+
+    return frozenset(
+        str(field.fieldname)
+        for field in frappe.get_meta(doctype).fields
+        if str(getattr(field, "fieldtype", "")) in NUMERIC_FIELDTYPES
+    )
+
+
+def _unpopulated_quote_values() -> dict[str, tuple[Any, bool]]:
+    """Per blank field, what "nothing was ever written here" looks like stored.
+
+    Two schema mechanisms stop a genuinely blank Draft from being literally
+    empty on a real site, and neither of them is commercial data:
+
+    * a DocType ``default``, applied by ``insert()`` before ``validate`` --
+      ``currency`` -> ``CAD``, ``payment_status`` -> ``Not Due``;
+    * a numeric column, which Frappe stores ``NOT NULL DEFAULT 0``, so the nine
+      money and count fields this command writes as ``None`` read back as ``0``.
+
+    Both state what the schema says, not what an estimator priced.  Anything
+    else in a blank field is an estimator's commercial fact and is still
+    refused -- including a value that merely *differs* from the default, so a
+    hand-edited ``currency`` or any populated total is caught exactly as before.
+    Read from the DocType so this cannot drift from the schema it describes.
+    """
+
+    defaults = _schema_defaults("Customer Quote")
+    meta = frappe.get_meta("Customer Quote")
+    return {
+        field: (
+            defaults.get(field),
+            str(getattr(meta.get_field(field), "fieldtype", "")) in NUMERIC_FIELDTYPES,
+        )
+        for field in BLANK_QUOTE_FIELDS
+    }
+
+
+def _commercial_violations(quote: Mapping[str, Any]) -> tuple[str, ...]:
+    """Fields of a projected Draft that carry commercial data."""
+
+    unpopulated = _unpopulated_quote_values()
+    violations = []
+    for field in BLANK_QUOTE_FIELDS:
+        value = quote.get(field)
+        if value in {None, ""}:
+            continue
+        default, numeric = unpopulated[field]
+        if default is not None and _same(value, default):
+            continue
+        if numeric and _numeric_zero(value):
+            continue
+        violations.append(field)
+    return tuple(violations)
 
 
 def _assert_blank_draft(existing: Mapping[str, Any], expected: Mapping[str, Any]) -> None:
+    # The blank fields are checked by commercial meaning, not by exact equality:
+    # replaying against a site whose DocType default changed must not be read as
+    # the Draft having drifted.  Every other projected fact is still exact.
     compared = {
         key: value
         for key, value in expected.items()
-        if key not in {"doctype", "prepared_at"}
+        if key not in {"doctype", "prepared_at"} and key not in BLANK_QUOTE_FIELDS
     }
-    _assert_replay(existing, compared)
-    if any(existing.get(field) not in {None, ""} for field in BLANK_QUOTE_FIELDS):
-        _fail("facet_design_projection_conflict", "Draft contains commercial data")
+    _assert_replay(existing, compared, doctype="Customer Quote")
+    violations = _commercial_violations(existing)
+    if violations:
+        _fail(
+            "facet_design_projection_conflict",
+            f"Draft contains commercial data: {', '.join(violations)}",
+        )
 
 
 def _assert_rejected_predecessor(
@@ -718,6 +891,7 @@ def _assert_rejected_predecessor(
             "quote_version": expected["quote_version"],
             "status": "Rejected",
         },
+        doctype="Customer Quote",
     )
 
 
@@ -756,7 +930,7 @@ def _projection_documents(
         "content_type": "application/json",
         "content_length": claim["raw_content_length"],
         "capture_actor": actor,
-        "captured_at": claim["received_at"],
+        "captured_at": _frappe_datetime(claim["received_at"]),
         "latitude": None,
         "longitude": None,
         "location_accuracy_m": None,
@@ -790,7 +964,7 @@ def _projection_documents(
         "local_name": target_quote_id,
         "direction": "Inbound",
         "status": "Pending" if active else "Superseded",
-        "detected_at": claim["received_at"],
+        "detected_at": _frappe_datetime(claim["received_at"]),
         "raw_key": claim["raw_key"],
         "source_version": claim["design_revision_id"],
         "source_amount": None,
@@ -844,7 +1018,15 @@ def _projection_documents(
             }
         ),
     }
-    return draft, evidence, reconciliation
+    # Evidence Item and Integration Reconciliation specify every guarded field
+    # today, so this resolves nothing for them - it is here so the day one of
+    # those fields gains a DocType default, the guard does not start refusing the
+    # command that owns it.
+    return (
+        draft,
+        _resolve_schema_defaults(evidence),
+        _resolve_schema_defaults(reconciliation),
+    )
 
 
 def _projection_response(
@@ -948,10 +1130,12 @@ def record_facet_design_proposal_evidence(facet_claim_json: str) -> dict[str, An
                 for field, value in evidence.items()
                 if field not in {"doctype", "verified_at"}
             },
+            doctype="Evidence Item",
         )
         _assert_replay(
             existing_reconciliation,
             {field: reconciliation.get(field) for field in RECONCILIATION_REPLAY_FIELDS},
+            doctype="Integration Reconciliation",
         )
         if active:
             _assert_blank_draft(target_quote, draft)

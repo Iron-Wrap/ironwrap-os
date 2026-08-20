@@ -124,6 +124,11 @@
       "authority": ["docs/AUTHORITY-AND-EVIDENCE-CONTRACT.md"]
     },
     {
+      "path": "docs/PRODUCTION-SCHEDULING-CONTRACT.md",
+      "class": "canonical",
+      "authority": []
+    },
+    {
       "path": "docs/WEBSITE-INTEGRATION.md",
       "class": "runbook",
       "authority": [

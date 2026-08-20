@@ -48,6 +48,21 @@ import {
   handleQuickbooksWebhook,
   recoverDueQuickBooksProjections,
 } from "./quickbooks.ts";
+// The IRO-52 money-plane sweeps are the same class of scheduled reconciliation work as the
+// QuickBooks recovery above, so they are registered on the same frequent cron.
+import {
+  accountingSweepIsNoteworthy,
+  accountingSweepTenantId,
+  runAccountingSweeps,
+} from "./accounting-sweeps.ts";
+// The dispatcher itself. Same cron, same class of work: `submission_pending` is an outbox and this
+// is what drains it (contract section 8.1).
+import {
+  runAccountingCompensationDispatch,
+  runAccountingDispatch,
+} from "./accounting-dispatch.ts";
+// ...and what it dispatches *through*. ELEC-74: the call above existed, the connection did not.
+import { resolveAccountingDispatchBinding } from "./accounting-dispatch-binding.ts";
 import {
   handleQuickBooksOAuthCallback,
   recoverQuickBooksFinalInvoices,
@@ -253,7 +268,16 @@ export default {
           ),
         ]).then(() => {}),
       );
-    } else
+    } else {
+      // Resolved once and awaited by both money dispatchers below. `catch` rather than a throw:
+      // a connection lookup that fails is the unbound case, not a reason to fail the whole tick.
+      const accountingDispatchBinding = resolveAccountingDispatchBinding(
+        env as import("./app-types.ts").AppEnv,
+        { tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv) },
+      ).catch((error) => {
+        log({ at: "accounting_money_dispatch_binding", error: String(error) });
+        return null;
+      });
       ctx.waitUntil(
         Promise.all([
           retrySweep(env),
@@ -316,6 +340,80 @@ export default {
               error: String(error),
             }),
           ),
+          // IRO-52. The money-plane dispatcher: it is what turns an accountant's approve into a
+          // provider mutation and an authorized compensation into a reversal. `submission_pending`
+          // is its queue, the same way the final-invoice outbox is drained here rather than by a
+          // Cloudflare Queue (contract section 8.1).
+          //
+          // The binding is resolved once per tick and shared by both dispatchers, so one tick
+          // performs one connection lookup rather than two. It resolves to `null` - and both
+          // dispatchers fall back to reporting what is waiting and dispatching nothing - whenever
+          // the effect ledger is disabled, QuickBooks OAuth is unconfigured, or the tenant has
+          // never connected a realm. ELEC-74 proved that unbound path was *all* there was: no
+          // production code constructed a binding at all, so an approved intent sat in
+          // `submission_pending` forever.
+          accountingDispatchBinding.then((binding) =>
+            runAccountingDispatch(env as import("./app-types.ts").AppEnv, {
+              tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv),
+              ...(binding ? { binding } : {}),
+            })
+          ).then((report) => {
+            if (report.pending.length > 0 || report.dispatched.length > 0) {
+              log({
+                at: "accounting_money_dispatch",
+                tenant_id: report.tenant_id,
+                pending: report.pending.length,
+                dispatched: report.dispatched.length,
+                expectation_unbound: report.expectation_unbound.length,
+                // Per intent, with the code that stopped each one: an aggregate count is what
+                // made ELEC-73's head-of-line block invisible in the first place.
+                failed: report.failed,
+                dispatcher_unbound: report.dispatcher_unbound,
+              });
+            }
+          }).catch((error) =>
+            log({ at: "accounting_money_dispatch", error: String(error) }),
+          ),
+          accountingDispatchBinding.then((binding) =>
+            runAccountingCompensationDispatch(env as import("./app-types.ts").AppEnv, {
+              tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv),
+              ...(binding ? { binding } : {}),
+            })
+          ).then((report) => {
+            if (report.authorized.length > 0 || report.refused.length > 0) {
+              log({
+                at: "accounting_money_compensation_dispatch",
+                tenant_id: report.tenant_id,
+                authorized: report.authorized.length,
+                dispatched: report.dispatched.length,
+                refused: report.refused.length,
+                dispatcher_unbound: report.dispatcher_unbound,
+              });
+            }
+          }).catch((error) =>
+            log({ at: "accounting_money_compensation_dispatch", error: String(error) }),
+          ),
+          // IRO-52 slice S8. Four money-plane sweeps: due observations, the `unknown`
+          // dispatch deadline, exception ageing, and dispatches that have stopped moving. No
+          // provider reader is bound until the slice S11 binding lands, so the due sweep reports
+          // rather than re-reads - a timer is not evidence (contract section 5.1).
+          runAccountingSweeps(env as import("./app-types.ts").AppEnv, {
+            tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv),
+          }).then((report) => {
+            if (accountingSweepIsNoteworthy(report)) {
+              log({
+                at: "accounting_money_sweep",
+                tenant_id: report.tenant_id,
+                due_observations: report.due_observations.due.length,
+                reader_unbound: report.due_observations.reader_unbound,
+                uncertain_expired: report.uncertain.expired.length,
+                exceptions_ageing: report.exceptions.ageing.length,
+                stuck_dispatches: report.stuck_dispatches.stuck.length,
+              });
+            }
+          }).catch((error) =>
+            log({ at: "accounting_money_sweep", error: String(error) }),
+          ),
           recoverExpiredExternalEffects(
             env as import("./app-types.ts").AppEnv,
           ).then((result) => {
@@ -325,6 +423,7 @@ export default {
           ),
         ]).then(() => {}),
       ); // the frequent cron
+    }
   },
 } satisfies ExportedHandler<Env, BusQueueMessage>;
 

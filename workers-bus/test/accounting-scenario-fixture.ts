@@ -40,6 +40,8 @@ import {
   taxBindingSetSha256,
   type TaxPolicySnapshotRecord,
 } from "../src/accounting-tax-snapshots.ts";
+import { recordAccountingCompensationAuthorization } from "../src/accounting-compensation-authorizations.ts";
+import type { CompensationPlan } from "../src/accounting-compensation.ts";
 import type { QuickBooksAuthPort } from "../src/quickbooks-auth-port.ts";
 
 /** Derivation, dispatch, first readback, second readback. One ordering for every scenario. */
@@ -89,6 +91,12 @@ export interface DeriveIntentOptions {
   compensatesIntentId?: string | null;
   compensatesEffectId?: string | null;
   ratePercent?: string;
+  /**
+   * Who derived the candidate. Defaults to the finance agent, which is the production path;
+   * naming a user is how a scenario reaches section 6's separation of duty, where the actor that
+   * derived may not be the actor that approves.
+   */
+  derivedBy?: { actorKind: "agent" | "owner" | "accounting"; userId?: string | null };
 }
 
 const TAX_BEARING_KINDS: readonly AccountingIntentKind[] = [
@@ -154,7 +162,7 @@ export async function deriveScenarioIntent(
       maxAmount: options.maxAmount ?? "5000.00",
     },
     effectIdempotencyKey: options.effectIdempotencyKey ?? `acct:${intentId}:v1`,
-    derivedBy: { actorKind: "agent" },
+    derivedBy: options.derivedBy ?? { actorKind: "agent" },
     compensatesIntentId: options.compensatesIntentId ?? null,
     compensatesEffectId: options.compensatesEffectId ?? null,
   }, NOW);
@@ -186,13 +194,27 @@ export async function approveIntent(
   return applied;
 }
 
-/** Run the accountant's compensate command, so the intent reaches `compensating`. */
+/**
+ * Run the accountant's compensate command, so the intent reaches `compensating`.
+ *
+ * Pass `plan` to record the authorization first, which is the order `POST /compensate` uses: the
+ * authorization row *is* the accountant's decision, and since ELEC-73 finding 3 an exception cannot
+ * be closed without one. A caller that omits it is deliberately exercising the unauthorized path.
+ */
 export async function compensateCommand(
   env: AppEnv,
   intent: AccountingIntentRecord,
   actorUserId: string = OWNER,
   now: Date = NOW,
+  plan?: CompensationPlan,
 ): Promise<AccountingIntentRecord> {
+  if (plan) {
+    await recordAccountingCompensationAuthorization(env, {
+      tenantId: TENANT,
+      plan,
+      authorizedByUserId: actorUserId,
+    }, now);
+  }
   const { intent: applied } = await applyAccountingIntentCommand(env, {
     tenantId: TENANT,
     intentId: intent.intent_id,

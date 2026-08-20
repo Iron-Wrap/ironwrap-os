@@ -176,6 +176,24 @@ export async function planAccountingCompensation(
   };
 }
 
+/**
+ * Which authority a plan needs (contract section 8.1: "owner-gated above ceiling").
+ *
+ * Compared by magnitude, like every other money comparison on this lane: `authority_max_amount` is
+ * a magnitude by schema and a reversal is negative by construction, so a signed compare would
+ * exempt exactly the reversals the ceiling exists to gate. Section 6 reads "the same authority
+ * that authorized the original, or higher", so an accountant may reverse inside the ceiling and
+ * only a breach of it escalates to the owner.
+ */
+export function compensationAuthorityLevel(
+  plan: CompensationPlan,
+  original: AccountingIntentRecord,
+): "accounting" | "owner" {
+  return magnitudeCents(plan.totalAmount) > magnitudeCents(original.authority_max_amount)
+    ? "owner"
+    : "accounting";
+}
+
 export interface DeriveCompensationIntentInput {
   tenantId: string;
   plan: CompensationPlan;

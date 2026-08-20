@@ -1,4 +1,5 @@
 import {
+  Banknote,
   BriefcaseBusiness,
   CalendarClock,
   CircleGauge,
@@ -30,12 +31,19 @@ export interface NavigationItem {
     | "/sales"
     | "/service"
     | "/newo"
+    | "/accounting"
+    | "/accounting/exceptions"
     | "/accounting/quickbooks"
     | "/settings";
   icon: LucideIcon;
   activeColor: "accent" | "ok" | "warning";
 }
 
+// Deliberately unchanged by IRO-52 slice S9. The mobile bar already carries nine items, which on a
+// 360 px viewport is about 38 px each - under the touch-target floor before anything is added. The
+// money desk is the accounting role's surface and lives in that role's navigation below; owner and
+// ops reach it the same way they already reach `/accounting/quickbooks`, by link. Widening this bar
+// to ten would degrade the mobile experience for every office role, which the product rule forbids.
 const officeNavigation = [
   { label: "Now", to: "/now", icon: CircleGauge, activeColor: "warning" },
   {
@@ -115,7 +123,23 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       activeColor: "accent",
     },
   ],
+  // The money desk leads, because it is the accounting role's landing page (contract section 8.2)
+  // and the work; QuickBooks is a connection setting, not a queue.
   accounting: [
+    {
+      label: "Money desk",
+      mobileLabel: "Money",
+      to: "/accounting",
+      icon: Banknote,
+      activeColor: "ok",
+    },
+    {
+      label: "Exceptions",
+      mobileLabel: "Issues",
+      to: "/accounting/exceptions",
+      icon: ShieldCheck,
+      activeColor: "warning",
+    },
     { label: "Now", to: "/now", icon: CircleGauge, activeColor: "warning" },
     {
       label: "Settings",

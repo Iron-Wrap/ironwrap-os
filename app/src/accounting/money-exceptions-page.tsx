@@ -1,0 +1,365 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import { ArrowLeft, RefreshCw, TriangleAlert } from "lucide-react";
+import { useRef, useState } from "react";
+
+import { isOfflineSession } from "../auth/session";
+import { useSession } from "../auth/session-context";
+import { RoleGuard } from "../components/role-guard";
+import { Button } from "../components/ui/button";
+import { ErrorState, LoadingState } from "../components/ui/state-panel";
+import { ApiError } from "../lib/api";
+import { Notice } from "../service/service-notice";
+import {
+  loadAccountingExceptions,
+  newAccountingActionKey,
+  resolveAccountingException,
+} from "./money-api";
+import {
+  ageLabel,
+  reasonLabel,
+  remedyLabel,
+  type AccountingExceptionRow,
+  type AccountingRemedy,
+} from "./money-contracts";
+
+/**
+ * Remedies an accountant can record here, because performing them moves no money at the provider.
+ *
+ * Everything else is a reversal, and a reversal is not something to type a reference for after the
+ * fact - it is authorized on the money movement and dispatched by the system, which closes the
+ * exception itself on the effect the ledger actually settled. This screen used to offer a free-text
+ * "reference of the reversal" box for those, and ELEC-71 closed a real $240 overpayment through it
+ * with an invented string. The box is gone; the server refuses the same input independently.
+ */
+const RECORDABLE_REMEDIES: readonly AccountingRemedy[] = [
+  "accepted_as_posted",
+  "superseded_by_new_intent",
+];
+
+/**
+ * Reversals IronWrap can actually run: authorized on the money movement, dispatched by the system.
+ *
+ * The remaining offered remedies — voiding an entity, posting an adjusting entry — have no dispatch
+ * path in any shipped slice. Telling an accountant to "authorize" one would send them to a screen
+ * that cannot do it, so they are named separately and honestly.
+ */
+const DISPATCHABLE_REVERSALS: readonly AccountingRemedy[] = ["credit_memo_issued", "refund_issued"];
+
+/** "A", "A or B", "A, B or C" — a sentence, not a joined array. */
+function orList(remedies: readonly AccountingRemedy[]): string {
+  const labels = remedies.map((remedy) => remedyLabel(remedy));
+  if (labels.length <= 1) return labels[0] ?? "";
+  return `${labels.slice(0, -1).join(", ")} or ${labels[labels.length - 1]}`;
+}
+
+/**
+ * The exception queue (IRO-52 slice S9).
+ *
+ * docs/ACCOUNTING-RECONCILIATION-CONTRACT.md section 8.2: reason code, both hashes, the proposed
+ * provider-supported remedies, and the resolve action. The remedies come from the exception itself
+ * rather than from a list in the browser, because an exception offers what QuickBooks can actually
+ * do about it and nothing else.
+ *
+ * A remedy that reverses money asks for the compensating effect it claims to have. The server
+ * refuses without it, and asking here means the accountant finds out before they commit rather
+ * than after.
+ */
+export function MoneyExceptionsPage() {
+  return (
+    <RoleGuard surface="accounting">
+      <MoneyExceptionsContent />
+    </RoleGuard>
+  );
+}
+
+function MoneyExceptionsContent() {
+  const session = useSession();
+  const offline = isOfflineSession(session);
+  const queryClient = useQueryClient();
+  const actionKeys = useRef(new Map<string, string>());
+  const [showResolved, setShowResolved] = useState(false);
+  const [actionError, setActionError] = useState<string>();
+  const [resolved, setResolved] = useState<string>();
+
+  const queryKey = ["accounting-exceptions", session.tenant.id, showResolved] as const;
+  const query = useQuery({
+    queryKey,
+    queryFn: () => loadAccountingExceptions(showResolved ? undefined : "open"),
+    retry: false,
+  });
+
+  const mutation = useMutation({
+    retry: false,
+    mutationFn: async (input: { exceptionId: string; remedy: AccountingRemedy }) => {
+      const name = `${input.exceptionId}:${input.remedy}`;
+      const key = actionKeys.current.get(name) ?? newAccountingActionKey("resolve");
+      actionKeys.current.set(name, key);
+      // No compensating effect is ever sent from this screen: the only remedies it offers are the
+      // ones that move no money, and a reversal is closed by the dispatcher on the effect the
+      // ledger settled.
+      return await resolveAccountingException(session, input.exceptionId, input.remedy, null, key);
+    },
+    onSuccess: async (response) => {
+      setActionError(undefined);
+      setResolved(response.exception.exception_id);
+      await queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (error) => {
+      setResolved(undefined);
+      setActionError(messageFor(error));
+    },
+  });
+
+  if (!query.data && query.isPending) return <LoadingState label="Loading the exception queue…" />;
+  if (!query.data) {
+    return (
+      <ErrorState
+        title="Exception queue unavailable"
+        message="Nothing was resolved or changed. Reconnect and re-open the queue before deciding anything."
+        onRetry={() => void query.refetch()}
+        action={<BackToDesk />}
+      />
+    );
+  }
+
+  const exceptions = query.data.exceptions;
+  const canResolve = query.data.allowed_actions.includes("accounting.exception.resolve");
+
+  return (
+    <section className="mx-auto max-w-3xl space-y-6 pb-4">
+      <BackToDesk />
+
+      <header className="border-b border-border pb-5 sm:pb-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="grid size-11 shrink-0 place-items-center rounded-md bg-foreground text-background">
+              <TriangleAlert className="size-5 text-warning" aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
+                Accounting
+              </p>
+              <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                Exceptions
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
+                Findings that need a person. Each one names only the remedies QuickBooks actually
+                supports — there is never a delete.
+              </p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="compact"
+            busy={query.isFetching}
+            disabled={offline || query.isFetching}
+            onClick={() => void query.refetch()}
+          >
+            <RefreshCw aria-hidden="true" />
+            Refresh
+          </Button>
+        </div>
+      </header>
+
+      {offline ? (
+        <Notice tone="warning" title="Reconnect before resolving anything">
+          Resolutions are never queued offline.
+        </Notice>
+      ) : null}
+      {actionError ? (
+        <Notice tone="danger" title="Nothing was resolved">
+          {actionError}
+        </Notice>
+      ) : null}
+      {resolved ? (
+        <Notice tone="success" title="Exception closed">
+          The remedy you performed is recorded against the exception. Nothing was deleted.
+        </Notice>
+      ) : null}
+
+      <label className="flex min-h-12 items-center gap-3 text-sm font-bold">
+        <input
+          type="checkbox"
+          className="size-5"
+          checked={showResolved}
+          onChange={(event) => setShowResolved(event.target.checked)}
+        />
+        Include already-closed exceptions
+      </label>
+
+      {exceptions.length === 0 ? (
+        <p className="border border-border bg-surface px-4 py-6 text-sm leading-6 text-muted sm:px-6">
+          Nothing needs a decision. Every finding has been answered.
+        </p>
+      ) : (
+        <ul className="space-y-4">
+          {exceptions.map((exception) => (
+            <ExceptionCard
+              key={exception.exception_id}
+              exception={exception}
+              canResolve={canResolve && exception.status !== "resolved"}
+              busy={offline || mutation.isPending}
+              onResolve={(remedy) =>
+                mutation.mutate({ exceptionId: exception.exception_id, remedy })
+              }
+            />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function ExceptionCard({
+  exception,
+  canResolve,
+  busy,
+  onResolve,
+}: {
+  exception: AccountingExceptionRow;
+  canResolve: boolean;
+  busy: boolean;
+  onResolve: (remedy: AccountingRemedy) => void;
+}) {
+  const offered = exception.offered_remedies ?? [];
+  const recordable = offered.filter((option) => RECORDABLE_REMEDIES.includes(option));
+  const reversals = offered.filter((option) => DISPATCHABLE_REVERSALS.includes(option));
+  const byHand = offered.filter(
+    (option) => !RECORDABLE_REMEDIES.includes(option) && !DISPATCHABLE_REVERSALS.includes(option),
+  );
+  const [remedy, setRemedy] = useState<AccountingRemedy | "">(recordable[0] ?? "");
+  const submitDisabled = busy || remedy === "";
+  const remedyFieldId = `remedy-${exception.exception_id}`;
+
+  return (
+    <li className="border border-border bg-surface">
+      <div className="border-b border-border px-4 py-4 sm:px-6">
+        <h2 className="text-lg font-bold tracking-[-0.02em] text-balance">
+          {reasonLabel(exception.reason_code)}
+        </h2>
+        <p className="mt-1 text-sm leading-6 text-muted">
+          {exception.status === "resolved"
+            ? `Closed as ${exception.resolution_action ? remedyLabel(exception.resolution_action as AccountingRemedy) : "resolved"}.`
+            : `Open for ${ageLabel(exception.age_seconds)}.`}
+        </p>
+        {exception.intent_id ? (
+          <Link
+            to="/accounting/intents/$intentId"
+            params={{ intentId: exception.intent_id }}
+            className="mt-2 inline-flex min-h-12 items-center font-bold underline underline-offset-4"
+          >
+            Open the money movement
+          </Link>
+        ) : null}
+      </div>
+
+      <dl className="divide-y divide-border">
+        <div className="px-4 py-3 sm:px-6">
+          <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
+            Our fingerprint
+          </dt>
+          <dd className="mt-1">
+            <code className="break-all text-xs">{exception.expected_sha256 ?? "—"}</code>
+          </dd>
+        </div>
+        <div className="px-4 py-3 sm:px-6">
+          <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">
+            QuickBooks fingerprint
+          </dt>
+          <dd className="mt-1">
+            <code className="break-all text-xs">{exception.observed_sha256 ?? "—"}</code>
+          </dd>
+        </div>
+      </dl>
+
+      {canResolve ? (
+        <div className="flex flex-col gap-3 border-t border-border px-4 py-4 sm:px-6">
+          {reversals.length > 0 ? (
+            <p className="text-sm leading-6 text-muted">
+              To put the money back, authorize {orList(reversals)} on the money movement above. We
+              send it to QuickBooks and close this on the entry QuickBooks gives back — there is
+              nothing to type in here.
+            </p>
+          ) : null}
+          {byHand.length > 0 ? (
+            <p className="text-sm leading-6 text-muted">
+              {orList(byHand)} still has to be done in QuickBooks by hand. We cannot record it as
+              done here, because we have no way to check that it happened.
+            </p>
+          ) : null}
+          {recordable.length === 0 ? (
+            <p className="text-sm leading-6 text-muted">
+              Nothing can be closed from this screen for this finding.
+            </p>
+          ) : (
+            <>
+              <label className="text-sm font-bold" htmlFor={remedyFieldId}>
+                What was done about it
+              </label>
+              <select
+                id={remedyFieldId}
+                className="min-h-14 w-full rounded-md border border-border bg-surface px-3 text-base"
+                value={remedy}
+                disabled={busy}
+                onChange={(event) => setRemedy(event.target.value as AccountingRemedy)}
+              >
+                <option value="">Choose a remedy</option>
+                {recordable.map((option) => (
+                  <option key={option} value={option}>
+                    {remedyLabel(option)}
+                  </option>
+                ))}
+              </select>
+              <Button
+                type="button"
+                className="min-h-14 w-full"
+                disabled={submitDisabled}
+                onClick={() => remedy !== "" && onResolve(remedy)}
+              >
+                Close this exception
+              </Button>
+            </>
+          )}
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+function BackToDesk() {
+  return (
+    <Link
+      to="/accounting"
+      className="inline-flex min-h-12 items-center gap-2 font-bold underline underline-offset-4"
+    >
+      <ArrowLeft className="size-4" aria-hidden="true" />
+      Money desk
+    </Link>
+  );
+}
+
+function messageFor(error: unknown): string {
+  if (!(error instanceof ApiError)) return "The exception was not closed.";
+  const messages: Record<string, string> = {
+    accounting_exception_compensating_effect_required:
+      "A remedy that moves money is authorized on the money movement, not closed from here.",
+    accounting_exception_compensating_effect_unknown:
+      "We have no record of that reversal reaching QuickBooks, so this stays open.",
+    accounting_exception_compensating_effect_intent_mismatch:
+      "That reversal belongs to a different money movement. This one is still open.",
+    accounting_exception_compensating_effect_not_settled:
+      "That reversal has not reached QuickBooks yet. We will close this when it does.",
+    accounting_exception_compensating_effect_amount_mismatch:
+      "That reversal is not for the amount that was authorized, so this stays open.",
+    accounting_exception_remedy_dispatch_unavailable:
+      "IronWrap cannot perform that remedy yet, so it cannot record it as done.",
+    accounting_exception_transition_invalid:
+      "This exception was already answered by somebody else. Refresh to see how.",
+    accounting_exception_resolution_invalid:
+      "That is not a remedy this finding offers. Pick one from the list.",
+    csrf_failed: "Your session needs refreshing. Reload the page and try again.",
+  };
+  return messages[error.code] ?? "The exception was not closed, and nothing was changed.";
+}

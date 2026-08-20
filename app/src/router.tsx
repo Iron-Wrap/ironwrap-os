@@ -55,6 +55,15 @@ const ServiceCasePage = lazy(async () => ({
 const PostizPage = lazy(async () => ({
   default: (await import("./postiz/postiz-page")).PostizPage,
 }));
+const MoneyDeskPage = lazy(async () => ({
+  default: (await import("./accounting/money-desk-page")).MoneyDeskPage,
+}));
+const MoneyIntentPage = lazy(async () => ({
+  default: (await import("./accounting/money-intent-page")).MoneyIntentPage,
+}));
+const MoneyExceptionsPage = lazy(async () => ({
+  default: (await import("./accounting/money-exceptions-page")).MoneyExceptionsPage,
+}));
 const QuickBooksSettingsPage = lazy(async () => ({
   default: (await import("./accounting/quickbooks-page")).QuickBooksSettingsPage,
 }));
@@ -426,6 +435,27 @@ const postizIntentRoute = createRoute({
   component: PostizIntentRoute,
 });
 
+// The money desk. `/accounting` is the accounting role's landing page (contract section 8.2), and
+// the two child routes below are the screens it leads to. `/accounting/quickbooks` stays where it
+// is: the connection is a setting, the desk is the work.
+const moneyDeskRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/accounting",
+  component: MoneyDeskRoute,
+});
+
+const moneyIntentRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/accounting/intents/$intentId",
+  component: MoneyIntentRoute,
+});
+
+const moneyExceptionsRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/accounting/exceptions",
+  component: MoneyExceptionsRoute,
+});
+
 const quickBooksSettingsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/accounting/quickbooks",
@@ -528,6 +558,30 @@ function ServiceCaseRoute() {
   );
 }
 
+function MoneyDeskRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <MoneyDeskPage />
+    </Suspense>
+  );
+}
+
+function MoneyIntentRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <MoneyIntentPage />
+    </Suspense>
+  );
+}
+
+function MoneyExceptionsRoute() {
+  return (
+    <Suspense fallback={<OwnerRouteSkeleton />}>
+      <MoneyExceptionsPage />
+    </Suspense>
+  );
+}
+
 function QuickBooksSettingsRoute() {
   return (
     <Suspense fallback={<OwnerRouteSkeleton />}>
@@ -626,6 +680,9 @@ const routeTree = rootRoute.addChildren([
     serviceDeskRoute,
     serviceCaseRoute,
     postizIntentRoute,
+    moneyDeskRoute,
+    moneyIntentRoute,
+    moneyExceptionsRoute,
     quickBooksSettingsRoute,
     quickBooksFinalInvoiceRoute,
     facetDesignsRoute,

@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { REALM, TENANT, fakeIntuit, quickBooksEntity, testEnv } from "./accounting-fixture.ts";
+import { NOW, REALM, TENANT, fakeIntuit, quickBooksEntity, testEnv } from "./accounting-fixture.ts";
 import { TestMoneyEffectPort } from "./accounting-port-fixture.ts";
 import {
   AT_LATER,
@@ -323,7 +323,7 @@ test("a credit memo reverses the surplus end to end, and both intents stay visib
   await approveIntent(env, reversal);
   // The accountant authorizes the reversal on the original. `owner`, because money is being
   // reversed (section 6).
-  await compensateCommand(env, original, OWNER);
+  await compensateCommand(env, original, OWNER, NOW, plan);
 
   const executor = scenarioExecutor({ providerExternalId: "4002", observed: expected });
   const result = await submitAccountingCompensation(env, {
@@ -389,7 +389,7 @@ test("a reversal that does not reach the provider leaves the exception open and 
     effectId: original.effect_id,
   });
   await approveIntent(env, reversal);
-  await compensateCommand(env, original, OWNER);
+  await compensateCommand(env, original, OWNER, NOW, plan);
 
   const executor = scenarioExecutor({
     providerExternalId: "5002",
@@ -461,7 +461,7 @@ async function raceOutcome(order: ReadonlyArray<"refund" | "payment">) {
     effectId: original.effect_id,
   });
   await approveIntent(env, reversal);
-  await compensateCommand(env, original, OWNER);
+  await compensateCommand(env, original, OWNER, NOW, plan);
   await submitAccountingCompensation(env, {
     tenantId: TENANT,
     plan,

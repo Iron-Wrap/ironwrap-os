@@ -849,13 +849,28 @@ test("an exception moves open to acknowledged to resolved, once, and a reversal 
       && error.code === "accounting_exception_compensating_effect_required",
   );
 
+  // ...and naming one is not the same as having done it. `void_provider_entity` has no dispatch
+  // path in any shipped slice, so there is no ledger evidence it could ever produce: it refuses by
+  // name rather than accepting a typed-in reference, which is what let ELEC-71 close a real $240
+  // exception for money nothing had reversed.
+  await assert.rejects(
+    resolveAccountingException(env, {
+      tenantId: TENANT, exceptionId, actorUserId: "appu_owner_0001",
+      resolutionAction: "void_provider_entity",
+      compensatingEffectId: "effect:ironwrap:2",
+    }, LATEST),
+    (error: unknown) =>
+      error instanceof AccountingExceptionError
+      && error.code === "accounting_exception_remedy_dispatch_unavailable",
+  );
+
+  // A remedy that moves no money at the provider needs no effect, and still closes the queue entry.
   const resolved = await resolveAccountingException(env, {
     tenantId: TENANT, exceptionId, actorUserId: "appu_owner_0001",
-    resolutionAction: "void_provider_entity",
-    compensatingEffectId: "effect:ironwrap:2",
+    resolutionAction: "accepted_as_posted",
   }, LATEST);
   assert.equal(resolved.status, "resolved");
-  assert.equal(resolved.compensating_effect_id, "effect:ironwrap:2");
+  assert.equal(resolved.compensating_effect_id, null);
 
   // Resolved is terminal, and the queue is never emptied by deletion.
   assert.throws(

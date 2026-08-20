@@ -44,13 +44,25 @@ describe("role-shaped navigation", () => {
     expect(roleLabel("production")).toBe("Production");
   });
 
-  it("gives accounting only Now and its finance settings", () => {
+  // IRO-52 slice S9: the money desk is the accounting role's landing page (contract section 8.2),
+  // so it leads, and the exception queue sits beside it. QuickBooks stays a setting.
+  it("lands accounting on the money desk, with its queue, Now, and finance settings", () => {
     expect(appRoles).toContain("accounting");
     expect(navigationForRole("accounting").map((item) => item.to)).toEqual([
+      "/accounting",
+      "/accounting/exceptions",
       "/now",
       "/accounting/quickbooks",
     ]);
     expect(roleLabel("accounting")).toBe("Accounting");
+  });
+
+  // Mobile-first is a gating product rule. The shared office bar already carries nine items, which
+  // on a 360 px viewport is about 38 px each; a tenth would put every office role under the
+  // touch-target floor. The money desk therefore lives in the accounting role's own navigation.
+  it("does not widen the shared office navigation past what a phone can carry", () => {
+    expect(navigationForRole("owner")).toHaveLength(9);
+    expect(navigationForRole("ops")).toHaveLength(9);
   });
 
   it("allows every role only onto its intended work surfaces", () => {

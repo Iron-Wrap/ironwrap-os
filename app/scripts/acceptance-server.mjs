@@ -14,7 +14,7 @@ const ACCEPTANCE_MODE = process.env.ACCEPTANCE_MODE ?? "field";
 const ACCEPTANCE_PROTOCOL = process.env.ACCEPTANCE_PROTOCOL ?? "http1";
 const FIXTURE_FIELD_DEVICE_PROOF = "a".repeat(43);
 
-if (!new Set(["field", "estimator"]).has(ACCEPTANCE_MODE)) {
+if (!new Set(["field", "estimator", "accounting"]).has(ACCEPTANCE_MODE)) {
   throw new Error(`Unsupported ACCEPTANCE_MODE: ${ACCEPTANCE_MODE}`);
 }
 
@@ -497,6 +497,218 @@ const fixtureEstimatorWorkbench = {
   ],
 };
 
+// Test-only: mirrors the money desk read contract (IRO-52 slice S9). Synthetic throughout - a fake
+// QuickBooks realm, placeholder hashes, and a reserved `example.test` identity. No provider payload
+// body and no tenant id appears here, because none appears on the real envelopes either.
+const fixtureAccountingSession = {
+  version: 1,
+  source_updated_at: null,
+  read_model_generated_at: "2026-08-20T09:00:00.000Z",
+  stale_fields: [],
+  permissions: [
+    "session:read",
+    "now:read",
+    "accounting:read",
+    "accounting:review",
+    "accounting:approve",
+    "accounting:reconcile",
+    "accounting:compensate",
+  ],
+  allowed_actions: ["accounting.read"],
+  authenticated: true,
+  user: {
+    id: "appu_acceptance_accounting",
+    email: "accounting.acceptance@example.test",
+    display_name: "Acceptance Accounting",
+    role: "accounting",
+    frappe_user_id: "accounting.acceptance@example.test",
+  },
+  tenant: fixtureSession.tenant,
+  csrf_token: "accounting-acceptance-csrf",
+  session_expires_at: "2030-08-20T09:00:00.000Z",
+};
+
+const ACCOUNTING_INTENT_ID = "acct-intent:JOB-ACCEPTANCE:deposit_invoice";
+const ACCOUNTING_EXCEPTION_ID = "acct-exc-acceptance-0001";
+const ACCOUNTING_SHA_EXPECTED = "a".repeat(64);
+const ACCOUNTING_SHA_OBSERVED = "b".repeat(64);
+
+const fixtureAccountingEnvelope = {
+  version: 1,
+  read_model_generated_at: "2026-08-20T09:00:00.000Z",
+  allowed_actions: [
+    "accounting.read",
+    "accounting.intent.approve",
+    "accounting.intent.reject",
+    "accounting.intent.reconcile",
+    "accounting.intent.compensate",
+    "accounting.exception.resolve",
+  ],
+};
+
+const fixtureAccountingIntent = {
+  intent_id: ACCOUNTING_INTENT_ID,
+  kind: "deposit_invoice",
+  roof_job_id: "JOB-ACCEPTANCE",
+  customer_ref: "CUST-ACCEPTANCE",
+  currency: "CAD",
+  total_amount: "1260.00",
+  settled_amount: null,
+  state: "pending_review",
+  badge: "pending",
+  next_step: "Check the amount against the approved paperwork, then approve or reject it.",
+  version: 1,
+  blocker_code: null,
+  reason_code: null,
+  derived_at: "2026-08-20T08:00:00.000Z",
+  updated_at: "2026-08-20T08:00:00.000Z",
+  age_seconds: 3600,
+  compensates_intent_id: null,
+};
+
+const fixtureAccountingMismatch = {
+  ...fixtureAccountingIntent,
+  intent_id: "acct-intent:JOB-ACCEPTANCE-2:progress_invoice",
+  kind: "progress_invoice",
+  roof_job_id: "JOB-ACCEPTANCE-2",
+  state: "mismatch",
+  badge: "mismatched",
+  next_step: "QuickBooks does not agree with our figures. Open the detail and pick a remedy.",
+  version: 4,
+  age_seconds: 7200,
+};
+
+const fixtureAccountingException = {
+  exception_id: ACCOUNTING_EXCEPTION_ID,
+  intent_id: ACCOUNTING_INTENT_ID,
+  subject_ref: `accounting_intent:${ACCOUNTING_INTENT_ID}`,
+  reason_code: "provider_overpayment",
+  status: "open",
+  expected_sha256: ACCOUNTING_SHA_EXPECTED,
+  observed_sha256: ACCOUNTING_SHA_OBSERVED,
+  remedies: [
+    { action: "void_provider_entity", alternatives: [] },
+    { action: "credit_memo_issued", alternatives: ["refund_issued"] },
+  ],
+  detail: { invoiceTotal: "1260.00", observedSettled: "1500.00" },
+  resolution_action: null,
+  opened_at: "2026-08-20T08:10:00.000Z",
+  updated_at: "2026-08-20T08:10:00.000Z",
+  age_seconds: 7200,
+  offered_remedies: ["void_provider_entity", "credit_memo_issued", "refund_issued"],
+};
+
+const fixtureAccountingSummary = {
+  ...fixtureAccountingEnvelope,
+  summary: {
+    queues: {
+      needs_approval: { count: 1, oldest_age_seconds: 3600 },
+      awaiting_provider: { count: 0, oldest_age_seconds: null },
+      mismatched: { count: 1, oldest_age_seconds: 7200 },
+      exceptions: { count: 1, oldest_age_seconds: 7200 },
+    },
+    reconciliation_health: {
+      open_exceptions: 1,
+      acknowledged_exceptions: 0,
+      oldest_open_exception_age_seconds: 7200,
+      oldest_unreconciled_intent_id: ACCOUNTING_INTENT_ID,
+      oldest_unreconciled_age_seconds: 7200,
+      stale_observation_count: 2,
+      stale_after_seconds: 86400,
+      unobserved_intent_count: 1,
+    },
+  },
+  queues: {
+    needs_approval: [fixtureAccountingIntent],
+    awaiting_provider: [],
+    mismatched: [fixtureAccountingMismatch],
+    exceptions: [fixtureAccountingException],
+  },
+};
+
+const fixtureAccountingDetail = {
+  ...fixtureAccountingEnvelope,
+  intent: fixtureAccountingIntent,
+  basis: { roofJob: "JOB-ACCEPTANCE", customerRef: "CUST-ACCEPTANCE" },
+  source_documents: [{ id: "QUOTE-ACCEPTANCE", version: 3 }],
+  evidence: {
+    basis_sha256: ACCOUNTING_SHA_EXPECTED,
+    expected_sha256: ACCOUNTING_SHA_EXPECTED,
+    observed_sha256: null,
+    provider_payload_sha256: ACCOUNTING_SHA_OBSERVED,
+    provider_request_id: "req-acceptance-0001",
+    provider: "quickbooks",
+    realm_id: "4620816365000000000",
+    provider_entity_type: "Invoice",
+    provider_entity_id: null,
+    tax_policy_snapshot_sha256: ACCOUNTING_SHA_OBSERVED,
+    effect_id: null,
+    compensates_effect_id: null,
+    authority_permit_ref: "permit:accounting:money",
+    authority_policy_ref: "policy:accounting:money.create",
+    authority_policy_version: "v1",
+    authority_max_amount: "5000.00",
+    provider_submitted_at: null,
+    provider_reconciled_at: null,
+  },
+  comparison: {
+    expected_sha256: ACCOUNTING_SHA_EXPECTED,
+    observed_sha256: null,
+    verdict_observed_sha256: null,
+    hashes_agree: false,
+    awaiting_readback: true,
+    fields: [
+      { field: "realm_id", expected: "4620816365000000000", observed: null, agrees: false },
+      { field: "provider_entity_type", expected: "Invoice", observed: null, agrees: false },
+      { field: "provider_entity_id", expected: null, observed: null, agrees: true },
+      { field: "total_amount", expected: "1260.00", observed: null, agrees: false },
+      { field: "currency", expected: "CAD", observed: null, agrees: false },
+    ],
+    observed_facts: null,
+    read_at: null,
+    read_source: null,
+  },
+  events: [
+    {
+      event_seq: 1,
+      intent_version: 1,
+      event_type: "derived",
+      state_from: null,
+      state_to: "pending_review",
+      actor_kind: "agent",
+      actor_user_id: null,
+      detail_code: null,
+      occurred_at: "2026-08-20T08:00:00.000Z",
+    },
+  ],
+  reconciliations: [],
+  observations: [],
+  tax_bindings: [
+    {
+      snapshot_id: "tax-snap:CA-AB:GST:v1",
+      snapshot_sha256: ACCOUNTING_SHA_OBSERVED,
+      jurisdiction: "CA-AB",
+      tax_code: "GST",
+      bound_at: "2026-08-20T08:00:00.000Z",
+    },
+  ],
+  exceptions: [],
+};
+
+const fixtureAccountingExceptions = {
+  ...fixtureAccountingEnvelope,
+  exceptions: [fixtureAccountingException],
+};
+
+const fixtureAccountingConnection = {
+  version: 1,
+  state: "connected",
+  connection_version: 4,
+  realm_id: "4620816365000000000",
+  last_connected_at: "2026-08-20T07:00:00.000Z",
+  allowed_actions: ["refresh"],
+};
+
 const requestListener = async (request, response) => {
   const method = request.method ?? "GET";
   const requestUrl = new URL(request.url ?? "/", `http://${HOST}:${PORT}`);
@@ -512,8 +724,26 @@ const requestListener = async (request, response) => {
       response,
       method,
       200,
-      ACCEPTANCE_MODE === "estimator" ? fixtureEstimatorSession : fixtureSession,
+      ACCEPTANCE_MODE === "estimator"
+        ? fixtureEstimatorSession
+        : ACCEPTANCE_MODE === "accounting"
+          ? fixtureAccountingSession
+          : fixtureSession,
     );
+  }
+  if (ACCEPTANCE_MODE === "accounting") {
+    if (requestUrl.pathname === "/api/v1/accounting/summary") {
+      return sendJson(response, method, 200, fixtureAccountingSummary);
+    }
+    if (requestUrl.pathname === "/api/v1/accounting/exceptions") {
+      return sendJson(response, method, 200, fixtureAccountingExceptions);
+    }
+    if (requestUrl.pathname.startsWith("/api/v1/accounting/intents/")) {
+      return sendJson(response, method, 200, fixtureAccountingDetail);
+    }
+    if (requestUrl.pathname === "/api/v1/quickbooks/connection") {
+      return sendJson(response, method, 200, fixtureAccountingConnection);
+    }
   }
   if (requestUrl.pathname === "/api/v1/field/bootstrap") {
     if (request.headers["x-ironwrap-device-proof"] !== FIXTURE_FIELD_DEVICE_PROOF) {

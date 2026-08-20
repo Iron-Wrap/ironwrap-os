@@ -17,6 +17,8 @@ import {
   rejectQuickBooksFinalInvoice,
   removeQuickBooksFromIronWrap,
 } from "./quickbooks-api";
+import { loadAccountingSummary } from "./money-api";
+import { summaryResponse } from "./money-fixtures";
 import { QuickBooksFinalInvoicePage, QuickBooksSettingsPage } from "./quickbooks-page";
 import {
   quickBooksIntentStates,
@@ -33,6 +35,12 @@ vi.mock("@tanstack/react-router", () => ({
       {children}
     </a>
   ),
+}));
+
+// IRO-52 slice S9 extended this page with reconciliation health, which reads the money desk's own
+// summary. It is mocked here so the connection tests keep testing the connection.
+vi.mock("./money-api", () => ({
+  loadAccountingSummary: vi.fn(),
 }));
 
 vi.mock("./quickbooks-api", () => ({
@@ -329,6 +337,36 @@ describe("QuickBooks connection settings", () => {
       allowed_actions: ["remove_from_ironwrap", "refresh"],
     });
     vi.mocked(newQuickBooksActionKey).mockReturnValue("quickbooks:settings:stable-key");
+    vi.mocked(loadAccountingSummary).mockResolvedValue(summaryResponse());
+  });
+
+  // IRO-52 slice S9, contract section 8.2: "Extends PR #43's page with reconciliation health:
+  // stale observations, open exceptions, oldest unreconciled intent."
+  it("extends the connection page with reconciliation health from the money desk", async () => {
+    renderPage("settings", ownerSession);
+
+    expect(await screen.findByRole("heading", { name: "Reconciliation health" })).toBeVisible();
+    expect(await screen.findByText("Open exceptions")).toBeVisible();
+    expect(screen.getByText("Not re-read recently")).toBeVisible();
+    expect(screen.getByText("Never read back")).toBeVisible();
+    expect(screen.getByText(/Oldest unfinished money movement/u)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open the money desk" })).toHaveAttribute(
+      "href",
+      "/accounting",
+    );
+  });
+
+  it("says health is unknown rather than healthy when the desk cannot be read", async () => {
+    vi.mocked(loadAccountingSummary).mockRejectedValue(new Error("offline"));
+    renderPage("settings", ownerSession);
+
+    expect(
+      await screen.findByText(
+        /The money desk could not be read, so reconciliation health is unknown/u,
+      ),
+    ).toBeVisible();
+    // The connection state is a separate fact and must still render.
+    expect(screen.getByRole("heading", { name: "Connected" })).toBeVisible();
   });
 
   it("shows only the server-declared owner connection action", async () => {

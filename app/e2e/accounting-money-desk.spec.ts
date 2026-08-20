@@ -1,0 +1,153 @@
+import { mkdir } from "node:fs/promises";
+
+import { devices, expect, test, type Page } from "@playwright/test";
+
+// Mobile-first acceptance for the money desk (IRO-52 slice S9).
+//
+// Mobile-first is a gating product rule, not a preference: "contractors primarily work from their
+// phones", and "a feature that degrades the mobile experience is not done". These run against the
+// `accounting` acceptance profile and assert the two things that decide whether an office manager
+// can actually work a queue on a phone:
+//
+//  1. **No horizontal scrolling.** `documentElement.scrollWidth` must not exceed the viewport, on
+//     every screen. A queue that scrolls sideways hides the column the decision depends on.
+//  2. **No hidden actions.** Every control the screen offers must be inside the viewport width and
+//     at least 44 CSS px tall, which is the smallest thing a thumb reliably hits.
+//
+// They also write a screenshot per screen to `.playwright-mobile/`, which is the evidence the
+// delivery report attaches.
+
+const accountingMode = process.env.ACCEPTANCE_MODE === "accounting";
+const INTENT_ID = "acct-intent:JOB-ACCEPTANCE:deposit_invoice";
+const SHOT_DIR = ".playwright-mobile";
+
+/** Pixel 5 is the project's mobile profile; 393 px is a common real contractor phone width. */
+const MOBILE_WIDTH = 393;
+
+async function assertNoHorizontalScroll(page: Page, screen: string): Promise<void> {
+  const overflow = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(
+    overflow.scrollWidth,
+    `${screen} scrolls sideways at ${overflow.clientWidth}px: content is ${overflow.scrollWidth}px`,
+  ).toBeLessThanOrEqual(overflow.clientWidth + 1);
+}
+
+async function assertActionsAreReachable(page: Page, screen: string): Promise<void> {
+  const controls = page.locator("main button:visible, main a:visible, main select:visible");
+  const count = await controls.count();
+  expect(count, `${screen} offers no controls at all`).toBeGreaterThan(0);
+  for (let index = 0; index < count; index += 1) {
+    const control = controls.nth(index);
+    const box = await control.boundingBox();
+    if (!box) continue;
+    const label = (await control.textContent())?.trim().slice(0, 40) ?? `control ${index}`;
+    expect(box.x, `${screen}: "${label}" starts off the left edge`).toBeGreaterThanOrEqual(-1);
+    expect(box.x + box.width, `${screen}: "${label}" runs past the right edge`).toBeLessThanOrEqual(
+      MOBILE_WIDTH + 1,
+    );
+    expect(box.height, `${screen}: "${label}" is only ${box.height}px tall`).toBeGreaterThanOrEqual(
+      44,
+    );
+  }
+}
+
+// Pinned at file scope rather than inherited from the project: mobile-first is what is being
+// asserted, so the viewport these run against must not depend on which project invoked them.
+// Playwright refuses a device `use()` inside a describe group, because it forces a new worker.
+test.use({ ...devices["Pixel 5"] });
+
+test.describe("Money desk mobile acceptance", () => {
+  test.skip(!accountingMode, "requires ACCEPTANCE_MODE=accounting");
+
+  test.beforeAll(async () => {
+    await mkdir(SHOT_DIR, { recursive: true });
+  });
+
+  test("the money desk works the queues without sideways scrolling", async ({ page }) => {
+    await page.goto("/accounting");
+    await expect(page.getByRole("heading", { name: "Money desk" })).toBeVisible();
+
+    // The four queues section 8.2 names, all reachable by scrolling down and nothing else.
+    for (const queue of ["Needs approval", "Awaiting QuickBooks", "Mismatched", "Exceptions"]) {
+      await expect(page.getByRole("heading", { name: queue })).toBeVisible();
+    }
+    // A row carries its own next step, in words.
+    await expect(
+      page.getByText("Check the amount against the approved paperwork, then approve or reject it."),
+    ).toBeVisible();
+
+    await assertNoHorizontalScroll(page, "money desk");
+    await assertActionsAreReachable(page, "money desk");
+    await page.screenshot({ path: `${SHOT_DIR}/money-desk.png`, fullPage: true });
+  });
+
+  test("an intent's state and actions read on a phone without hidden controls", async ({
+    page,
+  }) => {
+    await page.goto(`/accounting/intents/${encodeURIComponent(INTENT_ID)}`);
+    await expect(page.getByRole("heading", { name: "Deposit invoice" })).toBeVisible();
+    await expect(page.getByText("CAD 1260.00")).toBeVisible();
+    await expect(page.getByText("Pending", { exact: true })).toBeVisible();
+
+    // Every action the role is allowed is on the screen, at a thumb-sized target.
+    await expect(
+      page.getByRole("button", { name: "Approve and send to QuickBooks" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Do not approve" })).toBeVisible();
+    // The comparison is readable without a table that scrolls sideways.
+    await expect(
+      page.getByRole("region", { name: "Our figures against QuickBooks" }),
+    ).toBeVisible();
+
+    await assertNoHorizontalScroll(page, "intent detail");
+    await assertActionsAreReachable(page, "intent detail");
+    await page.screenshot({ path: `${SHOT_DIR}/money-intent.png`, fullPage: true });
+  });
+
+  test("the exception queue offers its remedies without a sideways scroll", async ({ page }) => {
+    await page.goto("/accounting/exceptions");
+    await expect(page.getByRole("heading", { name: "Exceptions", exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "More was paid than was invoiced" }),
+    ).toBeVisible();
+
+    // A reversal is authorized on the money movement and dispatched by the system, so the queue
+    // points there instead of offering a box to type a reference into. The box is what ELEC-71
+    // closed a real $240 overpayment with, using a string it invented on the spot.
+    await expect(page.getByText(/To put the money back, authorize/)).toBeVisible();
+    await expect(page.getByLabel("Reference of the reversal in QuickBooks")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Open the money movement" })).toBeVisible();
+    // Section 8.2: reversal is provider-supported, never a delete.
+    await expect(page.getByRole("button", { name: /delete/i })).toHaveCount(0);
+
+    await assertNoHorizontalScroll(page, "exception queue");
+    await assertActionsAreReachable(page, "exception queue");
+    await page.screenshot({ path: `${SHOT_DIR}/money-exceptions.png`, fullPage: true });
+  });
+
+  test("the settings page carries reconciliation health on a phone", async ({ page }) => {
+    await page.goto("/accounting/quickbooks");
+    await expect(page.getByRole("heading", { name: "QuickBooks connection" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Reconciliation health" })).toBeVisible();
+    await expect(page.getByText("Not re-read recently")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open the money desk" })).toBeVisible();
+
+    await assertNoHorizontalScroll(page, "quickbooks settings");
+    await page.screenshot({ path: `${SHOT_DIR}/money-settings.png`, fullPage: true });
+  });
+
+  test("the accounting role's navigation reaches every money screen", async ({ page }) => {
+    await page.goto("/accounting");
+    const nav = page.getByRole("navigation", { name: "Main navigation" }).last();
+    await expect(nav.getByRole("link", { name: "Money" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Issues" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Setup" })).toBeVisible();
+
+    await nav.getByRole("link", { name: "Issues" }).click();
+    await expect(page.getByRole("heading", { name: "Exceptions", exact: true })).toBeVisible();
+    await assertNoHorizontalScroll(page, "navigation");
+  });
+});

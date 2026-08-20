@@ -27,9 +27,18 @@ slice needs a table: a reversal is an ordinary `accounting_intents` row carrying
 | S3 | **Implemented** | `workers-bus/migrations/0060_accounting_provider_observations.sql`, `workers-bus/migrations/0061_accounting_exceptions.sql`, `workers-bus/src/accounting-normalizers.ts`, `workers-bus/src/accounting-reconciliation.ts`, `workers-bus/src/accounting-exceptions.ts`, `workers-bus/src/accounting-provider-read.ts` |
 | S4 | **Implemented** | `workers-bus/src/accounting-submission.ts`, `workers-bus/src/accounting-payments.ts` |
 | S5 | **Implemented** | `workers-bus/src/accounting-compensation.ts` |
-| S6–S12 | Target | — |
+| S8a | **Implemented** | `workers-bus/src/accounting-dispatch.ts`, `workers-bus/src/accounting-expectations.ts`, `workers-bus/src/accounting-compensation-authorizations.ts`, `workers-bus/migrations/0063_accounting_dispatch_evidence.sql` |
+| S6, S7, S10–S12 | Target | — |
 
-Two deviations from this document, both deliberate and both argued at the point they occur:
+**S8a — the dispatcher (ELEC-72).** S1–S5 built the money engine and S8 built the routes, and
+nothing joined them: `submitAccountingIntent` had no production caller, `deriveCompensationIntent`
+and `submitAccountingCompensation` had none at all, and every approved intent stopped at
+`submission_pending` for good. ELEC-71 proved that on the running stack. `accounting-dispatch.ts`
+is the caller, on the frequent cron beside the sweeps, with its provider binding injected so an
+unbound Worker reports what is waiting and dispatches nothing. Binding a real provider adapter to
+it remains S11.
+
+Five deviations from this document, all deliberate and each argued at the point it occurs:
 
 1. **Migration numbers.** Section 7.1's reserved block was chosen on 2026-08-18 against the heads in
    flight then, and `main` has since shipped through `0057`. The real mapping is in section 7.1.
@@ -39,6 +48,52 @@ Two deviations from this document, both deliberate and both argued at the point 
    `0061_accounting_exceptions.sql` enforces the dedupe the contract wants — one **live** exception
    per subject and reason — with a partial unique index. The reasoning is recorded in the migration
    header.
+3. **Two extra state badges.** Section 8.2 names six badges. `accounting_intents` also holds
+   `rejected` and `failed`, so `accounting-desk.ts` declares `rejected` and `failed` alongside the
+   six. A screen that could not render a state its own aggregate holds would have to hide or
+   mislabel those intents, and both are worse than naming them. `test/accounting-desk.test.ts`
+   asserts every state in `ACCOUNTING_INTENT_STATES` maps to a declared badge, so the two cannot
+   drift apart.
+4. **Six routes are served, gated, and answer `501`.** Section 8.1's holdback and payroll routes
+   belong to slices S6 and S7, which have not shipped. `accounting-api.ts` serves all six,
+   enforces the permission each row names, and then answers `501` with the slice named. A 404
+   would be indistinguishable from a typo and a stub that pretended to work would be worse than
+   either; the gate is real today, so the slice that lands behind it inherits a tested boundary.
+5. **The third cron sweep is exception ageing, not the holdback lien period.** Section 8.1's third
+   sweep needs the S6 holdback ledger. Its place is taken by the ageing sweep the desk's queue
+   needs; the lien-period sweep lands with S6. A fourth sweep was added by ELEC-72:
+   `sweepStuckAccountingDispatches` surfaces an intent that has stopped moving in
+   `submission_pending` or `compensating`. Those two states are deliberately **not** added to
+   `OBSERVED_STATES` — that list means "expected to have a current provider observation", and an
+   intent with no provider entity id yet has nothing to re-read by exact id.
+6. **An eighteenth route: `POST /api/v1/accounting/intents`.** Section 8.1's table has no create
+   row, because an intent is derived from local facts rather than typed in. But nothing outside a
+   test could derive one either, so no journey in the shipped product could start (ELEC-71,
+   journey 1). The route is a *derivation* request — the caller names the job, the customer and the
+   figures, and the engine computes the payload, the expectation, the tax binding and the hashes —
+   gated on `accounting:review`, because section 6 says derivation is not a side effect and the
+   approval is still the gate. It reaches no provider and lands in `pending_review` like any other
+   candidate. Deriving deposit and progress invoices from the job/quote domain automatically
+   remains the better long-term origin and is not built here.
+7. **The provider `Id` is not hashed for an entity IronWrap creates.** Section 5.2 puts `Id` inside
+   the comparison fact set, and Intuit assigns it — so an intent for an entity IronWrap is about to
+   create could never bind a reconcilable `expected_sha256` at derivation, and `0058`'s own CHECK
+   (`reconciled` requires `observed_sha256 = expected_sha256`, and `expected_sha256` is immutable)
+   closes the other exit. Such an intent therefore binds an **identity-free** expectation
+   (`localFactEnvelope`) and its observations are hashed on the same basis
+   (`accounting-expectations.ts`, `omits_identity`). Identity is not thereby unchecked: section
+   5.1's other half — provider identity equals the identity recorded on the settled effect attempt
+   — is enforced directly by `accounting-reconciliation.ts` before any hash is compared. Hashing the
+   id as well stated that check twice and made the create case impossible. An intent that bound a
+   complete envelope, which is every intent derived before this, is compared exactly as before.
+8. **Two remedies refuse rather than accept an unverifiable claim.** `resolveAccountingException`
+   now looks a claimed `compensating_effect_id` up against `accounting_intents.effect_id` — the
+   only place a dispatched money effect is ever recorded — and refuses a reference that is not a
+   real, settled, matching reversal of that exception's own intent. `void_provider_entity` and
+   `adjusting_entry_posted` have no dispatch path in any shipped slice, so no ledger evidence for
+   them can exist; they refuse with `accounting_exception_remedy_dispatch_unavailable` until one
+   does. Before this, presence of any 8–160 character string closed any exception, and ELEC-71
+   closed a real $240 overpayment on the live UI with an invented reference.
 
 ## 1. Requirement
 
@@ -453,6 +508,19 @@ that executes it; every test runs the real 0058–0062 SQL and the real in-memor
 | A reversal that did not reach the provider closes nothing | `submitAccountingCompensation` resolves only on `submitted` | "a reversal that does not reach the provider leaves the exception open and the original uncompensated" |
 | Refund race: refund intent and payment observation, either order | one invariant over recorded facts; the compensated original is reported, not reopened | "a refund and a payment observed in either order produce one deterministic outcome" |
 
+Slice S8a adds the production path that reaches all of the above from an accountant's own actions,
+and the check that stops an exception being closed on a reversal nobody performed.
+
+| Behaviour | Enforced by | Test |
+|---|---|---|
+| An approved intent dispatches with no further human step | `accounting-dispatch.ts` → `runAccountingDispatch` on the frequent cron | `test/accounting-dispatch.test.ts` "journey 1: derive, approve, and the dispatcher carries it to reconciled with no human step" |
+| A re-run neither re-dispatches nor moves anything | `submission_pending` is the queue, so a drained queue is empty | "the dispatcher is idempotent: a second run neither re-dispatches nor moves anything" |
+| An unbound Worker dispatches nothing and hides nothing | the injected binding; `dispatcher_unbound` in the report | "an unbound dispatcher reports what is waiting and dispatches nothing" |
+| An authorized compensation derives, approves and dispatches its reversal | `runAccountingCompensationDispatch` over `accounting_compensation_authorizations` | "journey 2: authorizing a compensation dispatches the reversal and closes the exception on it" |
+| A claimed reversal that never happened closes nothing | `verifyCompensatingEffect` → `accounting_exception_compensating_effect_unknown` | "the fabricated-reference repro is refused: closing an exception now needs a real reversal" |
+| A real reversal of a different intent closes nothing either | the same check, on `compensates_intent_id` | "a real reversal of a different intent does not close this exception" |
+| A dispatch that stopped moving is surfaced rather than silent | `sweepStuckAccountingDispatches` | "an intent stuck in submission_pending is surfaced by the staleness sweep, and a re-run is a no-op" |
+
 **Target, not implemented.** Refund after holdback release (`holdback_over_released`) waits on the
 holdback ledger in S6, and payroll correction waits on S7 and PR #55. Their reason codes are already
 declared by `0061_accounting_exceptions.sql` so neither slice has to edit a shipped migration.
@@ -478,6 +546,22 @@ envelope.
 | Resolve an exception | `accounting`; `owner` where a money reversal is involved | — | the resolution decision and any provider correction receipt |
 | Compensate any effect | the same authority that authorized the original, or higher | original amount | the exception, the chosen provider-supported remedy |
 
+**Where the ceiling comes from.** The `maxAmount` in the table above is **server-derived and never
+caller-supplied**. `POST /api/v1/accounting/intents` rejects a request body carrying
+`authority_max_amount` (`unexpected_field`, 400) and reads the ceiling from the tenant's own policy
+instead: `accounting_authority_policies` (migration `0064`), newest in-force row for the tenant,
+narrowed by intent kind where a kind-specific row exists. A tenant with no recorded policy gets the
+conservative platform default in `accounting-authority-policy.ts`
+(`DEFAULT_ACCOUNTING_AUTHORITY_MAX_AMOUNT`), never "unlimited" — an absent ceiling fails closed. The
+ceiling in force at derivation is copied onto the intent row (`authority_max_amount`) and is what
+every later comparison uses, so an intent derived under one policy version stays explainable after
+the policy moves. Policy rows are append-only and versioned: raising a ceiling is a new row naming
+who raised it and from when.
+
+This replaces the caller-declared value ELEC-73 finding 2 identified, where the only ceiling check
+(`|total_amount| > |authority_max_amount|`) compared two numbers that both came from the same
+request and could always be satisfied by declaring a bigger ceiling.
+
 Three standing rules:
 
 - **Agents may not invent chart-of-accounts, tax, or payroll truth.** Account refs, item refs, tax
@@ -486,6 +570,12 @@ Three standing rules:
   `terms_mapping_missing` already exist on PR #43 and are reused), never a guess.
 - **Separation of duty.** The actor that derived a candidate may not be the actor that approves it.
   Enforced in the command handler against `app_users.user_id` and in D1 by a CHECK on the intent row.
+  Both layers depend on the derivation being attributed to somebody: `POST
+  /api/v1/accounting/intents` records the session that derived (`owner` or `accounting`, with its
+  `user_id`), because an unattributed derivation makes the check `NULL = <user id>` and it can never
+  refuse — which is what it did until ELEC-79. An agent-derived intent, such as a reversal the
+  compensation dispatcher derives from an authorization row, still carries no user and is therefore
+  approvable by any human: nobody has claimed the deriving half of the duty.
 - **Rollback is provider-supported only.** Void, credit memo, refund receipt, or adjusting journal
   entry. Deleting a D1 row or flipping a Frappe status is never a reversal, and the append-only
   triggers make it impossible anyway.
@@ -520,6 +610,10 @@ and what the remaining slices will take:
 | 0059 | `0059_tax_policy_snapshots.sql` | `tax_policy_snapshots` (immutable), `accounting_intent_tax_bindings` | S2, **shipped** |
 | 0060 | `0060_accounting_provider_observations.sql` | `accounting_observations` and `accounting_observation_links` (append-only), `accounting_reconciliations` | S3, **shipped** |
 | 0061 | `0061_accounting_exceptions.sql` | `accounting_exceptions`, one live row per subject and reason, plus the compensation guard an `identity_conflict` needs | S3, **shipped** |
+| — | none | S8 and S9 need no table: the desk reads the S1-S5 aggregates and the sweeps write only through them. Re-verified at push: `main` at `0062`, and no open head claims `0063`. | S8, S9 |
+| 0063 | `0063_accounting_dispatch_evidence.sql` | `accounting_intent_expectations`, `accounting_compensation_authorizations` (both append-only) | ELEC-72, **shipped on this head** |
+| 0064 | `0064_accounting_authority_policy.sql` | `accounting_authority_policies` (append-only, versioned): the server-owned section 6 ceiling | ELEC-75, **shipped on this head** |
+| 0065 | `0065_accounting_intent_derivation_receipts.sql` | `accounting_intent_derivation_receipts` (append-only): the derive route's `Idempotency-Key`, enforced rather than only required | ELEC-79, **shipped on this head** |
 | next free | `…_holdback_ledger.sql` | `holdback_ledger`, `holdback_events` (append-only), release-precondition guard | S6 |
 | next free | `…_payroll_posting_intents.sql` | `payroll_posting_intents`, accountant approval receipts | S7 |
 
@@ -574,15 +668,35 @@ caller, and a roofing office manager reaches all of them from the nav.
 
 ### 8.1 Bus routes
 
+**Implemented** (slice S8) in `workers-bus/src/accounting-api.ts`, wired into
+`workers-bus/src/app-api.ts:352`, with the read models in `workers-bus/src/accounting-desk.ts`, the
+sweeps in `workers-bus/src/accounting-sweeps.ts`, and the dispatcher in
+`workers-bus/src/accounting-dispatch.ts`. All seventeen routes below are served and
+permission-gated, plus the eighteenth that deviation 6 in section 0 records; the six holdback and payroll rows answer `501` naming their slice, per deviation
+4 in section 0. Route-level cover is `workers-bus/test/accounting-api.test.ts`, which drives the
+real dispatch path through `handleAuthenticatedRoute` and speaks D1's own error dialect so a
+refused transition is asserted at `409` rather than `502`.
+
 All under `/api/v1/accounting/`, behind the app BFF session, CSRF, and an `Idempotency-Key` header on
 every command — the exact conventions of `handleQuickBooksFinalInvoiceCommand`
 (PR #46 `workers-bus/src/app-api.ts:990`). Commands return `202` when they enqueue an effect and
 `200` when they settle locally.
 
+The header is enforced, not merely required. `approve`, `reject`, `reconcile` and `compensate` are
+enforced through `accounting_intent_command_receipts` and the derive route through
+`accounting_intent_derivation_receipts` (migration `0065`): the same key with the same request
+replays the intent it already derived and answers `200` with `replayed: true`, and the same key with
+a different request is refused `409 accounting_intent_derivation_conflict` rather than deriving a
+second intent for money nobody asked for twice. A request that refused before it derived anything
+writes no receipt, so its key can be retried. Derivation's idempotency on `basis_sha256` is a
+separate guarantee and does not replace this one: it makes the same figures converge on one intent,
+and says nothing about one key standing for two different sets of figures (ELEC-79).
+
 | Method | Path | Permission |
 |---|---|---|
 | GET | `/api/v1/accounting/summary` | `accounting:read` |
 | GET | `/api/v1/accounting/intents?kind=&state=&job=` | `accounting:read` |
+| POST | `/api/v1/accounting/intents` (deviation 6) | `accounting:review` |
 | GET | `/api/v1/accounting/intents/{intentId}` | `accounting:read` |
 | POST | `/api/v1/accounting/intents/{intentId}/approve` | `accounting:approve` |
 | POST | `/api/v1/accounting/intents/{intentId}/reject` | `accounting:review` |
@@ -611,7 +725,30 @@ Scheduled work joins the existing cron in `workers-bus/src/index.ts` beside
 stale), a deadline sweep (expire `unknown` effects into `manual_exception`), and a holdback
 lien-period sweep (surface releases that have become eligible).
 
+**The dispatcher runs on that same cron** (`runAccountingDispatch`,
+`runAccountingCompensationDispatch`). `submission_pending` is its queue — the money plane already
+has an outbox, so it does not need a second one — and a compensation authorization row is the
+queue for a reversal. This follows `quickbooks-final-invoice.ts`, whose outbox is likewise drained
+by the frequent cron rather than by a Cloudflare Queue; a new queue binding would be a production
+configuration change, and the ordering guarantees a money dispatch needs come from the effect
+ledger's idempotency key rather than from the transport. The binding that reaches the provider is
+injected, so an unbound Worker reports what is waiting and dispatches nothing, and project rule 5
+holds by construction.
+
 ### 8.2 PWA screens
+
+**Implemented** (slice S9) for the Money Desk, intent detail, exception queue, and the settings
+extension: `app/src/accounting/money-desk-page.tsx`, `money-intent-page.tsx`,
+`money-exceptions-page.tsx`, and the reconciliation-health card added to `quickbooks-page.tsx`.
+Routes are registered in `app/src/router.tsx` and the accounting role's navigation lands on
+`/accounting` (`app/src/lib/roles.ts`). The holdback register, release wizard, and payroll review
+rows remain **Target**: they are slice S10 and are gated on S6 and S7.
+
+Mobile-first is proven rather than asserted. `app/e2e/accounting-money-desk.spec.ts` runs every
+screen at a Pixel 5 viewport and fails on horizontal overflow or on any control under 44 CSS px,
+which is what caught the reconciliation-health link at 41 px before it shipped. The shared office
+navigation is deliberately unchanged: it already carries nine mobile tabs, and a tenth would put
+every office role under the touch-target floor.
 
 New directory `app/src/accounting/` alongside the `quickbooks-page.tsx` that PR #43 already puts
 there, with routes registered in `app/src/router.tsx`:
@@ -715,8 +852,8 @@ Dependency order. S0–S10 are provable against `main` today. Every slice ends g
 | S5 | Credit memo and refund intents + compensation plans + refund-race scenario + ceiling enforcement | S4 | **Implemented.** First reversal path. No migration. |
 | S6 | Next free migration + holdback ledger, entitlement computation, release preconditions, refund-after-release | S5 | The domain-specific slice; largest design surface. |
 | S7 | Next free migration + `PayrollAccountingAdapter` implementation + payroll correction scenario | S3, **PR #55** | Gated on IRO-53 landing. Posting target per open question 2. |
-| S8 | Bus BFF routes + permissions + cron sweeps | S3 | Backend surface. |
-| S9 | PWA Money Desk, intent detail, exception queue | S8 | Frontend surface. |
+| S8 | Bus BFF routes + permissions + cron sweeps | S3 | **Implemented.** Backend surface. |
+| S9 | PWA Money Desk, intent detail, exception queue | S8 | **Implemented.** Frontend surface. |
 | S10 | PWA holdback register + release wizard + payroll review | S6, S7, S9 | Frontend surface. |
 | S11 | **Binding PR**: wire the ports to `runExternalEffect` and `quickbooks_connections` | **PR #46 and PR #43 merged** | ~60 lines. The only slice that waits. |
 | S12 | Sandbox proof + accountant business acceptance | credentials, accountant | **Blocked** by project rule 5. |

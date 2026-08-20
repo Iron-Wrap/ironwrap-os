@@ -1,6 +1,11 @@
 import { sha256Hex } from "./app-auth.ts";
 import { assertEffectLedgerReady, EffectRuntimeError, runExternalEffect } from "./effect-runtime.ts";
 import { canonicalJson as canonicalEffectJson } from "./newo-hash.ts";
+import {
+  QuickBooksAuthError,
+  type QuickBooksAuthPort,
+  type QuickBooksRealmBinding,
+} from "./quickbooks-auth-port.ts";
 import type { AppEnv, AppRole } from "./app-types.ts";
 
 export const QUICKBOOKS_ACCOUNTING_SCOPE = "com.intuit.quickbooks.accounting" as const;
@@ -78,6 +83,13 @@ type QuickBooksEnv = AppEnv & {
   QB_FINAL_INVOICE_FRAPPE_API_KEY?: string;
   QB_FINAL_INVOICE_FRAPPE_API_SECRET?: string;
   QB_API_TIMEOUT_MS?: string;
+  /**
+   * Loopback Intuit double for the local stack. Honoured *only* when
+   * `APP_ALLOW_INSECURE_LOCAL` is `"true"` and the origin is loopback, which `wrangler.jsonc`
+   * sets to `"false"` in every deployed environment - so project rule 5 ("no live provider
+   * calls") holds by construction on a developer machine instead of by discipline.
+   */
+  QB_API_BASE_LOCAL_OVERRIDE?: string;
 };
 
 interface OAuthStateRow {
@@ -351,6 +363,8 @@ interface Config {
   frappeApiKey: string;
   frappeApiSecret: string;
   timeoutMs: number;
+  /** Loopback Intuit double, or null for the real Intuit host. Local development only. */
+  apiBaseOverride: string | null;
 }
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -381,6 +395,72 @@ export function quickBooksFinalInvoiceEnabled(env: AppEnv): boolean {
 
 export function validQuickBooksIntentId(value: string): boolean {
   return INTENT_ID.test(value);
+}
+
+/**
+ * This module's connection plane, projected onto the money plane's `QuickBooksAuthPort` (IRO-52).
+ *
+ * ELEC-74 proved the money dispatcher ran permanently unbound because nothing in `src/` ever built
+ * a realm binding for it, and named the fix precisely: the `activeConnection`/OAuth lookup this
+ * module already performs for the older money plane, adapted to that port's shape. This is that
+ * adaptation and it is deliberately thin - the token still comes from `accessToken` (same
+ * refresh-under-lease, same encrypted bundle, same uncertainty receipt), so there is exactly one
+ * credential path in this Worker and the accounting plane still holds no secret of its own.
+ *
+ * Null means *unconfigured*, not broken: a Worker with no QuickBooks OAuth configuration has no
+ * realm to authenticate against, and the dispatcher's answer to that is to report what is waiting
+ * and dispatch nothing.
+ */
+export function quickBooksAuthPort(
+  env: AppEnv,
+  fetcher: typeof fetch = fetch,
+): QuickBooksAuthPort | null {
+  const config = configuration(env, false);
+  if (!config) return null;
+  return {
+    async activeRealm(tenantId: string): Promise<QuickBooksRealmBinding> {
+      const connection = await activeConnection(env, tenantId);
+      if (!connection) throw new QuickBooksAuthError("quickbooks_connection_required");
+      const now = new Date();
+      // Deliberately `accessToken` rather than a local decrypt: refresh, leasing and the
+      // `reconciliation_required` receipt on a failed refresh are behaviours the money plane must
+      // inherit, not reimplement.
+      const access = await accessToken(env, config, tenantId, fetcher, now);
+      return {
+        realmId: connection.realm_id,
+        accessToken: access,
+        apiBase: providerBase(config),
+        minorVersion: String(config.minorVersion),
+        connectionId: connection.connection_id,
+      };
+    },
+  };
+}
+
+/**
+ * The Intuit origin this Worker would call, or null when QuickBooks is unconfigured.
+ *
+ * Exported so the loopback-double gate is directly testable rather than only observable through a
+ * live dispatch: a deployed Worker (`APP_ALLOW_INSECURE_LOCAL="false"`) must resolve to Intuit no
+ * matter what `QB_API_BASE_LOCAL_OVERRIDE` says.
+ */
+export function quickBooksProviderApiBase(env: AppEnv): string | null {
+  const config = configuration(env, false);
+  return config ? providerBase(config) : null;
+}
+
+/**
+ * Whether this tenant has a connected realm at all, without minting a token.
+ *
+ * The dispatcher asks this before it builds a binding, so an unconfigured tenant takes the
+ * report-and-dispatch-nothing path rather than a refresh attempt that would throw on every tick.
+ */
+export async function quickBooksConnectedRealmId(
+  env: AppEnv,
+  tenantId: string,
+): Promise<string | null> {
+  const connection = await activeConnection(env, tenantId);
+  return connection?.realm_id ?? null;
 }
 
 export async function requestQuickBooksConnect(
@@ -2635,7 +2715,32 @@ function configuration(env: AppEnv, requireFrappe: boolean): Config | null {
     environment, minorVersion, clientId, clientSecret, encryptionKey,
     encryptionKeyVersion, expectedRealmId, frappeBaseUrl: frappeBaseUrl ?? "",
     frappeApiKey: frappeApiKey ?? "", frappeApiSecret: frappeApiSecret ?? "", timeoutMs,
+    apiBaseOverride: loopbackApiBase(q),
   };
+}
+
+/**
+ * The loopback Intuit double, when a developer machine has asked for one.
+ *
+ * Two gates, both of which must hold: `APP_ALLOW_INSECURE_LOCAL` (already `"false"` in every
+ * deployed `wrangler.jsonc` environment and the switch the rest of this Worker uses for exactly
+ * this class of affordance) and a loopback host. A deployed Worker therefore cannot be pointed
+ * anywhere but Intuit, and a local stack cannot reach Intuit by accident.
+ */
+function loopbackApiBase(env: QuickBooksEnv): string | null {
+  if (String(env.APP_ALLOW_INSECURE_LOCAL ?? "") !== "true") return null;
+  const configured = String(env.QB_API_BASE_LOCAL_OVERRIDE ?? "").trim();
+  if (!configured) return null;
+  try {
+    const url = new URL(configured);
+    const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1"
+      || url.hostname === "[::1]" || url.hostname === "::1";
+    if (!loopback || (url.protocol !== "http:" && url.protocol !== "https:")) return null;
+    if (url.search || url.hash || url.username || url.password) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
 }
 
 function oauthConfigurationReady(env: AppEnv): boolean {
@@ -3075,6 +3180,7 @@ function fixedOAuthRedirect(origin: string | null, status: "connected" | "error"
 }
 
 function providerBase(config: Config): string {
+  if (config.apiBaseOverride) return config.apiBaseOverride;
   return config.environment === "sandbox"
     ? "https://sandbox-quickbooks.api.intuit.com"
     : "https://quickbooks.api.intuit.com";

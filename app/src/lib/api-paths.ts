@@ -33,6 +33,23 @@ export const API_PATHS = {
     `/api/v1/postiz/intents/${encodeURIComponent(intentId)}/stop`,
   postizIntentReconcile: (intentId: string) =>
     `/api/v1/postiz/intents/${encodeURIComponent(intentId)}/reconcile`,
+  // The money desk (IRO-52 slice S8). Deliberately a separate path space from the QuickBooks
+  // connection routes above: one is the provider link, the other is the money.
+  accountingSummary: "/api/v1/accounting/summary",
+  accountingIntents: "/api/v1/accounting/intents",
+  accountingIntent: (intentId: string) =>
+    `/api/v1/accounting/intents/${encodeURIComponent(intentId)}`,
+  accountingIntentApprove: (intentId: string) =>
+    `/api/v1/accounting/intents/${encodeURIComponent(intentId)}/approve`,
+  accountingIntentReject: (intentId: string) =>
+    `/api/v1/accounting/intents/${encodeURIComponent(intentId)}/reject`,
+  accountingIntentReconcile: (intentId: string) =>
+    `/api/v1/accounting/intents/${encodeURIComponent(intentId)}/reconcile`,
+  accountingIntentCompensate: (intentId: string) =>
+    `/api/v1/accounting/intents/${encodeURIComponent(intentId)}/compensate`,
+  accountingExceptions: "/api/v1/accounting/exceptions",
+  accountingExceptionResolve: (exceptionId: string) =>
+    `/api/v1/accounting/exceptions/${encodeURIComponent(exceptionId)}/resolve`,
   quickBooksConnect: "/api/v1/quickbooks/connect",
   quickBooksConnection: "/api/v1/quickbooks/connection",
   quickBooksDisconnect: "/api/v1/quickbooks/disconnect",

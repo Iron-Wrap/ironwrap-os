@@ -154,6 +154,26 @@ export function providerFactEnvelope(input: {
   return { realmId: input.realmId, entityType: input.entityType, facts: input.facts };
 }
 
+/**
+ * Project the facts an intent *asserts*, from the payload IronWrap is about to send.
+ *
+ * The same descriptor and the same projection as `normalizeProviderEntity`, minus `Id`: an entity
+ * IronWrap is creating has no provider id yet, and section 5.1's identity half is checked against
+ * the settled effect attempt rather than against the hash (see `accounting-expectations.ts`). Every
+ * other comparison field is read exactly as a readback will read it, so the expectation and the
+ * observation are still produced by one projection over one descriptor.
+ */
+export function localFactEnvelope(input: {
+  realmId: string;
+  entityType: AccountingEntityType;
+  payload: unknown;
+}): { realmId: string; entityType: AccountingEntityType; facts: Record<string, unknown> } {
+  const fields = COMPARISON_FIELDS[input.entityType];
+  if (!fields) throw new AccountingNormalizerError("provider_entity_type_unsupported");
+  const facts = projectFields(input.payload, fields.filter((field) => field !== "Id"));
+  return { realmId: input.realmId, entityType: input.entityType, facts };
+}
+
 /** The hash section 5.1 compares. Same canonical JSON helper the effect ledger already uses. */
 export async function observedSha256(normalized: NormalizedEntityFacts): Promise<string> {
   return await sha256Hex(canonicalJson(providerFactEnvelope(normalized)));

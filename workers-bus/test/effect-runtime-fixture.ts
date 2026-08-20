@@ -13,14 +13,16 @@ const effectSql = /\bexternal_effect(?:s|_attempts|_events|_exceptions)\b/i;
 class SqliteStatement {
   private readonly statement: StatementSync;
   private readonly args: unknown[];
+  private readonly database: DatabaseSync;
 
-  constructor(statement: StatementSync, args: unknown[] = []) {
+  constructor(statement: StatementSync, database: DatabaseSync, args: unknown[] = []) {
     this.statement = statement;
+    this.database = database;
     this.args = args;
   }
 
   bind(...args: unknown[]) {
-    return new SqliteStatement(this.statement, args);
+    return new SqliteStatement(this.statement, this.database, args);
   }
 
   async first<T>(): Promise<T | null> {
@@ -31,10 +33,29 @@ class SqliteStatement {
     return { results: this.statement.all(...this.args) as T[] };
   }
 
+  /**
+   * `meta.changes` the way D1 reports it: a `total_changes()` delta, which **includes rows written
+   * by triggers**, not `sqlite3_changes()`.
+   *
+   * This is not a detail. `0042` puts an `AFTER UPDATE OF state` trigger on `external_effects` that
+   * writes an `external_effect_events` row, so every state transition reports 2 on D1 and 1 here
+   * until this delta is measured the same way. Reporting the narrow count let
+   * `effect-runtime.ts`'s `!== 1` CAS guards pass every test while failing on the first transition
+   * against real D1 - proven on the ELEC-75 local stack, where the ledger recorded
+   * `proposed -> authorized` and the caller was told `effect_transition_conflict` for the same
+   * write. `accounting-api-fixture.ts` already models D1 this way, and for the same reason.
+   */
   async run(): Promise<{ success: true; meta: { changes: number } }> {
-    const result = this.statement.run(...this.args);
-    return { success: true, meta: { changes: Number(result.changes) } };
+    const before = totalChanges(this.database);
+    this.statement.run(...this.args);
+    return { success: true, meta: { changes: totalChanges(this.database) - before } };
   }
+}
+
+function totalChanges(database: DatabaseSync): number {
+  return Number(
+    (database.prepare("SELECT total_changes() AS total").get() as { total: number }).total,
+  );
 }
 
 class EffectLedgerTestD1 {
@@ -49,7 +70,7 @@ class EffectLedgerTestD1 {
 
   prepare(sql: string) {
     if (effectSql.test(sql) || /^\s*SELECT\s+1(?:\s|;|$)/i.test(sql)) {
-      return new SqliteStatement(this.ledger.prepare(sql));
+      return new SqliteStatement(this.ledger.prepare(sql), this.ledger);
     }
     if (typeof this.base?.prepare !== "function") throw new Error("test_business_db_unavailable");
     return this.base.prepare(sql);

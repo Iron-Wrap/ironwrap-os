@@ -1813,11 +1813,16 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // takes 0058 (intents), 0059 (tax snapshots), 0060 (observations and verdicts) and 0061
     // (the accountant exception queue), each above every number in flight on an open head when it
     // was numbered. 0062 is the forward repair that closes the `INSERT OR REPLACE` bypass on the
-    // shipped 0042 ledger without editing it. #54 kept 0046 and #48 kept 0047, both of which
-    // landed on `main`, so the gap from 0048 to 0055 is expected and not a missing migration.
-    assert.equal(migrations.length, 54);
+    // shipped 0042 ledger without editing it, and 0063 adds the two append-only records a
+    // production dispatch needs - the expectation envelope and the accountant's compensation
+    // authorization. 0064 adds the server-owned section 6 ceiling the derive route reads instead
+    // of taking one from the request body, and 0065 the derivation receipts that make the derive
+    // route's `Idempotency-Key` enforced rather than merely required. #54 kept 0046 and #48 kept
+    // 0047, both of which landed on `main`, so the gap from 0048 to 0055 is expected and not a
+    // missing migration.
+    assert.equal(migrations.length, 57);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0062_external_effect_insert_replace_guards.sql");
+    assert.equal(migrations.at(-1), "0065_accounting_intent_derivation_receipts.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -1861,7 +1866,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
        FROM sqlite_master`,
       )
       .get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 113, indexes: 162, triggers: 253 });
+    // 0063 adds two tables (the expectation envelope and the compensation authorization), one
+    // index each, and the two append-only triggers each of them carries. 0064 adds one more of
+    // each shape: the tenant authority-policy table, its effective-row index, and its two
+    // append-only triggers. 0065 adds the derivation receipts table, its intent index, and three
+    // triggers - the append-only pair plus the `INSERT OR REPLACE` guard 0062 established.
+    assert.deepEqual({ ...counts }, { tables: 117, indexes: 166, triggers: 262 });
     // The applied chain — not the text of any single file — is what production
     // ends up running, so the complete_work receipt kind is asserted here.
     // 0028 is frozen at its shipped three-member CHECK and 0057 widens it

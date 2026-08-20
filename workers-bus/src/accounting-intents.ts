@@ -12,6 +12,7 @@
 import type { AppEnv } from "./app-types.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 import type { MoneyEffectOutcome } from "./accounting-effect-port.ts";
+import { recordAccountingIntentExpectation } from "./accounting-expectations.ts";
 
 export const ACCOUNTING_INTENT_KINDS = [
   "deposit_invoice", "progress_invoice", "payment", "credit_memo", "refund",
@@ -255,7 +256,135 @@ export async function deriveAccountingIntent(
 
   const stored = await readAccountingIntentByBasis(env, input.tenantId, basisSha256);
   if (!stored) throw new AccountingIntentError("accounting_intent_derivation_failed");
+
+  // The envelope, not just its hash. `submitAccountingIntent` requires the exact object
+  // `expected_sha256` was taken over, and until `0063` nothing stored it - which is why the only
+  // thing that could dispatch an approved intent was a test that still had it in a local variable.
+  // Written here rather than at each call site so every intent, including a reversal derived by
+  // `deriveCompensationIntent`, is dispatchable by construction.
+  await recordAccountingIntentExpectation(env, {
+    tenantId: input.tenantId,
+    intentId: stored.intent_id,
+    envelope: input.expected,
+  }, now);
   return stored;
+}
+
+/** A derivation that came from a request, so it carries the caller's key and attribution. */
+export type RequestedAccountingIntentDerivation =
+  & Omit<DeriveAccountingIntentInput, "derivedBy">
+  & {
+    /** The `Idempotency-Key` header value. Hashed; never stored raw. */
+    idempotencyKey: string;
+    /**
+     * The normalized derivation request, hashed into a fingerprint. Normalized rather than raw so
+     * the same figures sent with different key order replay instead of conflicting - the same
+     * thing `applyAccountingIntentCommand` fingerprints for the four commands.
+     */
+    request: unknown;
+    /** A person, from the session. An agent-derived intent does not go through this path. */
+    derivedBy: { actorKind: "owner" | "accounting"; userId: string };
+  };
+
+export interface AccountingIntentDerivationResult {
+  intent: AccountingIntentRecord;
+  /** True when this key had already derived this intent, so nothing was written a second time. */
+  replayed: boolean;
+}
+
+interface AccountingIntentDerivationReceiptRow {
+  intent_id: string;
+  request_fingerprint_sha256: string;
+}
+
+/**
+ * Derive one intent under the caller's `Idempotency-Key` (contract section 8.1).
+ *
+ * ELEC-77 defect 2: the derive route required that header and then never used it, so replaying one
+ * key with a different body derived a second intent. Derivation being idempotent on `basis_sha256`
+ * is a different guarantee - it makes the same figures converge on one intent, and says nothing
+ * about one key standing for two different sets of figures.
+ *
+ * The receipt is written after the derivation rather than before it, because the intent id is
+ * computed from the bound basis and `0065`'s foreign key has to point at a row that exists. That
+ * ordering is why the insert's failure path re-reads: if a concurrent request with the same key won
+ * the race, its receipt is the one of record and this request answers from it.
+ */
+export async function deriveAccountingIntentForRequest(
+  env: AppEnv,
+  input: RequestedAccountingIntentDerivation,
+  now: Date = new Date(),
+): Promise<AccountingIntentDerivationResult> {
+  const idempotencyKeySha256 = await sha256Hex(input.idempotencyKey);
+  const requestFingerprintSha256 = await sha256Hex(canonicalJson(input.request));
+
+  const existing = await readAccountingIntentDerivationReceipt(
+    env, input.tenantId, idempotencyKeySha256,
+  );
+  if (existing) {
+    return {
+      intent: await replayedDerivation(env, input.tenantId, existing, requestFingerprintSha256),
+      replayed: true,
+    };
+  }
+
+  const intent = await deriveAccountingIntent(env, input, now);
+  try {
+    await env.DB.prepare(
+      `INSERT INTO accounting_intent_derivation_receipts (
+         receipt_id, tenant_id, intent_id, idempotency_key_sha256, request_fingerprint_sha256,
+         actor_user_id, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      crypto.randomUUID(), input.tenantId, intent.intent_id, idempotencyKeySha256,
+      requestFingerprintSha256, input.derivedBy.userId, now.toISOString(),
+    ).run();
+  } catch (error) {
+    const raced = await readAccountingIntentDerivationReceipt(
+      env, input.tenantId, idempotencyKeySha256,
+    );
+    if (!raced) {
+      throw new AccountingIntentError(triggerCode(error, "accounting_intent_derivation_failed"));
+    }
+    return {
+      intent: await replayedDerivation(env, input.tenantId, raced, requestFingerprintSha256),
+      replayed: true,
+    };
+  }
+  return { intent, replayed: false };
+}
+
+async function readAccountingIntentDerivationReceipt(
+  env: AppEnv,
+  tenantId: string,
+  idempotencyKeySha256: string,
+): Promise<AccountingIntentDerivationReceiptRow | null> {
+  return await env.DB.prepare(
+    `SELECT intent_id, request_fingerprint_sha256
+       FROM accounting_intent_derivation_receipts
+      WHERE tenant_id = ? AND idempotency_key_sha256 = ?`,
+  ).bind(tenantId, idempotencyKeySha256).first<AccountingIntentDerivationReceiptRow>();
+}
+
+/**
+ * The intent a key already derived, or a refusal.
+ *
+ * A different fingerprint under the same key is a second set of figures wearing the first request's
+ * key. Answering it with the first intent would be the silent-overwrite failure the command path
+ * already refuses; deriving a second one is the defect this exists to close.
+ */
+async function replayedDerivation(
+  env: AppEnv,
+  tenantId: string,
+  receipt: AccountingIntentDerivationReceiptRow,
+  requestFingerprintSha256: string,
+): Promise<AccountingIntentRecord> {
+  if (receipt.request_fingerprint_sha256 !== requestFingerprintSha256) {
+    throw new AccountingIntentError("accounting_intent_derivation_conflict");
+  }
+  const intent = await readAccountingIntent(env, tenantId, receipt.intent_id);
+  if (!intent) throw new AccountingIntentError("accounting_intent_missing");
+  return intent;
 }
 
 export interface AccountingIntentCommandInput {
@@ -569,6 +698,57 @@ export async function readAccountingIntent(
   return await env.DB.prepare(
     `SELECT * FROM accounting_intents WHERE tenant_id = ? AND intent_id = ?`,
   ).bind(tenantId, intentId).first<AccountingIntentRecord>();
+}
+
+export interface AccountingIntentListFilter {
+  kind?: AccountingIntentKind | null;
+  state?: AccountingIntentState | null;
+  roofJobId?: string | null;
+  /** Restrict to a named set of states, which is how the desk asks for one queue. */
+  states?: readonly AccountingIntentState[] | null;
+  limit?: number;
+}
+
+/**
+ * The money desk's list reader (section 8.1, `GET /api/v1/accounting/intents`).
+ *
+ * Tenant-scoped like every other reader in this module, for the reason recorded on
+ * `listAccountingIntentEvents`: `intent_id` is derived and therefore guessable, so an unscoped
+ * read is a cross-tenant leak the moment a BFF route calls it.
+ *
+ * Ordered oldest-first on `derived_at`: the desk is a work queue, and the oldest unfinished money
+ * movement is the one the office manager has to answer first.
+ */
+export async function listAccountingIntents(
+  env: AppEnv,
+  tenantId: string,
+  filter: AccountingIntentListFilter = {},
+): Promise<AccountingIntentRecord[]> {
+  const states = filter.states && filter.states.length > 0 ? [...filter.states] : null;
+  // A bounded, explicitly built IN list. Every member is validated against
+  // `ACCOUNTING_INTENT_STATES` before it reaches here, and the values are still bound rather
+  // than interpolated, so the vocabulary is closed on both sides.
+  const stateSet = states === null
+    ? ""
+    : ` AND state IN (${states.map(() => "?").join(", ")})`;
+  const limit = Math.min(Math.max(Math.trunc(filter.limit ?? 100), 1), 200);
+  const rows = await env.DB.prepare(
+    `SELECT * FROM accounting_intents
+      WHERE tenant_id = ?
+        AND (? IS NULL OR kind = ?)
+        AND (? IS NULL OR state = ?)
+        AND (? IS NULL OR roof_job_id = ?)${stateSet}
+      ORDER BY derived_at, intent_id
+      LIMIT ?`,
+  ).bind(
+    tenantId,
+    filter.kind ?? null, filter.kind ?? null,
+    filter.state ?? null, filter.state ?? null,
+    filter.roofJobId ?? null, filter.roofJobId ?? null,
+    ...(states ?? []),
+    limit,
+  ).all<AccountingIntentRecord>();
+  return rows.results ?? [];
 }
 
 export async function readAccountingIntentByBasis(

@@ -62,7 +62,7 @@ The owner action that opens the chain is `POST /api/v1/estimator/jobs/{job}/face
 
 ## Approval brokers (Hermes approved writes)
 
-The three private brokers run against the local Frappe stack on `127.0.0.1:9101-9103`.
+The four private brokers run against the local Frappe stack on `127.0.0.1:9101-9104`.
 Each needs its own Frappe identity (the API token's user must equal the actor user -
 `frappe_service_principal_mismatch` otherwise) and the shared key material in
 `deploy/local/keys/`. Provision once per fresh site:
@@ -73,14 +73,14 @@ docker exec -i ironwrap-local-frappe-1 bash -lc \
   'cd /home/frappe/frappe-bench && bench --site ironwrap.localhost console' <<'PYEOF'
 import frappe
 for email in ["lead-concierge@ironwrap.local", "estimator-assistant@ironwrap.local",
-              "production-controller@ironwrap.local", "owner@ironwrap.local",
-              "crew@ironwrap.local"]:
+              "production-controller@ironwrap.local", "owner-operator@ironwrap.local",
+              "owner@ironwrap.local", "crew@ironwrap.local"]:
     if not frappe.db.exists("User", email):
         u = frappe.get_doc({"doctype": "User", "email": email, "first_name": email.split("@")[0],
                             "send_welcome_email": 0, "roles": [{"role": "System Manager"}]})
         u.insert(ignore_permissions=True)
 for email in ["lead-concierge@ironwrap.local", "estimator-assistant@ironwrap.local",
-              "production-controller@ironwrap.local"]:
+              "production-controller@ironwrap.local", "owner-operator@ironwrap.local"]:
     frappe.core.doctype.user.user.generate_keys(email)
 frappe.db.commit()
 print("users ok")
@@ -101,6 +101,11 @@ them out of git - `*.env` is ignored):
   `estimator-assistant`, `QUOTE_REVISION_BROKER_*`
 - production-schedule (`src/production-schedule-approval-broker.mjs`, port 9103): role
   `production-controller`, `PRODUCTION_SCHEDULE_BROKER_*`
+- proposal-publication (`src/proposal-publication-approval-broker.mjs`, port 9104): role
+  `owner-operator`, `PROPOSAL_PUBLICATION_BROKER_*`. This is the one that turns a Draft
+  Proposal Evidence Pack into a customer-visible proposal, so the local stack also needs
+  `APP_PROPOSAL_PUBLICATION_ENABLED=true` (already set for `--env local`) and an
+  `owner-operator@ironwrap.local` Frappe user with generated API keys.
 
 Start: `cd mcp/erpnext-roofing-mcp && set -a && source <env-file> && set +a && node src/<broker>.mjs`
 

@@ -27,6 +27,7 @@ import { cn } from "../lib/cn";
 import { useOnlineStatus } from "../hooks/use-online-status";
 import { ApiError } from "../lib/api";
 import { CustomerPortalOfficeAccess } from "../portal/customer-portal-office-access";
+import { ProposalPublicationAction } from "../proposal/proposal-publication-action";
 import {
   createFacetLaunch,
   loadEstimatorWorkbench,
@@ -1595,6 +1596,13 @@ function CommercialRecord({
           <ProposalReadiness readiness={model.proposal_readiness} />
         </div>
       </section>
+
+      <ProposalPublicationAction
+        roofJobId={model.job.id}
+        proposalEvidencePackId={proposal?.id ?? null}
+        proposalStatus={proposal?.status ?? null}
+        locale={locale}
+      />
 
       <CustomerPortalOfficeAccess roofJobId={model.job.id} locale={locale} />
 

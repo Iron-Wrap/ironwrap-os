@@ -53,6 +53,12 @@ import {
   quoteRevisionApprovalBrokerConfig,
 } from "./quote-revision-approval-broker-client.ts";
 import {
+  ProposalPublicationApprovalBrokerError,
+  executeProposalPublicationApproval,
+  previewProposalPublicationApproval,
+  proposalPublicationApprovalBrokerConfig,
+} from "./proposal-publication-approval-broker-client.ts";
+import {
   ProductionScheduleApprovalBrokerError,
   executeProductionScheduleApproval,
   previewProductionScheduleApproval,
@@ -74,6 +80,18 @@ import {
   quoteRevisionApprovalProjection,
   reconcileQuoteRevisionApprovalUncertainty,
 } from "./quote-revision-approval-store.ts";
+import {
+  claimProposalPublicationApprovalExecution,
+  createProposalPublicationApprovalRequest,
+  denyProposalPublicationApprovalRequest,
+  finalizeProposalPublicationApprovalExecution,
+  getCurrentProposalPublicationApprovalRequest,
+  getProposalPublicationApprovalRequestByPrepareKey,
+  listProposalPublicationApprovalRequests,
+  matchesProposalPublicationApprovalPreparation,
+  proposalPublicationApprovalProjection,
+  reconcileProposalPublicationApprovalUncertainty,
+} from "./proposal-publication-approval-store.ts";
 import {
   claimProductionScheduleApprovalExecution,
   createProductionScheduleApprovalRequest,
@@ -540,6 +558,93 @@ export async function handleAuthenticatedRoute(
     } catch {
       return privateAppJson(
         { error: "quote_revision_approval_store_unavailable" },
+        502,
+      );
+    }
+  }
+  // Owner-facing proposal publication. This is the second door onto exactly the
+  // owner-operator publication command the MCP surface already exposes: same tool
+  // pair, same signed dry-run/approval receipts, same Frappe bounded command. It
+  // exists because an owner can issue a customer portal link but, until now, could
+  // not publish the proposal that link is meant to show.
+  if (
+    req.method === "GET" &&
+    url.pathname === "/api/v1/proposal-publication-approvals"
+  ) {
+    if (!hasPermission(auth, "approvals:read"))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    const roofJobId = url.searchParams.get("roof_job_id");
+    if (roofJobId !== null && !idText(roofJobId, 1, 140))
+      return privateAppJson({ error: "invalid_roof_job_id" }, 400);
+    try {
+      const approvals = await listProposalPublicationApprovalRequests(
+        env,
+        auth.session.tenant_id,
+        new Date().toISOString(),
+        parsedListLimit(url.searchParams.get("limit")),
+        roofJobId ?? undefined,
+      );
+      return privateAppJson(
+        proposalPublicationApprovalReadEnvelope(env, auth, {
+          approvals: approvals.map(proposalPublicationApprovalProjection),
+        }),
+      );
+    } catch {
+      return privateAppJson(
+        { error: "proposal_publication_approval_store_unavailable" },
+        502,
+      );
+    }
+  }
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/v1/proposal-publication-approvals"
+  ) {
+    return await prepareProposalPublicationApproval(req, env, auth);
+  }
+  const proposalPublicationDecisionMatch = url.pathname.match(
+    /^\/api\/v1\/proposal-publication-approvals\/([^/]+)\/(approve|reject|reconcile)$/,
+  );
+  if (req.method === "POST" && proposalPublicationDecisionMatch) {
+    const requestId = decodedProposalPublicationApprovalId(
+      proposalPublicationDecisionMatch[1],
+    );
+    if (!requestId) return privateAppJson({ error: "not_found" }, 404);
+    if (proposalPublicationDecisionMatch[2] === "approve") {
+      return await approveProposalPublicationApproval(req, env, auth, requestId);
+    }
+    if (proposalPublicationDecisionMatch[2] === "reject") {
+      return await rejectProposalPublicationApproval(req, env, auth, requestId);
+    }
+    return await reconcileProposalPublicationApproval(req, env, auth, requestId);
+  }
+  const proposalPublicationDetailMatch = url.pathname.match(
+    /^\/api\/v1\/proposal-publication-approvals\/([^/]+)$/,
+  );
+  if (req.method === "GET" && proposalPublicationDetailMatch) {
+    if (!hasPermission(auth, "approvals:read"))
+      return privateAppJson({ error: "office_role_required" }, 403);
+    const requestId = decodedProposalPublicationApprovalId(
+      proposalPublicationDetailMatch[1],
+    );
+    if (!requestId) return privateAppJson({ error: "not_found" }, 404);
+    try {
+      const approval = await getCurrentProposalPublicationApprovalRequest(
+        env,
+        auth.session.tenant_id,
+        requestId,
+        new Date().toISOString(),
+      );
+      return approval
+        ? privateAppJson(
+            proposalPublicationApprovalReadEnvelope(env, auth, {
+              approval: proposalPublicationApprovalProjection(approval),
+            }),
+          )
+        : privateAppJson({ error: "not_found" }, 404);
+    } catch {
+      return privateAppJson(
+        { error: "proposal_publication_approval_store_unavailable" },
         502,
       );
     }
@@ -1870,6 +1975,430 @@ async function reconcileQuoteRevisionApproval(
   }
 }
 
+async function prepareProposalPublicationApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  if (!proposalPublicationEnabled(env))
+    return privateAppJson({ error: "not_found" }, 404);
+  if (!hasPermission(auth, "approvals:prepare"))
+    return privateAppJson({ error: "office_role_required" }, 403);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const prepareIdempotencyKey = idempotencyKey(req);
+  if (!prepareIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const input = parseProposalPublicationApprovalPreparation(parsed.value);
+  if (!input)
+    return privateAppJson(
+      { error: "invalid_proposal_publication_approval_request" },
+      400,
+    );
+  return await prepareProposalPublicationApprovalRequest(
+    env,
+    auth,
+    prepareIdempotencyKey,
+    input,
+  );
+}
+
+async function prepareProposalPublicationApprovalRequest(
+  env: AppEnv,
+  auth: AuthContext,
+  prepareIdempotencyKey: string,
+  input: NonNullable<ReturnType<typeof parseProposalPublicationApprovalPreparation>>,
+): Promise<Response> {
+  const requestedByFrappeUser = auth.session.frappe_user_id?.trim() ?? "";
+  if (!requestedByFrappeUser)
+    return privateAppJson({ error: "frappe_identity_required" }, 403);
+  const requestText = proposalPublicationRequestText(input.proposalEvidencePackId);
+
+  try {
+    const existing = await getProposalPublicationApprovalRequestByPrepareKey(
+      env,
+      auth.session.tenant_id,
+      prepareIdempotencyKey,
+    );
+    if (existing) {
+      return matchesProposalPublicationApprovalPreparation(existing, {
+        requestedByUserId: auth.session.user_id,
+        roofJobId: input.roofJobId,
+        proposalEvidencePackId: input.proposalEvidencePackId,
+        requestText,
+      })
+        ? privateAppJson({
+            approval: proposalPublicationApprovalProjection(existing),
+            replayed: true,
+          })
+        : privateAppJson(
+            {
+              error: "idempotency_conflict",
+              approval: proposalPublicationApprovalProjection(existing),
+            },
+            409,
+          );
+    }
+  } catch {
+    return privateAppJson(
+      { error: "proposal_publication_approval_store_unavailable" },
+      502,
+    );
+  }
+
+  if (!proposalPublicationApprovalBrokerConfig(env) || !approvalDecisionConfig(env)) {
+    return privateAppJson(
+      { error: "proposal_publication_broker_not_configured" },
+      503,
+    );
+  }
+  const approvalRequestId = `proposal-publication-approval:${randomToken()}`;
+  const runId = `run:proposal-publication:${randomToken()}`;
+  let packet;
+  try {
+    packet = await previewProposalPublicationApproval(env, {
+      approvalRequestId,
+      tenantId: auth.session.tenant_id,
+      runId,
+      roofJobId: input.roofJobId,
+      proposalEvidencePackId: input.proposalEvidencePackId,
+      requestText,
+      requestedByUserId: auth.session.user_id,
+      requestedByFrappeUser,
+    });
+  } catch (error) {
+    return privateAppJson(
+      { error: proposalPublicationBrokerPrepareError(error) },
+      proposalPublicationBrokerPrepareStatus(error),
+    );
+  }
+
+  try {
+    const created = await createProposalPublicationApprovalRequest(env, {
+      id: approvalRequestId,
+      tenantId: auth.session.tenant_id,
+      prepareIdempotencyKey,
+      intentFingerprint: packet.intentFingerprint,
+      actorUser: packet.actorUser,
+      siteId: packet.siteId,
+      roofJobId: packet.roofJobId,
+      proposalEvidencePackId: packet.proposalEvidencePackId,
+      customerQuoteId: packet.customerQuoteId,
+      packStatusBefore: packet.packStatusBefore,
+      requestText: packet.requestText,
+      writeArgsJson: packet.writeArgsJson,
+      previewJson: packet.previewJson,
+      argsDigest: packet.argsDigest,
+      previewDigest: packet.previewDigest,
+      receiptPreviewDigest: packet.receiptPreviewDigest,
+      dryRunReceipt: packet.dryRunReceipt,
+      expiresAt: packet.expiresAt,
+      requestedByUserId: auth.session.user_id,
+      requestedByFrappeUser,
+      runId: packet.runId,
+      now: new Date().toISOString(),
+    });
+    if (created.kind === "conflict") {
+      return privateAppJson(
+        {
+          error: "idempotency_conflict",
+          approval: proposalPublicationApprovalProjection(created.request),
+        },
+        409,
+      );
+    }
+    return privateAppJson(
+      {
+        approval: proposalPublicationApprovalProjection(created.request),
+        replayed: created.kind === "replayed",
+      },
+      created.kind === "created" ? 201 : 200,
+    );
+  } catch (error) {
+    // A competing active intent for the same pack is a conflict, not an outage:
+    // Frappe accepts publication only from Draft, so two live runs cannot both win.
+    if (String(error).includes("UNIQUE")) {
+      return privateAppJson(
+        { error: "proposal_publication_approval_already_active" },
+        409,
+      );
+    }
+    return privateAppJson(
+      { error: "proposal_publication_approval_store_unavailable" },
+      502,
+    );
+  }
+}
+
+async function approveProposalPublicationApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  requestId: string,
+): Promise<Response> {
+  if (!proposalPublicationEnabled(env))
+    return privateAppJson({ error: "not_found" }, 404);
+  const identity = proposalPublicationApprovalBrokerDecisionIdentity(env, auth);
+  if (!identity.ok)
+    return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const decisionIdempotencyKey = idempotencyKey(req);
+  if (!decisionIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const expectedVersion = parseExpectedVersion(parsed.value);
+  if (expectedVersion === null)
+    return privateAppJson(
+      { error: "invalid_proposal_publication_approval_decision" },
+      400,
+    );
+
+  const now = new Date();
+  let claimed;
+  try {
+    claimed = await claimProposalPublicationApprovalExecution(env, {
+      tenantId: auth.session.tenant_id,
+      requestId,
+      expectedVersion,
+      decisionIdempotencyKey,
+      approvedByUserId: auth.session.user_id,
+      approvedByFrappeUser: identity.frappeUserId,
+      now: now.toISOString(),
+      leaseExpiresAt: new Date(
+        now.getTime() + identity.config.executionLeaseSeconds * 1000,
+      ).toISOString(),
+    });
+  } catch {
+    return privateAppJson(
+      { error: "proposal_publication_approval_store_unavailable" },
+      502,
+    );
+  }
+  if (claimed.kind !== "claimed")
+    return proposalPublicationDecisionResultResponse(claimed);
+
+  let outcome;
+  try {
+    outcome = await executeProposalPublicationApproval(env, claimed.request);
+  } catch (error) {
+    return await finalizeProposalPublicationBrokerFailure(
+      env,
+      auth,
+      claimed.request,
+      decisionIdempotencyKey,
+      error,
+    );
+  }
+  try {
+    const finalized = await finalizeProposalPublicationApprovalExecution(env, {
+      tenantId: auth.session.tenant_id,
+      requestId,
+      decisionIdempotencyKey,
+      state: outcome.state,
+      hermesRunId: outcome.hermesRunId,
+      resultJson: outcome.resultJson,
+      errorCode: outcome.errorCode,
+      now: new Date().toISOString(),
+    });
+    if (finalized.kind === "lost_claim") {
+      return finalized.request
+        ? privateAppJson(
+            {
+              error: "proposal_publication_approval_state_changed",
+              approval: proposalPublicationApprovalProjection(finalized.request),
+            },
+            409,
+          )
+        : privateAppJson({ error: "not_found" }, 404);
+    }
+    const status =
+      outcome.state === "executed"
+        ? 200
+        : outcome.state === "execution_uncertain"
+          ? 502
+          : 422;
+    return privateAppJson(
+      { approval: proposalPublicationApprovalProjection(finalized.request) },
+      status,
+    );
+  } catch {
+    // The private broker may have completed the Frappe publication. Keep the
+    // lease so it becomes reconciliation work rather than a second publish.
+    return privateAppJson(
+      { error: "proposal_publication_execution_finalization_unavailable" },
+      502,
+    );
+  }
+}
+
+async function finalizeProposalPublicationBrokerFailure(
+  env: AppEnv,
+  auth: AuthContext,
+  request: Parameters<typeof executeProposalPublicationApproval>[1],
+  decisionIdempotencyKey: string,
+  error: unknown,
+): Promise<Response> {
+  const errorCode =
+    error instanceof ProposalPublicationApprovalBrokerError &&
+    error.code === "proposal_publication_broker_unavailable"
+      ? "proposal_publication_broker_unavailable"
+      : "proposal_publication_broker_response_unverified";
+  try {
+    const finalized = await finalizeProposalPublicationApprovalExecution(env, {
+      tenantId: auth.session.tenant_id,
+      requestId: request.proposal_publication_approval_id,
+      decisionIdempotencyKey,
+      state: "execution_uncertain",
+      hermesRunId: request.run_id,
+      errorCode,
+      now: new Date().toISOString(),
+    });
+    if (finalized.kind === "finalized") {
+      return privateAppJson(
+        {
+          error: "execution_uncertain",
+          approval: proposalPublicationApprovalProjection(finalized.request),
+        },
+        502,
+      );
+    }
+    return finalized.request
+      ? privateAppJson(
+          {
+            error: "proposal_publication_approval_state_changed",
+            approval: proposalPublicationApprovalProjection(finalized.request),
+          },
+          409,
+        )
+      : privateAppJson({ error: "not_found" }, 404);
+  } catch {
+    return privateAppJson(
+      { error: "proposal_publication_execution_finalization_unavailable" },
+      502,
+    );
+  }
+}
+
+async function rejectProposalPublicationApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  requestId: string,
+): Promise<Response> {
+  if (!proposalPublicationEnabled(env))
+    return privateAppJson({ error: "not_found" }, 404);
+  const identity = approvalDecisionIdentity(env, auth);
+  if (!identity.ok)
+    return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const decisionIdempotencyKey = idempotencyKey(req);
+  if (!decisionIdempotencyKey)
+    return privateAppJson({ error: "idempotency_key_required" }, 400);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const decision = parseRejectionDecision(parsed.value);
+  if (!decision)
+    return privateAppJson(
+      { error: "invalid_proposal_publication_approval_decision" },
+      400,
+    );
+  try {
+    const denied = await denyProposalPublicationApprovalRequest(env, {
+      tenantId: auth.session.tenant_id,
+      requestId,
+      expectedVersion: decision.version,
+      decisionIdempotencyKey,
+      approvedByUserId: auth.session.user_id,
+      approvedByFrappeUser: identity.frappeUserId,
+      rejectionReason: decision.reason,
+      now: new Date().toISOString(),
+    });
+    if (denied.kind === "denied")
+      return privateAppJson({
+        approval: proposalPublicationApprovalProjection(denied.request),
+      });
+    return proposalPublicationDecisionResultResponse(denied);
+  } catch {
+    return privateAppJson(
+      { error: "proposal_publication_approval_store_unavailable" },
+      502,
+    );
+  }
+}
+
+async function reconcileProposalPublicationApproval(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  requestId: string,
+): Promise<Response> {
+  if (!proposalPublicationEnabled(env))
+    return privateAppJson({ error: "not_found" }, 404);
+  const identity = approvalDecisionIdentity(env, auth);
+  if (!identity.ok)
+    return privateAppJson({ error: identity.error }, identity.status);
+  if (!validAppCsrf(req, auth))
+    return privateAppJson({ error: "csrf_failed" }, 403);
+  const parsed = await readJson(req, MAX_ADMIN_BODY_BYTES);
+  if (!parsed.ok) return privateAppJson({ error: parsed.error }, parsed.status);
+  const reconciliation = parseReconciliation(parsed.value);
+  if (!reconciliation)
+    return privateAppJson(
+      { error: "invalid_proposal_publication_reconciliation" },
+      400,
+    );
+  try {
+    const result = await reconcileProposalPublicationApprovalUncertainty(env, {
+      tenantId: auth.session.tenant_id,
+      requestId,
+      expectedVersion: reconciliation.version,
+      reconciledByUserId: auth.session.user_id,
+      reconciledByFrappeUser: identity.frappeUserId,
+      outcome: reconciliation.outcome,
+      evidence: reconciliation.evidence,
+      now: new Date().toISOString(),
+    });
+    if (result.kind === "reconciled")
+      return privateAppJson({
+        approval: proposalPublicationApprovalProjection(result.request),
+      });
+    if (result.kind === "already_reconciled") {
+      return privateAppJson({
+        approval: proposalPublicationApprovalProjection(result.request),
+        replayed: true,
+      });
+    }
+    if (result.kind === "missing")
+      return privateAppJson({ error: "not_found" }, 404);
+    if (result.kind === "not_uncertain") {
+      return privateAppJson(
+        {
+          error: "proposal_publication_approval_not_uncertain",
+          approval: proposalPublicationApprovalProjection(result.request),
+        },
+        409,
+      );
+    }
+    return privateAppJson(
+      {
+        error: "proposal_publication_approval_version_conflict",
+        approval: proposalPublicationApprovalProjection(result.request),
+      },
+      409,
+    );
+  } catch {
+    return privateAppJson(
+      { error: "proposal_publication_approval_store_unavailable" },
+      502,
+    );
+  }
+}
+
 async function prepareProductionScheduleApproval(
   req: Request,
   env: AppEnv,
@@ -3051,6 +3580,56 @@ function quoteRevisionDecisionResultResponse(
   );
 }
 
+function proposalPublicationDecisionResultResponse(
+  result:
+    | Exclude<
+        Awaited<ReturnType<typeof claimProposalPublicationApprovalExecution>>,
+        { kind: "claimed" }
+      >
+    | Exclude<
+        Awaited<ReturnType<typeof denyProposalPublicationApprovalRequest>>,
+        { kind: "denied" }
+      >,
+): Response {
+  if (result.kind === "missing")
+    return privateAppJson({ error: "not_found" }, 404);
+  if (result.kind === "expired") {
+    return privateAppJson(
+      {
+        error: "proposal_publication_approval_expired",
+        approval: proposalPublicationApprovalProjection(result.request),
+      },
+      410,
+    );
+  }
+  if (result.kind === "version_conflict") {
+    return privateAppJson(
+      {
+        error: "proposal_publication_approval_version_conflict",
+        approval: proposalPublicationApprovalProjection(result.request),
+      },
+      409,
+    );
+  }
+  if (result.kind === "replayed") {
+    const status = result.request.state === "executing" ? 202 : 200;
+    return privateAppJson(
+      {
+        approval: proposalPublicationApprovalProjection(result.request),
+        replayed: true,
+      },
+      status,
+    );
+  }
+  return privateAppJson(
+    {
+      error: "proposal_publication_approval_already_decided",
+      approval: proposalPublicationApprovalProjection(result.request),
+    },
+    409,
+  );
+}
+
 function productionScheduleDecisionResultResponse(
   result:
     | Exclude<
@@ -3129,6 +3708,20 @@ function quoteRevisionApprovalReadEnvelope(
   };
 }
 
+function proposalPublicationApprovalReadEnvelope(
+  env: AppEnv,
+  auth: AuthContext,
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    version: 1,
+    read_model_generated_at: new Date().toISOString(),
+    permissions: auth.permissions,
+    allowed_actions: proposalPublicationApprovalAllowedActions(env, auth),
+    ...body,
+  };
+}
+
 function productionScheduleApprovalReadEnvelope(
   env: AppEnv,
   auth: AuthContext,
@@ -3182,6 +3775,31 @@ function quoteRevisionApprovalAllowedActions(
     actions.push("quote_revision_approval.reconcile");
   if (quoteRevisionApprovalBrokerDecisionIdentity(env, auth).ok)
     actions.push("quote_revision_approval.approve");
+  return actions;
+}
+
+function proposalPublicationApprovalAllowedActions(
+  env: AppEnv,
+  auth: AuthContext,
+): string[] {
+  if (!hasPermission(auth, "approvals:read")) return [];
+  if (!proposalPublicationEnabled(env)) return [];
+  const actions = ["proposal_publication_approval.read"];
+  const broker = proposalPublicationApprovalBrokerConfig(env);
+  if (
+    hasPermission(auth, "approvals:prepare") &&
+    broker &&
+    approvalDecisionConfig(env) &&
+    auth.session.frappe_user_id?.trim()
+  ) {
+    actions.push("proposal_publication_approval.prepare");
+  }
+  if (approvalDecisionIdentity(env, auth).ok)
+    actions.push("proposal_publication_approval.reject");
+  if (approvalDecisionIdentity(env, auth).ok)
+    actions.push("proposal_publication_approval.reconcile");
+  if (proposalPublicationApprovalBrokerDecisionIdentity(env, auth).ok)
+    actions.push("proposal_publication_approval.approve");
   return actions;
 }
 
@@ -3246,6 +3864,26 @@ function parseQuoteRevisionApprovalPreparation(value: unknown): {
 
 function quoteRevisionRequestText(correctionReason: string): string {
   return `Prepare an append-only Draft Customer Quote revision shell after human review. Reason: ${correctionReason}`;
+}
+
+function parseProposalPublicationApprovalPreparation(value: unknown): {
+  roofJobId: string;
+  proposalEvidencePackId: string;
+} | null {
+  if (
+    !isRecord(value) ||
+    !onlyKeys(value, ["roof_job_id", "proposal_evidence_pack_id"])
+  )
+    return null;
+  const roofJobId = idText(value.roof_job_id, 1, 140);
+  const proposalEvidencePackId = idText(value.proposal_evidence_pack_id, 1, 140);
+  return roofJobId && proposalEvidencePackId
+    ? { roofJobId, proposalEvidencePackId }
+    : null;
+}
+
+function proposalPublicationRequestText(proposalEvidencePackId: string): string {
+  return `Publish the reviewed Draft Proposal Evidence Pack ${proposalEvidencePackId} to the private customer portal. No customer message, portal link, signature, or quote change.`;
 }
 
 function parseProductionScheduleApprovalPreparation(value: unknown): {
@@ -3443,6 +4081,14 @@ function decodedQuoteRevisionApprovalId(value: string): string | null {
     : null;
 }
 
+function decodedProposalPublicationApprovalId(value: string): string | null {
+  const decoded = decodedPathSegment(value);
+  return decoded &&
+    /^proposal-publication-approval:[A-Za-z0-9_-]{16,64}$/.test(decoded)
+    ? decoded
+    : null;
+}
+
 function decodedProductionScheduleApprovalId(value: string): string | null {
   const decoded = decodedPathSegment(value);
   return decoded &&
@@ -3510,6 +4156,51 @@ function quoteRevisionBrokerPrepareError(error: unknown): string {
 function quoteRevisionBrokerPrepareStatus(error: unknown): number {
   return error instanceof QuoteRevisionApprovalBrokerError &&
     error.code === "quote_revision_broker_not_configured"
+    ? 503
+    : 502;
+}
+
+function proposalPublicationEnabled(env: AppEnv): boolean {
+  return String(env.APP_PROPOSAL_PUBLICATION_ENABLED) === "true";
+}
+
+function proposalPublicationApprovalBrokerDecisionIdentity(
+  env: AppEnv,
+  auth: AuthContext,
+):
+  | {
+      ok: true;
+      config: NonNullable<
+        ReturnType<typeof proposalPublicationApprovalBrokerConfig>
+      >;
+      frappeUserId: string;
+    }
+  | { ok: false; error: string; status: number } {
+  const decision = approvalDecisionIdentity(env, auth);
+  if (!decision.ok) return decision;
+  const config = proposalPublicationApprovalBrokerConfig(env);
+  if (!config)
+    return {
+      ok: false,
+      error: "proposal_publication_broker_not_configured",
+      status: 503,
+    };
+  return { ok: true, config, frappeUserId: decision.frappeUserId };
+}
+
+function proposalPublicationBrokerPrepareError(error: unknown): string {
+  if (
+    error instanceof ProposalPublicationApprovalBrokerError &&
+    error.code === "proposal_publication_broker_not_configured"
+  ) {
+    return error.code;
+  }
+  return "proposal_publication_broker_unavailable";
+}
+
+function proposalPublicationBrokerPrepareStatus(error: unknown): number {
+  return error instanceof ProposalPublicationApprovalBrokerError &&
+    error.code === "proposal_publication_broker_not_configured"
     ? 503
     : 502;
 }

@@ -725,7 +725,7 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       JSON.stringify(restoreIndexes) === JSON.stringify(migrationInventory.indexBindings) &&
       JSON.stringify(backupTriggers) === JSON.stringify(migrationInventory.triggerBindings) &&
       JSON.stringify(restoreTriggers) === JSON.stringify(migrationInventory.triggerBindings),
-    "D1 backup and restore inventories match all 117 migration-defined tables, 172 indexes, and 262 triggers",
+    "D1 backup and restore inventories match all 119 migration-defined tables, 178 indexes, and 271 triggers",
     "D1 backup and restore inventories must exactly match the migration-defined table, index, and trigger schema",
   ));
   checks.push(check("contract.d1_backup.safety", d1Backup.includes("set -euo pipefail") && d1Backup.includes("set +x") && d1Backup.includes("umask 077") && d1Backup.includes("this command accepts no arguments") && d1Backup.includes("mktemp -d") && d1Backup.includes("flock -n") && /trap 'exit 1(?:29|30|43)' (?:HUP|INT|TERM)/.test(d1Backup), "D1 backup uses strict no-argv, no-tracing, private-temp, locking, and signal controls", "D1 backup lacks strict no-argv, no-tracing, private-temp, locking, or signal controls"));
@@ -736,8 +736,8 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
     d1Backup.includes("sqlite3 -bail") && d1Backup.includes("PRAGMA integrity_check") &&
       d1Backup.includes("quickbooks_projection_outbox") && d1Backup.includes("facet_design_evidence_associations") &&
       d1Backup.includes("newo_reconciliation_runs") && d1Backup.includes("customer_portal_acceptance_events") &&
-      d1Backup.includes("hermes_desktop_results") && d1Backup.includes("REQUIRED_TABLE_COUNT=117") &&
-      d1Backup.includes("REQUIRED_INDEX_COUNT=172") && d1Backup.includes("REQUIRED_TRIGGER_COUNT=262") &&
+      d1Backup.includes("hermes_desktop_results") && d1Backup.includes("REQUIRED_TABLE_COUNT=119") &&
+      d1Backup.includes("REQUIRED_INDEX_COUNT=178") && d1Backup.includes("REQUIRED_TRIGGER_COUNT=271") &&
       d1Backup.includes("idx_app_users_tenant_access_role_active=app_users") &&
       d1Backup.includes("idx_measurement_intake_receipts_ocr_review=measurement_intake_receipts") &&
       d1Backup.includes("idx_dead_letter_open_measurement=dead_letter") &&
@@ -773,8 +773,8 @@ export async function validateContract({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
       d1Restore.includes("sqlite3 -bail") && d1Restore.includes("PRAGMA integrity_check") &&
       d1Restore.includes("quickbooks_projection_outbox") && d1Restore.includes("facet_design_evidence_associations") &&
       d1Restore.includes("newo_reconciliation_runs") && d1Restore.includes("customer_portal_acceptance_events") &&
-      d1Restore.includes("hermes_desktop_results") && d1Restore.includes("REQUIRED_TABLE_COUNT=117") &&
-      d1Restore.includes("REQUIRED_INDEX_COUNT=172") && d1Restore.includes("REQUIRED_TRIGGER_COUNT=262") &&
+      d1Restore.includes("hermes_desktop_results") && d1Restore.includes("REQUIRED_TABLE_COUNT=119") &&
+      d1Restore.includes("REQUIRED_INDEX_COUNT=178") && d1Restore.includes("REQUIRED_TRIGGER_COUNT=271") &&
       d1Restore.includes("idx_app_users_tenant_access_role_active=app_users") &&
       d1Restore.includes("idx_measurement_intake_receipts_ocr_review=measurement_intake_receipts") &&
       d1Restore.includes("idx_dead_letter_open_measurement=dead_letter") &&

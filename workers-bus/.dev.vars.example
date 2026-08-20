@@ -72,6 +72,12 @@ FACET_LAUNCH_HMAC_KEY=""
 # matching route lives in the non-secret FACET_V2_ROUTES_JSON.
 # FACET_V2_KEYS_JSON='[{"key_id":"facet-prod","key_version":1,"secret":"...","not_before_ms":0,"not_after_ms":4102444800000}]'
 
+# Worker-to-broker secret for the private proposal-publication approval broker. `npm run dev`
+# generates this into deploy/local/keys/ and writes it here. It must match
+# PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET in the broker's own env file and must never be
+# reused for another broker authority.
+PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET=""
+
 # Public instant estimate (disabled until the non-secret vars in wrangler.jsonc
 # are configured with exact origins, rate limits, and a validated JSON rule set).
 PUBLIC_ESTIMATE_TURNSTILE_SECRET=""

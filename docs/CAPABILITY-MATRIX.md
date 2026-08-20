@@ -39,12 +39,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 58,
-      "latest": "0066_dev_outbox_contract_acceptance.sql"
+      "count": 59,
+      "latest": "0068_proposal_publication_approval_requests.sql"
     },
     "tests": {
-      "pwa": 485,
-      "worker": 913
+      "pwa": 492,
+      "worker": 918
     }
   },
   "proof_state_policy": {
@@ -253,10 +253,47 @@ ELEC-86 Facet v2 chain and customer portal switch-on (2026-08-20):
   `BLANK_QUOTE_FIELDS`, so the idempotent-replay path would then fail its "Draft contains commercial
   data" check as well. The Python unit tests do not reach this because they do not run against a
   DocType that applies defaults.
-- **Open gap, blocking step 5.** A Proposal Evidence Pack can only be promoted Draft → Approved by
-  the Owner Operator MCP command `request_publish_proposal_evidence_pack`; no Worker/PWA route
-  publishes one. Until a pack is published the portal read model returns `proposal: null`, so the
-  customer sees no proposal and the acceptance challenge answers 404.
+- **Step-5 gap, closed by ELEC-92 (below).** A Proposal Evidence Pack could only be promoted
+  Draft → Approved by the Owner Operator MCP command `request_publish_proposal_evidence_pack`;
+  no Worker/PWA route published one, so the portal read model returned `proposal: null` and the
+  acceptance challenge answered 404.
+
+ELEC-92 owner-facing proposal publication (2026-08-20):
+
+- `/api/v1/proposal-publication-approvals` is the second door onto exactly that owner-operator
+  command. Prepare (`approvals:prepare` + CSRF + `Idempotency-Key`) records a receipt-bound
+  approval request; approve (owner only) releases it. The Worker holds no signing key: the
+  private `proposal-publication` broker re-runs `dry_run_publish_proposal_evidence_pack` as a
+  pre-write source fence, verifies the stored signed dry-run receipt, mints the Ed25519 approval
+  receipt, and invokes `request_publish_proposal_evidence_pack`. Frappe's
+  `publish_proposal_evidence_pack` is unchanged, so every approval, anchor, and evidence check the
+  MCP path enforces is enforced here.
+- Migration `0068_proposal_publication_approval_requests.sql` is a fourth isolated approval
+  vertical alongside `0016`/`0017`/`0020`. A partial unique index permits one live intent per pack,
+  because publication is legal only out of Draft and is therefore not repeatable in Frappe.
+- The browser receives an allowlisted projection only: no receipt, no raw write arguments, no
+  private digest, and no approver identity inside the preview. An ambiguous broker call becomes
+  `execution_uncertain` reconciliation work, never an automatic retry.
+- The PWA action sits on the estimator workbench beside customer-link issuance
+  (`app/src/proposal/proposal-publication-action.tsx`): prepare, then a confirmation that states
+  what the customer will see and that no message, link, signature, or quote change occurs.
+- Fail-closed by default. `APP_PROPOSAL_PUBLICATION_ENABLED` is `"false"` in production and
+  staging and `"true"` only on `deploy/local`; while it is off the routes answer 404 and the read
+  model advertises no actions.
+- **Estimator workbench reachability.** The strict PWA contract did not know about the
+  `computed_takeoff`/`computed_estimate` previews or the `economics` block the Worker already
+  returns, so every job carrying measurement values failed the parse and the page rendered
+  "Measurement workbench is unavailable" — including the job this traverse runs on. The contract now
+  accepts them, pinned by a verbatim capture of the live read model
+  (`app/src/estimator/estimator-workbench-live-shape.fixture.json`).
+- **Four real-site defects were found on the way and fixed in a separate Frappe-side change**, not
+  in this lane: a stored Frappe Datetime arrives as a `datetime` while the surrounding contract is
+  text, so `!=`/`_text` comparisons rejected every real record while accepting every dict-built
+  fixture. Sites: the proposal measurement provenance check and the price-rule snapshot identity
+  check in `domain_policy`, the terms snapshot in `customer_contract_acceptance_api`, and that
+  module's claim timestamps, which MariaDB refuses outright in RFC 3339 form. Until those land, a
+  Proposal Evidence Pack cannot be created or published and a contract cannot be accepted against a
+  real site.
 
 IRO-44 safety substrate (merged in #59; the "branch-local" qualifier this section carried was
 stale from before that merge):

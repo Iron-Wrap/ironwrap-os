@@ -1874,12 +1874,18 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // of taking one from the request body, and 0065 the derivation receipts that make the derive
     // route's `Idempotency-Key` enforced rather than merely required. 0066 widens the dev-only
     // 0022 capture table so the local stack can complete the customer contract-acceptance
-    // challenge without Gmail, exactly as it already completes magic-link sign-in. #54 kept
+    // challenge without Gmail, exactly as it already completes magic-link sign-in. 0068 is the
+    // fourth approval vertical: the owner-facing Draft -> Approved Proposal Evidence Pack
+    // publication ledger, kept isolated from 0016/0017/0020 exactly as those are from each
+    // other; it took 0068 because #60 claimed 0067 while this branch was open. #54 kept
     // 0046 and #48 kept 0047, both of which landed on `main`, so the gap from 0048 to 0055 is
     // expected and not a missing migration.
-    assert.equal(migrations.length, 58);
+    assert.equal(migrations.length, 59);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0066_dev_outbox_contract_acceptance.sql");
+    assert.equal(
+      migrations.at(-1),
+      "0068_proposal_publication_approval_requests.sql",
+    );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -1927,8 +1933,12 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // index each, and the two append-only triggers each of them carries. 0064 adds one more of
     // each shape: the tenant authority-policy table, its effective-row index, and its two
     // append-only triggers. 0065 adds the derivation receipts table, its intent index, and three
-    // triggers - the append-only pair plus the `INSERT OR REPLACE` guard 0062 established.
-    assert.deepEqual({ ...counts }, { tables: 117, indexes: 166, triggers: 262 });
+    // triggers - the append-only pair plus the `INSERT OR REPLACE` guard 0062 established. 0068
+    // adds the proposal-publication approval vertical: its request and event tables, six indexes
+    // (including the partial unique index that permits only one live intent per pack), and nine
+    // triggers - binding immutability, the state and reconciliation fences, the three event
+    // appenders, and the three append-only guards.
+    assert.deepEqual({ ...counts }, { tables: 119, indexes: 172, triggers: 271 });
     // The applied chain — not the text of any single file — is what production
     // ends up running, so the complete_work receipt kind is asserted here.
     // 0028 is frozen at its shipped three-member CHECK and 0057 widens it

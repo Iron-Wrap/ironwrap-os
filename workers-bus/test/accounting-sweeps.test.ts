@@ -30,15 +30,15 @@ import {
   sweepAgeingAccountingExceptions,
   sweepDueAccountingObservations,
   sweepUncertainAccountingIntents,
-  type SweepProviderReader,
+  type SweepIntentReobserver,
 } from "../src/accounting-sweeps.ts";
+import { accountingIntentReobserver } from "../src/accounting-reobservation.ts";
 import { readAccountingIntent } from "../src/accounting-intents.ts";
 import {
   listAccountingExceptions,
   readLiveAccountingException,
 } from "../src/accounting-exceptions.ts";
 import { listAccountingObservations } from "../src/accounting-reconciliation.ts";
-import { readProviderEntity } from "../src/accounting-provider-read.ts";
 import { ingestObservedPayment } from "../src/accounting-payments.ts";
 import { submitAccountingIntent } from "../src/accounting-submission.ts";
 
@@ -82,17 +82,33 @@ async function submittedInvoice(
   return intent.intent_id;
 }
 
-/** A reader over the synthetic fixtures, shaped exactly like the S11 binding will be. */
-function fixtureReader(entityFile: string): { read: SweepProviderReader; calls: () => number } {
+/**
+ * The sweep's provider seam, over the synthetic fixtures.
+ *
+ * Deliberately the *production* factory (`accountingIntentReobserver`) rather than a hand-written
+ * stub: the one seam this file may replace is the credential, which project rule 5 forbids a test
+ * from holding. Everything downstream of it - the exact-id read, the payment discovery, the hash
+ * comparison, the verdict - is the code `index.ts` runs on the cron.
+ */
+function fixtureReobserver(
+  env: AppEnv,
+  routes: ReadonlyArray<Parameters<typeof fakeIntuit>[0][number]>,
+): { reobserve: SweepIntentReobserver; calls: () => number } {
   let calls = 0;
-  const { fetcher } = fakeIntuit([entityRoute("Invoice", entityFile)]);
+  const { fetcher } = fakeIntuit([...routes]);
+  const reobserve = accountingIntentReobserver(env, { auth: scenarioAuth(), fetcher });
   return {
     calls: () => calls,
-    read: async (input) => {
+    reobserve: async (input) => {
       calls += 1;
-      return await readProviderEntity(scenarioAuth(), { ...input, source: "sweep" }, fetcher, MUCH_LATER);
+      return await reobserve(input);
     },
   };
+}
+
+/** The common case: one invoice fixture, read by its exact id. */
+function fixtureReader(env: AppEnv, entityFile: string) {
+  return fixtureReobserver(env, [entityRoute("Invoice", entityFile)]);
 }
 
 test("with no reader bound the due sweep reports what is stale and changes nothing", async () => {
@@ -122,19 +138,23 @@ test("with no reader bound the due sweep reports what is stale and changes nothi
 test("with a reader bound the due sweep re-reads and judges what it finds", async () => {
   const { env } = testEnv();
   const intentId = await submittedInvoice(env);
-  const reader = fixtureReader("invoice-open.json");
+  const reader = fixtureReader(env, "invoice-open.json");
 
   const result = await sweepDueAccountingObservations(env, {
     tenantId: TENANT,
-    read: reader.read,
+    reobserve: reader.reobserve,
     now: MUCH_LATER,
   });
 
   assert.equal(result.reader_unbound, false);
   assert.equal(result.reread, 1);
   assert.equal(reader.calls(), 1);
-  // The fixture's balance is not zero, so an honest verdict is not `reconciled`.
+  // The fixture's balance is not zero, so an honest verdict is not `reconciled`. It is not a
+  // mismatch either: an issued, unpaid invoice is `partially_settled`, and the sweep counts it as
+  // what it is rather than folding a healthy queue into the mismatch column.
   assert.equal(result.reconciled, 0);
+  assert.equal(result.partially_settled, 1);
+  assert.equal(result.mismatched, 0);
   const observations = await listAccountingObservations(env, TENANT, { intentId });
   assert.equal(observations.length, 1);
   assert.equal(observations[0]!.source, "sweep");
@@ -144,14 +164,14 @@ test("with a reader bound the due sweep re-reads and judges what it finds", asyn
 test("a freshly read intent is not due again inside the window", async () => {
   const { env } = testEnv();
   await submittedInvoice(env);
-  const reader = fixtureReader("invoice-open.json");
+  const reader = fixtureReader(env, "invoice-open.json");
   await sweepDueAccountingObservations(env, {
-    tenantId: TENANT, read: reader.read, now: MUCH_LATER,
+    tenantId: TENANT, reobserve: reader.reobserve, now: MUCH_LATER,
   });
 
   const second = await sweepDueAccountingObservations(env, {
     tenantId: TENANT,
-    read: reader.read,
+    reobserve: reader.reobserve,
     // One minute after the read that just happened, with a one-day window.
     now: new Date(MUCH_LATER.getTime() + 60_000),
   });
@@ -171,8 +191,7 @@ test("a provider outage during the sweep leaves every money state exactly as it 
   const result = await sweepDueAccountingObservations(env, {
     tenantId: TENANT,
     now: MUCH_LATER,
-    read: async (input) =>
-      await readProviderEntity(scenarioAuth(), { ...input, source: "sweep" }, fetcher, MUCH_LATER),
+    reobserve: accountingIntentReobserver(env, { auth: scenarioAuth(), fetcher }),
   });
 
   assert.equal(result.unavailable, 1);
@@ -291,9 +310,9 @@ test("a realm is never invented: the reader is asked for the entity the intent a
   await sweepDueAccountingObservations(env, {
     tenantId: TENANT,
     now: MUCH_LATER,
-    read: async (input) => {
+    reobserve: async (input) => {
       asked.push({ entityType: input.entityType, entityId: input.entityId });
-      return { status: "unavailable", detailCode: "provider_unreachable" };
+      return { intent_id: input.intentId, verdict: null, detail_code: "provider_unreachable" };
     },
   });
   assert.deepEqual(asked, [{ entityType: "Invoice", entityId: "2001" }]);

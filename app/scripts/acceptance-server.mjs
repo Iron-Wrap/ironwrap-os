@@ -578,6 +578,26 @@ const fixtureAccountingMismatch = {
   age_seconds: 7200,
 };
 
+/**
+ * A freshly posted invoice, waiting on the customer. Slice S11's copy case.
+ *
+ * `settled_amount` is `0.00` and not null on purpose: that is the figure the dispatch readback
+ * writes when the invoice is issued and nothing has been paid yet, and it is exactly the row the
+ * old copy lied about ("Part of this is paid. Waiting for the rest." for an invoice nobody had
+ * paid a cent of). The next step here is what `accountingNextStep` now returns for it.
+ */
+const fixtureAccountingAwaiting = {
+  ...fixtureAccountingIntent,
+  intent_id: "acct-intent:JOB-ACCEPTANCE-3:deposit_invoice",
+  roof_job_id: "JOB-ACCEPTANCE-3",
+  settled_amount: "0.00",
+  state: "partially_settled",
+  badge: "in_flight",
+  next_step: "Posted to QuickBooks. Waiting for the customer to pay it.",
+  version: 5,
+  age_seconds: 5400,
+};
+
 const fixtureAccountingException = {
   exception_id: ACCOUNTING_EXCEPTION_ID,
   intent_id: ACCOUNTING_INTENT_ID,
@@ -603,7 +623,7 @@ const fixtureAccountingSummary = {
   summary: {
     queues: {
       needs_approval: { count: 1, oldest_age_seconds: 3600 },
-      awaiting_provider: { count: 0, oldest_age_seconds: null },
+      awaiting_provider: { count: 1, oldest_age_seconds: 5400 },
       mismatched: { count: 1, oldest_age_seconds: 7200 },
       exceptions: { count: 1, oldest_age_seconds: 7200 },
     },
@@ -620,7 +640,7 @@ const fixtureAccountingSummary = {
   },
   queues: {
     needs_approval: [fixtureAccountingIntent],
-    awaiting_provider: [],
+    awaiting_provider: [fixtureAccountingAwaiting],
     mismatched: [fixtureAccountingMismatch],
     exceptions: [fixtureAccountingException],
   },

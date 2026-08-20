@@ -56,7 +56,7 @@ import { readAccountingCompensationAuthorizationByException } from "../src/accou
 import { ingestObservedPayment } from "../src/accounting-payments.ts";
 import { runAccountingSweeps, sweepStuckAccountingDispatches } from "../src/accounting-sweeps.ts";
 import { recordTaxPolicySnapshot } from "../src/accounting-tax-snapshots.ts";
-import { readProviderEntity } from "../src/accounting-provider-read.ts";
+import { accountingIntentReobserver } from "../src/accounting-reobservation.ts";
 import { normalizeProviderEntity } from "../src/accounting-normalizers.ts";
 
 /** The instant every scenario derives at, and the two the dispatcher runs at. */
@@ -260,9 +260,7 @@ test("journey 1: derive, approve, and the dispatcher carries it to reconciled wi
   const nextDay = new Date(AT_READ.getTime() + 25 * 60 * 60 * 1000);
   const swept = await runAccountingSweeps(env, {
     tenantId: TENANT,
-    read: async (input) => await readProviderEntity(
-      scenarioAuth(), { ...input, source: "sweep" }, fetcher, nextDay,
-    ),
+    reobserve: accountingIntentReobserver(env, { auth: scenarioAuth(), fetcher }),
     now: nextDay,
   });
   assert.equal(swept.due_observations.reconciled, 1);

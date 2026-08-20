@@ -28,7 +28,22 @@ slice needs a table: a reversal is an ordinary `accounting_intents` row carrying
 | S4 | **Implemented** | `workers-bus/src/accounting-submission.ts`, `workers-bus/src/accounting-payments.ts` |
 | S5 | **Implemented** | `workers-bus/src/accounting-compensation.ts` |
 | S8a | **Implemented** | `workers-bus/src/accounting-dispatch.ts`, `workers-bus/src/accounting-expectations.ts`, `workers-bus/src/accounting-compensation-authorizations.ts`, `workers-bus/migrations/0063_accounting_dispatch_evidence.sql` |
-| S6, S7, S10–S12 | Target | — |
+| S11 | **Implemented** | `workers-bus/src/accounting-reobservation.ts`, the bound sweep in `workers-bus/src/index.ts`, the re-reading `reconcile` route and `POST /tax/snapshots` in `workers-bus/src/accounting-api.ts` |
+| S6, S7, S10, S12 | Target | — |
+
+**S11 — the re-observation rail (ELEC-81).** S8a made an approved intent reach the provider, and
+ELEC-77 proved on the running stack that nothing carried it any further: `ingestObservedPayment` had
+zero callers in `src/`, `runAccountingSweeps` ran with no bound reader, and `reconcile` on the BFF
+was a state-trigger flip that compared nothing. A genuinely dispatched, fully-matching invoice
+therefore stopped at `partially_settled` for good — `reconciled` was unreachable in the shipped
+product — and the reconciliation-drift exception could not be raised at all, so ELEC-75's hardening
+of exception resolution had never been exercised end to end. `accounting-reobservation.ts` is the
+caller that was missing, shared by the accountant's `reconcile` route and the cron's due-observation
+sweep so the two cannot drift: read the entity by its exact id, observe each Payment that entity
+declares, judge once. Unbound stays a first-class state in both.
+
+S11 adds no migration. The original plan called it "a small binding PR gated on #46 and #43"; both
+merged, and what was left was not a binding but the missing caller described above.
 
 **S8a — the dispatcher (ELEC-72).** S1–S5 built the money engine and S8 built the routes, and
 nothing joined them: `submitAccountingIntent` had no production caller, `deriveCompensationIntent`
@@ -86,7 +101,30 @@ Five deviations from this document, all deliberate and each argued at the point 
    — is enforced directly by `accounting-reconciliation.ts` before any hash is compared. Hashing the
    id as well stated that check twice and made the create case impossible. An intent that bound a
    complete envelope, which is every intent derived before this, is compared exactly as before.
-8. **Two remedies refuse rather than accept an unverifiable claim.** `resolveAccountingException`
+8. **An eighteenth and nineteenth origin, for the same reason as deviation 6.** Section 8.1's route
+   table has no create row for a tax policy snapshot, and `recordTaxPolicySnapshot` (slice S2)
+   accordingly had no production caller. That was not cosmetic: `deriveIntent` refuses with
+   `tax_mapping_missing` when no current snapshot binds the jurisdiction and code it was given, so
+   on a tenant nobody had hand-inserted a row for, **no money intent could be derived at all** and
+   the whole lane was unreachable from zero. `POST /api/v1/accounting/tax/snapshots` is that origin,
+   gated on `accounting:review` like the derive route, recording a statutory rate with the citation
+   it was read from. It is a policy command, not a money one: it reaches no provider, creates no
+   entity, moves no intent, and cannot touch a snapshot that already exists. Its `Idempotency-Key`
+   is enforced by the facts hash rather than by a receipts table, and the difference from
+   deviation 6's derivation receipts is argued at the handler: two different rates are two
+   legitimately different snapshots, so one key standing for two bodies causes no harm here.
+   Separately, `reconcile` is no longer only a trigger — see deviation 9.
+9. **`reconcile` performs the re-read it names.** Before S11 the command wrote a receipt, the D1
+   trigger moved the intent to `reconciliation_required`, and no code compared anything with the
+   provider. Both halves are kept, because both are true: the receipt records that a named
+   accountant asked for a re-read, and the authenticated re-read that immediately follows is what
+   section 5.1 admits as the only route to a settled state. A tenant with no connected realm still
+   gets the receipt and an explicit `re_read.status = "provider_unbound"` at `202` rather than a
+   verdict nobody checked. Two consequences elsewhere follow from the receipt landing first, and
+   both are recorded at their code: provider drift is judged by `provider_reconciled_at` rather than
+   by the current state (the receipt has already moved it), and an exception now carries the hash
+   **this** read produced rather than the one the intent still held.
+10. **Two remedies refuse rather than accept an unverifiable claim.** `resolveAccountingException`
    now looks a claimed `compensating_effect_id` up against `accounting_intents.effect_id` — the
    only place a dispatched money effect is ever recorded — and refuses a reference that is not a
    real, settled, matching reversal of that exception's own intent. `void_provider_entity` and
@@ -484,6 +522,7 @@ rather than being described.
 | Lost response | `resolveUncertainAccountingIntent`, retry never offered | "a lost response is resolved by finding the entity, never by retrying" |
 | Lost response, entity never created | deadline → `unknown_effect_deadline_expired` | "a lost response whose entity never appears becomes the accountant's decision at the deadline" |
 | Provider drift | new observation supersedes → `reconciliation_required` | "a previously reconciled entity that changed is drift: the new observation supersedes" |
+| Provider drift, raised through a production surface | `accounting-reobservation.ts` → the `reconcile` route and the bound sweep | `test/accounting-reobservation.test.ts` "a re-observation that disagrees raises the drift exception through the production path" |
 | Identity conflict | `provider_identity_conflict`, compensation refused in both layers | "an entity id that is not the one we created is `identity_conflict`, and it blocks compensation" |
 
 Slices S4 and S5 add the path that reaches those verdicts from a live dispatch rather than from a
@@ -520,6 +559,20 @@ and the check that stops an exception being closed on a reversal nobody performe
 | A claimed reversal that never happened closes nothing | `verifyCompensatingEffect` → `accounting_exception_compensating_effect_unknown` | "the fabricated-reference repro is refused: closing an exception now needs a real reversal" |
 | A real reversal of a different intent closes nothing either | the same check, on `compensates_intent_id` | "a real reversal of a different intent does not close this exception" |
 | A dispatch that stopped moving is surfaced rather than silent | `sweepStuckAccountingDispatches` | "an intent stuck in submission_pending is surfaced by the staleness sweep, and a re-run is a no-op" |
+
+Slice S11 adds the surfaces that reach all of the above after the dispatch readback, and the origin
+the lane needs before any of it can start.
+
+| Behaviour | Enforced by | Test |
+|---|---|---|
+| An accountant's re-read reaches the provider and settles the verdict inside the request | `accounting-api.ts` `reconcile` → `reobserveAccountingIntent` | `test/accounting-reobservation.test.ts` "the reconcile route re-reads the provider and carries a paid invoice to reconciled" |
+| A paid invoice reaches `reconciled` on the cron, with no human step | `index.ts` binds `accountingIntentReobserver` into `runAccountingSweeps` | "the due-observation sweep re-reads through the bound rail and reconciles what it finds" |
+| An invoice's Payments are discovered from what the invoice itself declares, and observed by exact id | `linkedPaymentIds` → `ingestObservedPayment` | "linked payments are read from the invoice's own declaration, and only Payments" |
+| A re-run inside the staleness window reads nothing and moves no version | the sweep's own due window | "the due-observation sweep re-reads through the bound rail and reconciles what it finds" |
+| An unconnected tenant gets a receipt and an honest refusal, never an unchecked verdict | `resolveAccountingObservationBinding` → `null` | "an unbound tenant gets a receipt and an honest refusal, never an unchecked verdict" |
+| An outage writes no observation, no verdict and no exception | `readProviderEntity` → `unavailable` short-circuit | "a provider outage writes nothing at all: not an observation, not a verdict, not an exception" |
+| The $240 over-payment loop, raised by a production re-read and closed only by a real reversal | the rail → `verifyCompensatingEffect` | "the $240 over-payment loop: raised by a real re-observation, closed only by a real reversal" |
+| A tenant with no recorded rate can record one, and only then derive | `POST /tax/snapshots` → `recordTaxPolicySnapshot` | `test/accounting-api.test.ts` "the money lane starts from zero: the statutory rate has a route, so a derivation can bind one" |
 
 **Target, not implemented.** Refund after holdback release (`holdback_over_released`) waits on the
 holdback ledger in S6, and payroll correction waits on S7 and PR #55. Their reason codes are already
@@ -708,6 +761,7 @@ and says nothing about one key standing for two different sets of figures (ELEC-
 | GET | `/api/v1/accounting/exceptions?status=` | `accounting:read` |
 | POST | `/api/v1/accounting/exceptions/{exceptionId}/resolve` | `accounting:reconcile` |
 | GET | `/api/v1/accounting/tax/snapshots?period=` | `accounting:read` |
+| POST | `/api/v1/accounting/tax/snapshots` (deviation 8) | `accounting:review` |
 | GET | `/api/v1/accounting/tax/remittance/{period}` | `accounting:read` |
 | GET | `/api/v1/accounting/payroll/runs/{payrollRunId}` | `accounting:payroll` |
 | POST | `/api/v1/accounting/payroll/runs/{payrollRunId}/approve` | `accounting:payroll` |
@@ -855,7 +909,7 @@ Dependency order. S0–S10 are provable against `main` today. Every slice ends g
 | S8 | Bus BFF routes + permissions + cron sweeps | S3 | **Implemented.** Backend surface. |
 | S9 | PWA Money Desk, intent detail, exception queue | S8 | **Implemented.** Frontend surface. |
 | S10 | PWA holdback register + release wizard + payroll review | S6, S7, S9 | Frontend surface. |
-| S11 | **Binding PR**: wire the ports to `runExternalEffect` and `quickbooks_connections` | **PR #46 and PR #43 merged** | ~60 lines. The only slice that waits. |
+| S11 | **Shipped (ELEC-81)**: the re-observation rail — bound sweep, re-reading `reconcile`, statutory-rate origin | #46 and #43 merged | No migration. What was actually missing was the caller, not the binding. |
 | S12 | Sandbox proof + accountant business acceptance | credentials, accountant | **Blocked** by project rule 5. |
 
 Backend versus frontend split: S0–S8 and S11 are `workers-bus/` plus `frappe-apps/`; S9–S10 are

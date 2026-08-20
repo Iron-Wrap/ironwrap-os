@@ -939,6 +939,141 @@ test("tax snapshots and the remittance proposal read by period, and refuse a per
   assert.equal(bogusFilter.status, 400);
 });
 
+test("the money lane starts from zero: the statutory rate has a route, so a derivation can bind one", async () => {
+  // Slice S11. `recordTaxPolicySnapshot` shipped with S2 and had no production caller, which made
+  // this the first wall a real tenant hit: `deriveIntent` refuses with `tax_mapping_missing` when
+  // no current snapshot binds the jurisdiction and code, so on a tenant nobody had hand-inserted a
+  // row for, no money intent could be derived at all.
+  const { env } = apiTestEnv();
+
+  const before = await call(env, "accounting", "POST", "/api/v1/accounting/intents", {
+    body: derivationBody(),
+    idempotencyKey: "idem-derive-notax-00001",
+  });
+  assert.equal(before.status, 409);
+  assert.equal(before.body.error, "tax_mapping_missing");
+
+  const recorded = await call(env, "accounting", "POST", "/api/v1/accounting/tax/snapshots", {
+    body: {
+      jurisdiction: "CA-AB",
+      tax_code: "GST",
+      provider_tax_code_id: "3",
+      rate_percent: "5.0000",
+      effective_from: "2008-01-01",
+      source_ref: "CRA GST bulletin 2008-01-01",
+    },
+    idempotencyKey: "idem-taxsnap-00000001",
+  });
+  assert.equal(recorded.status, 201, JSON.stringify(recorded.body));
+  const snapshot = recorded.body.snapshot as Record<string, unknown>;
+  assert.equal(snapshot.rate_percent, "5.0000");
+  assert.equal(snapshot.version, 1);
+  assert.equal(snapshot.tenant_id, undefined, "the tenant is the session's, never echoed");
+
+  // ...and now the derivation the same tenant could not make a moment ago succeeds and binds it.
+  const after = await call(env, "accounting", "POST", "/api/v1/accounting/intents", {
+    body: derivationBody(),
+    idempotencyKey: "idem-derive-withtax-0001",
+  });
+  assert.equal(after.status, 201, JSON.stringify(after.body));
+  const intent = await readAccountingIntent(
+    env, TENANT, (after.body.intent as { intent_id: string }).intent_id,
+  );
+  assert.ok(intent?.tax_policy_snapshot_sha256, "the candidate bound a rate somebody recorded");
+
+  // The same rate again is one snapshot, not a second version of the same number: the facts hash
+  // is the idempotency, which is the guarantee `recordTaxPolicySnapshot` has always given.
+  const again = await call(env, "accounting", "POST", "/api/v1/accounting/tax/snapshots", {
+    body: {
+      jurisdiction: "CA-AB",
+      tax_code: "GST",
+      provider_tax_code_id: "3",
+      rate_percent: "5",
+      effective_from: "2008-01-01",
+      source_ref: "CRA GST bulletin 2008-01-01",
+    },
+    idempotencyKey: "idem-taxsnap-00000002",
+  });
+  assert.equal(again.status, 201);
+  assert.equal((again.body.snapshot as { snapshot_id: string }).snapshot_id, snapshot.snapshot_id);
+
+  // A different rate is a different snapshot, versioned beside the first rather than over it -
+  // section 5.4's "a rate change creates a NEW snapshot", with the old one still immutable.
+  const raised = await call(env, "accounting", "POST", "/api/v1/accounting/tax/snapshots", {
+    body: {
+      jurisdiction: "CA-AB",
+      tax_code: "GST",
+      provider_tax_code_id: "3",
+      rate_percent: "6.0000",
+      effective_from: "2026-09-01",
+      source_ref: "CRA GST bulletin 2026-09-01",
+    },
+    idempotencyKey: "idem-taxsnap-00000003",
+  });
+  assert.equal(raised.status, 201);
+  assert.equal((raised.body.snapshot as { version: number }).version, 2);
+  const listed = await call(
+    env, "accounting", "GET", "/api/v1/accounting/tax/snapshots?period=2026-09",
+  );
+  assert.equal((listed.body.snapshots as unknown[]).length, 2);
+});
+
+test("recording a rate is gated, CSRF-checked, key-required, and refuses a rate that is not one", async () => {
+  const { env } = apiTestEnv();
+  const path = "/api/v1/accounting/tax/snapshots";
+  const body = {
+    jurisdiction: "CA-AB",
+    tax_code: "GST",
+    rate_percent: "5.0000",
+    effective_from: "2008-01-01",
+    source_ref: "CRA GST bulletin 2008-01-01",
+  };
+
+  // `ops` holds `accounting:read` alone: reading the rates is not recording them.
+  const ops = await call(env, "ops", "POST", path, { body, idempotencyKey: "idem-tax-ops-00001" });
+  assert.equal(ops.status, 403);
+  const sales = await call(env, "sales", "POST", path, { body, idempotencyKey: "idem-tax-sal-001" });
+  assert.equal(sales.status, 403);
+
+  const noCsrf = await call(env, "accounting", "POST", path, { body, csrf: false });
+  assert.equal(noCsrf.status, 403);
+  assert.equal(noCsrf.body.error, "csrf_failed");
+
+  const noKey = await call(env, "accounting", "POST", path, { body, idempotencyKey: null });
+  assert.equal(noKey.status, 400);
+  assert.equal(noKey.body.error, "idempotency_key_required");
+
+  for (const bad of [
+    { ...body, rate_percent: "-5.0000" },
+    { ...body, rate_percent: "5.000005" },
+    { ...body, rate_percent: "five" },
+    { ...body, effective_from: "not-a-date" },
+    { ...body, source_ref: "x" },
+    { ...body, jurisdiction: "C" },
+  ]) {
+    const refused = await call(env, "accounting", "POST", path, {
+      body: bad,
+      idempotencyKey: "idem-tax-bad-000001",
+    });
+    assert.equal(refused.status, 400, JSON.stringify(bad));
+    assert.equal(refused.body.error, "invalid_accounting_tax_snapshot");
+  }
+
+  // The tenant is the session's, and a body that tries to name one is refused outright.
+  const extraField = await call(env, "accounting", "POST", path, {
+    body: { ...body, tenant_id: "someone-else" },
+    idempotencyKey: "idem-tax-extra-00001",
+  });
+  assert.equal(extraField.status, 400);
+  assert.equal(extraField.body.error, "unexpected_field");
+
+  assert.deepEqual(
+    (await call(env, "accounting", "GET", "/api/v1/accounting/tax/snapshots")).body.snapshots,
+    [],
+    "not one refusal wrote a rate",
+  );
+});
+
 test("the allowed-action list mirrors the permissions the session really holds", async () => {
   const { env } = apiTestEnv();
   const accountant = await call(env, "accounting", "GET", "/api/v1/accounting/summary");

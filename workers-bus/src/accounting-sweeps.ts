@@ -17,9 +17,17 @@
 //   what is due; the ageing sweep reports; and only the deadline sweep transitions state, because
 //   there the deadline itself is the accountant's own policy and section 5.4 names the outcome.
 //
-// No credential lives here. The provider reader is injected (the `fetcher` convention slice S3
+// No credential lives here. The re-observer is injected (the `fetcher` convention slice S3
 // established), so under test it is a synthetic Intuit double and in an unbound Worker it is
 // simply absent - project rule 5 holds by construction rather than by discipline.
+//
+// Slice S11 changed what that injected seam *is*. Until then it was a raw entity reader and this
+// module judged the result itself, which could never have worked for the case that matters: an
+// invoice reconciles only when its Payment observations account for what was settled, and a sweep
+// that re-read the invoice alone would have reported `settlement_invariant_violated` on every
+// invoice a customer had actually paid. The seam is now one re-observation
+// (`accounting-reobservation.ts`), which reads the invoice, observes the Payments the invoice
+// declares, and judges once. This module counts what came back and nothing more.
 
 import {
   listAccountingExceptions,
@@ -34,10 +42,9 @@ import {
   listAccountingIntents,
   type AccountingIntentRecord,
   type AccountingIntentState,
+  type AccountingVerdict,
 } from "./accounting-intents.ts";
 import type { AccountingEntityType } from "./accounting-normalizers.ts";
-import type { ProviderReadResult } from "./accounting-provider-read.ts";
-import { reconcileAccountingIntent } from "./accounting-reconciliation.ts";
 import { resolveUncertainAccountingIntent } from "./accounting-reconciliation.ts";
 import type { AppEnv } from "./app-types.ts";
 
@@ -67,16 +74,34 @@ export const AWAITING_DISPATCH_STATES: readonly AccountingIntentState[] = [
 ];
 
 /**
- * The one seam a sweep needs to reach the provider: read one entity by its exact id.
+ * What one re-observation hands back to a sweep that counts.
  *
- * Deliberately narrower than `readProviderEntity` itself so a sweep cannot grow a write path, and
- * optional everywhere so the Worker can register the sweep before slice S11 binds a real reader.
+ * Deliberately the *verdict*, not the provider payload: a sweep decides what is due to be looked at
+ * and how to report it, and nothing else. Hashing, payment discovery and the judgement itself
+ * belong to `accounting-reobservation.ts`, so there is exactly one place where "look again" is
+ * defined and the cron cannot drift from what the accountant's own re-read does.
  */
-export type SweepProviderReader = (input: {
+export interface SweepReobservation {
+  intent_id: string;
+  /** `null` when the provider could not be reached, so nothing was written (section 5.3). */
+  verdict: AccountingVerdict | null;
+  detail_code: string | null;
+}
+
+/**
+ * The one seam a sweep needs to reach the provider: look again at one intent.
+ *
+ * Deliberately narrower than the rail's own entry point - a sweep names an intent and gets a
+ * verdict back, so it cannot grow a write path of its own - and optional everywhere, so an unbound
+ * Worker registers the sweep and reports what is due without ever reaching a provider.
+ */
+export type SweepIntentReobserver = (input: {
   tenantId: string;
+  intentId: string;
   entityType: AccountingEntityType;
   entityId: string;
-}) => Promise<ProviderReadResult>;
+  now: Date;
+}) => Promise<SweepReobservation>;
 
 export interface DueObservation {
   intent_id: string;
@@ -91,12 +116,20 @@ export interface DueObservationSweepResult {
   scanned: number;
   /** Intents whose provider truth has not been re-read inside the window. */
   due: DueObservation[];
-  /** How many were actually re-read. Zero without a reader, and that is a normal state. */
+  /** How many were actually re-read. Zero without a reobserver, and that is a normal state. */
   reread: number;
   reconciled: number;
+  /**
+   * Re-read, matched, and legitimately still waiting on the rest of the money.
+   *
+   * Counted apart from `mismatched` on purpose: `partially_settled` is a correct posting that has
+   * not been paid off (section 5.4), and folding it into the mismatch count made a healthy queue
+   * read like a broken one in the cron log.
+   */
+  partially_settled: number;
   mismatched: number;
   unavailable: number;
-  /** True when no reader was supplied, so `due` is a report and nothing was checked. */
+  /** True when no reobserver was supplied, so `due` is a report and nothing was checked. */
   reader_unbound: boolean;
 }
 
@@ -111,7 +144,7 @@ export async function sweepDueAccountingObservations(
   env: AppEnv,
   input: {
     tenantId: string;
-    read?: SweepProviderReader;
+    reobserve?: SweepIntentReobserver;
     staleAfterSeconds?: number;
     limit?: number;
     now?: Date;
@@ -145,34 +178,29 @@ export async function sweepDueAccountingObservations(
     due,
     reread: 0,
     reconciled: 0,
+    partially_settled: 0,
     mismatched: 0,
     unavailable: 0,
-    reader_unbound: input.read === undefined,
+    reader_unbound: input.reobserve === undefined,
   };
-  const read = input.read;
-  if (!read) return result;
+  const reobserve = input.reobserve;
+  if (!reobserve) return result;
 
   for (const item of due) {
     // An intent with no provider entity id has nothing to re-read by exact id, and section 5.1
     // admits no other kind of read. It stays due, and the deadline sweep is what answers it.
     if (!item.entity_id || !item.entity_type) continue;
-    const outcome = await read({
-      tenantId: input.tenantId,
-      entityType: item.entity_type as AccountingEntityType,
-      entityId: item.entity_id,
-    });
-    result.reread += 1;
-    if (outcome.status === "unavailable") {
-      result.unavailable += 1;
-      continue;
-    }
-    const judged = await reconcileAccountingIntent(env, {
+    const judged = await reobserve({
       tenantId: input.tenantId,
       intentId: item.intent_id,
-      read: outcome,
-    }, now);
+      entityType: item.entity_type as AccountingEntityType,
+      entityId: item.entity_id,
+      now,
+    });
+    result.reread += 1;
     if (judged.verdict === "reconciled") result.reconciled += 1;
-    else if (judged.verdict === "unavailable") result.unavailable += 1;
+    else if (judged.verdict === "partially_settled") result.partially_settled += 1;
+    else if (judged.verdict === null || judged.verdict === "unavailable") result.unavailable += 1;
     else result.mismatched += 1;
   }
   return result;
@@ -330,7 +358,7 @@ export async function runAccountingSweeps(
   env: AppEnv,
   input: {
     tenantId: string;
-    read?: SweepProviderReader;
+    reobserve?: SweepIntentReobserver;
     staleAfterSeconds?: number;
     deadlineSeconds?: number;
     agingAfterSeconds?: number;
@@ -341,7 +369,7 @@ export async function runAccountingSweeps(
   const [dueObservations, uncertain, exceptions, stuckDispatches] = await Promise.all([
     sweepDueAccountingObservations(env, {
       tenantId: input.tenantId,
-      read: input.read,
+      ...(input.reobserve ? { reobserve: input.reobserve } : {}),
       staleAfterSeconds: input.staleAfterSeconds,
       now: input.now,
     }),

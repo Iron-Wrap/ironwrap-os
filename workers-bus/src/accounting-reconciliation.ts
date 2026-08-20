@@ -265,7 +265,9 @@ export async function reconcileAccountingIntent(
       entityId: read.entityId,
       detailCode: read.detailCode ?? null,
       remedies: remedies("superseded_by_new_intent", "accepted_as_posted"),
-    }, now);
+      // Nothing was read, so nothing was hashed. An exception that named a hash here would be
+      // citing evidence that does not exist.
+    }, now, null);
     // The verdict is recorded even though there is no observation to point at: "we looked and it
     // was not there" is a decision about the money, and a queue entry with no verdict behind it
     // would leave the accountant guessing what the system actually concluded.
@@ -372,7 +374,7 @@ export async function reconcileAccountingIntent(
   }, now);
 
   const exception = decision.exceptionReason
-    ? await raise(env, intent, decision.exceptionReason, decision.exceptionDetail, now)
+    ? await raise(env, intent, decision.exceptionReason, decision.exceptionDetail, now, comparedObserved)
     : null;
   const applied = await applyVerdict(env, {
     intent,
@@ -463,7 +465,13 @@ async function decide(
   }
 
   const hashesAgree = observedSha256 === expectedSha256;
-  const drifted = intent.state === "reconciled";
+  // "Previously reconciled" is a durable fact, not the current state. `provider_reconciled_at` is
+  // stamped once a readback matched and never cleared, whereas the state moves: the accountant's
+  // own `reconcile` command writes a receipt that flips the intent to `reconciliation_required`
+  // *before* the re-read it triggers, so judging drift by the state would report the most
+  // deliberate re-read in the system - a person pressing "check this against QuickBooks" - as a
+  // first-time mismatch on an entity that had already agreed once.
+  const drifted = intent.provider_reconciled_at !== null;
 
   // Only an invoice carries the cumulative settlement target (section 5.4). A payment, credit memo
   // or refund is settled by its own existence, so hash equality is the whole test.
@@ -634,7 +642,9 @@ export async function resolveUncertainAccountingIntent(
     providerRequestId: intent.provider_request_id,
     deadlineAt: input.deadlineAt,
     remedies: remedies("superseded_by_new_intent", "accepted_as_posted"),
-  }, now);
+    // A deadline passing is not a read: the last hash we hold is the last one an observation
+    // produced, and it is the honest thing to cite for an entity nobody has been able to find.
+  }, now, intent.observed_sha256);
   const applied = await recordAccountingIntentVerdict(env, {
     tenantId: input.tenantId,
     intentId: input.intentId,
@@ -741,17 +751,35 @@ async function applyVerdict(
     intentId: input.intent.intent_id,
     verdict: input.verdict,
     observedSha256: input.observedSha256,
-    settledAmount: input.verdict === "partially_settled" ? input.settledAmount : null,
+    // Every verdict that computed a settled figure records it, not only `partially_settled`.
+    // Restricting it to that one verdict was invisible while `reconciled` was unreachable and
+    // became a desk-truth defect the moment slice S11 made it reachable: an invoice that a
+    // customer had paid in full showed the badge "Reconciled" beside `settled_amount` `0.00` -
+    // the figure the dispatch readback wrote when nothing had been paid yet. `null` still means
+    // "this verdict computed no settlement", and the column's COALESCE keeps the last one that did.
+    settledAmount: input.settledAmount,
     reasonCode: input.reasonCode,
   }, now);
 }
 
+/**
+ * Open the accountant's queue entry for one verdict.
+ *
+ * `observedSha256` is the hash **this** read produced, passed in rather than taken from
+ * `intent.observed_sha256`. The column on the intent still holds the previous observation's hash
+ * at this point - the verdict has not been applied yet - so reading it here put the *old* figure on
+ * the exception. On a first mismatch that column is null and the omission was invisible; on drift,
+ * where the previous read matched by definition, it wrote the expected hash into both fields and
+ * the queue entry claimed expected and observed were identical on an exception that exists because
+ * they are not. `null` is honest and means there was nothing to compare (the entity was absent).
+ */
 async function raise(
   env: AppEnv,
   intent: AccountingIntentRecord,
   reasonCode: AccountingExceptionReasonCode,
   detail: unknown,
   now: Date,
+  observedSha256: string | null,
 ): Promise<AccountingExceptionRecord> {
   const { exception } = await raiseAccountingException(env, {
     tenantId: intent.tenant_id,
@@ -759,7 +787,7 @@ async function raise(
     intentId: intent.intent_id,
     reasonCode,
     expectedSha256: intent.expected_sha256,
-    observedSha256: intent.observed_sha256,
+    observedSha256,
     detail,
   }, now);
   return exception;

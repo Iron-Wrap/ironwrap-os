@@ -214,3 +214,33 @@ export async function readIntentByProviderEntity(
   ).bind(input.tenantId, input.realmId, input.entityType, input.entityId)
     .first<AccountingIntentRecord>();
 }
+
+/**
+ * The distinct Payments an invoice payload says have been applied to it.
+ *
+ * The mirror image of `linkedInvoiceIds`, and the reason `reconciled` is reachable at all: an
+ * invoice reaches it only when `Balance == 0` *and* the cumulative invariant holds
+ * (section 5.4), and the settled half of that invariant is summed from Payment **observations**.
+ * Re-reading the invoice alone can therefore never reconcile it - it would see a zero balance with
+ * nothing recorded as settling it and report `settlement_invariant_violated`, which is a defect
+ * dressed as a verdict. So the re-observation rail reads what the invoice itself declares and goes
+ * and observes each one.
+ *
+ * Deliberately not part of `SETTLEMENT_FIELDS`: `LinkedTxn` is not an input to the invariant and is
+ * never hashed. It only names which entity to read next, and every one of those reads is still an
+ * authenticated detail read of an exact provider id - the only kind section 5.1 admits. No search,
+ * no query, nothing inferred from the link itself.
+ */
+export function linkedPaymentIds(invoicePayload: unknown): string[] {
+  const record = invoicePayload as Record<string, unknown> | null | undefined;
+  const links = record?.["LinkedTxn"];
+  if (!Array.isArray(links)) return [];
+  const seen = new Set<string>();
+  for (const entry of links) {
+    const link = entry as Record<string, unknown> | null;
+    if (link?.["TxnType"] !== "Payment") continue;
+    const txnId = link["TxnId"];
+    if (typeof txnId === "string" && txnId.length > 0) seen.add(txnId);
+  }
+  return [...seen];
+}

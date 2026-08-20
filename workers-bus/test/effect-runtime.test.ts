@@ -41,7 +41,11 @@ class SqliteD1 {
 
   constructor() {
     this.raw.exec("PRAGMA foreign_keys = ON");
-    this.raw.exec(readFileSync(new URL("../migrations/0042_external_effect_runtime.sql", import.meta.url), "utf8"));
+    // 0042 declares the ledger; 0062 adds the `BEFORE INSERT` guards that make its append-only
+    // claim hold against `INSERT OR REPLACE` too. Both, so the harness matches the deployed schema.
+    for (const file of ["0042_external_effect_runtime.sql", "0062_external_effect_insert_replace_guards.sql"]) {
+      this.raw.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
+    }
   }
 
   prepare(sql: string) {
@@ -516,4 +520,86 @@ test("a remotely claimed attempt uses the same provider readback settlement rule
   assert.equal(settled.effect.state, "succeeded");
   assert.equal(settled.attempt.state, "succeeded");
   assert.deepEqual(settled.value, { accepted: true });
+});
+
+test("`INSERT OR REPLACE` cannot rewrite the effect ledger either", async () => {
+  // The 0042 follow-up the PR #73 review asked for (Multica ELEC-64 item 3 / ELEC-65 item 3).
+  // 0059-0061 mirrored 0042's append-only trigger shape, so when the money-plane tables turned out
+  // to be rewritable through `INSERT OR REPLACE` the same question applied here - and the answer
+  // was yes. Every assertion below failed before 0062: SQLite's internal conflict-delete does not
+  // fire a `BEFORE DELETE` trigger unless `PRAGMA recursive_triggers` is ON, which it is not.
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  const effect = await authorized(appEnv, "email:replace-guard");
+  await executeExternalEffect(appEnv, effect.effect_id, {
+    async dispatch() { return { outcome: "unknown" as const, providerResponse: { timeout: true } }; },
+  }, new Date(NOW));
+  await reconcileExternalEffect(appEnv, effect.effect_id, {
+    outcome: "inconclusive",
+    evidence: { provider: "gmail", search_complete: false },
+    now: NOW,
+  });
+
+  const row = <T,>(sql: string): T => db.raw.prepare(sql).get() as T;
+  const attempt = row<Record<string, unknown>>(
+    `SELECT * FROM external_effect_attempts ORDER BY attempt_number DESC LIMIT 1`,
+  );
+  const event = row<Record<string, unknown>>(
+    `SELECT * FROM external_effect_events ORDER BY event_seq LIMIT 1`,
+  );
+  const exception = row<Record<string, unknown>>(`SELECT * FROM external_effect_exceptions LIMIT 1`);
+  assert.ok(attempt && event && exception, "the ledger should carry an attempt, an event and an exception");
+
+  const replace = (table: string, source: Record<string, unknown>, changes: Record<string, unknown>) => {
+    const next = { ...source, ...changes };
+    const columns = Object.keys(next);
+    return () => db.raw.prepare(
+      `REPLACE INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+    ).run(...columns.map((column) => next[column] ?? null));
+  };
+
+  // A terminal attempt, re-stated as a success under a new attempt id: conflicts on
+  // UNIQUE (effect_id, attempt_number), which is exactly what `OR REPLACE` would resolve by
+  // deleting the row the append-only trigger is supposed to protect.
+  assert.throws(
+    replace("external_effect_attempts", attempt, {
+      attempt_id: "external-effect-attempt:forged01",
+      state: "succeeded",
+      request_hash: "f".repeat(64),
+      result_code: "ok",
+    }),
+    /external_effect_attempts_append_only/,
+  );
+  assert.throws(
+    replace("external_effect_events", event, { detail_code: "forged" }),
+    /external_effect_events_append_only/,
+  );
+  assert.throws(
+    replace("external_effect_exceptions", exception, {
+      exception_id: "external-effect-exception:forged01",
+      expected_hash: "f".repeat(64),
+      observed_hash: "f".repeat(64),
+    }),
+    /external_effect_exceptions_retained/,
+  );
+  assert.throws(
+    replace("external_effects", row<Record<string, unknown>>(`SELECT * FROM external_effects LIMIT 1`), {
+      effect_id: "external-effect:forged0001",
+      authority_ref: "FORGED-AUTHORITY",
+      state: "succeeded",
+    }),
+    /external_effect_binding_immutable/,
+  );
+
+  const survivingAttempt = row<Record<string, unknown>>(
+    `SELECT * FROM external_effect_attempts ORDER BY attempt_number DESC LIMIT 1`,
+  );
+  assert.equal(survivingAttempt.attempt_id, attempt.attempt_id);
+  assert.equal(survivingAttempt.state, attempt.state);
+  assert.equal(survivingAttempt.request_hash, attempt.request_hash);
+  assert.equal(
+    row<{ n: number }>(`SELECT COUNT(*) AS n FROM external_effects`).n,
+    1,
+    "no forged effect landed alongside the real one",
+  );
 });

@@ -1,0 +1,33 @@
+{
+  "Payment": {
+    "Id": "3003",
+    "SyncToken": "0",
+    "MetaData": {
+      "CreateTime": "2026-08-19T12:00:00-07:00",
+      "LastUpdatedTime": "2026-08-19T12:00:00-07:00"
+    },
+    "TxnDate": "2026-08-20",
+    "CurrencyRef": {
+      "value": "CAD",
+      "name": "Canadian Dollar"
+    },
+    "CustomerRef": {
+      "value": "42",
+      "name": "Synthetic Customer"
+    },
+    "Line": [
+      {
+        "Amount": 1260.0,
+        "LinkedTxn": [
+          {
+            "TxnId": "2001",
+            "TxnType": "Invoice"
+          }
+        ]
+      }
+    ],
+    "TotalAmt": 1260.0,
+    "UnappliedAmt": 0.0
+  },
+  "time": "2026-08-19T12:00:00.000-07:00"
+}

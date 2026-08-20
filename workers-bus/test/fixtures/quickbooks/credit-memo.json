@@ -1,0 +1,44 @@
+{
+  "CreditMemo": {
+    "Id": "4001",
+    "SyncToken": "0",
+    "MetaData": {
+      "CreateTime": "2026-08-19T12:00:00-07:00",
+      "LastUpdatedTime": "2026-08-19T12:00:00-07:00"
+    },
+    "DocNumber": "CM-1001",
+    "TxnDate": "2026-08-21",
+    "DueDate": "2026-08-21",
+    "CurrencyRef": {
+      "value": "CAD",
+      "name": "Canadian Dollar"
+    },
+    "CustomerRef": {
+      "value": "42",
+      "name": "Synthetic Customer"
+    },
+    "TxnTaxDetail": {
+      "TotalTax": 15.0
+    },
+    "Line": [
+      {
+        "Id": "1",
+        "LineNum": 1,
+        "Amount": 300.0,
+        "DetailType": "SalesItemLineDetail",
+        "SalesItemLineDetail": {
+          "ItemRef": {
+            "value": "7",
+            "name": "Metal roofing - synthetic"
+          },
+          "TaxCodeRef": {
+            "value": "TAX"
+          }
+        }
+      }
+    ],
+    "TotalAmt": 315.0,
+    "RemainingCredit": 315.0
+  },
+  "time": "2026-08-19T12:00:00.000-07:00"
+}

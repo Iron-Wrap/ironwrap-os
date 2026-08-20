@@ -6,9 +6,15 @@
 // that is the actual backstop.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+
+import {
+  NOW,
+  REALM,
+  TENANT,
+  readAccountingMigration,
+  testEnv,
+} from "./accounting-fixture.ts";
 
 import type { AppEnv } from "../src/app-types.ts";
 import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
@@ -28,109 +34,9 @@ import {
 } from "../src/accounting-intents.ts";
 import type { MoneyEffectOutcome } from "../src/accounting-effect-port.ts";
 
-const TENANT = "ironwrap";
-const REALM = "4620816365000000000";
-const NOW = new Date("2026-08-19T12:00:00.000Z");
 const LATER = new Date("2026-08-19T12:05:00.000Z");
 
-const MIGRATION = readFileSync(
-  new URL("../migrations/0058_accounting_money_intents.sql", import.meta.url),
-  "utf8",
-);
-
-class SqliteStatement {
-  private readonly raw: DatabaseSync;
-  private readonly sql: string;
-  private readonly args: unknown[];
-
-  constructor(raw: DatabaseSync, sql: string, args: unknown[]) {
-    this.raw = raw;
-    this.sql = sql;
-    this.args = args;
-  }
-
-  bind(...args: unknown[]): SqliteStatement {
-    return new SqliteStatement(this.raw, this.sql, args);
-  }
-
-  async first<T>(column?: string): Promise<T | null> {
-    const row = this.raw.prepare(this.sql).get(...this.args) as Record<string, unknown> | undefined;
-    if (!row) return null;
-    return (column === undefined ? row : row[column]) as T | null;
-  }
-
-  async all<T>(): Promise<{ success: true; results: T[]; meta: { changes: number } }> {
-    return {
-      success: true,
-      results: this.raw.prepare(this.sql).all(...this.args) as T[],
-      meta: { changes: 0 },
-    };
-  }
-
-  async run(): Promise<{ success: true; results: []; meta: { changes: number } }> {
-    const result = this.raw.prepare(this.sql).run(...this.args);
-    return { success: true, results: [], meta: { changes: Number(result.changes) } };
-  }
-}
-
-class AccountingTestD1 {
-  readonly raw = new DatabaseSync(":memory:");
-
-  constructor() {
-    this.raw.exec("PRAGMA foreign_keys = ON");
-    for (const migration of [
-      "0011_app_bff_auth.sql",
-      "0030_facet_design_ingest.sql",
-      "0034_facet_customer_approval_ingest.sql",
-      "0035_facet_design_evidence_associations.sql",
-      "0038_app_access_roles.sql",
-      "0058_accounting_money_intents.sql",
-    ]) {
-      this.raw.exec(
-        readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"),
-      );
-    }
-    const insert = this.raw.prepare(
-      `INSERT INTO app_users (
-         user_id, tenant_id, email_normalized, display_name, role, access_role,
-         active, created_by, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, 1, 'seed', ?, ?)`,
-    );
-    for (const role of ["owner", "accounting", "ops"] as const) {
-      // `access_role` carries the accounting role; `role` keeps the legacy three-value column.
-      insert.run(
-        `appu_${role}_0001`,
-        TENANT,
-        `${role}@example.invalid`,
-        role,
-        role === "accounting" ? "ops" : role,
-        role,
-        NOW.toISOString(),
-        NOW.toISOString(),
-      );
-    }
-    // A second accountant, so separation of duty has somebody legitimate to fall back to.
-    insert.run(
-      "appu_accounting_0002",
-      TENANT,
-      "accounting2@example.invalid",
-      "accounting-2",
-      "ops",
-      "accounting",
-      NOW.toISOString(),
-      NOW.toISOString(),
-    );
-  }
-
-  prepare(sql: string): SqliteStatement {
-    return new SqliteStatement(this.raw, sql, []);
-  }
-}
-
-function testEnv(): { env: AppEnv; db: AccountingTestD1 } {
-  const db = new AccountingTestD1();
-  return { env: { DB: db } as unknown as AppEnv, db };
-}
+const MIGRATION = readAccountingMigration("0058_accounting_money_intents.sql");
 
 function deriveInput(
   overrides: Partial<DeriveAccountingIntentInput> = {},

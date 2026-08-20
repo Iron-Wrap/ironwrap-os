@@ -1,0 +1,37 @@
+{
+  "JournalEntry": {
+    "Id": "6001",
+    "SyncToken": "0",
+    "MetaData": {
+      "CreateTime": "2026-08-19T12:00:00-07:00",
+      "LastUpdatedTime": "2026-08-19T12:00:00-07:00"
+    },
+    "TxnDate": "2026-08-23",
+    "Line": [
+      {
+        "Id": "0",
+        "Amount": 4200.0,
+        "DetailType": "JournalEntryLineDetail",
+        "JournalEntryLineDetail": {
+          "PostingType": "Debit",
+          "AccountRef": {
+            "value": "61"
+          }
+        }
+      },
+      {
+        "Id": "1",
+        "Amount": 4200.0,
+        "DetailType": "JournalEntryLineDetail",
+        "JournalEntryLineDetail": {
+          "PostingType": "Credit",
+          "AccountRef": {
+            "value": "62"
+          }
+        }
+      }
+    ],
+    "TotalAmt": 4200.0
+  },
+  "time": "2026-08-19T12:00:00.000-07:00"
+}

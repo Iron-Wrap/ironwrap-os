@@ -1741,6 +1741,108 @@ test("0042 keeps external effects durable, append-only, and reconciliation-gated
   assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
 });
 
+test("0067 keeps inventory movement conserving, append-only, and separation-of-duties bound", async () => {
+  const sql = await readFile(
+    new URL("../migrations/0067_inventory_control.sql", import.meta.url),
+    "utf8",
+  );
+
+  for (const table of [
+    "inventory_items",
+    "inventory_uoms",
+    "inventory_uom_conversions",
+    "inventory_locations",
+    "inventory_bins",
+    "inventory_lots",
+    "inventory_commands",
+    "inventory_events",
+    "inventory_positions",
+    "inventory_reservations",
+    "inventory_valuation_layers",
+    "inventory_valuation_allocations",
+    "inventory_approvals",
+    "inventory_po_lines",
+    "inventory_receipt_lines",
+    "inventory_invoice_lines",
+    "inventory_three_way_matches",
+    "inventory_exceptions",
+    "inventory_barcodes",
+    "inventory_labels",
+    "inventory_scans",
+    "inventory_count_sessions",
+    "inventory_count_lines",
+    "inventory_job_cost_attributions",
+    "inventory_provider_reconciliations",
+  ]) {
+    assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+    assert.match(sql, new RegExp(`BEFORE DELETE ON ${table}\\b`));
+  }
+
+  // The named guards that make conservation structural rather than conventional.
+  for (const trigger of [
+    "inventory_positions_movement_guard",
+    "inventory_positions_open_guard",
+    "inventory_commands_conservation_guard",
+    "inventory_events_command_binding_guard",
+    "inventory_valuation_layers_binding_guard",
+    "inventory_valuation_layers_consumption_guard",
+    "inventory_valuation_allocations_binding_guard",
+    "inventory_approvals_separation_of_duties",
+    "inventory_three_way_identity_guard",
+    "inventory_invoice_lines_readback_guard",
+    "inventory_receipt_lines_binding_guard",
+    "inventory_count_sessions_transition_guard",
+    "inventory_count_lines_transition_guard",
+    "inventory_lots_identity_immutable",
+    "inventory_provider_reconciliations_transition_guard",
+  ]) {
+    assert.match(sql, new RegExp(`CREATE TRIGGER IF NOT EXISTS ${trigger}\\b`));
+  }
+
+  // Conservation is asserted on the exact abort codes, not merely on trigger presence.
+  assert.match(sql, /inventory_command_quantity_not_conserved/);
+  assert.match(sql, /inventory_command_value_not_conserved/);
+  assert.match(sql, /inventory_command_reservation_not_conserved/);
+  assert.match(sql, /inventory_command_quarantine_not_conserved/);
+  assert.match(sql, /inventory_command_valuation_not_allocated/);
+  assert.match(sql, /inventory_command_uom_mixed/);
+  assert.match(sql, /inventory_position_event_delta_mismatch/);
+  assert.match(sql, /inventory_position_open_event_mismatch/);
+  assert.match(sql, /inventory_event_bin_frozen/);
+  assert.match(sql, /inventory_event_lot_item_mismatch/);
+  assert.match(sql, /inventory_event_lot_not_validated/);
+
+  // Separation of duties and independent approval.
+  assert.match(sql, /inventory_approval_receiver_cannot_release/);
+  assert.match(sql, /inventory_approval_counter_cannot_approve/);
+  assert.match(sql, /inventory_count_variance_approval_required/);
+  assert.match(sql, /inventory_count_counter_separation_required/);
+  assert.match(sql, /inventory_lot_quarantine_release_approval_required/);
+  assert.match(sql, /CHECK \(approved_by_user_id != requested_by_user_id\)/);
+  assert.match(sql, /CHECK \(value_bearing = 0 OR finance_reviewed_by_user_id IS NOT NULL\)/);
+
+  // No negative or phantom stock is representable.
+  assert.match(sql, /quantity_scaled INTEGER NOT NULL CHECK \(quantity_scaled >= 0\)/);
+  assert.match(sql, /CHECK \(reserved_scaled \+ quarantined_scaled <= quantity_scaled\)/);
+
+  // Provider facts must arrive through the 0042 effect runtime, never from a webhook.
+  assert.match(sql, /inventory_invoice_line_authenticated_readback_required/);
+  assert.match(sql, /readback_effect_id TEXT NOT NULL/);
+  assert.match(
+    sql,
+    /FOREIGN KEY \(readback_effect_id\)\s*\n\s*REFERENCES external_effects\(effect_id\) ON DELETE RESTRICT/,
+  );
+
+  // Money and quantity are exact integers; a rational conversion is a versioned row.
+  // Comments are stripped so the prose describing the rule cannot satisfy or break it.
+  const schema = sql.replace(/^\s*--.*$/gm, "");
+  assert.doesNotMatch(schema, /\b(REAL|FLOAT|DOUBLE|DECIMAL|NUMERIC)\b/i);
+  assert.match(sql, /numerator INTEGER NOT NULL CHECK \(numerator > 0\)/);
+  assert.match(sql, /denominator INTEGER NOT NULL CHECK \(denominator > 0\)/);
+
+  assert.doesNotMatch(sql, /ON DELETE CASCADE|DROP TABLE|REPLACE INTO/i);
+});
+
 test("0047 keeps safety records additive, right-preserving, and separation-enforced", async () => {
   const sql = await readFile(
     new URL("../migrations/0047_safety_lifecycle.sql", import.meta.url),
@@ -1879,8 +1981,10 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // publication ledger, kept isolated from 0016/0017/0020 exactly as those are from each
     // other; it took 0068 because #60 claimed 0067 while this branch was open. #54 kept
     // 0046 and #48 kept 0047, both of which landed on `main`, so the gap from 0048 to 0055 is
-    // expected and not a missing migration.
-    assert.equal(migrations.length, 59);
+    // expected and not a missing migration. 0067 is the IRO-45 inventory ledger: it was
+    // numbered 0046 while that number was still free on its own head, and was renumbered
+    // above every shipped migration once `main` landed 0046 elsewhere.
+    assert.equal(migrations.length, 60);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
@@ -1937,8 +2041,9 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // adds the proposal-publication approval vertical: its request and event tables, six indexes
     // (including the partial unique index that permits only one live intent per pack), and nine
     // triggers - binding immutability, the state and reconciliation fences, the three event
-    // appenders, and the three append-only guards.
-    assert.deepEqual({ ...counts }, { tables: 119, indexes: 172, triggers: 271 });
+    // appenders, and the three append-only guards. 0067 adds the IRO-45 inventory-control
+    // ledger on top of both.
+    assert.deepEqual({ ...counts }, { tables: 144, indexes: 205, triggers: 333 });
     // The applied chain — not the text of any single file — is what production
     // ends up running, so the complete_work receipt kind is asserted here.
     // 0028 is frozen at its shipped three-member CHECK and 0057 widens it

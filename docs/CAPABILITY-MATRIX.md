@@ -39,12 +39,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 59,
+      "count": 60,
       "latest": "0068_proposal_publication_approval_requests.sql"
     },
     "tests": {
       "pwa": 492,
-      "worker": 918
+      "worker": 955
     }
   },
   "proof_state_policy": {
@@ -335,10 +335,38 @@ IRO-62 shipped-migration remediation:
   and the row-preserving rebuild are asserted in `workers-bus/test/app-migration.test.ts`. Nothing
   here claims the remediation has been deployed.
 
+IRO-45 branch-local inventory ledger:
+
+- Migration `0067_inventory_control.sql` adds tenant item/UOM/conversion/location/bin/lot
+  identity, an append-only inventory command/event ledger, the position projection, lot and
+  FIFO valuation layers with explicit freight/tax/discount allocation, physical receipt
+  lines, AP invoice lines, three-way match, count sessions/lines, barcode/label/scan capture,
+  exceptions, job-cost attribution, and provider reconciliation rows.
+- Conservation is structural: a position moves only by the exact delta of the event it
+  names, a conserving command's movements must net to zero in quantity and value, and
+  reserved plus quarantined can never exceed on-hand, so negative and phantom stock are
+  unrepresentable rather than merely discouraged.
+- Quantities are scaled integers and money is minor units; UOM conversion is a versioned
+  rational row whose inexact results are refused rather than rounded.
+- A count freezes its bin, a non-zero variance requires an independent decided approval, a
+  value-bearing adjustment additionally requires a distinct finance reviewer, and neither the
+  counter nor the receiver may approve their own variance or quarantine release.
+- An AP invoice line is admissible only from a succeeded IRO-38 effect whose readback digest
+  matches; a provider webhook is never match proof.
+- An unrecognised offline barcode is captured as `observed_pending_validation` and never
+  creates stock; scan replay converges on one observation per device action.
+- The Worker store is `src/inventory-control.ts` with tests in
+  `test/inventory-control.test.ts`, and `src/inventory-control-api.ts` binds it to
+  `/api/v1/inventory` off the authenticated app router with effective-role actor binding,
+  covered by `test/inventory-control-api.test.ts`. This branch has repository tests only: no
+  PWA surface, no provider adapter, no deployment, and no business-acceptance proof.
+
 Missing for autonomous target:
 
 - general event/transition envelope across every company aggregate;
-- inventory/shop/fleet/workforce/safety/quality/accounting event ledgers;
+- shop/fleet/workforce/safety/quality/accounting event ledgers;
+- inventory HTTP routes, warehouse/receiving PWA surfaces, and the QuickBooks
+  Bill/PurchaseOrder/Vendor adapter that would feed the AP readback;
 - universal evidence freshness, revocation, conflict, and compensation semantics;
 - production proof across one real end-to-end job.
 
@@ -488,7 +516,7 @@ Target gaps:
 | Contract | Partial: email-bound, single-use click-to-accept evidence pinned to an approved quote, proposal pack, and canonical terms snapshot | correct agreement selection, cancellation, legal/commercial e-sign determination, authority, and live business proof | residential/commercial scenarios |
 | Preconstruction | seven gates plus current Crew/Safety/Access Authority Record links and owner-attributed waivers; legacy Crew Profile summaries remain projections only | complete multi-domain readiness and live issuer-backed freshness | stale permit/WCB/weather injection |
 | Procurement | Partial: supplier quote/order records plus signed internal transmission, evidence-backed acknowledgement, and receipt/shortage conservation facts; `Ordered` is internal only | vendor onboarding, direct supplier transmission/acknowledgement, substitution, three-way match, provider reconciliation | duplicate/short/backorder test |
-| Inventory | Partial: signed controlled-item approval, lot receipt/reservation, and reconciled shop yield/remnant/scrap lineage | bin/count/valuation plus physical use and reconciliation | receive-reserve-use-yield-reconcile |
+| Inventory | Partial: signed controlled-item approval plus a branch-local D1 item/lot/bin/position ledger with conserving receive/reserve/issue/return/transfer/yield/count movements, lot and FIFO valuation, and separation-of-duties approvals | HTTP routes, warehouse/receiving PWA capture, provider AP adapter, and live reconciliation | receive-reserve-use-yield-reconcile |
 | Shop | Partial: signed release, reservation, setup route, independent first-piece/final QC, yield, labeled bundles, custody handover, and provider-mirror billing-basis readiness | cutting/fabrication event capture, work-centre tooling/maintenance, physical dispatch proof, and live reconciliation | physical synthetic/real shop batch including handover and billing basis |
 | Scheduling | assignment and approval ledger | complete constraint solver and autonomous reschedule | conflict/weather/material test |
 | Human field work | assignment-scoped Work Package with exact Authority Record requirements, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |

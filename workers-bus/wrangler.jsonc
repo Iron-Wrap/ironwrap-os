@@ -154,8 +154,19 @@
     // Frappe operating core. ERPNEXT_BASE_URL must resolve BEFORE this is deployed:
     // with the flag on and the host unreachable, /ready goes red (fail-closed) and every
     // lead push retries into the dead-letter queue.
+    //
+    // It has not resolved since the flag was turned on: os.ironwrapexteriors.com has no
+    // DNS record of any kind, and all three brand domains sit on GoDaddy nameservers whose
+    // control was never part of the ownership handover. That is why /ready has been red.
+    //
+    // ironwrap.mindburn.org is a real host reached through a Cloudflare Tunnel with no
+    // inbound port open: netcup VPS in Manassas running the pinned frappe_docker topology,
+    // seven app processes on one digest-pinned image. The hostname sits in the neighbouring
+    // estate's zone by a decision taken on 2026-08-19, because IronWrap has no Cloudflare
+    // zone of its own until DNS authority is obtained. Move it to os.ironwrapexteriors.com
+    // once that happens; nothing else here changes.
     "ERPNEXT_ENABLED": "true",
-    "ERPNEXT_BASE_URL": "https://os.ironwrapexteriors.com",
+    "ERPNEXT_BASE_URL": "https://ironwrap.mindburn.org",
     "QB_EXPECTED_REALM_ID": "",
     "QB_RECONCILIATION_ISSUER_USER": "",
     "QB_OAUTH_ENABLED": "false",

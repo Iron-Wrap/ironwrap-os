@@ -43,7 +43,7 @@ implication.
       "latest": "0069_customer_portal_decision_intents.sql"
     },
     "tests": {
-      "pwa": 500,
+      "pwa": 507,
       "worker": 971
     }
   },

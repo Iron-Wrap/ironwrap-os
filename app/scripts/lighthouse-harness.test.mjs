@@ -8,6 +8,7 @@ import {
   legPlan,
   summarizeProtocolAb,
 } from "./lighthouse-protocol-ab.mjs";
+import { describeRunner } from "./lighthouse-field.mjs";
 import { median } from "./lighthouse-statistics.mjs";
 
 const require = createRequire(import.meta.url);
@@ -158,5 +159,25 @@ describe("median", () => {
 
   it("refuses an empty set", () => {
     expect(() => median([])).toThrow(/empty set/);
+  });
+});
+
+describe("describeRunner", () => {
+  // Two jobs reading 214 ms and 34 ms on byte-identical bytes is the ELEC-106 symptom, and
+  // it was only diagnosable by re-deriving the runner from the metrics. The evidence now
+  // carries the machine's own speed, so the next comparison does not have to.
+  it("records the runner speed the readings were taken on", () => {
+    const runner = describeRunner([
+      { environment: { benchmarkIndex: 1100, hostUserAgent: "Chrome/tests" } },
+      { environment: { benchmarkIndex: 900 } },
+      { environment: { benchmarkIndex: 1000 } },
+    ]);
+
+    expect(runner.benchmarkIndex).toEqual({ median: 1000, values: [1100, 900, 1000] });
+    expect(runner.hostUserAgent).toBe("Chrome/tests");
+  });
+
+  it("stays quiet when Lighthouse reported no environment", () => {
+    expect(describeRunner([{}, {}])).toBeUndefined();
   });
 });

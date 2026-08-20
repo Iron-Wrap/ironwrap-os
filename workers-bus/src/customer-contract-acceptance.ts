@@ -2,6 +2,7 @@ import {
   appPublicOrigin,
   authRequestContext,
   configuredTenantId,
+  devOutboxCapture,
   randomToken,
   sha256Hex,
   validateAppOrigin,
@@ -688,6 +689,13 @@ async function sendChallengeEmail(
   const href = `${origin}/contract-accept#token=${encodeURIComponent(rawToken)}`;
   const greeting = escapeHtml(prepared.displayName);
   const expiry = escapeHtml(new Date(expiresAt).toLocaleString("en-CA", { timeZone: "America/Edmonton" }));
+  // Same local-only escape hatch the magic-link rail uses (app-auth.devOutboxCapture):
+  // APP_ALLOW_INSECURE_LOCAL is "false" in every deployed environment, so a deployed
+  // Worker always falls through to Gmail. Without this the acceptance half of the
+  // customer portal could not be driven end to end on a local stack at all.
+  if (await devOutboxCapture(env, "contract_acceptance", prepared.email, href)) {
+    return { providerMessageId: `dev-outbox:${crypto.randomUUID()}` };
+  }
   return await sendGmail(
     env,
     prepared.email,

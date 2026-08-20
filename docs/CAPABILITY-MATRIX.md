@@ -3,7 +3,7 @@
 Status: canonical implementation gap register
 Owner: IronWrap OS product owner
 Last verified: 2026-08-17
-Latest phase delta verified: 2026-08-18 (IRO-44 safety lifecycle over the merged IRO-36/38/41/42/43/54 source assembly; repository checks only, not merged, deployed, runtime-verified, business-accepted, or production-proven)
+Latest phase delta verified: 2026-08-20 (IRO-2 Facet v2 chain and IRO-20 customer portal switched on in configuration and driven on a local stack; repository and local-stack checks only, not deployed, runtime-verified, business-accepted, or production-proven)
 Review trigger: merged capability, changed proof, deployment, or production acceptance
 
 ## Status vocabulary
@@ -39,8 +39,8 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 57,
-      "latest": "0065_accounting_intent_derivation_receipts.sql"
+      "count": 58,
+      "latest": "0066_dev_outbox_contract_acceptance.sql"
     },
     "tests": {
       "pwa": 474,
@@ -192,7 +192,40 @@ IRO-38 branch-local side-effect substrate:
   This branch has repository tests for the remote claim/provider/readback/settle sequence, but no
   live provider, deployment, or business-acceptance proof.
 
-IRO-44 branch-local safety substrate:
+ELEC-86 Facet v2 chain and customer portal switch-on (2026-08-20):
+
+- `FACET_V2_INGEST_ENABLED`, `FACET_V2_FRAPPE_PROJECTION_ENABLED` and `APP_FACET_LAUNCH_ENABLED` are
+  `"true"` in every environment; `APP_CUSTOMER_PORTAL_ENABLED` and
+  `APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED` are `"true"` for production and local. A flag alone
+  opens nothing: `facetV2ConsumerConfig`, `launchConfig`, `projectionSettings` and
+  `customerAcceptanceBackendConfigured` each return null/false without their key material, so a
+  deployed environment that has not been provisioned answers 503.
+- Staging keeps the portal off because it runs with `APP_BFF_ENABLED: "false"`, and
+  `customerPortalConfigured` reports false whenever the portal is on without the office control
+  plane that revokes customer links — which turns `/ready` red and blocks the release.
+- Repository-verified locally, on the `deploy/local` stack with those flags on: an owner session
+  issues a Facet launch capability (`POST /api/v1/estimator/jobs/{job}/facet-launches`), a Facet-
+  signed customer-decision event is accepted at `POST /ingest/facet-design` with
+  `result: accepted_associated` and `detail_code: exact_identity_project_association_verified`, and
+  a signed IronWrap receipt is returned.
+- **Open defect, blocking step 4.** The Frappe projection cannot create the blank Draft Customer
+  Quote against a real site. `Customer Quote` defaults `currency` to `CAD` and `payment_status` to
+  `Not Due`; `Document.insert()` applies those defaults before `validate` runs, but
+  `facet_design_projection_api` captures its trusted snapshot before `insert()`, so
+  `validate_customer_quote_acceptance_mutation` sees a different document than
+  `facet_design_projection_issuance_context` authorized and raises
+  `Facet design projection service users may only mutate records through the bounded projection
+  command` (HTTP 403 → `facet_projection_readback_id_missing`). The same two defaulted fields are in
+  `BLANK_QUOTE_FIELDS`, so the idempotent-replay path would then fail its "Draft contains commercial
+  data" check as well. The Python unit tests do not reach this because they do not run against a
+  DocType that applies defaults.
+- **Open gap, blocking step 5.** A Proposal Evidence Pack can only be promoted Draft → Approved by
+  the Owner Operator MCP command `request_publish_proposal_evidence_pack`; no Worker/PWA route
+  publishes one. Until a pack is published the portal read model returns `proposal: null`, so the
+  customer sees no proposal and the acceptance challenge answers 404.
+
+IRO-44 safety substrate (merged in #59; the "branch-local" qualifier this section carried was
+stale from before that merge):
 
 - Migration `0047_safety_lifecycle.sql` adds owned safety equipment, physical safety occurrence,
   external notification, corrective action, immutable readiness snapshot, and offline safety-action
@@ -209,9 +242,12 @@ IRO-44 branch-local safety substrate:
 - Work Package acknowledge/start/complete and production-schedule approval both consume current
   safety readiness and record an immutable snapshot of what they saw, including a refusal. Stopping
   work is never gated by that readiness.
-- This branch has repository tests, including one emergency drill covering rescue, failed PPE, a
-  duplicate offline report, a late corrective action, and independent release. It has no deployment,
-  runtime, business-acceptance, or real-device proof.
+- Merged to `main` in #59 (2026-08-18), including the offline safety panel the PWA field surface
+  renders (`app/src/field/safety-action-panel.tsx`, `app/src/field/safety-action-panel.test.tsx`),
+  so this is no longer a branch-local repository check. It carries repository tests, including one
+  emergency drill covering rescue, failed PPE, a duplicate offline report, a late corrective action,
+  and independent release. It still has no deployment, runtime, business-acceptance, or real-device
+  proof.
 
 IRO-62 shipped-migration remediation:
 
@@ -321,7 +357,7 @@ Implemented surfaces:
 - owner, approval inbox, sales, production, Newo operations;
 - estimator workbench and quote revision;
 - production schedule approval;
-- customer portal links and resolution, plus disabled email-bound customer contract confirmation;
+- customer portal links and resolution, plus email-bound customer contract confirmation;
 - settings.
 
 Target gaps:

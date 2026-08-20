@@ -59,6 +59,19 @@ FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET=""
 # Deployment-controlled opaque exact-anchor mappings only; no names, addresses, prices, or user input.
 FACET_DESIGN_FRAPPE_PROJECTION_ASSOCIATIONS_JSON='{"schema_version":1,"associations":[]}'
 
+# Signed Facet v2 chain (the live rail; the FACET_DESIGN_INGEST_* pair above is the
+# retired v1 contract). `npm run dev` generates all three of these into
+# deploy/local/keys/ and writes them here, so a local stack needs no manual step.
+#
+# FACET_LAUNCH_HMAC_KEY signs the owner's "open in Facet" capability. It must be
+# base64url of at least 32 bytes and is paired with the non-secret
+# APP_FACET_LAUNCH_BASE_URL / APP_FACET_LAUNCH_SOURCE_TENANT_ID in wrangler.jsonc.
+FACET_LAUNCH_HMAC_KEY=""
+# FACET_V2_KEYS_JSON holds the delivery-verification keys Facet signs its customer-decision
+# event with. Every entry needs a >=32-character secret and an active validity window; the
+# matching route lives in the non-secret FACET_V2_ROUTES_JSON.
+# FACET_V2_KEYS_JSON='[{"key_id":"facet-prod","key_version":1,"secret":"...","not_before_ms":0,"not_after_ms":4102444800000}]'
+
 # Public instant estimate (disabled until the non-secret vars in wrangler.jsonc
 # are configured with exact origins, rate limits, and a validated JSON rule set).
 PUBLIC_ESTIMATE_TURNSTILE_SECRET=""

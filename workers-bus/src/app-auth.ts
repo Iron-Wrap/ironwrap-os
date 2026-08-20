@@ -703,12 +703,13 @@ function sessionCookie(rawToken: string, expiresAt: string): string {
 
 /**
  * Local-only development capture (APP_ALLOW_INSECURE_LOCAL="true"; always false in
- * production). Records a sign-in href in dev_outbox so local end-to-end runs can complete
- * the real consume flow without intercepting email. Returns false when the flag is off.
+ * production). Records a sign-in or contract-acceptance href in dev_outbox so local
+ * end-to-end runs can complete the real consume flow without intercepting email.
+ * Returns false when the flag is off, which is what makes Gmail the only deployed path.
  */
 export async function devOutboxCapture(
   env: AppEnv,
-  kind: "magic_link",
+  kind: "magic_link" | "contract_acceptance",
   recipient: string,
   href: string,
 ): Promise<boolean> {

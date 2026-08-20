@@ -59,7 +59,9 @@ if [[ ! "$RCLONE_CONFIG_R2_ENDPOINT" =~ ^https://[a-z0-9-]+\.r2\.cloudflarestora
   echo "error: RCLONE_CONFIG_R2_ENDPOINT must be an HTTPS Cloudflare R2 endpoint" >&2
   exit 1
 fi
-if [[ ! "$IRONWRAP_OS_IMAGE" =~ ^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$ || \
+# A registry may carry a port, and the previous pattern could not express one;
+# allow an optional leading "host[:port]/" group (same fix as validate-frappe-compose.sh).
+if [[ ! "$IRONWRAP_OS_IMAGE" =~ ^([a-z0-9][a-z0-9.-]*(:[0-9]+)?/)?[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$ || \
       "$IRONWRAP_OS_IMAGE" == *':latest@'* || "$IRONWRAP_OS_IMAGE" == *//* || "$IRONWRAP_OS_IMAGE" == *..* ]]; then
   echo "error: IRONWRAP_OS_IMAGE must be the deployed image pinned by digest" >&2
   exit 1

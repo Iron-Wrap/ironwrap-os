@@ -33,8 +33,22 @@ if [[ ! -r /etc/os-release ]]; then
 fi
 # shellcheck disable=SC1091
 source /etc/os-release
-if [[ "${ID:-}" != "ubuntu" || ! "${VERSION_ID:-}" =~ ^(22\.04|24\.04)$ ]]; then
-  echo "error: production hosts must run Ubuntu 22.04 or 24.04" >&2
+# Ubuntu and Debian both. Everything downstream assumes an apt/systemd host, so
+# a genuinely different family still exits here rather than failing later in a
+# confusing way -- but Debian is the same family, and frappe_docker is an
+# ordinary compose topology that does not care which of the two carries it. The
+# lock field is still named ubuntu_minimum; renaming it would break the CI
+# contract assertion in tools/production-readiness.mjs that reads it by name.
+if [[ "${ID:-}" == "ubuntu" ]]; then
+  supported_release_pattern='^(22\.04|24\.04)$'
+elif [[ "${ID:-}" == "debian" ]]; then
+  supported_release_pattern='^(12|13)$'
+else
+  echo "error: production hosts must run Ubuntu 22.04/24.04 or Debian 12/13" >&2
+  exit 1
+fi
+if [[ ! "${VERSION_ID:-}" =~ $supported_release_pattern ]]; then
+  echo "error: unsupported ${ID} release ${VERSION_ID:-unknown}; production hosts must run Ubuntu 22.04/24.04 or Debian 12/13" >&2
   exit 1
 fi
 
@@ -94,6 +108,10 @@ if (( ${#HOST_LOCK[@]} != 5 )); then
 fi
 CPU_MINIMUM="${HOST_LOCK[0]}"
 MEMORY_GIB_MINIMUM="${HOST_LOCK[1]}"
+# How much of the locked memory floor the kernel may reserve before the host is
+# judged short. 5% covers the reservation observed on 8 GiB and 64 GiB hosts
+# (3.2% and 2.1%); a host genuinely one tier down still fails.
+MEMORY_KERNEL_RESERVATION_ALLOWANCE_PERCENT=95
 DISK_GIB_MINIMUM="${HOST_LOCK[2]}"
 NODE_VERSION_MINIMUM="${HOST_LOCK[3]}"
 SUPPORTED_ARCHITECTURES=",${HOST_LOCK[4]},"
@@ -126,8 +144,14 @@ if [[ "$SUPPORTED_ARCHITECTURES" == *",$arch,"* ]]; then pass "supported CPU arc
 cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '0')"
 if [[ "$cpu_count" =~ ^[0-9]+$ ]] && (( cpu_count >= CPU_MINIMUM )); then pass "CPU capacity meets the runtime lock"; else fail "CPU capacity is below the runtime lock"; fi
 
+# MemTotal is what the kernel has left after reserving its own memory, so it is
+# always a few percent under what the host advertises: a machine sold with 8 GB
+# reports about 7.76 GiB and could never satisfy a literal 8 GiB test. Comparing
+# the two directly rejects every host bought exactly to the lock's floor, at any
+# provider. Allow the reservation; the floor itself is unchanged.
 memory_kib="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || printf '0')"
-if [[ "$memory_kib" =~ ^[0-9]+$ ]] && (( memory_kib >= MEMORY_GIB_MINIMUM * 1024 * 1024 )); then pass "memory capacity meets the runtime lock"; else fail "memory capacity is below the runtime lock"; fi
+memory_floor_kib=$(( MEMORY_GIB_MINIMUM * 1024 * 1024 * MEMORY_KERNEL_RESERVATION_ALLOWANCE_PERCENT / 100 ))
+if [[ "$memory_kib" =~ ^[0-9]+$ ]] && (( memory_kib >= memory_floor_kib )); then pass "memory capacity meets the runtime lock"; else fail "memory capacity is below the runtime lock"; fi
 
 disk_kib="$(df -Pk / | awk 'NR == 2 {print $4}')"
 if [[ "$disk_kib" =~ ^[0-9]+$ ]] && (( disk_kib >= DISK_GIB_MINIMUM * 1024 * 1024 )); then pass "disk capacity meets the runtime lock"; else fail "disk capacity is below the runtime lock"; fi

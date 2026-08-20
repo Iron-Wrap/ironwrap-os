@@ -28,7 +28,12 @@ if [[ ! -r "$LOCK" || ! -r "$OVERLAY" || ! -d "$FRAPPE_DOCKER_DIR/.git" ]]; then
 fi
 if ! node - "$IRONWRAP_OS_IMAGE" <<'NODE'
 const image = process.argv[2] ?? "";
-if (!/^[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$/.test(image) ||
+// A registry may carry a port, and the previous pattern could not express one:
+// it read the ":5000" of "localhost:5000/name@sha256:..." as a tag and then
+// demanded "@sha256:" immediately after, so every self-hosted or local registry
+// was rejected. The optional leading "host[:port]/" group fixes that; the digest
+// requirement itself is unchanged and still mandatory.
+if (!/^(?:[a-z0-9][a-z0-9.-]*(?::[0-9]+)?\/)?[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$/.test(image) ||
     image.includes("//") || image.includes("..")) {
   process.exit(1);
 }

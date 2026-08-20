@@ -24,12 +24,13 @@ import math
 import re
 import time
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import frappe
 
 from ironwrap_roofing.access_control import CUSTOMER_DECISION_SERVICE_ROLE
+from ironwrap_roofing.document_validation import customer_decision_issuance_context
 
 
 SERVICE_USER_CONFIG_KEY = "ironwrap_customer_decision_service_user"
@@ -98,12 +99,25 @@ def _text(value: Any, field: str, *, maximum: int = MAX_IDENTIFIER_LENGTH) -> st
 
 
 def _timestamp(value: Any, field: str) -> str:
+    """Accept the Worker's ISO-8601 instant and store it as a Frappe datetime.
+
+    Same normalization the acceptance lane next door already does (ELEC-92): the
+    claim carries RFC 3339 text (``...Z``), which MariaDB rejects outright for a
+    DATETIME column, and which would never compare equal to the stored value on
+    replay. This lane shipped without it, so `captured_at`/`decided_at` reached
+    the column verbatim; the guard refusal fixed in ELEC-110 masked the failure
+    because no write ever got as far as the insert. The instant is unchanged and
+    the customer's R2 receipt is untouched.
+    """
+
     timestamp = _text(value, field, maximum=64)
     try:
-        datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
     except ValueError:
         _fail("customer_decision_invalid_claim", f"{field} must be an ISO timestamp")
-    return timestamp
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return str(parsed)
 
 
 def _sha256(value: Any, field: str) -> str:
@@ -488,6 +502,8 @@ def record_customer_portal_material_decision(
         )
         return {"decision_id": claim["decision_id"]}
 
-    frappe.get_doc(evidence).insert()
+    evidence_document = frappe.get_doc(evidence)
+    with customer_decision_issuance_context(evidence_document):
+        evidence_document.insert()
     frappe.get_doc(decision).insert()
     return {"decision_id": claim["decision_id"]}

@@ -75,6 +75,15 @@ export const API_PATHS = {
   estimatorJob: (jobId: string) => `/api/v1/estimator/jobs/${encodeURIComponent(jobId)}`,
   estimatorFacetLaunch: (jobId: string) =>
     `/api/v1/estimator/jobs/${encodeURIComponent(jobId)}/facet-launches`,
+  proposalPublicationApprovals: "/api/v1/proposal-publication-approvals",
+  proposalPublicationApproval: (approvalId: string) =>
+    `/api/v1/proposal-publication-approvals/${encodeURIComponent(approvalId)}`,
+  proposalPublicationApprovalApprove: (approvalId: string) =>
+    `/api/v1/proposal-publication-approvals/${encodeURIComponent(approvalId)}/approve`,
+  proposalPublicationApprovalReject: (approvalId: string) =>
+    `/api/v1/proposal-publication-approvals/${encodeURIComponent(approvalId)}/reject`,
+  proposalPublicationApprovalReconcile: (approvalId: string) =>
+    `/api/v1/proposal-publication-approvals/${encodeURIComponent(approvalId)}/reconcile`,
   quoteRevisionApprovals: "/api/v1/quote-revision-approvals",
   quoteRevisionApproval: (approvalId: string) =>
     `/api/v1/quote-revision-approvals/${encodeURIComponent(approvalId)}`,

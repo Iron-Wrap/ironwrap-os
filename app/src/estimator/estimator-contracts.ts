@@ -135,6 +135,12 @@ const selectedMeasurementSchema = measurementReportSchema
     metrics_truncated: z.boolean(),
     geometry: geometrySchema,
     roof_graph: roofGraphSchema.nullable(),
+    // Non-operational previews the Worker already returns. The workbench does
+    // not render either one, but a strict schema that omits them rejects the
+    // whole response and leaves the page reporting "workbench is unavailable"
+    // for every job that has measurement values. Accept and ignore.
+    computed_takeoff: z.unknown().optional(),
+    computed_estimate: z.unknown().optional(),
   })
   .strict();
 
@@ -387,6 +393,9 @@ const scopeClauseSchema = z
 export const estimatorWorkbenchResponseSchema = envelopeSchema
   .extend({
     partial_sources: z.array(z.string()),
+    // Job economics is a separate read surface the workbench does not render;
+    // see the note on computed_takeoff above.
+    economics: z.unknown().optional(),
     job: z
       .object({
         id: z.string().min(1),

@@ -1,0 +1,29 @@
+# Private Hermes proposal-publication approval broker. Install as
+# /etc/systemd/system/ironwrap-proposal-publication-approval-broker.service and
+# keep the referenced environment file root-readable only. It is separate from
+# the lead-triage, quote-revision, and production-schedule brokers: publication
+# is the one command that makes quote terms customer-visible, so distinct
+# credentials and process are part of the safety boundary, not convenience.
+[Unit]
+Description=IronWrap Hermes proposal-publication approval broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ironwrap-broker
+Group=ironwrap-broker
+WorkingDirectory=/srv/ironwrap/mcp/erpnext-roofing-mcp
+EnvironmentFile=/etc/ironwrap/proposal-publication-approval-broker.env
+ExecStart=/usr/bin/node /srv/ironwrap/mcp/erpnext-roofing-mcp/src/proposal-publication-approval-broker.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/srv/ironwrap /run/secrets
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

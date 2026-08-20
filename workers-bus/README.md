@@ -197,6 +197,12 @@ general Worker, Hermes MCP, Administrator, or human-finance credentials.
 | POST | `/api/v1/quote-revision-approvals/:id/approve` | configured owner + CSRF + recent session + idempotency key | distinct broker/ledger execution; ambiguity is reconciliation-only and never replays the Frappe write |
 | POST | `/api/v1/quote-revision-approvals/:id/reject` | configured owner + CSRF + recent session + idempotency key | durable rejection; does not invoke either broker |
 | POST | `/api/v1/quote-revision-approvals/:id/reconcile` | configured owner + CSRF + recent session | one immutable reconciliation append for an uncertain quote-revision execution |
+| GET | `/api/v1/proposal-publication-approvals` | owner/ops session | separate browser-safe queue for Draft -> Approved Proposal Evidence Pack publication; optional `roof_job_id` filter |
+| GET | `/api/v1/proposal-publication-approvals/:id` | owner/ops session | one safe publication approval DTO; pending expiry is re-evaluated before return |
+| POST | `/api/v1/proposal-publication-approvals` | owner/ops session + CSRF + idempotency key | fixed owner-operator preparation path; only the job and pack are caller-supplied, the quote anchor and preview are broker-derived |
+| POST | `/api/v1/proposal-publication-approvals/:id/approve` | configured owner + CSRF + recent session + idempotency key | releases the proposal to a customer link through its own broker; ambiguity is reconciliation-only and never republishes |
+| POST | `/api/v1/proposal-publication-approvals/:id/reject` | configured owner + CSRF + recent session + idempotency key | durable rejection of a prepared publication; invokes no broker |
+| POST | `/api/v1/proposal-publication-approvals/:id/reconcile` | configured owner + CSRF + recent session | one immutable reconciliation append for an uncertain publication |
 
 ### PWA auth and tenant boundary
 
@@ -330,6 +336,48 @@ projection. The broker re-runs the full dry run immediately before it signs;
 source drift, quote-version drift, or a deterministic target collision fails
 before the write. An invoked-write transport failure is terminal
 `execution_uncertain`, not an automatic retry.
+
+### Proposal-publication approval broker (optional, separate authority)
+
+Publishing a Proposal Evidence Pack is the one command that makes quote terms
+customer-visible on an issued portal link, so it is **not** a second route on any
+existing broker. After migration `0068`, enable it only with a separate loopback
+service, HMAC secret, key id, port, and owner-operator MCP runtime, and only with
+its own capability flag on. The Worker needs these non-secret values plus one
+secret:
+
+```text
+APP_PROPOSAL_PUBLICATION_ENABLED=false
+APP_PROPOSAL_PUBLICATION_BROKER_URL=https://<private-proposal-publication-broker-origin>
+APP_PROPOSAL_PUBLICATION_BROKER_KEY_ID=proposal-publication-v1
+APP_PROPOSAL_PUBLICATION_BROKER_TIMEOUT_MS=15000
+APP_PROPOSAL_PUBLICATION_EXECUTION_LEASE_SECONDS=45
+PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET=<different 32+-byte Worker-to-broker secret>
+```
+
+Use [`deploy/proposal-publication-approval-broker.service.example`](../deploy/proposal-publication-approval-broker.service.example)
+with the dedicated host-only
+[`deploy/proposal-publication-approval-broker.env.example`](../deploy/proposal-publication-approval-broker.env.example).
+That process binds `HERMES_AGENT_ROLE=owner-operator` and exposes only
+`/v1/proposal-publication/preview` and `/v1/proposal-publication/execute`.
+
+The route is the second door onto the same bounded operation the Owner Operator
+MCP command performs, not a lighter one: the broker re-runs
+`dry_run_publish_proposal_evidence_pack` immediately before signing, so a pack
+that left Draft, changed its quote anchor, or changed its job fails before the
+write; Frappe's `publish_proposal_evidence_pack` still requires the Approved
+Hermes Run, the signed approval receipt, the Draft state, and both record
+anchors. Publication changes only the pack's status and approval facts: it
+issues no portal link, sends no message, renders no PDF, records no acceptance,
+and does not touch the quote.
+
+Its D1 ledger stores a redacted preview (pack identity, job, quote anchor,
+Draft-to-Approved transition, and the three "did not happen" facts) plus a
+one-way digest of the full receipt-bound dry run. The approver identity, the
+receipts, the raw write arguments, and the private digests never reach the
+browser projection. A partial unique index permits exactly one live intent per
+pack, and an invoked-write transport failure is terminal `execution_uncertain`,
+never an automatic retry.
 
 The session cookie is `Secure; HttpOnly; SameSite=Strict; Path=/`, has no `Domain`, and expires
 after a fixed 12 hours. The D1 row contains only an HMAC; the CSRF value is separately derived and

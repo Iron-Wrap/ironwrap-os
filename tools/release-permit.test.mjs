@@ -1308,7 +1308,10 @@ test("migration inventory is ordered and expand-contract only", async () => {
   assert.equal(migrations.compatibility, "expand-contract");
   assert.equal(migrations.no_down_migrations, true);
   assert.deepEqual(migrations.ordered, [...migrations.ordered].sort());
-  assert.equal(migrations.ordered.at(-1), "0066_dev_outbox_contract_acceptance.sql");
+  assert.equal(
+    migrations.ordered.at(-1),
+    "0068_proposal_publication_approval_requests.sql",
+  );
 });
 
 test("the permit lifetime remains bounded by the source contract", () => {

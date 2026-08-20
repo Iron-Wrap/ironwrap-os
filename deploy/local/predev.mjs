@@ -82,6 +82,23 @@ for (const [name, keyPath] of Object.entries(facetKeyFiles)) {
   facetKeys[name] = value;
 }
 
+// The Worker-to-broker secret for the proposal-publication approval rail. It is
+// generated here for the same reason the Facet keys are: without it the local
+// stack cannot traverse step 5 at all, and a hand-invented value is one more
+// undocumented manual step between a fresh checkout and a working chain.
+const proposalPublicationSecretPath = path.join(keysDir, "proposal-publication-broker-secret.txt");
+if (!existsSync(proposalPublicationSecretPath)) {
+  log("generating throwaway proposal-publication broker secret into deploy/local/keys/");
+  mkdirSync(keysDir, { recursive: true });
+  writeFileSync(proposalPublicationSecretPath, `${randomBytes(32).toString("base64url")}\n`, { mode: 0o600 });
+}
+const proposalPublicationBrokerSecret = readFileSync(proposalPublicationSecretPath, "utf8").trim();
+if (!/^[A-Za-z0-9_-]{43}$/.test(proposalPublicationBrokerSecret)) {
+  fail(
+    "proposal-publication broker secret is invalid; remove deploy/local/keys/proposal-publication-broker-secret.txt and retry",
+  );
+}
+
 const acceptanceHmacPath = path.join(keysDir, "customer-acceptance-hmac-key.txt");
 if (!existsSync(acceptanceHmacPath)) {
   log("generating throwaway customer-acceptance HMAC key into deploy/local/keys/");
@@ -217,6 +234,7 @@ for (const [key, value] of [
   ["APP_CUSTOMER_ACCEPTANCE_HMAC_KEY", acceptanceHmacKey],
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY", acceptanceCreds.api_key],
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET", acceptanceCreds.api_secret],
+  ["PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET", proposalPublicationBrokerSecret],
   ["FACET_LAUNCH_HMAC_KEY", facetKeys.FACET_LAUNCH_HMAC_KEY],
   ["FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY", facetKeys.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY],
   ["FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY", facetProjectionCreds.api_key],

@@ -74,6 +74,15 @@ export type AppEnv = Env & {
   APP_QUOTE_REVISION_BROKER_TIMEOUT_MS?: string;
   APP_QUOTE_REVISION_EXECUTION_LEASE_SECONDS?: string;
   QUOTE_REVISION_BROKER_SHARED_SECRET?: string;
+  // Proposal publication is the only step that makes quote terms customer-visible.
+  // It gets its own broker, signing secret, and execution lease: the owner-operator
+  // publication authority must never ride the estimator or lead-triage rails.
+  APP_PROPOSAL_PUBLICATION_ENABLED?: string;
+  APP_PROPOSAL_PUBLICATION_BROKER_URL?: string;
+  APP_PROPOSAL_PUBLICATION_BROKER_KEY_ID?: string;
+  APP_PROPOSAL_PUBLICATION_BROKER_TIMEOUT_MS?: string;
+  APP_PROPOSAL_PUBLICATION_EXECUTION_LEASE_SECONDS?: string;
+  PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET?: string;
   // A durable Facet association may prepare the existing quote-revision approval rail only
   // after this separate, false-by-default capability is explicitly enabled.
   APP_FACET_QUOTE_REVISION_PREPARE_ENABLED?: string;

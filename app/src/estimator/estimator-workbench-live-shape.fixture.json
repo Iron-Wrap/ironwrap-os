@@ -1,0 +1,287 @@
+{
+  "allowed_actions": [
+    "job.read",
+    "lead.read",
+    "lead_triage.read",
+    "field_blocker.read",
+    "incident.read",
+    "finance_exception.read",
+    "material_exception.read",
+    "estimator.read"
+  ],
+  "economics": {
+    "currency": "CAD",
+    "job_id": "RJ-FACET-0001",
+    "metrics": {
+      "accrued_actual_cost": {
+        "complete": true,
+        "known_cents": 0,
+        "source_count": 0
+      },
+      "actual_profit": {
+        "amount_cents": null,
+        "reason": "posted_revenue_recognition_unavailable",
+        "state": "unavailable"
+      },
+      "cash_collected": {
+        "complete": true,
+        "known_cents": 0,
+        "source_count": 0
+      },
+      "committed_cost": {
+        "complete": true,
+        "known_cents": 0,
+        "source_count": 0
+      },
+      "forecast_cost": {
+        "complete": false,
+        "known_cents": 0,
+        "source_count": 0
+      },
+      "forecast_revenue": {
+        "complete": true,
+        "known_cents": 2366667,
+        "source_count": 1
+      },
+      "invoiced_revenue_ex_tax": {
+        "complete": true,
+        "known_cents": 0,
+        "source_count": 0
+      },
+      "posted_actual_cost": {
+        "complete": true,
+        "known_cents": 0,
+        "source_count": 0
+      }
+    },
+    "reconciliation_gaps": [
+      "actual_profit.posted_revenue_recognition_unavailable",
+      "payment_milestone.posted_revenue_missing",
+      "supplier_quote.approved_missing"
+    ],
+    "source_coverage": {
+      "accepted_change_orders": 0,
+      "committed_supplier_orders": 0,
+      "cost_events": 0,
+      "customer_quotes": 1,
+      "matched_cost_reconciliations": 0,
+      "matched_payment_milestones": 0,
+      "material_lots": 0,
+      "posted_cost_events": 0,
+      "posted_revenue_milestones": 0,
+      "progressed_shop_orders": 0,
+      "supplier_quotes": 0,
+      "valid_reversals": 0,
+      "verified_field_checkins": 0
+    },
+    "state": "needs_review",
+    "tenant_id": "ironwrap"
+  },
+  "insurance_supplements": [],
+  "job": {
+    "brand": "ironwrap",
+    "id": "RJ-FACET-0001",
+    "job_number": "IW-2026-0001",
+    "roof_job_id": "RJ-FACET-0001",
+    "service_type": "Metal Roofing",
+    "status": "Proposal",
+    "workflow_profile": "Residential Retail"
+  },
+  "lineage": {
+    "measurement_to_takeoff": "no_takeoff",
+    "quote_to_proposal": "linked"
+  },
+  "measurements": {
+    "reports": [
+      {
+        "approved_at": "2026-08-18 08:45:00",
+        "id": "MR-FACET-0001",
+        "parsed_at": "2026-08-18 08:30:00",
+        "provider": "AppliCad",
+        "review_status": "Approved"
+      }
+    ],
+    "selected": {
+      "approved_at": "2026-08-18 08:45:00",
+      "computed_estimate": {
+        "approval_eligible": false,
+        "authority": "non_operational_preview",
+        "calculation_schema": "legacy_preview/v1",
+        "currency": null,
+        "lines": [],
+        "lines_truncated": false,
+        "markup": null,
+        "mode": null,
+        "needs_review": null,
+        "policy_bound": false,
+        "policy_id": null,
+        "policy_revision": null,
+        "policy_snapshot_sha256": null,
+        "state": "unavailable",
+        "subtotal": null,
+        "tax": null,
+        "total": null,
+        "unpriced_profiles": []
+      },
+      "computed_takeoff": {
+        "approval_eligible": false,
+        "authority": "non_operational_preview",
+        "calculation_schema": "legacy_preview/v1",
+        "failed_check_count": null,
+        "fasteners": null,
+        "needs_review": null,
+        "nest": null,
+        "overage": null,
+        "panel_area_sqft": null,
+        "panel_count": null,
+        "panel_ft": null,
+        "policy_bound": false,
+        "reason": "geometry_unavailable",
+        "roof_area_computed_sqft": null,
+        "skipped_facets": null,
+        "state": "unavailable",
+        "trims": [],
+        "trims_truncated": false
+      },
+      "geometry": {
+        "check_count": 0,
+        "checks": [],
+        "checks_truncated": false,
+        "facet_count": 0,
+        "facets": [],
+        "facets_truncated": false,
+        "failed_check_count": 0,
+        "metrics": [],
+        "metrics_truncated": false,
+        "reason": "raw_source_rejected",
+        "state": "unavailable"
+      },
+      "id": "MR-FACET-0001",
+      "metrics": [
+        {
+          "confidence": "deterministic",
+          "metric": "roof_area",
+          "needs_review": false,
+          "source_ref": "applicad:roof_area",
+          "unit": "sqft",
+          "value": 2058
+        },
+        {
+          "confidence": "deterministic",
+          "metric": "ridge_length",
+          "needs_review": false,
+          "source_ref": "applicad:ridge",
+          "unit": "ft",
+          "value": 48.5
+        },
+        {
+          "confidence": "deterministic",
+          "metric": "eave_length",
+          "needs_review": false,
+          "source_ref": "applicad:eave",
+          "unit": "ft",
+          "value": 96
+        }
+      ],
+      "metrics_truncated": false,
+      "parsed_at": "2026-08-18 08:30:00",
+      "provider": "AppliCad",
+      "review_status": "Approved",
+      "roof_graph": null
+    }
+  },
+  "partial_sources": [],
+  "permissions": [
+    "session:read",
+    "now:read",
+    "today:read",
+    "jobs:read:any",
+    "owner:read",
+    "sales:read",
+    "estimator:read",
+    "production:read",
+    "approvals:read",
+    "approvals:prepare",
+    "approvals:decide",
+    "facet:read",
+    "facet:launch",
+    "quickbooks:read",
+    "quickbooks:review",
+    "quickbooks:reconcile",
+    "accounting:read",
+    "accounting:review",
+    "accounting:approve",
+    "accounting:reconcile",
+    "accounting:compensate",
+    "accounting:holdback_release",
+    "accounting:payroll",
+    "authority:read",
+    "authority:write"
+  ],
+  "pricing_snapshot": {
+    "price_book_version": "IW-PRICEBOOK-2026-08",
+    "pricing_effective_at": "2026-08-18 09:00:00",
+    "quote_id": "CQ-FACET-0001",
+    "quote_version": 1,
+    "state": "recorded",
+    "valid_until": "2026-09-30"
+  },
+  "proposal": {
+    "approved_at": "2026-08-20 18:17:13.413847",
+    "assumptions": "Measurement and evidence links are draft inputs for estimator review.",
+    "exclusions": "This pack does not create a binding quote, accepted scope, material order, or payment request.",
+    "id": "proposal:CQ-FACET-0001",
+    "prepared_at": "2026-08-20 09:00:00",
+    "quote_id": "CQ-FACET-0001",
+    "signed_at": null,
+    "status": "Approved"
+  },
+  "proposal_readiness": {
+    "reasons": ["measurement_source_review_required", "takeoff_link_missing"],
+    "state": "blocked"
+  },
+  "quote": {
+    "accepted_at": "2026-08-20 12:56:07.666000",
+    "amount_due": 24850,
+    "amount_paid": 0,
+    "approved_at": "2026-08-19 10:00:00",
+    "assumptions": "Existing decking is sound. One layer of shingles to be removed.",
+    "balance_due": 24850,
+    "correction_reason": null,
+    "currency": "CAD",
+    "deposit_amount": 5000,
+    "exclusions": "Structural repairs, chimney masonry, interior finishing.",
+    "id": "CQ-FACET-0001",
+    "payment_due_date": null,
+    "payment_status": "Deposit Due",
+    "prepared_at": "2026-08-18 09:00:00",
+    "price_book_version": "IW-PRICEBOOK-2026-08",
+    "pricing_effective_at": "2026-08-18 09:00:00",
+    "quote_total": 24850,
+    "scope_summary": "Complete metal roof replacement: 26ga standing seam, synthetic underlay, new flashings and vents.",
+    "status": "Accepted",
+    "subtotal": 23666.67,
+    "supersedes": null,
+    "tax_amount": 1183.33,
+    "tax_code": "GST-5",
+    "tax_rate": 5,
+    "valid_until": "2026-09-30",
+    "version": 1
+  },
+  "quote_revision": {
+    "delta": null,
+    "prior_quote": null,
+    "state": "not_revised"
+  },
+  "read_model_generated_at": "2026-08-20T09:00:01.000Z",
+  "scope_changes": [],
+  "scope_clauses": [],
+  "source_updated_at": "2026-08-20 18:26:07.712659",
+  "stale_fields": [],
+  "takeoffs": {
+    "records": [],
+    "selected": null
+  },
+  "version": 1,
+  "visual_model": null
+}

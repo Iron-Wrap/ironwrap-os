@@ -73,6 +73,8 @@ REQUIRED_INPUT_FIELDS = frozenset(
         "content_length",
         "capture_actor",
         "captured_at",
+        "latitude",
+        "longitude",
         "customer_safe",
     }
 )
@@ -82,8 +84,6 @@ OPTIONAL_INPUT_FIELDS = frozenset(
         # Work Package evidence deliberately omits this field and binds its
         # parent/context through the typed capture command instead.
         "roof_job",
-        "latitude",
-        "longitude",
         "location_accuracy_m",
         "correction_of",
         "correction_reason",
@@ -231,6 +231,24 @@ def _optional_number(value: Any, field: str) -> int | float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         _fail("field_evidence_invalid_input", f"{field} must be numeric")
     return value
+
+
+def _required_coordinate(
+    value: Any, field: str, *, minimum: float, maximum: float
+) -> float:
+    if value is None:
+        _fail(
+            "field_evidence_invalid_input",
+            f"{field} is required for verified field evidence",
+        )
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        _fail("field_evidence_invalid_input", f"{field} must be numeric")
+    number = float(value)
+    if number != number or number in {float("inf"), float("-inf")}:
+        _fail("field_evidence_invalid_input", f"{field} must be a finite coordinate")
+    if not minimum <= number <= maximum:
+        _fail("field_evidence_invalid_input", f"{field} is out of range")
+    return number
 
 
 def _customer_safe(value: Any) -> int:
@@ -514,8 +532,12 @@ def _issued_document(payload: Mapping[str, Any]) -> dict[str, Any]:
         "content_length": content_length,
         "capture_actor": capture_actor,
         "captured_at": _clean_required(payload["captured_at"], "captured_at"),
-        "latitude": _optional_number(payload.get("latitude"), "latitude"),
-        "longitude": _optional_number(payload.get("longitude"), "longitude"),
+        "latitude": _required_coordinate(
+            payload.get("latitude"), "latitude", minimum=-90.0, maximum=90.0
+        ),
+        "longitude": _required_coordinate(
+            payload.get("longitude"), "longitude", minimum=-180.0, maximum=180.0
+        ),
         "location_accuracy_m": _optional_number(
             payload.get("location_accuracy_m"), "location_accuracy_m"
         ),

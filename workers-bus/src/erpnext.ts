@@ -171,7 +171,7 @@ export async function pushToErpNext(
     customer.name,
     jn,
   );
-  const productionGateCount = await ensureInitialProductionGates(cfg, base, roofJob.name);
+  const productionGateCount = await ensureInitialProductionGates(cfg, base, roofJob.name, rec);
   const instantEstimate = await upsertInstantEstimateSession(cfg, base, rec, p, lead.name, roofJob.name);
   await mirrorPublicEstimatorConsent(
     cfg,
@@ -704,13 +704,25 @@ async function linkRoofJobCustomerIfMissing(
   });
 }
 
-async function ensureInitialProductionGates(env: ErpEnv, base: string, roofJobName: string): Promise<number> {
+async function ensureInitialProductionGates(
+  env: ErpEnv,
+  base: string,
+  roofJobName: string,
+  rec: EnvelopeRecord,
+): Promise<number> {
   // App policy (domain_policy._validate_gate) requires accountability fields on every gate:
   // an owner, an assignment time, and for Blocked gates a blocker reason and due time.
   // Transport-created gates start Blocked under the integration identity so no job enters
   // production without a named accountable assignee; a human re-assigns during triage.
   const owner = str(env.ERPNEXT_INTEGRATION_USER) ?? "Administrator";
-  const assignedAt = new Date();
+  // Anchored to the envelope, never to `new Date()`. `erpFetch` derives each effect's
+  // idempotency key from a hash of the request body, and `toFrappeDatetime` keeps only
+  // whole seconds, so a wall-clock stamp gives the same gate a different key on any retry
+  // that crosses a second boundary: the effect runtime then reads an exact replay as a new
+  // effect and dispatches a second POST, leaving `findByTerm` as the only duplicate guard.
+  // Anchoring to the envelope also starts the 72h clock when the lead arrived - when the
+  // customer began waiting - rather than whenever transport happened to succeed.
+  const assignedAt = envelopeInstant(rec);
   const dueAt = new Date(assignedAt.getTime() + 72 * 60 * 60 * 1000);
   for (const gate of PRODUCTION_GATES) {
     await createIfMissingByField(env, base, "Production Gate State", "gate_id", gateId(roofJobName, gate), {
@@ -1682,6 +1694,19 @@ function frappeDatetime(value: string): string {
  * DATETIME columns reject ISO-8601 "T…Z" text, so convert when parseable and omit the field
  * otherwise. Never substitutes a fabricated time for a provider fact.
  */
+/**
+ * The envelope's own instant, so anything derived from it replays identically. Falls back
+ * through the columns the store always writes; `new Date()` is the last resort for a record
+ * carrying neither, which no persisted envelope does.
+ */
+function envelopeInstant(rec: EnvelopeRecord): Date {
+  for (const candidate of [rec.ts, rec.created_at]) {
+    const parsed = new Date(String(candidate ?? ""));
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return new Date();
+}
+
 function toFrappeDatetime(value: string | undefined | null): string | undefined {
   if (!value) return undefined;
   const parsed = new Date(value);

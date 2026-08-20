@@ -117,6 +117,56 @@ test("pushToErpNext: creates Lead Envelope, Roofing Customer, Property, and Roof
   assert.deepEqual(gateBodies.map((g) => g.gate), ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew", "Completion"]);
   assert.ok(gateBodies.every((g) => g.roof_job === "RJ-0001" && g.state === "Blocked"));
   assert.ok(gateBodies.every((g) => typeof g.blocker_reason === "string" && g.blocker_reason.length > 0));
+  // Anchored to the envelope, not to the wall clock: this is what keeps the effect-runtime
+  // idempotency key - a hash of the request body - stable across retries. See the boundary
+  // test below for the failure this prevents.
+  assert.ok(gateBodies.every((g) => g.assigned_at === "2026-07-08 10:00:00"));
+  assert.ok(gateBodies.every((g) => g.due_at === "2026-07-11 10:00:00"));
+});
+
+test("pushToErpNext: gate replay stays exact across a wall-clock second boundary", async (t) => {
+  // The shipped bug this pins: `ensureInitialProductionGates` stamped `new Date()` into every
+  // gate body, `toFrappeDatetime` truncated it to whole seconds, and `erpFetch` keys each
+  // effect's idempotency on a hash of that body. Two pushes landing in different seconds
+  // therefore hashed differently, so the effect runtime dispatched a second POST per gate
+  // instead of replaying - 18 mutations where the first pass made 11. It reproduced only when
+  // the clock happened to tick between the calls, which is why CI failed and local runs did
+  // not; forcing the tick makes it deterministic in both.
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    if ((init?.method ?? "GET") === "GET") return json({ data: [] });
+    if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-0001" } });
+    if (url.endsWith("/api/resource/Roofing%20Customer")) return json({ data: { name: "RC-0001" } });
+    if (url.endsWith("/api/resource/Roofing%20Property")) return json({ data: { name: "RP-0001" } });
+    if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-0001" } });
+    if (url.endsWith("/api/resource/Production%20Gate%20State")) {
+      const body = JSON.parse(String(init?.body));
+      return json({ data: { name: body.gate_id } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  }));
+
+  const testEnv = effectEnv({
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.com/",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
+  });
+  const mutations = () => calls.filter((c) => ["POST", "PUT"].includes(c.init.method ?? "GET")).length;
+
+  const first = await pushToErpNext(testEnv, rec, { contactId: "C-1", jobId: "J-1", reused: false });
+  const mutationsAfterFirstCall = mutations();
+  await new Promise((resolve) => setTimeout(resolve, 1_000 - (Date.now() % 1_000) + 20));
+  const replay = await pushToErpNext(testEnv, rec, { contactId: "C-1", jobId: "J-1", reused: false });
+
+  assert.deepEqual(replay, first);
+  assert.equal(
+    mutations(),
+    mutationsAfterFirstCall,
+    "a replay in a later second must still reconstruct from provider GETs without another mutation",
+  );
 });
 
 test("pushToErpNext: retry never resets existing human-owned operational records", async (t) => {

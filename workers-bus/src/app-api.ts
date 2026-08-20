@@ -135,6 +135,7 @@ import { hasPhysicalAssignmentAuthority } from "./work-package.ts";
 import { handleAuthorityRecordRoute } from "./authority-record-api.ts";
 import { handleSafetyRoute } from "./safety-api.ts";
 import { safetyReleaseGate } from "./safety-release-gate.ts";
+import { handleInventoryRoute } from "./inventory-control-api.ts";
 import { handleProposalDocAction } from "./proposal-doc-action.ts";
 import {
   listMeasurementIntakeExceptions,
@@ -373,6 +374,10 @@ export async function handleAuthenticatedRoute(
   if (url.pathname.startsWith("/api/v1/safety")) {
     const safetyResponse = await handleSafetyRoute(req, env, auth);
     if (safetyResponse) return safetyResponse;
+  }
+  if (url.pathname.startsWith("/api/v1/inventory")) {
+    const inventoryResponse = await handleInventoryRoute(req, env, auth);
+    if (inventoryResponse) return inventoryResponse;
   }
   if (req.method === "GET" && url.pathname === "/api/v1/now") {
     if (!hasPermission(auth, "now:read"))

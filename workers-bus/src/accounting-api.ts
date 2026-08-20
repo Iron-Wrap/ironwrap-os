@@ -25,6 +25,13 @@
 //     not shipped, so their six routes authenticate, authorize, and then answer `501` naming the
 //     slice. A route that 404s would be indistinguishable from a typo; one that pretended to work
 //     would be worse than either.
+//
+// Slice S11 adds the two origins section 8.1's table never had, both for the same reason deviation
+// 6 added `POST /intents`: the engine function existed, nothing outside a test called it, and the
+// product was therefore unreachable at that step. `POST /tax/snapshots` is the statutory rate a
+// derivation binds - without it `deriveIntent` answers `tax_mapping_missing` forever on a fresh
+// tenant - and `reconcile` now performs the authenticated re-read it only ever pretended to
+// trigger, which is what makes `reconciled` reachable and the drift exception raisable at all.
 
 import { validAppCsrf } from "./app-auth.ts";
 import {
@@ -66,8 +73,14 @@ import { localFactEnvelope, type AccountingEntityType } from "./accounting-norma
 import {
   bindAccountingIntentTaxSnapshots,
   currentTaxPolicySnapshot,
+  recordTaxPolicySnapshot,
   taxBindingSetSha256,
 } from "./accounting-tax-snapshots.ts";
+import {
+  reobserveAccountingIntent,
+  resolveAccountingObservationBinding,
+  type AccountingObservationBinding,
+} from "./accounting-reobservation.ts";
 import { APP_API_VERSION, type AppEnv, type AuthContext } from "./app-types.ts";
 
 const MAX_ACCOUNTING_BODY_BYTES = 8 * 1024;
@@ -117,10 +130,24 @@ const ACTION_PERMISSION: Readonly<Record<(typeof ACCOUNTING_ALLOWED_ACTIONS)[num
  * this path space is exclusively the money desk's and an unclaimed path here is a 404 rather than
  * a fall-through into somebody else's router.
  */
+/**
+ * The one seam the money desk's routes take from outside `env`.
+ *
+ * Only the re-observation binding, and only because a route that reaches QuickBooks has to be
+ * provable without one: production leaves it unset and the reconcile route resolves the tenant's
+ * own connection, while a test hands in the same binding shape built over a synthetic Intuit
+ * double. `undefined` means "resolve it"; an explicit `null` means "there is none", which is the
+ * unbound answer an unconnected tenant gets and must keep getting.
+ */
+export interface AccountingRouteDeps {
+  observation?: AccountingObservationBinding | null;
+}
+
 export async function handleAccountingRoute(
   req: Request,
   env: AppEnv,
   auth: AuthContext,
+  deps: AccountingRouteDeps = {},
 ): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname.replace(/^\/api\/v1\/accounting\/?/, "");
@@ -135,7 +162,7 @@ export async function handleAccountingRoute(
       ? await readSummary(env, auth, url)
       : json({ error: "not_found" }, 404);
   }
-  if (head === "intents") return await intentRoute(req, env, auth, url, parts);
+  if (head === "intents") return await intentRoute(req, env, auth, url, parts, deps);
   if (head === "exceptions") return await exceptionRoute(req, env, auth, url, parts);
   if (head === "tax") return await taxRoute(req, env, auth, url, parts);
   if (head === "holdback") return holdbackRoute(req, auth, parts);
@@ -195,6 +222,7 @@ async function intentRoute(
   auth: AuthContext,
   url: URL,
   parts: readonly string[],
+  deps: AccountingRouteDeps,
 ): Promise<Response> {
   if (req.method === "GET" && parts.length === 1) return await listIntents(env, auth, url);
   if (req.method === "POST" && parts.length === 1) return await deriveIntent(req, env, auth);
@@ -205,9 +233,11 @@ async function intentRoute(
   if (req.method !== "POST" || parts.length !== 3) return json({ error: "not_found" }, 404);
 
   const action = parts[2];
-  if (action === "approve") return await commandIntent(req, env, auth, intentId, "approve");
-  if (action === "reject") return await commandIntent(req, env, auth, intentId, "reject");
-  if (action === "reconcile") return await commandIntent(req, env, auth, intentId, "reconcile");
+  if (action === "approve") return await commandIntent(req, env, auth, intentId, "approve", deps);
+  if (action === "reject") return await commandIntent(req, env, auth, intentId, "reject", deps);
+  if (action === "reconcile") {
+    return await commandIntent(req, env, auth, intentId, "reconcile", deps);
+  }
   if (action === "compensate") return await compensateIntent(req, env, auth, intentId);
   return json({ error: "not_found" }, 404);
 }
@@ -471,12 +501,24 @@ async function readIntent(
   }
 }
 
+/**
+ * Apply one accountant command - and, for `reconcile`, actually go and look.
+ *
+ * `reconcile` used to be a state-trigger flip and nothing else: the receipt moved the intent to
+ * `reconciliation_required` and no code compared anything with the provider, so no production
+ * surface could ever re-read an already-submitted entity and `reconciled` was unreachable in the
+ * shipped product (ELEC-77). Both halves are kept, because both are true: the receipt records that
+ * a named accountant asked for a re-read, and the re-read that follows is what section 5.1 admits
+ * as the only route to a settled state. An unbound tenant still gets the receipt and an honest
+ * `provider_unbound` answer rather than a verdict nobody checked.
+ */
 async function commandIntent(
   req: Request,
   env: AppEnv,
   auth: AuthContext,
   intentId: string,
   operation: "approve" | "reject" | "reconcile",
+  deps: AccountingRouteDeps,
 ): Promise<Response> {
   const permission = operation === "approve"
     ? "accounting:approve"
@@ -518,13 +560,59 @@ async function commandIntent(
       reasonCode,
     });
     const now = new Date();
+    if (operation !== "reconcile" || result.replayed) {
+      return json(
+        envelope(auth, {
+          intent: projectAccountingIntent(result.intent, now),
+          replayed: result.replayed,
+        }),
+        // Approve enqueues provider work; reject settles here and now (section 8.1). A replay
+        // applied nothing a second time, so it answers 200 whatever it replayed.
+        operation === "reject" || result.replayed ? 200 : 202,
+      );
+    }
+
+    const binding = deps.observation === undefined
+      ? await resolveAccountingObservationBinding(env, { tenantId: auth.session.tenant_id })
+      : deps.observation;
+    if (!binding) {
+      // No connected realm, so there is nothing to read. The intent stays in
+      // `reconciliation_required` - which is the truth: it needs re-reading and we could not.
+      return json(
+        envelope(auth, {
+          intent: projectAccountingIntent(result.intent, now),
+          replayed: false,
+          re_read: { status: "provider_unbound", verdict: null, reason_code: null },
+        }),
+        202,
+      );
+    }
+
+    const reobserved = await reobserveAccountingIntent(env, binding, {
+      tenantId: auth.session.tenant_id,
+      intentId,
+      // Not `sweep`: a person asked for this one, and the observation records which.
+      source: "recovery_query",
+    }, now);
+    const settled = await readAccountingIntent(env, auth.session.tenant_id, intentId);
     return json(
       envelope(auth, {
-        intent: projectAccountingIntent(result.intent, now),
-        replayed: result.replayed,
+        intent: projectAccountingIntent(settled ?? result.intent, now),
+        replayed: false,
+        re_read: {
+          status: reobserved.status,
+          verdict: reobserved.verdict,
+          reason_code: reobserved.reason_code,
+          detail_code: reobserved.detail_code,
+          // The Payments the invoice declared, each observed by its exact id: the settled half of
+          // the cumulative invariant, and the reason a paid invoice can reach `reconciled` here.
+          payments_observed: reobserved.payments.length,
+          exception_id: reobserved.exception_id,
+        },
       }),
-      // Approve and reconcile enqueue provider work; reject settles here and now (section 8.1).
-      operation === "reject" || result.replayed ? 200 : 202,
+      // 200: the provider work this command names happened inside the request and settled. 202
+      // stays for the unbound answer above, where the sweep is still what will do it.
+      reobserved.status === "judged" ? 200 : 202,
     );
   } catch (error) {
     return engineError(error);
@@ -735,6 +823,9 @@ async function taxRoute(
   url: URL,
   parts: readonly string[],
 ): Promise<Response> {
+  if (req.method === "POST" && parts.length === 2 && parts[1] === "snapshots") {
+    return await recordTaxSnapshot(req, env, auth);
+  }
   if (req.method !== "GET") return json({ error: "not_found" }, 404);
   const denied = denyUnless(auth, "accounting:read");
   if (denied) return denied;
@@ -770,6 +861,99 @@ async function taxRoute(
   }
 
   return json({ error: "not_found" }, 404);
+}
+
+/**
+ * Record one statutory tax rate as an immutable snapshot (the production origin for section 5.4).
+ *
+ * `recordTaxPolicySnapshot` shipped with slice S2 and had zero callers in `src/`, and that was not
+ * a cosmetic gap: `deriveIntent` refuses with `tax_mapping_missing` when no current snapshot binds
+ * the jurisdiction and code it was given, so on a tenant that had never had a row inserted by hand
+ * *no money intent could be derived at all*. The whole lane was unreachable from zero. Section
+ * 8.1's route table has a `GET` for snapshots and no create row for the same reason it had no
+ * create row for intents (deviation 6): the facts are supposed to come from somewhere. For a
+ * statutory rate that somewhere is a person reading the statute, so this is the route.
+ *
+ * It is a *policy* command, not a money one, and the difference is why it is shaped the way it is:
+ * it reaches no provider, creates no entity, moves no intent, and cannot touch a snapshot that
+ * already exists - `0059` makes them immutable and `recordTaxPolicySnapshot` is idempotent on the
+ * bound facts, so the same rate recorded twice is one snapshot rather than two versions of the same
+ * number. Already-submitted intents keep the snapshot they bound, which is what section 5.4
+ * requires; an un-submitted candidate whose snapshot was superseded is blocked `candidate_changed`
+ * by the staleness check and must be re-derived.
+ *
+ * `Idempotency-Key` is required for the same reason every command under `/accounting` requires it,
+ * and is enforced here by the facts hash rather than by a receipts table. That is a real difference
+ * from `deriveIntent` and it is deliberate: ELEC-79's argument for derivation receipts is that one
+ * key standing for two different sets of *figures* would derive money nobody asked for twice, and
+ * there is no equivalent harm here - two different rates are two legitimately different snapshots,
+ * and the same rate under any number of keys is one row.
+ *
+ * `accounting:review` gates it, matching `deriveIntent`: recording what the statute says is
+ * reviewing work, and the approval on the intent that binds it is still the gate that matters.
+ */
+async function recordTaxSnapshot(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+): Promise<Response> {
+  const denied = denyUnless(auth, "accounting:review");
+  if (denied) return denied;
+  if (!validAppCsrf(req, auth)) return json({ error: "csrf_failed" }, 403);
+  if (!idempotencyKey(req)) return json({ error: "idempotency_key_required" }, 400);
+
+  const parsed = await readJson(req);
+  if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
+  const body = parsed.value;
+  if (!onlyKeys(body, [
+    "jurisdiction", "tax_code", "provider_tax_code_id", "rate_percent", "effective_from",
+    "effective_to", "source_ref",
+  ])) {
+    return json({ error: "unexpected_field" }, 400);
+  }
+
+  const jurisdiction = refText(body.jurisdiction, 2, 32);
+  const taxCode = refText(body.tax_code, 1, 32);
+  const providerTaxCodeId = body.provider_tax_code_id === undefined
+    || body.provider_tax_code_id === null
+    ? null
+    : refText(body.provider_tax_code_id, 1, 40);
+  const ratePercent = rateText(body.rate_percent);
+  const effectiveFrom = isoDate(body.effective_from);
+  const effectiveTo = body.effective_to === undefined || body.effective_to === null
+    ? null
+    : isoDate(body.effective_to);
+  // The statute, bulletin or rate table this was read from. Section 6: evidence is cited, never
+  // implied - a rate with no source is a number somebody typed. Spaces are allowed here and
+  // nowhere else in this file, because a citation is prose ("CRA GST bulletin 2008-01-01") rather
+  // than an identifier, and forcing it through the ref alphabet would only produce worse citations.
+  const sourceRef = citationText(body.source_ref, 4, 200);
+  if (
+    jurisdiction === null || taxCode === null || ratePercent === null || effectiveFrom === null
+    || sourceRef === null
+    || (body.provider_tax_code_id !== undefined && body.provider_tax_code_id !== null
+      && providerTaxCodeId === null)
+    || (body.effective_to !== undefined && body.effective_to !== null && effectiveTo === null)
+  ) {
+    return json({ error: "invalid_accounting_tax_snapshot" }, 400);
+  }
+
+  try {
+    const snapshot = await recordTaxPolicySnapshot(env, {
+      tenantId: auth.session.tenant_id,
+      jurisdiction,
+      taxCode,
+      providerTaxCodeId,
+      ratePercent,
+      effectiveFrom,
+      effectiveTo,
+      sourceRef,
+    });
+    const { tenant_id: _tenantId, ...row } = snapshot;
+    return json(envelope(auth, { snapshot: row }), 201);
+  } catch (error) {
+    return engineError(error);
+  }
 }
 
 // ------------------------------------------------------------------------ holdback and payroll
@@ -927,11 +1111,33 @@ function refText(value: unknown, min: number, max: number): string | null {
     : null;
 }
 
+/**
+ * A short human citation: bounded, single-line, and free of control characters.
+ *
+ * Deliberately not `refText`: this is the only field on the money desk that a person writes in
+ * their own words, and it is evidence rather than an identifier.
+ */
+function citationText(value: unknown, min: number, max: number): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed.length < min || trimmed.length > max) return null;
+  return /^[^\u0000-\u001f\u007f]+$/.test(trimmed) ? trimmed : null;
+}
+
 function positiveInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
 }
 
 /** Two-place decimal magnitude, matching the money columns' own CHECK. */
+/** A tax rate as the snapshot stores it: percent with up to four decimal places, never negative. */
+function rateText(value: unknown): string | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? value.toFixed(4) : null;
+  }
+  if (typeof value !== "string") return null;
+  return /^\d{1,3}(\.\d{1,4})?$/.test(value) ? value : null;
+}
+
 function decimalText(value: unknown): string | null {
   return typeof value === "string" && /^\d+\.\d{2}$/.test(value) && value.length <= 20
     ? value

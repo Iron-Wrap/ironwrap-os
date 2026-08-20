@@ -1,4 +1,4 @@
-import { handleAccountingRoute } from "./accounting-api.ts";
+import { handleAccountingRoute, type AccountingRouteDeps } from "./accounting-api.ts";
 import {
   appBffConfigured,
   authenticateAppRequest,
@@ -296,10 +296,22 @@ export async function handleAdminFirstOwnerBootstrap(
   });
 }
 
+/**
+ * Seams the authenticated routes take from outside `env`, all optional and all unset in production.
+ *
+ * One entry so far: the money desk's provider-observation binding, so a route that reaches
+ * QuickBooks can be driven against a synthetic Intuit double without the test dropping out of the
+ * real router, the real permission set and the real CSRF check on the way in.
+ */
+export interface AppRouteDeps {
+  accounting?: AccountingRouteDeps;
+}
+
 export async function handleAuthenticatedRoute(
   req: Request,
   env: AppEnv,
   auth: AuthContext,
+  deps: AppRouteDeps = {},
 ): Promise<Response> {
   const url = new URL(req.url);
   if (
@@ -355,7 +367,7 @@ export async function handleAuthenticatedRoute(
     url.pathname === "/api/v1/accounting" ||
     url.pathname.startsWith("/api/v1/accounting/")
   ) {
-    return await handleAccountingRoute(req, env, auth);
+    return await handleAccountingRoute(req, env, auth, deps.accounting ?? {});
   }
   if (url.pathname === "/api/v1/quickbooks/connection") {
     return req.method === "GET"

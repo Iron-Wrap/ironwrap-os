@@ -16,7 +16,7 @@
 
 import { DatabaseSync } from "node:sqlite";
 
-import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import { handleAuthenticatedRoute, type AppRouteDeps } from "../src/app-api.ts";
 import { permissionsForRole, type AppEnv, type AppRole, type AuthContext } from "../src/app-types.ts";
 import { ACCOUNTING_MIGRATIONS, NOW, TENANT, readAccountingMigration } from "./accounting-fixture.ts";
 
@@ -192,6 +192,16 @@ export interface CallOptions {
   idempotencyKey?: string | null;
   userId?: string;
   tenantId?: string;
+  /**
+   * The optional route seams, threaded through the real router.
+   *
+   * Only the money desk's provider-observation binding so far, and it exists so a route that
+   * reaches QuickBooks can be driven against a synthetic Intuit double *without* the test
+   * stepping outside `handleAuthenticatedRoute` - the permission set, the CSRF check and the
+   * idempotency header are still executed on the way in, which is the whole reason this harness
+   * goes through the real dispatch path.
+   */
+  deps?: AppRouteDeps;
 }
 
 export async function call(
@@ -221,6 +231,7 @@ export async function call(
       ...(options.userId === undefined ? {} : { userId: options.userId }),
       ...(options.tenantId === undefined ? {} : { tenantId: options.tenantId }),
     }),
+    options.deps ?? {},
   );
   return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 }

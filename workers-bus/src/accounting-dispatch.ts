@@ -42,8 +42,16 @@ import {
   readAccountingIntent,
   type AccountingIntentRecord,
 } from "./accounting-intents.ts";
-import { localFactEnvelope, type AccountingEntityType } from "./accounting-normalizers.ts";
-import { readProviderEntity } from "./accounting-provider-read.ts";
+import {
+  localFactEnvelope,
+  type AccountingEntityType,
+  type NormalizedEntityFacts,
+} from "./accounting-normalizers.ts";
+import {
+  listAccountingIntentTaxBindings,
+  readTaxPolicySnapshot,
+} from "./accounting-tax-snapshots.ts";
+import { readProviderEntity, readProviderTaxRates } from "./accounting-provider-read.ts";
 import { reconcileAccountingIntent } from "./accounting-reconciliation.ts";
 import {
   dispatchRefusalCode,
@@ -537,4 +545,46 @@ function firstLineDetail(payload: Record<string, unknown>): Record<string, unkno
   return detail && typeof detail === "object" && !Array.isArray(detail)
     ? detail as Record<string, unknown>
     : {};
+}
+
+/**
+ * The provider's own rate for each code this intent bound, read through the S0 port.
+ *
+ * Section 5.4: "every submission preflight reads QuickBooks' `TaxCode`/`TaxRate` for the bound
+ * code; if the provider's rate differs from the snapshot the intent is blocked with
+ * `tax_rate_drift`". `preflightAccountingIntentTax` has always implemented that comparison and the
+ * dispatcher has always handed it an empty map, so `readProviderTaxRates` had no caller in `src/`
+ * and the drift half of the preflight could not fire in production however far the provider's rate
+ * had moved. This is the read it was waiting for, and it belongs to the same slice as the rest of
+ * the re-observation work: a rate is one more provider fact nobody was looking at.
+ *
+ * An outage is not drift. `readProviderTaxRates` omits any code it could not read and
+ * `detectTaxRateDrift` treats an absent rate as "not a rate that differs", so a provider incident
+ * delays no submission - which is why this returns what it has rather than refusing.
+ */
+async function boundProviderTaxRates(
+  env: AppEnv,
+  tenantId: string,
+  intent: AccountingIntentRecord,
+  binding: AccountingDispatchBinding,
+  now: Date,
+): Promise<ReadonlyMap<string, NormalizedEntityFacts>> {
+  if (!intent.tax_policy_snapshot_sha256) return new Map();
+  const bindings = await listAccountingIntentTaxBindings(env, tenantId, intent.intent_id);
+  const taxRateIdsByCode = new Map<string, string>();
+  for (const bound of bindings) {
+    const snapshot = await readTaxPolicySnapshot(env, tenantId, bound.snapshot_id);
+    // A snapshot that never recorded the provider's own id for the code has nothing to read by
+    // exact id, and section 5.1 admits no other kind of read. It is simply not compared.
+    if (snapshot?.provider_tax_code_id) {
+      taxRateIdsByCode.set(bound.tax_code, snapshot.provider_tax_code_id);
+    }
+  }
+  if (taxRateIdsByCode.size === 0) return new Map();
+  return await readProviderTaxRates(
+    binding.auth,
+    { tenantId, taxRateIdsByCode },
+    binding.fetcher ?? fetch,
+    now,
+  );
 }

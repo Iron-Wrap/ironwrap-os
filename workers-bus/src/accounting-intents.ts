@@ -657,9 +657,16 @@ export async function recordAccountingIntentVerdict(
   // moves to `reconciliation_required`, not straight to `mismatch`. The state graph says the same
   // thing - `reconciled` reaches nothing else - so this is the one rule that keeps a legitimate
   // drift from being refused as an illegal transition.
-  const state: AccountingIntentState = intent.state === "reconciled" && verdictState !== "reconciled"
-    ? "reconciliation_required"
-    : verdictState;
+  //
+  // The test is `provider_reconciled_at`, not the current state, and the difference is load-bearing
+  // since slice S11: the `reconcile` command's receipt moves the intent to
+  // `reconciliation_required` before the re-read it exists to trigger, so an intent that had
+  // genuinely reconciled is no longer in `reconciled` by the time the verdict lands. The stamp is
+  // written once a readback matched and never cleared, so it says what the state no longer can.
+  const state: AccountingIntentState =
+    intent.provider_reconciled_at !== null && verdictState !== "reconciled"
+      ? "reconciliation_required"
+      : verdictState;
 
   if (input.verdict === "reconciled" && input.observedSha256 !== intent.expected_sha256) {
     // Never adjust local truth to match the provider (section 5.1). A difference is an exception.

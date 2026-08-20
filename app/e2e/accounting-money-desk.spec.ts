@@ -78,6 +78,12 @@ test.describe("Money desk mobile acceptance", () => {
     await expect(
       page.getByText("Check the amount against the approved paperwork, then approve or reject it."),
     ).toBeVisible();
+    // ...and the words track the truth. A posted invoice nobody has paid yet is waiting on the
+    // customer, not "part paid": slice S11 made `reconciled` reachable, and a queue whose copy
+    // described a state it could never leave was the other half of that gap (ELEC-77).
+    await expect(
+      page.getByText("Posted to QuickBooks. Waiting for the customer to pay it."),
+    ).toBeVisible();
 
     await assertNoHorizontalScroll(page, "money desk");
     await assertActionsAreReachable(page, "money desk");

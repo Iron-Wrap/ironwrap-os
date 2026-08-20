@@ -64,6 +64,10 @@ import {
 // ...and what it dispatches *through*. ELEC-74: the call above existed, the connection did not.
 import { resolveAccountingDispatchBinding } from "./accounting-dispatch-binding.ts";
 import {
+  accountingIntentReobserver,
+  resolveAccountingObservationBinding,
+} from "./accounting-reobservation.ts";
+import {
   handleQuickBooksOAuthCallback,
   recoverQuickBooksFinalInvoices,
 } from "./quickbooks-final-invoice.ts";
@@ -278,6 +282,16 @@ export default {
         log({ at: "accounting_money_dispatch_binding", error: String(error) });
         return null;
       });
+      // Resolved separately from the dispatch binding, and deliberately so: re-observing needs a
+      // QuickBooks connection and nothing else, while dispatching also needs the effect ledger. A
+      // Worker with the ledger switched off must still be able to re-read what it already posted.
+      const accountingObservationBinding = resolveAccountingObservationBinding(
+        env as import("./app-types.ts").AppEnv,
+        { tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv) },
+      ).catch((error) => {
+        log({ at: "accounting_money_observation_binding", error: String(error) });
+        return null;
+      });
       ctx.waitUntil(
         Promise.all([
           retrySweep(env),
@@ -393,19 +407,39 @@ export default {
           }).catch((error) =>
             log({ at: "accounting_money_compensation_dispatch", error: String(error) }),
           ),
-          // IRO-52 slice S8. Four money-plane sweeps: due observations, the `unknown`
-          // dispatch deadline, exception ageing, and dispatches that have stopped moving. No
-          // provider reader is bound until the slice S11 binding lands, so the due sweep reports
-          // rather than re-reads - a timer is not evidence (contract section 5.1).
-          runAccountingSweeps(env as import("./app-types.ts").AppEnv, {
-            tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv),
-          }).then((report) => {
+          // IRO-52 slices S8 and S11. Four money-plane sweeps: due observations, the `unknown`
+          // dispatch deadline, exception ageing, and dispatches that have stopped moving.
+          //
+          // The due-observation sweep is the half S11 finished. Until this binding existed it ran
+          // with no reader at all (ELEC-77), so a dispatched invoice sat at `partially_settled`
+          // forever and `reconciled` was unreachable in the shipped product no matter what the
+          // customer paid. It now re-observes through the same connection the dispatcher uses:
+          // read the entity by its exact id, observe the Payments that entity declares, judge once.
+          // Unbound stays exactly what it was - the sweep reports what is due and re-reads nothing,
+          // because a timer is not evidence (contract section 5.1).
+          accountingObservationBinding.then((binding) =>
+            runAccountingSweeps(env as import("./app-types.ts").AppEnv, {
+              tenantId: accountingSweepTenantId(env as import("./app-types.ts").AppEnv),
+              ...(binding
+                ? {
+                  reobserve: accountingIntentReobserver(
+                    env as import("./app-types.ts").AppEnv,
+                    binding,
+                  ),
+                }
+                : {}),
+            })
+          ).then((report) => {
             if (accountingSweepIsNoteworthy(report)) {
               log({
                 at: "accounting_money_sweep",
                 tenant_id: report.tenant_id,
                 due_observations: report.due_observations.due.length,
                 reader_unbound: report.due_observations.reader_unbound,
+                reread: report.due_observations.reread,
+                reconciled: report.due_observations.reconciled,
+                partially_settled: report.due_observations.partially_settled,
+                mismatched: report.due_observations.mismatched,
                 uncertain_expired: report.uncertain.expired.length,
                 exceptions_ageing: report.exceptions.ageing.length,
                 stuck_dispatches: report.stuck_dispatches.stuck.length,

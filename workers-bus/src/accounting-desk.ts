@@ -86,7 +86,7 @@ const NEXT_STEP_BY_STATE: Readonly<Record<AccountingIntentState, string>> = {
   rejected: "Nothing was sent. Start again from a new set of figures if this is still needed.",
   submission_pending: "Being sent to QuickBooks. Nothing else to do yet.",
   submitted: "Waiting for QuickBooks to confirm. We re-read it until it does.",
-  partially_settled: "Part of this is paid. Waiting for the rest.",
+  partially_settled: "Posted to QuickBooks. Waiting for the customer to pay it.",
   uncertain: "We do not know whether this reached QuickBooks; we are checking.",
   mismatch: "QuickBooks does not agree with our figures. Open the detail and pick a remedy.",
   reconciliation_required: "This needs re-reading against QuickBooks before it can be trusted.",
@@ -115,8 +115,52 @@ export function accountingBadge(state: AccountingIntentState): AccountingBadge {
   return BADGE_BY_STATE[state];
 }
 
-export function accountingNextStep(state: AccountingIntentState): string {
+/**
+ * How long an intent may sit waiting to reach the provider before the copy stops saying
+ * "nothing else to do". Matches `DEFAULT_STUCK_DISPATCH_SECONDS` in `accounting-sweeps.ts`: the
+ * sweep that logs a stalled dispatcher and the sentence the office manager reads must agree, or
+ * the desk is calm about something the cron is already shouting about.
+ */
+export const STUCK_DISPATCH_NEXT_STEP_SECONDS = 30 * 60;
+
+/**
+ * The sentence a person acts on, from the state and what is actually known about it.
+ *
+ * The state alone is not always enough to tell the truth, and both exceptions were live copy
+ * defects ELEC-77 photographed:
+ *
+ *   * a freshly dispatched invoice is `partially_settled` with nothing paid at all - `Balance`
+ *     still equals `TotalAmt` and no Payment has been observed - so "Part of this is paid" was
+ *     simply false for the most common case the state has;
+ *   * `submission_pending` says "Nothing else to do yet", which is right for the first few minutes
+ *     and wrong once the dispatcher has clearly stopped. `sweepStuckAccountingDispatches` already
+ *     surfaces that intent in the cron log; the desk now says the same thing to the person looking
+ *     at it.
+ *
+ * The context is optional so a caller that only holds a state still gets the plain sentence.
+ */
+export function accountingNextStep(
+  state: AccountingIntentState,
+  context: { settledAmount?: string | null; waitingSeconds?: number } = {},
+): string {
+  if (
+    state === "submission_pending"
+    && (context.waitingSeconds ?? 0) >= STUCK_DISPATCH_NEXT_STEP_SECONDS
+  ) {
+    return "This has been waiting to reach QuickBooks longer than it should. "
+      + "Tell whoever runs the system.";
+  }
+  if (state === "partially_settled" && settledCents(context.settledAmount) > 0) {
+    return "Part of this is paid. Waiting for the rest.";
+  }
   return NEXT_STEP_BY_STATE[state];
+}
+
+/** Integer cents from the `settled_amount` the last verdict recorded, or zero when none has. */
+function settledCents(settledAmount: string | null | undefined): number {
+  if (!settledAmount) return 0;
+  const parsed = Number.parseInt(settledAmount.replace(".", ""), 10);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 export function queueStates(queue: Exclude<AccountingQueue, "exceptions">): readonly AccountingIntentState[] {
@@ -159,7 +203,12 @@ export function projectAccountingIntent(
     settled_amount: intent.settled_amount,
     state: intent.state,
     badge: accountingBadge(intent.state),
-    next_step: accountingNextStep(intent.state),
+    next_step: accountingNextStep(intent.state, {
+      settledAmount: intent.settled_amount,
+      // Since the last transition, not since derivation: what the copy is judging is how long this
+      // intent has been stuck in the state it is in now.
+      waitingSeconds: ageSeconds(intent.updated_at, now),
+    }),
     version: intent.version,
     blocker_code: intent.blocker_code,
     reason_code: intent.reason_code,

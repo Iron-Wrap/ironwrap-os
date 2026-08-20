@@ -206,6 +206,15 @@ export const QUICKBOOKS_FIXTURES: ReadonlyArray<{ file: string; entityType: stri
   { file: "invoice-open.json", entityType: "Invoice" },
   { file: "invoice-partially-paid.json", entityType: "Invoice" },
   { file: "invoice-paid.json", entityType: "Invoice" },
+  // Slice S11: the same paid invoice, carrying the `LinkedTxn` the provider puts on it once a
+  // Payment is applied. `LinkedTxn` is hashed by nothing and read by no normalizer - it only names
+  // which Payment the re-observation rail goes and reads next, which is what lets an invoice reach
+  // `reconciled` from a sweep or a route instead of only from a hand-called engine function.
+  { file: "invoice-paid-linked.json", entityType: "Invoice" },
+  { file: "invoice-overpaid-linked.json", entityType: "Invoice" },
+  // ...and the same invoice after somebody edited the posted total in QuickBooks: same identity,
+  // different comparison facts, which is section 5.4's provider drift.
+  { file: "invoice-drifted-linked.json", entityType: "Invoice" },
   { file: "payment-partial-500.json", entityType: "Payment" },
   { file: "payment-remainder-760.json", entityType: "Payment" },
   { file: "payment-full-1260.json", entityType: "Payment" },

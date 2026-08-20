@@ -149,40 +149,62 @@ Source: Linear IRO-52 (Urgent, blocked by IRO-38/IRO-39/IRO-48/IRO-53, blocking 
 
 ### 2.1 What exists on `main`
 
-**Implemented — inbound only.** `main` has exactly one QuickBooks code path: a webhook receiver.
+**Implemented — inbound webhook and outbound final-invoice, source-green only.** As of 2026-08-20
+(`c59fad4536e33fe6a885bda9c6be8e45b69f1ff6`), `main` is not inbound-only. Nothing below is Deployed,
+Runtime-verified, or Business-accepted. A live QuickBooks post is flag-gated and off.
 
-- `workers-bus/src/index.ts:407` routes `POST /webhook/quickbooks` and nothing else QuickBooks-shaped.
-- `workers-bus/src/quickbooks.ts:17` accepts four entity types (`Invoice`, `Payment`, `CreditMemo`,
-  `RefundReceipt`) and its own header states the rule the rest of this contract builds on: a webhook
-  "must never be used to infer paid, posted, reconciled, or amount facts"
-  (`workers-bus/src/quickbooks.ts:5`).
-- Every successful response reports `provider_truth_reconciled: false`
-  (`workers-bus/src/quickbooks.ts:197`, `workers-bus/src/quickbooks.ts:205`). The bus is honest that
-  it has reconciled nothing.
+**Inbound webhook** (raw evidence, not posted truth):
+
+- `workers-bus/src/index.ts` routes `POST /webhook/quickbooks`.
+- `workers-bus/src/quickbooks.ts` accepts four entity types (`Invoice`, `Payment`, `CreditMemo`,
+  `RefundReceipt`). A webhook "must never be used to infer paid, posted, reconciled, or amount facts".
+- Every successful response reports `provider_truth_reconciled: false`.
 - `workers-bus/migrations/0031_quickbooks_projection_outbox.sql` is a durable, leased, retryable
   per-entity projection outbox into Frappe. It projects *that an event was seen*, not *what is true*.
 - Frappe holds the mirrors: `Payment Milestone` with `milestone_type` in
   `Invoice | Payment | Credit | Refund | Other` and `status` in
-  `Webhook Seen | Needs Review | Matched | Ignored`
-  (`frappe-apps/ironwrap_roofing/ironwrap_roofing/ironwrap_roofing/doctype/payment_milestone/payment_milestone.json:47`),
-  and `Integration Reconciliation` with `Pending | Matched | Mismatch | Resolved | Ignored | Superseded`.
+  `Webhook Seen | Needs Review | Matched | Ignored`, and `Integration Reconciliation` with
+  `Pending | Matched | Mismatch | Resolved | Ignored | Superseded`.
   `frappe-apps/ironwrap_roofing/ironwrap_roofing/quickbooks_reconciliation_api.py` is the bounded
   issuer that writes them.
 
-**There is no outbound QuickBooks write path on `main` at all.** No OAuth, no connection record, no
-token store, no invoice/payment/credit create, no authenticated provider-detail read, and no
-external-effect ledger. `docs/CAPABILITY-MATRIX.md:108` states this plainly — "no direct accounting
-mutation" — and `docs/CAPABILITY-MATRIX.md:207` scores Finance as *Partial*, with the missing half
-being exactly this issue's scope.
+**Outbound final-invoice is on `main`.** The 2026-08-18 sentence "There is no outbound QuickBooks
+write path on `main` at all" is false.
 
-**A repository-wide search for `holdback` in code returns nothing.** Holdback exists only as a target
-noun in `docs/AUTONOMOUS-OPERATING-SYSTEM.md:716` and `docs/CAPABILITY-MATRIX.md:284`. It is
-greenfield.
+- `workers-bus/src/quickbooks-final-invoice.ts` — OAuth connect/disconnect, candidate discover,
+  approve/reject, authenticated readback, Frappe bind. Submit goes through `runExternalEffect`.
+- `workers-bus/migrations/0041_quickbooks_final_invoice.sql` — `quickbooks_connections`,
+  final-invoice intents, observations, outbox, and command receipts.
+- PWA: `app/src/accounting/quickbooks-page.tsx` (`/accounting/quickbooks` and final-invoice review).
+- `workers-bus/src/effect-runtime.ts` and `workers-bus/migrations/0042_external_effect_runtime.sql`
+  are on `main`. There is an external-effect ledger.
+
+**What still blocks a live post** is committed Worker vars, not a missing module:
+
+- `QB_OAUTH_ENABLED` and `QB_FINAL_INVOICE_ENABLED` are `"false"` in production, local, and staging
+  (`workers-bus/wrangler.jsonc`).
+- Production vars set `QB_API_ENVIRONMENT` to `production` with empty `QB_EXPECTED_REALM_ID`. Local
+  and staging use `sandbox`.
+- Discover is a no-op while the final-invoice flag is off. Approve stays a human click after a flag
+  flip and a connected realm. This contract does not authorize that flip.
+
+**IRO-52 money aggregate on `main`:** PR #65 (S0+S1) merged 2026-08-19.
+`workers-bus/src/accounting-effect-port.ts`, `workers-bus/src/quickbooks-auth-port.ts`,
+`workers-bus/src/accounting-intents.ts`, and `workers-bus/migrations/0058_accounting_money_intents.sql`
+are on `main`. Later S2–S5 / S8a / S11 files are also on the tree; see §0. That is source presence,
+not a live reconciliation run.
+
+**Holdback** remains Target (S6). S6/S7/S10/S12 stay Target per §0. `docs/CAPABILITY-MATRIX.md` may
+still score Finance as *Partial*; treat that score as a claim to re-verify, not as proof that
+outbound code is absent.
 
 ### 2.2 What exists only on unmerged heads
 
+> Stale as of 2026-08-20. The artefacts in the table below are on `main`. See §2.1. The table is
+> kept as the 2026-08-18 branch snapshot so the later slices can see what they reused.
+
 The IRO-52 Linear description says final-invoice OAuth/create/readback "is implemented and
-source-green". That is true of a **branch**, not of `main`:
+source-green". That is now true of `main` as well (flags off; see §2.1). The 2026-08-18 table:
 
 | Artefact | Where it lives | On `main`? |
 |---|---|---|

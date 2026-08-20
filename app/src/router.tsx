@@ -109,6 +109,10 @@ const WorkObjectPage = lazy(async () => ({
 const CheckInPage = lazy(async () => ({
   default: (await loadFieldPages()).CheckInPage,
 }));
+const loadFleetPage = () => import("./field/fleet-page");
+const FleetPage = lazy(async () => ({
+  default: (await loadFleetPage()).FleetPage,
+}));
 
 // Field Companion is the PWA's default entry point. Start loading its module while the
 // session boundary verifies the device instead of serializing the authenticated read
@@ -120,6 +124,9 @@ const CheckInPage = lazy(async () => ({
 if (typeof window !== "undefined") {
   const { pathname } = window.location;
   if (isTodayPath(pathname)) void loadTodayPage();
+  // The vehicle rail is its own module. Warming the job packet for it would pay
+  // for the largest field bundle to render a screen that never uses it.
+  else if (isFleetPath(pathname)) void loadFleetPage();
   else if (isFieldPath(pathname)) void loadFieldPages();
 }
 
@@ -134,6 +141,10 @@ function isFieldPath(pathname: string): boolean {
     pathname.startsWith("/work-objects/") ||
     pathname.startsWith("/check-in")
   );
+}
+
+function isFleetPath(pathname: string): boolean {
+  return pathname === "/vehicle" || pathname.startsWith("/vehicle/");
 }
 
 const rootRoute = createRootRoute({
@@ -297,6 +308,12 @@ const jobCheckInRoute = createRoute({
   component: CheckInRoute,
 });
 
+const fleetRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
+  path: "/vehicle",
+  component: FleetRoute,
+});
+
 function TodayRoute() {
   return (
     <RoleGuard surface="field">
@@ -332,6 +349,16 @@ function CheckInRoute() {
     <RoleGuard surface="field">
       <Suspense fallback={<FieldRouteSkeleton label="Loading field check-in" />}>
         <CheckInPage />
+      </Suspense>
+    </RoleGuard>
+  );
+}
+
+function FleetRoute() {
+  return (
+    <RoleGuard surface="fleet">
+      <Suspense fallback={<FieldRouteSkeleton label="Loading your vehicle" />}>
+        <FleetPage />
       </Suspense>
     </RoleGuard>
   );
@@ -674,6 +701,7 @@ const routeTree = rootRoute.addChildren([
     workObjectRoute,
     checkInRoute,
     jobCheckInRoute,
+    fleetRoute,
     ownerRoute,
     approvalsRoute,
     newoOperationsRoute,

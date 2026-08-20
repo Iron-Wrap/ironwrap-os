@@ -9,13 +9,14 @@ import {
   Palette,
   Settings,
   ShieldCheck,
+  Truck,
   type LucideIcon,
 } from "lucide-react";
 
 export const appRoles = ["owner", "ops", "sales", "production", "accounting", "field"] as const;
 export type AppRole = (typeof appRoles)[number];
 export type RoleSurface =
-  "owner" | "sales" | "production" | "accounting" | "newo" | "job" | "field";
+  "owner" | "sales" | "production" | "accounting" | "newo" | "job" | "field" | "fleet";
 
 export interface NavigationItem {
   label: string;
@@ -24,6 +25,7 @@ export interface NavigationItem {
     | "/now"
     | "/today"
     | "/check-in"
+    | "/vehicle"
     | "/owner"
     | "/facet-designs"
     | "/approvals"
@@ -149,9 +151,14 @@ const navigationByRole: Record<AppRole, readonly NavigationItem[]> = {
       activeColor: "accent",
     },
   ],
+  // Four items on a 360 px bar is ~90 px each, well clear of the touch-target
+  // floor the office bar is already sitting on (see the note above it). The
+  // vehicle rail belongs here and not in the office navigation: only a field
+  // role may capture against an asset, so an office tab would lead to a refusal.
   field: [
     { label: "Now", to: "/now", icon: CircleGauge, activeColor: "accent" },
     { label: "Check-in", to: "/check-in", icon: BriefcaseBusiness, activeColor: "ok" },
+    { label: "Vehicle", to: "/vehicle", icon: Truck, activeColor: "ok" },
     { label: "Settings", to: "/settings", icon: Settings, activeColor: "accent" },
   ],
 };
@@ -163,6 +170,10 @@ export function navigationForRole(role: AppRole): readonly NavigationItem[] {
 export function roleCanAccess(role: AppRole, surface: RoleSurface): boolean {
   if (surface === "accounting") return role === "owner" || role === "accounting";
   if (role === "accounting") return false;
+  // Capturing against a fleet asset is a field-only right: `/api/v1/fleet/*`
+  // refuses every other role, so an office user reaching this screen would only
+  // meet a 403. The Desk is where the office reads the fleet.
+  if (surface === "fleet") return role === "field";
   if (surface === "job")
     return role === "owner" || role === "ops" || role === "production" || role === "field";
   if (role === "sales") return surface === "sales";

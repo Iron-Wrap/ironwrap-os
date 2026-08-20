@@ -12,6 +12,7 @@ from unittest.mock import patch
 from ironwrap_roofing.domain_policy import (
     CARGO_LOAD_RELEASE_FENCE_STATUSES,
     PolicyViolation,
+    fleet_release_blockers,
     validate_record,
 )
 
@@ -1684,6 +1685,109 @@ class FleetReleaseContextLockTests(unittest.TestCase):
         self.assertEqual(defects, {"asset-truck-1": 2})
         self.assertTrue(
             any("`tabAsset Defect`" in query for query, _values in queries)
+        )
+
+
+class FleetReleaseBlockerReportTests(FleetPolicyTestCase):
+    """`fleet_release_blockers` must always agree with the fence it explains.
+
+    The Field Companion's vehicle screen shows a driver why dispatch will
+    refuse their truck. An explanation that drifted from the refusal would be
+    worse than none: the driver would fix the wrong thing and still be blocked.
+    """
+
+    def test_a_ready_asset_reports_nothing(self) -> None:
+        self.assertEqual(fleet_release_blockers(fleet_asset(), REFERENCE_DAY), [])
+
+    def test_every_asset_fence_the_release_path_raises_is_reported_identically(self) -> None:
+        cases = {
+            "unsafe_fleet_asset": fleet_asset(status="Out of Service"),
+            "telematics_cannot_authorize_asset": fleet_asset(
+                inspection_authority_source="Telematics"
+            ),
+            "overdue_fleet_inspection": fleet_asset(next_inspection_due="2026-07-01"),
+            "overdue_fleet_maintenance": fleet_asset(next_service_due_date="2026-07-01"),
+            "overdue_fleet_calibration": fleet_asset(
+                calibration_required=1, next_calibration_due="2026-07-01"
+            ),
+            "expired_fleet_registration": fleet_asset(registration_expiry="2026-07-01"),
+            "expired_fleet_insurance": fleet_asset(insurance_expiry="2026-07-01"),
+        }
+        for code, asset in cases.items():
+            with self.subTest(code=code):
+                raised = self.assert_policy(
+                    code,
+                    validate_record,
+                    "job_assignment",
+                    scheduled_assignment(),
+                    context=schedule_context(fleet_asset_rows={"asset-truck-1": asset}),
+                )
+                reported = fleet_release_blockers(asset, REFERENCE_DAY)
+                self.assertEqual([blocker.code for blocker in reported], [code])
+                self.assertEqual(str(reported[0]), str(raised))
+
+    def test_the_open_defect_blocker_matches_the_count_fence_word_for_word(self) -> None:
+        raised = self.assert_policy(
+            "open_out_of_service_defect",
+            validate_record,
+            "job_assignment",
+            scheduled_assignment(),
+            context=schedule_context(
+                fleet_out_of_service_defect_counts={"asset-truck-1": 1}
+            ),
+        )
+        reported = fleet_release_blockers(
+            fleet_asset(), REFERENCE_DAY, open_out_of_service_defects=1
+        )
+        self.assertEqual([blocker.code for blocker in reported], ["open_out_of_service_defect"])
+        self.assertEqual(str(reported[0]), str(raised))
+
+    def test_every_driver_fence_is_reported_identically(self) -> None:
+        cases = {
+            "inactive_driver_authority": driver_authority(status="Suspended"),
+            "telematics_cannot_authorize_driver": driver_authority(
+                authority_source="Telematics"
+            ),
+            "expired_driver_licence": driver_authority(licence_expiry="2026-07-01"),
+            "expired_driver_medical": driver_authority(medical_expiry="2026-07-01"),
+            "unlicensed_fleet_driver": driver_authority(licence_class="Class 5"),
+        }
+        for code, driver in cases.items():
+            with self.subTest(code=code):
+                raised = self.assert_policy(
+                    code,
+                    validate_record,
+                    "job_assignment",
+                    scheduled_assignment(),
+                    context=schedule_context(driver_authority_rows={"driver-1": driver}),
+                )
+                reported = fleet_release_blockers(
+                    fleet_asset(), REFERENCE_DAY, driver=driver
+                )
+                self.assertEqual([blocker.code for blocker in reported], [code])
+                self.assertEqual(str(reported[0]), str(raised))
+
+    def test_no_driver_means_not_this_actors_question_rather_than_verified(self) -> None:
+        # The release path always has a driver to check, because a loaded cargo
+        # load names one. A panel reader may not be a driver at all -- a crew
+        # member holding custody of a trailer is not -- so `driver=None` reports
+        # nothing rather than accusing them of an unverified authority. A driver
+        # row that does exist is judged in full.
+        self.assertEqual(fleet_release_blockers(fleet_asset(), REFERENCE_DAY), [])
+        self.assertEqual(
+            [
+                blocker.code
+                for blocker in fleet_release_blockers(
+                    fleet_asset(), REFERENCE_DAY, driver={}
+                )
+            ],
+            ["inactive_driver_authority"],
+        )
+
+    def test_an_unverified_asset_is_reported_rather_than_assumed_ready(self) -> None:
+        self.assertEqual(
+            [blocker.code for blocker in fleet_release_blockers(None, REFERENCE_DAY)],
+            ["unverified_fleet_asset"],
         )
 
 

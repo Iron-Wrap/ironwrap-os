@@ -43,8 +43,8 @@ implication.
       "latest": "0066_dev_outbox_contract_acceptance.sql"
     },
     "tests": {
-      "pwa": 474,
-      "worker": 904
+      "pwa": 485,
+      "worker": 913
     }
   },
   "proof_state_policy": {
@@ -127,6 +127,40 @@ The fence's perimeter is the Cargo Load, which is the only record that binds a F
 Roof Job. It engages from the planned (`Draft`) load onward, so scheduling is fenced before the
 truck is loaded; the driver, weight, and custody comparisons apply from `Loaded`, when those facts
 first exist. A job that binds no asset through a Cargo Load has nothing for the fence to check.
+
+### Fleet capture surface delta (IRO-54 branch, 2026-08-20, after merging `main` @ d196127)
+
+The IRO-54 capture routes shipped with no production caller: the rail could be posted to, and
+nothing in the product posted to it. This lane adds the read that makes a screen possible and the
+screen itself. Repository-only checks; nothing here claims a deployed, runtime, real-vehicle, or
+business-accepted capability.
+
+Numbers are re-measured on this branch **with `main` merged in**, against `main` @ `d196127`
+measured the same way, so the delta is this lane's and not another lane's.
+
+| Contract | `main` @ d196127 | This branch |
+|---|---|---|
+| Frappe tests | 340 | 372 |
+| Worker tests | 904 | 913 |
+| PWA tests | 474 | 485 |
+| PWA Playwright specs | 4 | 5 |
+| D1 migration chain | 58 migrations | 58 migrations (unchanged; this lane adds none) |
+
+The fence itself is unchanged. `domain_policy.fleet_release_blockers` is a read-only accessor that
+calls the same `_require_fleet_asset_ready` / `_require_driver_authority_ready` fences the release
+path calls and returns their violations instead of raising, so the sentence a driver reads on a
+phone and the refusal dispatch would raise cannot drift; `tests/test_fleet_operations_policy.py`
+pins that equivalence code-for-code and message-for-message. The blocker itself is built in exactly
+one function (`domain_policy._open_out_of_service_defect_violation`), and the defect statuses the
+fence counts are one constant (`domain_policy.OPEN_OUT_OF_SERVICE_DEFECT_STATUSES`) read by both the
+locked release-fence count and the panel's unlocked one, so the screen cannot hold a stale copy of
+what "open" means; `tests/test_fleet_panel_api.py` walks that constant status by status.
+
+Photo evidence on a fleet capture remains absent and is not faked by this lane. The capture
+envelope is bounded JSON (`workers-bus/src/fleet-actions.ts`), the browser outbox refuses
+attachments on every fleet kind by design, and `record_asset_defect` never writes the
+`Asset Defect.evidence_item` link the DocType already carries. Wiring a camera into the rail is a
+fleet evidence-rail lane, not a screen change.
 
 ### Service lifecycle delta (IRO-56 branch, 2026-08-19, after merging `main` @ 394de9b)
 
@@ -428,7 +462,7 @@ Target gaps:
 | Warranty/service | Partial: versioned Service Case bound to customer/property/job/asset/warranty/consent, duplicate-linked intake, human-authority triage, diagnosis-issued service Work Package, separate remedy verification and customer acceptance, evidence-bound supplier/manufacturer/insurer recovery on the one-attempt effect shape, history-preserving reopen, and an office BFF surface (`/api/v1/service-cases`) reachable from the PWA at `/service` | dispatch/scheduling integration, customer portal and mobile service surfaces, re-seat onto the IRO-38 canonical effect runtime, and live recovery settlement | callback end to end |
 | Finance | Partial: raw-backed immutable QuickBooks webhook identity ledger and Pending reconciliation work; no webhook-only provider payment, posting, or reconciliation truth | authenticated provider detail, provider-issued invoice/holdback/payment/refund/tax/payroll contracts, and accountant-approved reconciliation | provider sandbox, linked mirror, and accountant signoff |
 | Workforce | Crew Profile/Crew Member projections plus individually versioned worker/subcontractor competency, trade, WCB, permit, inspection, insurance, and manufacturer Authority Records consumed by schedule/field/shop gates | HR, apprenticeship, time, accommodation, and live issuer readback continuity | worker lifecycle |
-| Fleet/equipment | Partial: versioned asset/driver/inspection/defect/maintenance/usage/cargo/custody records, offline pre/post-trip and defect capture bound to an actor who holds or drives the asset, and a release fence that blocks unsafe, overdue, unlicensed, overloaded, or wrong-custody assets carried on a job's Cargo Load | telematics/sensor identity, collision and fleet incident lifecycle, shop machine and work-centre tooling, facility assets, and real-vehicle proof | unsafe asset release blocked on a real vehicle day |
+| Fleet/equipment | Partial: versioned asset/driver/inspection/defect/maintenance/usage/cargo/custody records, offline pre/post-trip and defect capture bound to an actor who holds or drives the asset, a driver-scoped read (`/api/v1/fleet/panel`) that reports the release fence's own verdict per asset, a mobile-first field surface at `/vehicle` that files all three captures and states a refusal in plain language, and a release fence that blocks unsafe, overdue, unlicensed, overloaded, or wrong-custody assets carried on a job's Cargo Load | photo evidence on a fleet capture (the envelope is JSON-only and `Asset Defect.evidence_item` is never written), telematics/sensor identity, collision and fleet incident lifecycle, shop machine and work-centre tooling, facility assets, and real-vehicle proof | unsafe asset release blocked on a real vehicle day |
 | Facility | deployment infra only | shop/building/fire/security/environmental operations | facility inspection/drill |
 | Privacy/security | strong technical controls, consent; production dependency audit clear | complete data inventory, DSAR, breach, retention/destruction; resolve or explicitly accept dev-toolchain advisories | restore, breach, access, production-audit tests |
 | Insurance/risk | generic compliance | policy/claim/notification/recovery | claim tabletop |

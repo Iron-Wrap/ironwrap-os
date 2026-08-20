@@ -7,6 +7,7 @@ describe("role-shaped navigation", () => {
     expect(navigationForRole("field").map((item) => item.to)).toEqual([
       "/now",
       "/check-in",
+      "/vehicle",
       "/settings",
     ]);
     expect(navigationForRole("owner")[0]?.to).toBe("/now");
@@ -63,6 +64,12 @@ describe("role-shaped navigation", () => {
   it("does not widen the shared office navigation past what a phone can carry", () => {
     expect(navigationForRole("owner")).toHaveLength(9);
     expect(navigationForRole("ops")).toHaveLength(9);
+    // ELEC-87 added the vehicle rail to the field bar, not this one. Four items
+    // on a 360 px bar is ~90 px each; the office bar stays where it is, and no
+    // office role gets a tab to a route its role is refused at.
+    expect(navigationForRole("field")).toHaveLength(4);
+    expect(navigationForRole("owner").map((item) => item.to)).not.toContain("/vehicle");
+    expect(navigationForRole("ops").map((item) => item.to)).not.toContain("/vehicle");
   });
 
   it("allows every role only onto its intended work surfaces", () => {
@@ -72,7 +79,9 @@ describe("role-shaped navigation", () => {
       sales: ["sales"],
       production: ["production", "job"],
       accounting: ["accounting"],
-      field: ["job", "field"],
+      // The fleet capture routes refuse every role but `field`, so only the
+      // field role may reach the screen that calls them.
+      field: ["job", "field", "fleet"],
     } as const;
     const surfaces = [
       "owner",
@@ -82,6 +91,7 @@ describe("role-shaped navigation", () => {
       "newo",
       "job",
       "field",
+      "fleet",
     ] as const;
 
     for (const role of appRoles) {

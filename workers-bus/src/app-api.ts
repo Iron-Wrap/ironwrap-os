@@ -111,6 +111,7 @@ import {
 } from "./app-types.ts";
 import { claimFieldUploadWindow, handleFieldAction } from "./field-actions.ts";
 import { handleFleetAction, type FleetActionKind } from "./fleet-actions.ts";
+import { buildFleetPanelReadModel } from "./fleet-panel.ts";
 import { handleWorkPackageAction, type WorkPackageActionKind } from "./work-package-actions.ts";
 import { hasPhysicalAssignmentAuthority } from "./work-package.ts";
 import { handleAuthorityRecordRoute } from "./authority-record-api.ts";
@@ -832,6 +833,18 @@ export async function handleAuthenticatedRoute(
     // route to its offline outbox, while the device action id still makes a
     // lost response safe to retry over the active connection.
     return await handleFieldWorkPackageRoute(req, env, auth, workPackageStartMatch[1], "start_work");
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/fleet/panel") {
+    // The read half of the capture rail, and the only fleet read a field
+    // session gets. It is field-only for the same reason the capture routes
+    // are: an office role has the Desk, and widening this would turn a
+    // driver's own vehicle list into a fleet directory.
+    if (auth.session.role !== "field") return appJson({ error: "field_role_required" }, 403);
+    try {
+      return appJson(await buildFleetPanelReadModel(env, auth));
+    } catch {
+      return appJson({ error: "upstream_unavailable" }, 502);
+    }
   }
   const fleetInspectionMatch = url.pathname.match(
     /^\/api\/v1\/fleet\/assets\/([^/]+)\/(pre-trip|post-trip)-inspections$/,

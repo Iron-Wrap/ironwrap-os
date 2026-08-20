@@ -19,6 +19,7 @@ from ironwrap_roofing.domain_policy import (
     ACTIVE_SCHEDULED_PRODUCTION_ASSIGNMENT_STATUSES,
     CARGO_LOAD_RELEASE_FENCE_STATUSES,
     JOB_COST_EVENT_SOURCE_DOCTYPES,
+    OPEN_OUT_OF_SERVICE_DEFECT_STATUSES,
     SHOP_ORDER_FINAL_STATUSES,
     parse_json_field,
 )
@@ -312,8 +313,6 @@ _CARGO_LOAD_FENCE_STATUSES = tuple(sorted(CARGO_LOAD_RELEASE_FENCE_STATUSES))
 _CARGO_LOAD_FENCE_STATUS_PLACEHOLDERS = ", ".join(
     "%s" for _ in _CARGO_LOAD_FENCE_STATUSES
 )
-# An out-of-service defect stops the asset until repair work closes it out.
-_OPEN_OUT_OF_SERVICE_DEFECT_STATUSES = ("Open", "Contained", "Scheduled")
 ASSET_INSPECTION_CONTEXT_FIELDS = (
     "name",
     "asset_inspection_id",
@@ -2583,10 +2582,10 @@ def _locked_fleet_release_context(
             FROM `tabAsset Defect`
             WHERE fleet_asset IN ({", ".join("%s" for _ in asset_names)})
               AND out_of_service = 1
-              AND status IN ({", ".join("%s" for _ in _OPEN_OUT_OF_SERVICE_DEFECT_STATUSES)})
+              AND status IN ({", ".join("%s" for _ in OPEN_OUT_OF_SERVICE_DEFECT_STATUSES)})
             FOR UPDATE
             """,
-            (*asset_names, *_OPEN_OUT_OF_SERVICE_DEFECT_STATUSES),
+            (*asset_names, *OPEN_OUT_OF_SERVICE_DEFECT_STATUSES),
             as_dict=True,
         ):
             name = str(row.get("fleet_asset") or "")

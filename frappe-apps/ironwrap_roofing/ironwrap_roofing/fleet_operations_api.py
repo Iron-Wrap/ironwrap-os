@@ -34,6 +34,9 @@ from ironwrap_roofing.domain_policy import (
     ASSET_INSPECTION_TYPES,
     CARGO_LOAD_RELEASE_FENCE_STATUSES,
     FLEET_DEFECT_SEVERITIES,
+    FLEET_ROAD_ASSET_KINDS,
+    OPEN_OUT_OF_SERVICE_DEFECT_STATUSES,
+    fleet_release_blockers,
 )
 
 
@@ -80,6 +83,48 @@ ASSET_RESPONSE_FIELDS = (
     "out_of_service_reason",
 )
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$")
+REFERENCE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# One driver's own fleet is small. The cap keeps a compromised or buggy caller
+# from turning the panel into a fleet-wide scan, and keeps the phone's payload
+# bounded.
+PANEL_ASSET_LIMIT = 25
+PANEL_ASSET_FIELDS = (
+    "name",
+    "fleet_asset_id",
+    "asset_kind",
+    "status",
+    "display_name",
+    "unit_number",
+    "licence_plate",
+    "meter_kind",
+    "current_meter",
+    "required_licence_class",
+    "inspection_authority_source",
+    "last_inspection_at",
+    "next_inspection_due",
+    "next_service_due_date",
+    "calibration_required",
+    "next_calibration_due",
+    "registration_expiry",
+    "insurance_expiry",
+    "out_of_service_reason",
+)
+# What the driver's phone is allowed to see. The fence needs more fields than a
+# screen does, so the readiness columns above stay on this side of the wire.
+PANEL_RESPONSE_FIELDS = (
+    "name",
+    "fleet_asset_id",
+    "asset_kind",
+    "status",
+    "display_name",
+    "unit_number",
+    "licence_plate",
+    "meter_kind",
+    "current_meter",
+    "last_inspection_at",
+    "next_inspection_due",
+    "out_of_service_reason",
+)
 
 
 def _value(record: Any, field: str, default: Any = None) -> Any:
@@ -619,3 +664,275 @@ def record_asset_defect(
         "fleet_asset": _asset_response(asset),
         "idempotent_replay": False,
     }
+
+
+def _assert_worker_reader() -> None:
+    """Admit the Worker integration principal to the read-only panel.
+
+    Deliberately not ``_assert_worker_issuer``: reading a driver's own assets
+    needs no authority to create an inspection or a defect, and demanding one
+    would make a read fail for a principal correctly holding read-only grants.
+    """
+
+    request = getattr(frappe, "request", None)
+    method = getattr(request, "method", None)
+    if method is not None and str(method).upper() != "POST":
+        _fail("fleet_post_required", "this read accepts POST only", permission=True)
+    configured = _clean_optional(
+        getattr(frappe, "conf", {}).get(ISSUER_CONFIG_KEY),
+        ISSUER_CONFIG_KEY,
+        maximum=MAX_IDENTIFIER_LENGTH,
+    )
+    if not configured:
+        _fail(
+            "fleet_issuer_not_configured",
+            f"Frappe site config {ISSUER_CONFIG_KEY} is required",
+            permission=True,
+        )
+    principal = _clean_required(getattr(frappe.session, "user", None), "session_user")
+    if principal == "Guest" or principal != configured:
+        _fail(
+            "fleet_issuer_auth_mismatch",
+            "only the configured Worker integration user may read the fleet panel",
+            permission=True,
+        )
+    if not frappe.has_permission("Fleet Asset", ptype="read", user=principal):
+        _fail(
+            "fleet_issuer_permission_denied",
+            "the configured Worker integration user cannot read Fleet Asset",
+            permission=True,
+        )
+
+
+def _panel_reference_date(value: Any) -> str:
+    if value is None:
+        return str(frappe.utils.now_datetime())[:10]
+    cleaned = _clean_required(value, "reference_date", maximum=10, minimum=10)
+    if not REFERENCE_DATE_RE.match(cleaned):
+        _fail("fleet_invalid_input", "reference_date must be an ISO-8601 date")
+    return cleaned
+
+
+def _panel_asset_relationships(actor: str) -> dict[str, str]:
+    """Every asset this actor may capture against, and how they reach it.
+
+    The three bindings are exactly the ones ``_require_actor_asset_relationship``
+    accepts one asset at a time -- custody as the named user, custody through an
+    active crew membership, or driving an open Cargo Load.  Custody wins over
+    driving when both hold, because custody is the stronger claim and it is what
+    the release fence compares against the load.
+    """
+
+    statuses = tuple(sorted(CARGO_LOAD_RELEASE_FENCE_STATUSES))
+    load_placeholders = ", ".join("%s" for _ in statuses)
+    relationships: dict[str, str] = {}
+    for row in _sql_rows(
+        f"""
+        SELECT cargo.fleet_asset, cargo.trailer_asset
+        FROM `tabCargo Load` AS cargo
+        LEFT JOIN `tabDriver Authority` AS authority
+          ON authority.name = cargo.driver_authority
+        WHERE cargo.status IN ({load_placeholders})
+          AND (cargo.driver_user = %s OR authority.driver_user = %s)
+        LIMIT %s
+        """,
+        (*statuses, actor, actor, PANEL_ASSET_LIMIT),
+    ):
+        for field in ("fleet_asset", "trailer_asset"):
+            name = str(row.get(field) or "")
+            if name:
+                relationships[name] = "driver"
+    for row in _sql_rows(
+        """
+        SELECT name
+        FROM `tabFleet Asset`
+        WHERE custody_holder_type = 'User'
+          AND custody_user = %s
+          AND status != 'Retired'
+        LIMIT %s
+        """,
+        (actor, PANEL_ASSET_LIMIT),
+    ):
+        name = str(row.get("name") or "")
+        if name:
+            relationships[name] = "custody"
+    for row in _sql_rows(
+        """
+        SELECT asset.name
+        FROM `tabFleet Asset` AS asset
+        JOIN `tabCrew Member` AS member
+          ON member.parenttype = 'Crew Profile'
+         AND member.parentfield = 'members'
+         AND member.parent = asset.custody_crew_profile
+        WHERE asset.custody_holder_type = 'Crew'
+          AND asset.status != 'Retired'
+          AND member.crew_user = %s
+          AND member.active = 1
+        LIMIT %s
+        """,
+        (actor, PANEL_ASSET_LIMIT),
+    ):
+        name = str(row.get("name") or "")
+        if name:
+            relationships[name] = "custody"
+    return relationships
+
+
+def _panel_assets(names: Sequence[str]) -> dict[str, dict[str, Any]]:
+    placeholders = ", ".join("%s" for _ in names)
+    columns = ", ".join(PANEL_ASSET_FIELDS)
+    return {
+        str(row["name"]): dict(row)
+        for row in _sql_rows(
+            f"""
+            SELECT {columns}
+            FROM `tabFleet Asset`
+            WHERE name IN ({placeholders})
+              AND status != 'Retired'
+            """,
+            tuple(names),
+        )
+        if row.get("name")
+    }
+
+
+def _panel_open_out_of_service_defects(names: Sequence[str]) -> dict[str, int]:
+    placeholders = ", ".join("%s" for _ in names)
+    status_placeholders = ", ".join("%s" for _ in OPEN_OUT_OF_SERVICE_DEFECT_STATUSES)
+    counts: dict[str, int] = {name: 0 for name in names}
+    for row in _sql_rows(
+        f"""
+        SELECT fleet_asset
+        FROM `tabAsset Defect`
+        WHERE fleet_asset IN ({placeholders})
+          AND out_of_service = 1
+          AND status IN ({status_placeholders})
+        """,
+        (*names, *OPEN_OUT_OF_SERVICE_DEFECT_STATUSES),
+    ):
+        name = str(row.get("fleet_asset") or "")
+        if name in counts:
+            counts[name] += 1
+    return counts
+
+
+def _panel_recent_inspections(names: Sequence[str]) -> dict[tuple[str, str], str]:
+    """The newest pre/post-trip capture per asset, whoever recorded it.
+
+    Currency is a property of the vehicle, not of the driver looking at it: a
+    pre-trip another crew member recorded this morning is the one the fence
+    reads, so the screen must show that instead of inviting a duplicate.
+    """
+
+    placeholders = ", ".join("%s" for _ in names)
+    newest: dict[tuple[str, str], str] = {}
+    for row in _sql_rows(
+        f"""
+        SELECT fleet_asset, inspection_type, performed_at, result
+        FROM `tabAsset Inspection`
+        WHERE fleet_asset IN ({placeholders})
+          AND inspection_type IN ('Pre-Trip', 'Post-Trip')
+          AND status != 'Superseded'
+        """,
+        tuple(names),
+    ):
+        asset = str(row.get("fleet_asset") or "")
+        kind = str(row.get("inspection_type") or "")
+        performed_at = str(row.get("performed_at") or "")
+        if not asset or not kind or not performed_at:
+            continue
+        key = (asset, kind)
+        if performed_at > newest.get(key, ""):
+            newest[key] = performed_at
+    return newest
+
+
+def _panel_driver_authority(actor: str) -> dict[str, Any] | None:
+    """The actor's own Driver Authority, preferring the one the fence accepts.
+
+    A field user with no authority row at all is not necessarily a driver -- a
+    crew member holding custody of a trailer is not -- so the panel reports no
+    driver blocker for them rather than accusing every asset of an unverified
+    driver.
+    """
+
+    rows = _sql_rows(
+        """
+        SELECT name, driver_user, status, authority_source, licence_class,
+               licence_expiry, medical_expiry
+        FROM `tabDriver Authority`
+        WHERE driver_user = %s
+        LIMIT %s
+        """,
+        (actor, PANEL_ASSET_LIMIT),
+    )
+    if not rows:
+        return None
+    return next((row for row in rows if row.get("status") == "Active"), rows[0])
+
+
+@frappe.whitelist()
+def read_driver_fleet_panel(actor_user: Any, reference_date: Any = None) -> dict[str, Any]:
+    """Read one field actor's own fleet assets, with the fence's own verdict.
+
+    This is the read side of the capture rail.  Without it the Field Companion
+    can post a pre-trip but cannot tell a driver which vehicle to post it
+    against, nor why dispatch will refuse the one they are standing next to.
+
+    The scope is the actor's own assets and nothing else -- same three bindings
+    the capture command proves before any write -- so the panel can no more be
+    used to enumerate the fleet than the capture route can.  Readiness is not
+    recomputed here: ``fleet_release_blockers`` calls the release fence itself,
+    so a reason shown on a phone is the reason the schedule would give.
+    """
+
+    _assert_worker_reader()
+    actor = _clean_required(actor_user, "actor_user")
+    today = _panel_reference_date(reference_date)
+    relationships = _panel_asset_relationships(actor)
+    if not relationships:
+        return {"reference_date": today, "assets": []}
+    names = sorted(relationships)[:PANEL_ASSET_LIMIT]
+    assets = _panel_assets(names)
+    present = [name for name in names if name in assets]
+    if not present:
+        return {"reference_date": today, "assets": []}
+    defects = _panel_open_out_of_service_defects(present)
+    inspections = _panel_recent_inspections(present)
+    authority = _panel_driver_authority(actor)
+
+    panel_assets: list[dict[str, Any]] = []
+    for name in present:
+        asset = assets[name]
+        relationship = relationships.get(name, "driver")
+        # A road asset is the only kind a Driver Authority says anything about,
+        # and only when this actor holds one at all.
+        driver = (
+            authority
+            if authority is not None and asset.get("asset_kind") in FLEET_ROAD_ASSET_KINDS
+            else None
+        )
+        blockers = fleet_release_blockers(
+            asset,
+            today,
+            open_out_of_service_defects=defects.get(name, 0),
+            driver=driver,
+        )
+        panel_assets.append(
+            {
+                **{field: asset.get(field) for field in PANEL_RESPONSE_FIELDS},
+                "relationship": relationship,
+                "open_out_of_service_defects": defects.get(name, 0),
+                "last_pre_trip_at": inspections.get((name, "Pre-Trip")),
+                "last_post_trip_at": inspections.get((name, "Post-Trip")),
+                "blockers": [
+                    {
+                        "code": violation.code,
+                        "field": violation.field,
+                        "message": str(violation),
+                    }
+                    for violation in blockers
+                ],
+            }
+        )
+    return {"reference_date": today, "assets": panel_assets}

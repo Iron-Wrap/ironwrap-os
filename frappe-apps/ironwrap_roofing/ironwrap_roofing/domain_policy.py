@@ -257,6 +257,12 @@ CARGO_LOAD_RELEASE_FENCE_STATUSES = frozenset(
 CARGO_LOAD_RELEASE_FENCE_LOADED_STATUSES = frozenset(
     ("Loaded", "In Transit", "Delivered")
 )
+# An out-of-service defect stops the asset until repair work closes it out.
+# One list with three readers: the locked count the release fence runs
+# (`document_validation`), the unlocked count the driver panel shows
+# (`fleet_operations_api`), and any future surface that has to agree with the
+# fence.  A copy here would let the phone and the refusal drift apart silently.
+OPEN_OUT_OF_SERVICE_DEFECT_STATUSES = ("Open", "Contained", "Scheduled")
 
 
 class PolicyViolation(ValueError):
@@ -8303,6 +8309,22 @@ def _custody_holder(record: Any, prefix: str = "custody") -> tuple[str, str]:
     return ("Yard", "")
 
 
+def _open_out_of_service_defect_violation() -> PolicyViolation:
+    """Build the open-defect blocker -- the only place it is constructed.
+
+    Two callers need it in two shapes: ``_require_fleet_readiness`` raises it to
+    refuse a release, and ``fleet_release_blockers`` returns it so a phone can
+    say *why* before the refusal happens.  Both build it here so the sentence a
+    driver reads and the refusal dispatch would actually produce cannot drift.
+    """
+
+    return PolicyViolation(
+        "open_out_of_service_defect",
+        "an asset with an open out-of-service defect cannot be scheduled or released",
+        "fleet_asset",
+    )
+
+
 def _require_fleet_readiness(context: Mapping[str, Any], reference_date: str) -> None:
     """Block a schedule or Work Package release behind unsafe fleet facts.
 
@@ -8330,11 +8352,7 @@ def _require_fleet_readiness(context: Mapping[str, Any], reference_date: str) ->
             _require_fleet_asset_ready(trailer, reference_date, "trailer_asset")
         for asset_name in (carrier_name, str(trailer_name or "")):
             if asset_name and int(out_of_service_defects.get(asset_name, 0) or 0) > 0:
-                raise PolicyViolation(
-                    "open_out_of_service_defect",
-                    "an asset with an open out-of-service defect cannot be scheduled or released",
-                    "fleet_asset",
-                )
+                raise _open_out_of_service_defect_violation()
         if _get(load, "status") not in CARGO_LOAD_RELEASE_FENCE_LOADED_STATUSES:
             # A planned load records no driver, weight, or custody holder yet,
             # so there is nothing further to compare; the asset fences above
@@ -8370,6 +8388,47 @@ def _require_fleet_readiness(context: Mapping[str, Any], reference_date: str) ->
                 "the cargo custody holder must match the trailer asset custody holder",
                 "custody_holder_type",
             )
+
+def fleet_release_blockers(
+    asset: Any,
+    reference_date: str,
+    *,
+    open_out_of_service_defects: int = 0,
+    driver: Any = None,
+) -> list[PolicyViolation]:
+    """Report, without raising, why the release fence would refuse one asset.
+
+    Read-only companion to ``_require_fleet_readiness``, for surfaces that have
+    to explain a refusal *before* it happens: the Field Companion's vehicle
+    screen tells a driver why dispatch is blocked instead of leaving them to
+    discover it when the schedule refuses, hours later and off the phone.
+
+    It decides nothing of its own.  Every verdict here is produced by calling
+    the same fences the release path calls, so the explanation and the refusal
+    cannot drift apart.  Each fence short-circuits on its first violation, so
+    at most one blocker per fence is reported -- exactly the one the release
+    path would have raised.
+
+    ``driver`` is optional because a crew member who holds an asset is not
+    necessarily its driver; pass the Driver Authority only when the caller
+    knows the actor drives it.
+    """
+
+    blockers: list[PolicyViolation] = []
+    try:
+        _require_fleet_asset_ready(asset, reference_date, "fleet_asset")
+    except PolicyViolation as violation:
+        blockers.append(violation)
+    if int(open_out_of_service_defects or 0) > 0:
+        # The same object the count fence in `_require_fleet_readiness` raises,
+        # built by the same function rather than retyped here.
+        blockers.append(_open_out_of_service_defect_violation())
+    if driver is not None:
+        try:
+            _require_driver_authority_ready(driver, asset, reference_date, "driver_authority")
+        except PolicyViolation as violation:
+            blockers.append(violation)
+    return blockers
 
 
 def _validate_custody_holder(record: Any, prefix: str, code: str) -> None:

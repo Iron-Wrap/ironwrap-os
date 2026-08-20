@@ -37,6 +37,13 @@ test("pushToErpNext: disabled flag is a no-op", async () => {
   assert.equal(await pushToErpNext({ ERPNEXT_ENABLED: "false" } as never, rec), null);
 });
 
+test("pushToErpNext: enabled without tokens throws erpnext_no_token (no dummy credentials)", async () => {
+  await assert.rejects(
+    () => pushToErpNext({ ERPNEXT_ENABLED: "true" } as never, rec),
+    (err: unknown) => err instanceof Error && err.message === "erpnext_no_token",
+  );
+});
+
 test("pushToErpNext: creates Lead Envelope, Roofing Customer, Property, and Roof Job", async (t) => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {

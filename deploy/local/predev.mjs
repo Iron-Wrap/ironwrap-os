@@ -5,7 +5,8 @@
  * `npm run dev` in workers-bus runs this before `wrangler dev --env local`. It guarantees:
  *   1. ../app/dist exists (builds the PWA once when missing)
  *   2. the deploy/local Frappe stack (mariadb, redis, frappe) is up and answering
- *   3. .dev.vars carries the Frappe integration API key/secret for the local site
+ *   3. .dev.vars carries the Frappe integration, customer-acceptance and Facet
+ *      design-projection API key/secret pairs plus the throwaway Facet chain keys
  *   4. every D1 migration is applied to the local (Miniflare) database
  *
  * It never touches production: the Frappe stack is the throwaway deploy/local one and
@@ -55,6 +56,30 @@ if (!existsSync(privateKeyPath) || !existsSync(publicKeyPath) || !existsSync(dry
   writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
   writeFileSync(publicKeyPath, publicKey.export({ type: "spki", format: "pem" }));
   writeFileSync(dryRunKeyPath, `${randomBytes(32).toString("hex")}\n`, { mode: 0o600 });
+}
+
+// Facet v2 chain key material (throwaway, gitignored). Three distinct purposes,
+// never shared: the launch capability HMAC the Worker signs an "open in Facet"
+// URL with, the delivery-verification key Facet signs its customer-decision
+// event with, and the projection HMAC the Worker and the Frappe app both hold
+// for facet_design_projection_api.
+const facetKeyFiles = {
+  FACET_LAUNCH_HMAC_KEY: path.join(keysDir, "facet-launch-hmac-key.txt"),
+  FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY: path.join(keysDir, "facet-design-projection-hmac-key.txt"),
+  FACET_V2_DELIVERY_SECRET: path.join(keysDir, "facet-v2-delivery-secret.txt"),
+};
+const facetKeys = {};
+for (const [name, keyPath] of Object.entries(facetKeyFiles)) {
+  if (!existsSync(keyPath)) {
+    log(`generating throwaway ${name} into deploy/local/keys/`);
+    mkdirSync(keysDir, { recursive: true });
+    writeFileSync(keyPath, `${randomBytes(32).toString("base64url")}\n`, { mode: 0o600 });
+  }
+  const value = readFileSync(keyPath, "utf8").trim();
+  if (!/^[A-Za-z0-9_-]{43}$/.test(value)) {
+    fail(`${name} is invalid; remove ${keyPath} and retry`);
+  }
+  facetKeys[name] = value;
 }
 
 const acceptanceHmacPath = path.join(keysDir, "customer-acceptance-hmac-key.txt");
@@ -151,6 +176,31 @@ try {
   fail("could not configure the local customer acceptance HMAC key");
 }
 
+let facetProjectionCreds;
+try {
+  facetProjectionCreds = JSON.parse(
+    run("docker", [
+      "compose", "-f", composeFile, "exec", "-T", "frappe",
+      "cat", "/home/frappe/frappe-bench/sites/ironwrap.localhost/.facet_design_projection_credentials",
+    ]),
+  );
+} catch {
+  fail("could not read Facet design projection credentials from the container");
+}
+if (!facetProjectionCreds?.api_key || !facetProjectionCreds?.api_secret) {
+  fail("Facet design projection credentials are empty");
+}
+try {
+  run("docker", [
+    "compose", "-f", composeFile, "exec", "-T", "frappe",
+    "bench", "--site", "ironwrap.localhost", "set-config",
+    "ironwrap_facet_design_projection_hmac_key",
+    facetKeys.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY,
+  ]);
+} catch {
+  fail("could not configure the local Facet design projection HMAC key");
+}
+
 const vars = existsSync(devVarsPath) ? readFileSync(devVarsPath, "utf8") : "";
 const setVar = (src, key, value) => {
   const line = `${key}=${value}`;
@@ -167,6 +217,20 @@ for (const [key, value] of [
   ["APP_CUSTOMER_ACCEPTANCE_HMAC_KEY", acceptanceHmacKey],
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY", acceptanceCreds.api_key],
   ["APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET", acceptanceCreds.api_secret],
+  ["FACET_LAUNCH_HMAC_KEY", facetKeys.FACET_LAUNCH_HMAC_KEY],
+  ["FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY", facetKeys.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY],
+  ["FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY", facetProjectionCreds.api_key],
+  ["FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_SECRET", facetProjectionCreds.api_secret],
+  // The delivery-verification key Facet signs with. wrangler.jsonc's local
+  // FACET_V2_ROUTES_JSON declares the matching route; key id/version are pinned
+  // so a locally signed event verifies without any shared production secret.
+  ["FACET_V2_KEYS_JSON", JSON.stringify([{
+    key_id: "local-facet-v2",
+    key_version: 1,
+    secret: facetKeys.FACET_V2_DELIVERY_SECRET,
+    not_before_ms: 0,
+    not_after_ms: 4102444800000,
+  }])],
 ]) {
   next = setVar(next, key, value);
 }

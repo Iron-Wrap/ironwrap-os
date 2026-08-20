@@ -83,15 +83,42 @@ test("Wrangler environments declare Newo explicitly and staging keeps its queue 
 
   assert.equal(config.env.local.vars.NEWO_PRODUCTION_REQUIRED, "false");
   assert.equal(config.env.staging.vars.NEWO_PRODUCTION_REQUIRED, "true");
-  assert.equal(config.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED, "false");
-  assert.equal(
-    config.env.local.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED,
-    "false",
-  );
+  // The customer portal and its contract-acceptance half are on wherever the office control
+  // plane exists. customerAcceptanceBackendConfigured still requires the dedicated acceptance
+  // HMAC key, the scoped Frappe acceptance identity and a mail sender before the rail answers,
+  // so an unprovisioned environment reports contract_acceptance_available false and returns
+  // 503 rather than showing a customer a half-wired acceptance button.
+  for (const [name, environment] of [
+    ["production", config],
+    ["local", config.env.local],
+  ] as const) {
+    assert.equal(
+      environment.vars.APP_CUSTOMER_PORTAL_ENABLED,
+      "true",
+      `${name} customer portal`,
+    );
+    assert.equal(
+      environment.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED,
+      "true",
+      `${name} contract acceptance`,
+    );
+  }
+  // Staging runs without the BFF, and the BFF is the only control plane that can revoke a
+  // live customer link. customerPortalConfigured therefore reports false whenever the portal
+  // is on and the BFF is off, which turns `/ready` red and blocks the release. Enabling the
+  // portal there is not a flag flip; it needs APP_BFF_ENABLED plus an APP_AUTH_PEPPER secret.
+  assert.equal(config.env.staging.vars.APP_BFF_ENABLED, "false");
+  assert.equal(config.env.staging.vars.APP_CUSTOMER_PORTAL_ENABLED, "false");
   assert.equal(
     config.env.staging.vars.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED,
     "false",
   );
+  // The coupling itself, so a future flip of either flag alone cannot pass review.
+  for (const environment of [config, config.env.local, config.env.staging]) {
+    if (environment.vars.APP_CUSTOMER_PORTAL_ENABLED === "true") {
+      assert.equal(environment.vars.APP_BFF_ENABLED, "true");
+    }
+  }
   assert.equal(config.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "false");
   assert.equal(config.env.local.vars.APP_FIRST_OWNER_BOOTSTRAP_ENABLED, "true");
   assert.equal(
@@ -1609,20 +1636,48 @@ test("0043 keeps Facet v2 identity, intake, decisions, receipts, and projection 
   assert.doesNotMatch(sql, /DROP TABLE|REPLACE INTO|ON DELETE CASCADE/i);
 });
 
-test("signed Facet v2 intake is default-off and secret-free in every Wrangler environment", async () => {
+test("signed Facet v2 intake is enabled, secret-free, and fail-closed until a real Facet identity lands", async () => {
   const source = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+
+  // The chain (launch -> signed ingest -> Frappe projection) is switched on in every
+  // environment, but a flag alone can never open it: facetV2ConsumerConfig, launchConfig
+  // and projectionSettings each return null without their key material, which is what keeps
+  // an enabled-but-unprovisioned deployment answering 503 instead of accepting traffic.
   for (const environment of [config, config.env.local, config.env.staging]) {
-    assert.equal(environment.vars.FACET_V2_INGEST_ENABLED, "false");
-    assert.equal(environment.vars.FACET_V2_ROUTES_JSON, "[]");
-    assert.equal(environment.vars.FACET_V2_FRAPPE_PROJECTION_ENABLED, "false");
-    assert.equal(environment.vars.APP_FACET_LAUNCH_ENABLED, "false");
-    assert.equal(environment.vars.APP_FACET_LAUNCH_BASE_URL, "");
-    assert.equal(environment.vars.APP_FACET_LAUNCH_SOURCE_TENANT_ID, "");
+    assert.equal(environment.vars.FACET_V2_INGEST_ENABLED, "true");
+    assert.equal(environment.vars.FACET_V2_FRAPPE_PROJECTION_ENABLED, "true");
+    assert.equal(environment.vars.APP_FACET_LAUNCH_ENABLED, "true");
+    // Delivery-verification and launch-capability keys are secrets. They must never
+    // appear in committed configuration, enabled or not.
     assert.equal("FACET_V2_KEYS_JSON" in environment, false);
     assert.equal("FACET_V2_KEYS_JSON" in environment.vars, false);
     assert.equal("FACET_LAUNCH_HMAC_KEY" in environment, false);
     assert.equal("FACET_LAUNCH_HMAC_KEY" in environment.vars, false);
+  }
+
+  // Deployed environments still carry no route table and no launch identity: the real Facet
+  // production tenant id, issuer and origin are not in this repository. Until they are, the
+  // rail is enabled and provably unreachable rather than enabled and guessing.
+  for (const environment of [config, config.env.staging]) {
+    assert.equal(environment.vars.FACET_V2_ROUTES_JSON, "[]");
+    assert.equal(environment.vars.APP_FACET_LAUNCH_BASE_URL, "");
+    assert.equal(environment.vars.APP_FACET_LAUNCH_SOURCE_TENANT_ID, "");
+  }
+
+  // The local stack carries a complete, self-consistent route so `npm run dev` can drive the
+  // whole chain. Its launch source tenant must be the route's source tenant, or launchConfig
+  // finds no matching route and the owner action is silently unavailable.
+  const local = config.env.local.vars;
+  const routes = JSON.parse(local.FACET_V2_ROUTES_JSON);
+  assert.equal(routes.length, 1);
+  assert.equal(routes[0].destination_tenant_id, local.APP_TENANT_ID);
+  assert.equal(routes[0].source_tenant_id, local.APP_FACET_LAUNCH_SOURCE_TENANT_ID);
+  assert.match(routes[0].destination_url, /^https:\/\/[^/]+\/ingest\/facet-design$/);
+  assert.match(local.APP_FACET_LAUNCH_BASE_URL, /^https:\/\//);
+  // A local route may only point at a reserved development namespace, never at a real host.
+  for (const url of [routes[0].destination_url, local.APP_FACET_LAUNCH_BASE_URL]) {
+    assert.match(new URL(url).hostname, /\.test$/);
   }
 });
 
@@ -1817,12 +1872,14 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // production dispatch needs - the expectation envelope and the accountant's compensation
     // authorization. 0064 adds the server-owned section 6 ceiling the derive route reads instead
     // of taking one from the request body, and 0065 the derivation receipts that make the derive
-    // route's `Idempotency-Key` enforced rather than merely required. #54 kept 0046 and #48 kept
-    // 0047, both of which landed on `main`, so the gap from 0048 to 0055 is expected and not a
-    // missing migration.
-    assert.equal(migrations.length, 57);
+    // route's `Idempotency-Key` enforced rather than merely required. 0066 widens the dev-only
+    // 0022 capture table so the local stack can complete the customer contract-acceptance
+    // challenge without Gmail, exactly as it already completes magic-link sign-in. #54 kept
+    // 0046 and #48 kept 0047, both of which landed on `main`, so the gap from 0048 to 0055 is
+    // expected and not a missing migration.
+    assert.equal(migrations.length, 58);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0065_accounting_intent_derivation_receipts.sql");
+    assert.equal(migrations.at(-1), "0066_dev_outbox_contract_acceptance.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(

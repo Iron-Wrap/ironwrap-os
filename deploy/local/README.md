@@ -18,7 +18,34 @@ cd workers-bus && npm run dev
 Then `wrangler dev --env local --port 7100 --test-scheduled` starts: the Worker serves
 the built PWA and every API route. The `local` env keeps all bridge rails OFF
 (JobNimbus/Drive), turns the BFF + public estimator ON, uses Turnstile always-pass
-test keys, and captures magic-link email into the `dev_outbox` table instead of Gmail.
+test keys, and captures magic-link **and customer contract-acceptance** email into the
+`dev_outbox` table instead of Gmail (both writers are gated on
+`APP_ALLOW_INSECURE_LOCAL="true"`, which every deployed environment pins to `"false"`).
+
+`local` also has the Facet v2 chain and the customer portal switched on:
+`FACET_V2_INGEST_ENABLED`, `FACET_V2_FRAPPE_PROJECTION_ENABLED`, `APP_FACET_LAUNCH_ENABLED`,
+`APP_CUSTOMER_PORTAL_ENABLED`, `APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED`. `predev.mjs`
+generates the three throwaway Facet keys into `deploy/local/keys/`, provisions the scoped
+`ironwrap-facet-projection@ironwrap.local` service identity, and pins the matching
+`ironwrap_facet_design_projection_hmac_key` into the Frappe site config.
+
+## Driving the Facet v2 ingest leg
+
+The v2 delivery signature binds the request to the exact **public https origin** in
+`FACET_V2_ROUTES_JSON`, so `http://localhost:7100` can never satisfy it. The local route
+points at `https://bus.local.test:7443/ingest/facet-design`; run a second Worker over TLS and
+resolve that name to loopback rather than editing `/etc/hosts`:
+
+```bash
+cd workers-bus && npx wrangler dev --env local --port 7443 --local-protocol https --test-scheduled
+# then deliver a Facet-signed event:
+curl -sS -k --resolve bus.local.test:7443:127.0.0.1 \
+  -X POST https://bus.local.test:7443/ingest/facet-design \
+  -H 'content-type: application/json' -H 'x-ironwrap-event-...: ...' --data-binary @event.json
+```
+
+The owner action that opens the chain is `POST /api/v1/estimator/jobs/{job}/facet-launches`
+(owner session + CSRF); it registers the authority link the signed event must match.
 
 ## What you can drive end-to-end
 

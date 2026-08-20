@@ -31,8 +31,8 @@ log() { printf '\n\033[1;34m[ironwrap-init]\033[0m %s\n' "$*"; }
 # The field-evidence, fleet-capture and work-package rails are all issued by the
 # Worker BFF, which authenticates with the single ERPNEXT_API_KEY/SECRET pair, so
 # all three pin the same integration user created in step 8.  The customer
-# acceptance and QuickBooks rails hold their own least-privilege identities and
-# their own key pairs.
+# acceptance, QuickBooks and Facet-design-projection rails hold their own
+# least-privilege identities and their own key pairs.
 pin_service_identities() {
   log "pinning Worker BFF and service issuer site config"
   bench --site "$SITE" set-config ironwrap_field_evidence_issuer_user ironwrap-bus@ironwrap.local
@@ -40,6 +40,7 @@ pin_service_identities() {
   bench --site "$SITE" set-config ironwrap_work_package_issuer_user ironwrap-bus@ironwrap.local
   bench --site "$SITE" set-config ironwrap_customer_acceptance_service_user ironwrap-customer-acceptance@ironwrap.local
   bench --site "$SITE" set-config ironwrap_quickbooks_reconciliation_issuer_user ironwrap-quickbooks-issuer@ironwrap.local
+  bench --site "$SITE" set-config ironwrap_facet_design_projection_service_user ironwrap-facet-projection@ironwrap.local
 }
 
 cd "$BENCH_DIR" 2>/dev/null || { mkdir -p "$BENCH_DIR"; cd "$BENCH_DIR"; }
@@ -191,6 +192,35 @@ frappe.db.commit()
 print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
 PYEOF
   grep -o 'CREDS:{.*}' /tmp/quickbooks_reconciliation_issuer_raw.json | sed 's/^CREDS://' > "sites/$SITE/.quickbooks_reconciliation_issuer_credentials"
+fi
+
+# 10b. dedicated Facet design projection service identity ----------------------
+# The Worker projects an approved Facet v2 design decision into a blank Draft
+# Customer Quote through ironwrap_roofing.facet_design_projection_api, which
+# refuses any actor that is not the pinned service user holding the
+# `IronWrap Facet Design Projection Service` role.  Without this identity the
+# whole Facet ingest -> projection chain is unreachable on a local stack.
+if [ ! -s "sites/$SITE/.facet_design_projection_credentials" ] || ! grep -q '^{' "sites/$SITE/.facet_design_projection_credentials"; then
+  log "creating scoped Facet design projection service user with API keys"
+  bench --site "$SITE" console > /tmp/facet_design_projection_raw.json <<'PYEOF'
+import frappe, json
+email = "ironwrap-facet-projection@ironwrap.local"
+role = "IronWrap Facet Design Projection Service"
+if not frappe.db.exists("User", email):
+    u = frappe.get_doc({"doctype": "User", "email": email, "first_name": "Facet Design Projection Service",
+                        "send_welcome_email": 0, "roles": [{"role": role}]})
+    u.insert(ignore_permissions=True)
+else:
+    u = frappe.get_doc("User", email)
+    if role not in {entry.role for entry in u.roles}:
+        u.append("roles", {"role": role})
+        u.save(ignore_permissions=True)
+frappe.core.doctype.user.user.generate_keys(email)
+u = frappe.get_doc("User", email)
+frappe.db.commit()
+print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
+PYEOF
+  grep -o 'CREDS:{.*}' /tmp/facet_design_projection_raw.json | sed 's/^CREDS://' > "sites/$SITE/.facet_design_projection_credentials"
 fi
 
 # 11. pinned service identities -------------------------------------------------

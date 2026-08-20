@@ -36,10 +36,6 @@ const PINNED_KEY = /set-config["',\s]+(ironwrap_[a-z0-9_]*_user)/g;
 // dead rail wearing a different hat.
 export const LOCAL_STACK_EXEMPTIONS = new Map([
   [
-    "ironwrap_facet_design_projection_service_user",
-    "dedicated Facet projection identity that must hold the IronWrap Facet Design Projection Service role and its own API pair (workers-bus/.dev.vars.example); the local compose stack does not stand up that channel",
-  ],
-  [
     "ironwrap_launch_proof_reader_user",
     "release-tool reader identity supplied by the operator who runs tools/launch-proof.mjs against a deployed site; never part of the local compose rail",
   ],

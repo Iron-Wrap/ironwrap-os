@@ -195,6 +195,25 @@ export interface AppTenantPublic {
   currency: string;
 }
 
+/**
+ * The money-plane permissions (IRO-52 slice S8, contract section 8.1).
+ *
+ * `accounting:compensate` is granted to the accountant as well as the owner because section 6
+ * reads "the same authority that authorized the original, or higher"; the ceiling breach is what
+ * escalates, and `accounting-api.ts` enforces that owner gate on the plan's magnitude. Releasing
+ * holdback is unconditionally the owner's (section 6 requires `external_authority` evidence), so
+ * `accounting:holdback_release` is owner-only at the permission itself.
+ */
+export const ACCOUNTING_PERMISSIONS = [
+  "accounting:read",
+  "accounting:review",
+  "accounting:approve",
+  "accounting:reconcile",
+  "accounting:compensate",
+  "accounting:holdback_release",
+  "accounting:payroll",
+] as const;
+
 export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
   owner: [
     "session:read",
@@ -213,6 +232,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
     "quickbooks:read",
     "quickbooks:review",
     "quickbooks:reconcile",
+    ...ACCOUNTING_PERMISSIONS,
     "authority:read",
     "authority:write",
   ],
@@ -228,6 +248,8 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
     "approvals:read",
     "approvals:prepare",
     "facet:read",
+    // Section 8.1: `ops` sees the money desk and changes nothing on it.
+    "accounting:read",
     "authority:read",
     "authority:write",
   ],
@@ -246,6 +268,9 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
     "quickbooks:read",
     "quickbooks:review",
     "quickbooks:reconcile",
+    ...ACCOUNTING_PERMISSIONS.filter(
+      (permission) => permission !== "accounting:holdback_release",
+    ),
   ],
   field: [
     "session:read",

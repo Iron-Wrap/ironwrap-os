@@ -434,7 +434,13 @@ export async function executeExternalEffect<T = unknown>(
        SET state = 'executing', attempt_count = ?, lease_expires_at = ?, result_code = NULL, updated_at = ?
      WHERE effect_id = ? AND state IN ('authorized', 'retry') AND attempt_count = ?`,
   ).bind(attemptNumber, leaseExpiresAt, now.toISOString(), effect.effect_id, effect.attempt_count).run();
-  if (Number(claim.meta?.changes ?? 0) !== 1) throw new EffectRuntimeError("effect_lease_lost");
+  // `< 1`, not `!== 1`: D1's `meta.changes` is a `total_changes()` delta and therefore *includes
+  // rows written by triggers*, and `0042` writes an `external_effect_events` row on every state
+  // change. The CAS is the `WHERE ... AND state IN (...)` clause - it matches one row or none - so
+  // zero means the lease was lost and anything else means this caller won it. Asserting exactly 1
+  // meant every transition against real D1 threw while succeeding (ELEC-75, proven on the local
+  // stack: the ledger recorded the transition and the caller was told it conflicted).
+  if (Number(claim.meta?.changes ?? 0) < 1) throw new EffectRuntimeError("effect_lease_lost");
   await env.DB.prepare(
     `INSERT INTO external_effect_attempts (
       attempt_id, effect_id, attempt_number, business_idempotency_key, request_hash,
@@ -516,7 +522,13 @@ export async function claimExternalEffect(
        SET state = 'executing', attempt_count = ?, lease_expires_at = ?, result_code = NULL, updated_at = ?
      WHERE effect_id = ? AND state IN ('authorized', 'retry') AND attempt_count = ?`,
   ).bind(attemptNumber, leaseExpiresAt, now.toISOString(), effect.effect_id, effect.attempt_count).run();
-  if (Number(claim.meta?.changes ?? 0) !== 1) throw new EffectRuntimeError("effect_lease_lost");
+  // `< 1`, not `!== 1`: D1's `meta.changes` is a `total_changes()` delta and therefore *includes
+  // rows written by triggers*, and `0042` writes an `external_effect_events` row on every state
+  // change. The CAS is the `WHERE ... AND state IN (...)` clause - it matches one row or none - so
+  // zero means the lease was lost and anything else means this caller won it. Asserting exactly 1
+  // meant every transition against real D1 threw while succeeding (ELEC-75, proven on the local
+  // stack: the ledger recorded the transition and the caller was told it conflicted).
+  if (Number(claim.meta?.changes ?? 0) < 1) throw new EffectRuntimeError("effect_lease_lost");
   await env.DB.prepare(
     `INSERT INTO external_effect_attempts (
       attempt_id, effect_id, attempt_number, business_idempotency_key, request_hash,
@@ -846,7 +858,10 @@ async function transitionEffect(
     resetAttemptEvidence, patch.exceptionRef ?? null,
     now, effect.effect_id, effect.state,
   ).run();
-  if (Number(result.meta?.changes ?? 0) !== 1) throw new EffectRuntimeError("effect_transition_conflict");
+  // See the lease claim above: D1 counts triggered writes, so a successful state transition
+  // reports 2 (the effect row plus its `external_effect_events` row). Zero is the only value that
+  // means the compare-and-set lost.
+  if (Number(result.meta?.changes ?? 0) < 1) throw new EffectRuntimeError("effect_transition_conflict");
 }
 
 async function updateAttemptAndEffect(

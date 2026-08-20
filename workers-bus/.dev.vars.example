@@ -20,6 +20,12 @@ GOOGLE_SERVICE_ACCOUNT_JSON=""
 # QuickBooks webhook verifier token (Intuit)
 QB_WEBHOOK_TOKEN=""
 
+# Loopback Intuit double for the local money-plane stack (IRO-52). Honoured ONLY when
+# APP_ALLOW_INSECURE_LOCAL="true" and the origin is loopback; wrangler.jsonc sets that var to
+# "false" in every deployed environment, so a deployed Worker always resolves to Intuit. This is
+# what lets the accounting dispatcher be exercised end to end locally without a live provider call.
+# QB_API_BASE_LOCAL_OVERRIDE="http://127.0.0.1:19099"
+
 # Anthropic key for measurement-report OCR. Required whenever MEASUREMENT_OCR_ENABLED is
 # "true" — which wrangler.jsonc sets in every environment, including local — otherwise
 # `/ready` reports measurement_ocr_configuration false on a fresh checkout.

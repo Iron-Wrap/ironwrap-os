@@ -48,6 +48,12 @@ class SqliteD1 {
     }
   }
 
+  private totalChanges(): number {
+    return Number(
+      (this.raw.prepare("SELECT total_changes() AS total").get() as { total: number }).total,
+    );
+  }
+
   prepare(sql: string) {
     return {
       bind: (...args: unknown[]) => {
@@ -56,8 +62,14 @@ class SqliteD1 {
           first: async <T>() => (statement.get(...args) ?? null) as T | null,
           all: async <T>() => ({ results: statement.all(...args) as T[] }),
           run: async () => {
-            const result = statement.run(...args);
-            return { success: true, meta: { changes: Number(result.changes) } };
+            const before = this.totalChanges();
+            statement.run(...args);
+            // D1 reports a `total_changes()` delta, which counts rows written by triggers. `0042`
+            // writes an `external_effect_events` row on every state change, so a successful
+            // transition reports 2 here exactly as it does in production. Reporting
+            // `sqlite3_changes()` instead is what let the runtime's `!== 1` CAS guards pass this
+            // suite while failing on the first transition against real D1 (ELEC-75).
+            return { success: true, meta: { changes: this.totalChanges() - before } };
           },
         };
       },

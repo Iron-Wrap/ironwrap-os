@@ -19,6 +19,7 @@ import { Card } from "../components/ui/card";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { ApiError } from "../lib/api";
 import { cn } from "../lib/cn";
+import { loadAccountingSummary } from "./money-api";
 import {
   approveQuickBooksFinalInvoice,
   connectQuickBooks,
@@ -161,6 +162,93 @@ export function QuickBooksFinalInvoicePage() {
     <RoleGuard surface="accounting">
       <QuickBooksFinalInvoiceContent />
     </RoleGuard>
+  );
+}
+
+/**
+ * Reconciliation health on the connection page (IRO-52 slice S9, contract section 8.2).
+ *
+ * "Extends PR #43's page with reconciliation health: stale observations, open exceptions, oldest
+ * unreconciled intent." It reads the money desk's own summary rather than a second source, so the
+ * connection page and the desk can never disagree about how healthy the reconciliation is.
+ *
+ * It is a soft dependency on purpose: a desk that cannot be read is reported here in one line, and
+ * never blocks the connection screen an owner may have opened precisely because something is
+ * broken.
+ */
+function ReconciliationHealthCard() {
+  const session = useSession();
+  const summary = useQuery({
+    queryKey: ["accounting-summary", session.tenant.id],
+    queryFn: () => loadAccountingSummary(),
+    retry: false,
+  });
+
+  if (summary.isPending && !summary.data) {
+    return (
+      <Card className="p-5 sm:p-6">
+        <h2 className="text-xl font-black tracking-[-0.025em]">Reconciliation health</h2>
+        <p className="mt-2 text-sm leading-6 text-muted">Loading the money desk…</p>
+      </Card>
+    );
+  }
+  if (!summary.data) {
+    return (
+      <Card className="p-5 sm:p-6">
+        <h2 className="text-xl font-black tracking-[-0.025em]">Reconciliation health</h2>
+        <p className="mt-2 text-sm leading-6 text-muted">
+          The money desk could not be read, so reconciliation health is unknown. The recorded
+          connection state above is unaffected.
+        </p>
+      </Card>
+    );
+  }
+
+  const health = summary.data.summary.reconciliation_health;
+  return (
+    <Card className="p-5 sm:p-6">
+      <h2 className="text-xl font-black tracking-[-0.025em]">Reconciliation health</h2>
+      <p className="mt-2 text-sm leading-6 text-muted">
+        How much of what IronWrap believes has been checked against QuickBooks recently.
+      </p>
+      <dl className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <HealthTile label="Open exceptions" value={health.open_exceptions} />
+        <HealthTile label="Not re-read recently" value={health.stale_observation_count} />
+        <HealthTile label="Never read back" value={health.unobserved_intent_count} />
+      </dl>
+      <p className="mt-4 text-sm leading-6">
+        {health.oldest_unreconciled_intent_id ? (
+          <>
+            Oldest unfinished money movement:{" "}
+            <Link
+              to="/accounting/intents/$intentId"
+              params={{ intentId: health.oldest_unreconciled_intent_id }}
+              className="font-bold underline underline-offset-4"
+            >
+              {health.oldest_unreconciled_intent_id}
+            </Link>
+            .
+          </>
+        ) : (
+          "Nothing is outstanding. Every money movement has reached a settled state."
+        )}
+      </p>
+      <Link
+        to="/accounting"
+        className="mt-4 inline-flex min-h-12 items-center font-bold underline underline-offset-4"
+      >
+        Open the money desk
+      </Link>
+    </Card>
+  );
+}
+
+function HealthTile({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="border border-border bg-surface px-4 py-3">
+      <dt className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">{label}</dt>
+      <dd className="mt-1 text-2xl font-black tabular-nums">{value}</dd>
+    </div>
   );
 }
 
@@ -316,6 +404,8 @@ function QuickBooksSettingsContent() {
           </p>
         ) : null}
       </Card>
+
+      <ReconciliationHealthCard />
 
       {connectionModel.state === "reconciliation_required" ? (
         <Notice tone="danger" title="QuickBooks connection state is uncertain">

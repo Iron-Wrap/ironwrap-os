@@ -14,6 +14,7 @@
 // storage-layer facts that make that structural are the append-only triggers on observations and
 // reconciliations, and `accounting_intents_no_delete` from slice S1.
 
+import { comparableObservedSha256 } from "./accounting-expectations.ts";
 import type { AppEnv } from "./app-types.ts";
 import { canonicalJson } from "./newo-hash.ts";
 import type { MoneyEffectOutcome } from "./accounting-effect-port.ts";
@@ -270,6 +271,9 @@ export async function reconcileAccountingIntent(
     // would leave the accountant guessing what the system actually concluded.
     await writeReconciliation(env, {
       intent,
+      // Nothing was compared: the entity was not there. The verdict still records which
+      // expectation went unmet, which is the intent's own.
+      expectedSha256: intent.expected_sha256,
       observationId: null,
       observedSha256: null,
       verdict: "not_found",
@@ -339,11 +343,29 @@ export async function reconcileAccountingIntent(
     };
   }
 
-  const decision = await decide(env, { intent, read, observation }, now);
+  // What this observation is compared against, and what it is compared *as*.
+  //
+  // `expected_sha256` is the intent's own and never moves - `0058`'s CHECK requires
+  // `observed_sha256 = expected_sha256` on any row in `reconciled`, so nothing else could be
+  // written here. The observed side is what varies: for an intent whose provider entity IronWrap
+  // is creating, the `Id` is not a local fact and cannot be bound at derivation (section 5.2 hashes
+  // it, Intuit assigns it), so such an intent binds an identity-free expectation and the
+  // observation is hashed on the same basis. Identity is not thereby unchecked - `decide` compares
+  // realm, entity type and entity id against the identity the effect attempt settled on, before
+  // any hash is looked at, which is section 5.1's other half stated once instead of twice.
+  //
+  // The observation row itself keeps the full hash, `Id` included: it is evidence of what the
+  // provider returned, and evidence is never trimmed to make a comparison work.
+  const expectedSha256 = intent.expected_sha256;
+  const comparedObserved = await comparableObservedSha256(env, intent, observation);
+  const decision = await decide(
+    env, { intent, read, observation, expectedSha256, observedSha256: comparedObserved }, now,
+  );
   await writeReconciliation(env, {
     intent,
+    expectedSha256,
     observationId: observation.observation_id,
-    observedSha256: observation.observed_sha256,
+    observedSha256: comparedObserved,
     verdict: decision.verdict,
     reasonCode: decision.reasonCode,
     settledAmount: decision.settledAmount,
@@ -357,7 +379,7 @@ export async function reconcileAccountingIntent(
     verdict: decision.verdict,
     reasonCode: decision.reasonCode,
     observationId: observation.observation_id,
-    observedSha256: observation.observed_sha256,
+    observedSha256: comparedObserved,
     settledAmount: decision.settledAmount,
   }, now);
 
@@ -387,10 +409,14 @@ async function decide(
     intent: AccountingIntentRecord;
     read: Extract<ProviderReadResult, { status: "ok" }>;
     observation: AccountingObservationRecord;
+    /** What the observation is compared against; see `reconcileAccountingIntent`. */
+    expectedSha256: string;
+    /** ...and the observation hashed on the same basis as that expectation. */
+    observedSha256: string;
   },
   now: Date,
 ): Promise<Decision> {
-  const { intent, read, observation } = input;
+  const { intent, read, observation, expectedSha256, observedSha256 } = input;
 
   // Identity before facts. A fact set that matches on a different entity is the most dangerous
   // shape of all: it looks reconciled and points at money we never created.
@@ -436,7 +462,7 @@ async function decide(
     };
   }
 
-  const hashesAgree = observation.observed_sha256 === intent.expected_sha256;
+  const hashesAgree = observedSha256 === expectedSha256;
   const drifted = intent.state === "reconciled";
 
   // Only an invoice carries the cumulative settlement target (section 5.4). A payment, credit memo
@@ -451,7 +477,7 @@ async function decide(
         exceptionDetail: null,
       };
     }
-    return mismatchDecision(intent, observation, drifted, null);
+    return mismatchDecision(intent, drifted, null, expectedSha256, observedSha256);
   }
 
   const settlement = await invoiceSettlement(env, {
@@ -484,7 +510,9 @@ async function decide(
     };
   }
 
-  if (!hashesAgree) return mismatchDecision(intent, observation, drifted, settledAmount);
+  if (!hashesAgree) {
+    return mismatchDecision(intent, drifted, settledAmount, expectedSha256, observedSha256);
+  }
 
   // The cumulative invariant: what has been settled plus what is still owed is the whole invoice.
   if (balanceCents === null || settlement.linkedCents + balanceCents !== intentTotalCents) {
@@ -526,9 +554,10 @@ async function decide(
 
 function mismatchDecision(
   intent: AccountingIntentRecord,
-  observation: AccountingObservationRecord,
   drifted: boolean,
   settledAmount: string | null,
+  expectedSha256: string,
+  observedSha256: string,
 ): Decision {
   // Section 5.4, provider drift: somebody changed a posted transaction in QuickBooks. That is an
   // accounting event, and it is reported as one rather than as a first-time mismatch.
@@ -542,8 +571,8 @@ function mismatchDecision(
       realmId: intent.realm_id,
       entityType: intent.provider_entity_type,
       entityId: intent.provider_entity_id,
-      expectedSha256: intent.expected_sha256,
-      observedSha256: observation.observed_sha256,
+      expectedSha256,
+      observedSha256,
       remedies: remedies("adjusting_entry_posted", "accepted_as_posted"),
     },
   };
@@ -672,6 +701,8 @@ async function writeReconciliation(
   env: AppEnv,
   input: {
     intent: AccountingIntentRecord;
+    /** The hash actually compared, which is the only one worth recording as the verdict's basis. */
+    expectedSha256: string;
     observationId: string | null;
     observedSha256: string | null;
     verdict: Exclude<AccountingVerdict, "unavailable">;
@@ -688,7 +719,7 @@ async function writeReconciliation(
      ON CONFLICT (tenant_id, intent_id, observation_id) DO NOTHING`,
   ).bind(
     crypto.randomUUID(), input.intent.tenant_id, input.intent.intent_id, input.observationId,
-    input.intent.expected_sha256, input.observedSha256, input.verdict, input.reasonCode,
+    input.expectedSha256, input.observedSha256, input.verdict, input.reasonCode,
     input.settledAmount, now.toISOString(),
   ).run();
 }

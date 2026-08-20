@@ -19,7 +19,10 @@ export const TENANT = "ironwrap";
 export const REALM = "4620816365000000000";
 export const NOW = new Date("2026-08-19T12:00:00.000Z");
 
-/** The money-plane migrations, in order. 0058 is slice S1; 0059-0061 are S2 and S3. */
+/**
+ * The money-plane migrations, in order. 0058 is slice S1; 0059-0061 are S2 and S3; 0063-0065 are
+ * the ELEC-72/75/79 follow-ups.
+ */
 export const ACCOUNTING_MIGRATIONS = [
   "0011_app_bff_auth.sql",
   "0030_facet_design_ingest.sql",
@@ -30,6 +33,9 @@ export const ACCOUNTING_MIGRATIONS = [
   "0059_tax_policy_snapshots.sql",
   "0060_accounting_provider_observations.sql",
   "0061_accounting_exceptions.sql",
+  "0063_accounting_dispatch_evidence.sql",
+  "0064_accounting_authority_policy.sql",
+  "0065_accounting_intent_derivation_receipts.sql",
 ] as const;
 
 export function readAccountingMigration(name: string): string {

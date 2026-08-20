@@ -1,3 +1,4 @@
+import { handleAccountingRoute } from "./accounting-api.ts";
 import {
   appBffConfigured,
   authenticateAppRequest,
@@ -346,6 +347,15 @@ export async function handleAuthenticatedRoute(
     if (!hasPermission(auth, "now:read"))
       return privateAppJson({ error: "office_role_required" }, 403);
     return privateAppJson(await buildNowReadModel(env, auth));
+  }
+  // The money desk owns `/api/v1/accounting` outright (IRO-52 slice S8). It is checked before the
+  // QuickBooks connection routes below because those live under `/api/v1/quickbooks/` and the two
+  // path spaces are deliberately separate: one is the provider connection, the other is the money.
+  if (
+    url.pathname === "/api/v1/accounting" ||
+    url.pathname.startsWith("/api/v1/accounting/")
+  ) {
+    return await handleAccountingRoute(req, env, auth);
   }
   if (url.pathname === "/api/v1/quickbooks/connection") {
     return req.method === "GET"

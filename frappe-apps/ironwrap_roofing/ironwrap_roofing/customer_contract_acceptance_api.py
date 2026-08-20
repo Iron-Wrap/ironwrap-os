@@ -17,7 +17,7 @@ import math
 import re
 import time
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -122,12 +122,37 @@ def _optional_text(value: Any, field: str, *, maximum: int) -> str:
 
 
 def _timestamp(value: Any, field: str) -> str:
+    """Accept the Worker's ISO-8601 instant and store it as a Frappe datetime.
+
+    The claim carries RFC 3339 text (``...Z``), which MariaDB rejects outright
+    for a DATETIME column, and which would never compare equal to the stored
+    value on replay. Normalize once, here, to the naive-UTC text Frappe reads
+    back; the instant is unchanged and the caller's receipt is untouched.
+    """
+
     timestamp = _text(value, field, maximum=64)
     try:
-        datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
     except ValueError:
         _fail("customer_contract_invalid_claim", f"{field} must be an ISO timestamp")
-    return timestamp
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return str(parsed)
+
+
+def _stored_timestamp_text(value: Any, field: str) -> str:
+    """Render a stored Datetime column as the text the terms snapshot commits to.
+
+    ``frappe.db.sql`` returns a Datetime column as a ``datetime`` while the
+    surrounding contract is text, so passing one straight to ``_text`` refuses
+    every real record and accepts only hand-built string fixtures.
+    """
+
+    if isinstance(value, datetime):
+        return _text(str(value), field, maximum=64)
+    if isinstance(value, date):
+        return _text(value.isoformat(), field, maximum=64)
+    return _text(value, field)
 
 
 def _positive_int(value: Any, field: str) -> int:
@@ -443,7 +468,7 @@ def _terms_snapshot(anchors: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
             "price_book_version": _text(
                 quote.get("price_book_version"), "quote.price_book_version"
             ),
-            "pricing_effective_at": _text(
+            "pricing_effective_at": _stored_timestamp_text(
                 quote.get("pricing_effective_at"), "quote.pricing_effective_at"
             ),
             "currency": _text(quote.get("currency"), "quote.currency"),
@@ -482,8 +507,8 @@ def _terms_snapshot(anchors: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
             ),
         },
         "proposal": {
-            "prepared_at": _text(pack.get("prepared_at"), "pack.prepared_at"),
-            "published_at": _text(pack.get("approved_at"), "pack.approved_at"),
+            "prepared_at": _stored_timestamp_text(pack.get("prepared_at"), "pack.prepared_at"),
+            "published_at": _stored_timestamp_text(pack.get("approved_at"), "pack.approved_at"),
             "assumptions": _optional_text(
                 pack.get("assumptions"), "pack.assumptions", maximum=10_000
             ),

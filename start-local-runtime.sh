@@ -57,6 +57,9 @@ start_service() {
 cleanup() {
   echo
   echo "Stopping local runtime services..."
+  # The brokers record their own pids, so stop them by name rather than relying on
+  # a signal reaching through the wrapper subshell.
+  bash "$ROOT_DIR/deploy/local/start-approval-brokers.sh" stop 2>/dev/null || true
   for i in "${!PIDS[@]}"; do
     pid="${PIDS[$i]}"
     name="${NAMES[$i]}"
@@ -158,12 +161,27 @@ start_service "erpnext-roofing-mcp" "$ROOT_DIR/mcp/erpnext-roofing-mcp" "$LOG_DI
     HERMES_APPROVER_ID="${HERMES_APPROVER_ID:-$ERPNEXT_STUB_USER}" \
     npm start
 
+# Approval brokers (proposal publication + production schedule)
+# These are the only path to steps 5 and 6 of the six-step workflow. They talk to
+# the REAL local Frappe stack, not the stub above, because they perform approved
+# writes to operating records. The helper waits for deploy/local/predev.mjs (run by
+# the workers-bus dev server started above) to write their env files, so ordering
+# here is not a race. Set IRONWRAP_LOCAL_APPROVAL_BROKERS=off to skip them.
+if [[ "${IRONWRAP_LOCAL_APPROVAL_BROKERS:-on}" == "off" ]]; then
+  echo "Skipping approval brokers (IRONWRAP_LOCAL_APPROVAL_BROKERS=off): steps 5 and 6 will be unreachable."
+else
+  start_service "approval-brokers" "$ROOT_DIR" "$LOG_DIR/approval-brokers.log" \
+    env IRONWRAP_EFFECT_RUNTIME_URL="$HERMES_BUS_BASE_URL" \
+      bash "$ROOT_DIR/deploy/local/start-approval-brokers.sh" --foreground
+fi
+
 echo
 
 echo "All services started."
 echo "- bus:       $HERMES_BUS_BASE_URL"
 echo "- app:       http://localhost:5173"
 echo "- stub ERP:  http://127.0.0.1:$ERPNEXT_STUB_PORT"
+echo "- brokers:   http://127.0.0.1:9104 (proposal publication), http://127.0.0.1:9103 (production schedule)"
 echo "- logs:     $LOG_DIR"
 echo "- stop with Ctrl-C (trap will terminate all child processes)."
 

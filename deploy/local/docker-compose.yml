@@ -25,7 +25,10 @@ x-frappe-env: &frappe-env
   # only the ed25519 PUBLIC key; broker-held private key + dry-run HMAC stay out.
   # deploy/local/predev.mjs generates the throwaway keypair into deploy/local/keys/.
   IRONWRAP_HERMES_APPROVAL_PUBLIC_KEY_FILE: /opt/ironwrap-keys/hermes-approval-public.pem
-  IRONWRAP_HERMES_SITE_BASE_URL: http://localhost:8000
+  # The approval receipt binds to this exact site id, so it has to follow the host
+  # port a second stack was started on or every approved write fails the receipt's
+  # site check (proposal_publication_approval_receipt_mismatch_site_id).
+  IRONWRAP_HERMES_SITE_BASE_URL: http://localhost:${IRONWRAP_LOCAL_FRAPPE_PORT:-8000}
   IRONWRAP_HERMES_ALLOW_INSECURE_LOCAL: "true"
 
 services:
@@ -96,7 +99,10 @@ services:
     working_dir: /home/frappe/frappe-bench
     command: ["bench", "start"]
     ports:
-      - "127.0.0.1:8000:8000"
+      # One machine often runs more than one agent. A second stack needs its own
+      # host port and its own COMPOSE_PROJECT_NAME so it gets its own volumes
+      # instead of resyncing the bench someone else is mid-proof on.
+      - "127.0.0.1:${IRONWRAP_LOCAL_FRAPPE_PORT:-8000}:8000"
     restart: unless-stopped
 
 volumes:

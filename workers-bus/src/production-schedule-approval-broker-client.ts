@@ -99,11 +99,21 @@ export class ProductionScheduleApprovalBrokerError extends Error {
   readonly code:
     | "production_schedule_broker_not_configured"
     | "production_schedule_broker_unavailable"
-    | "production_schedule_broker_response_invalid";
+    | "production_schedule_broker_response_invalid"
+    | "production_schedule_broker_rejected";
+  /** HTTP status the broker answered with; only set for `_rejected`. */
+  readonly brokerStatus: number | null;
+  /** The broker's own error code, verbatim when it is well formed. */
+  readonly brokerErrorCode: string | null;
 
-  constructor(code: ProductionScheduleApprovalBrokerError["code"]) {
-    super(code);
+  constructor(
+    code: ProductionScheduleApprovalBrokerError["code"],
+    rejection?: { status: number; errorCode: string },
+  ) {
+    super(rejection ? `${code}:${rejection.errorCode}` : code);
     this.code = code;
+    this.brokerStatus = rejection?.status ?? null;
+    this.brokerErrorCode = rejection?.errorCode ?? null;
   }
 }
 
@@ -271,7 +281,18 @@ async function callBroker(
     now,
   });
   if (!verified) throw new ProductionScheduleApprovalBrokerError("production_schedule_broker_response_invalid");
-  if (!response.ok) throw new ProductionScheduleApprovalBrokerError("production_schedule_broker_unavailable");
+  // Same honesty rule as the proposal-publication rail: a signature-verified 4xx
+  // carries the broker's own reason for refusing, and only a network failure or a
+  // 5xx means the broker itself could not answer.
+  if (!response.ok) {
+    if (response.status >= 500) {
+      throw new ProductionScheduleApprovalBrokerError("production_schedule_broker_unavailable");
+    }
+    throw new ProductionScheduleApprovalBrokerError("production_schedule_broker_rejected", {
+      status: response.status,
+      errorCode: brokerErrorCode(rawResponse, "production_schedule_broker_rejected"),
+    });
+  }
   try {
     const parsed = record(JSON.parse(rawResponse));
     if (!parsed) throw new Error("not_object");
@@ -658,6 +679,19 @@ function constantTimeEqual(left: string, right: string): boolean {
   let difference = 0;
   for (let index = 0; index < a.length; index++) difference |= a[index] ^ b[index];
   return difference === 0;
+}
+
+// Broker error bodies are `{"error":"<snake_case_code>"}`. Bounded to a code shape
+// so a malformed or hostile body can never widen the private error vocabulary the
+// Worker hands back to a browser.
+function brokerErrorCode(rawResponse: string, fallback: string): string {
+  try {
+    const parsed = record(JSON.parse(rawResponse));
+    const code = parsed?.error;
+    return typeof code === "string" && /^[a-z][a-z0-9_]{2,79}$/.test(code) ? code : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function assertOnlyKeys(value: Record<string, unknown>, allowed: string[]): void {

@@ -271,6 +271,81 @@ test("production schedule execute returns only the safe append-only outcome", as
   });
 });
 
+// A 422 is the broker deciding against the request; only a network failure or a
+// 5xx means it could not answer. Reporting both as `_unavailable` hid every real
+// reason behind an outage code (ELEC-95 process risk 3).
+test("production schedule broker passes a signed 422 rejection through with its own code", async () => {
+  await assert.rejects(
+    () => previewProductionScheduleApproval(env(), previewInput(), {
+      now: () => NOW,
+      nonce: () => NONCE,
+      fetch: async (input, init) => {
+        const request = requestFrom(input, init);
+        const raw = await request.text();
+        return signedBrokerResponse(
+          request,
+          new URL(request.url).pathname,
+          raw,
+          { error: "broker_production_schedule_preview_rejected" },
+          422,
+        );
+      },
+    }),
+    (error: unknown) => error instanceof ProductionScheduleApprovalBrokerError &&
+      error.code === "production_schedule_broker_rejected" &&
+      error.brokerErrorCode === "broker_production_schedule_preview_rejected" &&
+      error.brokerStatus === 422,
+  );
+});
+
+test("production schedule broker still reads unavailable on a signed 5xx", async () => {
+  await assert.rejects(
+    () => previewProductionScheduleApproval(env(), previewInput(), {
+      now: () => NOW,
+      nonce: () => NONCE,
+      fetch: async (input, init) => {
+        const request = requestFrom(input, init);
+        const raw = await request.text();
+        return signedBrokerResponse(
+          request,
+          new URL(request.url).pathname,
+          raw,
+          { error: "broker_internal_error" },
+          503,
+        );
+      },
+    }),
+    (error: unknown) => error instanceof ProductionScheduleApprovalBrokerError &&
+      error.code === "production_schedule_broker_unavailable" &&
+      error.brokerErrorCode === null,
+  );
+});
+
+// The error vocabulary the Worker hands back to a browser stays closed even when
+// the broker answers with something that is not one.
+test("production schedule broker falls back to a bounded code on a malformed 4xx body", async () => {
+  await assert.rejects(
+    () => previewProductionScheduleApproval(env(), previewInput(), {
+      now: () => NOW,
+      nonce: () => NONCE,
+      fetch: async (input, init) => {
+        const request = requestFrom(input, init);
+        const raw = await request.text();
+        return signedBrokerResponse(
+          request,
+          new URL(request.url).pathname,
+          raw,
+          { error: "Not A Code <script>" },
+          409,
+        );
+      },
+    }),
+    (error: unknown) => error instanceof ProductionScheduleApprovalBrokerError &&
+      error.code === "production_schedule_broker_rejected" &&
+      error.brokerErrorCode === "production_schedule_broker_rejected",
+  );
+});
+
 test("production schedule broker fails closed on a timeout", async () => {
   await assert.rejects(
     () => previewProductionScheduleApproval(env("1000"), previewInput(), {

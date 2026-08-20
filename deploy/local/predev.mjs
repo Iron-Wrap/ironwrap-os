@@ -24,6 +24,11 @@ const workersBus = path.join(repoRoot, "workers-bus");
 const composeFile = path.join(here, "docker-compose.yml");
 const devVarsPath = path.join(workersBus, ".dev.vars");
 const keysDir = path.join(here, "keys");
+// Defaults to the single documented local stack. A second stack (another agent on
+// the same machine, or a throwaway volume for a resync proof) sets both this and
+// COMPOSE_PROJECT_NAME so it never touches the first one's containers or volumes.
+const frappePort = process.env.IRONWRAP_LOCAL_FRAPPE_PORT ?? "8000";
+const frappeUrl = `http://localhost:${frappePort}`;
 
 const log = (msg) => console.log(`[predev] ${msg}`);
 const fail = (msg) => {
@@ -99,6 +104,38 @@ if (!/^[A-Za-z0-9_-]{43}$/.test(proposalPublicationBrokerSecret)) {
   );
 }
 
+// The production-schedule broker is the step-6 half of the same story: without
+// its own Worker-to-broker secret the scheduling rail cannot be reached locally
+// at all, and every broker authority keeps a distinct secret.
+const productionScheduleSecretPath = path.join(keysDir, "production-schedule-broker-secret.txt");
+if (!existsSync(productionScheduleSecretPath)) {
+  log("generating throwaway production-schedule broker secret into deploy/local/keys/");
+  mkdirSync(keysDir, { recursive: true });
+  writeFileSync(productionScheduleSecretPath, `${randomBytes(32).toString("base64url")}\n`, { mode: 0o600 });
+}
+const productionScheduleBrokerSecret = readFileSync(productionScheduleSecretPath, "utf8").trim();
+if (!/^[A-Za-z0-9_-]{43}$/.test(productionScheduleBrokerSecret)) {
+  fail(
+    "production-schedule broker secret is invalid; remove deploy/local/keys/production-schedule-broker-secret.txt and retry",
+  );
+}
+
+// The Worker authenticates /admin/effects/* with EFFECT_RUNTIME_TOKEN, not
+// ADMIN_TOKEN (index.ts:606). It is not in .dev.vars.example, so a local stack
+// had no value for it and every broker write that goes through the effect ledger
+// answered 401 - which the broker then reports as broker_mcp_call_ambiguous.
+// Generating it here is what makes an approved write reach Frappe locally.
+const effectRuntimeTokenPath = path.join(keysDir, "effect-runtime-token.txt");
+if (!existsSync(effectRuntimeTokenPath)) {
+  log("generating throwaway effect-runtime token into deploy/local/keys/");
+  mkdirSync(keysDir, { recursive: true });
+  writeFileSync(effectRuntimeTokenPath, `${randomBytes(32).toString("base64url")}\n`, { mode: 0o600 });
+}
+const effectRuntimeToken = readFileSync(effectRuntimeTokenPath, "utf8").trim();
+if (!/^[A-Za-z0-9_-]{43}$/.test(effectRuntimeToken)) {
+  fail("effect-runtime token is invalid; remove deploy/local/keys/effect-runtime-token.txt and retry");
+}
+
 const acceptanceHmacPath = path.join(keysDir, "customer-acceptance-hmac-key.txt");
 if (!existsSync(acceptanceHmacPath)) {
   log("generating throwaway customer-acceptance HMAC key into deploy/local/keys/");
@@ -126,14 +163,43 @@ log("ensuring local Frappe stack is up (docker compose)");
 try {
   execSync(`docker compose -f "${composeFile}" up -d`, { stdio: "inherit" });
 } catch {
-  fail("docker compose up failed - is Docker running?");
+  fail(
+    "docker compose up failed - is Docker running? A frappe-init exit 1 with a STALE VOLUME banner " +
+      "means IRONWRAP_LOCAL_APP_RESYNC=off refused a drifted bench; re-run without it to resync.",
+  );
 }
 
-log("waiting for Frappe API (http://localhost:8000/api/method/ping)");
+// The bench serves a COPY of the app, so a resync that happened inside the
+// init container is not live until the already-running bench reloads it.
+// frappe-init leaves a marker in the volume precisely because the restart has
+// to happen out here, where compose is.
+const resyncMarker = "/home/frappe/frappe-bench/sites/.ironwrap_app_resync_pending";
+let resynced = false;
+try {
+  execFileSync("docker", ["compose", "-f", composeFile, "exec", "-T", "frappe", "test", "-f", resyncMarker], {
+    stdio: "ignore",
+  });
+  resynced = true;
+} catch {
+  /* no resync happened on this boot */
+}
+if (resynced) {
+  log("frappe-init resynced a stale bench - restarting frappe so it serves the new app code");
+  try {
+    execFileSync("docker", ["compose", "-f", composeFile, "exec", "-T", "frappe", "rm", "-f", resyncMarker], {
+      stdio: "ignore",
+    });
+    execSync(`docker compose -f "${composeFile}" restart frappe`, { stdio: "inherit" });
+  } catch {
+    fail("could not restart the frappe container after an app resync");
+  }
+}
+
+log(`waiting for Frappe API (${frappeUrl}/api/method/ping)`);
 let frappeUp = false;
 for (let attempt = 0; attempt < 90; attempt += 1) {
   try {
-    const res = execSync("curl -sf --max-time 3 http://localhost:8000/api/method/ping", {
+    const res = execSync(`curl -sf --max-time 3 ${frappeUrl}/api/method/ping`, {
       stdio: ["ignore", "pipe", "ignore"],
     }).toString();
     if (res.includes("pong")) {
@@ -253,6 +319,35 @@ try {
   fail("could not configure the local Facet design projection HMAC key");
 }
 
+// Broker actor credentials. Each broker process authenticates to Frappe as its
+// own operator identity and refuses to start if the token resolves to anyone
+// else, so these pairs are what make the approval rails bootable by script
+// instead of by hand (ELEC-95 process risk 3).
+function containerCredentials(file, label) {
+  let parsed;
+  try {
+    parsed = JSON.parse(
+      run("docker", [
+        "compose", "-f", composeFile, "exec", "-T", "frappe",
+        "cat", `/home/frappe/frappe-bench/sites/ironwrap.localhost/${file}`,
+      ]),
+    );
+  } catch {
+    fail(`could not read ${label} credentials from the container`);
+  }
+  if (!parsed?.api_key || !parsed?.api_secret) fail(`${label} credentials are empty`);
+  return parsed;
+}
+
+const proposalPublicationActorCreds = containerCredentials(
+  ".proposal_publication_broker_credentials",
+  "proposal-publication broker actor",
+);
+const productionScheduleActorCreds = containerCredentials(
+  ".production_schedule_broker_credentials",
+  "production-schedule broker actor",
+);
+
 const vars = existsSync(devVarsPath) ? readFileSync(devVarsPath, "utf8") : "";
 const setVar = (src, key, value) => {
   const line = `${key}=${value}`;
@@ -272,7 +367,9 @@ for (const [key, value] of [
   ["APP_CUSTOMER_DECISION_HMAC_KEY", decisionHmacKey],
   ["APP_CUSTOMER_DECISION_FRAPPE_API_KEY", decisionCreds.api_key],
   ["APP_CUSTOMER_DECISION_FRAPPE_API_SECRET", decisionCreds.api_secret],
+  ["EFFECT_RUNTIME_TOKEN", effectRuntimeToken],
   ["PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET", proposalPublicationBrokerSecret],
+  ["PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET", productionScheduleBrokerSecret],
   ["FACET_LAUNCH_HMAC_KEY", facetKeys.FACET_LAUNCH_HMAC_KEY],
   ["FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY", facetKeys.FACET_DESIGN_FRAPPE_PROJECTION_HMAC_KEY],
   ["FACET_DESIGN_FRAPPE_PROJECTION_FRAPPE_API_KEY", facetProjectionCreds.api_key],
@@ -293,6 +390,72 @@ for (const [key, value] of [
 if (next !== vars) {
   writeFileSync(devVarsPath, next);
   log(".dev.vars updated with local Frappe integration credentials");
+}
+
+// 3b. broker env files ---------------------------------------------------------
+// Steps 5 and 6 of the six-step workflow run through the proposal-publication and
+// production-schedule approval brokers. Before this, nothing scripted started
+// them: `deploy/*.env.example` describes a production systemd unit, and standing
+// the pair up locally meant hand-writing two env files and hand-creating a Frappe
+// user (ELEC-95). These generated files hold only throwaway local values and live
+// in the already-gitignored keys directory; `start-approval-brokers.sh` sources
+// them verbatim.
+
+const brokerCommonEnv = [
+  "# Generated by deploy/local/predev.mjs for the local stack only. Throwaway values.",
+  "# Never copy into a deployed environment; deploy/*.env.example is the production shape.",
+  `ERPNEXT_BASE_URL=${frappeUrl}`,
+  "ERPNEXT_ALLOW_INSECURE_LOCAL=true",
+  "ERPNEXT_TENANT_ID=ironwrap",
+  "ERPNEXT_REQUEST_TIMEOUT_MS=10000",
+  "ERPNEXT_WRITE_ENABLED=true",
+  "IRONWRAP_EFFECT_RUNTIME_ENABLED=true",
+  "IRONWRAP_EFFECT_RUNTIME_URL=http://localhost:7100",
+  `IRONWRAP_EFFECT_RUNTIME_TOKEN=${effectRuntimeToken}`,
+  `HERMES_ROLE_POLICY_PATH=${path.join(repoRoot, "hermes/agents/roles.json")}`,
+  `HERMES_DRY_RUN_SIGNING_KEY=${readFileSync(dryRunKeyPath, "utf8").trim()}`,
+  `HERMES_APPROVAL_PUBLIC_KEY_FILE=${publicKeyPath}`,
+  `HERMES_APPROVAL_PRIVATE_KEY_FILE=${privateKeyPath}`,
+  "HERMES_APPROVER_ID=owner@ironwrap.local",
+];
+const brokerEnvFiles = [
+  {
+    file: "proposal-publication-broker.env",
+    lines: [
+      "HERMES_AGENT_ROLE=owner-operator",
+      "HERMES_ACTOR_USER=owner-operator@ironwrap.local",
+      `ERPNEXT_API_KEY=${proposalPublicationActorCreds.api_key}`,
+      `ERPNEXT_API_SECRET=${proposalPublicationActorCreds.api_secret}`,
+      "PROPOSAL_PUBLICATION_BROKER_TENANT_ID=ironwrap",
+      // Must match APP_PROPOSAL_PUBLICATION_BROKER_KEY_ID/URL in wrangler.jsonc's local env.
+      "PROPOSAL_PUBLICATION_BROKER_KEY_ID=local-proposal-publication-broker",
+      `PROPOSAL_PUBLICATION_BROKER_SHARED_SECRET=${proposalPublicationBrokerSecret}`,
+      "PROPOSAL_PUBLICATION_BROKER_LISTEN_HOST=127.0.0.1",
+      "PROPOSAL_PUBLICATION_BROKER_PORT=9104",
+    ],
+  },
+  {
+    file: "production-schedule-broker.env",
+    lines: [
+      "HERMES_AGENT_ROLE=production-controller",
+      "HERMES_ACTOR_USER=production-controller@ironwrap.local",
+      `ERPNEXT_API_KEY=${productionScheduleActorCreds.api_key}`,
+      `ERPNEXT_API_SECRET=${productionScheduleActorCreds.api_secret}`,
+      "PRODUCTION_SCHEDULE_BROKER_TENANT_ID=ironwrap",
+      "PRODUCTION_SCHEDULE_BROKER_KEY_ID=local-production-schedule-broker",
+      `PRODUCTION_SCHEDULE_BROKER_SHARED_SECRET=${productionScheduleBrokerSecret}`,
+      "PRODUCTION_SCHEDULE_BROKER_LISTEN_HOST=127.0.0.1",
+      "PRODUCTION_SCHEDULE_BROKER_PORT=9103",
+    ],
+  },
+];
+for (const { file, lines } of brokerEnvFiles) {
+  const target = path.join(keysDir, file);
+  const body = `${[...brokerCommonEnv, ...lines].join("\n")}\n`;
+  if (!existsSync(target) || readFileSync(target, "utf8") !== body) {
+    writeFileSync(target, body, { mode: 0o600 });
+    log(`wrote deploy/local/keys/${file}`);
+  }
 }
 
 // 4. local D1 migrations -------------------------------------------------------

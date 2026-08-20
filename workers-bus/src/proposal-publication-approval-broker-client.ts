@@ -54,11 +54,21 @@ export class ProposalPublicationApprovalBrokerError extends Error {
   readonly code:
     | "proposal_publication_broker_not_configured"
     | "proposal_publication_broker_unavailable"
-    | "proposal_publication_broker_response_invalid";
+    | "proposal_publication_broker_response_invalid"
+    | "proposal_publication_broker_rejected";
+  /** HTTP status the broker answered with; only set for `_rejected`. */
+  readonly brokerStatus: number | null;
+  /** The broker's own error code, verbatim when it is well formed. */
+  readonly brokerErrorCode: string | null;
 
-  constructor(code: ProposalPublicationApprovalBrokerError["code"]) {
-    super(code);
+  constructor(
+    code: ProposalPublicationApprovalBrokerError["code"],
+    rejection?: { status: number; errorCode: string },
+  ) {
+    super(rejection ? `${code}:${rejection.errorCode}` : code);
     this.code = code;
+    this.brokerStatus = rejection?.status ?? null;
+    this.brokerErrorCode = rejection?.errorCode ?? null;
   }
 }
 
@@ -208,7 +218,21 @@ async function callBroker(
     now,
   });
   if (!verified) throw new ProposalPublicationApprovalBrokerError("proposal_publication_broker_response_invalid");
-  if (!response.ok) throw new ProposalPublicationApprovalBrokerError("proposal_publication_broker_unavailable");
+  // A 422 from this broker is a business rejection it took a decision to produce
+  // (`proposal_evidence_pack_not_draft` and friends), not an outage. Collapsing
+  // every non-2xx into `_unavailable` made those indistinguishable from a dead
+  // broker and cost ELEC-95 an evening of instrumenting broker source to find out
+  // which one it was. The response is signature-verified above, so its error code
+  // is as trustworthy as its success body.
+  if (!response.ok) {
+    if (response.status >= 500) {
+      throw new ProposalPublicationApprovalBrokerError("proposal_publication_broker_unavailable");
+    }
+    throw new ProposalPublicationApprovalBrokerError("proposal_publication_broker_rejected", {
+      status: response.status,
+      errorCode: brokerErrorCode(rawResponse, "proposal_publication_broker_rejected"),
+    });
+  }
   try {
     const parsed: unknown = JSON.parse(rawResponse);
     const parsedRecord = record(parsed);
@@ -524,6 +548,19 @@ function constantTimeEqual(left: string, right: string): boolean {
   let difference = 0;
   for (let index = 0; index < a.length; index++) difference |= a[index] ^ b[index];
   return difference === 0;
+}
+
+// Broker error bodies are `{"error":"<snake_case_code>"}`. Bounded to a code shape
+// so a malformed or hostile body can never widen the private error vocabulary the
+// Worker hands back to a browser.
+function brokerErrorCode(rawResponse: string, fallback: string): string {
+  try {
+    const parsed = record(JSON.parse(rawResponse));
+    const code = parsed?.error;
+    return typeof code === "string" && /^[a-z][a-z0-9_]{2,79}$/.test(code) ? code : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function assertOnlyKeys(value: Record<string, unknown>, allowed: string[]): void {

@@ -424,6 +424,43 @@ export async function recordAccountingIntentSubmission(
 }
 
 /**
+ * Block an intent that may not be submitted as derived.
+ *
+ * Added by slice S2 for the tax preflight (section 5.4): a stale snapshot or a provider rate that
+ * disagrees with the bound one has to stop the candidate before it reaches the provider. The state
+ * graph already admits `blocked` from every pre-submission state and from nowhere else, so an
+ * intent that has already been dispatched cannot be walked backwards by blocking it.
+ */
+export async function blockAccountingIntent(
+  env: AppEnv,
+  input: {
+    tenantId: string;
+    intentId: string;
+    blocker: { code: string; nextStep: string };
+  },
+  now: Date = new Date(),
+): Promise<AccountingIntentRecord> {
+  const intent = await readAccountingIntent(env, input.tenantId, input.intentId);
+  if (!intent) throw new AccountingIntentError("accounting_intent_missing");
+  assertTransition(intent.state, "blocked");
+
+  const timestamp = now.toISOString();
+  await env.DB.prepare(
+    `UPDATE accounting_intents
+        SET state = 'blocked', version = version + 1,
+            blocker_code = ?, blocker_next_step = ?, updated_at = ?
+      WHERE intent_id = ? AND tenant_id = ? AND version = ?`,
+  ).bind(
+    input.blocker.code, input.blocker.nextStep, timestamp, input.intentId, input.tenantId,
+    intent.version,
+  ).run();
+
+  const applied = await readAccountingIntent(env, input.tenantId, input.intentId);
+  if (!applied) throw new AccountingIntentError("accounting_intent_missing");
+  return applied;
+}
+
+/**
  * Apply a reconciliation verdict (section 5.3).
  *
  * `unavailable` is deliberately a no-op: the provider being unreachable is not a statement about
@@ -445,13 +482,20 @@ export async function recordAccountingIntentVerdict(
   if (!intent) throw new AccountingIntentError("accounting_intent_missing");
   if (input.verdict === "unavailable") return intent;
 
-  const state: AccountingIntentState = input.verdict === "reconciled"
+  const verdictState: AccountingIntentState = input.verdict === "reconciled"
     ? "reconciled"
     : input.verdict === "partially_settled"
       ? "partially_settled"
       : input.verdict === "not_found"
         ? "reconciliation_required"
         : "mismatch";
+  // Section 5.4, provider drift: a previously reconciled entity whose re-read no longer agrees
+  // moves to `reconciliation_required`, not straight to `mismatch`. The state graph says the same
+  // thing - `reconciled` reaches nothing else - so this is the one rule that keeps a legitimate
+  // drift from being refused as an illegal transition.
+  const state: AccountingIntentState = intent.state === "reconciled" && verdictState !== "reconciled"
+    ? "reconciliation_required"
+    : verdictState;
 
   if (input.verdict === "reconciled" && input.observedSha256 !== intent.expected_sha256) {
     // Never adjust local truth to match the provider (section 5.1). A difference is an exception.

@@ -1,0 +1,13 @@
+{
+  "Fault": {
+    "Error": [
+      {
+        "Message": "Duplicate Document Number Error",
+        "Detail": "Duplicate Document Number Error : You must specify a different number.",
+        "code": "6240"
+      }
+    ],
+    "type": "ValidationFault"
+  },
+  "time": "2026-08-19T12:00:00.000-07:00"
+}

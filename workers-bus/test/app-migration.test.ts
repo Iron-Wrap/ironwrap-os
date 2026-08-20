@@ -1809,13 +1809,15 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
     // The chain starts at 0001 and is unique and increasing, but it is not contiguous: the
-    // service lane takes 0056, the IRO-62 forward repair takes 0057, and the IRO-52 money intent
-    // aggregate takes 0058, each above every number in flight on an open head when it was
-    // numbered. #54 kept 0046 and #48 kept 0047, both of which landed on `main`, so the gap from
-    // 0048 to 0055 is expected and not a missing migration.
-    assert.equal(migrations.length, 50);
+    // service lane takes 0056, the IRO-62 forward repair takes 0057, and the IRO-52 money lane
+    // takes 0058 (intents), 0059 (tax snapshots), 0060 (observations and verdicts) and 0061
+    // (the accountant exception queue), each above every number in flight on an open head when it
+    // was numbered. 0062 is the forward repair that closes the `INSERT OR REPLACE` bypass on the
+    // shipped 0042 ledger without editing it. #54 kept 0046 and #48 kept 0047, both of which
+    // landed on `main`, so the gap from 0048 to 0055 is expected and not a missing migration.
+    assert.equal(migrations.length, 54);
     assert.equal(migrations[0], "0001_init.sql");
-    assert.equal(migrations.at(-1), "0058_accounting_money_intents.sql");
+    assert.equal(migrations.at(-1), "0062_external_effect_insert_replace_guards.sql");
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {
         db.prepare(
@@ -1859,7 +1861,7 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
        FROM sqlite_master`,
       )
       .get() as { tables: number; indexes: number; triggers: number };
-    assert.deepEqual({ ...counts }, { tables: 107, indexes: 153, triggers: 229 });
+    assert.deepEqual({ ...counts }, { tables: 113, indexes: 162, triggers: 253 });
     // The applied chain — not the text of any single file — is what production
     // ends up running, so the complete_work receipt kind is asserted here.
     // 0028 is frozen at its shipped three-member CHECK and 0057 widens it

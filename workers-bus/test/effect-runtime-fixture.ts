@@ -1,10 +1,13 @@
 import { readFileSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 
-const migration = readFileSync(
-  new URL("../migrations/0042_external_effect_runtime.sql", import.meta.url),
-  "utf8",
-);
+// 0042 declares the ledger; 0062 adds the `BEFORE INSERT` guards that make its append-only claim
+// hold against `INSERT OR REPLACE` as well as against UPDATE and DELETE. The fixture applies both,
+// so a test that says "the ledger refuses this" is executing the refusal the deployed schema has.
+const migrations = [
+  "0042_external_effect_runtime.sql",
+  "0062_external_effect_insert_replace_guards.sql",
+].map((file) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
 const effectSql = /\bexternal_effect(?:s|_attempts|_events|_exceptions)\b/i;
 
 class SqliteStatement {
@@ -41,7 +44,7 @@ class EffectLedgerTestD1 {
   constructor(base: Record<string, any> | undefined) {
     this.base = base;
     this.ledger.exec("PRAGMA foreign_keys = ON");
-    this.ledger.exec(migration);
+    for (const migration of migrations) this.ledger.exec(migration);
   }
 
   prepare(sql: string) {

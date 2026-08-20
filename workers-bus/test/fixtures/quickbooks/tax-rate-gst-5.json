@@ -1,0 +1,23 @@
+{
+  "TaxRate": {
+    "Id": "3",
+    "SyncToken": "0",
+    "MetaData": {
+      "CreateTime": "2026-08-19T12:00:00-07:00",
+      "LastUpdatedTime": "2026-08-19T12:00:00-07:00"
+    },
+    "Name": "GST",
+    "RateValue": 5,
+    "AgencyRef": {
+      "value": "1"
+    },
+    "EffectiveTaxRate": [
+      {
+        "RateValue": 5,
+        "EffectiveDate": "2008-01-01",
+        "EndDate": "2099-12-31"
+      }
+    ]
+  },
+  "time": "2026-08-19T12:00:00.000-07:00"
+}

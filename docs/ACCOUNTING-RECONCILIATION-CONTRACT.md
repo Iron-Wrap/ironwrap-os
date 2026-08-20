@@ -2,12 +2,36 @@
 
 Status: proposed target contract — awaiting product-owner ratification
 Owner: IronWrap OS product owner
-Last verified: 2026-08-18
+Last verified: 2026-08-20
 Review trigger: any new money transition, provider entity, tax rule, holdback statute, payroll
 provider, or accounting authority change
 
 Every behaviour below is **Target** unless a paragraph explicitly says **Implemented** and cites a
 path and line. Nothing in this document is Deployed, Runtime-verified, or Business-accepted.
+
+## 0. Implementation status
+
+Repository facts as of 2026-08-20, on `main` plus the S2+S3 branch. Source-green only: nothing here
+is deployed, runtime-verified, or business-accepted, and slice S12 remains the only route to those.
+
+| Slice | State | Where |
+|---|---|---|
+| S0 | **Implemented** | `workers-bus/src/accounting-effect-port.ts`, `workers-bus/src/quickbooks-auth-port.ts`, `workers-bus/test/accounting-port-fixture.ts` |
+| S1 | **Implemented** | `workers-bus/migrations/0058_accounting_money_intents.sql`, `workers-bus/src/accounting-intents.ts` |
+| S2 | **Implemented** | `workers-bus/migrations/0059_tax_policy_snapshots.sql`, `workers-bus/src/accounting-tax-snapshots.ts` |
+| S3 | **Implemented** | `workers-bus/migrations/0060_accounting_provider_observations.sql`, `workers-bus/migrations/0061_accounting_exceptions.sql`, `workers-bus/src/accounting-normalizers.ts`, `workers-bus/src/accounting-reconciliation.ts`, `workers-bus/src/accounting-exceptions.ts`, `workers-bus/src/accounting-provider-read.ts` |
+| S4–S12 | Target | — |
+
+Two deviations from this document, both deliberate and both argued at the point they occur:
+
+1. **Migration numbers.** Section 7.1's reserved block was chosen on 2026-08-18 against the heads in
+   flight then, and `main` has since shipped through `0057`. The real mapping is in section 7.1.
+2. **The exception uniqueness key.** Section 7.1 specifies
+   `UNIQUE (tenant_id, subject_ref, reason_code, status)`. Taken literally with three statuses that
+   key makes the *second* occurrence of a recurring exception impossible to resolve, so
+   `0061_accounting_exceptions.sql` enforces the dedupe the contract wants — one **live** exception
+   per subject and reason — with a partial unique index. The reasoning is recorded in the migration
+   header.
 
 ## 1. Requirement
 
@@ -378,6 +402,32 @@ edited: the correction posts as a provider-supported adjusting entry linked to t
 `compensates_effect_id`, and both remain visible. Reconciliation compares the *net* of the original
 and its adjustments against the corrected artifact.
 
+### 5.5 Which of these are implemented, and where
+
+**Implemented** — each row names the code that enforces the rule and the test that executes it.
+Every test runs the real 0058–0061 SQL in `node:sqlite`, so the D1 CHECKs and triggers execute
+rather than being described.
+
+| Failure case | Enforced by | Test |
+|---|---|---|
+| Duplicate create (duplicate observed at readback) | `accounting-reconciliation.ts` → `duplicate_provider_entity` | `test/accounting-reconciliation.test.ts` "a duplicate provider entity observed at readback is an exception, never an auto-delete" |
+| Duplicate payment | `invoiceSettlement` + `duplicate_provider_payment`, two remedies | "two payments against one invoice are `duplicate_provider_payment` with exactly two remedies" |
+| Partial payment | cumulative invariant, `partially_settled` | "partial payment is `partially_settled` with no exception, and the cumulative invariant holds" |
+| Full settlement after partial | `Balance == 0` gate | "full settlement after a partial reaches `reconciled` only when the balance is zero" |
+| Over-payment | `provider_overpayment`, a mismatch not a partial | "over-payment is a mismatch, not a partial" |
+| Refund race | one invariant over recorded facts, order-independent | "a refund and a payment settling concurrently produce one deterministic verdict" |
+| Tax snapshot stale at submission | `assessTaxSnapshotStaleness` → `candidate_changed` | `test/accounting-tax-snapshots.test.ts` "an un-submitted intent whose snapshot was superseded is stale; a submitted one never is" |
+| Provider tax rate differs from snapshot | `detectTaxRateDrift` → `tax_rate_drift`, snapshot unchanged | "a provider rate that differs from the bound snapshot is drift, and the snapshot is untouched" |
+| Tax rate change mid-project | the two rules together | "mid-project rate change: what was posted keeps its rate, what is still a candidate is re-derived" |
+| Lost response | `resolveUncertainAccountingIntent`, retry never offered | "a lost response is resolved by finding the entity, never by retrying" |
+| Lost response, entity never created | deadline → `unknown_effect_deadline_expired` | "a lost response whose entity never appears becomes the accountant's decision at the deadline" |
+| Provider drift | new observation supersedes → `reconciliation_required` | "a previously reconciled entity that changed is drift: the new observation supersedes" |
+| Identity conflict | `provider_identity_conflict`, compensation refused in both layers | "an entity id that is not the one we created is `identity_conflict`, and it blocks compensation" |
+
+**Target, not implemented.** Refund after holdback release (`holdback_over_released`) waits on the
+holdback ledger in S6, and payroll correction waits on S7 and PR #55. Their reason codes are already
+declared by `0061_accounting_exceptions.sql` so neither slice has to edit a shipped migration.
+
 ## 6. Authority and evidence
 
 Every provider mutation in this contract is authority level `commit_external`
@@ -430,16 +480,23 @@ matching the ledger's existing discipline. Raw webhook bytes stay in R2 under `r
 `0050` to #53 and `0051` to #56; both branches actually held `0046` until the 2026-08-18 renumber.
 The highest number in flight anywhere is **0056**.
 
-IRO-52 therefore reserves **0057 through 0062**, all above every number currently in flight:
+That reservation is superseded. The numbers above were taken on 2026-08-18; `main` has since
+shipped through `0057`, so each slice re-listed `workers-bus/migrations/` on `main` and on every
+open PR head as it started and took the next free number above all of them. What actually shipped,
+and what the remaining slices will take:
 
-| Number | File | Contents |
-|---|---|---|
-| 0057 | `0057_accounting_money_intents.sql` | `accounting_intents`, `accounting_intent_events`, `accounting_intent_command_receipts`, state-transition and version guards |
-| 0058 | `0058_accounting_provider_observations.sql` | `accounting_observations` (append-only), `accounting_reconciliations` |
-| 0059 | `0059_holdback_ledger.sql` | `holdback_ledger`, `holdback_events` (append-only), release-precondition guard |
-| 0060 | `0060_accounting_exceptions.sql` | `accounting_exceptions` with `UNIQUE (tenant_id, subject_ref, reason_code, status)` |
-| 0061 | `0061_tax_policy_snapshots.sql` | `tax_policy_snapshots` (immutable), `accounting_intent_tax_bindings` |
-| 0062 | `0062_payroll_posting_intents.sql` | `payroll_posting_intents`, accountant approval receipts |
+| Number | File | Contents | Slice |
+|---|---|---|---|
+| 0058 | `0058_accounting_money_intents.sql` | `accounting_intents`, `accounting_intent_events`, `accounting_intent_command_receipts`, state-transition and version guards | S1, **shipped** |
+| 0059 | `0059_tax_policy_snapshots.sql` | `tax_policy_snapshots` (immutable), `accounting_intent_tax_bindings` | S2, **shipped** |
+| 0060 | `0060_accounting_provider_observations.sql` | `accounting_observations` and `accounting_observation_links` (append-only), `accounting_reconciliations` | S3, **shipped** |
+| 0061 | `0061_accounting_exceptions.sql` | `accounting_exceptions`, one live row per subject and reason, plus the compensation guard an `identity_conflict` needs | S3, **shipped** |
+| next free | `…_holdback_ledger.sql` | `holdback_ledger`, `holdback_events` (append-only), release-precondition guard | S6 |
+| next free | `…_payroll_posting_intents.sql` | `payroll_posting_intents`, accountant approval receipts | S7 |
+
+`accounting_exceptions.reason_code` already declares `holdback_over_released` and
+`payroll_posting_mismatch`, because a shipped migration is never edited and S6 and S7 must be able
+to raise against the same queue without one.
 
 Discipline, per project rule 4 and the confirmed 0042 collision (ELEC-3 finding 1 / IRO-62):
 
@@ -620,14 +677,14 @@ Dependency order. S0–S10 are provable against `main` today. Every slice ends g
 
 | # | Slice | Depends on | Notes |
 |---|---|---|---|
-| S0 | Effect and auth **ports** + test doubles (`accounting-effect-port.ts`, `quickbooks-auth-port.ts`, `test/accounting-port-fixture.ts`) | — | No schema. Unblocks everything. Must be reviewed hardest: the port shape is the contract with #46. |
-| S1 | Migration 0057 + intent state machine + command receipts + D1 invariant tests | S0 | The core aggregate. |
-| S2 | Migration 0061 + tax snapshot binding, staleness and drift detection | S1 | Cheap, and every other slice binds a snapshot. |
-| S3 | Migrations 0058 + 0060 + the reconciliation engine (normalizers, expected/observed hashing, verdicts, exception raising) | S1, S2 | The heart of the issue. |
+| S0 | Effect and auth **ports** + test doubles (`accounting-effect-port.ts`, `quickbooks-auth-port.ts`, `test/accounting-port-fixture.ts`) | — | **Implemented.** No schema. Unblocks everything. |
+| S1 | Migration **0058** + intent state machine + command receipts + D1 invariant tests | S0 | **Implemented.** The core aggregate. |
+| S2 | Migration **0059** + tax snapshot binding, staleness and drift detection | S1 | **Implemented.** Cheap, and every other slice binds a snapshot. |
+| S3 | Migrations **0060 + 0061** + the reconciliation engine (normalizers, expected/observed hashing, verdicts, exception raising) | S1, S2 | **Implemented.** The heart of the issue. |
 | S4 | Payment and deposit intents through the port + fixtures + duplicate/partial/over-payment scenarios | S3 | First end-to-end money path. |
 | S5 | Credit memo and refund intents + compensation plans + refund-race scenario + ceiling enforcement | S4 | First reversal path. |
-| S6 | Migration 0059 + holdback ledger, entitlement computation, release preconditions, refund-after-release | S5 | The domain-specific slice; largest design surface. |
-| S7 | Migration 0062 + `PayrollAccountingAdapter` implementation + payroll correction scenario | S3, **PR #55** | Gated on IRO-53 landing. Posting target per open question 2. |
+| S6 | Next free migration + holdback ledger, entitlement computation, release preconditions, refund-after-release | S5 | The domain-specific slice; largest design surface. |
+| S7 | Next free migration + `PayrollAccountingAdapter` implementation + payroll correction scenario | S3, **PR #55** | Gated on IRO-53 landing. Posting target per open question 2. |
 | S8 | Bus BFF routes + permissions + cron sweeps | S3 | Backend surface. |
 | S9 | PWA Money Desk, intent detail, exception queue | S8 | Frontend surface. |
 | S10 | PWA holdback register + release wizard + payroll review | S6, S7, S9 | Frontend surface. |

@@ -1414,6 +1414,99 @@ const fixtureAccountingExceptions = {
   exceptions: [fixtureAccountingException],
 };
 
+/**
+ * The driver's own fleet, for the mobile-first vehicle acceptance (ELEC-87).
+ *
+ * It is stateful on purpose. The rail this suite proves is capture -> fence
+ * verdict: a passing pre-trip is what clears `overdue_fleet_inspection`, so a
+ * fixture that answered the same panel before and after a capture would let a
+ * screen that posts nowhere pass the suite.
+ */
+const fleetCaptureState = { preTripAt: null, postTripAt: null, defects: [] };
+
+function resetFleetCaptureState() {
+  fleetCaptureState.preTripAt = null;
+  fleetCaptureState.postTripAt = null;
+  fleetCaptureState.defects = [];
+}
+
+function fixtureFleetPanel() {
+  const grounded = fleetCaptureState.defects.some((defect) => defect.severity === "Out of Service");
+  const blockers = [];
+  if (grounded) {
+    blockers.push({
+      code: "unsafe_fleet_asset",
+      field: "fleet_asset",
+      message:
+        "[unsafe_fleet_asset] fleet_asset: the linked Fleet Asset must be Active before scheduling or release",
+    });
+  } else if (!fleetCaptureState.preTripAt) {
+    blockers.push({
+      code: "overdue_fleet_inspection",
+      field: "next_inspection_due",
+      message:
+        "[overdue_fleet_inspection] next_inspection_due: the linked Fleet Asset inspection is overdue for the scheduled or released work",
+    });
+  }
+  return {
+    version: 1,
+    source_updated_at: null,
+    read_model_generated_at: "2026-07-10T12:00:00.000Z",
+    stale_fields: [],
+    permissions: ["jobs:read:assigned"],
+    allowed_actions: [
+      "fleet.pre_trip_inspection.create",
+      "fleet.post_trip_inspection.create",
+      "fleet.defect_report.create",
+    ],
+    reference_date: "2026-07-10",
+    assets: [
+      {
+        id: "FLEET-ACCEPTANCE",
+        fleet_asset_id: "TRUCK-ACCEPTANCE",
+        display_name: "Truck 12 flat deck",
+        unit_number: "12",
+        asset_kind: "Vehicle",
+        status: grounded ? "Out of Service" : "Active",
+        licence_plate: "ABC-1234",
+        meter_kind: "Odometer km",
+        current_meter: 142000,
+        relationship: "custody",
+        last_inspection_at: fleetCaptureState.preTripAt,
+        next_inspection_due: fleetCaptureState.preTripAt ? "2026-07-11" : "2026-07-01",
+        last_pre_trip_at: fleetCaptureState.preTripAt,
+        last_post_trip_at: fleetCaptureState.postTripAt,
+        out_of_service_reason: grounded ? "Out-of-service defect reported from the field." : null,
+        open_out_of_service_defects: 0,
+        blockers,
+      },
+    ],
+  };
+}
+
+const FLEET_CAPTURE_ROUTES = [
+  [/^\/api\/v1\/fleet\/assets\/([^/]+)\/pre-trip-inspections$/, "pre_trip"],
+  [/^\/api\/v1\/fleet\/assets\/([^/]+)\/post-trip-inspections$/, "post_trip"],
+  [/^\/api\/v1\/fleet\/assets\/([^/]+)\/defects$/, "defect"],
+];
+
+function fleetCaptureRoute(pathname) {
+  for (const [pattern, kind] of FLEET_CAPTURE_ROUTES) {
+    if (pattern.test(pathname)) return kind;
+  }
+  return null;
+}
+
+async function readJsonBody(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
 const fixtureAccountingConnection = {
   version: 1,
   state: "connected",
@@ -1429,6 +1522,33 @@ const requestListener = async (request, response) => {
 
   if (requestUrl.pathname === "/healthz") {
     return sendJson(response, method, 200, { ok: true });
+  }
+  if (method === "POST" && requestUrl.pathname === "/__acceptance/fleet/reset") {
+    resetFleetCaptureState();
+    return sendJson(response, method, 200, { ok: true });
+  }
+  const captureKind =
+    ACCEPTANCE_MODE === "field" && method === "POST"
+      ? fleetCaptureRoute(requestUrl.pathname)
+      : null;
+  if (captureKind) {
+    const body = await readJsonBody(request);
+    const deviceActionId = body?.device_action_id;
+    if (typeof deviceActionId !== "string" || !deviceActionId) {
+      return sendJson(response, method, 400, { error: "invalid_fleet_action" });
+    }
+    const capturedAt = body?.payload?.performed_at ?? body?.payload?.detected_at ?? null;
+    if (captureKind === "pre_trip") fleetCaptureState.preTripAt = capturedAt;
+    if (captureKind === "post_trip") fleetCaptureState.postTripAt = capturedAt;
+    if (captureKind === "defect") {
+      fleetCaptureState.defects.push({ severity: body?.payload?.severity ?? "Minor" });
+    }
+    return sendJson(response, method, 200, {
+      device_action_id: deviceActionId,
+      status: "verified",
+      server_ref: `${captureKind}:${deviceActionId}`,
+      cursor: "FLEET-ACCEPTANCE",
+    });
   }
 
   if (ACCEPTANCE_MODE === "field" && method === "POST") {
@@ -1483,6 +1603,9 @@ const requestListener = async (request, response) => {
       session: fixtureSession,
       today: fixtureToday,
     });
+  }
+  if (ACCEPTANCE_MODE === "field" && requestUrl.pathname === "/api/v1/fleet/panel") {
+    return sendJson(response, method, 200, fixtureFleetPanel());
   }
   if (requestUrl.pathname === "/api/v1/today") {
     return sendJson(response, method, 200, fixtureToday);

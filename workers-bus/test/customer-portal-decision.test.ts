@@ -118,7 +118,18 @@ class MemoryR2 {
   }
 }
 
-type RecordMode = "recorded" | "rejected" | "uncertain";
+type RecordMode = "recorded" | "rejected" | "guard_rejected" | "uncertain";
+
+// The exact body Frappe returned for every customer in ELEC-95: a guard refusal, whose only
+// statement of the cause lives in _server_messages.
+const GUARD_REFUSAL_MESSAGE =
+  "Evidence Item verification can only be issued by the dedicated Worker command.";
+const GUARD_REFUSAL_BODY = JSON.stringify({
+  exc_type: "ValidationError",
+  _server_messages: JSON.stringify([
+    JSON.stringify({ message: GUARD_REFUSAL_MESSAGE, title: "Message" }),
+  ]),
+});
 
 const OPTION_ROWS: Record<string, Array<Record<string, unknown>>> = {
   "Option Package": [
@@ -209,6 +220,12 @@ function setup(mode: RecordMode = "recorded") {
       const claim = JSON.parse(body.customer_claim_json as string) as Record<string, unknown>;
       claims.push(claim);
       if (activeMode === "rejected") return new Response("denied", { status: 409 });
+      if (activeMode === "guard_rejected") {
+        return new Response(GUARD_REFUSAL_BODY, {
+          status: 417,
+          headers: { "content-type": "application/json" },
+        });
+      }
       if (activeMode === "uncertain") return new Response("outage", { status: 503 });
       return Response.json({ message: { decision_id: claim.decision_id } });
     }
@@ -593,6 +610,40 @@ test("a Frappe rejection is terminal and never retried", async () => {
     assert.deepEqual(await replay.json(), { error: "decision_rejected" });
     assert.equal(h.claims.length, 1);
   } finally {
+    h.restore();
+  }
+});
+
+test("a guard refusal is diagnosable from the worker log without leaking to the customer", async () => {
+  // ELEC-95 lost a debugging session to this exact response: the customer's generic
+  // "decision_rejected" was the only trace, so the guard's own reason had to be recovered by
+  // reading Frappe's server log by hand.
+  const h = setup("guard_rejected");
+  const originalLog = console.log;
+  const lines: string[] = [];
+  console.log = (line: unknown) => {
+    lines.push(String(line));
+  };
+  try {
+    const token = await seedPortalLink(h.db);
+    const response = await post(h.env, decisionRequest(token, "opt-better", "decision-key-0016"));
+
+    assert.equal(response.status, 409);
+    const body = await response.text();
+    assert.deepEqual(JSON.parse(body), { error: "decision_rejected" });
+    // The customer is told nothing about the internals.
+    assert.ok(!body.includes("Evidence Item"));
+
+    const rejection = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((entry) => entry.at === "customer_portal_decision_rejected");
+    assert.ok(rejection, "the rejection is logged");
+    assert.equal(rejection.frappe_status, 417);
+    assert.equal(rejection.frappe_detail, GUARD_REFUSAL_MESSAGE);
+    assert.equal(rejection.decision_id, h.claims[0].decision_id);
+    assert.equal(rejection.roof_job_id, "JOB-A");
+  } finally {
+    console.log = originalLog;
     h.restore();
   }
 });

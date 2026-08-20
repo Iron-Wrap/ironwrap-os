@@ -32,6 +32,7 @@ import type { AppEnv, AuthRequestContext } from "./app-types.ts";
 
 const MAX_BODY_BYTES = 2_048;
 const MAX_FRAPPE_RESPONSE_BYTES = 64 * 1_024;
+const MAX_FRAPPE_DETAIL_CHARS = 500;
 const FRAPPE_ATTEMPT_LEASE_MS = 90 * 1_000;
 const DECISION_ACCESS_WINDOW_MS = 15 * 60 * 1_000;
 const DECISION_ACCESS_IP_LIMIT = 120;
@@ -85,14 +86,59 @@ type ClaimDecisionResult =
   | { kind: "existing"; intent: DecisionIntent }
   | { kind: "conflict" };
 
+const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
+
 class FrappeDecisionHttpError extends Error {
   readonly status: number;
+  /** Frappe's own reason, for the worker log only -- never for the customer. */
+  readonly detail: string | null;
 
-  constructor(status: number) {
+  constructor(status: number, detail: string | null = null) {
     super(`frappe_http_${status}`);
     this.name = "FrappeDecisionHttpError";
     this.status = status;
+    this.detail = detail;
   }
+}
+
+/**
+ * Pull Frappe's own reason out of an error body so a refusal is diagnosable from the worker log
+ * alone.
+ *
+ * ELEC-95 spent a debugging session on this: a guard in `document_validation.py` refused every
+ * customer's decision, and the only trace anywhere on our side was the generic
+ * `decision_rejected` this route returns. The reason existed the whole time -- in the response
+ * body we threw away. Frappe spreads it across `exception`, `_server_messages` (a JSON string of
+ * JSON strings) and `message` depending on the throw, so try each.
+ */
+function frappeErrorDetail(raw: string): string | null {
+  const clip = (value: unknown): string | null => {
+    const text = typeof value === "string" ? value.trim() : "";
+    return text ? text.slice(0, MAX_FRAPPE_DETAIL_CHARS) : null;
+  };
+  let body: Record<string, unknown>;
+  try {
+    body = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return clip(raw);
+  }
+  if (!body || typeof body !== "object") return clip(raw);
+  const serverMessages = body._server_messages;
+  if (typeof serverMessages === "string") {
+    try {
+      const entries = JSON.parse(serverMessages) as unknown[];
+      for (const entry of entries) {
+        const parsed = typeof entry === "string"
+          ? JSON.parse(entry) as Record<string, unknown>
+          : entry as Record<string, unknown>;
+        const detail = clip(parsed?.message);
+        if (detail) return detail;
+      }
+    } catch {
+      // Fall through to the other shapes below.
+    }
+  }
+  return clip(body.exception) ?? clip(body.message) ?? clip(body.exc_type);
 }
 
 class FrappeDecisionTransportError extends Error {
@@ -315,6 +361,15 @@ async function settleDecisionIntent(
       if (error instanceof FrappeDecisionHttpError && error.status < 500) {
         const responseStatus = error.status === 400 ? 400 : 409;
         const rejected = { error: "decision_rejected" };
+        // The customer keeps the generic message; the operator gets Frappe's actual reason.
+        log({
+          at: "customer_portal_decision_rejected",
+          decision_id: intent.decision_id,
+          roof_job_id: intent.roof_job_id,
+          option_package_id: intent.option_package_id,
+          frappe_status: error.status,
+          frappe_detail: error.detail,
+        });
         const finalized = await finalizeDecisionIntent(env, intent, {
           state: "rejected",
           response: rejected,
@@ -330,6 +385,15 @@ async function settleDecisionIntent(
         status: "uncertain" as const,
         decision_id: intent.decision_id,
       };
+      log({
+        at: "customer_portal_decision_uncertain",
+        decision_id: intent.decision_id,
+        roof_job_id: intent.roof_job_id,
+        error_code: errorCode(error),
+        frappe_detail: error instanceof FrappeDecisionHttpError
+          ? error.detail
+          : null,
+      });
       const finalized = await finalizeDecisionIntent(env, intent, {
         state: "uncertain",
         response: uncertain,
@@ -457,7 +521,14 @@ async function frappeCustomerDecisionCall(
       },
       body: JSON.stringify({ customer_claim_json: claimJson }),
     });
-    if (!response.ok) throw new FrappeDecisionHttpError(response.status);
+    if (!response.ok) {
+      // Read the body before discarding it: it carries the only statement of why Frappe refused.
+      const body = await response.text().catch(() => "");
+      throw new FrappeDecisionHttpError(
+        response.status,
+        frappeErrorDetail(body.slice(0, MAX_FRAPPE_RESPONSE_BYTES)),
+      );
+    }
     const declared = Number(response.headers.get("content-length") ?? "0");
     if (Number.isFinite(declared) && declared > MAX_FRAPPE_RESPONSE_BYTES) {
       throw new FrappeDecisionTransportError("frappe_response_too_large");

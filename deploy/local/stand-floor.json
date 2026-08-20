@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "purpose": "Admission floor for the development/proof stand in deploy/local/. This is NOT a runtime lock: it pins no component, no image digest and no architecture policy. Production admission remains deploy/runtime-lock.json enforced by deploy/host-preflight.sh, and nothing here may weaken, replace or be substituted for either.",
+  "measured_on": "2026-08-19",
+  "measurement": {
+    "host": "Raspberry Pi 5, aarch64, Ubuntu 24.04.2 LTS, 4 cores, MemTotal 7.75 GiB, SD card",
+    "stack": "deploy/local/docker-compose.yml: mariadb:10.6 + redis:7-alpine x2 + frappe/bench (bench start), site ironwrap.localhost with frappe 15.114.0 and ironwrap_roofing installed, no business data",
+    "peak_memory_mib": 568,
+    "steady_memory_mib": 457,
+    "disk_images_gb": 3.06,
+    "disk_volumes_gb": 1.18,
+    "note": "frappe-init exited 0 with OOMKilled=false under a 3 GiB cap, so provisioning peaked below that; its exact high-water mark was lost with the container cgroup."
+  },
+  "host_requirements": {
+    "cpu_cores_minimum": 1,
+    "memory_gib_minimum": 2,
+    "disk_gib_minimum": 20,
+    "architectures": [
+      "aarch64",
+      "x86_64"
+    ],
+    "distributions": [
+      "debian 12",
+      "debian 13",
+      "ubuntu 22.04",
+      "ubuntu 24.04"
+    ]
+  }
+}

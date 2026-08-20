@@ -10,6 +10,7 @@ import time
 import types
 import unittest
 from contextlib import contextmanager
+from datetime import timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,8 +22,79 @@ API_PATH = (
     / "ironwrap_roofing"
     / "facet_design_projection_api.py"
 )
+VALIDATION_PATH = (
+    Path(__file__).resolve().parents[1] / "ironwrap_roofing" / "document_validation.py"
+)
+DOCTYPE_DIR = (
+    Path(__file__).resolve().parents[1]
+    / "ironwrap_roofing"
+    / "ironwrap_roofing"
+    / "doctype"
+)
 SERVICE_USER = "facet-projection@example.invalid"
 HMAC_KEY = "facet-projection-test-secret-longer-than-thirty-two-characters"
+# A deliberately non-UTC site clock, so an implementation that passed the claim's
+# ISO-8601 "Z" string straight through cannot match. A fixed offset rather than a
+# named zone: the tenant's own America/Edmonton resolves differently across tzdata
+# versions for a date this far out, and this test is about the conversion
+# happening, not about which zone the site is configured for.
+SITE_TIMEZONE = timezone(timedelta(hours=-7), "MST")
+
+
+SITE_CLOCK_CONVERSIONS: list = []
+
+
+def convert_utc_to_system_timezone(value):
+    """Stand in for ``frappe.utils.convert_utc_to_system_timezone``.
+
+    Every call is recorded.  A value this command *stores* must never be routed
+    through the site clock -- naive Frappe Datetimes are UTC here -- so "was this
+    consulted at all?" is itself an assertion, not only the value it returned.
+    """
+
+    SITE_CLOCK_CONVERSIONS.append(value)
+    return value.replace(tzinfo=timezone.utc).astimezone(SITE_TIMEZONE)
+
+
+def doctype_schema(doctype: str) -> dict:
+    slug = doctype.lower().replace(" ", "_")
+    return json.loads((DOCTYPE_DIR / slug / f"{slug}.json").read_text())
+
+
+class FakeMeta:
+    """Just enough of ``frappe.get_meta`` to answer "what fieldtype is this?"."""
+
+    def __init__(self, doctype: str) -> None:
+        self.fields = [
+            types.SimpleNamespace(**field) for field in doctype_schema(doctype)["fields"]
+        ]
+
+    def get_field(self, fieldname: str):
+        return next(
+            (field for field in self.fields if field.fieldname == fieldname), None
+        )
+
+
+def doctype_defaults(doctype: str) -> dict:
+    """The new-document values a real Frappe site stamps for this DocType.
+
+    Read from the committed DocType JSON rather than restated here, so the
+    harness cannot drift from the schema it is meant to stand in for.  Frappe
+    fills a new document from two static sources: an explicit ``default``, and -
+    for ``Select`` - the first option when it is not blank.  ``Customer Quote``
+    exercises both (``currency`` -> ``CAD`` by default, ``payment_status`` ->
+    ``Not Due`` by either rule).
+    """
+
+    schema = doctype_schema(doctype)
+    defaults: dict = {"doctype": doctype}
+    for field in schema.get("fields", []):
+        value = field.get("default")
+        if not value and field.get("fieldtype") == "Select":
+            value = (field.get("options") or "").split("\n")[0].strip()
+        if value:
+            defaults[field["fieldname"]] = value
+    return defaults
 
 
 class FakeValidationError(Exception):
@@ -50,10 +122,11 @@ class FakeNonceCache:
 
 
 class FakeDocument(dict):
-    def __init__(self, values: dict, on_insert, on_save=None) -> None:
+    def __init__(self, values: dict, on_insert, on_save=None, on_validate=None) -> None:
         super().__init__(values)
         object.__setattr__(self, "_on_insert", on_insert)
         object.__setattr__(self, "_on_save", on_save)
+        object.__setattr__(self, "_on_validate", on_validate)
 
     def __getattr__(self, name: str):
         try:
@@ -68,12 +141,20 @@ class FakeDocument(dict):
             self[name] = value
 
     def insert(self) -> None:
+        # Frappe's ordering, which the projection has to survive: defaults are
+        # applied to still-unset fields (``_set_defaults`` -> ``update_if_missing``)
+        # and the row is autonamed, both *before* ``validate`` runs.
+        for field, value in doctype_defaults(self["doctype"]).items():
+            if self.get(field) is None:
+                self[field] = value
         identity = (
             self.get("customer_quote_id")
             or self.get("evidence_id")
             or self.get("reconciliation_id")
         )
         self["name"] = identity
+        if self._on_validate is not None:
+            self._on_validate(self)
         self._on_insert(self)
 
     def save(self) -> None:
@@ -258,9 +339,12 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
         )
         frappe_module.has_permission = lambda *args, **kwargs: permission
         frappe_module.utils = types.SimpleNamespace(
-            now_datetime=lambda: "2027-01-15 08:00:02"
+            now_datetime=lambda: "2027-01-15 08:00:02",
+            convert_utc_to_system_timezone=convert_utc_to_system_timezone,
         )
         frappe_module.whitelist = lambda: lambda function: function
+        frappe_module.new_doc = lambda doctype, as_dict=False: doctype_defaults(doctype)
+        frappe_module.get_meta = lambda doctype: FakeMeta(doctype)
 
         def throw(message: str, *, exc):
             raise exc(message)
@@ -386,7 +470,24 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
                 "supersedes": "QUOTE-001",
             },
         )
-        self.assertTrue(all(draft[field] is None for field in api.BLANK_QUOTE_FIELDS))
+        # Blank means "carries no commercial fact", not "literally empty": a real
+        # site stamps the DocType's own currency and payment status on insert.
+        defaults = doctype_defaults("Customer Quote")
+        self.assertEqual(
+            {
+                field: draft[field]
+                for field in api.BLANK_QUOTE_FIELDS
+                if draft[field] is not None
+            },
+            {"currency": "CAD", "payment_status": "Not Due"},
+        )
+        self.assertTrue(
+            all(
+                draft[field] is None or draft[field] == defaults.get(field)
+                for field in api.BLANK_QUOTE_FIELDS
+            )
+        )
+        self.assertEqual(api._commercial_violations(draft), ())
         self.assertEqual(len(issuance_calls), 1)
         self.assertNotEqual(
             claim["external_customer_identity_link_id"].removeprefix(
@@ -599,6 +700,322 @@ class FacetDesignProjectionApiTests(unittest.TestCase):
         with self.assertRaisesRegex(FakeValidationError, "projection trio is incomplete"):
             self.call(api, frappe_module, claim, nonce="t" * 32)
         self.assertFalse(first["idempotent_replay"])
+
+
+class RealTrustGuardProjectionTests(unittest.TestCase):
+    """Run the bounded command against the real issuance context and guard.
+
+    Every other test in this suite substitutes a no-op issuance context, so the
+    ordering between Frappe's insert-time defaults and the trust guard is never
+    observed - which is exactly why CI stayed green while step 4 was dead on
+    every real site.  ``Customer Quote`` defaults ``currency`` -> ``CAD`` and
+    ``payment_status`` -> ``Not Due`` inside ``insert()``, *before* ``validate``
+    runs, so a trusted tuple captured against the pre-insert document authorizes
+    a document that never reaches the guard and the guard refuses the very
+    bounded command it exists to admit (ELEC-86 §5, against real Frappe v15)::
+
+        PermissionError: Facet design projection service users may only mutate
+        records through the bounded projection command.
+        diffs: [('currency', '', 'CAD'), ('payment_status', '', 'Not Due')]
+
+    These cases run the real ``document_validation`` guards in the same order
+    the DocType controllers call them, against documents that default and
+    autoname on insert the way Frappe does.
+    """
+
+    def load_validation(self):
+        frappe_module = types.ModuleType("frappe")
+        frappe_module.ValidationError = FakeValidationError
+        frappe_module.PermissionError = FakePermissionError
+        frappe_module.session = types.SimpleNamespace(user=SERVICE_USER)
+        frappe_module.get_roles = lambda _user: [FACET_DESIGN_PROJECTION_SERVICE_ROLE]
+        frappe_module.throw = lambda message, *, exc: (_ for _ in ()).throw(exc(message))
+        spec = importlib.util.spec_from_file_location(
+            "ironwrap_document_validation_for_facet_projection", VALIDATION_PATH
+        )
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"frappe": frappe_module}):
+            spec.loader.exec_module(module)
+        return module
+
+    def load_api(self, validation_module, fixtures: dict):
+        db = FakeDb(fixtures)
+        cache = FakeNonceCache()
+        guarded: list[dict] = []
+
+        # The guards each DocType controller actually runs, in the same order.
+        validators = {
+            "Customer Quote": (
+                validation_module.validate_customer_quote_acceptance_mutation,
+            ),
+            "Evidence Item": (
+                validation_module.validate_facet_design_projection_evidence_mutation,
+                validation_module.validate_evidence_verification_mutation,
+            ),
+            "Integration Reconciliation": (
+                validation_module.validate_quickbooks_final_invoice_mutation,
+                validation_module.validate_facet_design_projection_reconciliation_mutation,
+            ),
+        }
+
+        def on_validate(document: FakeDocument) -> None:
+            guarded.append(dict(document))
+            for validator in validators[document["doctype"]]:
+                validator(document)
+
+        def on_write(document: FakeDocument) -> None:
+            if document["doctype"] == "Customer Quote":
+                fixtures["quotes"].append(dict(document))
+            elif document["doctype"] == "Evidence Item":
+                fixtures["evidence"].append(dict(document))
+            else:
+                fixtures["reconciliations"].append(dict(document))
+
+        frappe_module = types.ModuleType("frappe")
+        frappe_module.ValidationError = FakeValidationError
+        frappe_module.PermissionError = FakePermissionError
+        frappe_module.db = db
+        frappe_module.cache = lambda: cache
+        frappe_module.conf = {
+            "ironwrap_facet_design_projection_service_user": SERVICE_USER,
+            "ironwrap_facet_design_projection_hmac_key": HMAC_KEY,
+        }
+        frappe_module.session = types.SimpleNamespace(user=SERVICE_USER)
+        frappe_module.request = types.SimpleNamespace(method="POST", headers={})
+        frappe_module.get_roles = lambda _user: [FACET_DESIGN_PROJECTION_SERVICE_ROLE]
+        frappe_module.has_permission = lambda *args, **kwargs: True
+        frappe_module.utils = types.SimpleNamespace(
+            now_datetime=lambda: "2027-01-15 08:00:02",
+            convert_utc_to_system_timezone=convert_utc_to_system_timezone,
+        )
+        frappe_module.whitelist = lambda: lambda function: function
+        frappe_module.new_doc = lambda doctype, as_dict=False: doctype_defaults(doctype)
+        frappe_module.get_meta = lambda doctype: FakeMeta(doctype)
+        frappe_module.throw = lambda message, *, exc: (_ for _ in ()).throw(exc(message))
+
+        def get_doc(values, name=None):
+            if isinstance(values, dict) and name is None:
+                return FakeDocument(dict(values), on_write, None, on_validate)
+            stored = next(
+                quote for quote in fixtures["quotes"] if quote.get("name") == name
+            )
+
+            def on_save(document: FakeDocument) -> None:
+                on_validate(document)
+                stored.clear()
+                stored.update(dict(document))
+
+            return FakeDocument(dict(stored), on_write, on_save, None)
+
+        frappe_module.get_doc = get_doc
+        spec = importlib.util.spec_from_file_location(
+            "ironwrap_facet_design_projection_api_with_real_guard", API_PATH
+        )
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(
+            sys.modules,
+            {
+                "frappe": frappe_module,
+                "ironwrap_roofing.document_validation": validation_module,
+            },
+        ):
+            spec.loader.exec_module(module)
+        return module, frappe_module, guarded
+
+    def test_the_real_guard_admits_a_draft_that_defaults_on_insert(self) -> None:
+        validation_module = self.load_validation()
+        fixtures = FacetDesignProjectionApiTests.fixtures()
+        api, frappe_module, guarded = self.load_api(validation_module, fixtures)
+        claim = FacetDesignProjectionApiTests.claim()
+
+        result = FacetDesignProjectionApiTests().call(
+            api, frappe_module, claim, nonce="g" * 32
+        )
+
+        # The Draft actually landed - on main this raised PermissionError and
+        # nothing was written, which is what left the Worker readback empty.
+        self.assertFalse(result["idempotent_replay"])
+        self.assertEqual(len(fixtures["quotes"]), 2)
+        draft = fixtures["quotes"][1]
+        self.assertEqual(draft["status"], "Draft")
+        self.assertEqual(draft["name"], result["draft_customer_quote_id"])
+        # The guard saw the document *after* insert applied the DocType defaults,
+        # and the trusted tuple described that document.
+        quote_seen = next(
+            document for document in guarded if document["doctype"] == "Customer Quote"
+        )
+        self.assertEqual(quote_seen["currency"], "CAD")
+        self.assertEqual(quote_seen["payment_status"], "Not Due")
+        self.assertEqual(quote_seen["name"], result["draft_customer_quote_id"])
+        self.assertEqual(api._commercial_violations(draft), ())
+
+    def test_a_defaulted_draft_replays_instead_of_being_refused(self) -> None:
+        validation_module = self.load_validation()
+        fixtures = FacetDesignProjectionApiTests.fixtures()
+        api, frappe_module, _ = self.load_api(validation_module, fixtures)
+        claim = FacetDesignProjectionApiTests.claim()
+        caller = FacetDesignProjectionApiTests()
+
+        first = caller.call(api, frappe_module, claim, nonce="h" * 32)
+        replay = caller.call(api, frappe_module, claim, nonce="i" * 32)
+
+        # Re-delivery of the same event is idempotent, not a "Draft contains
+        # commercial data" refusal over the values insert() itself wrote.
+        self.assertFalse(first["idempotent_replay"])
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(
+            replay["draft_customer_quote_id"], first["draft_customer_quote_id"]
+        )
+        self.assertEqual(replay["draft_quote_version"], first["draft_quote_version"])
+        self.assertEqual(replay["evidence_id"], first["evidence_id"])
+        self.assertEqual(replay["reconciliation_id"], first["reconciliation_id"])
+        self.assertEqual(len(fixtures["quotes"]), 2)
+        self.assertEqual(len(fixtures["evidence"]), 1)
+        self.assertEqual(len(fixtures["reconciliations"]), 1)
+
+    def test_commercial_data_in_a_defaulted_draft_is_still_refused(self) -> None:
+        for field, value in (
+            ("quote_total", 1),
+            ("currency", "USD"),
+            ("payment_status", "Overdue"),
+            ("accepted_at", "2027-01-16 09:00:00"),
+        ):
+            with self.subTest(field=field):
+                validation_module = self.load_validation()
+                fixtures = FacetDesignProjectionApiTests.fixtures()
+                api, frappe_module, _ = self.load_api(validation_module, fixtures)
+                claim = FacetDesignProjectionApiTests.claim()
+                caller = FacetDesignProjectionApiTests()
+                caller.call(api, frappe_module, claim, nonce=f"j{field}".ljust(32, "0"))
+
+                # Tolerating the schema default must not tolerate a value that
+                # merely differs from it, nor any populated commercial field.
+                fixtures["quotes"][1][field] = value
+                with self.assertRaisesRegex(
+                    FakeValidationError, "Draft contains commercial data"
+                ) as raised:
+                    caller.call(
+                        api, frappe_module, claim, nonce=f"k{field}".ljust(32, "0")
+                    )
+                self.assertIn(field, str(raised.exception))
+
+    def test_the_guard_still_refuses_a_write_outside_the_bounded_command(self) -> None:
+        validation_module = self.load_validation()
+        fixtures = FacetDesignProjectionApiTests.fixtures()
+        _api, _frappe_module, _guarded = self.load_api(validation_module, fixtures)
+
+        # No issuance context is open: the service user has no standing authority
+        # to write a Customer Quote, defaults resolved or not.
+        with self.assertRaisesRegex(FakePermissionError, "bounded projection command"):
+            validation_module.validate_customer_quote_acceptance_mutation(
+                doctype_defaults("Customer Quote")
+            )
+
+    def test_a_numeric_column_reading_back_as_zero_is_still_blank(self) -> None:
+        validation_module = self.load_validation()
+        fixtures = FacetDesignProjectionApiTests.fixtures()
+        api, frappe_module, _ = self.load_api(validation_module, fixtures)
+        claim = FacetDesignProjectionApiTests.claim()
+        caller = FacetDesignProjectionApiTests()
+        first = caller.call(api, frappe_module, claim, nonce="n" * 32)
+
+        # Frappe stores Currency/Float/Int NOT NULL DEFAULT 0, so every money and
+        # count field this command wrote as NULL reads back as 0 on a real site.
+        # That is the column speaking, not an estimator pricing something.
+        zeroed = {
+            "subtotal": 0.0, "tax_amount": 0.0, "tax_rate": 0.0, "quote_total": 0.0,
+            "deposit_amount": 0.0, "amount_due": 0.0, "amount_paid": 0.0,
+            "balance_due": 0.0, "qb_terms_due_days": 0,
+        }
+        fixtures["quotes"][1].update(zeroed)
+        self.assertEqual(api._commercial_violations(fixtures["quotes"][1]), ())
+
+        replay = caller.call(api, frappe_module, claim, nonce="o" * 32)
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(
+            replay["draft_customer_quote_id"], first["draft_customer_quote_id"]
+        )
+        # A real amount in the same column is still commercial data.
+        fixtures["quotes"][1]["quote_total"] = 42_000
+        self.assertEqual(api._commercial_violations(fixtures["quotes"][1]), ("quote_total",))
+
+    def test_a_reconciliation_amount_stored_as_zero_replays(self) -> None:
+        validation_module = self.load_validation()
+        fixtures = FacetDesignProjectionApiTests.fixtures()
+        api, frappe_module, _ = self.load_api(validation_module, fixtures)
+        claim = FacetDesignProjectionApiTests.claim()
+        caller = FacetDesignProjectionApiTests()
+        first = caller.call(api, frappe_module, claim, nonce="q" * 32)
+
+        # Integration Reconciliation's Currency columns store 0 for the NULL the
+        # command wrote, so the replay comparison sees 0.0 where it expects None
+        # on every real re-delivery.
+        fixtures["reconciliations"][0].update({"source_amount": 0.0, "local_amount": 0.0})
+        replay = caller.call(api, frappe_module, claim, nonce="r" * 32)
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(replay["reconciliation_id"], first["reconciliation_id"])
+
+        # Only NULL may match a stored zero: a real amount is still drift.
+        fixtures["reconciliations"][0]["source_amount"] = 250
+        with self.assertRaisesRegex(FakeValidationError, "drifted: source_amount"):
+            caller.call(api, frappe_module, claim, nonce="s" * 32)
+
+    def test_claim_timestamps_are_written_as_naive_utc_datetimes(self) -> None:
+        validation_module = self.load_validation()
+        fixtures = FacetDesignProjectionApiTests.fixtures()
+        api, frappe_module, _ = self.load_api(validation_module, fixtures)
+        claim = FacetDesignProjectionApiTests.claim()
+        SITE_CLOCK_CONVERSIONS.clear()
+        FacetDesignProjectionApiTests().call(api, frappe_module, claim, nonce="p" * 32)
+
+        # The Worker stamps received_at with new Date().toISOString(); MariaDB
+        # rejects that shape outright, so the offset marker has to go - but the
+        # instant must not move with it. A naive Frappe Datetime is UTC in this
+        # app (quickbooks_final_invoice_api._timestamp_value states the policy;
+        # document_validation._server_approval_utc_timestamp writes to it), and
+        # this site clock is deliberately not UTC, so a system-timezone
+        # conversion would show up here as a seven-hour skew.
+        # The claim carries received_at = "2027-01-15T08:00:01.000Z".
+        self.assertEqual(fixtures["evidence"][0]["captured_at"], "2027-01-15 08:00:01")
+        self.assertEqual(
+            fixtures["reconciliations"][0]["detected_at"], "2027-01-15 08:00:01"
+        )
+        self.assertNotEqual(
+            fixtures["evidence"][0]["captured_at"], claim["received_at"]
+        )
+        self.assertNotIn("Z", fixtures["evidence"][0]["captured_at"])
+        # Same instant, no site clock involved on the way in.
+        self.assertEqual(SITE_CLOCK_CONVERSIONS, [])
+
+    def test_every_guarded_field_is_specified_by_the_projection_payload(self) -> None:
+        validation_module = self.load_validation()
+        fixtures = FacetDesignProjectionApiTests.fixtures()
+        api, _frappe_module, _ = self.load_api(validation_module, fixtures)
+        claim = FacetDesignProjectionApiTests.claim()
+        anchors = {
+            "job": fixtures["job"],
+            "source_quote": fixtures["quotes"][0],
+            "existing_draft": None,
+            "previous_draft": None,
+            "draft_version": 3,
+        }
+        draft, evidence, reconciliation = api._projection_documents(
+            claim, anchors, SERVICE_USER, "e", "r", "x", "d", "2027-01-15 08:00:02"
+        )
+
+        # The defaults fix only holds while the payload names every field the
+        # guard snapshots: a field the payload omits is a field insert() may
+        # default behind the trusted tuple's back.  This is the tripwire for that.
+        for payload, fields in (
+            (draft, validation_module.FACET_DESIGN_PROJECTION_QUOTE_FIELDS),
+            (evidence, validation_module.FACET_DESIGN_PROJECTION_EVIDENCE_FIELDS),
+            (
+                reconciliation,
+                validation_module.FACET_DESIGN_PROJECTION_RECONCILIATION_FIELDS,
+            ),
+        ):
+            with self.subTest(doctype=payload["doctype"]):
+                self.assertEqual(set(fields) - set(payload), set())
 
 
 if __name__ == "__main__":

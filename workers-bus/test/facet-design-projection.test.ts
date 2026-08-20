@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import { canonicalJson } from "../src/facet-design-v2-protocol.ts";
 import { reconcileFacetDesignFrappeProjections } from "../src/facet-design-projection.ts";
+import { schemaBlankRules } from "../../tools/validate-facet-blank-quote-contract.mjs";
 
 const HMAC_SECRET =
   "facet-projection-test-secret-longer-than-thirty-two-characters";
@@ -254,6 +255,45 @@ function count(db: SqliteD1, outcome: string): number {
   );
 }
 
+const CUSTOMER_QUOTE_DOCTYPE = JSON.parse(
+  readFileSync(
+    new URL(
+      "../../frappe-apps/ironwrap_roofing/ironwrap_roofing/ironwrap_roofing/doctype/customer_quote/customer_quote.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+) as { fields: Array<Record<string, string>> };
+
+/**
+ * What a real Frappe site hands back for the blank half of a projected Draft.
+ *
+ * Every readback fixture in this file used to return a literal `null` for all
+ * 33 fields, which is a shape no site produces: `insert()` stamps the DocType
+ * defaults and Currency/Float/Int columns are NOT NULL DEFAULT 0. That fixture
+ * is precisely why the readback conflict was invisible in CI and fatal on the
+ * real stack (ELEC-86 §5 / ELEC-91), so the shape is derived from the shipped
+ * DocType here rather than restated. `literalNull` keeps the old shape available
+ * for the cases that assert the readback accepts both.
+ */
+function blankQuoteReadback(literalNull: boolean): Record<string, unknown> {
+  const rules = schemaBlankRules(CUSTOMER_QUOTE_DOCTYPE, [...BLANK_QUOTE_FIELDS]) as Array<{
+    field: string;
+    schemaDefault: string | null;
+    numeric: boolean;
+  }>;
+  if (literalNull) {
+    return Object.fromEntries(rules.map((rule) => [rule.field, null]));
+  }
+  // What a real site returns: the DocType default where there is one, 0 for a
+  // numeric column, and *nothing at all* for a field that is genuinely NULL.
+  return Object.fromEntries(
+    rules
+      .map((rule) => [rule.field, rule.schemaDefault ?? (rule.numeric ? 0 : undefined)])
+      .filter(([, value]) => value !== undefined),
+  );
+}
+
 function installFrappeMock(
   input: {
     status?: number;
@@ -262,6 +302,8 @@ function installFrappeMock(
     missingEvidence?: boolean;
     mutatedReconciliationHash?: boolean;
     populatedDraft?: boolean;
+    literalNullDraft?: boolean;
+    driftedCurrency?: boolean;
     responseLostOnce?: boolean;
   } = {},
 ): {
@@ -384,15 +426,14 @@ function installFrappeMock(
       if (url.includes("Customer%20Quote")) {
         return Response.json({
           data: {
-            ...Object.fromEntries(
-              BLANK_QUOTE_FIELDS.map((field) => [field, null]),
-            ),
+            ...blankQuoteReadback(input.literalNullDraft === true),
             customer: "CUSTOMER-001",
             customer_quote_id: id,
             correction_reason: active
               ? `Facet customer decision ${claim.event_id} requires estimator rebuild from current evidence.`
               : `Facet customer decision ${claim.previous_event_id} requires estimator rebuild from current evidence.`,
-            quote_total: input.populatedDraft ? 1 : null,
+            ...(input.driftedCurrency ? { currency: "USD" } : {}),
+            ...(input.populatedDraft ? { quote_total: 1 } : {}),
             quote_version: active ? 3 : 2,
             roof_job: roofJob,
             status: active ? "Draft" : "Rejected",
@@ -723,6 +764,26 @@ test("v2 projection uses the shared effect ledger and replays from provider read
   }
 });
 
+test("a blank Draft reads back as blank whether Frappe omits the nulls or spells them out", async () => {
+  // Frappe's REST readback omits NULL fields; a fixture that returns them as
+  // explicit nulls is the shape that hid this. Both must settle the effect.
+  for (const literalNullDraft of [false, true]) {
+    const db = new SqliteD1();
+    seedDecision(db);
+    const mock = installFrappeMock({ responseLostOnce: true, literalNullDraft });
+    try {
+      await reconcileFacetDesignFrappeProjections(
+        env(db, true),
+        new Date("2027-01-15T08:01:00.000Z"),
+      );
+    } finally {
+      mock.restore();
+    }
+    assert.equal(count(db, "reconciled"), 1, `literalNullDraft=${literalNullDraft}`);
+    assert.equal(count(db, "uncertain"), 0, `literalNullDraft=${literalNullDraft}`);
+  }
+});
+
 test("response loss succeeds only after the exact Frappe projection trio reads back", async () => {
   const db = new SqliteD1();
   seedDecision(db);
@@ -763,6 +824,9 @@ for (const scenario of [
     option: { mutatedReconciliationHash: true },
   },
   { name: "a populated commercial draft", option: { populatedDraft: true } },
+  // Tolerating the DocType's own default must not tolerate a value that merely
+  // differs from it: "USD" in a CAD-defaulted column is somebody's edit.
+  { name: "a currency that is not the schema default", option: { driftedCurrency: true } },
 ] as const) {
   test(`response loss remains uncertain when readback has ${scenario.name}`, async () => {
     const db = new SqliteD1();

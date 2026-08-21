@@ -111,6 +111,19 @@ test.describe("Now work list acceptance", () => {
         body: JSON.stringify(nowResponse),
       }),
     );
+    await page.route("**/api/v1/operating-intake", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          version: 1,
+          operating_authority: "d1",
+          tenant_id: "ironwrap",
+          generated_at: "2026-08-21T16:00:00.000Z",
+          leads: [],
+        }),
+      }),
+    );
 
     await page.goto("/now");
 

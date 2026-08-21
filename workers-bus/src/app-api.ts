@@ -119,6 +119,7 @@ import {
   fleetAssetForFieldActor,
 } from "./app-read-models.ts";
 import { buildNowReadModel } from "./now-read-model.ts";
+import { buildOperatingIntakeReadModel } from "./operating-intake.ts";
 import { handleCustomerPortalLinks } from "./customer-portal.ts";
 import { handleServiceCaseRoute } from "./service-cases.ts";
 import {
@@ -384,6 +385,11 @@ export async function handleAuthenticatedRoute(
     if (!hasPermission(auth, "now:read"))
       return privateAppJson({ error: "office_role_required" }, 403);
     return privateAppJson(await buildNowReadModel(env, auth));
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/operating-intake") {
+    const model = await buildOperatingIntakeReadModel(env, auth);
+    if ("error" in model) return privateAppJson({ error: model.error }, 403);
+    return privateAppJson(model);
   }
   // The money desk owns `/api/v1/accounting` outright (IRO-52 slice S8). It is checked before the
   // QuickBooks connection routes below because those live under `/api/v1/quickbooks/` and the two

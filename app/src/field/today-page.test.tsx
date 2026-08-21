@@ -9,6 +9,8 @@ import type { AuthenticatedSession } from "../auth/session";
 import { useOutboxActionsNeedingAttention } from "../storage/use-outbox";
 import type { OutboxAction } from "../storage/outbox-types";
 import type { TodayResponse } from "./field-contracts";
+import { loadOperatingIntake } from "../operating-intake/operating-intake-api";
+import { operatingIntakePayload } from "../operating-intake/operating-intake-fixture";
 import { cacheToday, hasCachedJobPacket, loadToday, prefetchAssignedPackets } from "./field-cache";
 import { TodayPage } from "./today-page";
 
@@ -21,6 +23,10 @@ vi.mock("./field-cache", () => ({
 
 vi.mock("../storage/use-outbox", () => ({
   useOutboxActionsNeedingAttention: vi.fn(),
+}));
+
+vi.mock("../operating-intake/operating-intake-api", () => ({
+  loadOperatingIntake: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -156,6 +162,7 @@ describe("TodayPage", () => {
     vi.mocked(hasCachedJobPacket).mockResolvedValue(true);
     vi.mocked(prefetchAssignedPackets).mockResolvedValue({});
     vi.mocked(useOutboxActionsNeedingAttention).mockReturnValue([]);
+    vi.mocked(loadOperatingIntake).mockResolvedValue(operatingIntakePayload({ leads: [] }));
   });
 
   afterEach(() => {
@@ -269,6 +276,20 @@ describe("TodayPage", () => {
     expect(screen.getByText(/This is a saved copy for .*Jul 10, 2026/i)).toBeVisible();
     expect(screen.queryByText("Current assignment read")).not.toBeInTheDocument();
     expect(prefetchAssignedPackets).not.toHaveBeenCalled();
+  });
+
+  it("shows D1 website intake separately from assigned field jobs", async () => {
+    vi.mocked(loadOperatingIntake).mockResolvedValue(operatingIntakePayload());
+    renderToday();
+
+    expect(await screen.findByRole("heading", { name: "Website intake" })).toBeVisible();
+    expect(screen.getByText("Launch Proof")).toBeVisible();
+    expect(
+      screen.getByText(
+        "These are website leads stored on D1. They are not assigned field jobs, not published portal proposals, and not money intents.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Today's work" })).toBeVisible();
   });
 
   it("makes named preserved field work recoverable from the run sheet", async () => {

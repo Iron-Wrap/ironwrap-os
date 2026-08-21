@@ -5,11 +5,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
+import { loadOperatingIntake } from "../operating-intake/operating-intake-api";
+import { operatingIntakePayload } from "../operating-intake/operating-intake-fixture";
 import { loadNow } from "./now-api";
 import type { NowResponse } from "./now-contracts";
 import { NowPage } from "./now-page";
 
 vi.mock("./now-api", () => ({ loadNow: vi.fn() }));
+vi.mock("../operating-intake/operating-intake-api", () => ({
+  loadOperatingIntake: vi.fn(),
+}));
 vi.mock("../field/today-page", () => ({
   TodayPage: () => <h1>Field run sheet</h1>,
 }));
@@ -161,6 +166,7 @@ function renderNow(session: AuthenticatedSession = ownerSession) {
 describe("NowPage", () => {
   beforeEach(() => {
     vi.mocked(loadNow).mockResolvedValue(nowModel());
+    vi.mocked(loadOperatingIntake).mockResolvedValue(operatingIntakePayload({ leads: [] }));
   });
 
   it("renders the owner work list with one main action and clear list status", async () => {
@@ -272,6 +278,17 @@ describe("NowPage", () => {
     );
     expect(screen.queryByText(/@|street|customer/i)).toBeNull();
     expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
+  });
+
+  it("shows D1 website intake on the office work list without calling it a scheduled job", async () => {
+    vi.mocked(loadOperatingIntake).mockResolvedValue(operatingIntakePayload());
+    renderNow();
+
+    expect(await screen.findByRole("heading", { name: "Website intake" })).toBeVisible();
+    expect(screen.getByText("Launch Proof")).toBeVisible();
+    expect(screen.getByText("Intake")).toBeVisible();
+    expect(loadOperatingIntake).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("link", { name: /open job/i })).toBeNull();
   });
 
   it("delegates field users to the existing Today surface without loading the office read", async () => {

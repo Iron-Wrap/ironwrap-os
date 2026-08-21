@@ -137,6 +137,14 @@ const fixtureToday = {
   ],
 };
 
+const fixtureOperatingIntake = {
+  version: 1,
+  operating_authority: "d1",
+  tenant_id: "ironwrap",
+  generated_at: "2026-08-21T16:00:00.000Z",
+  leads: [],
+};
+
 const fixtureJob = {
   ...fixtureEnvelope,
   allowed_actions: ["field.checkin.create", "work_package.acknowledge", "work_package.stop_work"],
@@ -1747,6 +1755,9 @@ const requestListener = async (request, response) => {
   }
   if (requestUrl.pathname === "/api/v1/today") {
     return sendJson(response, method, 200, fixtureToday);
+  }
+  if (requestUrl.pathname === "/api/v1/operating-intake") {
+    return sendJson(response, method, 200, fixtureOperatingIntake);
   }
   if (requestUrl.pathname === "/api/v1/jobs/JOB-ACCEPTANCE") {
     return sendJson(response, method, 200, buildFixtureJobResponse());

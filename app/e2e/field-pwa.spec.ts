@@ -6,6 +6,19 @@ test.describe("Field Companion PWA acceptance", () => {
     page,
   }) => {
     await seedPairedFieldDevice(page);
+    await page.route("**/api/v1/operating-intake", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          version: 1,
+          operating_authority: "d1",
+          tenant_id: "ironwrap",
+          generated_at: "2026-08-21T16:00:00.000Z",
+          leads: [],
+        }),
+      }),
+    );
     const appRequests: string[] = [];
     page.on("request", (request) => {
       const url = new URL(request.url());

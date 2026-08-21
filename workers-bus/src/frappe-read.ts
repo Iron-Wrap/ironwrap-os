@@ -1022,6 +1022,7 @@ export const FIELD_WORK_PACKAGE_CURRENT_STATUSES = [
   "Released",
   "Acknowledged",
   "In Progress",
+  "Blocked",
 ] as const;
 
 const FIELD_WORK_PACKAGE_LIST_READ = {
@@ -1608,71 +1609,6 @@ export async function readFieldWorkPackageFrappeResource(
     name,
     contract.fields,
     contract.children,
-  );
-}
-
-/**
- * Fleet custody is read for exactly one reason: proving that the authenticated
- * field user holds or drives an asset before the capture rail writes any
- * evidence for it. It is not a general fleet read surface — no meter, no
- * registration, no maintenance, and no defect ever leaves this contract.
- */
-const FLEET_CUSTODY_READ = {
-  "Fleet Asset": [
-    "name",
-    "fleet_asset_id",
-    "status",
-    "custody_holder_type",
-    "custody_crew_profile",
-    "custody_user",
-    "modified",
-  ],
-  "Cargo Load": [
-    "name",
-    "fleet_asset",
-    "trailer_asset",
-    "driver_authority",
-    "driver_user",
-    "status",
-    "modified",
-  ],
-  "Driver Authority": ["name", "driver_user", "status", "modified"],
-} as const;
-
-const FLEET_CUSTODY_FILTER_FIELDS: Readonly<
-  Record<keyof typeof FLEET_CUSTODY_READ, ReadonlySet<string>>
-> = {
-  "Fleet Asset": new Set(["name", "fleet_asset_id"]),
-  "Cargo Load": new Set(["driver_user", "driver_authority", "status"]),
-  "Driver Authority": new Set(["driver_user"]),
-};
-
-export type FleetCustodyDocType = keyof typeof FLEET_CUSTODY_READ;
-export type FleetCustodyFrappeFilter = readonly [
-  doctype: FleetCustodyDocType,
-  field: string,
-  operator: string,
-  value: unknown,
-];
-
-/**
- * Deliberately narrow custody lookup for the fleet capture rail. Callers cannot
- * ask for another DocType, another field, or another filter through it.
- */
-export async function listFleetCustodyFrappeResource(
-  env: AppEnv,
-  doctype: FleetCustodyDocType,
-  filters: readonly FleetCustodyFrappeFilter[],
-  limit = 20,
-): Promise<FrappeRow[]> {
-  return await listFrappeResourcePageForContract(
-    env,
-    doctype,
-    filters,
-    limit,
-    0,
-    FLEET_CUSTODY_READ,
-    FLEET_CUSTODY_FILTER_FIELDS,
   );
 }
 

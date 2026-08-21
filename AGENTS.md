@@ -26,8 +26,8 @@ deployment, runtime verification, business acceptance, or production proof.
 |---|---|
 | `workers-bus/` | Cloudflare Worker integration bus and D1/R2 intake spine |
 | `app/` | React PWA for public estimate, field, portal, sales, production, and owner surfaces |
-| `frappe-apps/ironwrap_roofing/` | Proprietary Frappe operating records and server-side policy |
-| `mcp/` | Bounded agent tools for the bus, Frappe, and Newo |
+| `frappe-apps/ironwrap_roofing/` | Temporary Frappe compatibility projection during the D1 cutover; no new operating authority |
+| `mcp/` | Bounded agent tools for the bus, compatibility rails, and Newo |
 | `hermes/` | Agent roles, MCP configuration, and procedure packs |
 | `config/tenants/` | White-label tenant contracts; secrets by environment-variable name only |
 | `config/newo/` | Newo release contract, tools, evidence inventory, and versioned AKB |
@@ -38,8 +38,13 @@ deployment, runtime verification, business acceptance, or production proof.
 
 ## Target architecture
 
-- D1/R2 is the owned first-write intake and raw-evidence spine.
-- Frappe holds normalized operating records and policy-controlled workflow state.
+- D1 plus the Worker is the sole owned operating authority for normalized state, transitions,
+  policy enforcement, audit, and reconciliation; R2 retains raw immutable evidence.
+- Frappe is a temporary compatibility projection and administrative export surface. It may mirror
+  D1 state while consumers migrate, but it may not originate or authorize new operating truth.
+- Do not add a new Frappe DocType, direct Worker dependency, readiness dependency, or release
+  dependency. Retire existing dependencies workflow by workflow after reconciliation and rollback
+  proof.
 - Hermes coordinates role-scoped agents; it is not a database.
 - The PWA is the owned human work, customer, estimator, and supervisory surface.
 - QuickBooks remains posted accounting truth; the OS prepares, validates, submits, and reconciles

@@ -6,19 +6,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedSession } from "../auth/session";
 import { SessionProvider } from "../auth/session-context";
-import { ApiError } from "../lib/api";
-import { loadProductionRunway } from "./production-api";
-import type { ProductionRunwayResponse } from "./production-contracts";
 import {
-  newProductionScheduleApprovalPrepareKey,
-  prepareProductionScheduleApproval,
-} from "./production-schedule-approval-api";
+  loadProductionRunway,
+  newProductionScheduleKey,
+  scheduleProductionJob,
+} from "./production-api";
+import type { ProductionRunwayResponse } from "./production-contracts";
 import { ProductionScheduleApprovalPreparePage } from "./production-schedule-approval-page";
 
-const router = vi.hoisted(() => ({
-  params: { jobId: "JOB-A" } as { jobId?: string },
-  navigate: vi.fn(),
-}));
+const router = vi.hoisted(() => ({ params: { jobId: "JOB-A" } as { jobId?: string } }));
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({
@@ -36,12 +32,11 @@ vi.mock("@tanstack/react-router", () => ({
     </a>
   ),
   useParams: () => router.params,
-  useNavigate: () => router.navigate,
 }));
-vi.mock("./production-api", () => ({ loadProductionRunway: vi.fn() }));
-vi.mock("./production-schedule-approval-api", () => ({
-  newProductionScheduleApprovalPrepareKey: vi.fn(),
-  prepareProductionScheduleApproval: vi.fn(),
+vi.mock("./production-api", () => ({
+  loadProductionRunway: vi.fn(),
+  newProductionScheduleKey: vi.fn(),
+  scheduleProductionJob: vi.fn(),
 }));
 
 const ownerSession = {
@@ -63,7 +58,7 @@ const ownerSession = {
     currency: "CAD",
   },
   permissions: ["jobs:read:any"],
-  allowed_actions: ["job.read", "production.read", "production_schedule_approval.prepare"],
+  allowed_actions: ["job.read", "production.read", "operating_job_assignment.create"],
   csrf_token: "csrf",
   session_expires_at: "2026-07-17T13:00:00.000Z",
   source_updated_at: null,
@@ -80,16 +75,21 @@ function job(
     brand: "IronWrap Exteriors",
     service_type: "Roofing",
     status: "In Production",
+    version: 5,
     assignment: {
       id: "assignment:current",
       type: "Production",
       status: "Assigned",
+      assignment_version: 2,
+      roof_job_version: 5,
+      crew_id: "crew:metal-1",
+      crew_version: 7,
       scheduled_start: "2026-07-18T15:00:00.000Z",
       scheduled_end: null,
     },
     scheduling_preparation_allowed: true,
     lane: "scheduled",
-    next_action: "Review a bounded schedule request.",
+    next_action: "Review the current native schedule.",
     gate_coverage: "complete",
     gate_summary: { expected: 6, blocked: 0, ready: 6, waived: 0, done: 0 },
     scheduling_gates: [
@@ -112,7 +112,7 @@ function model(overrides: Partial<ProductionRunwayResponse> = {}): ProductionRun
     read_model_generated_at: "2026-07-17T12:00:01.000Z",
     stale_fields: [],
     permissions: ["jobs:read:any"],
-    allowed_actions: ["job.read", "production.read", "production_schedule_approval.prepare"],
+    allowed_actions: ["job.read", "production.read", "operating_job_assignment.create"],
     partial_sources: [],
     summary: {
       active_jobs: 1,
@@ -124,8 +124,8 @@ function model(overrides: Partial<ProductionRunwayResponse> = {}): ProductionRun
     },
     jobs: [job()],
     crews: [
-      { id: "crew:metal-1", name: "Metal crew one" },
-      { id: "crew:roof-2", name: "Roof crew two" },
+      { id: "crew:metal-1", name: "Metal crew one", version: 7 },
+      { id: "crew:roof-2", name: "Roof crew two", version: 4 },
     ],
     ...overrides,
   };
@@ -148,113 +148,67 @@ describe("ProductionScheduleApprovalPreparePage", () => {
     vi.clearAllMocks();
     router.params = { jobId: "JOB-A" };
     vi.mocked(loadProductionRunway).mockResolvedValue(model());
-    vi.mocked(newProductionScheduleApprovalPrepareKey).mockReturnValue(
-      "production-schedule-approval:prepare-ui-001",
-    );
+    vi.mocked(newProductionScheduleKey).mockReturnValue("operating-job-assignment:schedule-ui-001");
   });
 
-  it("stages only the bounded schedule request for owner approval", async () => {
+  it("records the exact native schedule with optimistic versions", async () => {
     const user = userEvent.setup();
-    vi.mocked(prepareProductionScheduleApproval).mockResolvedValue({
-      approval: { id: "production-schedule-approval:ui-001" },
-    } as never);
+    vi.mocked(scheduleProductionJob).mockResolvedValue({ assignment: {} } as never);
     renderPage();
 
-    await screen.findByRole("heading", { name: "Ask to set a start date" });
-    await user.selectOptions(screen.getByLabelText("Crew"), "crew:metal-1");
-    fireEvent.change(screen.getByLabelText("Start time"), {
+    await screen.findByRole("heading", { name: "Schedule production job" });
+    await user.selectOptions(screen.getByLabelText("Crew"), "crew:roof-2");
+    fireEvent.change(screen.getByLabelText("Scheduled start"), {
       target: { value: "2026-07-20T09:30" },
     });
-    fireEvent.change(screen.getByLabelText("End time (optional)"), {
+    fireEvent.change(screen.getByLabelText("Scheduled end (optional)"), {
       target: { value: "2026-07-20T16:30" },
     });
     await user.type(
-      await screen.findByLabelText("Why replace the saved start date?"),
+      await screen.findByLabelText("Correction reason"),
       "Weather moved the install window.",
     );
-    await user.click(screen.getByRole("button", { name: "Send for a check" }));
+    await user.click(screen.getByRole("button", { name: "Record schedule" }));
 
     await waitFor(() => {
-      expect(prepareProductionScheduleApproval).toHaveBeenCalledWith(
+      expect(scheduleProductionJob).toHaveBeenCalledWith(
         ownerSession,
         {
           roofJobId: "JOB-A",
-          crewProfileId: "crew:metal-1",
+          expectedRoofJobVersion: 5,
+          crewId: "crew:roof-2",
+          expectedCrewVersion: 4,
           scheduledStart: new Date("2026-07-20T09:30").toISOString(),
           scheduledEnd: new Date("2026-07-20T16:30").toISOString(),
           supersedesAssignmentId: "assignment:current",
           correctionReason: "Weather moved the install window.",
         },
-        "production-schedule-approval:prepare-ui-001",
+        "operating-job-assignment:schedule-ui-001",
       );
     });
-    expect(router.navigate).toHaveBeenCalledWith({
-      to: "/production/schedule-approvals/$approvalId",
-      params: { approvalId: "production-schedule-approval:ui-001" },
-    });
+    expect(screen.getByRole("status")).toHaveTextContent(/schedule recorded/i);
     expect(document.body.textContent).not.toMatch(
-      /dry_run_receipt|approval_receipt|write_args_json|tool_name|site_id|append-only|production runway/i,
+      /dry_run_receipt|approval_receipt|write_args_json|tool_name|site_id/i,
     );
   });
 
-  it("keeps job and crew record IDs out of the first reading path", async () => {
-    const user = userEvent.setup();
-    renderPage();
-
-    await screen.findByRole("heading", { name: "Ask to set a start date" });
-    expect(screen.getByText("JOB-A")).not.toBeVisible();
-    expect(screen.getByText("assignment:current")).not.toBeVisible();
-    await user.click(screen.getByText("System details"));
-    expect(screen.getByText("JOB-A")).toBeVisible();
-    expect(screen.getByText("assignment:current")).toBeVisible();
-  });
-
-  it("explains a save conflict without blaming the operator or showing codes", async () => {
-    const user = userEvent.setup();
-    vi.mocked(prepareProductionScheduleApproval).mockRejectedValue(
-      new ApiError({
-        status: 409,
-        code: "idempotency_conflict",
-        message: "idempotency_conflict",
-      }),
-    );
-    renderPage();
-
-    await screen.findByRole("heading", { name: "Ask to set a start date" });
-    await user.selectOptions(screen.getByLabelText("Crew"), "crew:metal-1");
-    fireEvent.change(screen.getByLabelText("Start time"), {
-      target: { value: "2026-07-20T09:30" },
-    });
-    await user.type(
-      await screen.findByLabelText("Why replace the saved start date?"),
-      "Weather moved the install window.",
-    );
-    await user.click(screen.getByRole("button", { name: "Send for a check" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      /already sent with different details/i,
-    );
-    expect(screen.getByText("The start date was not sent")).toBeVisible();
-    expect(screen.queryByText("idempotency_conflict")).not.toBeInTheDocument();
-  });
-
-  it("fails closed when the current production read omits the prepare action", async () => {
+  it("fails closed when the current production read omits the native action", async () => {
     vi.mocked(loadProductionRunway).mockResolvedValue(
       model({ allowed_actions: ["job.read", "production.read"] }),
     );
     renderPage();
 
-    await screen.findByRole("heading", { name: "This job is not ready for a start date" });
-    expect(screen.queryByRole("button", { name: "Send for a check" })).not.toBeInTheDocument();
-    expect(prepareProductionScheduleApproval).not.toHaveBeenCalled();
+    await screen.findByRole("heading", { name: "Scheduling is not available" });
+    expect(screen.queryByRole("button", { name: "Record schedule" })).not.toBeInTheDocument();
+    expect(scheduleProductionJob).not.toHaveBeenCalled();
   });
 
   it("fails closed when no bounded active crew list is available", async () => {
     vi.mocked(loadProductionRunway).mockResolvedValue(model({ crews: [] }));
     renderPage();
 
-    await screen.findByRole("heading", { name: "No crew is ready" });
+    await screen.findByRole("heading", { name: "No active crew profile is available" });
     expect(screen.queryByLabelText("Crew")).not.toBeInTheDocument();
-    expect(prepareProductionScheduleApproval).not.toHaveBeenCalled();
+    expect(scheduleProductionJob).not.toHaveBeenCalled();
   });
 });

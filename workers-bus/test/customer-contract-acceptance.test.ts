@@ -1,112 +1,170 @@
 import assert from "node:assert/strict";
-import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { test } from "node:test";
 
 import worker from "../src/index.ts";
 import { randomToken, sha256Hex } from "../src/app-auth.ts";
+import {
+  admitCommercialPermit,
+  commercialEffectAuthority,
+  type CommercialAction,
+  type CommercialPermitRecord,
+} from "../src/commercial-authority.ts";
+import {
+  buildCommercialPublicationCommand,
+  prepareCommercialProposal,
+  prepareCommercialQuote,
+  recordCommercialProposalPublication,
+  recordCommercialProposalRevision,
+  recordCommercialQuoteRevision,
+  type RecordCommercialProposalInput,
+  type RecordCommercialPublicationInput,
+  type RecordCommercialQuoteInput,
+} from "../src/commercial-store.ts";
+import { runExternalEffect } from "../src/effect-runtime.ts";
 import type { AppEnv } from "../src/app-types.ts";
 
-const NOW = "2026-07-31T10:00:00.000Z";
+const TENANT = "ironwrap";
 const PUBLIC_ORIGIN = "https://app.example.com";
-const HMAC_SECRET = "customer-acceptance-test-hmac-secret-longer-than-thirty-two-characters";
+const OWNER_ID = "appu_owner_0001";
+const ENVELOPE_ID = "ow_acceptance_0001";
+const LEAD_ID = "lead:acceptance:0001";
+const CUSTOMER_ID = "customer:acceptance:0001";
+const JOB_ID = "job:acceptance:0001";
 const CUSTOMER_EMAIL = "Ada.Customer@Example.com";
-const EMAIL_HASH = createHash("sha256").update(CUSTOMER_EMAIL.trim().toLowerCase()).digest("hex");
-const TERMS = { clauses: [{ id: "scope-a", text: "Install approved roofing." }], version: "v1" };
-const TERMS_JSON = '{"clauses":[{"id":"scope-a","text":"Install approved roofing."}],"version":"v1"}';
+const EMAIL_HASH = createHash("sha256")
+  .update(CUSTOMER_EMAIL.toLowerCase())
+  .digest("hex");
+const TERMS = {
+  deposit_percent: 25,
+  payment_schedule: ["deposit", "completion"],
+  payment_terms_days: 30,
+  warranty_years: 10,
+};
+const TERMS_JSON = JSON.stringify(TERMS);
 const TERMS_HASH = createHash("sha256").update(TERMS_JSON).digest("hex");
+const EVIDENCE = [
+  { ref: "r2://commercial/evidence/acceptance.json", sha256: "a".repeat(64) },
+] as const;
+
+interface NativeChain {
+  quoteId: string;
+  quoteRevisionId: string;
+  proposalPackId: string;
+  proposalRevisionId: string;
+  publicationVersion: number;
+}
 
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
+  throwNextBatchAfterCommit = false;
 
   constructor() {
     this.raw.exec("PRAGMA foreign_keys = ON");
-    for (const migration of [
-      "0011_app_bff_auth.sql",
-      "0018_customer_portal_links.sql",
-      "0029_customer_contract_acceptance.sql",
-      "0042_external_effect_runtime.sql",
-    ]) {
-      this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
+    const directory = new URL("../migrations/", import.meta.url);
+    for (const file of readdirSync(directory)
+      .filter((name) => name.endsWith(".sql"))
+      .sort()) {
+      this.raw.exec(readFileSync(new URL(file, directory), "utf8"));
     }
-    this.raw.prepare(
-      `INSERT INTO app_users
-       (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
-        active, created_by, created_at, updated_at)
-       VALUES ('appu_owner_0001', 'ironwrap', 'owner@example.com', 'Owner', 'owner',
-               'owner@example.com', 1, 'seed', ?, ?)`,
-    ).run(NOW, NOW);
+    seedOperatingCore(this.raw);
   }
 
   prepare(sql: string) {
-    return { bind: (...args: unknown[]) => new SqliteStatement(this.raw, sql, args) };
+    return new SqliteStatement(this.raw, this.raw.prepare(sql));
   }
 
   async batch(statements: SqliteStatement[]): Promise<unknown[]> {
     this.raw.exec("BEGIN IMMEDIATE");
     try {
-      // Return the same D1Result shape as run(): batch callers read meta.changes.
-      const result = statements.map((statement) => {
-        const raw = statement.execute();
-        return { success: true as const, meta: { changes: Number(raw.changes ?? 0) } };
-      });
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
       this.raw.exec("COMMIT");
-      return result;
+      if (this.throwNextBatchAfterCommit) {
+        this.throwNextBatchAfterCommit = false;
+        throw new Error("simulated_lost_d1_response");
+      }
+      return results;
     } catch (error) {
-      this.raw.exec("ROLLBACK");
+      if (this.raw.isTransaction) this.raw.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  close(): void {
+    this.raw.close();
   }
 }
 
 class SqliteStatement {
-  private readonly raw: DatabaseSync;
-  private readonly sql: string;
+  private readonly database: DatabaseSync;
+  private readonly statement: StatementSync;
   private readonly args: unknown[];
 
   constructor(
-    raw: DatabaseSync,
-    sql: string,
-    args: unknown[],
+    database: DatabaseSync,
+    statement: StatementSync,
+    args: unknown[] = [],
   ) {
-    this.raw = raw;
-    this.sql = sql;
+    this.database = database;
+    this.statement = statement;
     this.args = args;
   }
 
+  bind(...args: unknown[]) {
+    return new SqliteStatement(this.database, this.statement, args);
+  }
+
   async first<T>(): Promise<T | null> {
-    return (this.raw.prepare(this.sql).get(...this.args) ?? null) as T | null;
+    return (this.statement.get(...this.args) ?? null) as T | null;
   }
 
   async all<T>(): Promise<{ results: T[] }> {
-    return { results: this.raw.prepare(this.sql).all(...this.args) as T[] };
+    return { results: this.statement.all(...this.args) as T[] };
   }
 
   async run(): Promise<{ success: true; meta: { changes: number } }> {
-    const result = this.execute();
-    return { success: true, meta: { changes: Number(result.changes ?? 0) } };
-  }
-
-  execute() {
-    return this.raw.prepare(this.sql).run(...this.args);
+    const before = totalChanges(this.database);
+    this.statement.run(...this.args);
+    return {
+      success: true,
+      meta: { changes: totalChanges(this.database) - before },
+    };
   }
 }
 
 class MemoryR2 {
-  readonly objects = new Map<string, { body: string; object: Record<string, unknown> }>();
+  readonly objects = new Map<
+    string,
+    { body: string; object: Record<string, unknown> }
+  >();
 
   async head(key: string) {
     return this.objects.get(key)?.object ?? null;
   }
 
-  async put(key: string, value: string, options: { sha256?: string; customMetadata?: Record<string, string>; onlyIf?: unknown }) {
+  async put(
+    key: string,
+    value: string,
+    options: {
+      sha256?: string;
+      customMetadata?: Record<string, string>;
+      onlyIf?: unknown;
+    },
+  ) {
     const prior = this.objects.get(key);
     if (prior && options.onlyIf) return null;
     const checksum = fromHex(options.sha256 ?? "");
     const object = {
       size: new TextEncoder().encode(value).byteLength,
-      checksums: { sha256: checksum.buffer.slice(checksum.byteOffset, checksum.byteOffset + checksum.byteLength) },
+      checksums: {
+        sha256: checksum.buffer.slice(
+          checksum.byteOffset,
+          checksum.byteOffset + checksum.byteLength,
+        ),
+      },
       customMetadata: options.customMetadata,
     };
     this.objects.set(key, { body: value, object });
@@ -114,29 +172,37 @@ class MemoryR2 {
   }
 }
 
-type CommitMode = "accepted" | "rejected" | "uncertain";
 type GmailReadbackDrift = "recipient" | "subject" | "body";
 
-function setup(
-  mode: CommitMode = "accepted",
-  gmailReadbackDrift?: GmailReadbackDrift,
+async function setup(
+  options: {
+    contracts?: 0 | 1 | 2;
+    gmailReadbackDrift?: GmailReadbackDrift;
+  } = {},
 ) {
   const db = new SqliteD1();
   const raw = new MemoryR2();
   const sentEmails: string[] = [];
-  const prepareClaims: Array<Record<string, unknown>> = [];
-  const commitClaims: Array<Record<string, unknown>> = [];
-  let activeMode = mode;
-  let activeEmailHash = EMAIL_HASH;
+  const fetchUrls: string[] = [];
   const originalFetch = globalThis.fetch;
   const env = testEnv(db, raw);
 
   globalThis.fetch = async (input, init) => {
-    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+    fetchUrls.push(url.href);
     if (url.href === "https://oauth2.googleapis.com/token") {
       return Response.json({ access_token: "gmail-test-token" });
     }
-    if (url.href === "https://gmail.googleapis.com/gmail/v1/users/me/messages/send") {
+    if (
+      url.href ===
+      "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+    ) {
       const payload = JSON.parse(String(init?.body)) as { raw: string };
       sentEmails.push(Buffer.from(payload.raw, "base64url").toString("utf8"));
       return Response.json({ id: `gmail-${sentEmails.length}` });
@@ -146,67 +212,47 @@ function setup(
         url.pathname.split("/").at(-1) ?? "",
       );
       const index = Number(messageId.replace(/^gmail-/, "")) - 1;
-      let raw = sentEmails[index];
-      assert.equal(typeof raw, "string");
-      if (gmailReadbackDrift === "recipient")
-        raw = raw.replace(`To: ${CUSTOMER_EMAIL}`, "To: other@example.invalid");
-      if (gmailReadbackDrift === "subject")
-        raw = raw.replace(/^Subject: .*$/m, "Subject: changed");
-      if (gmailReadbackDrift === "body") raw += "changed";
+      let rawMessage = sentEmails[index];
+      assert.equal(typeof rawMessage, "string");
+      if (options.gmailReadbackDrift === "recipient") {
+        rawMessage = rawMessage!.replace(
+          `To: ${CUSTOMER_EMAIL}`,
+          "To: other@example.invalid",
+        );
+      }
+      if (options.gmailReadbackDrift === "subject") {
+        rawMessage = rawMessage!.replace(/^Subject: .*$/m, "Subject: changed");
+      }
+      if (options.gmailReadbackDrift === "body") rawMessage += "changed";
       return Response.json({
         id: messageId,
-        raw: Buffer.from(raw).toString("base64url"),
+        raw: Buffer.from(rawMessage!).toString("base64url"),
       });
     }
-    if (url.pathname.startsWith("/api/resource/Contract%20Acceptance/")) {
-      if (activeMode === "uncertain") return new Response("not found", { status: 404 });
-      const acceptanceId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
-      return Response.json({ data: { name: acceptanceId, acceptance_id: acceptanceId } });
-    }
-    if (url.pathname.includes("customer_contract_acceptance_api.")) {
-      const body = JSON.parse(String(init?.body)) as { customer_claim_json?: unknown };
-      assert.equal(typeof body.customer_claim_json, "string");
-      assertFrappeSignature(url.pathname, body.customer_claim_json, init?.headers);
-      const claim = JSON.parse(body.customer_claim_json) as Record<string, unknown>;
-      if (url.pathname.endsWith("prepare_customer_portal_contract_acceptance")) {
-        prepareClaims.push(claim);
-        return Response.json({
-          message: {
-            email: CUSTOMER_EMAIL,
-            email_hash: activeEmailHash,
-            display_name: "Ada Customer",
-            roof_job_id: "JOB-A",
-            customer_id: "CUSTOMER-A",
-            quote_id: "QUOTE-A",
-            quote_version: 2,
-            proposal_pack_id: "PACK-A",
-            terms: TERMS,
-            terms_hash: TERMS_HASH,
-          },
-        });
-      }
-      commitClaims.push(claim);
-      if (activeMode === "rejected") return new Response("denied", { status: 409 });
-      if (activeMode === "uncertain") return new Response("outage", { status: 503 });
-      return Response.json({ message: { acceptance_id: claim.acceptance_id } });
-    }
-    throw new Error(`unexpected fetch ${url.href}`);
+    throw new Error(`unexpected non-Gmail fetch ${url.href}`);
   };
 
+  const contracts = options.contracts ?? 1;
+  const chain = contracts > 0 ? await seedNativeContract(env, "primary") : null;
+  if (contracts === 2) await seedNativeContract(env, "alternate");
   return {
     db,
     raw,
     env,
+    chain,
     sentEmails,
-    prepareClaims,
-    commitClaims,
-    setMode(next: CommitMode) { activeMode = next; },
-    setEmailHash(next: string) { activeEmailHash = next; },
-    restore() { globalThis.fetch = originalFetch; },
+    fetchUrls,
+    restore() {
+      globalThis.fetch = originalFetch;
+      db.close();
+    },
   };
 }
 
-function testEnv(db: SqliteD1, raw: MemoryR2): AppEnv {
+function testEnv(
+  db: SqliteD1,
+  raw: MemoryR2,
+): AppEnv & { COMMERCIAL_AUTHORITY_POLICY_JSON: string } {
   const { privateKey } = generateKeyPairSync("rsa", {
     modulusLength: 2048,
     privateKeyEncoding: { format: "pem", type: "pkcs8" },
@@ -214,15 +260,11 @@ function testEnv(db: SqliteD1, raw: MemoryR2): AppEnv {
   });
   return {
     DB: db as never,
-    EFFECT_RUNTIME_ENABLED: "true",
     RAW: raw as never,
-    APP_BFF_ENABLED: "true",
+    EFFECT_RUNTIME_ENABLED: "true",
     APP_CUSTOMER_PORTAL_ENABLED: "true",
     APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED: "true",
-    APP_CUSTOMER_ACCEPTANCE_HMAC_KEY: HMAC_SECRET,
-    APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY: "customer-acceptance-key",
-    APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET: "customer-acceptance-secret",
-    APP_TENANT_ID: "ironwrap",
+    APP_TENANT_ID: TENANT,
     APP_TENANT_NAME: "IronWrap OS",
     APP_TENANT_BRAND: "IronWrap",
     APP_LOCALE: "en-CA",
@@ -230,248 +272,678 @@ function testEnv(db: SqliteD1, raw: MemoryR2): AppEnv {
     APP_CURRENCY: "CAD",
     APP_PUBLIC_ORIGIN: PUBLIC_ORIGIN,
     APP_ALLOWED_ORIGINS: PUBLIC_ORIGIN,
-    APP_AUTH_PEPPER: "customer-contract-acceptance-test-pepper-longer-than-thirty-two-characters",
-    GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({ client_email: "service@example.com", private_key: privateKey }),
+    APP_AUTH_PEPPER:
+      "customer-contract-acceptance-test-pepper-longer-than-thirty-two-characters",
+    GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({
+      client_email: "service@example.com",
+      private_key: privateKey,
+    }),
     FROM_EMAIL: "contracts@example.com",
-    ERPNEXT_BASE_URL: "https://frappe.example.com",
-    ERPNEXT_API_KEY: "frappe-key",
-    ERPNEXT_API_SECRET: "frappe-secret",
-  } as AppEnv;
+    COMMERCIAL_AUTHORITY_POLICY_JSON: JSON.stringify({
+      schema_version: "ironwrap.commercial-authority-policy.v1",
+      policy_id: "customer-acceptance-native-test",
+      policy_version: "v1",
+      tenant_id: TENANT,
+      status: "active",
+      valid_from: "2020-01-01T00:00:00.000Z",
+      valid_until: "2099-01-01T00:00:00.000Z",
+      max_fact_age_seconds: 3_600,
+      max_permit_lifetime_seconds: 900,
+      allowed_actions: [
+        "quote.revision.record",
+        "proposal.revision.record",
+        "proposal.publish",
+        "proposal.withdraw",
+      ],
+      allowed_actor_types: ["agent"],
+      max_quote_total_cents: 1_000_000,
+    }),
+  } as AppEnv & { COMMERCIAL_AUTHORITY_POLICY_JSON: string };
+}
+
+async function seedNativeContract(
+  env: AppEnv & { COMMERCIAL_AUTHORITY_POLICY_JSON: string },
+  suffix: string,
+): Promise<NativeChain> {
+  const base = new Date(Date.now() - 60_000);
+  const quoteId = `customer-quote:acceptance:${suffix}`;
+  const quoteRevisionId = `quote-revision:acceptance:${suffix}:1`;
+  const proposalPackId = `proposal-pack:acceptance:${suffix}`;
+  const proposalRevisionId = `proposal-revision:acceptance:${suffix}:1`;
+  const quote: RecordCommercialQuoteInput = {
+    tenantId: TENANT,
+    quoteRevisionId,
+    customerQuoteId: quoteId,
+    revisionNumber: 1,
+    roofJobId: JOB_ID,
+    customerId: CUSTOMER_ID,
+    status: "approved",
+    currency: "CAD",
+    validUntil: "2099-12-31",
+    terms: TERMS,
+    evidence: EVIDENCE,
+    lines: [
+      {
+        lineId: "scope:roof",
+        sequence: 1,
+        kind: "labour",
+        description: "Install approved roofing scope",
+        quantityMicros: 1_000_000,
+        uom: "job",
+        unitPriceCents: 100_000,
+        taxCode: "GST",
+        taxCents: 5_000,
+      },
+    ],
+    authority: { kind: "policy_permit", permitId: "pending" },
+    idempotencyKey: `acceptance:quote:${suffix}`,
+  };
+  const preparedQuote = await prepareCommercialQuote(quote);
+  const quotePermit = await admitFor(
+    env,
+    "quote.revision.record",
+    { type: "customer_quote", id: quoteId, version: 1 },
+    preparedQuote.command,
+    `permit:acceptance:quote:${suffix}`,
+    base,
+    preparedQuote.totalCents,
+  );
+  quote.authority = { kind: "policy_permit", permitId: quotePermit.permit_id };
+  await recordCommercialQuoteRevision(
+    env,
+    quote,
+    new Date(base.getTime() + 1_000),
+  );
+
+  const proposal: RecordCommercialProposalInput = {
+    tenantId: TENANT,
+    proposalRevisionId,
+    proposalPackId,
+    revisionNumber: 1,
+    quoteRevisionId,
+    roofJobId: JOB_ID,
+    customerId: CUSTOMER_ID,
+    title: "Complete roof replacement proposal",
+    summary: "Approved scope, price, schedule assumptions, and warranty.",
+    terms: TERMS,
+    contentRef: `r2://commercial/proposals/${suffix}.pdf`,
+    contentHash: "b".repeat(64),
+    evidence: EVIDENCE,
+    authority: { kind: "policy_permit", permitId: "pending" },
+    idempotencyKey: `acceptance:proposal:${suffix}`,
+  };
+  const preparedProposal = await prepareCommercialProposal(proposal);
+  const proposalPermit = await admitFor(
+    env,
+    "proposal.revision.record",
+    { type: "proposal", id: proposalPackId, version: 1 },
+    preparedProposal.command,
+    `permit:acceptance:proposal:${suffix}`,
+    new Date(base.getTime() + 2_000),
+  );
+  proposal.authority = {
+    kind: "policy_permit",
+    permitId: proposalPermit.permit_id,
+  };
+  await recordCommercialProposalRevision(
+    env,
+    proposal,
+    new Date(base.getTime() + 3_000),
+  );
+
+  const chain = {
+    quoteId,
+    quoteRevisionId,
+    proposalPackId,
+    proposalRevisionId,
+    publicationVersion: 1,
+  };
+  await recordPublicationTransition(
+    env,
+    chain,
+    "published",
+    new Date(base.getTime() + 4_000),
+  );
+  return chain;
+}
+
+async function recordPublicationTransition(
+  env: AppEnv & { COMMERCIAL_AUTHORITY_POLICY_JSON: string },
+  chain: NativeChain,
+  state: "published" | "withdrawn",
+  now: Date,
+): Promise<void> {
+  const publicationVersion =
+    chain.publicationVersion + (state === "published" ? 0 : 1);
+  const action =
+    state === "published" ? "proposal.publish" : "proposal.withdraw";
+  const input: RecordCommercialPublicationInput = {
+    tenantId: TENANT,
+    proposalRevisionId: chain.proposalRevisionId,
+    proposalPackId: chain.proposalPackId,
+    publicationVersion,
+    previousState: state === "published" ? "draft" : "published",
+    state,
+    authority: { kind: "policy_permit", permitId: "pending" },
+    idempotencyKey: `acceptance:publication:${chain.proposalPackId}:${publicationVersion}`,
+  };
+  const permit = await admitFor(
+    env,
+    action,
+    {
+      type: "proposal_publication",
+      id: chain.proposalPackId,
+      version: publicationVersion,
+    },
+    buildCommercialPublicationCommand(input),
+    `permit:acceptance:publication:${chain.proposalPackId}:${publicationVersion}`,
+    now,
+  );
+  input.authority = { kind: "policy_permit", permitId: permit.permit_id };
+  input.externalEffectId = `effect:acceptance:${chain.proposalPackId}:${publicationVersion}`;
+  await executePublicationEffect(env, permit, input, action, now);
+  await recordCommercialProposalPublication(
+    env,
+    input,
+    new Date(now.getTime() + 1),
+  );
+  chain.publicationVersion = publicationVersion;
+}
+
+async function admitFor(
+  env: AppEnv & { COMMERCIAL_AUTHORITY_POLICY_JSON: string },
+  action: CommercialAction,
+  aggregate: {
+    type: "customer_quote" | "proposal" | "proposal_publication";
+    id: string;
+    version: number;
+  },
+  command: unknown,
+  idempotencyKey: string,
+  now: Date,
+  amountCents: number | null = null,
+): Promise<CommercialPermitRecord> {
+  const result = await admitCommercialPermit(
+    env,
+    {
+      tenantId: TENANT,
+      actor: { type: "agent", id: "sales-orchestrator" },
+      action,
+      aggregate,
+      amountCents,
+      command,
+      facts: {
+        source: "native-operating-core",
+        observed_version: aggregate.version,
+      },
+      factsObservedAt: now.toISOString(),
+      evidence: EVIDENCE,
+      idempotencyKey,
+      expiresAt: new Date(now.getTime() + 10 * 60_000).toISOString(),
+    },
+    now,
+  );
+  return result.permit;
+}
+
+async function executePublicationEffect(
+  env: AppEnv,
+  permit: CommercialPermitRecord,
+  input: RecordCommercialPublicationInput & { externalEffectId?: string },
+  action: "proposal.publish" | "proposal.withdraw",
+  now: Date,
+): Promise<void> {
+  await runExternalEffect(
+    env,
+    {
+      effectId: input.externalEffectId,
+      tenantId: TENANT,
+      actor: { type: "agent", id: "sales-orchestrator" },
+      taskId: `commercial:${input.externalEffectId}`,
+      authority: commercialEffectAuthority(permit),
+      aggregate: {
+        type: "proposal_publication",
+        id: input.proposalPackId,
+        version: input.publicationVersion,
+      },
+      intentId: input.proposalRevisionId,
+      action,
+      request: {
+        proposal_revision_id: input.proposalRevisionId,
+        state: input.state,
+      },
+      provider: "customer-portal",
+      providerAccountRef: TENANT,
+      idempotencyKey: `effect:${input.idempotencyKey}`,
+      deadlineAt: new Date(now.getTime() + 5 * 60_000).toISOString(),
+      preconditions: { quote_status: "approved" },
+      evidenceRefs: EVIDENCE.map(({ ref }) => ref),
+      expectedReadback: { state: input.state },
+      retryLimit: 1,
+      compensationPlan: {},
+      correlationId: input.externalEffectId,
+    },
+    {
+      async dispatch() {
+        return {
+          outcome: "accepted" as const,
+          value: { state: input.state },
+          providerExternalId: input.externalEffectId,
+          providerResponse: { state: input.state },
+          readback: {
+            status: "match" as const,
+            observed: { state: input.state },
+          },
+        };
+      },
+      async replay() {
+        return { state: input.state };
+      },
+    },
+    now,
+  );
+}
+
+function seedOperatingCore(db: DatabaseSync): void {
+  const now = new Date(Date.now() - 120_000).toISOString();
+  db.prepare(
+    `INSERT INTO app_users
+     (user_id, tenant_id, email_normalized, display_name, role, frappe_user_id,
+      active, created_by, created_at, updated_at)
+     VALUES (?, ?, 'owner@example.invalid', 'Owner', 'owner', NULL, 1, 'test-seed', ?, ?)`,
+  ).run(OWNER_ID, TENANT, now, now);
+  db.prepare(
+    `INSERT INTO envelopes
+     (envelope_id, source, contact_name, contact_email, payload_json, raw_key, ts,
+      status, created_at, updated_at)
+     VALUES (?, 'website', 'Ada Customer', ?, '{}', ?, ?, 'reconciled', ?, ?)`,
+  ).run(ENVELOPE_ID, CUSTOMER_EMAIL, "raw/acceptance/0001.json", now, now, now);
+  db.prepare(
+    `INSERT INTO operating_leads
+     (lead_id, tenant_id, source_envelope_id, source_raw_key, source, contact_name,
+      contact_email, lifecycle_status, version, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'website', 'Ada Customer', ?, 'qualified', 1, ?, ?)`,
+  ).run(
+    LEAD_ID,
+    TENANT,
+    ENVELOPE_ID,
+    "raw/acceptance/0001.json",
+    CUSTOMER_EMAIL,
+    now,
+    now,
+  );
+  db.prepare(
+    `INSERT INTO operating_customers
+     (customer_id, tenant_id, source_envelope_id, source_raw_key, display_name,
+      contact_email, lifecycle_status, version, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'Ada Customer', ?, 'active', 1, ?, ?)`,
+  ).run(
+    CUSTOMER_ID,
+    TENANT,
+    ENVELOPE_ID,
+    "raw/acceptance/0001.json",
+    CUSTOMER_EMAIL,
+    now,
+    now,
+  );
+  db.prepare(
+    `INSERT INTO operating_roof_jobs
+     (roof_job_id, tenant_id, lead_id, customer_id, property_id, source_envelope_id,
+      source_raw_key, brand, service_type, job_status, current_gate_state, version,
+      created_at, updated_at)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, 'ironwrap', 'roof_replacement', 'qualified',
+             'qualification', 1, ?, ?)`,
+  ).run(
+    JOB_ID,
+    TENANT,
+    LEAD_ID,
+    CUSTOMER_ID,
+    ENVELOPE_ID,
+    "raw/acceptance/0001.json",
+    now,
+    now,
+  );
 }
 
 async function seedPortalLink(db: SqliteD1): Promise<string> {
   const token = randomToken();
-  db.raw.prepare(
-    `INSERT INTO customer_portal_links
+  const now = new Date().toISOString();
+  db.raw
+    .prepare(
+      `INSERT INTO customer_portal_links
      (link_id, token_hash, tenant_id, roof_job_id, customer_id, issued_by_user_id,
       created_at, expires_at, revoked_at, revoked_by_user_id, last_accessed_at, access_count,
       issued_ip_hash, issued_user_agent_hash)
-     VALUES ('portal_00000000-0000-4000-8000-000000000001', ?, 'ironwrap', 'JOB-A', 'CUSTOMER-A',
-             'appu_owner_0001', ?, '2030-01-01T00:00:00.000Z', NULL, NULL, NULL, 0, ?, ?)`,
-  ).run(
-    await sha256Hex(token),
-    NOW,
-    "a".repeat(64),
-    "b".repeat(64),
-  );
+     VALUES ('portal_00000000-0000-4000-8000-000000000001', ?, ?, ?, ?, ?, ?,
+             '2099-01-01T00:00:00.000Z', NULL, NULL, NULL, 0, ?, ?)`,
+    )
+    .run(
+      await sha256Hex(token),
+      TENANT,
+      JOB_ID,
+      CUSTOMER_ID,
+      OWNER_ID,
+      now,
+      "a".repeat(64),
+      "b".repeat(64),
+    );
   return token;
 }
 
-async function issueChallenge(env: AppEnv, portalToken: string): Promise<{ token: string; response: Response }> {
-  const response = await worker.fetch(
-    new Request(`${PUBLIC_ORIGIN}/api/v1/customer-portal/acceptance/challenge`, {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: PUBLIC_ORIGIN, "cf-connecting-ip": "203.0.113.9" },
-      body: JSON.stringify({ token: portalToken }),
-    }),
+async function issueChallenge(
+  env: AppEnv,
+  portalToken: string,
+): Promise<Response> {
+  return await worker.fetch(
+    new Request(
+      `${PUBLIC_ORIGIN}/api/v1/customer-portal/acceptance/challenge`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: PUBLIC_ORIGIN,
+          "cf-connecting-ip": "203.0.113.9",
+        },
+        body: JSON.stringify({ token: portalToken }),
+      },
+    ),
     env as never,
     {} as never,
   );
-  return { token: "", response };
 }
 
 function emailChallengeToken(sentEmails: string[]): string {
-  const match = sentEmails.at(-1)?.match(/contract-accept#token=([A-Za-z0-9_-]{43})/);
+  const match = sentEmails
+    .at(-1)
+    ?.match(/contract-accept#token=([A-Za-z0-9_-]{43})/);
   assert.ok(match, "missing emailed acceptance fragment");
   return match[1]!;
 }
 
-function confirmRequest(token: string, idempotencyKey: string, signerName = "Ada Customer"): Request {
-  return new Request(`${PUBLIC_ORIGIN}/api/v1/customer-portal/acceptance/confirm`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      origin: PUBLIC_ORIGIN,
-      "cf-connecting-ip": "203.0.113.9",
-      "idempotency-key": idempotencyKey,
+function confirmRequest(
+  token: string,
+  idempotencyKey: string,
+  signerName = "Ada Customer",
+): Request {
+  return new Request(
+    `${PUBLIC_ORIGIN}/api/v1/customer-portal/acceptance/confirm`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: PUBLIC_ORIGIN,
+        "cf-connecting-ip": "203.0.113.9",
+        "idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify({ token, signer_name: signerName, accepted: true }),
     },
-    body: JSON.stringify({ token, signer_name: signerName, accepted: true }),
-  });
+  );
 }
 
-function assertFrappeSignature(path: string, claimJson: string, headers: HeadersInit | undefined): void {
-  const values = new Headers(headers);
-  const timestamp = values.get("x-ironwrap-acceptance-timestamp");
-  const nonce = values.get("x-ironwrap-acceptance-nonce");
-  assert.match(timestamp ?? "", /^\d{10,12}$/);
-  assert.match(nonce ?? "", /^[A-Za-z0-9_-]{43}$/);
-  const bodyHash = createHash("sha256").update(claimJson).digest("hex");
-  const expected = createHmac("sha256", HMAC_SECRET)
-    .update(`POST\n${path}\n${timestamp}\n${nonce}\n${bodyHash}`)
-    .digest("base64url");
-  assert.equal(values.get("x-ironwrap-acceptance-signature"), expected);
-  assert.equal(values.get("authorization"), "token customer-acceptance-key:customer-acceptance-secret");
+function totalChanges(database: DatabaseSync): number {
+  return Number(
+    (
+      database.prepare("SELECT total_changes() AS total").get() as {
+        total: number;
+      }
+    ).total,
+  );
 }
 
 function fromHex(value: string): Uint8Array {
-  return Uint8Array.from(value.match(/../g) ?? [], (byte) => Number.parseInt(byte, 16));
+  return Uint8Array.from(value.match(/../g) ?? [], (byte) =>
+    Number.parseInt(byte, 16),
+  );
 }
 
-test("customer acceptance is email-challenge-only, pinned, receipt-backed, and replay-safe", async () => {
-  const h = setup();
+test("native customer acceptance is pinned, receipt-backed, atomically bound, and replay-safe", async () => {
+  const h = await setup();
   try {
     const portalToken = await seedPortalLink(h.db);
     const challenge = await issueChallenge(h.env, portalToken);
+    assert.equal(challenge.status, 200, await challenge.clone().text());
     assert.equal(
-      challenge.response.status,
-      200,
-      `${await challenge.response.clone().text()} ${JSON.stringify(h.db.raw.prepare("SELECT state, result_code FROM external_effects").all())}`,
+      ((await challenge.json()) as { status: string }).status,
+      "challenge_sent",
     );
-    const challengeBody = await challenge.response.json() as { status: string; expires_at: string };
-    assert.equal(challengeBody.status, "challenge_sent");
-    assert.match(challengeBody.expires_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-    assert.equal(h.prepareClaims.length, 1);
-    const { challenge_id: preparedChallengeId, ...prepareAnchors } = h.prepareClaims[0]!;
-    assert.deepEqual(prepareAnchors, {
-      customer_id: "CUSTOMER-A",
-      portal_link_id: "portal_00000000-0000-4000-8000-000000000001",
-      roof_job_id: "JOB-A",
-      tenant_id: "ironwrap",
-    });
-    assert.match(String(preparedChallengeId), /^acceptance_challenge_[0-9a-f-]{36}$/);
+    assert.ok(
+      h.fetchUrls.every((url) =>
+        ["oauth2.googleapis.com", "gmail.googleapis.com"].includes(
+          new URL(url).host,
+        ),
+      ),
+    );
 
     const challengeToken = emailChallengeToken(h.sentEmails);
-    assert.match(challengeToken, /^[A-Za-z0-9_-]{43}$/);
-    assert.equal(h.sentEmails[0]!.includes(CUSTOMER_EMAIL), true);
-    assert.equal(h.sentEmails[0]!.includes("/contract-accept#token="), true);
-    const persistedChallenge = h.db.raw.prepare("SELECT * FROM customer_portal_acceptance_challenges").get() as Record<string, unknown>;
-    assert.equal(JSON.stringify(persistedChallenge).includes(CUSTOMER_EMAIL), false);
-    assert.equal(JSON.stringify(persistedChallenge).includes(challengeToken), false);
-    assert.match(String(persistedChallenge.token_hash), /^[0-9a-f]{64}$/);
+    const persistedChallenge = h.db.raw
+      .prepare("SELECT * FROM customer_portal_acceptance_challenges")
+      .get() as Record<string, unknown>;
+    assert.equal(persistedChallenge.roof_job_id, JOB_ID);
+    assert.equal(persistedChallenge.customer_id, CUSTOMER_ID);
     assert.equal(persistedChallenge.email_hash, EMAIL_HASH);
-    assert.equal(persistedChallenge.provider_message_id, "gmail-1");
-    assert.throws(
-      () => h.db.raw.prepare(
-        "UPDATE customer_portal_acceptance_challenges SET roof_job_id = 'JOB-B' WHERE challenge_id = ?",
-      ).run(preparedChallengeId),
-      /customer_portal_acceptance_challenge_immutable/,
+    assert.equal(persistedChallenge.quote_id, h.chain!.quoteId);
+    assert.equal(persistedChallenge.quote_version, 1);
+    assert.equal(persistedChallenge.proposal_pack_id, h.chain!.proposalPackId);
+    assert.equal(persistedChallenge.terms_hash, TERMS_HASH);
+    assert.equal(persistedChallenge.terms_json, TERMS_JSON);
+    assert.equal(
+      JSON.stringify(persistedChallenge).includes(CUSTOMER_EMAIL),
+      false,
     );
-    assert.throws(
-      () => h.db.raw.prepare(
-        `UPDATE customer_portal_acceptance_challenges
-         SET state = 'pending_delivery', sent_at = NULL, provider_message_id = NULL
-         WHERE challenge_id = ?`,
-      ).run(preparedChallengeId),
-      /customer_portal_acceptance_challenge_invalid_transition/,
-    );
-    assert.throws(
-      () => h.db.raw.prepare(
-        "DELETE FROM customer_portal_acceptance_challenges WHERE challenge_id = ?",
-      ).run(preparedChallengeId),
-      /customer_portal_acceptance_challenges_append_only/,
+    assert.equal(
+      JSON.stringify(persistedChallenge).includes(challengeToken),
+      false,
     );
 
-    const first = await worker.fetch(confirmRequest(challengeToken, "acceptance-confirm-0001"), h.env as never, {} as never);
-    assert.equal(first.status, 200);
-    const accepted = await first.json() as { status: string; acceptance_id: string };
-    assert.deepEqual(accepted.status, "accepted");
+    const first = await worker.fetch(
+      confirmRequest(challengeToken, "acceptance-confirm-native-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(first.status, 200, await first.clone().text());
+    const accepted = (await first.json()) as {
+      status: string;
+      acceptance_id: string;
+    };
+    assert.equal(accepted.status, "accepted");
     assert.match(accepted.acceptance_id, /^acceptance_[0-9a-f-]{36}$/);
-    assert.equal(h.commitClaims.length, 1);
-    const {
-      accepted_at: acceptedAt,
-      receipt_captured_at: receiptCapturedAt,
-      receipt_content_length: receiptContentLength,
-      receipt_hash: receiptHash,
-      ...commitAnchors
-    } = h.commitClaims[0]!;
-    assert.deepEqual(commitAnchors, {
-      acceptance_id: accepted.acceptance_id,
-      challenge_id: String(preparedChallengeId),
-      customer_id: "CUSTOMER-A",
-      email_hash: EMAIL_HASH,
-      portal_link_id: "portal_00000000-0000-4000-8000-000000000001",
-      proposal_pack_id: "PACK-A",
-      quote_id: "QUOTE-A",
-      quote_version: 2,
-      receipt_content_type: "application/json",
-      receipt_key: `customer-contract-acceptance/v1/${accepted.acceptance_id}.json`,
-      roof_job_id: "JOB-A",
-      signer_ip: "203.0.113.9",
-      signer_name: "Ada Customer",
-      tenant_id: "ironwrap",
-      terms_hash: TERMS_HASH,
-    });
-    assert.match(String(acceptedAt), /^\d{4}-\d{2}-\d{2}T/);
-    assert.equal(receiptCapturedAt, acceptedAt);
-    assert.match(String(receiptHash), /^[0-9a-f]{64}$/);
-    assert.ok(Number(receiptContentLength) > 0);
 
-    const receipt = h.raw.objects.get(`customer-contract-acceptance/v1/${accepted.acceptance_id}.json`);
+    const binding = h.db.raw
+      .prepare(
+        `SELECT * FROM commercial_acceptance_bindings WHERE acceptance_id = ?`,
+      )
+      .get(accepted.acceptance_id) as Record<string, unknown>;
+    assert.equal(binding.quote_revision_id, h.chain!.quoteRevisionId);
+    assert.equal(binding.proposal_revision_id, h.chain!.proposalRevisionId);
+    assert.equal(binding.roof_job_id, JOB_ID);
+    assert.equal(binding.customer_id, CUSTOMER_ID);
+    assert.equal(binding.terms_hash, TERMS_HASH);
+    assert.equal(
+      h.db.raw
+        .prepare(
+          "SELECT COUNT(*) AS count FROM external_effects WHERE provider = 'frappe'",
+        )
+        .get()!.count,
+      0,
+    );
+
+    const receipt = h.raw.objects.get(
+      `customer-contract-acceptance/v1/${accepted.acceptance_id}.json`,
+    );
     assert.ok(receipt);
     assert.equal(receipt!.body.includes(CUSTOMER_EMAIL), false);
     assert.equal(receipt!.body.includes(challengeToken), false);
     assert.equal(receipt!.body.includes(TERMS_HASH), true);
     assert.equal(receipt!.body.includes(EMAIL_HASH), true);
-    assert.equal(receipt!.body.includes("signer_ip_hash"), true);
-    assert.equal(receiptHash, createHash("sha256").update(receipt!.body).digest("hex"));
-
-    const replay = await worker.fetch(confirmRequest(challengeToken, "acceptance-confirm-0001"), h.env as never, {} as never);
-    assert.equal(replay.status, 200);
-    assert.deepEqual(await replay.json(), accepted);
-    assert.equal(h.commitClaims.length, 1);
-
-    const mismatch = await worker.fetch(confirmRequest(challengeToken, "acceptance-confirm-0001", "Other Representative"), h.env as never, {} as never);
-    assert.equal(mismatch.status, 409);
-    assert.deepEqual(await mismatch.json(), { error: "acceptance_idempotency_conflict" });
-    const used = await worker.fetch(confirmRequest(challengeToken, "acceptance-confirm-0002"), h.env as never, {} as never);
-    assert.equal(used.status, 409);
-    assert.deepEqual(await used.json(), { error: "acceptance_challenge_used" });
-    assert.equal(h.commitClaims.length, 1);
-
-    const events = h.db.raw.prepare(
-      "SELECT event_type FROM customer_portal_acceptance_events ORDER BY event_id",
-    ).all() as Array<{ event_type: string }>;
-    assert.deepEqual(events.map((event) => event.event_type), [
-      "intent_recorded",
-      "receipt_stored",
-      "frappe_commit_attempted",
-      "accepted",
-    ]);
-    assert.throws(
-      () => h.db.raw.prepare(
-        "UPDATE customer_portal_acceptance_events SET detail_code = 'rewritten' WHERE event_id = 1",
-      ).run(),
-      /customer_portal_acceptance_events_append_only/,
-    );
-    assert.throws(
-      () => h.db.raw.prepare(
-        "UPDATE customer_portal_acceptance_intents SET receipt_hash = ? WHERE acceptance_id = ?",
-      ).run("f".repeat(64), accepted.acceptance_id),
-      /customer_portal_acceptance_invalid_transition/,
-    );
-    assert.throws(
-      () => h.db.raw.prepare(
-        "DELETE FROM customer_portal_acceptance_intents WHERE acceptance_id = ?",
-      ).run(accepted.acceptance_id),
-      /customer_portal_acceptance_intents_append_only/,
+    assert.equal(
+      binding.receipt_hash,
+      createHash("sha256").update(receipt!.body).digest("hex"),
     );
 
-    const cookieOnly = await worker.fetch(
-      new Request(`${PUBLIC_ORIGIN}/api/v1/customer-portal/acceptance/challenge`, {
-        method: "POST",
-        headers: { "content-type": "application/json", origin: PUBLIC_ORIGIN, cookie: "__Host-ironwrap_session=not-authority" },
-        body: JSON.stringify({ token: randomToken() }),
-      }),
+    const replay = await worker.fetch(
+      confirmRequest(challengeToken, "acceptance-confirm-native-0001"),
       h.env as never,
       {} as never,
     );
-    assert.equal(cookieOnly.status, 404);
-    assert.deepEqual(await cookieOnly.json(), { error: "not_found" });
+    assert.equal(replay.status, 200);
+    assert.deepEqual(await replay.json(), accepted);
+    const mismatch = await worker.fetch(
+      confirmRequest(
+        challengeToken,
+        "acceptance-confirm-native-0001",
+        "Other Representative",
+      ),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(mismatch.status, 409);
+    assert.deepEqual(await mismatch.json(), {
+      error: "acceptance_idempotency_conflict",
+    });
+    const used = await worker.fetch(
+      confirmRequest(challengeToken, "acceptance-confirm-native-0002"),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(used.status, 409);
+    assert.deepEqual(await used.json(), { error: "acceptance_challenge_used" });
+    assert.equal(
+      h.db.raw
+        .prepare("SELECT COUNT(*) AS count FROM commercial_acceptance_bindings")
+        .get()!.count,
+      1,
+    );
+
+    const events = h.db.raw
+      .prepare(
+        "SELECT event_type FROM customer_portal_acceptance_events ORDER BY event_id",
+      )
+      .all() as Array<{ event_type: string }>;
+    assert.deepEqual(
+      events.map(({ event_type }) => event_type),
+      [
+        "intent_recorded",
+        "receipt_stored",
+        // Schema-compatibility name: this is the native transactional commit marker.
+        "frappe_commit_attempted",
+        "accepted",
+      ],
+    );
   } finally {
     h.restore();
   }
 });
 
-test("Gmail readback hashes bind recipient, subject, and HTML without persisting message content", async () => {
+test("native acceptance reads back a commit whose D1 response was lost", async () => {
+  const h = await setup();
+  try {
+    const portalToken = await seedPortalLink(h.db);
+    assert.equal((await issueChallenge(h.env, portalToken)).status, 200);
+    h.db.throwNextBatchAfterCommit = true;
+    const response = await worker.fetch(
+      confirmRequest(
+        emailChallengeToken(h.sentEmails),
+        "acceptance-lost-response-0001",
+      ),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(response.status, 200, await response.clone().text());
+    const accepted = (await response.json()) as { acceptance_id: string };
+    assert.equal(
+      h.db.raw
+        .prepare(
+          "SELECT COUNT(*) AS count FROM commercial_acceptance_bindings WHERE acceptance_id = ?",
+        )
+        .get(accepted.acceptance_id)!.count,
+      1,
+    );
+  } finally {
+    h.restore();
+  }
+});
+
+test("confirmation rejects and replays when the published contract changed after the challenge", async () => {
+  const h = await setup();
+  try {
+    const portalToken = await seedPortalLink(h.db);
+    assert.equal((await issueChallenge(h.env, portalToken)).status, 200);
+    const challenge = h.db.raw
+      .prepare("SELECT created_at FROM customer_portal_acceptance_challenges")
+      .get() as { created_at: string };
+    await recordPublicationTransition(
+      h.env,
+      h.chain!,
+      "withdrawn",
+      new Date(Date.parse(challenge.created_at) + 1),
+    );
+    const token = emailChallengeToken(h.sentEmails);
+    const first = await worker.fetch(
+      confirmRequest(token, "acceptance-contract-drift-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(first.status, 409);
+    assert.deepEqual(await first.json(), { error: "acceptance_rejected" });
+    const replay = await worker.fetch(
+      confirmRequest(token, "acceptance-contract-drift-0001"),
+      h.env as never,
+      {} as never,
+    );
+    assert.equal(replay.status, 409);
+    assert.deepEqual(await replay.json(), { error: "acceptance_rejected" });
+    const intent = h.db.raw
+      .prepare(
+        "SELECT state, error_code FROM customer_portal_acceptance_intents",
+      )
+      .get() as { state: string; error_code: string };
+    assert.equal(intent.state, "rejected");
+    assert.equal(intent.error_code, "native_contract_changed");
+    assert.equal(
+      h.db.raw
+        .prepare("SELECT COUNT(*) AS count FROM commercial_acceptance_bindings")
+        .get()!.count,
+      0,
+    );
+  } finally {
+    h.restore();
+  }
+});
+
+test("missing or ambiguous native contract chains fail closed before email delivery", async () => {
+  for (const contracts of [0, 2] as const) {
+    const h = await setup({ contracts });
+    try {
+      const portalToken = await seedPortalLink(h.db);
+      const response = await issueChallenge(h.env, portalToken);
+      assert.equal(response.status, 503, `contracts=${contracts}`);
+      assert.deepEqual(await response.json(), { error: "portal_unavailable" });
+      assert.equal(h.sentEmails.length, 0);
+      assert.equal(
+        h.db.raw
+          .prepare(
+            "SELECT COUNT(*) AS count FROM customer_portal_acceptance_challenges",
+          )
+          .get()!.count,
+        0,
+      );
+    } finally {
+      h.restore();
+    }
+  }
+});
+
+test("Gmail readback still binds recipient, subject, and HTML without persisting content", async () => {
   for (const drift of ["recipient", "subject", "body"] as const) {
-    const h = setup("accepted", drift);
+    const h = await setup({ gmailReadbackDrift: drift });
     try {
       const portalToken = await seedPortalLink(h.db);
       const challenge = await issueChallenge(h.env, portalToken);
-      assert.equal(challenge.response.status, 502, drift);
+      assert.equal(challenge.status, 502, drift);
       const effect = h.db.raw
         .prepare(
-          "SELECT state, expected_readback_json FROM external_effects WHERE provider = 'gmail'",
+          `SELECT state, expected_readback_json FROM external_effects
+          WHERE provider = 'gmail' ORDER BY created_at DESC LIMIT 1`,
         )
         .get() as { state: string; expected_readback_json: string };
       assert.equal(effect.state, "manual_exception", drift);
@@ -483,135 +955,124 @@ test("Gmail readback hashes bind recipient, subject, and HTML without persisting
         effect.expected_readback_json.includes(CUSTOMER_EMAIL),
         false,
       );
-      assert.equal(
-        effect.expected_readback_json.includes(
-          "Confirm your contract acceptance",
-        ),
-        false,
-      );
     } finally {
       h.restore();
     }
   }
 });
 
-test("customer acceptance is false by default and never falls back to broad ERP credentials", async () => {
-  const h = setup();
+test("acceptance remains false by default and needs delivery, not dedicated Frappe secrets", async () => {
+  const h = await setup();
   try {
     const portalToken = await seedPortalLink(h.db);
     h.env.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED = "false";
-    const disabled = await issueChallenge(h.env, portalToken);
-    assert.equal(disabled.response.status, 404);
-    assert.deepEqual(await disabled.response.json(), { error: "not_found" });
-    assert.equal(h.prepareClaims.length, 0);
+    assert.equal((await issueChallenge(h.env, portalToken)).status, 404);
 
     h.env.APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED = "true";
-    delete h.env.APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY;
-    delete h.env.APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET;
-    const globalOnly = await issueChallenge(h.env, portalToken);
-    assert.equal(globalOnly.response.status, 503);
-    assert.deepEqual(await globalOnly.response.json(), { error: "portal_unavailable" });
-    assert.equal(h.prepareClaims.length, 0);
+    delete h.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+    const unavailable = await issueChallenge(h.env, portalToken);
+    assert.equal(unavailable.status, 503);
+    assert.deepEqual(await unavailable.json(), { error: "portal_unavailable" });
   } finally {
     h.restore();
   }
 });
 
-
-test("customer acceptance rejects a too-short dedicated HMAC secret", async () => {
-  const h = setup();
+test("acceptance readiness uses native bindings without BFF or Frappe read configuration", async () => {
+  const h = await setup();
   try {
+    assert.equal(h.env.APP_BFF_ENABLED, undefined);
+    assert.equal(h.env.ERPNEXT_BASE_URL, undefined);
+    assert.equal(h.env.ERPNEXT_API_KEY, undefined);
+    assert.equal(h.env.ERPNEXT_API_SECRET, undefined);
     const portalToken = await seedPortalLink(h.db);
-    h.env.APP_CUSTOMER_ACCEPTANCE_HMAC_KEY = "short-hmac-secret";
-    const response = await issueChallenge(h.env, portalToken);
-    assert.equal(response.response.status, 503);
-    assert.deepEqual(await response.response.json(), { error: "portal_unavailable" });
-    assert.equal(h.prepareClaims.length, 0);
-  } finally {
-    h.restore();
-  }
-});
 
-test("customer acceptance verifies Frappe's normalized email hash before delivery", async () => {
-  const h = setup();
-  try {
-    h.setEmailHash("f".repeat(64));
-    const portalToken = await seedPortalLink(h.db);
-    const response = await issueChallenge(h.env, portalToken);
-    assert.equal(response.response.status, 503);
-    assert.deepEqual(await response.response.json(), { error: "portal_unavailable" });
-    assert.equal(h.sentEmails.length, 0);
-    assert.equal(
-      h.db.raw.prepare("SELECT COUNT(*) AS count FROM customer_portal_acceptance_challenges").get()!.count,
-      0,
+    const expectUnavailable = async (
+      mutate: () => void,
+      restore: () => void,
+    ): Promise<void> => {
+      mutate();
+      const response = await issueChallenge(h.env, portalToken);
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { error: "portal_unavailable" });
+      restore();
+    };
+
+    const tenantId = h.env.APP_TENANT_ID;
+    await expectUnavailable(
+      () => {
+        h.env.APP_TENANT_ID = "";
+      },
+      () => {
+        h.env.APP_TENANT_ID = tenantId;
+      },
     );
-  } finally {
-    h.restore();
-  }
-});
+    const publicOrigin = h.env.APP_PUBLIC_ORIGIN;
+    await expectUnavailable(
+      () => {
+        h.env.APP_PUBLIC_ORIGIN = "";
+      },
+      () => {
+        h.env.APP_PUBLIC_ORIGIN = publicOrigin;
+      },
+    );
+    const allowedOrigins = h.env.APP_ALLOWED_ORIGINS;
+    await expectUnavailable(
+      () => {
+        h.env.APP_ALLOWED_ORIGINS = "";
+      },
+      () => {
+        h.env.APP_ALLOWED_ORIGINS = allowedOrigins;
+      },
+    );
+    const authPepper = h.env.APP_AUTH_PEPPER;
+    await expectUnavailable(
+      () => {
+        h.env.APP_AUTH_PEPPER = "too-short";
+      },
+      () => {
+        h.env.APP_AUTH_PEPPER = authPepper;
+      },
+    );
+    const db = h.env.DB;
+    await expectUnavailable(
+      () => {
+        h.env.DB = {} as never;
+      },
+      () => {
+        h.env.DB = db;
+      },
+    );
+    const raw = h.env.RAW;
+    await expectUnavailable(
+      () => {
+        h.env.RAW = {} as never;
+      },
+      () => {
+        h.env.RAW = raw;
+      },
+    );
+    const serviceAccount = h.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+    await expectUnavailable(
+      () => {
+        h.env.GOOGLE_SERVICE_ACCOUNT_JSON = "";
+      },
+      () => {
+        h.env.GOOGLE_SERVICE_ACCOUNT_JSON = serviceAccount;
+      },
+    );
+    const fromEmail = h.env.FROM_EMAIL;
+    await expectUnavailable(
+      () => {
+        h.env.FROM_EMAIL = "";
+      },
+      () => {
+        h.env.FROM_EMAIL = fromEmail;
+      },
+    );
 
-test("customer acceptance records Frappe 4xx as a replay-safe rejection", async () => {
-  const h = setup("rejected");
-  try {
-    const portalToken = await seedPortalLink(h.db);
-    const challenge = await issueChallenge(h.env, portalToken);
-    assert.equal(challenge.response.status, 200);
-    const token = emailChallengeToken(h.sentEmails);
-    const first = await worker.fetch(confirmRequest(token, "acceptance-reject-0001"), h.env as never, {} as never);
-    assert.equal(first.status, 409);
-    assert.deepEqual(await first.json(), { error: "acceptance_rejected" });
-    const replay = await worker.fetch(confirmRequest(token, "acceptance-reject-0001"), h.env as never, {} as never);
-    assert.equal(replay.status, 409);
-    assert.deepEqual(await replay.json(), { error: "acceptance_rejected" });
-    assert.equal(h.commitClaims.length, 1);
-  } finally {
-    h.restore();
-  }
-});
-
-test("customer acceptance makes Frappe transport or 5xx uncertainty terminal without a blind retry", async () => {
-  const h = setup("uncertain");
-  try {
-    const portalToken = await seedPortalLink(h.db);
-    const challenge = await issueChallenge(h.env, portalToken);
-    assert.equal(challenge.response.status, 200);
-    const token = emailChallengeToken(h.sentEmails);
-    const first = await worker.fetch(confirmRequest(token, "acceptance-uncertain-0001"), h.env as never, {} as never);
-    assert.equal(first.status, 202);
-    const firstBody = await first.json() as { status: string; acceptance_id: string };
-    assert.deepEqual(firstBody.status, "uncertain");
-    const replay = await worker.fetch(confirmRequest(token, "acceptance-uncertain-0001"), h.env as never, {} as never);
-    assert.equal(replay.status, 202);
-    assert.deepEqual(await replay.json(), firstBody);
-    assert.equal(h.commitClaims.length, 1);
-    const state = h.db.raw.prepare(
-      "SELECT state, error_code FROM customer_portal_acceptance_intents",
-    ).get() as { state: string; error_code: string };
-    assert.equal(state.state, "uncertain");
-    assert.equal(state.error_code, "frappe_acceptance_readback_not_found");
-  } finally {
-    h.restore();
-  }
-});
-
-test("customer acceptance commits through the universal effect ledger and reads back the acceptance", async () => {
-  const h = setup();
-  try {
-    const portalToken = await seedPortalLink(h.db);
-    const challenge = await issueChallenge(h.env, portalToken);
-    assert.equal(challenge.response.status, 200);
-    h.env.EFFECT_RUNTIME_ENABLED = "true";
-    const token = emailChallengeToken(h.sentEmails);
-    const response = await worker.fetch(confirmRequest(token, "acceptance-runtime-0001"), h.env as never, {} as never);
-    assert.equal(response.status, 200);
-    const accepted = await response.json() as { acceptance_id: string };
-    const ledger = h.db.raw.prepare(
-      "SELECT state, provider, provider_external_id FROM external_effects WHERE provider = 'frappe'",
-    ).get() as { state: string; provider: string; provider_external_id: string };
-    assert.equal(ledger.state, "succeeded");
-    assert.equal(ledger.provider, "frappe");
-    assert.equal(ledger.provider_external_id, accepted.acceptance_id);
-    assert.equal(h.commitClaims.length, 1);
+    const ready = await issueChallenge(h.env, portalToken);
+    assert.equal(ready.status, 200, await ready.clone().text());
   } finally {
     h.restore();
   }

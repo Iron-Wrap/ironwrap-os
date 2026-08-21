@@ -856,6 +856,26 @@ test("field bootstrap returns only the unauthenticated session envelope", async 
   assert.equal("today" in body, false);
 });
 
+test("auth bootstrap stays available without Frappe when app auth itself is configured", async () => {
+  const env = baseEnv();
+  delete (env as { ERPNEXT_BASE_URL?: string }).ERPNEXT_BASE_URL;
+  delete (env as { ERPNEXT_API_KEY?: string }).ERPNEXT_API_KEY;
+  delete (env as { ERPNEXT_API_SECRET?: string }).ERPNEXT_API_SECRET;
+  const response = await worker.fetch(new Request(
+    "https://worker.example.com/api/v1/field/bootstrap",
+    { headers: { origin: "https://app.example.com" } },
+  ), env, waitContext().ctx as never);
+  const body = await response.json() as {
+    version: number;
+    session: Record<string, unknown>;
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  assert.equal(body.version, 1);
+  assert.equal(body.session.authenticated, false);
+});
+
 test("auth mutations reject missing/unlisted origins and never emit wildcard CORS", async () => {
   const env = baseEnv();
   const missing = await worker.fetch(new Request("https://worker.example.com/api/v1/auth/magic-link/request", {
@@ -1033,7 +1053,7 @@ test("app-session provisioning is tenant-bound, strict, CSRF-gated, and server-a
     access_role: "production",
   });
 
-  const noAssignee = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
+  const nativeField = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
     ...payload,
     email: "other@example.com",
     frappe_user_id: null,
@@ -1041,8 +1061,20 @@ test("app-session provisioning is tenant-bound, strict, CSRF-gated, and server-a
     cookie: office.cookiePair,
     "x-csrf-token": office.csrfToken,
   }), env, waitContext().ctx as never);
-  assert.equal(noAssignee.status, 400);
-  assert.deepEqual(await noAssignee.json(), { error: "field_requires_frappe_user_id" });
+  assert.equal(nativeField.status, 200);
+  const nativeFieldResponse = await nativeField.json() as {
+    user: { email: string; role: string; frappe_user_id: string | null };
+  };
+  assert.equal(nativeFieldResponse.user.email, "other@example.com");
+  assert.equal(nativeFieldResponse.user.role, "field");
+  assert.equal(nativeFieldResponse.user.frappe_user_id, null);
+  const nativeFieldUser = [...db.users.values()].find((user) =>
+    user.email_normalized === "other@example.com"
+  );
+  assert.deepEqual(db.storageRoles.get(nativeFieldUser!.user_id), {
+    role: "ops",
+    access_role: "field",
+  });
 
   const otherTenant = await worker.fetch(jsonRequest("/api/v1/admin/app-users", {
     ...payload,

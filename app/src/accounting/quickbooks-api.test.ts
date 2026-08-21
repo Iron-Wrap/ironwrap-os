@@ -10,6 +10,7 @@ import {
   reconcileQuickBooksFinalInvoice,
   rejectQuickBooksFinalInvoice,
   removeQuickBooksFromIronWrap,
+  saveQuickBooksFinalInvoiceMapping,
 } from "./quickbooks-api";
 import { quickBooksFinalInvoiceFixture } from "./quickbooks-test-fixture";
 
@@ -60,7 +61,16 @@ describe("QuickBooks API client", () => {
                 last_connected_at: null,
                 allowed_actions: ["connect", "refresh"],
               })
-            : Response.json(quickBooksFinalInvoiceFixture()),
+            : path === "/api/v1/quickbooks/final-invoice-mappings"
+              ? Response.json({
+                  version: 1,
+                  state: "connected",
+                  connection_version: 4,
+                  realm_id: "123456789",
+                  last_connected_at: "2026-08-13T11:00:00.000Z",
+                  allowed_actions: ["remove_from_ironwrap", "refresh"],
+                })
+              : Response.json(quickBooksFinalInvoiceFixture()),
     );
 
     await loadQuickBooksFinalInvoice(intentId, fetcher);
@@ -83,6 +93,22 @@ describe("QuickBooks API client", () => {
       fetcher,
     );
     await removeQuickBooksFromIronWrap(session, 4, "quickbooks:remove:test", fetcher);
+    await saveQuickBooksFinalInvoiceMapping(
+      session,
+      {
+        roof_job_id: "JOB-0001",
+        qbo_customer_id: "501",
+        qbo_item_id: "601",
+        qbo_tax_code_id: "701",
+        qbo_terms_id: "801",
+        jurisdiction: "CA-AB",
+        tax_code: "GST",
+        payment_terms_days: 30,
+        correction_reason: null,
+      },
+      "quickbooks:mapping:test",
+      fetcher,
+    );
 
     expect(fetcher.mock.calls.map((call) => call[0])).toEqual([
       `/api/v1/quickbooks/final-invoices/${intentId}`,
@@ -92,6 +118,7 @@ describe("QuickBooks API client", () => {
       `/api/v1/quickbooks/final-invoices/${intentId}/reject`,
       `/api/v1/quickbooks/final-invoices/${intentId}/reconcile`,
       "/api/v1/quickbooks/disconnect",
+      "/api/v1/quickbooks/final-invoice-mappings",
     ]);
     expect(fetcher.mock.calls.map((call) => call[1]?.body)).toEqual([
       undefined,
@@ -101,6 +128,17 @@ describe("QuickBooks API client", () => {
       JSON.stringify({ version: 2, reason_code: "evidence_incomplete" }),
       JSON.stringify({ version: 3 }),
       JSON.stringify({ version: 4 }),
+      JSON.stringify({
+        roof_job_id: "JOB-0001",
+        qbo_customer_id: "501",
+        qbo_item_id: "601",
+        qbo_tax_code_id: "701",
+        qbo_terms_id: "801",
+        jurisdiction: "CA-AB",
+        tax_code: "GST",
+        payment_terms_days: 30,
+        correction_reason: null,
+      }),
     ]);
     expect(
       fetcher.mock.calls.slice(2).map((call) => {
@@ -113,6 +151,7 @@ describe("QuickBooks API client", () => {
       ["csrf-qbo", "quickbooks:reject:test"],
       ["csrf-qbo", "quickbooks:reconcile:test"],
       ["csrf-qbo", "quickbooks:remove:test"],
+      ["csrf-qbo", "quickbooks:mapping:test"],
     ]);
   });
 

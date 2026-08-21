@@ -9,7 +9,8 @@ export const MAGIC_LINK_CONSUME_IP_LIMIT = 30;
 export const DEVICE_PAIRING_TTL_SECONDS = 10 * 60;
 export const APP_DEVICE_PROOF_HEADER = "x-ironwrap-device-proof";
 
-export type AppRole = "owner" | "ops" | "sales" | "production" | "accounting" | "field";
+export type AppRole =
+  "owner" | "ops" | "sales" | "production" | "accounting" | "field";
 
 /** Immutable parent/context envelope for universal physical-work routes. */
 export interface WorkObjectScope {
@@ -32,8 +33,8 @@ export type AppEnv = Env & {
   // A customer portal is a separately activated, read-only capability surface. It never
   // inherits an office BFF session or the office read-model allowlists.
   APP_CUSTOMER_PORTAL_ENABLED?: string;
-  // Customer contract signing is a distinct, false-by-default capability. It requires its own
-  // enablement in addition to a portal, email transport, Frappe service auth, and HMAC secret.
+  // Customer contract signing is a distinct, false-by-default native capability. It requires
+  // its own enablement in addition to a portal and a verified email-delivery channel.
   APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED?: string;
   // Recording a customer's material/colour preference is a third, separately activated
   // capability. It is provisional -- an estimator still confirms it before pricing moves -- so it
@@ -77,6 +78,10 @@ export type AppEnv = Env & {
   APP_APPROVAL_BROKER_TIMEOUT_MS?: string;
   APP_APPROVAL_EXECUTION_LEASE_SECONDS?: string;
   APPROVAL_BROKER_SHARED_SECRET?: string;
+  // Native commercial proposal revisions are permit-admitted by the Worker from
+  // this exact server-owned policy snapshot. Browsers and D1 never originate or
+  // mutate the policy itself.
+  COMMERCIAL_AUTHORITY_POLICY_JSON?: string;
   // Quote revisions have their own broker, signing secret, and execution
   // lease. Never route them through the fixed lead-triage authority.
   APP_QUOTE_REVISION_BROKER_URL?: string;
@@ -102,6 +107,7 @@ export type AppEnv = Env & {
   APP_FACET_LAUNCH_BASE_URL?: string;
   APP_FACET_LAUNCH_SOURCE_TENANT_ID?: string;
   FACET_LAUNCH_HMAC_KEY?: string;
+  FACET_V2_NATIVE_PROJECTION_ENABLED?: string;
   // Postiz is an execution adapter only. The API key remains a Worker secret;
   // D1 and the browser receive only opaque integration ids and bounded receipts.
   // Every provider mutation adapter is fail-closed behind the durable universal effect ledger.
@@ -196,6 +202,19 @@ export interface AuthContext {
   rawSessionToken: string;
   csrfToken: string;
   permissions: string[];
+}
+
+/** Every exact user coordinate carried by one authenticated app session. */
+export function appUserIdentities(
+  user: Pick<AppUserRecord, "frappe_user_id" | "email_normalized" | "user_id">,
+): string[] {
+  return [user.frappe_user_id, user.email_normalized, user.user_id].reduce<
+    string[]
+  >((identities, value) => {
+    const identity = value?.trim().toLowerCase();
+    if (identity && !identities.includes(identity)) identities.push(identity);
+    return identities;
+  }, []);
 }
 
 export interface ProvisionAppUserInput {

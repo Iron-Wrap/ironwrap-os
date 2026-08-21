@@ -33,7 +33,6 @@ import {
 } from "./operations.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
 import { materializeOperatingCore } from "./operating-core.ts";
-import { pushToErpNext, syncLeadSkipToErpNext, syncLeadTransportToErpNext } from "./erpnext.ts";
 import { sendInstantAck, sendOwnerAlert, sendDailyDigest } from "./notify.ts";
 import { handlePhotoIngest } from "./photos.ts";
 import {
@@ -42,7 +41,7 @@ import {
   handleMeasurementQueueMessage,
   retryMeasurementIntakeReceipts,
 } from "./measurements.ts";
-import { handleEstimateIngest, retryEstimateErpNextSyncs } from "./estimates.ts";
+import { handleEstimateIngest, retryEstimateOperatingCoreMaterializations } from "./estimates.ts";
 import {
   handleFacetDesignIngest,
   reconcileFacetV2UnassociatedIntakes,
@@ -74,7 +73,8 @@ import {
   handleQuickBooksOAuthCallback,
   recoverQuickBooksFinalInvoices,
 } from "./quickbooks-final-invoice.ts";
-import { reconcileFacetDesignFrappeProjections } from "./facet-design-projection.ts";
+import { deriveNativeFinalInvoiceIntents } from "./native-final-invoice-producer.ts";
+import { reconcileFacetDesignNativeProjections } from "./facet-design-projection.ts";
 import {
   recoverPostizControlPlane,
 } from "./postiz.ts";
@@ -158,9 +158,33 @@ async function recoverLeadTriageOutboxThenExpireLeases(env: Env): Promise<void> 
   }
 }
 
-async function reconcileFacetV2ThenFrappe(env: Env): Promise<void> {
+async function reconcileFacetV2ThenNativeDesign(env: Env): Promise<void> {
   await reconcileFacetV2UnassociatedIntakes(env);
-  await reconcileFacetDesignFrappeProjections(env);
+  await reconcileFacetDesignNativeProjections(env);
+}
+
+async function deriveThenRecoverQuickBooksFinalInvoices(env: Env): Promise<void> {
+  try {
+    const derivation = await deriveNativeFinalInvoiceIntents(
+      env as import("./app-types.ts").AppEnv,
+    );
+    if (
+      derivation.blocked > 0 ||
+      derivation.no_balance > 0 ||
+      derivation.intents_derived > 0 ||
+      derivation.intents_replayed > 0
+    ) {
+      log({ at: "native_final_invoice_derivation", ...derivation });
+    }
+  } catch (error) {
+    log({ at: "native_final_invoice_derivation", error: String(error) });
+  }
+  const recovery = await recoverQuickBooksFinalInvoices(
+    env as import("./app-types.ts").AppEnv,
+  );
+  if (recovery.discovered > 0 || recovery.effects_processed > 0) {
+    log({ at: "quickbooks_final_invoice_recovery", ...recovery });
+  }
 }
 const escapeHtml = (value: string): string => value
   .replace(/&/g, "&amp;")
@@ -308,8 +332,8 @@ export default {
           retryMeasurementIntakeReceipts(env).catch((error) =>
             log({ at: "measurement_intake_retry", error: String(error) }),
           ),
-          retryEstimateErpNextSyncs(env).catch((error) =>
-            log({ at: "estimate_erpnext_retry", error: String(error) }),
+          retryEstimateOperatingCoreMaterializations(env).catch((error) =>
+            log({ at: "estimate_operating_core_retry", error: String(error) }),
           ),
           recoverDueQuickBooksProjections(env).then((result) => {
             if (result.due > 0) log({ at: "quickbooks_projection_recovery", ...result });
@@ -323,12 +347,7 @@ export default {
           }).catch((error) =>
             log({ at: "dead_letter_auto_replay", error: String(error) }),
           ),
-          recoverQuickBooksFinalInvoices(
-            env as import("./app-types.ts").AppEnv,
-          ).then((result) => {
-            if (result.discovered > 0 || result.effects_processed > 0)
-              log({ at: "quickbooks_final_invoice_recovery", ...result });
-          }).catch(() =>
+          deriveThenRecoverQuickBooksFinalInvoices(env).catch(() =>
             log({ at: "quickbooks_final_invoice_recovery", error: "quickbooks_recovery_failed" })
           ),
           reconcileCustomerContractAcceptanceAttempts(env).catch((error) =>
@@ -337,8 +356,8 @@ export default {
           reconcileCustomerPortalDecisionAttempts(env).catch((error) =>
             log({ at: "customer_portal_decision_reconcile", error: String(error) }),
           ),
-          reconcileFacetV2ThenFrappe(env).catch((error) =>
-            log({ at: "facet_design_frappe_projection_reconcile", error: String(error) }),
+          reconcileFacetV2ThenNativeDesign(env).catch((error) =>
+            log({ at: "facet_design_native_projection_reconcile", error: String(error) }),
           ),
           recoverLeadTriageOutboxThenExpireLeases(env),
           recoverPostizControlPlane(env as import("./app-types.ts").AppEnv).then((result) => {
@@ -490,10 +509,14 @@ async function routeRequest(
     return methodAwareJson(req, { ok: true });
   if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/ready") {
     const readiness = await getReadiness(env);
-    // ?scope=core reports only the owned intake spine so a deliberate launch
-    // gate (Newo) cannot hide a core regression from monitoring. The full
-    // verdict remains the default.
-    const verdict = url.searchParams.get("scope") === "core" ? readiness.core_ok : readiness.ok;
+    const scope = url.searchParams.get("scope");
+    const verdict = scope === "core" || scope === "owned_core"
+      ? readiness.owned_core_ok
+      : scope === "office"
+      ? readiness.office_operating_plane_ok
+      : scope === "projection"
+      ? readiness.projection_rails_ok
+      : readiness.ok;
     // Keep public monitoring useful without advertising the state of every
     // downstream rail to an unauthenticated caller. Operators can use the
     // existing admin bearer token for the diagnostic check map.
@@ -592,13 +615,13 @@ async function routeRequest(
     );
   }
   // Facet v2 has separately provisioned rotating HMAC authority. It must never fall through to
-  // the broad lead-ingest bearer route; Frappe projection runs only from immutable accepted D1.
+  // the broad lead-ingest bearer route; native projection runs only from immutable accepted D1.
   if (url.pathname === "/ingest/facet-design") {
     const response = await handleFacetDesignIngest(req, env);
     const waitUntil = (ctx as ExecutionContext & { waitUntil?: ExecutionContext["waitUntil"] }).waitUntil;
     if (response.ok && typeof waitUntil === "function") {
-      waitUntil.call(ctx, reconcileFacetV2ThenFrappe(env).catch((error) =>
-        log({ at: "facet_design_frappe_projection_after_ingest", error: String(error) })
+      waitUntil.call(ctx, reconcileFacetV2ThenNativeDesign(env).catch((error) =>
+        log({ at: "facet_design_native_projection_after_ingest", error: String(error) })
       ));
     }
     return response;
@@ -807,38 +830,6 @@ async function handleIngest(
     recovery_owner: env.OWNER_ALERT_EMAIL,
   });
 
-  // 4b) Materialize the tenant-bound operating graph. Envelope intake stays the
-  // desk-visible lead (#123). This write is best-effort so a missing 0090 apply
-  // or a test fake without D1.batch cannot hide the envelope.
-  if (valid.ok) {
-    try {
-      const operating = await materializeOperatingCore(env, rec);
-      await store.recordAudit(env, {
-        automation: "operating_core",
-        trigger: source,
-        envelope_id: envelopeId,
-        target_ids: [
-          `lead:${operating.leadId}`,
-          `customer:${operating.customerId}`,
-          operating.propertyId ? `property:${operating.propertyId}` : null,
-          `roof_job:${operating.roofJobId}`,
-        ].filter(Boolean).join(","),
-        action: operating.reused ? "readback" : "materialize",
-        result: "ok",
-      });
-    } catch (err) {
-      await store.recordAudit(env, {
-        automation: "operating_core",
-        trigger: source,
-        envelope_id: envelopeId,
-        action: "materialize",
-        result: "error",
-        error: String(err),
-        recovery_owner: env.OWNER_ALERT_EMAIL,
-      }).catch(() => {});
-    }
-  }
-
   // 5) Instant-ack fires OFF the first owned-store write (never off a duplicate/retry).
   ctx.waitUntil(
     sendInstantAck(env, rec).catch((e) =>
@@ -867,79 +858,42 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
   if (
     rec.status === "pushed" ||
     rec.status === "reconciled" ||
-    rec.status === "jn_skipped" ||
-    rec.status === "erpnext_no_token"
+    rec.status === "jn_skipped"
   ) {
     await store.markDeadLettersRecovered(env, envelopeId);
     return; // idempotent re-delivery also closes any stale open recovery row for this envelope only
   }
-  // Config hole: ERPNEXT_ENABLED is on but the API pair is missing. Retry cannot mint
-  // credentials, so this is a terminal fail-closed skip — never a DLQ storm, never a
-  // dummy token, never a fake pushed landing. pushToErpNext still throws if called.
-  if (isOn(env.ERPNEXT_ENABLED) && (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET)) {
-    await store.setErpNextError(env, envelopeId, "erpnext_no_token").catch(() => {});
+  // Native D1 authority must exist before the JobNimbus side effect. This also re-drives legacy
+  // rows stranded by the retired Frappe credential gate.
+  try {
+    const operating = await materializeOperatingCore(env, rec);
     await store.recordAudit(env, {
-      automation: "erpnext_push",
+      automation: "operating_core",
       trigger: "queue",
       envelope_id: envelopeId,
-      action: "skip",
+      target_ids: [
+        `lead:${operating.leadId}`,
+        `customer:${operating.customerId}`,
+        operating.propertyId ? `property:${operating.propertyId}` : null,
+        `roof_job:${operating.roofJobId}`,
+      ].filter(Boolean).join(","),
+      action: operating.reused ? "readback_pre_bridge" : "materialize_pre_bridge",
       result: "ok",
-      error: "erpnext_no_token",
     });
-    await store.setStatus(env, envelopeId, "erpnext_no_token", {
-      last_error: "erpnext_no_token",
-    });
-    // Terminal, and the sweep only reconsiders envelopes still `dead`, so nothing else will ever
-    // close this envelope's dead-letter rows. Leaving them open would hold /admin/status degraded
-    // forever after a replay that actually settled (ELEC-137 defect 3, same shape as jn_skipped).
-    await store.markDeadLettersRecovered(env, envelopeId);
-    return;
-  }
-  // The owned operating record must exist before the temporary JobNimbus bridge. A bridge outage
-  // is an Automation Incident, never a reason to hide a fresh lead from the operator queue.
-  try {
-    const erp = await pushToErpNext(env, rec);
-    if (erp) {
-      await store.setErpNextSync(env, envelopeId, {
-        leadEnvelopeId: erp.name,
-        roofingPropertyId: erp.roofingPropertyName ?? null,
-        roofJobId: erp.roofJobName ?? null,
-      });
-      const targetIds = [
-        `lead_envelope:${erp.name}`,
-        erp.roofingPropertyName
-          ? `roofing_property:${erp.roofingPropertyName}`
-          : null,
-        erp.roofJobName ? `roof_job:${erp.roofJobName}` : null,
-        erp.productionGateCount
-          ? `production_gates:${erp.productionGateCount}`
-          : null,
-      ]
-        .filter(Boolean)
-        .join(",");
-      await store.recordAudit(env, {
-        automation: "erpnext_push",
-        trigger: "queue",
-        envelope_id: envelopeId,
-        target_ids: targetIds,
-        action: erp.reused ? "upsert_pre_bridge" : "create_pre_bridge",
-        result: "ok",
-      });
-    }
   } catch (err) {
-    const error = `erpnext_push: ${String(err)}`;
+    const error = `native_operating_core: ${String(err)}`;
     await store.setErpNextError(env, envelopeId, error).catch(() => {});
     const n = await store.bumpAttempt(env, envelopeId, error);
     await store.recordAudit(env, {
-      automation: "erpnext_push",
+      automation: "operating_core",
       trigger: "queue",
       envelope_id: envelopeId,
-      action: `push_attempt_${n}`,
+      action: `materialize_attempt_${n}`,
       result: "error",
       error,
       recovery_owner: env.OWNER_ALERT_EMAIL,
     });
-    throw err; // retry preserves the owned business record as a hard prerequisite for the bridge
+    throw err;
   }
 
   // Kill switch: a disabled JobNimbus write is a terminal skip, never a retry/DLQ.
@@ -964,25 +918,6 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     // ahead of the Desk sync below on purpose: that sync is best-effort and never un-terminals the
     // skip, so the recovery must not depend on it.
     await store.markDeadLettersRecovered(env, envelopeId);
-    const skippedRec: EnvelopeRecord = {
-      ...rec,
-      status: "jn_skipped",
-      last_error: "jobnimbus_disabled",
-    };
-    try {
-      await syncLeadSkipToErpNext(env, skippedRec);
-    } catch (err) {
-      await store.recordAudit(env, {
-        automation: "erpnext_push",
-        trigger: "queue",
-        envelope_id: envelopeId,
-        action: "sync_jn_skip",
-        result: "error",
-        error: `erpnext_skip_sync: ${String(err)}`,
-        recovery_owner: env.OWNER_ALERT_EMAIL,
-      });
-      // Skip stays terminal: do not rethrow (ack, no DLQ). Desk may still lag.
-    }
     return;
   }
 
@@ -1031,36 +966,29 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     jn_job_id: r.jobId ?? null,
   };
   try {
-    const lead = await syncLeadTransportToErpNext(env, pushedRecord, r);
-    if (lead) {
-      await store.recordAudit(env, {
-        automation: "erpnext_push",
-        trigger: "queue",
-        envelope_id: envelopeId,
-        target_ids: [
-          `lead_envelope:${lead.name}`,
-          lead.roofJobName ? `roof_job:${lead.roofJobName}` : null,
-        ]
-          .filter(Boolean)
-          .join(","),
-        action: "sync_bridge_transport",
-        result: "ok",
-      });
-    }
+    const operating = await materializeOperatingCore(env, pushedRecord, r);
+    await store.recordAudit(env, {
+      automation: "operating_core",
+      trigger: "queue",
+      envelope_id: envelopeId,
+      target_ids: `roof_job:${operating.roofJobId},jobnimbus_contact:${r.contactId}${r.jobId ? `,jobnimbus_job:${r.jobId}` : ""}`,
+      action: "bind_jobnimbus_transport",
+      result: "ok",
+    });
   } catch (err) {
-    const error = `erpnext_transport_sync: ${String(err)}`;
+    const error = `native_operating_transport: ${String(err)}`;
     await store.setErpNextError(env, envelopeId, error).catch(() => {});
     const n = await store.bumpAttempt(env, envelopeId, error);
     await store.recordAudit(env, {
-      automation: "erpnext_push",
+      automation: "operating_core",
       trigger: "queue",
       envelope_id: envelopeId,
-      action: `transport_sync_attempt_${n}`,
+      action: `transport_bind_attempt_${n}`,
       result: "error",
       error,
       recovery_owner: env.OWNER_ALERT_EMAIL,
     });
-    throw err; // keep pending so retry re-verifies both the bridge and its mirrored transport facts
+    throw err;
   }
 
   await store.setStatus(env, envelopeId, "pushed", {
@@ -1073,7 +1001,9 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
 
 async function handleDead(env: Env, envelopeId: string): Promise<void> {
   const rec = await store.getEnvelope(env, envelopeId);
-  const stage = rec?.last_error?.includes("erpnext_")
+  const stage = rec?.last_error?.includes("native_operating_")
+    ? "operating_core"
+    : rec?.last_error?.includes("erpnext_")
     ? "erpnext_push"
     : "jn_push";
   await store.setStatus(env, envelopeId, "dead", {

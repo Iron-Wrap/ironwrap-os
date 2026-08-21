@@ -2,7 +2,7 @@
 
 Status: canonical
 Owner: IronWrap OS product owner
-Last verified: 2026-08-17
+Last verified: 2026-08-20
 Review trigger: any new actor, tool, side effect, state transition, or physical workflow
 
 ## Binding assumption
@@ -147,14 +147,14 @@ overwrite history.
 
 Authority mutations use one governed proof chain: an authenticated Owner/Production request enters
 one tenant-scoped D1 action, and the separately authenticated executor binds the exact command,
-authority version, evidence, and (where required) genuine issuer receipt before applying it through
-the exact Frappe business actor,
-reads the material Frappe record back, verifies its state digest and all bound fields, and only then
-records the terminal D1 receipt. A browser session may request or observe the action but cannot mint
-an issuer readback or set an applied result. Frappe `System Manager` is an administrative capability,
-not business verification authority: lifecycle verification is restricted to the mapped `IronWrap
-Owner` or `IronWrap Production` role. External, legal, and professional authority remains with the
-genuine issuer and blocks release when its readback is missing, stale, contradictory, or mismatched.
+authority version, evidence, and (where required) genuine issuer receipt before committing the
+versioned D1 aggregate and immutable transition atomically. It then reads the material D1 state
+back, verifies its digest and all bound fields, and only then records the terminal receipt. A
+browser session may request or observe the action but cannot mint an issuer readback or set an
+applied result. Frappe may receive a compatibility projection after the D1 commit, but a Frappe
+role, document, or readback cannot grant authority or make the D1 transition succeed. External,
+legal, customer, physical, and professional authority remains with the genuine actor or issuer and
+blocks release when its readback is missing, stale, contradictory, or mismatched.
 
 ## Evidence freshness
 
@@ -249,6 +249,10 @@ the safe implemented baseline. The autonomous target may replace routine human a
 policy-issued machine authority receipt only after the corresponding capability is implemented and
 independently proven. Legal/customer/physical signoffs remain human where required.
 
+An owned business transition commits in D1 before any compatibility projection. Projection failure
+creates reconciliation work; it never rolls back, replaces, or becomes evidence for the committed
+authority decision. New operating workflows must not add a Frappe write or read dependency.
+
 Software release authority is generation-bound. The protected predecessor policy and executable
 enforcer must validate the exact PR, CI run/check identities, independent findings, complete
 manifest, isolated staging/recovery proof, provider reconciliation, and business-evidence
@@ -342,3 +346,4 @@ This contract is implemented only when tests demonstrate:
 - legal, safety, customer, and relationship-sensitive human gates remain intact;
 - an outage can recover without lost, duplicated, or falsely completed work;
 - the evidence bundle can reconstruct who did what, under which authority, from which facts.
+- no required operating transition, readiness verdict, or release artifact depends on Frappe.

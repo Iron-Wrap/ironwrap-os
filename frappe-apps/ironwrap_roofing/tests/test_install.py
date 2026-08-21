@@ -64,10 +64,7 @@ class InstallHookTests(unittest.TestCase):
             set(ALL_IRONWRAP_ROLES) - {existing},
         )
         self.assertTrue(all(ignore_permissions for _, ignore_permissions in inserted))
-        for role_name in (
-            "IronWrap Customer Acceptance Service",
-            LAUNCH_PROOF_READER_ROLE,
-        ):
+        for role_name in (LAUNCH_PROOF_READER_ROLE,):
             service = next(
                 item[0] for item in inserted if item[0]["role_name"] == role_name
             )

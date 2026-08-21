@@ -62,7 +62,7 @@ test("a matching table validates", () => {
   const result = validateFacetBlankQuoteContract({
     doctype: DOCTYPE, frappeSource: FRAPPE, workerSource: workerSource(CORRECT),
   });
-  assert.deepEqual(result, { fields: 4, shaped: 3 });
+  assert.deepEqual(result, { fields: 4, shaped: 3, worker: "frappe-readback" });
 });
 
 test("a Worker table that forgot a DocType default is rejected", () => {
@@ -122,9 +122,14 @@ test("the Frappe app and the validator must agree on which fieldtypes store 0", 
   );
 });
 
-test("the shipped Worker table is parseable and non-trivial", () => {
-  const rules = parseWorkerBlankRules(
-    readFileSync(resolve(root, "workers-bus/src/facet-design-projection.ts"), "utf8"),
-  );
-  assert.ok(rules.length >= 30);
+test("native Facet projection may omit the Frappe blank-quote readback table", () => {
+  const source = readFileSync(resolve(root, "workers-bus/src/facet-design-projection.ts"), "utf8");
+  assert.equal(parseWorkerBlankRules(source), null);
+  const result = validateFacetBlankQuoteContract({
+    doctype: JSON.parse(readFileSync(resolve(root, "frappe-apps/ironwrap_roofing/ironwrap_roofing/ironwrap_roofing/doctype/customer_quote/customer_quote.json"), "utf8")),
+    frappeSource: readFileSync(resolve(root, "frappe-apps/ironwrap_roofing/ironwrap_roofing/facet_design_projection_api.py"), "utf8"),
+    workerSource: source,
+  });
+  assert.equal(result.worker, "native");
+  assert.ok(result.fields >= 30);
 });

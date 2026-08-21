@@ -7,8 +7,11 @@
 import { parseBody } from "./core.ts";
 import * as store from "./store.ts";
 import { googleConfigured, fileToJobFolder } from "./google.ts";
-import { pushMeasurementToErpNext } from "./erpnext.ts";
-import { isAppliCadXml, parseAppliCadGeometry, type GeometryModel } from "./geometry.ts";
+import {
+  isAppliCadXml,
+  parseAppliCadGeometry,
+  type GeometryModel,
+} from "./geometry.ts";
 import { extractZipXml, isZip } from "./esx.ts";
 import {
   assessSolarEvidence,
@@ -26,10 +29,11 @@ import {
   type OmniRouteConfig,
 } from "./omniroute-fallback.ts";
 import { recordMeasurementDeltas, type MeasurementDeltaRow } from "./measurement-deltas-store.ts";
-import { deriveRoofGraph, type RoofGraphV1 } from "./roof-graph.ts";
+import { deriveRoofGraph } from "./roof-graph.ts";
 import {
   claimMeasurementIntakeReceipt,
   completeMeasurementIntakeReceipt,
+  getNativeMeasurementRevisionByReceipt,
   getMeasurementIntakeReceipt,
   getMeasurementIntakeReceiptById,
   listRetryableMeasurementIntakeReceipts,
@@ -41,19 +45,75 @@ import {
   recordMeasurementOcrResult,
   recordMeasurementOcrStarted,
   recordMeasurementReportEvidence,
+  recordNativeMeasurementRevision,
+  resolveNativeMeasurementJob,
+  NativeMeasurementStoreError,
   type MeasurementIntakeIdentity,
   type MeasurementIntakeReceipt,
 } from "./measurement-intake-store.ts";
 
-const JOB_KEYS = ["job_number", "jobnumber", "job", "job_no", "jn_job", "jobnimbus_job", "job_id", "jobid"];
-const REPORT_KEYS = ["report_url", "report", "pdf", "pdf_url", "document", "document_url", "file", "url"];
-const MEASURE_KEYS = ["squares", "area_sqft", "area", "pitch", "predominant_pitch", "ridge_ft", "hip_ft",
-  "valley_ft", "eave_ft", "rake_ft", "perimeter_ft", "facets", "waste_factor"];
+const JOB_KEYS = [
+  "job_number",
+  "jobnumber",
+  "job",
+  "job_no",
+  "jn_job",
+  "jobnimbus_job",
+  "job_id",
+  "jobid",
+];
+const REPORT_KEYS = [
+  "report_url",
+  "report",
+  "pdf",
+  "pdf_url",
+  "document",
+  "document_url",
+  "file",
+  "url",
+];
+const MEASURE_KEYS = [
+  "squares",
+  "area_sqft",
+  "area",
+  "pitch",
+  "predominant_pitch",
+  "ridge_ft",
+  "hip_ft",
+  "valley_ft",
+  "eave_ft",
+  "rake_ft",
+  "perimeter_ft",
+  "facets",
+  "waste_factor",
+];
 const LAT_KEYS = ["lat", "latitude"];
 const LNG_KEYS = ["lng", "lon", "long", "longitude"];
-const ATTACHMENT_ID_KEYS = ["report_id", "reportid", "attachment_id", "attachmentid", "file_id", "fileid"];
-const ATTACHMENT_HASH_KEYS = ["attachment_sha256", "attachment_hash", "file_sha256", "file_hash", "sha256"];
+const ATTACHMENT_ID_KEYS = [
+  "report_id",
+  "reportid",
+  "attachment_id",
+  "attachmentid",
+  "file_id",
+  "fileid",
+];
+const ATTACHMENT_HASH_KEYS = [
+  "attachment_sha256",
+  "attachment_hash",
+  "file_sha256",
+  "file_hash",
+  "sha256",
+];
+const SUPERSEDES_MEASUREMENT_KEYS = [
+  "supersedes_measurement_id",
+  "corrects_measurement_id",
+];
+const CORRECTION_REASON_KEYS = [
+  "correction_reason",
+  "measurement_correction_reason",
+];
 const REQUEST_IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:/-]{7,159}$/;
+const MEASUREMENT_ID = /^measurement:[0-9a-f]{64}$/;
 const MAX_REPORT_BYTES = 20 * 1024 * 1024;
 const MAX_MEASUREMENT_OCR_PDF_BYTES = 8 * 1024 * 1024;
 const MAX_MEASUREMENT_OCR_EVIDENCE_BYTES = 2 * 1024 * 1024;
@@ -73,7 +133,9 @@ const ALLOWED_MEASUREMENT_OCR_MODELS = new Set([
   "claude-opus-5",
   "claude-sonnet-5",
 ]);
-const OCR_MEASUREMENT_KEYS = [...new Set(MEASURE_KEYS.map((key) => key.toLowerCase()))];
+const OCR_MEASUREMENT_KEYS = [
+  ...new Set(MEASURE_KEYS.map((key) => key.toLowerCase())),
+];
 
 type MeasurementOcrEnv = Env & {
   MEASUREMENT_OCR_ENABLED?: string;
@@ -90,7 +152,11 @@ type MeasurementPdfOcrResult = {
   requestSha256: string;
   responseSha256: string;
   extractedAt: string;
-  jobNumberCandidate: { value: string; sourceRef: string; confidence: OcrConfidence } | null;
+  jobNumberCandidate: {
+    value: string;
+    sourceRef: string;
+    confidence: OcrConfidence;
+  } | null;
   measurements: Record<string, number>;
   sourceRefs: Record<string, string>;
   confidences: Record<string, OcrConfidence>;
@@ -156,7 +222,14 @@ const MEASUREMENT_OCR_TOOL_SCHEMA = {
             label: { type: "string" },
             confidence: { type: "string", enum: ["high", "medium", "low"] },
           },
-          required: ["metric", "value", "page", "region", "label", "confidence"],
+          required: [
+            "metric",
+            "value",
+            "page",
+            "region",
+            "label",
+            "confidence",
+          ],
           additionalProperties: false,
         },
       },
@@ -170,52 +243,114 @@ export interface MeasurementSubmission {
   jobNumber: string | null;
   reportUrl: string | null;
   measurements: Record<string, number>;
+  supersedesMeasurementId: string | null;
+  correctionReason: string | null;
   /** Property coordinates when the provider payload carries them (Solar cross-check input). */
   coords: { lat: number; lng: number } | null;
 }
 
 function pick(raw: Record<string, unknown>, keys: string[]): unknown {
-  for (const k of Object.keys(raw)) if (keys.includes(k.toLowerCase())) return raw[k];
+  for (const k of Object.keys(raw))
+    if (keys.includes(k.toLowerCase())) return raw[k];
   return undefined;
 }
 function asString(v: unknown): string | null {
-  return (typeof v === "string" || typeof v === "number") && String(v).trim() ? String(v).trim() : null;
+  return (typeof v === "string" || typeof v === "number") && String(v).trim()
+    ? String(v).trim()
+    : null;
 }
 function asNumber(v: unknown): number | null {
   const n = typeof v === "number" ? v : parseFloat(String(v));
   return Number.isFinite(n) ? n : null;
 }
 function firstUrl(v: unknown): string | null {
-  if (typeof v === "string") return v.match(/https?:\/\/[^\s"'<>]+/)?.[0] ?? null;
-  if (Array.isArray(v)) { for (const x of v) { const u = firstUrl(x); if (u) return u; } }
-  if (v && typeof v === "object") { const o = v as Record<string, unknown>; return firstUrl(o.url ?? o.href ?? null); }
+  if (typeof v === "string")
+    return v.match(/https?:\/\/[^\s"'<>]+/)?.[0] ?? null;
+  if (Array.isArray(v)) {
+    for (const x of v) {
+      const u = firstUrl(x);
+      if (u) return u;
+    }
+  }
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    return firstUrl(o.url ?? o.href ?? null);
+  }
   return null;
 }
 
 /** Extract job number + report URL + any structured measurements. Pure. */
-export function parseMeasurementSubmission(raw: Record<string, unknown>): MeasurementSubmission {
+export function parseMeasurementSubmission(
+  raw: Record<string, unknown>,
+): MeasurementSubmission {
   const jobNumber = boundedJobNumber(pick(raw, JOB_KEYS));
   let reportUrl = firstUrl(pick(raw, REPORT_KEYS));
-  if (!reportUrl) { // fallback: any PDF-looking URL anywhere
-    for (const v of Object.values(raw)) { const u = firstUrl(v); if (u && /\.pdf(\?|$)/i.test(u)) { reportUrl = u; break; } }
+  if (!reportUrl) {
+    // fallback: any PDF-looking URL anywhere
+    for (const v of Object.values(raw)) {
+      const u = firstUrl(v);
+      if (u && /\.pdf(\?|$)/i.test(u)) {
+        reportUrl = u;
+        break;
+      }
+    }
   }
   const measurements: Record<string, number> = {};
   for (const k of Object.keys(raw)) {
-    if (MEASURE_KEYS.includes(k.toLowerCase())) { const n = asNumber(raw[k]); if (n != null) measurements[k.toLowerCase()] = n; }
+    if (MEASURE_KEYS.includes(k.toLowerCase())) {
+      const n = asNumber(raw[k]);
+      if (n != null) measurements[k.toLowerCase()] = n;
+    }
   }
   const lat = asNumber(pick(raw, LAT_KEYS));
   const lng = asNumber(pick(raw, LNG_KEYS));
+  const rawSupersedes = asString(pick(raw, SUPERSEDES_MEASUREMENT_KEYS));
+  const supersedesMeasurementId =
+    rawSupersedes && MEASUREMENT_ID.test(rawSupersedes) ? rawSupersedes : null;
+  if (rawSupersedes && !supersedesMeasurementId) {
+    throw new MeasurementIntakeFailure(
+      "measurement_correction_reference_invalid",
+    );
+  }
+  const rawCorrectionReason = asString(pick(raw, CORRECTION_REASON_KEYS));
+  const correctionReason =
+    rawCorrectionReason &&
+    rawCorrectionReason.length >= 3 &&
+    rawCorrectionReason.length <= 500
+      ? rawCorrectionReason
+      : null;
+  if (rawCorrectionReason && !correctionReason) {
+    throw new MeasurementIntakeFailure("measurement_correction_reason_invalid");
+  }
+  if (Boolean(supersedesMeasurementId) !== Boolean(correctionReason)) {
+    throw new MeasurementIntakeFailure("measurement_correction_incomplete");
+  }
   // (0,0) is the classic null-island placeholder, never a real roof.
-  const coords = lat !== null && lng !== null && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && (lat !== 0 || lng !== 0)
-    ? { lat, lng }
-    : null;
-  return { jobNumber, reportUrl, measurements, coords };
+  const coords =
+    lat !== null &&
+    lng !== null &&
+    Math.abs(lat) <= 90 &&
+    Math.abs(lng) <= 180 &&
+    (lat !== 0 || lng !== 0)
+      ? { lat, lng }
+      : null;
+  return {
+    jobNumber,
+    reportUrl,
+    measurements,
+    coords,
+    supersedesMeasurementId,
+    correctionReason,
+  };
 }
 
 /** Find AppliCad XML embedded in any string field, or as the raw body itself. Pure.
  * Parsed fields are checked FIRST: a JSON envelope's raw text carries the marker but
  * with escaped quotes, so only the JSON-decoded field value parses correctly. */
-export function extractGeometry(rawText: string, raw: Record<string, unknown>): GeometryModel | null {
+export function extractGeometry(
+  rawText: string,
+  raw: Record<string, unknown>,
+): GeometryModel | null {
   for (const v of Object.values(raw)) {
     if (typeof v === "string" && isAppliCadXml(v)) {
       const g = parseAppliCadGeometry(v);
@@ -227,7 +362,9 @@ export function extractGeometry(rawText: string, raw: Record<string, unknown>): 
 
 /** Extension for the report file from URL then content-type. Pure. */
 export function reportExt(url: string, contentType: string): string {
-  const fromUrl = (url.split(/[?#]/)[0].match(/\.([a-z0-9]{1,5})$/i)?.[1] ?? "").toLowerCase();
+  const fromUrl = (
+    url.split(/[?#]/)[0].match(/\.([a-z0-9]{1,5})$/i)?.[1] ?? ""
+  ).toLowerCase();
   const fromCt = (contentType.split("/")[1] ?? "").split(";")[0].toLowerCase();
   return (fromUrl || fromCt || "pdf").replace(/[^a-z0-9]/g, "") || "pdf";
 }
@@ -241,6 +378,7 @@ const log = (o: Record<string, unknown>) => console.log(JSON.stringify(o));
  * the identifier nor a signed report URL.
  */
 export async function deriveMeasurementIntakeIdentity(input: {
+  tenantId: string;
   rawText: string;
   raw: Record<string, unknown>;
   submission: MeasurementSubmission;
@@ -252,22 +390,36 @@ export async function deriveMeasurementIntakeIdentity(input: {
   const provider = input.geometry ? "AppliCad" : "RoofRuler";
   const headerKey = normalizeRequestIdempotencyKey(input.requestIdempotencyKey);
   const attachmentId = boundedOpaqueValue(pick(input.raw, ATTACHMENT_ID_KEYS));
-  const attachmentHash = normalizedSha256(pick(input.raw, ATTACHMENT_HASH_KEYS));
+  const attachmentHash = normalizedSha256(
+    pick(input.raw, ATTACHMENT_HASH_KEYS),
+  );
 
   let keyStrategy: MeasurementIntakeIdentity["keyStrategy"] = "payload_hash";
   let source = payloadHash;
   if (attachmentId) {
     keyStrategy = "provider_attachment";
-    source = JSON.stringify({ provider, jobNumber: input.submission.jobNumber, attachmentId });
+    source = JSON.stringify({
+      provider,
+      jobNumber: input.submission.jobNumber,
+      attachmentId,
+      supersedesMeasurementId: input.submission.supersedesMeasurementId,
+    });
   } else if (attachmentHash) {
     keyStrategy = "attachment_job";
-    source = JSON.stringify({ provider, jobNumber: input.submission.jobNumber, attachmentHash });
+    source = JSON.stringify({
+      provider,
+      jobNumber: input.submission.jobNumber,
+      attachmentHash,
+    });
   } else if (headerKey) {
     keyStrategy = "request_header";
     source = headerKey;
   }
-  const idempotencyKeyHash = await sha256Hex(`measurement-intake/v1\n${keyStrategy}\n${source}`);
+  const idempotencyKeyHash = await sha256Hex(
+    `measurement-intake/v2\n${input.tenantId}\n${keyStrategy}\n${source}`,
+  );
   return {
+    tenantId: input.tenantId,
     receiptId: `measurement_${idempotencyKeyHash}`,
     idempotencyKeyHash,
     payloadHash,
@@ -287,14 +439,30 @@ export async function handleMeasurementIngest(
   contentType: string | null,
   requestIdempotencyKey?: string | null,
 ): Promise<Response> {
-  const raw = parseBody(rawText, contentType);
-  const sub = parseMeasurementSubmission(raw);
+  let tenantId: string;
+  let raw: Record<string, unknown>;
+  let sub: MeasurementSubmission;
+  try {
+    tenantId = configuredMeasurementTenant(env);
+    raw = parseBody(rawText, contentType);
+    sub = parseMeasurementSubmission(raw);
+  } catch (error) {
+    if (error instanceof MeasurementIntakeFailure) {
+      return jsonResp(
+        { error: error.code },
+        error.code === "measurement_tenant_not_configured" ? 503 : 400,
+      );
+    }
+    throw error;
+  }
   // First-principles geometry: AppliCad XML (raw or embedded) is parsed AND
   // cross-verified (lengths from coordinates, areas via Newell). Deterministic
   // values override upstream-AI-extracted keys on collision.
   const geometry = extractGeometry(rawText, raw);
-  if (geometry) sub.measurements = { ...sub.measurements, ...geometry.measurements };
+  if (geometry)
+    sub.measurements = { ...sub.measurements, ...geometry.measurements };
   const identity = await deriveMeasurementIntakeIdentity({
+    tenantId,
     rawText,
     raw,
     submission: sub,
@@ -305,13 +473,20 @@ export async function handleMeasurementIngest(
 
   // Do not create a second raw object or downstream execution for a completed/intentionally
   // pending key. A different body under the same caller-provided key is an explicit conflict.
-  const existing = await getMeasurementIntakeReceipt(env, identity.idempotencyKeyHash);
+  const existing = await getMeasurementIntakeReceipt(
+    env,
+    identity.idempotencyKeyHash,
+  );
   if (existing) {
-    if (existing.payload_hash !== identity.payloadHash) return jsonResp({ error: "measurement_idempotency_conflict" }, 409);
+    if (existing.payload_hash !== identity.payloadHash)
+      return jsonResp({ error: "measurement_idempotency_conflict" }, 409);
     if (existing.status === "matched" || existing.status === "unmatched") {
       return completedResponse(existing, undefined, true);
     }
-    if (existing.status === "processing" && leaseIsActive(existing, new Date().toISOString())) {
+    if (
+      existing.status === "processing" &&
+      leaseIsActive(existing, new Date().toISOString())
+    ) {
       return processingResponse(existing);
     }
   }
@@ -324,10 +499,14 @@ export async function handleMeasurementIngest(
     ...identity,
     now: now.toISOString(),
     leaseToken: crypto.randomUUID(),
-    leaseExpiresAt: new Date(now.getTime() + MEASUREMENT_LEASE_MS).toISOString(),
+    leaseExpiresAt: new Date(
+      now.getTime() + MEASUREMENT_LEASE_MS,
+    ).toISOString(),
   });
-  if (claim.kind === "conflict") return jsonResp({ error: "measurement_idempotency_conflict" }, 409);
-  if (claim.kind === "completed") return completedResponse(claim.receipt, undefined, true);
+  if (claim.kind === "conflict")
+    return jsonResp({ error: "measurement_idempotency_conflict" }, 409);
+  if (claim.kind === "completed")
+    return completedResponse(claim.receipt, undefined, true);
   if (claim.kind === "in_progress") return processingResponse(claim.receipt);
 
   try {
@@ -357,7 +536,8 @@ export async function handleMeasurementQueueMessage(
     receipt.status !== "processing" ||
     receipt.lease_token !== leaseToken ||
     !leaseIsActive(receipt, new Date().toISOString())
-  ) return;
+  )
+    return;
   await processMeasurementReceiptLease(env, receipt);
 }
 
@@ -371,10 +551,15 @@ export async function handleMeasurementDeadLetter(
   if (
     receipt &&
     (receipt.status !== "processing" || receipt.lease_token !== leaseToken)
-  ) return false;
+  )
+    return false;
 
   const error = "measurement_queue_exhausted";
-  const created = await store.recordMeasurementDeadLetter(env, receiptId, error);
+  const created = await store.recordMeasurementDeadLetter(
+    env,
+    receiptId,
+    error,
+  );
   if (!receipt) return created;
   try {
     await markMeasurementIntakeRetryable(env, {
@@ -385,10 +570,8 @@ export async function handleMeasurementDeadLetter(
     });
   } catch (markError) {
     const current = await getMeasurementIntakeReceiptById(env, receiptId);
-    if (
-      current?.status === "processing" &&
-      current.lease_token === leaseToken
-    ) throw markError;
+    if (current?.status === "processing" && current.lease_token === leaseToken)
+      throw markError;
   }
   return created;
 }
@@ -398,10 +581,17 @@ async function processMeasurementReceiptLease(
   receipt: MeasurementIntakeReceipt,
 ): Promise<void> {
   try {
+    const tenantId = configuredMeasurementTenant(env);
+    if (!receipt.tenant_id) {
+      throw new MeasurementIntakeFailure("measurement_receipt_tenant_missing");
+    }
+    if (receipt.tenant_id !== tenantId) {
+      throw new MeasurementIntakeFailure("measurement_receipt_tenant_mismatch");
+    }
     const rawObject = await env.RAW.get(receipt.raw_key);
     if (!rawObject) throw new MeasurementIntakeFailure("raw_source_missing");
     const rawText = await rawObject.text();
-    if (await sha256Hex(rawText) !== receipt.payload_hash) {
+    if ((await sha256Hex(rawText)) !== receipt.payload_hash) {
       throw new MeasurementIntakeFailure("raw_payload_hash_mismatch");
     }
     const raw = parseBody(rawText, receipt.content_type);
@@ -411,7 +601,10 @@ async function processMeasurementReceiptLease(
     }
     const geometry = extractGeometry(rawText, raw);
     if (geometry) {
-      submission.measurements = { ...submission.measurements, ...geometry.measurements };
+      submission.measurements = {
+        ...submission.measurements,
+        ...geometry.measurements,
+      };
     }
     await processClaimedMeasurementIntake(env, {
       receipt,
@@ -424,20 +617,27 @@ async function processMeasurementReceiptLease(
     await markClaimedMeasurementRetryable(env, receipt, error);
   }
 
-  const current = await getMeasurementIntakeReceiptById(env, receipt.receipt_id);
-  if (!current) throw new Error("measurement_receipt_processing_result_missing");
+  const current = await getMeasurementIntakeReceiptById(
+    env,
+    receipt.receipt_id,
+  );
+  if (!current)
+    throw new Error("measurement_receipt_processing_result_missing");
   if (
     current.status === "processing" &&
     current.lease_token === receipt.lease_token
-  ) throw new Error("measurement_processing_state_not_durable");
+  )
+    throw new Error("measurement_processing_state_not_durable");
   if (current.status === "matched" || current.status === "unmatched") {
-    await store.markDeadLettersRecovered(env, current.receipt_id).catch((error) =>
-      log({
-        at: "measurement_deadletter_recovery",
-        receipt_id: current.receipt_id,
-        error: measurementFailureCode(error),
-      })
-    );
+    await store
+      .markDeadLettersRecovered(env, current.receipt_id)
+      .catch((error) =>
+        log({
+          at: "measurement_deadletter_recovery",
+          receipt_id: current.receipt_id,
+          error: measurementFailureCode(error),
+        }),
+      );
   }
 }
 
@@ -452,6 +652,9 @@ async function processClaimedMeasurementIntake(
   },
 ): Promise<Response> {
   const { receipt, identity, submission: sub, parsedAt } = input;
+  const tenantId = receipt.tenant_id;
+  if (!tenantId)
+    throw new MeasurementIntakeFailure("measurement_receipt_tenant_missing");
   let geometry = input.geometry;
   let ocrSourceRefs: Record<string, string> = {};
   let ocrConfidences: Record<string, OcrConfidence> = {};
@@ -459,18 +662,47 @@ async function processClaimedMeasurementIntake(
   let reportArtifact: MeasurementReportArtifact | null = null;
   let geometryRawKey = identity.rawKey;
   let geometryRawSha256 = identity.payloadHash;
-  const graphFor = (g: GeometryModel | null): RoofGraphV1 | null => g
-    ? deriveRoofGraph({
-      geometry: g,
-      rawKey: geometryRawKey,
-      rawSha256: geometryRawSha256,
-      provider: identity.provider,
-      ingestedAt: parsedAt,
-    })
-    : null;
   try {
+    const replay = await getNativeMeasurementRevisionByReceipt(
+      env,
+      receipt.receipt_id,
+    );
+    if (replay) {
+      if (
+        replay.tenant_id !== tenantId ||
+        replay.measurement_id !== receipt.measurement_id ||
+        replay.measurement_raw_key !== receipt.raw_key ||
+        replay.measurement_raw_sha256 !== receipt.payload_hash
+      ) {
+        throw new MeasurementIntakeFailure(
+          "native_measurement_replay_collision",
+        );
+      }
+      const completed = await completeMeasurementIntakeReceipt(env, {
+        receiptId: receipt.receipt_id,
+        leaseToken: receipt.lease_token!,
+        tenantId,
+        status: replay.receipt_status,
+        nativeRoofJobId: replay.roof_job_id,
+        nativeMeasurementRevisionId: replay.measurement_revision_id,
+        nativeProjectionSha256: replay.projection_sha256,
+        lastError: replay.completion_reason,
+        now: new Date().toISOString(),
+      });
+      return completedResponse(completed, undefined, true);
+    }
+
+    const jobResolution = await resolveNativeMeasurementJob(
+      env,
+      tenantId,
+      sub.jobNumber,
+    );
     if (!geometry && sub.reportUrl) {
-      reportArtifact = await getOrStoreMeasurementReport(env, receipt, sub.reportUrl);
+      reportArtifact = await getOrStoreMeasurementReport(
+        env,
+        receipt,
+        sub.reportUrl,
+      );
       const zipGeometry = await geometryFromReportBytes(reportArtifact.bytes);
       if (zipGeometry) {
         geometry = zipGeometry;
@@ -480,63 +712,32 @@ async function processClaimedMeasurementIntake(
       } else {
         const ocrConfig = measurementPdfOcrConfig(env);
         if (ocrConfig && looksLikePdf(reportArtifact.bytes)) {
-          ocr = await getOrCreateMeasurementPdfOcr(env, receipt, reportArtifact, ocrConfig);
+          ocr = await getOrCreateMeasurementPdfOcr(
+            env,
+            receipt,
+            reportArtifact,
+            ocrConfig,
+          );
           const applied = applyMeasurementPdfOcr(sub, ocr);
           ocrSourceRefs = applied.sourceRefs;
           ocrConfidences = applied.confidences;
         }
       }
     }
-    const evidenceRawKey = reportArtifact?.rawKey ?? identity.rawKey;
-    const sourceRefs = mergeMeasurementSourceRefs(ocrSourceRefs, geometry?.sourceRefs);
-    const sourceConfidences = mergeMeasurementSourceConfidences(
-      ocrConfidences,
-      geometry?.sourceRefs,
-    );
-    if (!sub.jobNumber) {
-      await applySolarCrossCheck(env, geometry, sub.coords, receipt);
-      const erp = await syncMeasurementToErpNext(
-        env,
-        receipt,
-        sub,
-        evidenceRawKey,
-        parsedAt,
-        null,
-        geometry,
-        graphFor(geometry),
-        sourceRefs,
-        sourceConfidences,
-        Boolean(ocr),
-      );
-      if (erp.error) throw new MeasurementIntakeFailure("frappe_measurement_sync_failed", erp.error);
-      const reviewReason = ocr ? "ocr_review_required" : "no_job_number";
-      await store.recordAudit(env, {
-        automation: "measurement",
-        trigger: identity.provider.toLowerCase(),
-        envelope_id: receipt.receipt_id,
-        target_ids: erp.name ?? receipt.measurement_id,
-        action: "unmatched",
-        result: "ok",
-        error: reviewReason,
-      });
-      const completed = await completeMeasurementIntakeReceipt(env, {
-        receiptId: receipt.receipt_id,
-        leaseToken: receipt.lease_token!,
-        status: "unmatched",
-        frappeMeasurementId: erp.name,
-        frappeEvidenceId: erp.evidenceItemName,
-        frappeError: erp.error,
-        lastError: reviewReason,
-        now: new Date().toISOString(),
-      });
-      return completedResponse(completed, {
-        measurements: sub.measurements,
-        geometry: geometrySummary(geometry),
-        ocr: ocrSummary(ocr),
-      });
+    let filing: {
+      report: string | null;
+      folder: string | null;
+      note: string | null;
+      bytes: ArrayBuffer | null;
+    } = {
+      report: null,
+      folder: null,
+      note: null,
+      bytes: null,
+    };
+    if (jobResolution.state === "matched") {
+      filing = await fileMeasurementReport(env, receipt, sub, reportArtifact);
     }
-
-    const filing = await fileMeasurementReport(env, receipt, sub, reportArtifact);
     // Zip-wrapped report (ESX-style): the payload carried no XML, but the fetched
     // report file itself may be a zip around an AppliCad export. Recomputed values
     // override upstream-AI-extracted keys, the same rule as body-level XML.
@@ -560,45 +761,115 @@ async function processClaimedMeasurementIntake(
       });
     }
 
-    const erp = await syncMeasurementToErpNext(
+    const currentReceipt = await getMeasurementIntakeReceiptById(
       env,
-      receipt,
-      sub,
-      evidenceRawKey,
-      parsedAt,
-      filing.report,
-      geometry,
-      graphFor(geometry),
-      sourceRefs,
-      sourceConfidences,
-      Boolean(ocr),
+      receipt.receipt_id,
     );
-    if (erp.error) throw new MeasurementIntakeFailure("frappe_measurement_sync_failed", erp.error);
-    const unmatchedJob = erp.jobMatched === false;
-    const reviewRequired = Boolean(ocr);
-    const exceptionRequired = unmatchedJob || reviewRequired;
-    const completionReason = unmatchedJob
-      ? "roof_job_not_found"
-      : reviewRequired
-        ? "ocr_review_required"
-        : filing.note;
+    if (
+      !currentReceipt ||
+      currentReceipt.status !== "processing" ||
+      currentReceipt.lease_token !== receipt.lease_token
+    ) {
+      throw new MeasurementIntakeFailure("measurement_receipt_lease_lost");
+    }
+    const evidenceRawKey = reportArtifact?.rawKey ?? identity.rawKey;
+    const sourceRefs = mergeMeasurementSourceRefs(
+      ocrSourceRefs,
+      geometry?.sourceRefs,
+    );
+    const sourceConfidences = mergeMeasurementSourceConfidences(
+      ocrConfidences,
+      geometry?.sourceRefs,
+    );
+    const roofGraph = geometry
+      ? deriveRoofGraph({
+          geometry,
+          rawKey: geometryRawKey,
+          rawSha256: geometryRawSha256,
+          provider: identity.provider,
+          ingestedAt: parsedAt,
+        })
+      : null;
+    const reviewReasons = [
+      jobResolution.error,
+      ocr ? "ocr_review_required" : null,
+      geometry?.needsReview ? "geometry_review_required" : null,
+    ].filter((reason): reason is string => Boolean(reason));
+    const receiptStatus =
+      jobResolution.state === "matched" && !ocr ? "matched" : "unmatched";
+    const completionReason = ocr
+      ? "ocr_review_required"
+      : (jobResolution.error ?? filing.note);
+    const projection = await recordNativeMeasurementRevision(env, {
+      receipt: currentReceipt,
+      tenantId,
+      job: jobResolution.job,
+      associationError: jobResolution.error,
+      receiptStatus,
+      completionReason,
+      reviewReasons,
+      supersedesMeasurementId: sub.supersedesMeasurementId,
+      correctionReason: sub.correctionReason,
+      evidence: {
+        raw: {
+          key: currentReceipt.raw_key,
+          sha256: currentReceipt.payload_hash,
+          content_type: currentReceipt.content_type,
+        },
+        report: currentReceipt.report_raw_key
+          ? {
+              key: currentReceipt.report_raw_key,
+              sha256: currentReceipt.report_sha256,
+              content_type: currentReceipt.report_content_type,
+            }
+          : null,
+        ocr:
+          currentReceipt.ocr_status === "completed"
+            ? {
+                status: currentReceipt.ocr_status,
+                model: currentReceipt.ocr_model,
+                key: currentReceipt.ocr_result_key,
+                sha256: currentReceipt.ocr_result_sha256,
+                job_number_candidate: currentReceipt.ocr_job_number_candidate,
+                job_number_source_ref: currentReceipt.ocr_job_number_source_ref,
+                review_required: true,
+              }
+            : { status: currentReceipt.ocr_status, review_required: false },
+        drive: { report: filing.report, folder: filing.folder },
+        source_evidence_key: evidenceRawKey,
+        measurement_candidates: sub.measurements,
+        source_refs: sourceRefs ?? {},
+        source_confidences: sourceConfidences ?? {},
+        geometry_authority: geometry
+          ? {
+              kind: "deterministic",
+              measurements: geometry.measurements,
+              checks: geometry.checks,
+              roof_graph: roofGraph,
+            }
+          : { kind: "none", measurements: {}, checks: [], roof_graph: null },
+        ocr_is_geometry_authority: false,
+      },
+      now: new Date().toISOString(),
+    });
     await store.recordAudit(env, {
-      automation: "measurement",
+      automation: "native_measurement",
       trigger: identity.provider.toLowerCase(),
       envelope_id: receipt.receipt_id,
       job_number: sub.jobNumber,
-      target_ids: filing.report ?? filing.folder ?? receipt.measurement_id,
-      action: exceptionRequired ? "unmatched" : filing.report ? "filed" : "received",
+      target_ids: `measurement_revision:${projection.revision.measurement_revision_id}`,
+      action: projection.kind === "replayed" ? "upsert_existing" : "create",
       result: "ok",
       error: completionReason,
     });
     const completed = await completeMeasurementIntakeReceipt(env, {
       receiptId: receipt.receipt_id,
       leaseToken: receipt.lease_token!,
-      status: exceptionRequired ? "unmatched" : "matched",
-      frappeMeasurementId: erp.name,
-      frappeEvidenceId: erp.evidenceItemName,
-      frappeError: null,
+      tenantId,
+      status: receiptStatus,
+      nativeRoofJobId: projection.revision.roof_job_id,
+      nativeMeasurementRevisionId: projection.revision.measurement_revision_id,
+      nativeProjectionSha256: projection.revision.projection_sha256,
       lastError: completionReason,
       now: new Date().toISOString(),
     });
@@ -616,12 +887,10 @@ async function processClaimedMeasurementIntake(
 
 class MeasurementIntakeFailure extends Error {
   readonly code: string;
-  readonly frappeError: string | null;
 
-  constructor(code: string, frappeError: string | null = null) {
+  constructor(code: string) {
     super(code);
     this.code = code;
-    this.frappeError = frappeError;
   }
 }
 
@@ -631,18 +900,26 @@ async function markClaimedMeasurementRetryable(
   error: unknown,
 ): Promise<Response> {
   const code = measurementFailureCode(error);
-  log({ at: "measurement_intake", receipt_id: receipt.receipt_id, measurement_id: receipt.measurement_id, error: code });
+  log({
+    at: "measurement_intake",
+    receipt_id: receipt.receipt_id,
+    measurement_id: receipt.measurement_id,
+    error: code,
+  });
   try {
     await markMeasurementIntakeRetryable(env, {
       receiptId: receipt.receipt_id,
       leaseToken: receipt.lease_token!,
       error: code,
-      frappeError: error instanceof MeasurementIntakeFailure ? error.frappeError : null,
       now: new Date().toISOString(),
     });
   } catch (markError) {
     // A concurrent retry won after this lease expired. It owns the final receipt state.
-    log({ at: "measurement_intake_mark_retryable", receipt_id: receipt.receipt_id, error: measurementFailureCode(markError) });
+    log({
+      at: "measurement_intake_mark_retryable",
+      receipt_id: receipt.receipt_id,
+      error: measurementFailureCode(markError),
+    });
   }
   return pendingMeasurementResponse(receipt);
 }
@@ -658,21 +935,28 @@ export async function retryMeasurementIntakeReceipts(
     now.toISOString(),
     Math.min(limit * 5, 100),
   );
-  const due = candidates.filter((receipt) => {
-    if (
-      receipt.status === "retryable_error" &&
-      (measurementRetryNeedsHumanRecovery(receipt.last_error) ||
-        receipt.attempts >= measurementRetryAttemptLimit(receipt.last_error))
-    ) return false;
-    return retryDue(receipt, now);
-  }).slice(0, limit);
+  const due = candidates
+    .filter((receipt) => {
+      if (
+        receipt.status === "retryable_error" &&
+        (measurementRetryNeedsHumanRecovery(receipt.last_error) ||
+          receipt.attempts >= measurementRetryAttemptLimit(receipt.last_error))
+      )
+        return false;
+      return retryDue(receipt, now);
+    })
+    .slice(0, limit);
   // A report may be 20 MiB; bounded sequential replay prevents a cron tick from buffering a
   // large batch of report downloads and multipart Drive uploads in one Worker isolate.
   for (const candidate of due) {
     try {
       await retryMeasurementIntakeReceipt(env, candidate, now);
     } catch {
-      log({ at: "measurement_intake_retry", receipt_id: candidate.receipt_id, error: "retry_candidate_failed" });
+      log({
+        at: "measurement_intake_retry",
+        receipt_id: candidate.receipt_id,
+        error: "retry_candidate_failed",
+      });
     }
   }
 }
@@ -687,7 +971,9 @@ async function retryMeasurementIntakeReceipt(
     ...identity,
     now: now.toISOString(),
     leaseToken: crypto.randomUUID(),
-    leaseExpiresAt: new Date(now.getTime() + MEASUREMENT_LEASE_MS).toISOString(),
+    leaseExpiresAt: new Date(
+      now.getTime() + MEASUREMENT_LEASE_MS,
+    ).toISOString(),
   });
   if (claimed.kind !== "claimed") return;
   await processMeasurementReceiptLease(env, claimed.receipt);
@@ -698,34 +984,61 @@ async function fileMeasurementReport(
   receipt: MeasurementIntakeReceipt,
   sub: MeasurementSubmission,
   archivedReport: MeasurementReportArtifact | null = null,
-): Promise<{ report: string | null; folder: string | null; note: string | null; bytes: ArrayBuffer | null }> {
+): Promise<{
+  report: string | null;
+  folder: string | null;
+  note: string | null;
+  bytes: ArrayBuffer | null;
+}> {
   if (receipt.drive_report_url) {
-    return { report: receipt.drive_report_url, folder: receipt.drive_folder_url, note: null, bytes: null };
+    return {
+      report: receipt.drive_report_url,
+      folder: receipt.drive_folder_url,
+      note: null,
+      bytes: null,
+    };
   }
-  if (!sub.reportUrl) return { report: null, folder: null, note: "no_report_url", bytes: null };
-  if (!googleConfigured(env)) throw new MeasurementIntakeFailure("drive_not_configured");
+  if (!sub.reportUrl)
+    return { report: null, folder: null, note: "no_report_url", bytes: null };
+  if (!googleConfigured(env))
+    throw new MeasurementIntakeFailure("drive_not_configured");
 
-  const fetched = archivedReport ?? await fetchMeasurementReportBytes(sub.reportUrl);
+  const fetched =
+    archivedReport ?? (await fetchMeasurementReportBytes(sub.reportUrl));
   const contentType = fetched.contentType;
   const bytes = fetched.bytes;
-  const suffix = receipt.measurement_id.slice("measurement:".length, "measurement:".length + 16);
-  const batch = await fileToJobFolder(env, sub.jobNumber!, "02 Measurements & Reports", [{
-    name: `${sub.jobNumber}-measurement-${suffix}.${reportExt(sub.reportUrl, contentType)}`,
-    bytes,
-    contentType,
-    idempotencyKey: receipt.measurement_id,
-  }]);
+  const suffix = receipt.measurement_id.slice(
+    "measurement:".length,
+    "measurement:".length + 16,
+  );
+  const batch = await fileToJobFolder(
+    env,
+    sub.jobNumber!,
+    "02 Measurements & Reports",
+    [
+      {
+        name: `${sub.jobNumber}-measurement-${suffix}.${reportExt(sub.reportUrl, contentType)}`,
+        bytes,
+        contentType,
+        idempotencyKey: receipt.measurement_id,
+      },
+    ],
+  );
   const filed = batch.files[0];
   if (!filed?.webUrl) throw new MeasurementIntakeFailure("drive_upload_failed");
   return { report: filed.webUrl, folder: batch.folderUrl, note: null, bytes };
 }
 
 /** Zip-wrapped report (ESX-style): unwrap and verify any AppliCad XML payload. */
-export async function geometryFromReportBytes(bytes: ArrayBuffer | Uint8Array): Promise<GeometryModel | null> {
+export async function geometryFromReportBytes(
+  bytes: ArrayBuffer | Uint8Array,
+): Promise<GeometryModel | null> {
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (!isZip(u8)) return null;
   const extracted = await extractZipXml(u8);
-  return extracted?.appliCadXml ? parseAppliCadGeometry(extracted.appliCadXml.text) : null;
+  return extracted?.appliCadXml
+    ? parseAppliCadGeometry(extracted.appliCadXml.text)
+    : null;
 }
 
 function measurementPdfOcrConfig(env: Env): MeasurementOcrConfig | null {
@@ -756,7 +1069,9 @@ async function getOrStoreMeasurementReport(
 ): Promise<MeasurementReportArtifact> {
   if (receipt.report_raw_key) {
     if (!receipt.report_sha256 || !receipt.report_content_type) {
-      throw new MeasurementIntakeFailure("measurement_report_evidence_incomplete");
+      throw new MeasurementIntakeFailure(
+        "measurement_report_evidence_incomplete",
+      );
     }
     const stored = await env.RAW.get(receipt.report_raw_key);
     if (!stored) {
@@ -765,7 +1080,9 @@ async function getOrStoreMeasurementReport(
     const bytes = await stored.arrayBuffer();
     const sha256 = await sha256Bytes(bytes);
     if (sha256 !== receipt.report_sha256) {
-      throw new MeasurementIntakeFailure("measurement_report_evidence_hash_mismatch");
+      throw new MeasurementIntakeFailure(
+        "measurement_report_evidence_hash_mismatch",
+      );
     }
     return {
       bytes,
@@ -801,7 +1118,9 @@ async function fetchMeasurementReportBytes(
     const response = await fetchSafeReport(reportUrl, controller.signal);
     if (!response.ok) {
       await response.body?.cancel();
-      throw new MeasurementIntakeFailure(`report_fetch_status_${response.status}`);
+      throw new MeasurementIntakeFailure(
+        `report_fetch_status_${response.status}`,
+      );
     }
     return {
       contentType: normalizedContentType(
@@ -811,7 +1130,8 @@ async function fetchMeasurementReportBytes(
     };
   } catch (error) {
     if (error instanceof MeasurementIntakeFailure) throw error;
-    if (controller.signal.aborted) throw new MeasurementIntakeFailure("report_fetch_timeout");
+    if (controller.signal.aborted)
+      throw new MeasurementIntakeFailure("report_fetch_timeout");
     throw new MeasurementIntakeFailure("report_fetch_failed");
   } finally {
     clearTimeout(timeout);
@@ -889,7 +1209,11 @@ async function loadStoredMeasurementPdfOcr(
   receipt: MeasurementIntakeReceipt,
   reportSha256: string,
 ): Promise<MeasurementPdfOcrResult> {
-  if (!receipt.ocr_result_key || !receipt.ocr_result_sha256 || !receipt.ocr_model) {
+  if (
+    !receipt.ocr_result_key ||
+    !receipt.ocr_result_sha256 ||
+    !receipt.ocr_model
+  ) {
     throw new MeasurementIntakeFailure("measurement_ocr_evidence_incomplete");
   }
   const stored = await readStoredMeasurementPdfOcr(
@@ -898,9 +1222,12 @@ async function loadStoredMeasurementPdfOcr(
     reportSha256,
     receipt.ocr_model,
   );
-  if (!stored) throw new MeasurementIntakeFailure("measurement_ocr_evidence_missing");
+  if (!stored)
+    throw new MeasurementIntakeFailure("measurement_ocr_evidence_missing");
   if (stored.sha256 !== receipt.ocr_result_sha256) {
-    throw new MeasurementIntakeFailure("measurement_ocr_evidence_hash_mismatch");
+    throw new MeasurementIntakeFailure(
+      "measurement_ocr_evidence_hash_mismatch",
+    );
   }
   return stored.result;
 }
@@ -924,7 +1251,9 @@ async function readStoredMeasurementPdfOcr(
     throw new MeasurementIntakeFailure("measurement_ocr_report_hash_mismatch");
   }
   if (parsed.model !== model) {
-    throw new MeasurementIntakeFailure("measurement_ocr_evidence_model_mismatch");
+    throw new MeasurementIntakeFailure(
+      "measurement_ocr_evidence_model_mismatch",
+    );
   }
   return { result: parsed, sha256 };
 }
@@ -966,8 +1295,7 @@ async function requestMeasurementPdfOcr(
           },
           {
             type: "text",
-            text:
-              "Call extract_measurement_report_fields exactly once. Copy only visibly printed values. Page numbers are 1-indexed. Region and label must identify where a reviewer can find each value. Return null when no job number is printed.",
+            text: "Call extract_measurement_report_fields exactly once. Copy only visibly printed values. Page numbers are 1-indexed. Region and label must identify where a reviewer can find each value. Return null when no job number is printed.",
           },
         ],
       },
@@ -977,7 +1305,10 @@ async function requestMeasurementPdfOcr(
   const omnirouteBody = JSON.stringify({ ...requestPayload, model: OMNIROUTE_FALLBACK_MODEL });
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), MEASUREMENT_OCR_TIMEOUT_MS);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    MEASUREMENT_OCR_TIMEOUT_MS,
+  );
   try {
     let primaryErrorStatus: number | null = null;
     if (config.apiKey) {
@@ -1028,7 +1359,9 @@ async function requestMeasurementPdfOcr(
   } catch (error) {
     if (error instanceof MeasurementIntakeFailure) throw error;
     throw new MeasurementIntakeFailure(
-      controller.signal.aborted ? "measurement_ocr_timeout" : "measurement_ocr_request_failed",
+      controller.signal.aborted
+        ? "measurement_ocr_timeout"
+        : "measurement_ocr_request_failed",
     );
   } finally {
     clearTimeout(timeout);
@@ -1097,7 +1430,9 @@ function normalizeMeasurementPdfOcr(
     throw new MeasurementIntakeFailure("measurement_ocr_tool_result_invalid");
   }
   const record = value as Record<string, unknown>;
-  const measurements = Array.isArray(record.measurements) ? record.measurements : [];
+  const measurements = Array.isArray(record.measurements)
+    ? record.measurements
+    : [];
   const result: MeasurementPdfOcrResult = {
     schemaVersion: "ironwrap.measurement-ocr.v1",
     model: meta.model,
@@ -1121,8 +1456,18 @@ function normalizeMeasurementPdfOcr(
     const sourceRef = ocrSourceRef(row);
     const confidence = ocrConfidence(row.confidence);
     const parsedValue = typeof row.value === "number" ? row.value : null;
-    if (!metric || !OCR_MEASUREMENT_KEYS.includes(metric) || parsedValue === null || !sourceRef || !confidence) {
-      result.checks.push({ code: "invalid_row", ok: false, detail: "OCR row failed schema validation" });
+    if (
+      !metric ||
+      !OCR_MEASUREMENT_KEYS.includes(metric) ||
+      parsedValue === null ||
+      !sourceRef ||
+      !confidence
+    ) {
+      result.checks.push({
+        code: "invalid_row",
+        ok: false,
+        detail: "OCR row failed schema validation",
+      });
       continue;
     }
     const valueCheck = validateOcrMeasurementValue(metric, parsedValue);
@@ -1156,7 +1501,11 @@ function normalizeMeasurementPdfOcr(
   }
   appendOcrConsistencyChecks(result);
   if (!Object.keys(result.measurements).length && !result.jobNumberCandidate) {
-    result.checks.push({ code: "no_candidates", ok: false, detail: "No review candidates extracted" });
+    result.checks.push({
+      code: "no_candidates",
+      ok: false,
+      detail: "No review candidates extracted",
+    });
   }
   return result;
 }
@@ -1164,7 +1513,10 @@ function normalizeMeasurementPdfOcr(
 function applyMeasurementPdfOcr(
   sub: MeasurementSubmission,
   ocr: MeasurementPdfOcrResult,
-): { sourceRefs: Record<string, string>; confidences: Record<string, OcrConfidence> } {
+): {
+  sourceRefs: Record<string, string>;
+  confidences: Record<string, OcrConfidence>;
+} {
   const sourceRefs: Record<string, string> = {};
   const confidences: Record<string, OcrConfidence> = {};
   for (const [metric, value] of Object.entries(ocr.measurements)) {
@@ -1193,11 +1545,14 @@ function mergeMeasurementSourceConfidences(
 ): Record<string, "deterministic" | "parsed"> | undefined {
   const merged: Record<string, "deterministic" | "parsed"> = {};
   for (const metric of Object.keys(parsed)) merged[metric] = "parsed";
-  for (const metric of Object.keys(deterministicRefs ?? {})) merged[metric] = "deterministic";
+  for (const metric of Object.keys(deterministicRefs ?? {}))
+    merged[metric] = "deterministic";
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-function parseStoredMeasurementPdfOcr(serialized: string): MeasurementPdfOcrResult {
+function parseStoredMeasurementPdfOcr(
+  serialized: string,
+): MeasurementPdfOcrResult {
   let value: unknown;
   try {
     value = JSON.parse(serialized);
@@ -1208,12 +1563,18 @@ function parseStoredMeasurementPdfOcr(serialized: string): MeasurementPdfOcrResu
     throw new MeasurementIntakeFailure("measurement_ocr_evidence_invalid");
   }
   const result = value as Partial<MeasurementPdfOcrResult>;
-  const hashes = [result.reportSha256, result.requestSha256, result.responseSha256];
+  const hashes = [
+    result.reportSha256,
+    result.requestSha256,
+    result.responseSha256,
+  ];
   if (
     result.schemaVersion !== "ironwrap.measurement-ocr.v1" ||
     typeof result.model !== "string" ||
     !ALLOWED_MEASUREMENT_OCR_MODELS.has(result.model) ||
-    hashes.some((hash) => typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)) ||
+    hashes.some(
+      (hash) => typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash),
+    ) ||
     typeof result.extractedAt !== "string" ||
     result.reviewRequired !== true ||
     !isOcrNumberMap(result.measurements) ||
@@ -1222,11 +1583,14 @@ function parseStoredMeasurementPdfOcr(serialized: string): MeasurementPdfOcrResu
     !Array.isArray(result.checks) ||
     !result.checks.every(isOcrCheck) ||
     !isStoredOcrJobNumber(result.jobNumberCandidate)
-  ) throw new MeasurementIntakeFailure("measurement_ocr_evidence_invalid");
+  )
+    throw new MeasurementIntakeFailure("measurement_ocr_evidence_invalid");
   return result as MeasurementPdfOcrResult;
 }
 
-function normalizeOcrJobNumber(value: unknown): MeasurementPdfOcrResult["jobNumberCandidate"] {
+function normalizeOcrJobNumber(
+  value: unknown,
+): MeasurementPdfOcrResult["jobNumberCandidate"] {
   if (value === null || value === undefined) return null;
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
@@ -1239,10 +1603,13 @@ function normalizeOcrJobNumber(value: unknown): MeasurementPdfOcrResult["jobNumb
 }
 
 function ocrSourceRef(record: Record<string, unknown>): string | null {
-  const page = typeof record.page === "number" && Number.isInteger(record.page) &&
-      record.page >= 1 && record.page <= 600
-    ? record.page
-    : null;
+  const page =
+    typeof record.page === "number" &&
+    Number.isInteger(record.page) &&
+    record.page >= 1 &&
+    record.page <= 600
+      ? record.page
+      : null;
   const region = cleanCitationPart(record.region, 80);
   const label = cleanCitationPart(record.label, 100);
   return page && region && label
@@ -1251,12 +1618,18 @@ function ocrSourceRef(record: Record<string, unknown>): string | null {
 }
 
 function cleanCitationPart(value: unknown, maxLength: number): string | null {
-  const text = asString(value)?.replace(/[;\r\n]+/g, " ").replace(/\s+/g, " ").trim() ?? "";
+  const text =
+    asString(value)
+      ?.replace(/[;\r\n]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() ?? "";
   return text && text.length <= maxLength ? text : null;
 }
 
 function ocrConfidence(value: unknown): OcrConfidence | null {
-  return value === "high" || value === "medium" || value === "low" ? value : null;
+  return value === "high" || value === "medium" || value === "low"
+    ? value
+    : null;
 }
 
 function validateOcrMeasurementValue(
@@ -1264,15 +1637,19 @@ function validateOcrMeasurementValue(
   value: number,
 ): { code: string; ok: boolean; detail: string } {
   let ok = Number.isFinite(value);
-  if (metric === "facets") ok = ok && Number.isInteger(value) && value >= 1 && value <= 1_000;
-  else if (metric === "pitch" || metric === "predominant_pitch") ok = ok && value >= 0 && value <= 24;
+  if (metric === "facets")
+    ok = ok && Number.isInteger(value) && value >= 1 && value <= 1_000;
+  else if (metric === "pitch" || metric === "predominant_pitch")
+    ok = ok && value >= 0 && value <= 24;
   else if (metric === "waste_factor") ok = ok && value >= 0 && value <= 100;
   else if (metric === "squares") ok = ok && value > 0 && value <= 2_500;
   else ok = ok && value > 0 && value <= 250_000;
   return {
     code: `domain:${metric}`,
     ok,
-    detail: ok ? "Value is within the accepted roofing domain" : "Value is outside the accepted roofing domain",
+    detail: ok
+      ? "Value is within the accepted roofing domain"
+      : "Value is outside the accepted roofing domain",
   };
 }
 
@@ -1287,7 +1664,8 @@ function appendOcrConsistencyChecks(result: MeasurementPdfOcrResult): void {
   const area = result.measurements.area_sqft ?? result.measurements.area;
   const squares = result.measurements.squares;
   if (area !== undefined && squares !== undefined) {
-    const relativeDifference = Math.abs(area / 100 - squares) / Math.max(squares, 0.01);
+    const relativeDifference =
+      Math.abs(area / 100 - squares) / Math.max(squares, 0.01);
     result.checks.push({
       code: "area_squares_consistency",
       ok: relativeDifference <= 0.25,
@@ -1297,7 +1675,8 @@ function appendOcrConsistencyChecks(result: MeasurementPdfOcrResult): void {
   const areaSqft = result.measurements.area_sqft;
   const areaAlias = result.measurements.area;
   if (areaSqft !== undefined && areaAlias !== undefined) {
-    const relativeDifference = Math.abs(areaSqft - areaAlias) / Math.max(areaSqft, areaAlias, 0.01);
+    const relativeDifference =
+      Math.abs(areaSqft - areaAlias) / Math.max(areaSqft, areaAlias, 0.01);
     result.checks.push({
       code: "area_alias_consistency",
       ok: relativeDifference <= 0.02,
@@ -1307,28 +1686,59 @@ function appendOcrConsistencyChecks(result: MeasurementPdfOcrResult): void {
 }
 
 function isOcrNumberMap(value: unknown): value is Record<string, number> {
-  return !!value && typeof value === "object" && !Array.isArray(value) &&
-    Object.entries(value).every(([key, item]) => OCR_MEASUREMENT_KEYS.includes(key) &&
-      typeof item === "number" && Number.isFinite(item));
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(
+      ([key, item]) =>
+        OCR_MEASUREMENT_KEYS.includes(key) &&
+        typeof item === "number" &&
+        Number.isFinite(item),
+    )
+  );
 }
 
 function isOcrStringMap(value: unknown): value is Record<string, string> {
-  return !!value && typeof value === "object" && !Array.isArray(value) &&
-    Object.entries(value).every(([key, item]) => OCR_MEASUREMENT_KEYS.includes(key) &&
-      typeof item === "string" && item.length <= 240);
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(
+      ([key, item]) =>
+        OCR_MEASUREMENT_KEYS.includes(key) &&
+        typeof item === "string" &&
+        item.length <= 240,
+    )
+  );
 }
 
-function isOcrConfidenceMap(value: unknown): value is Record<string, OcrConfidence> {
-  return !!value && typeof value === "object" && !Array.isArray(value) &&
-    Object.entries(value).every(([key, item]) => OCR_MEASUREMENT_KEYS.includes(key) &&
-      ocrConfidence(item) !== null);
+function isOcrConfidenceMap(
+  value: unknown,
+): value is Record<string, OcrConfidence> {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(
+      ([key, item]) =>
+        OCR_MEASUREMENT_KEYS.includes(key) && ocrConfidence(item) !== null,
+    )
+  );
 }
 
-function isOcrCheck(value: unknown): value is MeasurementPdfOcrResult["checks"][number] {
+function isOcrCheck(
+  value: unknown,
+): value is MeasurementPdfOcrResult["checks"][number] {
   if (!value || typeof value !== "object") return false;
   const check = value as Record<string, unknown>;
-  return typeof check.code === "string" && check.code.length <= 120 &&
-    typeof check.ok === "boolean" && typeof check.detail === "string" && check.detail.length <= 500;
+  return (
+    typeof check.code === "string" &&
+    check.code.length <= 120 &&
+    typeof check.ok === "boolean" &&
+    typeof check.detail === "string" &&
+    check.detail.length <= 500
+  );
 }
 
 function isStoredOcrJobNumber(
@@ -1337,9 +1747,12 @@ function isStoredOcrJobNumber(
   if (value === null) return true;
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
-  return boundedJobNumber(candidate.value) !== null &&
-    typeof candidate.sourceRef === "string" && candidate.sourceRef.length <= 240 &&
-    ocrConfidence(candidate.confidence) !== null;
+  return (
+    boundedJobNumber(candidate.value) !== null &&
+    typeof candidate.sourceRef === "string" &&
+    candidate.sourceRef.length <= 240 &&
+    ocrConfidence(candidate.confidence) !== null
+  );
 }
 
 function looksLikePdf(bytes: ArrayBuffer | Uint8Array): boolean {
@@ -1347,7 +1760,8 @@ function looksLikePdf(bytes: ArrayBuffer | Uint8Array): boolean {
   const header = [0x25, 0x50, 0x44, 0x46, 0x2d];
   const limit = Math.min(input.length - header.length + 1, 1_024);
   for (let offset = 0; offset < limit; offset += 1) {
-    if (header.every((byte, index) => input[offset + index] === byte)) return true;
+    if (header.every((byte, index) => input[offset + index] === byte))
+      return true;
   }
   return false;
 }
@@ -1374,7 +1788,12 @@ async function applySolarCrossCheck(
     provider: receipt.provider,
     source: "google_solar",
   };
-  const recordInformational = (check: { check: string; target: string; ok: boolean; detail: string }) => {
+  const recordInformational = (check: {
+    check: string;
+    target: string;
+    ok: boolean;
+    detail: string;
+  }) => {
     geometry.checks.push(check);
     ledger.push({
       ...base,
@@ -1392,7 +1811,12 @@ async function applySolarCrossCheck(
     const insights = await fetchBuildingInsights(env, coords.lat, coords.lng);
     if (insights === null) {
       const detail = "no Solar coverage at location";
-      recordInformational({ check: "cross_source_coverage", target: "google_solar", ok: true, detail });
+      recordInformational({
+        check: "cross_source_coverage",
+        target: "google_solar",
+        ok: true,
+        detail,
+      });
       return;
     }
     const parsed = parseSolarBuildingInsightsResult(insights);
@@ -1413,20 +1837,43 @@ async function applySolarCrossCheck(
       geometry.needsReview = true;
       return;
     }
-    const cross = crossCheckMeasurements(geometry.measurements, solar.measurements);
+    const cross = crossCheckMeasurements(
+      geometry.measurements,
+      solar.measurements,
+    );
     geometry.checks.push(...cross.checks);
     geometry.needsReview = geometry.needsReview || cross.needsReview;
     for (const c of cross.comparisons) {
-      ledger.push({ ...base, check_name: `cross_source_${c.metric}`, metric: c.metric, ok: c.ok,
-        primary_value: c.primary, independent_value: c.independent,
-        rel_diff: c.relDiff, abs_diff: c.absDiff,
-        detail: cross.checks.find((chk) => chk.check === `cross_source_${c.metric}`)?.detail ?? "" });
+      ledger.push({
+        ...base,
+        check_name: `cross_source_${c.metric}`,
+        metric: c.metric,
+        ok: c.ok,
+        primary_value: c.primary,
+        independent_value: c.independent,
+        rel_diff: c.relDiff,
+        abs_diff: c.absDiff,
+        detail:
+          cross.checks.find((chk) => chk.check === `cross_source_${c.metric}`)
+            ?.detail ?? "",
+      });
     }
-    const compared = new Set(cross.comparisons.map((comparison) => comparison.metric));
+    const compared = new Set(
+      cross.comparisons.map((comparison) => comparison.metric),
+    );
     for (const check of cross.checks) {
       if (!compared.has(check.check.replace("cross_source_", ""))) {
-        ledger.push({ ...base, check_name: check.check, metric: "", ok: check.ok,
-          primary_value: null, independent_value: null, rel_diff: null, abs_diff: null, detail: check.detail });
+        ledger.push({
+          ...base,
+          check_name: check.check,
+          metric: "",
+          ok: check.ok,
+          primary_value: null,
+          independent_value: null,
+          rel_diff: null,
+          abs_diff: null,
+          detail: check.detail,
+        });
       }
     }
     for (const metric of ["roof_area", "pitch", "azimuth"] as const) {
@@ -1441,19 +1888,26 @@ async function applySolarCrossCheck(
       });
     }
   } catch (error) {
-    log({ at: "measurement_solar_crosscheck", error: String(error).slice(0, 200) });
+    log({
+      at: "measurement_solar_crosscheck",
+      error: String(error).slice(0, 200),
+    });
     recordInformational({
       check: "cross_source_availability",
       target: "google_solar",
       ok: true,
-      detail: "Solar cross-check unavailable because the independent provider request or validation failed",
+      detail:
+        "Solar cross-check unavailable because the independent provider request or validation failed",
     });
   } finally {
     if (ledger.length) {
       try {
         await recordMeasurementDeltas(env, ledger);
       } catch (error) {
-        log({ at: "measurement_delta_ledger", error: String(error).slice(0, 200) });
+        log({
+          at: "measurement_delta_ledger",
+          error: String(error).slice(0, 200),
+        });
       }
     }
   }
@@ -1465,29 +1919,33 @@ function completedResponse(
   idempotentReplay = false,
 ): Response {
   const unmatched = receipt.status === "unmatched";
-  const reviewReason = receipt.last_error === "ocr_review_required"
-    ? "ocr_review_required"
-    : null;
-  return jsonResp({
-    ok: true,
-    status: unmatched ? "unmatched_review" : "matched",
-    ...(idempotentReplay ? { idempotent_replay: true } : {}),
-    measurement_id: receipt.measurement_id,
-    job_number: receipt.job_number,
-    report: receipt.drive_report_url,
-    folder: receipt.drive_folder_url,
-    erpnext_measurement_id: receipt.frappe_measurement_id,
-    erpnext_evidence_id: receipt.frappe_evidence_id,
-    ...(unmatched
-      ? {
-        note: reviewReason
-          ? "OCR candidates queued for operator review"
-          : "unmatched report queued for operator review",
-        ...(reviewReason ? { review_reason: reviewReason } : {}),
-      }
-      : {}),
-    ...detail,
-  }, unmatched ? 202 : 200);
+  const reviewReason =
+    receipt.last_error === "ocr_review_required" ? "ocr_review_required" : null;
+  return jsonResp(
+    {
+      ok: true,
+      status: unmatched ? "unmatched_review" : "matched",
+      ...(idempotentReplay ? { idempotent_replay: true } : {}),
+      measurement_id: receipt.measurement_id,
+      job_number: receipt.job_number,
+      report: receipt.drive_report_url,
+      folder: receipt.drive_folder_url,
+      native_tenant_id: receipt.tenant_id,
+      native_roof_job_id: receipt.native_roof_job_id,
+      native_measurement_revision_id: receipt.native_measurement_revision_id,
+      native_projection_sha256: receipt.native_projection_sha256,
+      ...(unmatched
+        ? {
+            note: reviewReason
+              ? "OCR candidates queued for operator review"
+              : "unmatched report queued for operator review",
+            ...(reviewReason ? { review_reason: reviewReason } : {}),
+          }
+        : {}),
+      ...detail,
+    },
+    unmatched ? 202 : 200,
+  );
 }
 
 function processingResponse(receipt: MeasurementIntakeReceipt): Response {
@@ -1498,37 +1956,61 @@ function processingResponse(receipt: MeasurementIntakeReceipt): Response {
   );
 }
 
-function pendingMeasurementResponse(receipt: MeasurementIntakeReceipt): Response {
+function pendingMeasurementResponse(
+  receipt: MeasurementIntakeReceipt,
+): Response {
   return jsonResp(
-    { error: "measurement_intake_pending", measurement_id: receipt.measurement_id },
+    {
+      error: "measurement_intake_pending",
+      measurement_id: receipt.measurement_id,
+    },
     502,
     { "retry-after": String(RETRY_AFTER_SECONDS) },
   );
 }
 
-function leaseIsActive(receipt: MeasurementIntakeReceipt, now: string): boolean {
-  return receipt.status === "processing" && !!receipt.lease_token && !!receipt.lease_expires_at && receipt.lease_expires_at > now;
+function leaseIsActive(
+  receipt: MeasurementIntakeReceipt,
+  now: string,
+): boolean {
+  return (
+    receipt.status === "processing" &&
+    !!receipt.lease_token &&
+    !!receipt.lease_expires_at &&
+    receipt.lease_expires_at > now
+  );
 }
 
-function normalizeRequestIdempotencyKey(value: string | null | undefined): string | null {
+function normalizeRequestIdempotencyKey(
+  value: string | null | undefined,
+): string | null {
   const normalized = value?.trim() ?? "";
   return REQUEST_IDEMPOTENCY_KEY.test(normalized) ? normalized : null;
 }
 
 function normalizedContentType(value: string | null | undefined): string {
   const mediaType = value?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  return mediaType.length <= 120 && /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(mediaType)
+  return mediaType.length <= 120 &&
+    /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(mediaType)
     ? mediaType
     : "application/octet-stream";
 }
 
 function boundedJobNumber(value: unknown): string | null {
   const jobNumber = asString(value);
-  return jobNumber && jobNumber.length <= MAX_JOB_NUMBER_LENGTH ? jobNumber : null;
+  return jobNumber && jobNumber.length <= MAX_JOB_NUMBER_LENGTH
+    ? jobNumber
+    : null;
 }
 
-function identityFromReceipt(receipt: MeasurementIntakeReceipt): MeasurementIntakeIdentity {
+function identityFromReceipt(
+  receipt: MeasurementIntakeReceipt,
+): MeasurementIntakeIdentity {
+  if (!receipt.tenant_id) {
+    throw new MeasurementIntakeFailure("measurement_receipt_tenant_missing");
+  }
   return {
+    tenantId: receipt.tenant_id,
     receiptId: receipt.receipt_id,
     idempotencyKeyHash: receipt.idempotency_key_hash,
     payloadHash: receipt.payload_hash,
@@ -1565,8 +2047,13 @@ function normalizedSha256(value: unknown): string | null {
 }
 
 async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 async function sha256Bytes(value: ArrayBuffer | Uint8Array): Promise<string> {
@@ -1574,19 +2061,31 @@ async function sha256Bytes(value: ArrayBuffer | Uint8Array): Promise<string> {
     "SHA-256",
     value instanceof Uint8Array ? value : new Uint8Array(value),
   );
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 function isPublicReportUrl(url: URL): boolean {
   const host = url.hostname.toLowerCase();
-  if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) return false;
-  if (host === "localhost" || host.endsWith(".localhost") || host.includes(":")) return false;
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    (url.port && url.port !== "443")
+  )
+    return false;
+  if (host === "localhost" || host.endsWith(".localhost") || host.includes(":"))
+    return false;
   const octets = host.split(".");
-  if (octets.length !== 4 || octets.some((part) => !/^\d{1,3}$/.test(part))) return true;
+  if (octets.length !== 4 || octets.some((part) => !/^\d{1,3}$/.test(part)))
+    return true;
   const ip = octets.map(Number);
   if (ip.some((part) => part > 255)) return false;
   return !(
-    ip[0] === 0 || ip[0] === 10 || ip[0] === 127 ||
+    ip[0] === 0 ||
+    ip[0] === 10 ||
+    ip[0] === 127 ||
     (ip[0] === 100 && ip[1] >= 64 && ip[1] <= 127) ||
     (ip[0] === 169 && ip[1] === 254) ||
     (ip[0] === 172 && ip[1] >= 16 && ip[1] <= 31) ||
@@ -1596,7 +2095,8 @@ function isPublicReportUrl(url: URL): boolean {
 }
 
 function safeReportUrl(value: string): URL {
-  if (value.length > 2048) throw new MeasurementIntakeFailure("report_url_invalid");
+  if (value.length > 2048)
+    throw new MeasurementIntakeFailure("report_url_invalid");
   try {
     const url = new URL(value);
     if (!isPublicReportUrl(url)) throw new Error("not_public_https");
@@ -1606,14 +2106,21 @@ function safeReportUrl(value: string): URL {
   }
 }
 
-async function fetchSafeReport(initialUrl: string, signal: AbortSignal): Promise<Response> {
+async function fetchSafeReport(
+  initialUrl: string,
+  signal: AbortSignal,
+): Promise<Response> {
   let target = safeReportUrl(initialUrl);
   for (let redirects = 0; redirects <= 3; redirects += 1) {
-    const response = await fetch(target.toString(), { redirect: "manual", signal });
+    const response = await fetch(target.toString(), {
+      redirect: "manual",
+      signal,
+    });
     if (response.status < 300 || response.status >= 400) return response;
     const location = response.headers.get("location");
     await response.body?.cancel();
-    if (!location || redirects === 3) throw new MeasurementIntakeFailure("report_redirect_invalid");
+    if (!location || redirects === 3)
+      throw new MeasurementIntakeFailure("report_redirect_invalid");
     target = safeReportUrl(new URL(location, target).toString());
   }
   throw new MeasurementIntakeFailure("report_redirect_invalid");
@@ -1659,11 +2166,19 @@ async function readBoundedResponse(
 
 function measurementFailureCode(error: unknown): string {
   if (error instanceof MeasurementIntakeFailure) return error.code;
+  if (error instanceof NativeMeasurementStoreError) return error.code;
   return "measurement_processing_failed";
 }
 
-function jsonResp(body: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...extraHeaders } });
+function jsonResp(
+  body: unknown,
+  status = 200,
+  extraHeaders: Record<string, string> = {},
+): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", ...extraHeaders },
+  });
 }
 
 /** Compact response summary of a geometry parse; null when no geometry present. */
@@ -1674,7 +2189,9 @@ function geometrySummary(g: GeometryModel | null) {
     lines: g.lines.length,
     points: g.points.length,
     needs_review: g.needsReview,
-    failed_checks: g.checks.filter((c) => !c.ok).map((c) => `${c.check}:${c.target}`),
+    failed_checks: g.checks
+      .filter((c) => !c.ok)
+      .map((c) => `${c.check}:${c.target}`),
   };
 }
 
@@ -1686,64 +2203,25 @@ function ocrSummary(result: MeasurementPdfOcrResult | null) {
     report_sha256: result.reportSha256,
     job_number_candidate: result.jobNumberCandidate,
     review_required: true,
-    failed_checks: result.checks.filter((check) => !check.ok).map((check) => check.code),
+    failed_checks: result.checks
+      .filter((check) => !check.ok)
+      .map((check) => check.code),
   };
-}
-
-async function syncMeasurementToErpNext(
-  env: Env,
-  receipt: MeasurementIntakeReceipt,
-  sub: MeasurementSubmission,
-  rawKey: string,
-  parsedAt: string,
-  reportFileUrl: string | null,
-  geometry: GeometryModel | null,
-  roofGraph: RoofGraphV1 | null,
-  sourceRefs?: Record<string, string>,
-  sourceConfidences?: Record<string, "deterministic" | "parsed">,
-  forceReview = false,
-): Promise<{ name: string | null; evidenceItemName: string | null; jobMatched: boolean | null; error: string | null }> {
-  try {
-    const erp = await pushMeasurementToErpNext(env, {
-      measurementId: receipt.measurement_id,
-      jobNumber: sub.jobNumber,
-      reportUrl: sub.reportUrl,
-      reportFileUrl,
-      rawKey,
-      parsedAt,
-      measurements: sub.measurements,
-      provider: geometry ? "AppliCad" : undefined,
-      needsReview: Boolean(forceReview || geometry?.needsReview || !sub.jobNumber || !reportFileUrl),
-      sourceRefs,
-      sourceConfidences,
-      roofGraph: roofGraph ?? undefined,
-    });
-    if (erp) {
-      await store.recordAudit(env, { automation: "erpnext_measurement", trigger: "roofruler",
-        envelope_id: receipt.receipt_id, job_number: sub.jobNumber,
-        target_ids: `measurement_report:${erp.name}${erp.evidenceItemName ? ",evidence_item:" + erp.evidenceItemName : ""}`,
-        action: erp.reused ? "upsert_existing" : "create", result: "ok" });
-    }
-    return {
-      name: erp?.name ?? null,
-      evidenceItemName: erp?.evidenceItemName ?? null,
-      jobMatched: erp?.roofJobMatched ?? null,
-      error: null,
-    };
-  } catch {
-    const error = "erpnext_measurement_failed";
-    // Frappe can echo a submitted signed report URL in an error body. The audit receives the
-    // stable code; Worker logs must not turn an upstream validation echo into URL disclosure.
-    log({ at: "erpnext_measurement", receipt_id: receipt.receipt_id, error });
-    await store.recordAudit(env, { automation: "erpnext_measurement", trigger: "roofruler",
-      envelope_id: receipt.receipt_id, job_number: sub.jobNumber, action: "sync", result: "error", error });
-    return { name: null, evidenceItemName: null, jobMatched: null, error };
-  }
 }
 
 function cleanSourceRef(value: unknown): string | null {
   const text = asString(value)?.replace(/\s+/g, " ").trim() ?? null;
   return text && text.length <= 240 ? text : null;
+}
+
+function configuredMeasurementTenant(env: Env): string {
+  const tenantId = String(
+    (env as Env & { APP_TENANT_ID?: string }).APP_TENANT_ID ?? "",
+  ).trim();
+  if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(tenantId)) {
+    throw new MeasurementIntakeFailure("measurement_tenant_not_configured");
+  }
+  return tenantId;
 }
 
 function base64FromBytes(bytes: ArrayBuffer | Uint8Array): string {

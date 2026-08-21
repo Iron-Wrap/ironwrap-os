@@ -1,117 +1,388 @@
 {
-  "actions": [],
-  "allow_rename": 0,
-  "autoname": "field:evidence_id",
-  "creation": "2026-07-08 00:00:00.000000",
-  "custom": 0,
-  "doctype": "DocType",
-  "engine": "InnoDB",
-  "field_order": [
-    "evidence_id",
-    "device_action_id",
-    "roof_job",
-    "work_package",
-    "work_package_version",
-    "work_package_release_attempt_id",
-    "evidence_slot_id",
-    "evidence_requirement",
-    "evidence_source",
-    "evidence_device_id",
-    "lead_envelope",
-    "evidence_type",
-    "proof_owner",
-    "proof_slot",
-    "source_system",
-    "source_uri",
-    "r2_key",
-    "drive_file_id",
-    "content_checksum",
-    "checksum_algorithm",
-    "content_type",
-    "content_length",
-    "capture_section",
-    "capture_actor",
-    "captured_at",
-    "latitude",
-    "longitude",
-    "location_accuracy_m",
-    "sync_state",
-    "verified_at",
-    "verification_source",
-    "evidence_freshness",
-    "evidence_conflict_state",
-    "evidence_verification",
-    "evidence_disposition",
-    "correction_of",
-    "correction_reason",
-    "customer_safe",
-    "summary"
-  ],
-  "fields": [
-    { "fieldname": "evidence_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Evidence ID", "reqd": 1, "unique": 1 },
-    { "fieldname": "device_action_id", "fieldtype": "Data", "in_standard_filter": 1, "label": "Device Action ID", "unique": 1 },
-    { "fieldname": "roof_job", "fieldtype": "Link", "in_standard_filter": 1, "label": "Roof Job", "options": "Roof Job" },
-    { "fieldname": "work_package", "fieldtype": "Link", "in_standard_filter": 1, "label": "Work Package", "options": "Work Package" },
-    { "fieldname": "work_package_version", "fieldtype": "Int", "in_standard_filter": 1, "label": "Work Package Version" },
-    { "fieldname": "work_package_release_attempt_id", "fieldtype": "Data", "in_standard_filter": 1, "label": "Work Package Release Attempt ID" },
-    { "fieldname": "evidence_slot_id", "fieldtype": "Data", "in_standard_filter": 1, "label": "Evidence Slot ID" },
-    { "fieldname": "evidence_requirement", "fieldtype": "Small Text", "label": "Evidence Requirement" },
-    { "fieldname": "evidence_source", "fieldtype": "Data", "label": "Evidence Source" },
-    { "fieldname": "evidence_device_id", "fieldtype": "Data", "label": "Evidence Device ID" },
-    { "fieldname": "lead_envelope", "fieldtype": "Link", "label": "Lead Envelope", "options": "Lead Envelope" },
-    { "fieldname": "evidence_type", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Evidence Type", "options": "Photo\nMeasurement Report\nXML\nPDF\nVoice Note\nEmail\nSigned Document\nInvoice\nField Note\nOther", "reqd": 1 },
-    { "fieldname": "proof_owner", "fieldtype": "Link", "label": "Proof Owner", "options": "User" },
-    { "fieldname": "proof_slot", "fieldtype": "Select", "in_standard_filter": 1, "label": "Proof Slot", "options": "Lead\nMeasurement\nEstimate\nContract\nDeposit\nMaterials\nSafety\nAccess\nWeather\nCrew\nProduction\nChange Order\nCompletion\nWarranty\nPayment\nCommunication\nOther" },
-    { "fieldname": "source_system", "fieldtype": "Data", "label": "Source System" },
-    { "fieldname": "source_uri", "fieldtype": "Data", "label": "Source URI" },
-    { "fieldname": "r2_key", "fieldtype": "Data", "label": "R2 Key", "read_only": 1 },
-    { "fieldname": "drive_file_id", "fieldtype": "Data", "label": "Drive File ID", "read_only": 1 },
-    { "fieldname": "content_checksum", "fieldtype": "Data", "label": "Content Checksum" },
-    { "default": "SHA-256", "fieldname": "checksum_algorithm", "fieldtype": "Select", "label": "Checksum Algorithm", "options": "SHA-256" },
-    { "fieldname": "content_type", "fieldtype": "Data", "label": "Content Type" },
-    { "fieldname": "content_length", "fieldtype": "Int", "label": "Content Length" },
-    { "fieldname": "capture_section", "fieldtype": "Section Break", "label": "Capture and Verification" },
-    { "fieldname": "capture_actor", "fieldtype": "Link", "label": "Capture Actor", "options": "User" },
-    { "fieldname": "captured_at", "fieldtype": "Datetime", "in_standard_filter": 1, "label": "Captured At" },
-    { "fieldname": "latitude", "fieldtype": "Float", "label": "Latitude" },
-    { "fieldname": "longitude", "fieldtype": "Float", "label": "Longitude" },
-    { "fieldname": "location_accuracy_m", "fieldtype": "Float", "label": "Location Accuracy (m)" },
-    { "default": "Local", "fieldname": "sync_state", "fieldtype": "Select", "in_standard_filter": 1, "label": "Sync State", "options": "Local\nQueued\nUploaded\nVerified\nRejected\nSuperseded", "reqd": 1 },
-    { "fieldname": "verified_at", "fieldtype": "Datetime", "label": "Verified At" },
-    { "fieldname": "verification_source", "fieldtype": "Data", "label": "Verification Source" },
-    { "fieldname": "evidence_freshness", "fieldtype": "Select", "label": "Evidence Freshness", "options": "Current\nStale\nUnknown" },
-    { "fieldname": "evidence_conflict_state", "fieldtype": "Select", "label": "Evidence Conflict State", "options": "None\nDetected\nResolved" },
-    { "fieldname": "evidence_verification", "fieldtype": "Select", "label": "Evidence Verification", "options": "Pending\nVerified\nRejected" },
-    { "fieldname": "evidence_disposition", "fieldtype": "Select", "label": "Evidence Disposition", "options": "Open\nAccepted\nNeeds Correction\nSuperseded" },
-    { "fieldname": "correction_of", "fieldtype": "Link", "label": "Correction Of", "options": "Evidence Item" },
-    { "fieldname": "correction_reason", "fieldtype": "Small Text", "label": "Correction Reason" },
-    { "fieldname": "customer_safe", "fieldtype": "Check", "label": "Customer Safe" },
-    { "fieldname": "summary", "fieldtype": "Small Text", "label": "Summary" }
-  ],
-  "index_web_pages_for_search": 0,
-  "istable": 0,
-  "links": [],
-  "modified": "2026-07-08 00:00:00.000000",
-  "modified_by": "Administrator",
-  "module": "IronWrap Roofing",
-  "name": "Evidence Item",
-  "naming_rule": "By fieldname",
-  "owner": "Administrator",
-  "permissions": [
-    {"create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
-    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Owner", "write": 1},
-    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Sales", "write": 1},
-    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Estimator", "write": 1},
-    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Production", "write": 1},
-    {"create": 1, "delete": 0, "if_owner": 1, "read": 1, "role": "IronWrap Field", "write": 1},
-    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Closeout", "write": 1},
-    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support"},
-    {"create": 1, "delete": 0, "read": 1, "role": "IronWrap Customer Acceptance Service"},
-    {"create": 1, "delete": 0, "read": 1, "role": "IronWrap Customer Decision Service"},
-    {"create": 1, "delete": 0, "read": 1, "role": "IronWrap Facet Design Projection Service"}
-  ],
-  "sort_field": "modified",
-  "sort_order": "DESC",
-  "states": [],
-  "track_changes": 1
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:evidence_id",
+ "creation": "2026-07-08 00:00:00.000000",
+ "custom": 0,
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "evidence_id",
+  "device_action_id",
+  "roof_job",
+  "work_package",
+  "work_package_version",
+  "work_package_release_attempt_id",
+  "evidence_slot_id",
+  "evidence_requirement",
+  "evidence_source",
+  "evidence_device_id",
+  "lead_envelope",
+  "evidence_type",
+  "proof_owner",
+  "proof_slot",
+  "source_system",
+  "source_uri",
+  "r2_key",
+  "drive_file_id",
+  "content_checksum",
+  "checksum_algorithm",
+  "content_type",
+  "content_length",
+  "capture_section",
+  "capture_actor",
+  "captured_at",
+  "latitude",
+  "longitude",
+  "location_accuracy_m",
+  "sync_state",
+  "verified_at",
+  "verification_source",
+  "evidence_freshness",
+  "evidence_conflict_state",
+  "evidence_verification",
+  "evidence_disposition",
+  "correction_of",
+  "correction_reason",
+  "customer_safe",
+  "summary"
+ ],
+ "fields": [
+  {
+   "fieldname": "evidence_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Evidence ID",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "device_action_id",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Device Action ID",
+   "unique": 1
+  },
+  {
+   "fieldname": "roof_job",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Roof Job",
+   "options": "Roof Job"
+  },
+  {
+   "fieldname": "work_package",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Work Package",
+   "options": "Work Package"
+  },
+  {
+   "fieldname": "work_package_version",
+   "fieldtype": "Int",
+   "in_standard_filter": 1,
+   "label": "Work Package Version"
+  },
+  {
+   "fieldname": "work_package_release_attempt_id",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Work Package Release Attempt ID"
+  },
+  {
+   "fieldname": "evidence_slot_id",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Evidence Slot ID"
+  },
+  {
+   "fieldname": "evidence_requirement",
+   "fieldtype": "Small Text",
+   "label": "Evidence Requirement"
+  },
+  {
+   "fieldname": "evidence_source",
+   "fieldtype": "Data",
+   "label": "Evidence Source"
+  },
+  {
+   "fieldname": "evidence_device_id",
+   "fieldtype": "Data",
+   "label": "Evidence Device ID"
+  },
+  {
+   "fieldname": "lead_envelope",
+   "fieldtype": "Link",
+   "label": "Lead Envelope",
+   "options": "Lead Envelope"
+  },
+  {
+   "fieldname": "evidence_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Evidence Type",
+   "options": "Photo\nMeasurement Report\nXML\nPDF\nVoice Note\nEmail\nSigned Document\nInvoice\nField Note\nOther",
+   "reqd": 1
+  },
+  {
+   "fieldname": "proof_owner",
+   "fieldtype": "Link",
+   "label": "Proof Owner",
+   "options": "User"
+  },
+  {
+   "fieldname": "proof_slot",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Proof Slot",
+   "options": "Lead\nMeasurement\nEstimate\nContract\nDeposit\nMaterials\nSafety\nAccess\nWeather\nCrew\nProduction\nChange Order\nCompletion\nWarranty\nPayment\nCommunication\nOther"
+  },
+  {
+   "fieldname": "source_system",
+   "fieldtype": "Data",
+   "label": "Source System"
+  },
+  {
+   "fieldname": "source_uri",
+   "fieldtype": "Data",
+   "label": "Source URI"
+  },
+  {
+   "fieldname": "r2_key",
+   "fieldtype": "Data",
+   "label": "R2 Key",
+   "read_only": 1
+  },
+  {
+   "fieldname": "drive_file_id",
+   "fieldtype": "Data",
+   "label": "Drive File ID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "content_checksum",
+   "fieldtype": "Data",
+   "label": "Content Checksum"
+  },
+  {
+   "default": "SHA-256",
+   "fieldname": "checksum_algorithm",
+   "fieldtype": "Select",
+   "label": "Checksum Algorithm",
+   "options": "SHA-256"
+  },
+  {
+   "fieldname": "content_type",
+   "fieldtype": "Data",
+   "label": "Content Type"
+  },
+  {
+   "fieldname": "content_length",
+   "fieldtype": "Int",
+   "label": "Content Length"
+  },
+  {
+   "fieldname": "capture_section",
+   "fieldtype": "Section Break",
+   "label": "Capture and Verification"
+  },
+  {
+   "fieldname": "capture_actor",
+   "fieldtype": "Link",
+   "label": "Capture Actor",
+   "options": "User"
+  },
+  {
+   "fieldname": "captured_at",
+   "fieldtype": "Datetime",
+   "in_standard_filter": 1,
+   "label": "Captured At"
+  },
+  {
+   "fieldname": "latitude",
+   "fieldtype": "Float",
+   "label": "Latitude"
+  },
+  {
+   "fieldname": "longitude",
+   "fieldtype": "Float",
+   "label": "Longitude"
+  },
+  {
+   "fieldname": "location_accuracy_m",
+   "fieldtype": "Float",
+   "label": "Location Accuracy (m)"
+  },
+  {
+   "default": "Local",
+   "fieldname": "sync_state",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Sync State",
+   "options": "Local\nQueued\nUploaded\nVerified\nRejected\nSuperseded",
+   "reqd": 1
+  },
+  {
+   "fieldname": "verified_at",
+   "fieldtype": "Datetime",
+   "label": "Verified At"
+  },
+  {
+   "fieldname": "verification_source",
+   "fieldtype": "Data",
+   "label": "Verification Source"
+  },
+  {
+   "fieldname": "evidence_freshness",
+   "fieldtype": "Select",
+   "label": "Evidence Freshness",
+   "options": "Current\nStale\nUnknown"
+  },
+  {
+   "fieldname": "evidence_conflict_state",
+   "fieldtype": "Select",
+   "label": "Evidence Conflict State",
+   "options": "None\nDetected\nResolved"
+  },
+  {
+   "fieldname": "evidence_verification",
+   "fieldtype": "Select",
+   "label": "Evidence Verification",
+   "options": "Pending\nVerified\nRejected"
+  },
+  {
+   "fieldname": "evidence_disposition",
+   "fieldtype": "Select",
+   "label": "Evidence Disposition",
+   "options": "Open\nAccepted\nNeeds Correction\nSuperseded"
+  },
+  {
+   "fieldname": "correction_of",
+   "fieldtype": "Link",
+   "label": "Correction Of",
+   "options": "Evidence Item"
+  },
+  {
+   "fieldname": "correction_reason",
+   "fieldtype": "Small Text",
+   "label": "Correction Reason"
+  },
+  {
+   "fieldname": "customer_safe",
+   "fieldtype": "Check",
+   "label": "Customer Safe"
+  },
+  {
+   "fieldname": "summary",
+   "fieldtype": "Small Text",
+   "label": "Summary"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-07-08 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "IronWrap Roofing",
+ "name": "Evidence Item",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 0,
+   "export": 1,
+   "import": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Owner",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Sales",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Estimator",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Production",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "if_owner": 1,
+   "read": 1,
+   "role": "IronWrap Field",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Closeout",
+   "write": 1
+  },
+  {
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Support"
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "read": 1,
+   "role": "IronWrap Customer Acceptance Service"
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "read": 1,
+   "role": "IronWrap Customer Decision Service"
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "read": 1,
+   "role": "IronWrap Facet Design Projection Service"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
 }

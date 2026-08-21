@@ -32,14 +32,57 @@ const CHECKS = {
   newo_booking_mode: true,
 } as never;
 
-test("readiness: the Newo launch gate fails the full verdict but never the core one", () => {
-  assert.deepEqual(readinessVerdicts(CHECKS), { ok: false, core_ok: true });
+test("readiness: failures stay inside their named operating plane", () => {
+  assert.deepEqual(readinessVerdicts(CHECKS), {
+    ok: false,
+    core_ok: true,
+    owned_core_ok: true,
+    office_operating_plane_ok: true,
+    projection_rails_ok: true,
+  });
+
+  const projectionBroken = {
+    ...(CHECKS as Record<string, boolean>),
+    frappe_configuration: false,
+  } as never;
+  assert.deepEqual(readinessVerdicts(projectionBroken), {
+    ok: false,
+    core_ok: true,
+    owned_core_ok: true,
+    office_operating_plane_ok: true,
+    projection_rails_ok: false,
+  });
+
+  const officeBroken = {
+    ...(CHECKS as Record<string, boolean>),
+    app_bff_configuration: false,
+  } as never;
+  assert.deepEqual(readinessVerdicts(officeBroken), {
+    ok: false,
+    core_ok: true,
+    owned_core_ok: true,
+    office_operating_plane_ok: false,
+    projection_rails_ok: true,
+  });
+
   const coreBroken = { ...(CHECKS as Record<string, boolean>), d1: false } as never;
-  assert.deepEqual(readinessVerdicts(coreBroken), { ok: false, core_ok: false });
+  assert.deepEqual(readinessVerdicts(coreBroken), {
+    ok: false,
+    core_ok: false,
+    owned_core_ok: false,
+    office_operating_plane_ok: false,
+    projection_rails_ok: false,
+  });
   const allGreen = Object.fromEntries(
     Object.keys(CHECKS as Record<string, boolean>).map((key) => [key, true]),
   ) as never;
-  assert.deepEqual(readinessVerdicts(allGreen), { ok: true, core_ok: true });
+  assert.deepEqual(readinessVerdicts(allGreen), {
+    ok: true,
+    core_ok: true,
+    owned_core_ok: true,
+    office_operating_plane_ok: true,
+    projection_rails_ok: true,
+  });
 });
 
 test("watchdog: alerts only on core failure, backlog, or fresh divergence", () => {

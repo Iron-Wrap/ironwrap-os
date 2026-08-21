@@ -272,10 +272,10 @@ There is never a wildcard credentialed CORS response.
 Leave `PUBLIC_ESTIMATE_ENABLED=false` until every control below is set. When enabled, `/ready`
 fails closed unless the exact browser origin, tenant brand allowlist, consent jurisdiction,
 Turnstile site/secret pair, HMAC rate-limit pepper, numeric rate limits, and the exact disabled range catalogue `[]` are present. `[]` accepts a
-review-required lead and, when ERPNext is enabled, creates a price-free `Captured` Instant Estimate
-Session; this public path never returns or persists public pricing. A missing or non-empty rule set
-disables the public endpoint. If `ERPNEXT_ENABLED=true`, `ERPNEXT_INTEGRATION_USER` is also required
-so captured follow-up consent is mirrored under a deterministic integration identity.
+review-required lead and materializes its price-free native operating record; this public path never
+returns or persists public pricing. A missing or non-empty rule set disables the public endpoint.
+`OPERATING_AUTOMATION_USER` names the deterministic non-human actor recorded on native consent and
+production-gate evidence.
 
 ```text
 PUBLIC_ESTIMATE_ENABLED=true
@@ -287,7 +287,7 @@ PUBLIC_ESTIMATE_RATE_LIMIT_WINDOW_SECONDS=900
 PUBLIC_ESTIMATE_RATE_LIMIT_IP_MAX=12
 PUBLIC_ESTIMATE_RATE_LIMIT_CLIENT_MAX=3
 PUBLIC_ESTIMATE_RANGE_RULES_JSON=[]
-ERPNEXT_INTEGRATION_USER=<Frappe integration user when ERPNext is enabled>
+OPERATING_AUTOMATION_USER=ironwrap-worker
 ```
 
 `PUBLIC_ESTIMATE_ALLOWED_ORIGINS` controls browser CORS to this Worker only. It is deliberately

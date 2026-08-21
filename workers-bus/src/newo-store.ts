@@ -104,15 +104,15 @@ export interface NewoReconciliationRun {
 export async function recordNewoCallerAssociation(
   env: Env,
   association: NewoCallerAssociation,
-): Promise<void> {
+): Promise<boolean> {
   const now = new Date().toISOString();
-  await env.DB.prepare(
+  const result = await env.DB.prepare(
     `INSERT INTO newo_sessions (
        session_id, project_id, agent_id, channel, direction, status, contact_phone,
        address_line1, postal_code, matched_customer_id, matched_property_id,
        matched_roof_job_id, verification_status, structured_json, raw_key, payload_hash,
        sync_status, created_at, updated_at
-     ) VALUES (?, ?, ?, 'phone', 'inbound', 'caller_lookup', ?, ?, ?, ?, ?, ?, ?, ?, ?,
+     ) VALUES (?, ?, ?, 'phone', 'inbound', 'caller_lookup', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
        'pending', ?, ?)
      ON CONFLICT(session_id) DO UPDATE SET
        project_id = COALESCE(excluded.project_id, newo_sessions.project_id),
@@ -129,7 +129,8 @@ export async function recordNewoCallerAssociation(
        payload_hash = excluded.payload_hash,
        sync_status = 'pending',
        last_error = NULL,
-       updated_at = excluded.updated_at`,
+       updated_at = excluded.updated_at
+     WHERE excluded.updated_at >= newo_sessions.updated_at`,
   ).bind(
     association.session_id,
     association.project_id,
@@ -147,6 +148,7 @@ export async function recordNewoCallerAssociation(
     now,
     association.occurred_at,
   ).run();
+  return Number(result.meta?.changes ?? 0) === 1;
 }
 
 export async function getNewoReceipt(

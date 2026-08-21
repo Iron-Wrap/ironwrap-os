@@ -1310,7 +1310,7 @@ test("migration inventory is ordered and expand-contract only", async () => {
   assert.deepEqual(migrations.ordered, [...migrations.ordered].sort());
   assert.equal(
     migrations.ordered.at(-1),
-    "0091_authority_readback_subject_scope.sql",
+    "0105_facet_native_design_projection.sql",
   );
 });
 

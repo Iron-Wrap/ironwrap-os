@@ -26,10 +26,15 @@ function payload() {
         brand: "IronWrap Exteriors",
         service_type: "Roofing",
         status: "In Production",
+        version: 3,
         assignment: {
           id: "assignment:iw-1001-production",
           type: "Production",
           status: "Assigned",
+          assignment_version: 2,
+          roof_job_version: 3,
+          crew_id: "crew:metal-a",
+          crew_version: 4,
           scheduled_start: null,
           scheduled_end: null,
         },
@@ -49,7 +54,7 @@ function payload() {
         material_attention: [],
       },
     ],
-    crews: [{ id: "crew:metal-a", name: "Metal A" }],
+    crews: [{ id: "crew:metal-a", name: "Metal A", version: 4 }],
   };
 }
 

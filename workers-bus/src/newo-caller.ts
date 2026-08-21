@@ -1,16 +1,17 @@
 import type { AppEnv } from "./app-types.ts";
 import { normalizePhone } from "./core.ts";
-import { listReceptionLookupFrappeResource, type FrappeRow } from "./frappe-read.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
 import {
   claimNewoReceipt,
   completeNewoReceipt,
   failNewoReceipt,
   getNewoReceipt,
+  getNewoSession,
   recordNewoCallerAssociation,
   restartFailedNewoReceipt,
   touchNewoReceipt,
 } from "./newo-store.ts";
+import { tenantIdFrom } from "./operating-core.ts";
 import * as store from "./store.ts";
 
 const SCHEMA_VERSION = "newo.caller-lookup.v1" as const;
@@ -59,6 +60,15 @@ interface VerifiedAssociation {
   jobState: NewoCallerLookupResponse["job_state"];
 }
 
+interface CallerJobRow {
+  roof_job_id: string;
+  job_status: string;
+  updated_at: string;
+  property_key: string;
+  address_line1: string | null;
+  postal_code: string | null;
+}
+
 export async function handleNewoCallerLookup(req: Request, env: Env): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
   const rawText = await readBounded(req);
@@ -78,7 +88,7 @@ export async function handleNewoCallerLookup(req: Request, env: Env): Promise<Re
     await touchNewoReceipt(env, input.request_id, new Date().toISOString());
     if (existing.status === "accepted") {
       return new Response(existing.response_json, {
-        status: 200,
+        status: acceptedLookupStatus(existing.response_json),
         headers: { "content-type": "application/json; charset=utf-8", "x-newo-replay": "true" },
       });
     }
@@ -110,7 +120,7 @@ export async function handleNewoCallerLookup(req: Request, env: Env): Promise<Re
   try {
     const result = await lookupCaller(env as AppEnv, input);
     const response = lookupResponse(input, result);
-    await recordNewoCallerAssociation(env, {
+    const associationWritten = await recordNewoCallerAssociation(env, {
       session_id: input.session_id,
       project_id: input.provider.project_id,
       agent_id: input.provider.agent_id,
@@ -126,6 +136,33 @@ export async function handleNewoCallerLookup(req: Request, env: Env): Promise<Re
       payload_hash: hash,
       occurred_at: input.occurred_at,
     });
+    if (!associationWritten) {
+      const durable = await getNewoSession(env, input.session_id);
+      const durableAt = durable ? Date.parse(durable.updated_at) : Number.NaN;
+      if (
+        !durable || durable.session_id !== input.session_id || !Number.isFinite(durableAt)
+        || durableAt <= Date.parse(input.occurred_at)
+      ) {
+        throw new Error("newo_caller_association_readback_mismatch");
+      }
+      const staleResponse = {
+        error: "caller_lookup_stale",
+        request_id: input.request_id,
+        session_id: input.session_id,
+      } as const;
+      await store.recordAudit(env, {
+        automation: "newo_caller_lookup",
+        trigger: "lookup_caller",
+        envelope_id: null,
+        source_ids: `request:${input.request_id},session:${input.session_id}`,
+        action: "stale_association_rejected",
+        result: "error",
+        error: "newer_session_association_exists",
+        recovery_owner: env.OWNER_ALERT_EMAIL,
+      });
+      await completeNewoReceipt(env, input.request_id, null, staleResponse, new Date().toISOString());
+      return json(staleResponse, 409);
+    }
     await store.recordAudit(env, {
       automation: "newo_caller_lookup",
       trigger: "lookup_caller",
@@ -150,6 +187,15 @@ export async function handleNewoCallerLookup(req: Request, env: Env): Promise<Re
       recovery_owner: env.OWNER_ALERT_EMAIL,
     }).catch(() => {});
     return json({ error: "caller_lookup_unavailable" }, 503);
+  }
+}
+
+function acceptedLookupStatus(responseJson: string): 200 | 409 {
+  try {
+    const response = JSON.parse(responseJson) as unknown;
+    return isRecord(response) && response.error === "caller_lookup_stale" ? 409 : 200;
+  } catch {
+    return 200;
   }
 }
 
@@ -201,42 +247,33 @@ async function lookupCaller(
   | { kind: "verified"; value: VerifiedAssociation }
   | { kind: "not_found" | "verification_failed" | "ambiguous" }
 > {
-  const customers = await listReceptionLookupFrappeResource(
-    env,
-    "Roofing Customer",
-    [["Roofing Customer", "phone", "=", input.caller_phone]],
-    5,
-  );
-  if (customers.length === 0) return { kind: "not_found" };
-  if (customers.length !== 1) return { kind: "ambiguous" };
-  const customerName = textValue(customers[0].name);
-  const customerId = textValue(customers[0].customer_id);
-  if (!customerName || !customerId) return { kind: "ambiguous" };
-  const jobs = await listReceptionLookupFrappeResource(
-    env,
-    "Roof Job",
-    [["Roof Job", "customer", "=", customerName]],
-    10,
-  );
-  const propertyNames = [...new Set(jobs.map((job) => textValue(job.roofing_property)).filter(Boolean))] as string[];
-  if (propertyNames.length === 0) return { kind: "verification_failed" };
-  const properties = await listReceptionLookupFrappeResource(
-    env,
-    "Roofing Property",
-    [["Roofing Property", "name", "in", propertyNames]],
-    Math.min(propertyNames.length, 10),
-  );
-  const propertiesByName = new Map(properties.map((property) => [textValue(property.name), property]));
-  const verified = jobs
-    .filter((job) => {
-      const property = propertiesByName.get(textValue(job.roofing_property));
-      return property ? matchesVerification(property, input.verification) : false;
-    })
-    .sort((left, right) => textValue(right.modified).localeCompare(textValue(left.modified)));
+  const tenantId = tenantIdFrom(env);
+  const customers = await env.DB.prepare(
+    `SELECT customer_id
+       FROM operating_customers
+      WHERE tenant_id = ? AND contact_phone = ?
+      ORDER BY customer_id
+      LIMIT 2`,
+  ).bind(tenantId, input.caller_phone).all<{ customer_id: string }>();
+  if (customers.results.length === 0) return { kind: "not_found" };
+  if (customers.results.length !== 1) return { kind: "ambiguous" };
+  const customerId = textValue(customers.results[0]?.customer_id);
+  if (!customerId) return { kind: "ambiguous" };
+  const jobs = await env.DB.prepare(
+    `SELECT j.roof_job_id, j.job_status, j.updated_at,
+            p.property_key, p.address_line1, p.postal_code
+       FROM operating_roof_jobs j
+       JOIN operating_properties p
+         ON p.tenant_id = j.tenant_id AND p.property_id = j.property_id
+      WHERE j.tenant_id = ? AND j.customer_id = ?
+      ORDER BY j.updated_at DESC, j.roof_job_id
+      LIMIT 10`,
+  ).bind(tenantId, customerId).all<CallerJobRow>();
+  const verified = jobs.results.filter((row) => matchesVerification(row, input.verification));
   if (verified.length === 0) return { kind: "verification_failed" };
+  if (verified.length !== 1) return { kind: "ambiguous" };
   const job = verified[0];
-  const property = propertiesByName.get(textValue(job.roofing_property));
-  const propertyId = property ? textValue(property.property_key) : "";
+  const propertyId = textValue(job.property_key);
   const roofJobId = textValue(job.roof_job_id);
   if (!propertyId || !roofJobId) return { kind: "ambiguous" };
   return {
@@ -281,7 +318,7 @@ function lookupResponse(
 }
 
 function matchesVerification(
-  property: FrappeRow,
+  property: Pick<CallerJobRow, "address_line1" | "postal_code">,
   verification: NewoCallerLookupRequest["verification"],
 ): boolean {
   if (verification.postal_code &&

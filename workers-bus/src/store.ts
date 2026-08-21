@@ -976,20 +976,18 @@ export async function listStuck(env: Env, thresholdMin: number, limit: number): 
   return res.results ?? [];
 }
 
-/**
- * Estimate intake does not use the JobNimbus queue, so ERPNext mirror failures need their
- * own durable retry sweep. The partial error index keeps this bounded by unresolved rows.
- */
-export async function listRetryableEstimateErpNextSyncs(
+/** Estimate intake does not use JobNimbus, so incomplete native materializations need a sweep. */
+export async function listRetryableEstimateOperatingCoreMaterializations(
   env: Env,
   thresholdMin: number,
   limit: number,
 ): Promise<EnvelopeRecord[]> {
   const cutoff = new Date(Date.now() - thresholdMin * 60_000).toISOString();
   const res = await env.DB.prepare(
-    `SELECT * FROM envelopes INDEXED BY idx_envelopes_erpnext_error_open
-     WHERE estimate_submission_key IS NOT NULL
-       AND erpnext_error IS NOT NULL AND trim(erpnext_error) != ''
+    `SELECT * FROM envelopes INDEXED BY idx_env_status
+     WHERE status = 'received'
+       AND estimate_submission_key IS NOT NULL
+       AND last_error LIKE 'native_operating_core:retry:%'
        AND updated_at < ?
      ORDER BY updated_at ASC LIMIT ?`,
   ).bind(cutoff, limit).all<EnvelopeRecord>();

@@ -59,6 +59,7 @@ export const API_PATHS = {
   quickBooksConnect: "/api/v1/quickbooks/connect",
   quickBooksConnection: "/api/v1/quickbooks/connection",
   quickBooksDisconnect: "/api/v1/quickbooks/disconnect",
+  quickBooksFinalInvoiceMappings: "/api/v1/quickbooks/final-invoice-mappings",
   quickBooksFinalInvoice: (intentId: string) =>
     `/api/v1/quickbooks/final-invoices/${encodeURIComponent(intentId)}`,
   quickBooksFinalInvoiceApprove: (intentId: string) =>
@@ -68,8 +69,7 @@ export const API_PATHS = {
   quickBooksFinalInvoiceReconcile: (intentId: string) =>
     `/api/v1/quickbooks/final-invoices/${encodeURIComponent(intentId)}/reconcile`,
   production: "/api/v1/production",
-  productionGateClearance: (jobId: string, gate: string) =>
-    `/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates/${encodeURIComponent(gate)}/clearance`,
+  productionJobSchedule: (jobId: string) => `/api/v1/jobs/${encodeURIComponent(jobId)}/schedule`,
   productionScheduleApprovals: "/api/v1/production-schedule-approvals",
   productionScheduleApproval: (approvalId: string) =>
     `/api/v1/production-schedule-approvals/${encodeURIComponent(approvalId)}`,
@@ -79,7 +79,10 @@ export const API_PATHS = {
     `/api/v1/production-schedule-approvals/${encodeURIComponent(approvalId)}/reject`,
   productionScheduleApprovalReconcile: (approvalId: string) =>
     `/api/v1/production-schedule-approvals/${encodeURIComponent(approvalId)}/reconcile`,
+  productionGateClearance: (jobId: string, gate: string) =>
+    `/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates/${encodeURIComponent(gate)}/clearance`,
   sales: "/api/v1/sales",
+  commercialLeadTriageDecisions: "/api/v1/commercial/lead-triage-decisions",
   estimatorJob: (jobId: string) => `/api/v1/estimator/jobs/${encodeURIComponent(jobId)}`,
   estimatorFacetLaunch: (jobId: string) =>
     `/api/v1/estimator/jobs/${encodeURIComponent(jobId)}/facet-launches`,

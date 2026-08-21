@@ -4,9 +4,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import worker from "../src/index.ts";
-import { retryEstimateErpNextSyncs } from "../src/estimates.ts";
-import { withErpReadback, withTestEffectRuntime } from "./effect-runtime-fixture.ts";
+import { retryEstimateOperatingCoreMaterializations } from "../src/estimates.ts";
+import { withTestEffectRuntime } from "./effect-runtime-fixture.ts";
 
 function fakeEnv() {
   const r2: Array<{ key: string; body: string }> = [];
@@ -127,18 +129,6 @@ function fakeEnv() {
               },
               all: async () => {
                 db.push({ sql, args });
-                if (sql.includes("estimate_submission_key IS NOT NULL")) {
-                  const cutoff = String(args[0]);
-                  const limit = Number(args[1]);
-                  return {
-                    results: [...envelopesById.values()]
-                      .filter((row) => Boolean(row.estimate_submission_key) &&
-                        typeof row.erpnext_error === "string" && row.erpnext_error.trim() &&
-                        String(row.updated_at) < cutoff)
-                      .sort((a, b) => String(a.updated_at).localeCompare(String(b.updated_at)))
-                      .slice(0, limit),
-                  };
-                }
                 return { results: [] };
               },
             };
@@ -148,6 +138,76 @@ function fakeEnv() {
     },
   };
   return { env: withTestEffectRuntime(env), r2, queue, db, envelopesById };
+}
+
+class EstimateD1 {
+  readonly raw = new DatabaseSync(":memory:");
+  failNextOperatingBatch = false;
+
+  constructor() {
+    this.raw.exec("PRAGMA foreign_keys = ON");
+    for (const name of [
+      "0001_init.sql",
+      "0004_estimate_idempotency.sql",
+      "0009_replay_approval_audit.sql",
+      "0090_operating_core.sql",
+      "0082_envelope_operating_tenant.sql",
+    ]) {
+      this.raw.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
+    }
+  }
+
+  prepare(sql: string) {
+    const db = this.raw;
+    return {
+      bind: (...args: unknown[]) => ({
+        first: async <T>() => (db.prepare(sql).get(...args) ?? null) as T | null,
+        all: async <T>() => ({ results: db.prepare(sql).all(...args) as T[] }),
+        run: async () => {
+          const result = db.prepare(sql).run(...args);
+          return { success: true, meta: { changes: Number(result.changes) } };
+        },
+      }),
+    };
+  }
+
+  async batch(statements: Array<{ run(): Promise<unknown> }>) {
+    if (this.failNextOperatingBatch) {
+      this.failNextOperatingBatch = false;
+      throw new Error("temporary_native_d1_failure");
+    }
+    this.raw.exec("BEGIN");
+    try {
+      for (const statement of statements) await statement.run();
+      this.raw.exec("COMMIT");
+    } catch (error) {
+      this.raw.exec("ROLLBACK");
+      throw error;
+    }
+  }
+}
+
+function nativeEstimateEnv() {
+  const db = new EstimateD1();
+  const r2: Array<{ key: string; body: string }> = [];
+  const env = {
+    INGEST_TOKEN: "test-token",
+    ADMIN_TOKEN: "admin-token",
+    OWNER_ALERT_EMAIL: "owner@example.com",
+    STUCK_THRESHOLD_MIN: "15",
+    APP_TENANT_ID: "ironwrap",
+    OPERATING_AUTOMATION_USER: "worker@example.invalid",
+    // Deliberately enabled: native estimate intake must ignore legacy Frappe configuration.
+    ERPNEXT_ENABLED: "true",
+    ERPNEXT_BASE_URL: "https://erp.example.invalid",
+    ERPNEXT_API_KEY: "unused",
+    ERPNEXT_API_SECRET: "unused",
+    RAW: {
+      put: async (key: string, body: string) => { r2.push({ key, body }); },
+    },
+    DB: db,
+  };
+  return { env, db, r2 };
 }
 
 const fakeCtx = (waitUntilCalls: Promise<unknown>[] = []) => ({
@@ -211,31 +271,13 @@ test("POST /ingest/website: repeated contact claims duplicate and skips second J
   );
 });
 
-test("POST /ingest/estimate: configurator payload lands in owned store and ERPNext without JN/GHL queue", async (t) => {
-  const { env, r2, queue, db } = fakeEnv();
-  const erpCalls: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    erpCalls.push({ url, init: init ?? {} });
-    if ((init?.method ?? "GET") === "GET") return json({ data: [] });
-    if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-EST-1" } });
-    if (url.endsWith("/api/resource/Roofing%20Customer")) return json({ data: { name: "RC-EST-1" } });
-    if (url.endsWith("/api/resource/Roofing%20Property")) return json({ data: { name: "RP-EST-1" } });
-    if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-EST-1" } });
-    if (url.endsWith("/api/resource/Production%20Gate%20State")) {
-      const body = JSON.parse(String(init?.body));
-      return json({ data: { name: body.gate_id } });
-    }
-    if (url.endsWith("/api/resource/Instant%20Estimate%20Session")) return json({ data: { name: "IES-EST-1" } });
-    throw new Error(`unexpected fetch ${url}`);
-  }));
-  Object.assign(env, {
-    ERPNEXT_ENABLED: "true",
-    ERPNEXT_BASE_URL: "https://erp.example.com",
-    ERPNEXT_API_KEY: "erp-key",
-    ERPNEXT_API_SECRET: "erp-secret",
+test("POST /ingest/estimate: materializes native operating truth with zero Frappe calls", async (t) => {
+  const { env, r2, db } = nativeEstimateEnv();
+  let fetches = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    fetches += 1;
+    throw new Error("network_must_not_be_called");
   });
-
   const estimatePayload = {
     project_id: "26-180-ER",
     job_number: "26-180-ER",
@@ -256,77 +298,48 @@ test("POST /ingest/estimate: configurator payload lands in owned store and ERPNe
   const res = await worker.fetch(req, env as never, fakeCtx() as never);
   const body = await res.json() as {
     envelope_id: string;
-    erpnext_lead_envelope_id?: string;
-    erpnext_roof_job_id?: string;
-    erpnext_instant_estimate_id?: string;
+    operating_lead_id: string;
+    operating_customer_id: string;
+    operating_roof_job_id: string;
+    operating_instant_estimate_id: string;
   };
 
   assert.equal(res.status, 200);
-  assert.equal(body.erpnext_lead_envelope_id, "LE-EST-1");
-  assert.equal(body.erpnext_roof_job_id, "RJ-EST-1");
-  assert.equal(body.erpnext_instant_estimate_id, "IES-EST-1");
-  assert.equal(queue.length, 0);
+  assert.equal(fetches, 0);
+  assert.match(body.operating_lead_id, /^lead:ironwrap:[0-9a-f]{64}$/);
+  assert.match(body.operating_customer_id, /^customer:ironwrap:[0-9a-f]{64}$/);
+  assert.match(body.operating_roof_job_id, /^job:ironwrap:[0-9a-f]{64}$/);
+  assert.match(body.operating_instant_estimate_id, /^estimate:ironwrap:[0-9a-f]{64}$/);
+  assert.equal(Object.keys(body).some((key) => key.startsWith("erpnext_")), false);
   assert.equal(r2.length, 1);
   assert.match(r2[0].key, /^raw\/estimates\/\d{4}-\d{2}-\d{2}\/ow_/);
   assert.equal(r2[0].body, estimateBody);
-
-  const insert = db.find((c) => c.sql.includes("INSERT INTO envelopes"));
-  assert.ok(insert);
-  assert.ok(insert.args.includes("Jim Rakievich"));
-  assert.ok(insert.args.includes("26-180-ER"));
-  assert.ok(insert.args.includes("received"));
-
-  const job = JSON.parse(String(erpCalls.find((c) => c.url.endsWith("/api/resource/Roof%20Job"))?.init.body));
-  assert.equal(job.roof_job_id, "job:26-180-ER");
-  assert.equal(job.job_number, "26-180-ER");
-  assert.equal(job.customer, "RC-EST-1");
-
-  const customer = JSON.parse(String(erpCalls.find((c) => c.url.endsWith("/api/resource/Roofing%20Customer"))?.init.body));
-  assert.equal(customer.customer_id, "customer:email:jim_example.com");
-  assert.equal(customer.display_name, "Jim Rakievich");
-  assert.equal(customer.lead_envelope, "LE-EST-1");
-
-  const estimate = JSON.parse(String(erpCalls.find((c) => c.url.endsWith("/api/resource/Instant%20Estimate%20Session"))?.init.body));
-  assert.equal(estimate.estimate_session_id, "estimate:26-180-ER");
-  assert.equal(estimate.roof_job, "RJ-EST-1");
-  assert.equal(estimate.estimate_total, 216269.58);
-  assert.equal(estimate.configurator_url, "https://example.com/p/26-180-ER");
-  assert.equal(estimate.review_required, 1);
-  assert.deepEqual(JSON.parse(estimate.selected_services_json), ["Roof", "Wall", "Soffit", "Fascia", "Gutters", "Downspouts"]);
-  assert.deepEqual(JSON.parse(estimate.material_choices_json), {
-    roof: "SnapLock Metal Roofing",
-    siding: "Metal Siding",
-    roof_color: "Wrinkle RAL 7024",
-  });
+  const row = db.raw.prepare(
+    `SELECT j.roof_job_id, j.job_number, c.customer_id, c.display_name,
+            e.estimate_session_id, e.estimate_total_cents, e.configurator_url,
+            e.selected_services_json, e.material_choices_json
+       FROM operating_roof_jobs j
+       JOIN operating_customers c ON c.tenant_id = j.tenant_id AND c.customer_id = j.customer_id
+       JOIN operating_instant_estimates e ON e.tenant_id = j.tenant_id AND e.roof_job_id = j.roof_job_id`,
+  ).get() as Record<string, unknown>;
+  assert.equal(row.roof_job_id, body.operating_roof_job_id);
+  assert.equal(row.job_number, "26-180-ER");
+  assert.equal(row.customer_id, body.operating_customer_id);
+  assert.equal(row.display_name, "Jim Rakievich");
+  assert.equal(row.estimate_session_id, body.operating_instant_estimate_id);
+  assert.equal(row.estimate_total_cents, 21_626_958);
+  assert.equal(row.configurator_url, "https://example.com/p/26-180-ER");
+  assert.deepEqual(JSON.parse(String(row.selected_services_json)), estimatePayload.selected_services);
+  assert.deepEqual(JSON.parse(String(row.material_choices_json)), estimatePayload.materials);
 });
 
-test("POST /ingest/estimate: repeated project id is idempotent and does not re-drive side effects", async (t) => {
-  const { env, r2, queue, db } = fakeEnv();
-  const erpCalls: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    erpCalls.push({ url, init: init ?? {} });
-    if ((init?.method ?? "GET") === "GET") return json({ data: [] });
-    if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-EST-IDEMPOTENT" } });
-    if (url.endsWith("/api/resource/Roofing%20Customer")) return json({ data: { name: "RC-EST-IDEMPOTENT" } });
-    if (url.endsWith("/api/resource/Roofing%20Property")) return json({ data: { name: "RP-EST-IDEMPOTENT" } });
-    if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-EST-IDEMPOTENT" } });
-    if (url.endsWith("/api/resource/Production%20Gate%20State")) {
-      const body = JSON.parse(String(init?.body));
-      return json({ data: { name: body.gate_id } });
-    }
-    if (url.endsWith("/api/resource/Instant%20Estimate%20Session")) {
-      return json({ data: { name: "IES-EST-IDEMPOTENT" } });
-    }
-    throw new Error(`unexpected fetch ${url}`);
-  }));
-  Object.assign(env, {
-    ERPNEXT_ENABLED: "true",
-    ERPNEXT_BASE_URL: "https://erp.example.com",
-    ERPNEXT_API_KEY: "erp-key",
-    ERPNEXT_API_SECRET: "erp-secret",
+test("POST /ingest/estimate: repeated project id reuses one native graph and one raw object", async (t) => {
+  const { env, r2, db } = nativeEstimateEnv();
+  let fetches = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    fetches += 1;
+    throw new Error("network_must_not_be_called");
   });
-
   const bodyText = JSON.stringify({
     project_id: "26-180-ER",
     customer: "Jim Rakievich",
@@ -340,29 +353,29 @@ test("POST /ingest/estimate: repeated project id is idempotent and does not re-d
   });
 
   const first = await worker.fetch(makeReq(), env as never, fakeCtx() as never);
-  const firstBody = await first.json() as { envelope_id: string; erpnext_instant_estimate_id?: string };
+  const firstBody = await first.json() as { envelope_id: string; operating_instant_estimate_id: string };
   const second = await worker.fetch(makeReq(), env as never, fakeCtx() as never);
   const secondBody = await second.json() as {
     envelope_id: string;
     idempotent_replay?: boolean;
-    erpnext_instant_estimate_id?: string;
+    operating_instant_estimate_id: string;
   };
 
   assert.equal(first.status, 200);
   assert.equal(second.status, 200);
   assert.equal(secondBody.envelope_id, firstBody.envelope_id);
   assert.equal(secondBody.idempotent_replay, true);
-  assert.equal(secondBody.erpnext_instant_estimate_id, "IES-EST-IDEMPOTENT");
-  assert.equal(queue.length, 0);
+  assert.equal(secondBody.operating_instant_estimate_id, firstBody.operating_instant_estimate_id);
+  assert.equal(fetches, 0);
   assert.equal(r2.length, 1);
-  assert.equal(db.filter((c) => c.sql.includes("INSERT INTO envelopes")).length, 1);
-  assert.equal(erpCalls.filter((c) => c.url.endsWith("/api/resource/Lead%20Envelope")).length, 1);
-  assert.equal(erpCalls.filter((c) => c.url.endsWith("/api/resource/Roofing%20Customer")).length, 1);
-  assert.equal(erpCalls.filter((c) => c.url.endsWith("/api/resource/Instant%20Estimate%20Session")).length, 1);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS count FROM envelopes").get().count, 1);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS count FROM operating_leads").get().count, 1);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS count FROM operating_roof_jobs").get().count, 1);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS count FROM operating_instant_estimates").get().count, 1);
 });
 
 test("POST /ingest/estimate: replay of invalid project id returns original validation error", async () => {
-  const { env, r2, db } = fakeEnv();
+  const { env, r2, db } = nativeEstimateEnv();
   const bodyText = JSON.stringify({ project_id: "invalid-no-contact", total_estimate: "$1,000" });
   const makeReq = () => new Request("https://bus.example/ingest/estimate", {
     method: "POST",
@@ -381,36 +394,59 @@ test("POST /ingest/estimate: replay of invalid project id returns original valid
   assert.equal(secondBody.idempotent_replay, true);
   assert.equal(secondBody.error, "no_contact_handle");
   assert.equal(r2.length, 1);
-  assert.equal(db.filter((c) => c.sql.includes("INSERT INTO envelopes")).length, 1);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS count FROM envelopes").get().count, 1);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS count FROM operating_leads").get().count, 0);
 });
 
-test("POST /ingest/estimate: transient ERPNext failure stays accepted, then the scheduled retry mirrors it", async (t) => {
-  const { env, envelopesById, queue } = fakeEnv();
-  let erpAvailable = false;
-  const erpCalls: string[] = [];
-  t.mock.method(globalThis, "fetch", withErpReadback(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    erpCalls.push(url);
-    if (!erpAvailable) throw new Error("ERP temporarily unavailable");
-    if ((init?.method ?? "GET") === "GET") return json({ data: [] });
-    if (url.endsWith("/api/resource/Lead%20Envelope")) return json({ data: { name: "LE-EST-RETRY" } });
-    if (url.endsWith("/api/resource/Roofing%20Customer")) return json({ data: { name: "RC-EST-RETRY" } });
-    if (url.endsWith("/api/resource/Roofing%20Property")) return json({ data: { name: "RP-EST-RETRY" } });
-    if (url.endsWith("/api/resource/Roof%20Job")) return json({ data: { name: "RJ-EST-RETRY" } });
-    if (url.endsWith("/api/resource/Production%20Gate%20State")) {
-      const body = JSON.parse(String(init?.body));
-      return json({ data: { name: body.gate_id } });
-    }
-    if (url.endsWith("/api/resource/Instant%20Estimate%20Session")) return json({ data: { name: "IES-EST-RETRY" } });
-    throw new Error(`unexpected fetch ${url}`);
-  }));
-  Object.assign(env, {
-    ERPNEXT_ENABLED: "true",
-    ERPNEXT_BASE_URL: "https://erp.example.com",
-    ERPNEXT_API_KEY: "erp-key",
-    ERPNEXT_API_SECRET: "erp-secret",
+test("POST /ingest/estimate: invalid native money is terminal and never scheduled", async () => {
+  const { env, db } = nativeEstimateEnv();
+  const bodyText = JSON.stringify({
+    project_id: "invalid-money-project",
+    customer: "Invalid Money",
+    email: "invalid-money@example.com",
+    total_estimate: "not-money",
+  });
+  const request = () => new Request("https://bus.example/ingest/estimate", {
+    method: "POST",
+    headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+    body: bodyText,
   });
 
+  const first = await worker.fetch(request(), env as never, fakeCtx() as never);
+  const firstBody = await first.json() as { envelope_id: string; error: string };
+  assert.equal(first.status, 422);
+  assert.equal(firstBody.error, "native_operating_core_rejected");
+  const terminal = db.raw.prepare(
+    "SELECT attempts, last_error FROM envelopes WHERE envelope_id = ?",
+  ).get(firstBody.envelope_id) as { attempts: number; last_error: string };
+  assert.equal(terminal.attempts, 1);
+  assert.match(terminal.last_error, /^native_operating_core:terminal:.*operating_core_money_invalid:estimate_total/);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS count FROM operating_leads").get().count, 0);
+
+  db.raw.prepare("UPDATE envelopes SET updated_at = ? WHERE envelope_id = ?")
+    .run("2000-01-01T00:00:00.000Z", firstBody.envelope_id);
+  await retryEstimateOperatingCoreMaterializations(env as never);
+  assert.equal(
+    (db.raw.prepare("SELECT attempts FROM envelopes WHERE envelope_id = ?")
+      .get(firstBody.envelope_id) as { attempts: number }).attempts,
+    1,
+  );
+
+  const replay = await worker.fetch(request(), env as never, fakeCtx() as never);
+  const replayBody = await replay.json() as { idempotent_replay?: boolean; error: string };
+  assert.equal(replay.status, 422);
+  assert.equal(replayBody.idempotent_replay, true);
+  assert.equal(replayBody.error, "native_operating_core_rejected");
+});
+
+test("POST /ingest/estimate: failed native batch stays accepted and scheduled retry converges", async (t) => {
+  const { env, db } = nativeEstimateEnv();
+  let fetches = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    fetches += 1;
+    throw new Error("network_must_not_be_called");
+  });
+  db.failNextOperatingBatch = true;
   const bodyText = JSON.stringify({
     project_id: "retry-project-1",
     customer: "Retry Customer",
@@ -428,34 +464,41 @@ test("POST /ingest/estimate: transient ERPNext failure stays accepted, then the 
     accepted?: boolean;
     completed?: boolean;
     envelope_id: string;
-    erpnext_mirror_status?: string;
+    operating_core_status?: string;
   };
 
   assert.equal(first.status, 202);
   assert.equal(firstBody.accepted, true);
   assert.equal(firstBody.completed, false);
-  assert.equal(firstBody.erpnext_mirror_status, "retry_pending");
-  assert.equal(queue.length, 0);
-  const pending = envelopesById.get(firstBody.envelope_id)!;
-  assert.match(String(pending.erpnext_error), /ERP temporarily unavailable/);
-  assert.equal(pending.last_error, null, "mirror failure must not turn accepted intake into invalid input");
+  assert.equal(firstBody.operating_core_status, "retry_pending");
+  const pending = db.raw.prepare(
+    "SELECT attempts, last_error FROM envelopes WHERE envelope_id = ?",
+  ).get(firstBody.envelope_id) as { attempts: number; last_error: string };
+  assert.match(pending.last_error, /^native_operating_core:.*temporary_native_d1_failure/);
   assert.equal(pending.attempts, 1);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS count FROM operating_leads").get().count, 0);
 
-  pending.updated_at = "2000-01-01T00:00:00.000Z";
-  erpAvailable = true;
-  await retryEstimateErpNextSyncs(env as never);
-
-  assert.equal(pending.erpnext_error, null);
-  assert.equal(pending.erpnext_lead_envelope_id, "LE-EST-RETRY");
-  assert.equal(pending.erpnext_roof_job_id, "RJ-EST-RETRY");
-  assert.equal(pending.erpnext_instant_estimate_session_id, "IES-EST-RETRY");
+  db.raw.prepare("UPDATE envelopes SET updated_at = ? WHERE envelope_id = ?")
+    .run("2000-01-01T00:00:00.000Z", firstBody.envelope_id);
+  await retryEstimateOperatingCoreMaterializations(env as never);
+  const recovered = db.raw.prepare(
+    "SELECT attempts, last_error FROM envelopes WHERE envelope_id = ?",
+  ).get(firstBody.envelope_id) as { attempts: number; last_error: string | null };
+  assert.equal(recovered.last_error, null);
+  assert.equal(recovered.attempts, 1);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS count FROM operating_leads").get().count, 1);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS count FROM operating_roof_jobs").get().count, 1);
+  assert.equal(db.raw.prepare("SELECT COUNT(*) AS count FROM operating_instant_estimates").get().count, 1);
 
   const replay = await worker.fetch(request(), env as never, fakeCtx() as never);
-  const replayBody = await replay.json() as { idempotent_replay?: boolean; erpnext_instant_estimate_id?: string };
+  const replayBody = await replay.json() as {
+    idempotent_replay?: boolean;
+    operating_instant_estimate_id?: string;
+  };
   assert.equal(replay.status, 200);
   assert.equal(replayBody.idempotent_replay, true);
-  assert.equal(replayBody.erpnext_instant_estimate_id, "IES-EST-RETRY");
-  assert.equal(erpCalls.filter((url) => url.endsWith("/api/resource/Lead%20Envelope")).length, 1);
+  assert.match(replayBody.operating_instant_estimate_id ?? "", /^estimate:ironwrap:[0-9a-f]{64}$/);
+  assert.equal(fetches, 0);
 });
 
 test("auth: missing/wrong bearer token → 401, nothing written", async () => {

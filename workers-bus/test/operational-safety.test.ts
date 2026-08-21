@@ -421,9 +421,19 @@ test("public readiness exposes only a generic state while admins receive the dia
   const diagnosticResponse = await worker.fetch(new Request("https://bus.example/ready", {
     headers: adminHeaders,
   }), env as never, ctx);
-  const diagnostic = await diagnosticResponse.json() as { ok: boolean; status: string; checks: Record<string, boolean> };
+  const diagnostic = await diagnosticResponse.json() as {
+    ok: boolean;
+    owned_core_ok: boolean;
+    office_operating_plane_ok: boolean;
+    projection_rails_ok: boolean;
+    status: string;
+    checks: Record<string, boolean>;
+  };
   assert.equal(diagnosticResponse.status, 200);
   assert.equal(diagnostic.ok, true);
+  assert.equal(diagnostic.owned_core_ok, true);
+  assert.equal(diagnostic.office_operating_plane_ok, true);
+  assert.equal(diagnostic.projection_rails_ok, true);
   assert.equal(diagnostic.status, "ready");
   assert.ok(Object.values(diagnostic.checks).every(Boolean));
   const schemaQuery = sqlCalls.find((call) => call.sql.includes("sqlite_master"));
@@ -434,6 +444,25 @@ test("public readiness exposes only a generic state while admins receive the dia
   assert.equal(diagnostic.checks.public_estimate_configuration, true, "blank public-estimate config keeps the route intentionally disabled");
   assert.equal(JSON.stringify(diagnostic).includes("ingest-secret"), false);
   assert.equal(JSON.stringify(diagnostic).includes("jobnimbus-secret"), false);
+});
+
+test("readiness scopes isolate Frappe projection failure from the owned and office planes", async () => {
+  const { env } = fakeEnv();
+  (env as Record<string, unknown>).ERPNEXT_ENABLED = "true";
+
+  for (const [scope, expectedStatus] of [
+    [null, 503],
+    ["core", 200],
+    ["owned_core", 200],
+    ["office", 200],
+    ["projection", 503],
+  ] as const) {
+    const url = new URL("https://bus.example/ready");
+    if (scope) url.searchParams.set("scope", scope);
+    const response = await worker.fetch(new Request(url), env as never, ctx);
+    assert.equal(response.status, expectedStatus, scope ?? "full");
+    assert.deepEqual(await response.json(), { ok: expectedStatus === 200 }, scope ?? "full");
+  }
 });
 
 test("Newo production readiness requires credentials, live actor/webhooks, Frappe, and clear owned failures", async (t) => {
@@ -743,7 +772,6 @@ test("readiness fails closed for missing or malformed enabled app BFF metadata",
     ["APP_PUBLIC_ORIGIN", "http://app.example.com"],
     ["APP_ALLOWED_ORIGINS", "https://other.example.com"],
     ["APP_AUTH_PEPPER", "too-short"],
-    ["ERPNEXT_BASE_URL", "http://frappe.example.com"],
   ];
 
   for (const [key, invalidValue] of cases) {

@@ -90,7 +90,6 @@ pin_service_identities() {
   bench --site "$SITE" set-config ironwrap_fleet_capture_issuer_user "ironwrap-fleet-capture@$IDENTITY_DOMAIN"
   bench --site "$SITE" set-config ironwrap_work_package_issuer_user "ironwrap-work-package@$IDENTITY_DOMAIN"
   bench --site "$SITE" set-config ironwrap_production_gate_issuer_user "ironwrap-bus@$IDENTITY_DOMAIN"
-  bench --site "$SITE" set-config ironwrap_customer_acceptance_service_user "ironwrap-customer-acceptance@$IDENTITY_DOMAIN"
   bench --site "$SITE" set-config ironwrap_customer_decision_service_user "ironwrap-customer-decision@$IDENTITY_DOMAIN"
   bench --site "$SITE" set-config ironwrap_quickbooks_reconciliation_issuer_user "ironwrap-quickbooks-issuer@$IDENTITY_DOMAIN"
   bench --site "$SITE" set-config ironwrap_facet_design_projection_service_user "ironwrap-facet-projection@$IDENTITY_DOMAIN"

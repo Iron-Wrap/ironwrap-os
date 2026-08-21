@@ -1,10 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
 import {
+  appUserIdentities,
   permissionsForRole,
   type AppEnv,
   type AuthContext,
@@ -12,46 +11,12 @@ import {
 import {
   parseWorkPackageActionRequest,
   processWorkPackageAction,
-  frappeWorkPackageWriter,
   type PersistWorkPackageActionInput,
   type ProcessWorkPackageActionDependencies,
   type VerifiedWorkPackageActionResponse,
+  type WorkPackageCommandWriter,
   type WorkPackageActionStore,
-  type WorkPackageFrappeWriter,
 } from "../src/work-package-actions.ts";
-
-class SqliteD1 {
-  readonly raw = new DatabaseSync(":memory:");
-
-  constructor() {
-    this.raw.exec("PRAGMA foreign_keys = ON");
-    this.raw.exec(readFileSync(new URL("../migrations/0042_external_effect_runtime.sql", import.meta.url), "utf8"));
-  }
-
-  // The effect runtime claims an attempt through env.DB.batch; a sequential
-  // run is equivalent for a synchronous test double.
-  async batch(statements: Array<{ run: () => Promise<unknown> }>) {
-    const results = [];
-    for (const statement of statements) results.push(await statement.run());
-    return results;
-  }
-
-  prepare(sql: string) {
-    return {
-      bind: (...args: unknown[]) => {
-        const statement = this.raw.prepare(sql);
-        return {
-          first: async <T>() => (statement.get(...args) ?? null) as T | null,
-          all: async <T>() => ({ results: statement.all(...args) as T[] }),
-          run: async () => {
-            const result = statement.run(...args);
-            return { success: true, meta: { changes: Number(result.changes) } };
-          },
-        };
-      },
-    };
-  }
-}
 import {
   FieldActionError,
   type ImmutableObjectStore,
@@ -167,7 +132,7 @@ class MemoryObjects implements ImmutableObjectStore {
   }
 }
 
-class MemoryFrappe implements WorkPackageFrappeWriter {
+class MemoryWriter implements WorkPackageCommandWriter {
   readonly calls: PersistWorkPackageActionInput[] = [];
   failOnce = false;
 
@@ -177,7 +142,7 @@ class MemoryFrappe implements WorkPackageFrappeWriter {
     this.calls.push(input);
     if (this.failOnce) {
       this.failOnce = false;
-      throw new Error("work_package_frappe_network_error");
+      throw new Error("work_package_native_write_failed");
     }
     return {
       workPackageName: `WP-${input.workPackageId}`,
@@ -243,21 +208,21 @@ function submission(
 function dependencies(
   store = new MemoryStore(),
   objects = new MemoryObjects(),
-  frappe = new MemoryFrappe(),
+  native = new MemoryWriter(),
 ): {
   store: MemoryStore;
   objects: MemoryObjects;
-  frappe: MemoryFrappe;
+  native: MemoryWriter;
   dependency: ProcessWorkPackageActionDependencies;
 } {
   return {
     store,
     objects,
-    frappe,
+    native,
     dependency: {
       store,
       objects,
-      frappe,
+      native,
       now: () => new Date("2026-07-10T10:00:00.000Z"),
       randomId: () => "lease-token",
     },
@@ -323,6 +288,31 @@ function workPackageForProjectionFixture(): FieldWorkPackage {
     modified: "2026-07-10T07:10:00.000Z",
   };
 }
+
+test("native field identity retains Work Package capability without a Frappe link", () => {
+  const nativeAuth = auth("field");
+  nativeAuth.session.frappe_user_id = null;
+  nativeAuth.session.email_normalized = "crew@example.com";
+  const workPackage = {
+    ...workPackageForProjectionFixture(),
+    status: "Released" as const,
+    acknowledgedBy: null,
+    acknowledgedAt: null,
+    acknowledgements: [],
+  };
+  const projection = fieldWorkPackageProjection(
+    workPackage,
+    appUserIdentities(nativeAuth.session),
+  );
+  assert.deepEqual(appUserIdentities(nativeAuth.session), [
+    "crew@example.com",
+    "appu_field",
+  ]);
+  assert.equal(
+    projection.allowedActions.includes("work_package.acknowledge"),
+    true,
+  );
+});
 
 test("work-package action parser accepts only the existing bounded action envelope", async () => {
   const request = new Request(
@@ -743,8 +733,8 @@ test("optional roster rows remain visible without invalidating a required worker
   assert.equal(projection.allowedActions.includes("work_package.stop_work"), true);
 });
 
-test("work-package action writes immutable raw evidence before one Frappe command and replays exactly", async () => {
-  const { store, objects, frappe, dependency } = dependencies();
+test("work-package action writes immutable raw evidence before one native command and replays exactly", async () => {
+  const { store, objects, native, dependency } = dependencies();
   const first = await processWorkPackageAction(
     submission(),
     auth(),
@@ -757,19 +747,22 @@ test("work-package action writes immutable raw evidence before one Frappe comman
   );
   assert.deepEqual(replay, first);
   assert.equal(store.completed, 1);
-  assert.equal(frappe.calls.length, 1);
+  assert.equal(native.calls.length, 1);
   assert.equal(objects.calls.length, 1);
   const manifest = objects.bodies.get(objects.calls[0]!);
   assert.ok(manifest);
-  assert.match(manifest!, /"actor_user":"crew@example.com"/);
+  assert.match(manifest!, /"actor_user":"appu_field"/);
   assert.match(manifest!, /"action_kind":"acknowledge"/);
-  assert.deepEqual(frappe.calls[0], {
+  const manifestKey = objects.calls[0];
+  assert.ok(manifestKey);
+  assert.deepEqual(native.calls[0], {
     kind: "acknowledge",
     workPackageId: "work_package_a",
     workPackageVersion: 1,
     jobId: "JOB-A",
     assignmentId: "ASSIGN-A",
-    actorUser: "crew@example.com",
+    actorUser: "appu_field",
+    actorRole: "field",
     deviceActionId: "device-action-123",
     blockerReason: null,
     releaseAttemptId: "attempt-a",
@@ -777,11 +770,12 @@ test("work-package action writes immutable raw evidence before one Frappe comman
     workObjectId: null,
     physicalContextType: null,
     physicalContextId: null,
+    manifestKey,
   });
 });
 
-test("production completion action uses the bounded online Frappe command and replays", async () => {
-  const { store, objects, frappe, dependency } = dependencies();
+test("production completion action uses the bounded native command and replays", async () => {
+  const { store, objects, native, dependency } = dependencies();
   const first = await processWorkPackageAction(
     submission("complete_work"),
     auth("owner"),
@@ -793,13 +787,13 @@ test("production completion action uses the bounded online Frappe command and re
     dependency,
   );
   assert.deepEqual(replay, first);
-  assert.equal(frappe.calls[0]?.kind, "complete_work");
+  assert.equal(native.calls[0]?.kind, "complete_work");
   assert.equal(objects.calls.length, 1);
   assert.equal(store.completed, 1);
 });
 
 test("typed non-roof action persists the exact parent/context envelope", async () => {
-  const { frappe, dependency } = dependencies();
+  const { native, dependency } = dependencies();
   const generic = submission("acknowledge");
   generic.jobId = "SHOP-001";
   generic.assignmentId = "SHOP-ASSIGN-1";
@@ -813,10 +807,10 @@ test("typed non-roof action persists the exact parent/context envelope", async (
   await processWorkPackageAction(generic, auth(), dependency);
   assert.deepEqual(
     {
-      workObjectType: frappe.calls[0]?.workObjectType,
-      workObjectId: frappe.calls[0]?.workObjectId,
-      physicalContextType: frappe.calls[0]?.physicalContextType,
-      physicalContextId: frappe.calls[0]?.physicalContextId,
+      workObjectType: native.calls[0]?.workObjectType,
+      workObjectId: native.calls[0]?.workObjectId,
+      physicalContextType: native.calls[0]?.physicalContextType,
+      physicalContextId: native.calls[0]?.physicalContextId,
     },
     {
       workObjectType: "Shop Order",
@@ -827,14 +821,14 @@ test("typed non-roof action persists the exact parent/context envelope", async (
   );
 });
 
-test("work-package action rejects a changed duplicate payload and retries an unverified Frappe command", async () => {
-  const { store, frappe, dependency } = dependencies();
-  frappe.failOnce = true;
+test("work-package action rejects a changed duplicate payload and retries an unverified native command", async () => {
+  const { store, native, dependency } = dependencies();
+  native.failOnce = true;
   await assert.rejects(
     processWorkPackageAction(submission("stop_work"), auth(), dependency),
     (error: unknown) =>
       error instanceof FieldActionError &&
-      error.code === "work_package_frappe_network_error",
+      error.code === "work_package_native_write_failed",
   );
   assert.equal(store.failed, 1);
   const verified = await processWorkPackageAction(
@@ -843,7 +837,7 @@ test("work-package action rejects a changed duplicate payload and retries an unv
     dependency,
   );
   assert.equal(verified.status, "verified");
-  assert.equal(frappe.calls.length, 2);
+  assert.equal(native.calls.length, 2);
 
   await assert.rejects(
     processWorkPackageAction(submission("acknowledge"), auth(), dependency),
@@ -854,138 +848,11 @@ test("work-package action rejects a changed duplicate payload and retries an unv
   );
 });
 
-test("runtime-governed work-package actions read back the immutable event and replay safely", async () => {
-  const db = new SqliteD1();
-  const env = {
-    ERPNEXT_BASE_URL: "https://frappe.example.com",
-    ERPNEXT_API_KEY: "bus-key",
-    ERPNEXT_API_SECRET: "bus-secret",
-    WORK_PACKAGE_FRAPPE_API_KEY: "work-package-key",
-    WORK_PACKAGE_FRAPPE_API_SECRET: "work-package-secret",
-    APP_TENANT_ID: "ironwrap",
-    EFFECT_RUNTIME_ENABLED: "true",
-    DB: db,
-  } as unknown as AppEnv;
-  const originalFetch = globalThis.fetch;
-  const requests: Array<{ method: string; url: string; authorization: string }> = [];
-  globalThis.fetch = async (input, init) => {
-    const url = String(input);
-    const method = String(init?.method ?? "GET");
-    const authorization = String(
-      (init?.headers as Record<string, string> | undefined)?.authorization ?? "",
-    );
-    requests.push({ method, url, authorization });
-    if (method === "GET") {
-      const eventName = decodeURIComponent(url.split("/").pop() ?? "");
-      return Response.json({ data: {
-        name: eventName,
-        work_package_event_id: eventName,
-        work_package: "WP-work_package_a",
-      } });
-    }
-    const body = JSON.parse(String(init?.body)) as { device_action_id: string };
-    const eventName = `wpe_${createHash("sha256").update(body.device_action_id).digest("hex").slice(0, 32)}`;
-    return Response.json({ message: {
-      work_package: { name: "WP-work_package_a" },
-      event: { name: eventName },
-    } });
-  };
-  try {
-    const writer = frappeWorkPackageWriter(env);
-    const input: PersistWorkPackageActionInput = {
-      kind: "acknowledge",
-      workPackageId: "work_package_a",
-      workPackageVersion: 1,
-      jobId: "JOB-A",
-      assignmentId: "ASSIGN-A",
-      actorUser: "crew@example.com",
-      deviceActionId: "device-action-123",
-      blockerReason: null,
-      releaseAttemptId: null,
-      workObjectType: null,
-      workObjectId: null,
-      physicalContextType: null,
-      physicalContextId: null,
-    };
-    const expected = {
-      workPackageName: "WP-work_package_a",
-      eventName: `wpe_${createHash("sha256").update(input.deviceActionId).digest("hex").slice(0, 32)}`,
-    };
-    assert.deepEqual(await writer.persistAction(input), expected);
-    assert.deepEqual(await writer.persistAction(input), expected);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-  assert.equal(requests.filter((request) => request.method === "POST").length, 1);
-  assert.equal(requests.filter((request) => request.method === "GET").length, 2);
-  // Both the mutation and its readback ride the work-package rail's own Frappe issuer.
-  // A leak of the broad bus pair must not reach this rail at all (ELEC-48 audit section 3).
-  for (const request of requests) {
-    assert.equal(request.authorization, "token work-package-key:work-package-secret");
-  }
-  const effect = db.raw.prepare(
-    "SELECT state, provider_external_id FROM external_effects WHERE action = 'work_package.mutation'",
-  ).get() as { state: string; provider_external_id: string };
-  assert.equal(effect.state, "succeeded");
-  assert.match(effect.provider_external_id, /^wpe_/);
-});
-
-test("the work-package rail refuses to issue with the shared bus pair, before any request", async () => {
-  const db = new SqliteD1();
-  const env = {
-    ERPNEXT_BASE_URL: "https://frappe.example.com",
-    ERPNEXT_API_KEY: "bus-key",
-    ERPNEXT_API_SECRET: "bus-secret",
-    // The old arrangement, expressed through the new binding names: same identity, new label.
-    WORK_PACKAGE_FRAPPE_API_KEY: "bus-key",
-    WORK_PACKAGE_FRAPPE_API_SECRET: "bus-secret",
-    APP_TENANT_ID: "ironwrap",
-    EFFECT_RUNTIME_ENABLED: "true",
-    DB: db,
-  } as unknown as AppEnv;
-  const originalFetch = globalThis.fetch;
-  let called = false;
-  globalThis.fetch = async () => {
-    called = true;
-    return Response.json({});
-  };
-  try {
-    await assert.rejects(
-      frappeWorkPackageWriter(env).persistAction({
-        kind: "acknowledge",
-        workPackageId: "work_package_a",
-        workPackageVersion: 1,
-        jobId: "JOB-A",
-        assignmentId: "ASSIGN-A",
-        actorUser: "crew@example.com",
-        deviceActionId: "device-action-456",
-        blockerReason: null,
-        releaseAttemptId: null,
-        workObjectType: null,
-        workObjectId: null,
-        physicalContextType: null,
-        physicalContextId: null,
-      }),
-      /work_package_frappe_shared_credential_rejected/,
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-  assert.equal(called, false, "a shared credential must fail before Frappe is contacted");
-  // A configuration fault must not book an effect and burn a retry budget either.
-  assert.equal(
-    (db.raw.prepare("SELECT COUNT(*) AS n FROM external_effects").get() as { n: number }).n,
-    0,
-  );
-});
-
 test("all work-package routes fail before mutation for office roles, bad CSRF, or unassigned field users", async () => {
   const appEnv = {
     ERPNEXT_BASE_URL: "https://frappe.example.com",
-    ERPNEXT_API_KEY: "bus-key",
-    ERPNEXT_API_SECRET: "bus-secret",
-    WORK_PACKAGE_FRAPPE_API_KEY: "work-package-key",
-    WORK_PACKAGE_FRAPPE_API_SECRET: "work-package-secret",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
   } as AppEnv;
   const paths = [
     "/api/v1/jobs/JOB-C/work-package/acknowledgements",
@@ -1051,12 +918,44 @@ test("typed completion route binds exact authority identity and declared role be
   let actionStoreTouched = false;
   const appEnv = {
     ERPNEXT_BASE_URL: "https://frappe.example.com",
-    ERPNEXT_API_KEY: "bus-key",
-    ERPNEXT_API_SECRET: "bus-secret",
-    WORK_PACKAGE_FRAPPE_API_KEY: "work-package-key",
-    WORK_PACKAGE_FRAPPE_API_SECRET: "work-package-secret",
+    ERPNEXT_API_KEY: "key",
+    ERPNEXT_API_SECRET: "secret",
     DB: {
-      prepare() {
+      prepare(sql: string) {
+        if (sql.includes("FROM operating_work_object_assignments current")) {
+          return {
+            bind() {
+              return {
+                async all() {
+                  return {
+                    results: [
+                      {
+                        assignment_id: "ASSIGN-SHOP-1",
+                        tenant_id: "ironwrap",
+                        work_object_type: "Shop Order",
+                        work_object_id: "SHOP-001",
+                        physical_context_type: "Shop Floor",
+                        physical_context_id: "SHOP-FLOOR-1",
+                        assignment_version: 1,
+                        assigned_users_json: JSON.stringify(["appu_field"]),
+                        scheduled_start: "2026-07-10T08:00:00.000Z",
+                        scheduled_end: null,
+                        authority_user_id: "appu_actual_authority",
+                        authority_role: "owner",
+                        supersedes_assignment_id: null,
+                        correction_reason: null,
+                        actor_user_id: "appu_production",
+                        command_fingerprint: "c".repeat(64),
+                        idempotency_key_hash: "d".repeat(64),
+                        created_at: "2026-07-10T08:00:00.000Z",
+                      },
+                    ],
+                  };
+                },
+              };
+            },
+          };
+        }
         actionStoreTouched = true;
         throw new Error("action store must not be reached");
       },
@@ -1068,23 +967,7 @@ test("typed completion route binds exact authority identity and declared role be
     const request =
       input instanceof Request ? input : new Request(input.toString(), init);
     requests.push(request);
-    return Response.json({
-      data: [
-        {
-          name: "ASSIGN-SHOP-1",
-          assignment_id: "assignment_shop_1",
-          assignment_type: "Shop",
-          status: "In Progress",
-          authority_user: "actual-authority@example.com",
-          authority_role: "IronWrap Owner",
-          assigned_by: "production@example.com",
-          work_object_type: "Shop Order",
-          work_object_id: "SHOP-001",
-          physical_context_type: "Shop Floor",
-          physical_context_id: "SHOP-FLOOR-1",
-        },
-      ],
-    });
+    throw new Error(`Frappe must not be called: ${request.url}`);
   };
   const completeRequest = (actionId: string) =>
     new Request(
@@ -1130,7 +1013,7 @@ test("typed completion route binds exact authority identity and declared role be
     );
 
     const wrongRole = auth("production");
-    wrongRole.session.frappe_user_id = "actual-authority@example.com";
+    wrongRole.session.user_id = "appu_actual_authority";
     const wrongRoleResponse = await handleAuthenticatedRoute(
       completeRequest("wrong-declared-role-action"),
       appEnv,
@@ -1143,7 +1026,7 @@ test("typed completion route binds exact authority identity and declared role be
     assert.equal(actionStoreTouched, false);
 
     const exactAuthority = auth("owner");
-    exactAuthority.session.frappe_user_id = "actual-authority@example.com";
+    exactAuthority.session.user_id = "appu_actual_authority";
     const exactResponse = await handleAuthenticatedRoute(
       completeRequest("exact-authority-action"),
       appEnv,
@@ -1155,12 +1038,182 @@ test("typed completion route binds exact authority identity and declared role be
       "the exact authority and declared role must pass the pre-action gate",
     );
     assert.equal(actionStoreTouched, true);
-    assert.equal(
-      requests.every((request) => request.method === "GET"),
-      true,
-      "an unrelated office session must never reach a Frappe mutation",
+    assert.deepEqual(
+      requests,
+      [],
+      "native typed authority must not call Frappe",
     );
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test("typed terminal action replays before current-assignment lookup and rejects payload drift", async () => {
+  const actionId = "terminal-complete-action-1";
+  const payload = {
+    work_package_id: "work_package_shop_terminal",
+    work_package_version: 1,
+    release_attempt_id: "shop-release-terminal-1",
+    work_object_type: "Shop Order",
+    work_object_id: "SHOP-TERMINAL-1",
+    physical_context_type: "Shop Floor",
+    physical_context_id: "SHOP-FLOOR-1",
+  };
+  const payloadHash = await sha256Hex(
+    canonicalJson({
+      action_kind: "complete_work",
+      assignment_id: "ASSIGN-TERMINAL-1",
+      job_id: "SHOP-TERMINAL-1",
+      payload,
+    }),
+  );
+  const response = {
+    device_action_id: actionId,
+    status: "verified",
+    server_ref: payload.work_package_id,
+    cursor: "wpe_terminal_complete_1",
+  } as const;
+  let assignmentLookupTouched = false;
+  const appEnv = {
+    APP_TENANT_ID: "ironwrap",
+    DB: {
+      prepare(sql: string) {
+        if (!sql.includes("FROM field_work_package_actions")) {
+          assignmentLookupTouched = true;
+          throw new Error("current assignment must not be read for a durable replay");
+        }
+        return {
+          bind() {
+            return {
+              async first() {
+                return {
+                  device_action_id: actionId,
+                  tenant_id: "ironwrap",
+                  user_id: "appu_owner",
+                  job_id: "SHOP-TERMINAL-1",
+                  assignment_id: "ASSIGN-TERMINAL-1",
+                  work_package_id: payload.work_package_id,
+                  action_kind: "complete_work",
+                  payload_hash: payloadHash,
+                  status: "verified",
+                  processing_token: null,
+                  lease_expires_at: null,
+                  response_json: JSON.stringify(response),
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+  } as unknown as AppEnv;
+  const request = (workPackageVersion: number) =>
+    new Request(
+      "https://app.example.com/api/v1/work-objects/Shop%20Order/SHOP-TERMINAL-1/physical-contexts/Shop%20Floor/SHOP-FLOOR-1/work-package/complete",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-csrf-token": "csrf",
+          "x-device-action-id": actionId,
+          "idempotency-key": actionId,
+        },
+        body: JSON.stringify({
+          device_action_id: actionId,
+          payload: { ...payload, work_package_version: workPackageVersion },
+        }),
+      },
+    );
+  const replay = await handleAuthenticatedRoute(request(1), appEnv, auth("owner"));
+  assert.equal(replay.status, 200);
+  assert.deepEqual(await replay.json(), response);
+  assert.equal(assignmentLookupTouched, false);
+
+  const conflict = await handleAuthenticatedRoute(request(2), appEnv, auth("owner"));
+  assert.equal(conflict.status, 409);
+  assert.equal((await conflict.json() as { error: string }).error, "idempotency_conflict");
+  assert.equal(assignmentLookupTouched, false);
+});
+
+test("roof-job terminal action replays before current-assignment lookup and rejects payload drift", async () => {
+  const actionId = "terminal-roof-complete-action-1";
+  const payload = {
+    work_package_id: "work_package_roof_terminal",
+    work_package_version: 1,
+    release_attempt_id: "roof-release-terminal-1",
+  };
+  const payloadHash = await sha256Hex(
+    canonicalJson({
+      action_kind: "complete_work",
+      assignment_id: "ASSIGN-ROOF-TERMINAL-1",
+      job_id: "JOB-ROOF-TERMINAL-1",
+      payload,
+    }),
+  );
+  const response = {
+    device_action_id: actionId,
+    status: "verified",
+    server_ref: payload.work_package_id,
+    cursor: "wpe_terminal_roof_complete_1",
+  } as const;
+  let assignmentLookupTouched = false;
+  const appEnv = {
+    APP_TENANT_ID: "ironwrap",
+    DB: {
+      prepare(sql: string) {
+        if (!sql.includes("FROM field_work_package_actions")) {
+          assignmentLookupTouched = true;
+          throw new Error("current assignment must not be read for a durable replay");
+        }
+        return {
+          bind() {
+            return {
+              async first() {
+                return {
+                  device_action_id: actionId,
+                  tenant_id: "ironwrap",
+                  user_id: "appu_owner",
+                  job_id: "JOB-ROOF-TERMINAL-1",
+                  assignment_id: "ASSIGN-ROOF-TERMINAL-1",
+                  work_package_id: payload.work_package_id,
+                  action_kind: "complete_work",
+                  payload_hash: payloadHash,
+                  status: "verified",
+                  processing_token: null,
+                  lease_expires_at: null,
+                  response_json: JSON.stringify(response),
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+  } as unknown as AppEnv;
+  const request = (workPackageVersion: number) =>
+    new Request(
+      "https://app.example.com/api/v1/jobs/JOB-ROOF-TERMINAL-1/work-package/complete",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-csrf-token": "csrf",
+          "x-device-action-id": actionId,
+          "idempotency-key": actionId,
+        },
+        body: JSON.stringify({
+          device_action_id: actionId,
+          payload: { ...payload, work_package_version: workPackageVersion },
+        }),
+      },
+    );
+  const replay = await handleAuthenticatedRoute(request(1), appEnv, auth("owner"));
+  assert.equal(replay.status, 200);
+  assert.deepEqual(await replay.json(), response);
+  assert.equal(assignmentLookupTouched, false);
+
+  const conflict = await handleAuthenticatedRoute(request(2), appEnv, auth("owner"));
+  assert.equal(conflict.status, 409);
+  assert.equal((await conflict.json() as { error: string }).error, "idempotency_conflict");
+  assert.equal(assignmentLookupTouched, false);
 });

@@ -33,24 +33,12 @@ type InventoryEntry =
   | { kind: "worker-entry" };
 
 const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
-  "customer-contract-acceptance.ts": { kind: "runtime-routed" },
   "customer-portal-decision.ts": {
     kind: "governed-unrouted",
     discipline:
       "one-attempt lease with a durable R2 receipt written before the single Frappe effect attempt; terminal result replayed verbatim",
   },
   "erpnext.ts": { kind: "runtime-routed" },
-  "facet-design-projection.ts": { kind: "runtime-routed" },
-  "fleet-actions.ts": {
-    kind: "governed-unrouted",
-    discipline:
-      "field-action ledger lease/complete/fail cycle wrapping the Frappe fleet command; evidence precedes the provider write",
-  },
-  "fleet-panel.ts": {
-    kind: "read-only-post-rpc",
-    rpcMethods: ["read_driver_fleet_panel"],
-  },
-  "frappe-field.ts": { kind: "runtime-routed" },
   "frappe-read.ts": { kind: "read-only" },
   "google.ts": { kind: "runtime-routed" },
   "index.ts": { kind: "worker-entry" },
@@ -72,7 +60,6 @@ const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
       "caller idempotency key plus an immutable, canonical-JSON, checksummed R2 receipt written before the single Frappe clearance attempt; the command converges on replay and refuses a differing clearance of an already-cleared gate",
   },
   "solar.ts": { kind: "read-only" },
-  "work-package-actions.ts": { kind: "runtime-routed" },
 };
 
 const SRC_DIR = new URL("../src/", import.meta.url);
@@ -199,7 +186,6 @@ test("governed-unrouted mutation adapters are exactly the recorded debt, each wi
     // with no outbound call at all.
     [
       "customer-portal-decision.ts",
-      "fleet-actions.ts",
       "measurements.ts",
       "production-gate-clearance.ts",
     ],

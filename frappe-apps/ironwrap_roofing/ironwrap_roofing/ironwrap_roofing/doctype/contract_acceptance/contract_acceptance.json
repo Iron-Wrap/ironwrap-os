@@ -1,42 +1,269 @@
 {
-  "actions": [], "allow_rename": 0, "autoname": "field:acceptance_id", "creation": "2026-07-10 00:00:00.000000", "custom": 0, "doctype": "DocType", "engine": "InnoDB",
-  "field_order": ["acceptance_id", "roof_job", "customer", "customer_quote", "proposal_evidence_pack", "change_order", "contract_version", "status", "signer_name", "signer_email", "signer_ip", "accepted_at", "acceptance_method", "evidence_item", "terms_hash", "terms_snapshot_json", "document_checksum", "source_system", "provider_reference", "captured_by", "supersedes", "correction_reason", "notes"],
-  "fields": [
-    {"fieldname": "acceptance_id", "fieldtype": "Data", "in_list_view": 1, "in_standard_filter": 1, "label": "Acceptance ID", "reqd": 1, "unique": 1},
-    {"fieldname": "roof_job", "fieldtype": "Link", "in_list_view": 1, "in_standard_filter": 1, "label": "Roof Job", "options": "Roof Job", "reqd": 1},
-    {"fieldname": "customer", "fieldtype": "Link", "label": "Customer", "options": "Roofing Customer", "reqd": 1},
-    {"fieldname": "customer_quote", "fieldtype": "Link", "label": "Customer Quote", "options": "Customer Quote"},
-    {"fieldname": "proposal_evidence_pack", "fieldtype": "Link", "label": "Proposal Evidence Pack", "options": "Proposal Evidence Pack"},
-    {"fieldname": "change_order", "fieldtype": "Link", "label": "Change Order", "options": "Change Order"},
-    {"fieldname": "contract_version", "fieldtype": "Data", "label": "Contract Version", "reqd": 1},
-    {"fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "in_standard_filter": 1, "label": "Status", "options": "Accepted\nDeclined\nVoided\nSuperseded", "reqd": 1},
-    {"fieldname": "signer_name", "fieldtype": "Data", "label": "Signer Name", "reqd": 1},
-    {"fieldname": "signer_email", "fieldtype": "Data", "label": "Signer Email", "reqd": 1},
-    {"fieldname": "signer_ip", "fieldtype": "Data", "label": "Signer IP"},
-    {"fieldname": "accepted_at", "fieldtype": "Datetime", "label": "Accepted At"},
-    {"fieldname": "acceptance_method", "fieldtype": "Select", "label": "Acceptance Method", "options": "Click to Accept\nE-signature Provider\nIn Person\nImported Signed Contract", "reqd": 1},
-    {"fieldname": "evidence_item", "fieldtype": "Link", "label": "Evidence Item", "options": "Evidence Item", "reqd": 1},
-    {"fieldname": "terms_hash", "fieldtype": "Data", "label": "Terms Hash", "reqd": 1},
-    {"fieldname": "terms_snapshot_json", "fieldtype": "Code", "label": "Terms Snapshot JSON", "options": "JSON"},
-    {"fieldname": "document_checksum", "fieldtype": "Data", "label": "Document Checksum", "reqd": 1},
-    {"fieldname": "source_system", "fieldtype": "Data", "label": "Source System", "reqd": 1},
-    {"fieldname": "provider_reference", "fieldtype": "Data", "label": "Provider Reference", "reqd": 1},
-    {"fieldname": "captured_by", "fieldtype": "Link", "label": "Captured By", "options": "User", "reqd": 1},
-    {"fieldname": "supersedes", "fieldtype": "Link", "label": "Supersedes", "options": "Contract Acceptance"},
-    {"fieldname": "correction_reason", "fieldtype": "Small Text", "label": "Correction Reason"},
-    {"fieldname": "notes", "fieldtype": "Small Text", "label": "Notes"}
-  ],
-  "index_web_pages_for_search": 0, "istable": 0, "links": [], "modified": "2026-07-10 00:00:00.000000", "modified_by": "Administrator", "module": "IronWrap Roofing", "name": "Contract Acceptance", "naming_rule": "By fieldname", "owner": "Administrator",
-  "permissions": [
-    {"create": 1, "delete": 0, "export": 1, "import": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
-    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Owner", "write": 1},
-    {"create": 1, "delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Sales", "write": 1},
-    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Estimator"},
-    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Finance"},
-    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Production"},
-    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Closeout"},
-    {"delete": 0, "print": 1, "read": 1, "report": 1, "role": "IronWrap Support"},
-    {"create": 1, "delete": 0, "read": 1, "role": "IronWrap Customer Acceptance Service"}
-  ],
-  "sort_field": "modified", "sort_order": "DESC", "states": [], "track_changes": 1
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:acceptance_id",
+ "creation": "2026-07-10 00:00:00.000000",
+ "custom": 0,
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "acceptance_id",
+  "roof_job",
+  "customer",
+  "customer_quote",
+  "proposal_evidence_pack",
+  "change_order",
+  "contract_version",
+  "status",
+  "signer_name",
+  "signer_email",
+  "signer_ip",
+  "accepted_at",
+  "acceptance_method",
+  "evidence_item",
+  "terms_hash",
+  "terms_snapshot_json",
+  "document_checksum",
+  "source_system",
+  "provider_reference",
+  "captured_by",
+  "supersedes",
+  "correction_reason",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "acceptance_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Acceptance ID",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "roof_job",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Roof Job",
+   "options": "Roof Job",
+   "reqd": 1
+  },
+  {
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "label": "Customer",
+   "options": "Roofing Customer",
+   "reqd": 1
+  },
+  {
+   "fieldname": "customer_quote",
+   "fieldtype": "Link",
+   "label": "Customer Quote",
+   "options": "Customer Quote"
+  },
+  {
+   "fieldname": "proposal_evidence_pack",
+   "fieldtype": "Link",
+   "label": "Proposal Evidence Pack",
+   "options": "Proposal Evidence Pack"
+  },
+  {
+   "fieldname": "change_order",
+   "fieldtype": "Link",
+   "label": "Change Order",
+   "options": "Change Order"
+  },
+  {
+   "fieldname": "contract_version",
+   "fieldtype": "Data",
+   "label": "Contract Version",
+   "reqd": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Accepted\nDeclined\nVoided\nSuperseded",
+   "reqd": 1
+  },
+  {
+   "fieldname": "signer_name",
+   "fieldtype": "Data",
+   "label": "Signer Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "signer_email",
+   "fieldtype": "Data",
+   "label": "Signer Email",
+   "reqd": 1
+  },
+  {
+   "fieldname": "signer_ip",
+   "fieldtype": "Data",
+   "label": "Signer IP"
+  },
+  {
+   "fieldname": "accepted_at",
+   "fieldtype": "Datetime",
+   "label": "Accepted At"
+  },
+  {
+   "fieldname": "acceptance_method",
+   "fieldtype": "Select",
+   "label": "Acceptance Method",
+   "options": "Click to Accept\nE-signature Provider\nIn Person\nImported Signed Contract",
+   "reqd": 1
+  },
+  {
+   "fieldname": "evidence_item",
+   "fieldtype": "Link",
+   "label": "Evidence Item",
+   "options": "Evidence Item",
+   "reqd": 1
+  },
+  {
+   "fieldname": "terms_hash",
+   "fieldtype": "Data",
+   "label": "Terms Hash",
+   "reqd": 1
+  },
+  {
+   "fieldname": "terms_snapshot_json",
+   "fieldtype": "Code",
+   "label": "Terms Snapshot JSON",
+   "options": "JSON"
+  },
+  {
+   "fieldname": "document_checksum",
+   "fieldtype": "Data",
+   "label": "Document Checksum",
+   "reqd": 1
+  },
+  {
+   "fieldname": "source_system",
+   "fieldtype": "Data",
+   "label": "Source System",
+   "reqd": 1
+  },
+  {
+   "fieldname": "provider_reference",
+   "fieldtype": "Data",
+   "label": "Provider Reference",
+   "reqd": 1
+  },
+  {
+   "fieldname": "captured_by",
+   "fieldtype": "Link",
+   "label": "Captured By",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fieldname": "supersedes",
+   "fieldtype": "Link",
+   "label": "Supersedes",
+   "options": "Contract Acceptance"
+  },
+  {
+   "fieldname": "correction_reason",
+   "fieldtype": "Small Text",
+   "label": "Correction Reason"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-07-10 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "IronWrap Roofing",
+ "name": "Contract Acceptance",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 0,
+   "export": 1,
+   "import": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Owner",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Sales",
+   "write": 1
+  },
+  {
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Estimator"
+  },
+  {
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Finance"
+  },
+  {
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Production"
+  },
+  {
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Closeout"
+  },
+  {
+   "delete": 0,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "IronWrap Support"
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "read": 1,
+   "role": "IronWrap Customer Acceptance Service"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
 }

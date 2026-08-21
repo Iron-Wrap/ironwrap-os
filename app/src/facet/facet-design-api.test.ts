@@ -27,13 +27,19 @@ export const projectedEvidence = {
   external_project_link_id: `ironwrap-project-v1:${"c".repeat(64)}`,
   association_sha256: "d".repeat(64),
   projection_state: "projected",
-  status_code: "blank_draft_projected",
+  status_code: "native_design_projected",
   projection: {
-    outcome: "projected_blank_draft",
-    evidence_id: "facet-design:evidence-1",
-    reconciliation_id: "facet-design-projection:receipt-1",
-    draft_customer_quote_id: "facet-quote-revision:draft-1",
-    draft_quote_version: 3,
+    outcome: "projected_native_design",
+    projection_id: "facet-native-design-v2:projection-1",
+    projection_sha256: "e".repeat(64),
+    source_quote_revision_id: "quote-revision:accepted-1",
+    source_quote_version: 2,
+    source_proposal_revision_id: "proposal-revision:accepted-1",
+    source_publication_event_id: "publication-event:accepted-1",
+    source_acceptance_binding_id: "acceptance-binding:accepted-1",
+    launch_intent_sha256: "f".repeat(64),
+    design_sequence: 1,
+    design_state: "active",
     error_code: null,
     attempted_at: "2026-08-13T10:02:00.000Z",
   },
@@ -76,12 +82,12 @@ describe("Facet design API", () => {
     await expect(loadFacetDesignEvidence(fetcher)).rejects.toThrow();
   });
 
-  it("rejects a projected claim without complete blank Draft receipt anchors", () => {
+  it("rejects a projected claim without complete native authority anchors", () => {
     expect(() =>
       facetDesignEvidenceResponseSchema.parse(
         response({
           ...projectedEvidence,
-          projection: { ...projectedEvidence.projection, reconciliation_id: null },
+          projection: { ...projectedEvidence.projection, projection_sha256: null },
         }),
       ),
     ).toThrow();

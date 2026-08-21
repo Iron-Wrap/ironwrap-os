@@ -1,27 +1,19 @@
 // photos.ts — Jotform "Jobsite Photo" intake (Phase 3, spec 02 §2B / 07).
 //
-// A field tech submits photos against a JobNimbus job number → raw to R2 FIRST → each photo is
-// filed into that job's Google Drive folder (the file authority). Google creds are optional: with
-// none, the raw submission is still stored + audited, and the photos sync once Drive is connected.
+// A field tech submits photos against a job number → raw to R2 FIRST → optional Drive filing for
+// the file bytes → native D1 evidence authority. Google creds are optional: with none, the raw
+// submission and native evidence ledger are still stored, and the files sync once Drive is connected.
 
 import { newEnvelopeId, parseBody } from "./core.ts";
 import * as store from "./store.ts";
 import { googleConfigured, fileToJobFolder } from "./google.ts";
-import { pushPhotoEvidenceToErpNext } from "./erpnext.ts";
+import { recordNativePhotoEvidence, type NativePhotoEvidenceRef } from "./photo-evidence-store.ts";
 
 const JOB_KEYS = ["job_number", "jobnumber", "job", "job_no", "jn_job", "jobnimbus_job", "job_id", "jobid"];
 const PHOTO_KEYS = ["photos", "photo", "images", "image", "files", "file", "attachments", "upload", "uploads", "audio", "voice", "voice_note", "voice_notes", "recordings"];
 const CAPTION_KEYS = ["caption", "notes", "note", "description", "message", "comments", "comment", "transcript", "voice_transcript", "voice_note_text"];
 
 export interface PhotoSubmission { jobNumber: string | null; photos: string[]; caption: string | null }
-interface PhotoEvidenceRef {
-  index: number;
-  sourceUri: string;
-  fileName: string;
-  driveFileUrl?: string | null;
-  driveFileId?: string | null;
-  error?: string | null;
-}
 
 function pick(raw: Record<string, unknown>, keys: string[]): unknown {
   for (const k of Object.keys(raw)) if (keys.includes(k.toLowerCase())) return raw[k];
@@ -88,14 +80,21 @@ export async function handlePhotoIngest(env: Env, rawText: string, contentType: 
   }
 
   if (!googleConfigured(env)) {
-    const erp = await syncPhotoEvidenceToErpNext(env, id, sub, rawKey, now, buildPhotoRefs(sub));
+    const native = await persistNativePhotoEvidence(env, id, sub, rawKey, rawText, now, buildPhotoRefs(sub));
     await store.recordAudit(env, { automation: "jobsite_photo", trigger: "jotform", envelope_id: id,
-      job_number: sub.jobNumber, action: "received", result: "ok", error: "drive_not_configured" });
-    return jsonResp({ ok: true, job_number: sub.jobNumber, photos: sub.photos.length, uploaded: 0,
-      erpnext_evidence_ids: erp.names,
-      erpnext_field_check_in_id: erp.fieldCheckInName,
-      erpnext_error: erp.error,
-      note: "drive_not_configured — raw stored; files sync once Google creds are set" });
+      job_number: sub.jobNumber, target_ids: native.targetIds, action: "received",
+      result: native.ok ? "ok" : "error", error: native.ok ? "drive_not_configured" : native.error });
+    if (!native.ok) return jsonResp({ error: native.error }, 500);
+    return jsonResp({
+      ok: true,
+      job_number: sub.jobNumber,
+      photos: sub.photos.length,
+      uploaded: 0,
+      native_submission_id: native.record.submission_id,
+      native_evidence_ids: native.record.evidence_ids,
+      native_association_status: native.record.association_status,
+      note: "drive_not_configured — raw and native evidence stored; files sync once Google creds are set",
+    });
   }
 
   // Fetch each photo URL → bytes, then file the batch into the job's Drive folder (03 Photos).
@@ -128,19 +127,29 @@ export async function handlePhotoIngest(env: Env, rawText: string, contentType: 
     if (uploadedFile?.error) ref.error = uploadedFile.error.slice(0, 120);
   }
   const uploaded = result.files.filter((f) => f.webUrl).length;
-  const erp = await syncPhotoEvidenceToErpNext(env, id, sub, rawKey, now, refs, result.folderUrl);
+  const native = await persistNativePhotoEvidence(env, id, sub, rawKey, rawText, now, refs, result.folderUrl);
   await store.recordAudit(env, { automation: "jobsite_photo", trigger: "jotform", envelope_id: id,
-    job_number: sub.jobNumber, target_ids: result.folderUrl,
-    action: "filed", result: uploaded ? "ok" : "error", error: uploaded ? null : "no_files_uploaded" });
-  return jsonResp({ ok: true, job_number: sub.jobNumber, uploaded, folder: result.folderUrl, files: result.files,
-    erpnext_evidence_ids: erp.names, erpnext_field_check_in_id: erp.fieldCheckInName, erpnext_error: erp.error });
+    job_number: sub.jobNumber, target_ids: native.targetIds ?? result.folderUrl,
+    action: "filed", result: native.ok && uploaded ? "ok" : "error",
+    error: native.ok ? (uploaded ? null : "no_files_uploaded") : native.error });
+  if (!native.ok) return jsonResp({ error: native.error, uploaded, folder: result.folderUrl }, 500);
+  return jsonResp({
+    ok: true,
+    job_number: sub.jobNumber,
+    uploaded,
+    folder: result.folderUrl,
+    files: result.files,
+    native_submission_id: native.record.submission_id,
+    native_evidence_ids: native.record.evidence_ids,
+    native_association_status: native.record.association_status,
+  });
 }
 
 function jsonResp(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function buildPhotoRefs(sub: PhotoSubmission): PhotoEvidenceRef[] {
+function buildPhotoRefs(sub: PhotoSubmission): NativePhotoEvidenceRef[] {
   return sub.photos.map((sourceUri, index) => ({
     index,
     sourceUri,
@@ -148,39 +157,56 @@ function buildPhotoRefs(sub: PhotoSubmission): PhotoEvidenceRef[] {
   }));
 }
 
-async function syncPhotoEvidenceToErpNext(
+async function persistNativePhotoEvidence(
   env: Env,
   id: string,
   sub: PhotoSubmission,
   rawKey: string,
+  rawText: string,
   capturedAt: string,
-  photos: PhotoEvidenceRef[],
+  photos: NativePhotoEvidenceRef[],
   driveFolderUrl?: string | null,
-): Promise<{ names: string[]; fieldCheckInName?: string; error: string | null }> {
+): Promise<
+  | { ok: true; record: Awaited<ReturnType<typeof recordNativePhotoEvidence>>; targetIds: string; error?: undefined }
+  | { ok: false; error: string; record?: undefined; targetIds?: undefined }
+> {
   try {
-    const erp = await pushPhotoEvidenceToErpNext(env, {
-      submissionId: id,
+    const record = await recordNativePhotoEvidence(env, {
+      envelopeId: id,
       jobNumber: sub.jobNumber ?? "",
       rawKey,
+      rawText,
       capturedAt,
       caption: sub.caption,
       driveFolderUrl,
       photos,
     });
-    if (erp) {
-      await store.recordAudit(env, { automation: "erpnext_photo", trigger: "jotform",
-        envelope_id: id, job_number: sub.jobNumber,
-        target_ids: [
-          ...erp.names.map((name) => `evidence_item:${name}`),
-          erp.fieldCheckInName ? `field_check_in:${erp.fieldCheckInName}` : null,
-        ].filter(Boolean).join(","),
-        action: erp.reused ? "upsert_existing" : "create", result: "ok" });
-    }
-    return { names: erp?.names ?? [], fieldCheckInName: erp?.fieldCheckInName, error: null };
+    const targetIds = [
+      `native_photo_submission:${record.submission_id}`,
+      ...record.evidence_ids.map((evidenceId) => `native_photo_evidence:${evidenceId}`),
+    ].join(",");
+    await store.recordAudit(env, {
+      automation: "native_photo_evidence",
+      trigger: "jotform",
+      envelope_id: id,
+      job_number: sub.jobNumber,
+      target_ids: targetIds,
+      action: record.association_status === "matched" ? "matched" : "unmatched",
+      result: "ok",
+      error: record.association_error,
+    });
+    return { ok: true, record, targetIds };
   } catch (err) {
-    const error = `erpnext_photo: ${String(err)}`;
-    await store.recordAudit(env, { automation: "erpnext_photo", trigger: "jotform",
-      envelope_id: id, job_number: sub.jobNumber, action: "sync", result: "error", error });
-    return { names: [], error };
+    const error = `native_photo_evidence: ${String(err)}`;
+    await store.recordAudit(env, {
+      automation: "native_photo_evidence",
+      trigger: "jotform",
+      envelope_id: id,
+      job_number: sub.jobNumber,
+      action: "record",
+      result: "error",
+      error,
+    });
+    return { ok: false, error };
   }
 }

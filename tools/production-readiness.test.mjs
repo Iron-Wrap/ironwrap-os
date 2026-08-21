@@ -572,22 +572,25 @@ function d1ContractCsv(name) {
 }
 
 function extendD1Bindings(baseline, current) {
-  const bindings = new Map(baseline);
+  const bindings = [];
   for (const value of current) {
     const separator = value.indexOf("=");
     assert.ok(separator > 0, `invalid D1 binding fixture: ${value}`);
     const name = value.slice(0, separator);
     const table = value.slice(separator + 1);
-    if (bindings.has(name)) assert.equal(bindings.get(name), table, `D1 binding drift: ${name}`);
-    bindings.set(name, table);
+    bindings.push([name, table]);
   }
-  return [...bindings.entries()].sort(([left], [right]) => left.localeCompare(right));
+  const currentBindings = new Map(bindings);
+  assert.equal(currentBindings.size, bindings.length, "duplicate D1 binding fixture");
+  for (const [name, table] of baseline) {
+    assert.equal(currentBindings.get(name), table, `D1 binding drift: ${name}`);
+  }
+  return bindings;
 }
 
-const REQUIRED_D1_TABLES = [...new Set([
-  ...BASE_REQUIRED_D1_TABLES,
-  ...d1ContractCsv("REQUIRED_TABLES"),
-])].sort();
+const REQUIRED_D1_TABLES = d1ContractCsv("REQUIRED_TABLES");
+assert.equal(new Set(REQUIRED_D1_TABLES).size, REQUIRED_D1_TABLES.length, "duplicate D1 table fixture");
+for (const table of BASE_REQUIRED_D1_TABLES) assert.ok(REQUIRED_D1_TABLES.includes(table), `missing D1 table fixture: ${table}`);
 const REQUIRED_D1_INDEX_BINDINGS = extendD1Bindings(
   BASE_REQUIRED_D1_INDEX_BINDINGS,
   d1ContractCsv("REQUIRED_INDEX_BINDINGS"),
@@ -596,6 +599,30 @@ const REQUIRED_D1_TRIGGER_BINDINGS = extendD1Bindings(
   BASE_REQUIRED_D1_TRIGGER_BINDINGS,
   d1ContractCsv("REQUIRED_TRIGGER_BINDINGS"),
 );
+const D1_TRIGGER_VERIFY_QUERY_PREFIX = "SELECT name AS trigger_name, tbl_name AS table_name, sql AS trigger_sql FROM sqlite_master WHERE type='trigger' AND name IN (";
+const D1_TRIGGER_VERIFY_QUERY_SUFFIX = ") ORDER BY name;";
+const MAX_REMOTE_D1_READ_COMMAND_LENGTH = 16_384;
+
+function d1TriggerVerificationBatchCount() {
+  let batchNames = "";
+  let batchCount = 0;
+  for (const [triggerName] of REQUIRED_D1_TRIGGER_BINDINGS) {
+    const quotedName = `'${triggerName}'`;
+    const candidateNames = batchNames ? `${batchNames},${quotedName}` : quotedName;
+    const candidate = `${D1_TRIGGER_VERIFY_QUERY_PREFIX}${candidateNames}${D1_TRIGGER_VERIFY_QUERY_SUFFIX}`;
+    if (candidate.length > MAX_REMOTE_D1_READ_COMMAND_LENGTH) {
+      assert.notEqual(batchNames, "", "single D1 trigger name exceeds the bounded read contract");
+      batchCount += 1;
+      batchNames = quotedName;
+    } else {
+      batchNames = candidateNames;
+    }
+  }
+  assert.notEqual(batchNames, "", "D1 trigger inventory must not be empty");
+  return batchCount + 1;
+}
+
+const REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT = d1TriggerVerificationBatchCount();
 
 const HERMES_D1_TABLES = new Set([
   "hermes_desktop_contexts",
@@ -653,6 +680,18 @@ function d1IndexSql(name, table) {
     return `CREATE INDEX ${name} ON ${table}(ocr_review_required, ocr_status, updated_at DESC);`;
   if (name === "idx_dead_letter_open_measurement")
     return `CREATE UNIQUE INDEX ${name} ON ${table}(envelope_id, stage) WHERE recovered = 0 AND stage = 'measurement_processing';`;
+  if (name === "idx_native_measurement_revisions_job")
+    return `CREATE INDEX ${name} ON ${table}(tenant_id, roof_job_id, created_at DESC) WHERE roof_job_id IS NOT NULL;`;
+  if (name === "idx_native_measurement_revisions_root")
+    return `CREATE INDEX ${name} ON ${table}(tenant_id, root_measurement_id, revision_number DESC);`;
+  if (name === "idx_native_measurement_revisions_one_successor")
+    return `CREATE UNIQUE INDEX ${name} ON ${table}(tenant_id, supersedes_measurement_revision_id) WHERE supersedes_measurement_revision_id IS NOT NULL;`;
+  if (name === "idx_native_photo_evidence_submissions_envelope")
+    return `CREATE UNIQUE INDEX ${name} ON ${table}(tenant_id, envelope_id);`;
+  if (name === "idx_native_photo_evidence_submissions_job")
+    return `CREATE INDEX ${name} ON ${table}(tenant_id, job_number, created_at DESC);`;
+  if (name === "idx_native_photo_evidence_items_submission")
+    return `CREATE UNIQUE INDEX ${name} ON ${table}(submission_id, item_index);`;
   return `CREATE INDEX ${name} ON ${table}(id);`;
 }
 
@@ -721,10 +760,100 @@ function d1GenericTableSql(name, index) {
       ocr_result_sha256 IS NULL OR (length(ocr_result_sha256) = 64 AND ocr_result_sha256 NOT GLOB '*[^0-9a-f]*')
     ),
     ocr_review_required INTEGER NOT NULL DEFAULT 0 CHECK (ocr_review_required IN (0, 1)),
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    tenant_id TEXT CHECK (
+      tenant_id IS NULL OR (
+        length(tenant_id) BETWEEN 2 AND 64
+        AND tenant_id NOT GLOB '*[^a-z0-9-]*'
+      )
+    ),
+    native_measurement_revision_id TEXT CHECK (
+      native_measurement_revision_id IS NULL OR (
+        length(native_measurement_revision_id) = 69
+        AND native_measurement_revision_id GLOB 'mrev_[0-9a-f]*'
+        AND substr(native_measurement_revision_id, 6) NOT GLOB '*[^0-9a-f]*'
+      )
+    ),
+    native_projection_sha256 TEXT CHECK (
+      native_projection_sha256 IS NULL OR (
+        length(native_projection_sha256) = 64
+        AND native_projection_sha256 NOT GLOB '*[^0-9a-f]*'
+      )
+    )
   );
   INSERT INTO measurement_intake_receipts (id, updated_at)
   VALUES ('row-${index}', '2026-08-13T00:00:00.000Z');`;
+  if (name === "native_measurement_revisions") return `CREATE TABLE native_measurement_revisions (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT,
+    receipt_id TEXT,
+    measurement_id TEXT,
+    root_measurement_id TEXT,
+    revision_number INTEGER,
+    roof_job_id TEXT,
+    created_at TEXT,
+    supersedes_measurement_revision_id TEXT,
+    measurement_revision_id TEXT,
+    report_raw_key TEXT,
+    report_sha256 TEXT,
+    projection_json TEXT NOT NULL CHECK (
+      length(projection_json) BETWEEN 2 AND 2097152 AND json_valid(projection_json)
+    ),
+    UNIQUE (receipt_id),
+    UNIQUE (measurement_id),
+    UNIQUE (tenant_id, root_measurement_id, revision_number),
+    CHECK ((report_raw_key IS NULL) = (report_sha256 IS NULL)),
+    FOREIGN KEY (roof_job_id, tenant_id)
+      REFERENCES operating_roof_jobs(roof_job_id, tenant_id) ON DELETE RESTRICT,
+    FOREIGN KEY (supersedes_measurement_revision_id, tenant_id)
+      REFERENCES native_measurement_revisions(measurement_revision_id, tenant_id) ON DELETE RESTRICT
+  );
+  INSERT INTO native_measurement_revisions (id, projection_json)
+  VALUES ('row-${index}', '{}');`;
+  if (name === "native_photo_evidence_submissions") return `CREATE TABLE native_photo_evidence_submissions (
+    id TEXT PRIMARY KEY,
+    submission_id TEXT,
+    tenant_id TEXT,
+    envelope_id TEXT,
+    job_number TEXT,
+    roof_job_id TEXT,
+    operating_job_version INTEGER,
+    association_status TEXT,
+    association_error TEXT,
+    created_at TEXT,
+    photo_count INTEGER,
+    projection_json TEXT NOT NULL CHECK (
+      length(projection_json) BETWEEN 2 AND 2097152 AND json_valid(projection_json)
+    ),
+    UNIQUE (submission_id, tenant_id),
+    FOREIGN KEY (roof_job_id, tenant_id)
+      REFERENCES operating_roof_jobs(roof_job_id, tenant_id) ON DELETE RESTRICT,
+    CHECK (
+      (association_status = 'matched'
+        AND roof_job_id IS NOT NULL
+        AND operating_job_version IS NOT NULL
+        AND association_error IS NULL)
+      OR
+      (association_status = 'unmatched'
+        AND roof_job_id IS NULL
+        AND operating_job_version IS NULL
+        AND association_error IS NOT NULL)
+    )
+  );
+  INSERT INTO native_photo_evidence_submissions (id, projection_json, association_status, association_error)
+  VALUES ('row-${index}', '{}', 'unmatched', 'no-job');`;
+  if (name === "native_photo_evidence_items") return `CREATE TABLE native_photo_evidence_items (
+    id TEXT PRIMARY KEY,
+    evidence_id TEXT,
+    submission_id TEXT,
+    tenant_id TEXT,
+    item_index INTEGER,
+    UNIQUE (evidence_id, tenant_id),
+    FOREIGN KEY (submission_id, tenant_id)
+      REFERENCES native_photo_evidence_submissions(submission_id, tenant_id) ON DELETE RESTRICT
+  );
+  INSERT INTO native_photo_evidence_items (id)
+  VALUES ('row-${index}');`;
   return `CREATE TABLE ${name} (id TEXT PRIMARY KEY);\nINSERT INTO ${name} (id) VALUES ('row-${index}');`;
 }
 
@@ -800,6 +929,106 @@ function d1TriggerSql(name, table, {
   weakAccessRoleTrigger = false,
 } = {}) {
   if (HERMES_D1_TRIGGERS.has(name)) return hermesTriggerSql(name);
+  if (name === "native_measurement_revisions_receipt_guard") {
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'native_measurement_receipt_evidence_mismatch')
+      WHERE EXISTS (
+        SELECT 1 FROM measurement_intake_receipts AS receipt
+        WHERE receipt.payload_hash = NEW.measurement_raw_sha256
+      );
+    END;`;
+  }
+  if (name === "native_measurement_revisions_job_guard") {
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'native_measurement_job_anchor_mismatch')
+      WHERE EXISTS (
+        SELECT 1 FROM operating_roof_jobs AS job
+        WHERE job.version = NEW.operating_job_version
+      );
+    END;`;
+  }
+  if (name === "native_measurement_revisions_lineage_guard") {
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'native_measurement_lineage_mismatch')
+      WHERE EXISTS (
+        SELECT 1 FROM native_measurement_revisions AS predecessor
+        WHERE predecessor.revision_number = NEW.revision_number - 1
+      );
+    END;`;
+  }
+  if (name === "native_measurement_revisions_no_insert_replace") {
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'native_measurement_insert_replace_forbidden')
+      WHERE EXISTS (
+        SELECT 1 FROM native_measurement_revisions AS existing
+        WHERE existing.receipt_id = NEW.receipt_id
+      );
+    END;`;
+  }
+  if (name === "native_measurement_revisions_append_only_update") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'native_measurement_revisions_append_only'); END;`;
+  }
+  if (name === "native_measurement_revisions_append_only_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'native_measurement_revisions_append_only'); END;`;
+  }
+  if (name === "measurement_intake_receipts_native_binding_guard") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'measurement_native_binding_immutable')
+      WHERE EXISTS (
+        SELECT 1 FROM native_measurement_revisions AS revision
+        WHERE revision.projection_sha256 = NEW.native_projection_sha256
+          AND revision.measurement_raw_sha256 IS NOT NEW.payload_hash
+      );
+    END;`;
+  }
+  if (name === "native_photo_evidence_submissions_job_guard") {
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'native_photo_job_anchor_mismatch')
+      WHERE EXISTS (
+        SELECT 1 FROM operating_roof_jobs AS job
+        WHERE job.version = NEW.operating_job_version
+      );
+    END;`;
+  }
+  if (name === "native_photo_evidence_submissions_no_insert_replace") {
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'native_photo_insert_replace_forbidden')
+      WHERE EXISTS (
+        SELECT 1 FROM native_photo_evidence_submissions AS existing
+        WHERE existing.submission_id = NEW.submission_id
+      );
+    END;`;
+  }
+  if (name === "native_photo_evidence_submissions_append_only_update") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'native_photo_evidence_submissions_append_only'); END;`;
+  }
+  if (name === "native_photo_evidence_submissions_append_only_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'native_photo_evidence_submissions_append_only'); END;`;
+  }
+  if (name === "native_photo_evidence_items_parent_guard") {
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'native_photo_item_parent_mismatch')
+      WHERE EXISTS (
+        SELECT 1 FROM native_photo_evidence_submissions AS submission
+        WHERE NEW.item_index < submission.photo_count
+      );
+    END;`;
+  }
+  if (name === "native_photo_evidence_items_no_insert_replace") {
+    return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} BEGIN
+      SELECT RAISE(ABORT, 'native_photo_item_insert_replace_forbidden')
+      WHERE EXISTS (
+        SELECT 1 FROM native_photo_evidence_items AS existing
+        WHERE existing.evidence_id = NEW.evidence_id
+      );
+    END;`;
+  }
+  if (name === "native_photo_evidence_items_append_only_update") {
+    return `CREATE TRIGGER ${name} BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'native_photo_evidence_items_append_only'); END;`;
+  }
+  if (name === "native_photo_evidence_items_append_only_delete") {
+    return `CREATE TRIGGER ${name} BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'native_photo_evidence_items_append_only'); END;`;
+  }
   if (name === "validate_source_count_insert") {
     return `CREATE TRIGGER ${name} BEFORE INSERT ON ${table} WHEN 0 BEGIN SELECT RAISE(ABORT, 'invalid_source_count'); END;`;
   }
@@ -1010,7 +1239,7 @@ while (( $# > 0 )); do
 done
 [[ -n "$output" ]] || exit 2
 if [[ -n "$config" ]]; then /bin/cp "$config" "$MOCK_STATE/source-config.json"; fi
-printf '%s' "$MOCK_D1_SQL" > "$output"
+/bin/cp "$MOCK_D1_SQL_FILE" "$output"
 `);
   await writeExecutable(path.join(bin, "age"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -1035,6 +1264,18 @@ if [[ "\${1:-}" == 'copy' && "\${MOCK_FAIL_COPY:-0}" == '1' ]]; then exit 9; fi
 exit 0
 `);
 
+  const fixtureSql = path.join(state, "fixture.sql");
+  await writeFile(fixtureSql, d1Sql({
+    missingTable,
+    missingIndex,
+    missingTrigger,
+    weakReceiptTrigger,
+    weakMeasurementTrigger,
+    weakApprovalTrigger,
+    weakAccessRoleTrigger,
+    nullActiveAccessRole,
+  }));
+
   return {
     root,
     state,
@@ -1044,16 +1285,7 @@ exit 0
       PATH: `${bin}:${process.env.PATH}`,
       TMPDIR: root,
       MOCK_STATE: state,
-      MOCK_D1_SQL: d1Sql({
-        missingTable,
-        missingIndex,
-        missingTrigger,
-        weakReceiptTrigger,
-        weakMeasurementTrigger,
-        weakApprovalTrigger,
-        weakAccessRoleTrigger,
-        nullActiveAccessRole,
-      }),
+      MOCK_D1_SQL_FILE: fixtureSql,
       MOCK_FAIL_COPY: failCopy ? "1" : "0",
       MOCK_SIGNAL_COPY: signalCopy ? "1" : "0",
       D1_BACKUP_API_TOKEN: "cloudflare_d1_backup_read_4c8f0b2d6a9137e5",
@@ -1285,6 +1517,58 @@ async function mockD1RestoreEnvironment(t, {
     success: true,
     meta: { changes: 0, changed_db: false },
   }]);
+  const missingTriggers = JSON.stringify([{
+    results: REQUIRED_D1_TRIGGER_BINDINGS.slice(1).map(([trigger_name, table_name]) => ({
+      trigger_name,
+      table_name,
+      trigger_sql: d1TriggerSql(trigger_name, table_name),
+    })),
+    success: true,
+    meta: { changes: 0, changed_db: false },
+  }]);
+  const duplicateTriggers = JSON.stringify([{
+    results: [
+      ...REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({
+        trigger_name,
+        table_name,
+        trigger_sql: d1TriggerSql(trigger_name, table_name),
+      })),
+      {
+        trigger_name: REQUIRED_D1_TRIGGER_BINDINGS[0][0],
+        table_name: REQUIRED_D1_TRIGGER_BINDINGS[0][1],
+        trigger_sql: d1TriggerSql(...REQUIRED_D1_TRIGGER_BINDINGS[0]),
+      },
+    ],
+    success: true,
+    meta: { changes: 0, changed_db: false },
+  }]);
+  const errorTriggers = JSON.stringify([{
+    results: [],
+    success: false,
+    meta: { changes: 0, changed_db: false },
+  }]);
+  await Promise.all([
+    ["matching", matchingTriggers],
+    ["mismatched", mismatchedTriggers],
+    ["semantically-mismatched", semanticallyMismatchedTriggers],
+    ["measurement-semantically-mismatched", measurementSemanticallyMismatchedTriggers],
+    ["quote-revision-semantically-mismatched", quoteRevisionSemanticallyMismatchedTriggers],
+    ["production-schedule-semantically-mismatched", productionScheduleSemanticallyMismatchedTriggers],
+    ["governed-transition-semantically-mismatched", governedTransitionSemanticallyMismatchedTriggers],
+    ["missing", missingTriggers],
+    ["duplicate", duplicateTriggers],
+    ["error", errorTriggers],
+  ].map(([name, payload]) => writeFile(path.join(state, `triggers-${name}.json`), payload)));
+  await writeExecutable(path.join(bin, "filter-trigger-response"), `#!/usr/bin/env node
+const { readFileSync } = require("node:fs");
+const [fixture, command] = process.argv.slice(2);
+const payload = JSON.parse(readFileSync(fixture, "utf8"));
+const namesClause = command.match(/\\bname IN \\((.*)\\) ORDER BY name;$/);
+if (!namesClause || !Array.isArray(payload) || payload.length !== 1 || !Array.isArray(payload[0]?.results)) process.exit(2);
+const requested = new Set([...namesClause[1].matchAll(/'([^']+)'/g)].map((match) => match[1]));
+payload[0].results = payload[0].results.filter((row) => requested.has(row.trigger_name));
+process.stdout.write(JSON.stringify(payload) + "\\n");
+`);
 
   await writeExecutable(path.join(staged.workerBin, "wrangler"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -1336,13 +1620,21 @@ if (( json == 1 )); then
   elif [[ "$command" == *" AS index_name"* ]]; then
     if [[ "$MOCK_MEASUREMENT_INDEX_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${measurementSemanticallyMismatchedIndexes}'; elif [[ "$MOCK_INDEX_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${semanticallyMismatchedIndexes}'; elif [[ "$MOCK_INDEX_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedIndexes}'; else printf '%s\\n' '${matchingIndexes}'; fi
   elif [[ "$command" == *" AS trigger_name"* ]]; then
+    trigger_fixture="$MOCK_STATE/triggers-matching.json"
     if [[ "$MOCK_TRIGGER_RESULT_MODE" == 'error' ]]; then
-      printf '[{"results":[],"success":false,"meta":{"changes":0,"changed_db":false}}]\\n'
+      trigger_fixture="$MOCK_STATE/triggers-error.json"
     elif [[ "$MOCK_TRIGGER_RESULT_MODE" == 'missing' ]]; then
-      printf '%s\\n' '${JSON.stringify([{ results: REQUIRED_D1_TRIGGER_BINDINGS.slice(1).map(([trigger_name, table_name]) => ({ trigger_name, table_name, trigger_sql: d1TriggerSql(trigger_name, table_name) })), success: true, meta: { changes: 0, changed_db: false } }])}'
+      trigger_fixture="$MOCK_STATE/triggers-missing.json"
     elif [[ "$MOCK_TRIGGER_RESULT_MODE" == 'duplicate' ]]; then
-      printf '%s\\n' '${JSON.stringify([{ results: [...REQUIRED_D1_TRIGGER_BINDINGS.map(([trigger_name, table_name]) => ({ trigger_name, table_name, trigger_sql: d1TriggerSql(trigger_name, table_name) })), { trigger_name: REQUIRED_D1_TRIGGER_BINDINGS[0][0], table_name: REQUIRED_D1_TRIGGER_BINDINGS[0][1], trigger_sql: d1TriggerSql(...REQUIRED_D1_TRIGGER_BINDINGS[0]) }], success: true, meta: { changes: 0, changed_db: false } }])}'
-    elif [[ "$MOCK_GOVERNED_TRANSITION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${governedTransitionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_PRODUCTION_SCHEDULE_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${productionScheduleSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_QUOTE_REVISION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${quoteRevisionSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_MEASUREMENT_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${measurementSemanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then printf '%s\\n' '${semanticallyMismatchedTriggers}'; elif [[ "$MOCK_TRIGGER_MISMATCH" == '1' ]]; then printf '%s\\n' '${mismatchedTriggers}'; else printf '%s\\n' '${matchingTriggers}'; fi
+      trigger_fixture="$MOCK_STATE/triggers-duplicate.json"
+    elif [[ "$MOCK_GOVERNED_TRANSITION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then trigger_fixture="$MOCK_STATE/triggers-governed-transition-semantically-mismatched.json"
+    elif [[ "$MOCK_PRODUCTION_SCHEDULE_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then trigger_fixture="$MOCK_STATE/triggers-production-schedule-semantically-mismatched.json"
+    elif [[ "$MOCK_QUOTE_REVISION_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then trigger_fixture="$MOCK_STATE/triggers-quote-revision-semantically-mismatched.json"
+    elif [[ "$MOCK_MEASUREMENT_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then trigger_fixture="$MOCK_STATE/triggers-measurement-semantically-mismatched.json"
+    elif [[ "$MOCK_TRIGGER_SEMANTICS_MISMATCH" == '1' ]]; then trigger_fixture="$MOCK_STATE/triggers-semantically-mismatched.json"
+    elif [[ "$MOCK_TRIGGER_MISMATCH" == '1' ]]; then trigger_fixture="$MOCK_STATE/triggers-mismatched.json"
+    fi
+    filter-trigger-response "$trigger_fixture" "$command"
   else
     exit 2
   fi
@@ -1552,7 +1844,10 @@ test("contract mode rejects a self-consistent D1 allowlist that omits a migratio
     backupPath,
     backup
       .replace(",facet_design_evidence_associations", "")
-      .replace("REQUIRED_TABLE_COUNT=88", "REQUIRED_TABLE_COUNT=87"),
+      .replace(
+        `REQUIRED_TABLE_COUNT=${REQUIRED_D1_TABLES.length}`,
+        `REQUIRED_TABLE_COUNT=${REQUIRED_D1_TABLES.length - 1}`,
+      ),
   );
 
   const result = await validateContract({ repoRoot: root });
@@ -1887,7 +2182,7 @@ test("live-env mode rejects a fleet or work-package rail wearing the shared bus 
   }
 });
 
-test("live-env mode requires both per-rail Frappe issuer pairs to be present", async () => {
+test("live-env mode does not require leftover Frappe fleet or work-package issuer pairs", async () => {
   for (const binding of [
     "FLEET_CAPTURE_FRAPPE_API_KEY",
     "WORK_PACKAGE_FRAPPE_API_SECRET",
@@ -1896,8 +2191,12 @@ test("live-env mode requires both per-rail Frappe issuer pairs to be present", a
     delete env[binding];
 
     const result = await validateLiveEnv({ env, ...validApprovalPublicKeyOptions() });
-    assert.equal(result.ok, false, binding);
-    assert.equal(result.checks.find((item) => item.id === `live.env.${binding}`)?.status, "fail", binding);
+    assert.equal(result.ok, true, binding);
+    assert.notEqual(
+      result.checks.find((item) => item.id === `live.env.${binding}`)?.status,
+      "fail",
+      binding,
+    );
   }
 });
 
@@ -2361,12 +2660,12 @@ test("remote D1 drill uses exact generated target config and verifies restored t
   assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
   assert.match(run.stdout, /exact confirmed non-production drill database/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
   assert.equal(operations.every((line) => line.startsWith(`d1 execute ${mock.env.D1_RESTORE_TARGET_DATABASE_NAME} --remote`)), true);
   assert.equal(operations.join("\n").includes(mock.env.D1_RESTORE_API_TOKEN), false);
   const readOperations = operations.filter((line) => line.includes(" --json"));
   const importOperations = operations.filter((line) => line.includes(" --file "));
-  assert.equal(readOperations.length, REQUIRED_D1_TABLES.length + 3);
+  assert.equal(readOperations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 2);
   assert.equal(readOperations.every((line) => line.includes(" --command ") && !line.includes(" --file ")), true);
   assert.equal(importOperations.length, 1);
   assert.equal(importOperations[0].includes(" --json"), false);
@@ -2374,7 +2673,7 @@ test("remote D1 drill uses exact generated target config and verifies restored t
     .trim()
     .split("\n")
     .map(Number);
-  assert.equal(commandLengths.length, REQUIRED_D1_TABLES.length + 3);
+  assert.equal(commandLengths.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 2);
   assert.equal(commandLengths.every((length) => Number.isSafeInteger(length) && length <= 16_384), true);
   assert.equal((await readFile(path.join(mock.state, "imported"), "utf8")), "");
   const config = JSON.parse(await readFile(path.join(mock.state, "target-config.json"), "utf8"));
@@ -2631,7 +2930,7 @@ test("remote D1 drill fails when named invariant-trigger inventory differs", asy
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
 });
 
 test("remote D1 drill fails when named index inventory differs", async (t) => {
@@ -2681,7 +2980,7 @@ test("remote D1 drill rejects missing, duplicate, and error trigger results", as
       assert.notEqual(run.status, 0);
       assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
       const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-      assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
+      assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
       assert.equal(operations.at(-1).includes(" --command "), true);
       assert.equal((await readFile(path.join(mock.state, "imported"), "utf8")), "");
     });
@@ -2697,7 +2996,7 @@ test("remote D1 drill rejects receipt triggers without immutable update/delete s
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
 });
 
 test("remote D1 drill rejects measurement-delta triggers without append-only semantics", async (t) => {
@@ -2709,7 +3008,7 @@ test("remote D1 drill rejects measurement-delta triggers without append-only sem
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
 });
 
 test("remote D1 drill rejects quote-revision ledger triggers without immutable semantics", async (t) => {
@@ -2721,7 +3020,7 @@ test("remote D1 drill rejects quote-revision ledger triggers without immutable s
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
 });
 
 test("remote D1 drill rejects production-schedule ledger triggers without immutable semantics", async (t) => {
@@ -2733,7 +3032,7 @@ test("remote D1 drill rejects production-schedule ledger triggers without immuta
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
 });
 
 test("remote D1 drill rejects governed-transition outbox event triggers without immutable semantics", async (t) => {
@@ -2745,7 +3044,7 @@ test("remote D1 drill rejects governed-transition outbox event triggers without 
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /trigger inventory or immutable trigger semantics differ/);
   const operations = (await readFile(path.join(mock.state, "wrangler.log"), "utf8")).trim().split("\n");
-  assert.equal(operations.length, REQUIRED_D1_TABLES.length + 4);
+  assert.equal(operations.length, REQUIRED_D1_TABLES.length + REQUIRED_D1_TRIGGER_QUERY_BATCH_COUNT + 3);
 });
 
 test("D1 recovery rejects bad ciphertext checksums and signal-cleans decrypted workspace", async (t) => {

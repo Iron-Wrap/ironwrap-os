@@ -29,7 +29,7 @@
 // is textual, and EXECUTED where the property is behavioural — so the isolation cannot be
 // half-undone by a later edit that looks locally reasonable.
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -68,30 +68,9 @@ export const ISOLATED_RAILS = [
     role: "IronWrap Work Package Issuer",
     credentialFile: ".work_package_issuer_credentials",
     sources: [
+      // Native cutover retired `frappe-field.ts`. The work-package rail's remaining Worker
+      // source is the native D1 writer; leftover Frappe issuer pins stay for compat/provision.
       "workers-bus/src/work-package-actions.ts",
-      {
-        // The field writer serves two rails: `work_package_api` (isolated, this rail) and
-        // `field_evidence_api` / the Field Check-in resource (still the shared bus pair). One
-        // fetch, two identities, chosen by method path — so the contract is the routing itself.
-        path: "workers-bus/src/frappe-field.ts",
-        sharedWith: "field_evidence",
-        authorizingFunction: "frappeFieldAuthorization",
-        railDiscriminator: "work_package_api",
-        // The behavioural half of the same contract: the module's exported authorizer is CALLED
-        // with these real paths and the identity it hands back is compared against the rail it
-        // belongs to. `railPaths` must come back on this rail's own pair, `sharedPaths` on the
-        // bus pair — both are load-bearing, because a writer that answers everything with the
-        // rail identity has killed the field-evidence rail just as surely as the reverse leaks
-        // the work-package one.
-        authorizingExport: "frappeFieldAuthorization",
-        railPaths: [
-          "/api/method/ironwrap_roofing.work_package_api.capture_work_package_evidence",
-        ],
-        sharedPaths: [
-          "/api/method/ironwrap_roofing.field_evidence_api.record_verified_field_evidence",
-          "/api/resource/Field%20Check-in",
-        ],
-      },
     ],
   },
 ];
@@ -314,7 +293,11 @@ export async function verifySharedWriterRouting(rail, source, load) {
  * different questions — "is the routing written and ordered" versus "is it what actually runs" —
  * and a control that only ever answered the first is what ELEC-143 found.
  */
-export async function verifyRailCredentialRouting({ rails, load }) {
+export async function verifyRailCredentialRouting({
+  rails,
+  load,
+  sharedWriterPath = join(root, "workers-bus/src/frappe-field.ts"),
+}) {
   let probes = 0;
   let writers = 0;
   for (const rail of rails) {
@@ -324,10 +307,16 @@ export async function verifyRailCredentialRouting({ rails, load }) {
       probes += await verifySharedWriterRouting(rail, source, load);
     }
   }
-  assert.ok(
-    writers > 0,
-    "no shared writer is declared on any rail, so nothing executed: the behavioural half of this control only runs against sources it is pointed at, and de-listing the writer is the cheapest way to make it disappear.",
-  );
+  // Native cutover may retire the last shared Frappe writer. When none remain,
+  // the behavioural half has nothing to execute — that is retirement, not a
+  // silent de-list. The anti-de-list floor below still fires if the retired
+  // writer file is ever reintroduced without being declared.
+  if (existsSync(sharedWriterPath)) {
+    assert.ok(
+      writers > 0,
+      "workers-bus/src/frappe-field.ts still exists but no shared writer is declared: de-listing it from sources would make the behavioural half of this control disappear while the shared writer keeps shipping. Declare it, or delete the file as part of the native cutover.",
+    );
+  }
   return { writers, probes };
 }
 

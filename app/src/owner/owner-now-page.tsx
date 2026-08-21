@@ -616,7 +616,7 @@ function measurementExceptionCopy(report: MeasurementIntakeOwnerException): stri
     drive_not_configured: "The Google Drive folder is not set up.",
     report_fetch_failed: "The app could not get the roof report.",
     raw_source_missing: "The saved roof report is missing.",
-    frappe_sync_failed: "The job record did not save.",
+    frappe_sync_failed: "The native measurement projection needs recovery.",
     retry_pending: "The last try did not finish.",
   } as const;
   const summary = reason[report.reason as keyof typeof reason] ?? "The last try did not finish.";

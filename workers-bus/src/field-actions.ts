@@ -1,11 +1,4 @@
 import type { AppEnv, AuthContext, WorkObjectScope } from "./app-types.ts";
-import type {
-  FieldFrappeWriter,
-  PersistFieldCheckInInput,
-  PersistFieldMediaInput,
-  PersistWorkPackageEvidenceInput,
-} from "./frappe-field.ts";
-import { frappeFieldWriter } from "./frappe-field.ts";
 
 export const MAX_FIELD_MEDIA_COUNT = 12;
 export const MAX_FIELD_MEDIA_BYTES = 12 * 1024 * 1024;
@@ -117,7 +110,6 @@ export interface FieldMediaReceipt {
   checksum: string;
   contentType: string;
   contentLength: number;
-  frappeEvidenceName: string | null;
 }
 
 export interface VerifiedFieldActionResponse {
@@ -133,6 +125,27 @@ export interface VerifiedFieldActionResponse {
     content_length: number;
   }>;
 }
+
+/** Server-owned Work Package facts required before a typed field capture can start. */
+export interface FieldEvidenceAuthorization {
+  workPackageId: string;
+  workPackageVersion: number;
+  releaseAttemptId: string;
+  scope: WorkObjectScope;
+  slotId: string;
+  requirement: string;
+  source: string;
+  deviceId: string;
+  freshness: "Current" | "Stale" | "Unknown";
+  conflictState: "None" | "Detected" | "Resolved";
+  correctionOf: string | null;
+  itemCorrectionOf: string | null;
+}
+
+export type FieldEvidenceAuthorizer = (
+  submission: FieldSubmission,
+  auth: AuthContext,
+) => Promise<FieldEvidenceAuthorization>;
 
 interface ClaimInput {
   deviceActionId: string;
@@ -160,6 +173,12 @@ interface ClaimInput {
   evidenceItemCorrectionOf: string | null;
   workPackageReleaseAttemptId: string | null;
   correctionReason: string | null;
+  workObjectType: string | null;
+  workObjectId: string | null;
+  physicalContextType: string | null;
+  physicalContextId: string | null;
+  captureStartedAt: string;
+  captureCompletedAt: string;
 }
 
 type ClaimResult =
@@ -185,12 +204,6 @@ export interface FieldActionStore {
     receipt: FieldMediaReceipt,
     now: string,
   ): Promise<FieldMediaReceipt>;
-  markMediaPersisted(
-    deviceActionId: string,
-    attachmentId: string,
-    frappeName: string,
-    now: string,
-  ): Promise<void>;
   markR2Stored(
     deviceActionId: string,
     manifestKey: string,
@@ -222,9 +235,36 @@ export interface ImmutableObjectStore {
 export interface ProcessFieldDependencies {
   store: FieldActionStore;
   objects: ImmutableObjectStore;
-  frappe: FieldFrappeWriter;
+  authorizeTypedEvidence?: FieldEvidenceAuthorizer;
   now?: () => Date;
   randomId?: () => string;
+}
+
+export interface FieldWorkPackageEvidenceD1Row {
+  eventId: string;
+  evidenceItem: string;
+  actorUser: string;
+  actorUserId: string;
+  actorRole: string;
+  deviceActionId: string;
+  occurredAt: string;
+  slotId: string;
+  requirement: string;
+  source: string;
+  deviceId: string;
+  capturedAt: string;
+  freshness: "Current" | "Stale" | "Unknown";
+  conflictState: "None" | "Detected" | "Resolved";
+  correctionOf: string | null;
+  itemCorrectionOf: string | null;
+  verification: "Pending" | "Verified" | "Rejected";
+  disposition: "Open" | "Accepted" | "Needs Correction" | "Superseded";
+  correctionReason: string | null;
+  releaseAttemptId: string;
+  workObjectType: string;
+  workObjectId: string;
+  physicalContextType: string;
+  physicalContextId: string;
 }
 
 export class FieldActionError extends Error {
@@ -253,6 +293,7 @@ export async function handleFieldAction(
   jobId: string,
   assignmentId: string,
   scope?: WorkObjectScope,
+  authorizeTypedEvidence?: FieldEvidenceAuthorizer,
 ): Promise<Response> {
   try {
     const rateLimit = await claimFieldUploadWindow(env, auth);
@@ -268,10 +309,15 @@ export async function handleFieldAction(
       ...(await parseFieldActionRequest(req, jobId, assignmentId)),
       ...(scope ? { scope } : {}),
     } satisfies FieldSubmission;
+    const evidenceAuthorizer: FieldEvidenceAuthorizer =
+      authorizeTypedEvidence ?? (async (candidate, candidateAuth) => {
+        const { authorizeFieldEvidence } = await import("./work-package.ts");
+        return await authorizeFieldEvidence(env, candidate, candidateAuth);
+      });
     const response = await processFieldSubmission(submission, auth, {
       store: d1FieldActionStore(env),
       objects: r2ObjectStore(env.RAW),
-      frappe: frappeFieldWriter(env),
+      authorizeTypedEvidence: evidenceAuthorizer,
     });
     return fieldJson(response);
   } catch (error) {
@@ -539,7 +585,7 @@ export async function processFieldSubmission(
   auth: AuthContext,
   dependencies: ProcessFieldDependencies,
 ): Promise<VerifiedFieldActionResponse> {
-  validateSubmission(submission, auth);
+  validateSubmission(submission);
   // Treat a slot-only payload as typed as well.  The HTTP parser rejects this
   // shape, but callers can construct FieldSubmission objects directly (for
   // example an older offline queue or an internal adapter).  Those callers
@@ -558,7 +604,8 @@ export async function processFieldSubmission(
   const hasCorrectionReason = hasNonEmptyValue(
     submission.payload.correction_reason,
   );
-  if (hasCorrectionOf !== hasCorrectionReason) throw invalidMetadata();
+  if (!typedEvidence && hasCorrectionOf !== hasCorrectionReason)
+    throw invalidMetadata();
   if (hasEvidenceCorrectionOf !== hasEvidenceItemCorrectionOf)
     throw invalidMetadata();
   if (
@@ -648,6 +695,36 @@ export async function processFieldSubmission(
       "The evidence device binding is stale. Reconnect and refresh this package before retrying.",
     );
   }
+  if (typedEvidence) {
+    if (!dependencies.authorizeTypedEvidence) {
+      throw new FieldActionError(
+        "field_evidence_authorization_unavailable",
+        503,
+        "The current Work Package evidence authorization is unavailable. Refresh the package before retrying.",
+        5,
+      );
+    }
+    let authorization: FieldEvidenceAuthorization;
+    try {
+      authorization = await dependencies.authorizeTypedEvidence(
+        submission,
+        auth,
+      );
+    } catch (error) {
+      if (error instanceof FieldActionError) throw error;
+      throw new FieldActionError(
+        "field_evidence_authorization_unavailable",
+        503,
+        "The current Work Package evidence authorization is unavailable. Refresh the package before retrying.",
+        5,
+      );
+    }
+    submission = applyTypedEvidenceAuthorization(submission, authorization);
+  }
+  submission = {
+    ...submission,
+    scope: normalizeSubmissionScope(submission.scope, submission.jobId, typedEvidence),
+  };
   const now = dependencies.now ?? (() => new Date());
   const randomId = dependencies.randomId ?? (() => crypto.randomUUID());
   const prepared = await Promise.all(
@@ -711,6 +788,12 @@ export async function processFieldSubmission(
     workPackageReleaseAttemptId:
       submission.payload.work_package_release_attempt_id ?? null,
     correctionReason: submission.payload.correction_reason,
+    workObjectType: submission.scope?.workObjectType ?? null,
+    workObjectId: submission.scope?.workObjectId ?? null,
+    physicalContextType: submission.scope?.physicalContextType ?? null,
+    physicalContextId: submission.scope?.physicalContextId ?? null,
+    captureStartedAt: submission.payload.capture_started_at,
+    captureCompletedAt: submission.payload.capture_completed_at,
   });
   if (claim.state === "verified") return claim.response;
   if (claim.state === "conflict") {
@@ -751,7 +834,6 @@ export async function processFieldSubmission(
         checksum: media.checksum,
         contentType: media.mimeType,
         contentLength: media.size,
-        frappeEvidenceName: null,
       };
       const existing = await dependencies.store.getMedia(
         submission.deviceActionId,
@@ -786,9 +868,7 @@ export async function processFieldSubmission(
       scope: submission.scope ?? null,
       device_action_id: submission.deviceActionId,
       payload: submission.payload,
-      media: receipts.map(
-        ({ frappeEvidenceName: _frappe, ...receipt }) => receipt,
-      ),
+      media: receipts,
     });
     const manifestKey = manifestObjectKey(scopeDigest, checkinId);
     await renewLease(dependencies.store, submission.deviceActionId, token, now);
@@ -804,142 +884,12 @@ export async function processFieldSubmission(
       now().toISOString(),
     );
 
-    const persistedReceipts: FieldMediaReceipt[] = [];
-    for (const receipt of receipts) {
-      await renewLease(
-        dependencies.store,
-        submission.deviceActionId,
-        token,
-        now,
-      );
-      let frappeEvidenceName = receipt.frappeEvidenceName;
-      if (!frappeEvidenceName) {
-        const persisted = await dependencies.frappe.persistEvidence({
-          evidenceId: receipt.evidenceId,
-          deviceActionId: evidenceDeviceActionId(receipt.evidenceId),
-          jobId: submission.jobId,
-          evidenceType: receipt.contentType.startsWith("image/")
-            ? "Photo"
-            : "Voice Note",
-          proofSlot: submission.payload.proof_slot,
-          r2Key: receipt.r2Key,
-          checksum: receipt.checksum,
-          contentType: receipt.contentType,
-          contentLength: receipt.contentLength,
-          capturedAt: submission.payload.capture_completed_at,
-          captureActor: auth.session.frappe_user_id!,
-          latitude: submission.payload.latitude,
-          longitude: submission.payload.longitude,
-          locationAccuracyM: submission.payload.location_accuracy_m,
-          summary: submission.payload.notes,
-          customerSafe:
-            auth.session.role !== "field" &&
-            submission.payload.customer_safe_requested,
-          correctionOf: submission.payload.evidence_item_correction_of ?? null,
-          // A generic Field Check-in correction belongs to the check-in
-          // lineage.  Only typed Evidence Item corrections may carry this
-          // reason onto an Evidence Item; otherwise a multi-media generic
-          // correction would falsely annotate every attachment.
-          correctionReason: typedEvidence
-            ? submission.payload.correction_reason
-            : null,
-          workPackageId: submission.payload.work_package_id,
-          workPackageVersion: submission.payload.work_package_version,
-          evidenceSlotId: submission.payload.evidence_slot_id,
-          evidenceRequirement: submission.payload.evidence_requirement,
-          evidenceSource: submission.payload.evidence_source,
-          evidenceDeviceId: auth.session.device_id,
-          evidenceFreshness: submission.payload.evidence_freshness,
-          evidenceConflictState: submission.payload.evidence_conflict_state,
-          evidenceVerification: submission.payload.evidence_verification,
-          evidenceDisposition: submission.payload.evidence_disposition,
-          workPackageReleaseAttemptId:
-            submission.payload.work_package_release_attempt_id,
-          workObjectType: submission.scope?.workObjectType ?? null,
-          workObjectId: submission.scope?.workObjectId ?? null,
-          physicalContextType: submission.scope?.physicalContextType ?? null,
-          physicalContextId: submission.scope?.physicalContextId ?? null,
-        } satisfies PersistFieldMediaInput);
-        frappeEvidenceName = persisted.name;
-        await dependencies.store.markMediaPersisted(
-          submission.deviceActionId,
-          receipt.attachmentId,
-          frappeEvidenceName,
-          now().toISOString(),
-        );
-      }
-      if (typedEvidence) {
-        const persistWorkPackageEvidence =
-          dependencies.frappe.persistWorkPackageEvidence;
-        if (!persistWorkPackageEvidence)
-          throw new Error("work_package_evidence_writer_missing");
-        await persistWorkPackageEvidence.call(dependencies.frappe, {
-          workPackageId: submission.payload.work_package_id!,
-          workPackageVersion: submission.payload.work_package_version!,
-          jobId: submission.jobId,
-          assignmentId: submission.assignmentId,
-          actorUser: auth.session.frappe_user_id!,
-          deviceActionId: workPackageEvidenceDeviceActionId(receipt.evidenceId),
-          evidenceSlotId: submission.payload.evidence_slot_id!,
-          evidenceRequirement: submission.payload.evidence_requirement!,
-          evidenceSource: submission.payload.evidence_source!,
-          evidenceItemId: frappeEvidenceName!,
-          evidenceDeviceId: auth.session.device_id!,
-          evidenceCapturedAt: submission.payload.capture_completed_at,
-          evidenceFreshness: submission.payload.evidence_freshness!,
-          evidenceConflictState: submission.payload.evidence_conflict_state!,
-          evidenceCorrectionOf: submission.payload.evidence_correction_of,
-          evidenceItemCorrectionOf:
-            submission.payload.evidence_item_correction_of,
-          workPackageReleaseAttemptId:
-            submission.payload.work_package_release_attempt_id!,
-          workObjectType: submission.scope?.workObjectType ?? null,
-          workObjectId: submission.scope?.workObjectId ?? null,
-          physicalContextType: submission.scope?.physicalContextType ?? null,
-          physicalContextId: submission.scope?.physicalContextId ?? null,
-          correctionReason: submission.payload.correction_reason,
-          evidenceVerification: submission.payload.evidence_verification!,
-          evidenceDisposition: submission.payload.evidence_disposition!,
-        } satisfies PersistWorkPackageEvidenceInput);
-      }
-      persistedReceipts.push({ ...receipt, frappeEvidenceName });
-    }
-
-    const voiceEvidence = persistedReceipts.find((item) =>
-      item.contentType.startsWith("audio/"),
-    );
+    const persistedReceipts = receipts;
     await renewLease(dependencies.store, submission.deviceActionId, token, now);
-    const checkin = await dependencies.frappe.persistCheckIn({
-      checkinId,
-      deviceActionId: submission.deviceActionId,
-      jobId: submission.jobId,
-      assignmentId: submission.assignmentId,
-      captureActor: auth.session.frappe_user_id!,
-      captureStartedAt: submission.payload.capture_started_at,
-      captureCompletedAt: submission.payload.capture_completed_at,
-      submittedAt: now().toISOString(),
-      latitude: submission.payload.latitude,
-      longitude: submission.payload.longitude,
-      locationAccuracyM: submission.payload.location_accuracy_m,
-      photoCount: persistedReceipts.filter((item) =>
-        item.contentType.startsWith("image/"),
-      ).length,
-      evidenceIds: persistedReceipts.map((item) => item.evidenceId),
-      blocker: submission.payload.blocker,
-      blockerCategory: submission.payload.blocker_category,
-      blockerSummary: submission.payload.blocker_summary,
-      voiceEvidenceId: voiceEvidence?.frappeEvidenceName ?? null,
-      correctionOf: submission.payload.correction_of,
-      correctionReason: typedEvidence
-        ? null
-        : submission.payload.correction_reason,
-      notes: submission.payload.notes,
-      manifestKey,
-    } satisfies PersistFieldCheckInInput);
     const response: VerifiedFieldActionResponse = {
       device_action_id: submission.deviceActionId,
       status: "verified",
-      server_ref: checkin.name,
+      server_ref: checkinId,
       cursor: checkinId,
       checkin_id: checkinId,
       media: persistedReceipts.map((item) => ({
@@ -968,7 +918,7 @@ export async function processFieldSubmission(
       : new FieldActionError(
           code,
           502,
-          "The action remains queued until R2 and Frappe both verify it.",
+          "The action remains queued until D1 and R2 verify it.",
           5,
         );
   }
@@ -984,8 +934,10 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
            work_package_id, work_package_version, evidence_slot_id, evidence_requirement,
            evidence_source, evidence_device_id, evidence_freshness, evidence_conflict_state,
            evidence_verification, evidence_disposition, evidence_correction_of,
-           evidence_item_correction_of, work_package_release_attempt_id, correction_reason)
-         VALUES (?, ?, ?, ?, ?, 'field_checkin', ?, 'processing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           evidence_item_correction_of, work_package_release_attempt_id, correction_reason,
+           work_object_type, work_object_id, physical_context_type, physical_context_id,
+           capture_started_at, capture_completed_at)
+         VALUES (?, ?, ?, ?, ?, 'field_checkin', ?, 'processing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
         .bind(
           input.deviceActionId,
@@ -1013,6 +965,12 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
           input.evidenceItemCorrectionOf,
           input.workPackageReleaseAttemptId,
           input.correctionReason,
+          input.workObjectType,
+          input.workObjectId,
+          input.physicalContextType,
+          input.physicalContextId,
+          input.captureStartedAt,
+          input.captureCompletedAt,
         )
         .run();
       let row = await fieldActionRow(env, input.deviceActionId);
@@ -1049,6 +1007,18 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
           input.workPackageReleaseAttemptId,
         ) ||
         !sameNullable(row.correction_reason, input.correctionReason)
+        || (row.work_object_type !== null &&
+          !sameNullable(row.work_object_type, input.workObjectType))
+        || (row.work_object_id !== null &&
+          !sameNullable(row.work_object_id, input.workObjectId))
+        || (row.physical_context_type !== null &&
+          !sameNullable(row.physical_context_type, input.physicalContextType))
+        || (row.physical_context_id !== null &&
+          !sameNullable(row.physical_context_id, input.physicalContextId))
+        || (row.capture_started_at !== null &&
+          row.capture_started_at !== input.captureStartedAt)
+        || (row.capture_completed_at !== null &&
+          row.capture_completed_at !== input.captureCompletedAt)
       ) {
         return { state: "conflict" };
       }
@@ -1094,7 +1064,7 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
     },
     async getMedia(deviceActionId, attachmentId) {
       const row = await env.DB.prepare(
-        `SELECT attachment_id, evidence_id, r2_key, checksum_sha256, content_type, content_length, frappe_evidence_name
+        `SELECT attachment_id, evidence_id, r2_key, checksum_sha256, content_type, content_length
          FROM field_action_media WHERE device_action_id = ? AND attachment_id = ?`,
       )
         .bind(deviceActionId, attachmentId)
@@ -1127,15 +1097,6 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
       assertReceiptMatches(existing, receipt);
       return existing;
     },
-    async markMediaPersisted(deviceActionId, attachmentId, frappeName, now) {
-      await env.DB.prepare(
-        `UPDATE field_action_media
-         SET frappe_evidence_name = COALESCE(frappe_evidence_name, ?), frappe_persisted_at = COALESCE(frappe_persisted_at, ?)
-         WHERE device_action_id = ? AND attachment_id = ?`,
-      )
-        .bind(frappeName, now, deviceActionId, attachmentId)
-        .run();
-    },
     async markR2Stored(deviceActionId, manifestKey, now) {
       await env.DB.prepare(
         `UPDATE field_actions SET status = 'r2_stored', manifest_key = COALESCE(manifest_key, ?), updated_at = ?
@@ -1166,6 +1127,182 @@ function d1FieldActionStore(env: AppEnv): FieldActionStore {
         .run();
     },
   };
+}
+
+export interface FieldWorkPackageEvidenceD1Query {
+  tenantId: string;
+  workPackageId: string;
+  jobId: string;
+  assignmentId: string;
+  version: number;
+  releaseAttemptId: string;
+  scope: WorkObjectScope;
+}
+
+interface FieldWorkPackageEvidenceD1DbRow {
+  device_action_id: string;
+  user_id: string;
+  actor_user: string | null;
+  actor_role: string | null;
+  created_at: string;
+  work_package_id: string;
+  work_package_version: number;
+  evidence_slot_id: string;
+  evidence_requirement: string;
+  evidence_source: string;
+  evidence_device_id: string;
+  evidence_freshness: string;
+  evidence_conflict_state: string;
+  evidence_verification: string;
+  evidence_disposition: string;
+  evidence_correction_of: string | null;
+  evidence_item_correction_of: string | null;
+  work_package_release_attempt_id: string;
+  correction_reason: string | null;
+  work_object_type: string;
+  work_object_id: string;
+  physical_context_type: string;
+  physical_context_id: string;
+  capture_completed_at: string | null;
+  evidence_id: string;
+}
+
+/** Read typed field evidence from the canonical D1 action/media receipts. */
+export async function listFieldWorkPackageEvidenceFromD1(
+  env: AppEnv,
+  input: FieldWorkPackageEvidenceD1Query,
+): Promise<FieldWorkPackageEvidenceD1Row[] | null> {
+  let result: { results?: FieldWorkPackageEvidenceD1DbRow[] };
+  try {
+    result = await env.DB.prepare(
+      `SELECT a.device_action_id, a.user_id,
+              COALESCE(NULLIF(u.email_normalized, ''), a.user_id) AS actor_user,
+              COALESCE(NULLIF(u.access_role, ''), u.role) AS actor_role,
+              a.created_at, a.work_package_id, a.work_package_version,
+              a.evidence_slot_id, a.evidence_requirement, a.evidence_source,
+              a.evidence_device_id, a.evidence_freshness, a.evidence_conflict_state,
+              a.evidence_verification, a.evidence_disposition,
+              a.evidence_correction_of, a.evidence_item_correction_of,
+              a.work_package_release_attempt_id, a.correction_reason,
+              a.work_object_type, a.work_object_id, a.physical_context_type,
+              a.physical_context_id, a.capture_completed_at, m.evidence_id
+         FROM field_actions a
+         JOIN field_action_media m ON m.device_action_id = a.device_action_id
+         LEFT JOIN app_users u ON u.user_id = a.user_id AND u.tenant_id = a.tenant_id
+        WHERE a.tenant_id = ? AND a.status = 'verified'
+          AND a.manifest_key IS NOT NULL AND m.r2_stored_at IS NOT NULL
+          AND a.job_id = ? AND a.assignment_id = ?
+          AND a.work_package_id = ? AND a.work_package_version = ?
+          AND a.work_package_release_attempt_id = ?
+          AND a.work_object_type = ? AND a.work_object_id = ?
+          AND a.physical_context_type = ? AND a.physical_context_id = ?
+        ORDER BY a.created_at ASC, a.device_action_id ASC, m.attachment_id ASC`,
+    )
+      .bind(
+        input.tenantId,
+        input.jobId,
+        input.assignmentId,
+        input.workPackageId,
+        input.version,
+        input.releaseAttemptId,
+        input.scope.workObjectType,
+        input.scope.workObjectId,
+        input.scope.physicalContextType,
+        input.scope.physicalContextId,
+      )
+      .all<FieldWorkPackageEvidenceD1DbRow>();
+  } catch (error) {
+    // A pre-0071 deployment may not have the additive scope/timestamp columns
+    // yet; retain the explicit compatibility projection only for that known
+    // schema state. Operational D1/read failures must propagate so callers do
+    // not silently authorize or project a Frappe-only view.
+    if (isMissingFieldEvidenceSchema(error)) return null;
+    throw error;
+  }
+  return (result.results ?? []).map((row) => {
+    const evidenceId = requiredD1Text(row.evidence_id, "evidence_id");
+    if (!/^evi_[0-9a-f]{32}$/.test(evidenceId))
+      throw new Error("field_evidence_evidence_id_invalid");
+    const occurredAt = requiredD1Text(row.created_at, "created_at");
+    const capturedAt = row.capture_completed_at ?? occurredAt;
+    return {
+      eventId: workPackageEvidenceDeviceActionId(evidenceId),
+      evidenceItem: evidenceId,
+      actorUser: requiredD1Text(row.actor_user, "actor_user"),
+      actorUserId: requiredD1Text(row.user_id, "user_id"),
+      actorRole: requiredD1Text(row.actor_role, "actor_role"),
+      deviceActionId: workPackageEvidenceDeviceActionId(evidenceId),
+      occurredAt,
+      slotId: requiredD1Text(row.evidence_slot_id, "evidence_slot_id"),
+      requirement: requiredD1Text(
+        row.evidence_requirement,
+        "evidence_requirement",
+      ),
+      source: requiredD1Text(row.evidence_source, "evidence_source"),
+      deviceId: requiredD1Text(row.evidence_device_id, "evidence_device_id"),
+      capturedAt: requiredD1Text(capturedAt, "capture_completed_at"),
+      freshness: requiredD1Enum(
+        row.evidence_freshness,
+        ["Current", "Stale", "Unknown"],
+        "evidence_freshness",
+      ),
+      conflictState: requiredD1Enum(
+        row.evidence_conflict_state,
+        ["None", "Detected", "Resolved"],
+        "evidence_conflict_state",
+      ),
+      correctionOf: row.evidence_correction_of,
+      itemCorrectionOf: row.evidence_item_correction_of,
+      verification: requiredD1Enum(
+        row.evidence_verification,
+        ["Pending", "Verified", "Rejected"],
+        "evidence_verification",
+      ),
+      disposition: requiredD1Enum(
+        row.evidence_disposition,
+        ["Open", "Accepted", "Needs Correction", "Superseded"],
+        "evidence_disposition",
+      ),
+      correctionReason: row.correction_reason,
+      releaseAttemptId: requiredD1Text(
+        row.work_package_release_attempt_id,
+        "work_package_release_attempt_id",
+      ),
+      workObjectType: requiredD1Text(row.work_object_type, "work_object_type"),
+      workObjectId: requiredD1Text(row.work_object_id, "work_object_id"),
+      physicalContextType: requiredD1Text(
+        row.physical_context_type,
+        "physical_context_type",
+      ),
+      physicalContextId: requiredD1Text(
+        row.physical_context_id,
+        "physical_context_id",
+      ),
+    } satisfies FieldWorkPackageEvidenceD1Row;
+  });
+}
+
+function isMissingFieldEvidenceSchema(error: unknown): boolean {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return /(?:no such (?:column|table)|unknown column)/i.test(message);
+}
+
+function requiredD1Text(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim())
+    throw new Error(`field_evidence_${field}_missing`);
+  return value.trim();
+}
+
+function requiredD1Enum<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  field: string,
+): T {
+  const normalized = requiredD1Text(value, field);
+  if (!allowed.includes(normalized as T))
+    throw new Error(`field_evidence_${field}_invalid`);
+  return normalized as T;
 }
 
 async function renewLease(
@@ -1215,6 +1352,12 @@ interface FieldActionRow {
   evidence_item_correction_of: string | null;
   work_package_release_attempt_id: string | null;
   correction_reason: string | null;
+  work_object_type: string | null;
+  work_object_id: string | null;
+  physical_context_type: string | null;
+  physical_context_id: string | null;
+  capture_started_at: string | null;
+  capture_completed_at: string | null;
 }
 
 interface FieldMediaRow {
@@ -1224,7 +1367,6 @@ interface FieldMediaRow {
   checksum_sha256: string;
   content_type: string;
   content_length: number;
-  frappe_evidence_name: string | null;
 }
 
 async function fieldActionRow(
@@ -1237,7 +1379,9 @@ async function fieldActionRow(
             evidence_requirement, evidence_source, evidence_device_id, evidence_freshness,
             evidence_conflict_state, evidence_verification, evidence_disposition,
             evidence_correction_of, evidence_item_correction_of,
-            work_package_release_attempt_id, correction_reason
+            work_package_release_attempt_id, correction_reason,
+            work_object_type, work_object_id, physical_context_type, physical_context_id,
+            capture_started_at, capture_completed_at
      FROM field_actions WHERE device_action_id = ?`,
   )
     .bind(deviceActionId)
@@ -1252,7 +1396,6 @@ function mediaReceipt(row: FieldMediaRow): FieldMediaReceipt {
     checksum: row.checksum_sha256,
     contentType: row.content_type,
     contentLength: Number(row.content_length),
-    frappeEvidenceName: row.frappe_evidence_name,
   };
 }
 
@@ -1379,7 +1522,10 @@ function parsePayload(
     140,
   );
   const correctionReason = optionalText(value.correction_reason, 1000);
-  if (Boolean(correctionOf) !== Boolean(correctionReason))
+  if (
+    !evidenceCorrectionOf &&
+    Boolean(correctionOf) !== Boolean(correctionReason)
+  )
     throw invalidMetadata();
   if ((correctionOf || evidenceCorrectionOf) && !correctionReason)
     throw invalidMetadata();
@@ -1508,19 +1654,11 @@ function parsePayload(
 
 function validateSubmission(
   submission: FieldSubmission,
-  auth: AuthContext,
 ): void {
   boundedId(submission.deviceActionId, 8, 80, "device_action_id");
   boundedText(submission.jobId, 1, 140, "job_id");
   if (submission.payload.assignment_id !== submission.assignmentId)
     throw invalidMetadata();
-  if (auth.session.role === "field" && !auth.session.frappe_user_id) {
-    throw new FieldActionError(
-      "field_identity_missing",
-      403,
-      "This field account is not linked to a Frappe user.",
-    );
-  }
   if (submission.media.length > MAX_FIELD_MEDIA_COUNT) throw payloadTooLarge();
   if (
     submission.media.reduce((sum, item) => sum + item.size, 0) >
@@ -1542,6 +1680,178 @@ function validateSubmission(
       );
     }
   }
+}
+
+function applyTypedEvidenceAuthorization(
+  submission: FieldSubmission,
+  authorization: FieldEvidenceAuthorization,
+): FieldSubmission {
+  const payload = submission.payload;
+  if (payload.work_package_id !== authorization.workPackageId) {
+    throw new FieldActionError(
+      "work_package_not_available",
+      409,
+      "The saved evidence targets a Work Package that is not current for this assignment.",
+    );
+  }
+  if (payload.work_package_version !== authorization.workPackageVersion) {
+    throw new FieldActionError(
+      "work_package_version_conflict",
+      409,
+      "The saved evidence targets a stale Work Package version.",
+    );
+  }
+  if (
+    payload.work_package_release_attempt_id !== authorization.releaseAttemptId
+  ) {
+    throw new FieldActionError(
+      "work_package_release_attempt_conflict",
+      409,
+      "The saved evidence targets a stale Work Package release attempt.",
+    );
+  }
+  if (payload.evidence_slot_id !== authorization.slotId) {
+    throw new FieldActionError(
+      "work_package_evidence_slot_not_found",
+      409,
+      "The saved evidence slot is not declared by the current Work Package.",
+    );
+  }
+  if (payload.evidence_requirement !== authorization.requirement) {
+    throw new FieldActionError(
+      "work_package_evidence_requirement_conflict",
+      409,
+      "The saved evidence requirement does not match the frozen Work Package slot.",
+    );
+  }
+  if (payload.evidence_source !== authorization.source) {
+    throw new FieldActionError(
+      "evidence_source_mismatch",
+      409,
+      "The saved evidence source is not authorized for this field capture.",
+    );
+  }
+  if (
+    payload.evidence_device_id != null &&
+    payload.evidence_device_id !== authorization.deviceId
+  ) {
+    throw new FieldActionError(
+      "evidence_device_mismatch",
+      409,
+      "The evidence device binding is stale. Reconnect and refresh this package before retrying.",
+    );
+  }
+  if (
+    payload.evidence_freshness != null &&
+    payload.evidence_freshness !== authorization.freshness
+  ) {
+    throw new FieldActionError(
+      "evidence_freshness_mismatch",
+      409,
+      "The saved evidence freshness is not authorized by the current capture contract.",
+    );
+  }
+  if (
+    payload.evidence_conflict_state != null &&
+    payload.evidence_conflict_state !== authorization.conflictState
+  ) {
+    throw new FieldActionError(
+      "evidence_conflict_state_mismatch",
+      409,
+      "The saved evidence conflict state is not authorized by the current capture contract.",
+    );
+  }
+  if (payload.evidence_correction_of !== authorization.correctionOf) {
+    throw new FieldActionError(
+      "work_package_evidence_correction_mismatch",
+      409,
+      "The saved evidence correction does not target the current evidence lineage.",
+    );
+  }
+  if (
+    payload.evidence_item_correction_of !== authorization.itemCorrectionOf
+  ) {
+    throw new FieldActionError(
+      "work_package_evidence_correction_mismatch",
+      409,
+      "The saved Evidence Item correction does not target the current evidence lineage.",
+    );
+  }
+  if (
+    submission.scope &&
+    !sameWorkObjectScope(submission.scope, authorization.scope)
+  ) {
+    throw new FieldActionError(
+      "work_object_scope_mismatch",
+      409,
+      "The saved evidence scope does not match the current Work Package.",
+    );
+  }
+  return {
+    ...submission,
+    scope: authorization.scope,
+    payload: {
+      ...payload,
+      evidence_device_id: authorization.deviceId,
+      evidence_freshness: authorization.freshness,
+      evidence_conflict_state: authorization.conflictState,
+      evidence_verification: "Verified",
+      evidence_disposition: "Open",
+    },
+  };
+}
+
+function sameWorkObjectScope(
+  left: WorkObjectScope,
+  right: WorkObjectScope,
+): boolean {
+  return (
+    left.workObjectType === right.workObjectType &&
+    left.workObjectId === right.workObjectId &&
+    left.physicalContextType === right.physicalContextType &&
+    left.physicalContextId === right.physicalContextId
+  );
+}
+
+function normalizeSubmissionScope(
+  scope: WorkObjectScope | undefined,
+  jobId: string,
+  typedEvidence: boolean,
+): WorkObjectScope | undefined {
+  if (!scope) {
+    return typedEvidence
+      ? {
+          workObjectType: "Roof Job",
+          workObjectId: jobId,
+          physicalContextType: "Roof Site",
+          physicalContextId: jobId,
+        }
+      : undefined;
+  }
+  const normalized = {
+    workObjectType: boundedText(scope.workObjectType, 1, 140, "work_object_type"),
+    workObjectId: boundedId(scope.workObjectId, 1, 140, "work_object_id"),
+    physicalContextType: boundedText(
+      scope.physicalContextType,
+      1,
+      140,
+      "physical_context_type",
+    ),
+    physicalContextId: boundedId(
+      scope.physicalContextId,
+      1,
+      140,
+      "physical_context_id",
+    ),
+  } satisfies WorkObjectScope;
+  if (normalized.workObjectId !== jobId) {
+    throw new FieldActionError(
+      "work_object_scope_mismatch",
+      409,
+      "The saved evidence scope does not match the active work object.",
+    );
+  }
+  return normalized;
 }
 
 function assertReceiptMatches(
@@ -1572,8 +1882,9 @@ function parseStoredResponse(
     return parsed.status === "verified" &&
       typeof parsed.device_action_id === "string" &&
       typeof parsed.server_ref === "string" &&
-      typeof parsed.cursor === "string" &&
-      typeof parsed.checkin_id === "string" &&
+      /^fci_[0-9a-f]{32}$/.test(parsed.server_ref) &&
+      parsed.cursor === parsed.server_ref &&
+      parsed.checkin_id === parsed.server_ref &&
       Array.isArray(parsed.media)
       ? (parsed as VerifiedFieldActionResponse)
       : null;
@@ -1593,10 +1904,6 @@ function mediaKey(
 
 function manifestObjectKey(scopeDigest: string, checkinId: string): string {
   return `field/v1/${scopeDigest}/${checkinId}/manifest.json`;
-}
-
-function evidenceDeviceActionId(evidenceId: string): string {
-  return `fem_${evidenceId.replace(/^evi_/, "")}`;
 }
 
 function workPackageEvidenceDeviceActionId(evidenceId: string): string {

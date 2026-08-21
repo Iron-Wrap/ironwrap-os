@@ -38,6 +38,7 @@ describe("QuickBooks browser contracts", () => {
   it("accepts the exact zero-prior-billing final-invoice envelope", () => {
     const fixture = quickBooksFinalInvoiceFixture();
     expect(quickBooksFinalInvoiceResponseSchema.parse(fixture)).toEqual(fixture);
+    expect(fixture.intent.citations.every((citation) => citation.source === "IronWrap")).toBe(true);
   });
 
   it("requires invoice_date and keeps due_date on or after it", () => {
@@ -121,15 +122,20 @@ describe("QuickBooks browser contracts", () => {
     expect(quickBooksFinalInvoiceResponseSchema.safeParse(payload).success).toBe(false);
   });
 
-  it("rejects prior billing and any mismatch in immutable candidate totals", () => {
+  it("accepts exact prior billing and rejects malformed or mismatched remaining totals", () => {
     const priorBilling = structuredClone(quickBooksFinalInvoiceFixture());
-    priorBilling.intent.amounts.already_invoiced = "1.00" as "0.00";
+    priorBilling.intent.amounts.already_invoiced = "500.00";
+    const malformedPriorBilling = structuredClone(quickBooksFinalInvoiceFixture());
+    malformedPriorBilling.intent.amounts.already_invoiced = "500";
     const lineMismatch = structuredClone(quickBooksFinalInvoiceFixture());
     lineMismatch.intent.lines[0]!.amount = "999.00";
     const balanceMismatch = structuredClone(quickBooksFinalInvoiceFixture());
     balanceMismatch.intent.amounts.final_balance = "1049.99";
 
-    expect(quickBooksFinalInvoiceResponseSchema.safeParse(priorBilling).success).toBe(false);
+    expect(quickBooksFinalInvoiceResponseSchema.safeParse(priorBilling).success).toBe(true);
+    expect(quickBooksFinalInvoiceResponseSchema.safeParse(malformedPriorBilling).success).toBe(
+      false,
+    );
     expect(quickBooksFinalInvoiceResponseSchema.safeParse(lineMismatch).success).toBe(false);
     expect(quickBooksFinalInvoiceResponseSchema.safeParse(balanceMismatch).success).toBe(false);
   });

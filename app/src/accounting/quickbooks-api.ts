@@ -16,6 +16,46 @@ import {
 } from "./quickbooks-contracts";
 
 const positiveVersionSchema = z.number().int().positive();
+const quickBooksMappingInputSchema = z
+  .object({
+    roof_job_id: z
+      .string()
+      .trim()
+      .min(1)
+      .max(160)
+      .regex(/^[A-Za-z0-9:_-]+$/),
+    qbo_customer_id: z
+      .string()
+      .trim()
+      .regex(/^\d{1,32}$/),
+    qbo_item_id: z
+      .string()
+      .trim()
+      .regex(/^\d{1,32}$/),
+    qbo_tax_code_id: z
+      .string()
+      .trim()
+      .regex(/^\d{1,32}$/),
+    qbo_terms_id: z
+      .string()
+      .trim()
+      .regex(/^\d{1,32}$/),
+    jurisdiction: z
+      .string()
+      .trim()
+      .min(2)
+      .max(32)
+      .regex(/^[A-Za-z0-9._:-]+$/),
+    tax_code: z
+      .string()
+      .trim()
+      .min(1)
+      .max(32)
+      .regex(/^[A-Za-z0-9._:-]+$/),
+    payment_terms_days: z.number().int().min(0).max(365),
+    correction_reason: z.string().trim().min(3).max(1200).nullable().optional(),
+  })
+  .strict();
 const rejectionReasonSchema = z.enum(quickBooksRejectionReasons);
 
 export async function loadQuickBooksConnection(
@@ -120,6 +160,23 @@ export async function removeQuickBooksFromIronWrap(
     schema: quickBooksConnectionResponseSchema,
     method: "POST",
     body: { version: positiveVersionSchema.parse(connectionVersion) },
+    csrfToken: session.csrf_token,
+    idempotencyKey,
+    fetcher,
+  });
+}
+
+export async function saveQuickBooksFinalInvoiceMapping(
+  session: AuthenticatedSession,
+  input: z.input<typeof quickBooksMappingInputSchema>,
+  idempotencyKey: string,
+  fetcher: typeof fetch = fetch,
+): Promise<QuickBooksConnectionResponse> {
+  return await apiRequest({
+    path: API_PATHS.quickBooksFinalInvoiceMappings,
+    schema: quickBooksConnectionResponseSchema,
+    method: "POST",
+    body: quickBooksMappingInputSchema.parse(input),
     csrfToken: session.csrf_token,
     idempotencyKey,
     fetcher,

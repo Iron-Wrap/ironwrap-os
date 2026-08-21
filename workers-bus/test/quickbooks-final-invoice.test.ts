@@ -5,6 +5,12 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { handleAuthenticatedRoute } from "../src/app-api.ts";
+import { deriveAccountingIntent } from "../src/accounting-intents.ts";
+import {
+  bindAccountingIntentTaxSnapshots,
+  recordTaxPolicySnapshot,
+  taxBindingSetSha256,
+} from "../src/accounting-tax-snapshots.ts";
 import {
   permissionsForRole,
   type AppEnv,
@@ -21,9 +27,23 @@ import {
   quickBooksFinalInvoiceEnabled,
   quickBooksOAuthEnabled,
   recoverQuickBooksFinalInvoices,
+  rejectQuickBooksFinalInvoice,
   requestQuickBooksConnect,
   type QuickBooksCandidate,
 } from "../src/quickbooks-final-invoice.ts";
+import {
+  listNativeFinalInvoiceCandidates,
+  nativeFinalInvoiceEffectIdempotencyKey,
+  nativeFinalInvoiceExpectedReadback,
+  nativeFinalInvoiceProviderPayload,
+  nativeFinalInvoiceProviderRequestId,
+  type NativeFinalInvoiceBasisV1,
+} from "../src/quickbooks-native-final-invoice.ts";
+import {
+  nativeQuickBooksWebhookProjectionPort,
+  QuickBooksNativeWebhookError,
+} from "../src/quickbooks-native-webhook.ts";
+import { canonicalJson, sha256Hex } from "../src/newo-hash.ts";
 
 const TENANT = "ironwrap";
 const REALM = "1234567890";
@@ -46,6 +66,14 @@ class SqliteD1 {
       "0038_app_access_roles.sql",
       "0041_quickbooks_final_invoice.sql",
       "0042_external_effect_runtime.sql",
+      "0058_accounting_money_intents.sql",
+      "0059_tax_policy_snapshots.sql",
+      "0060_accounting_provider_observations.sql",
+      "0061_accounting_exceptions.sql",
+      "0062_external_effect_insert_replace_guards.sql",
+      "0063_accounting_dispatch_evidence.sql",
+      "0064_accounting_authority_policy.sql",
+      "0065_accounting_intent_derivation_receipts.sql",
     ]) {
       this.raw.exec(
         readFileSync(
@@ -169,6 +197,56 @@ class Integrations {
   resolverOutcome: "Matched" | "Mismatch" | "Pending" = "Matched";
   projectionPayload: Record<string, unknown> | null = null;
   projectionDriftField: string | null = null;
+  mappingReadMode: "ok" | "throw" = "ok";
+  mappingEntities: Record<string, Record<string, unknown>> = {
+    Customer: {
+      Id: "501",
+      Active: true,
+      SyncToken: "1",
+      MetaData: { LastUpdatedTime: NOW.toISOString() },
+      PrimaryEmailAddr: { Address: "customer@example.invalid" },
+    },
+    Item: {
+      Id: "601",
+      Active: true,
+      SyncToken: "2",
+      MetaData: { LastUpdatedTime: NOW.toISOString() },
+      Type: "Service",
+      IncomeAccountRef: { value: "401" },
+    },
+    Account: {
+      Id: "401",
+      Active: true,
+      SyncToken: "6",
+      MetaData: { LastUpdatedTime: NOW.toISOString() },
+      AccountType: "Income",
+      Classification: "Revenue",
+    },
+    TaxCode: {
+      Id: "701",
+      Active: true,
+      SyncToken: "3",
+      MetaData: { LastUpdatedTime: NOW.toISOString() },
+      Name: "GST",
+      SalesTaxRateList: {
+        TaxRateDetail: [{ TaxRateRef: { value: "702" } }],
+      },
+    },
+    TaxRate: {
+      Id: "702",
+      Active: true,
+      SyncToken: "4",
+      MetaData: { LastUpdatedTime: NOW.toISOString() },
+      RateValue: 5,
+    },
+    Term: {
+      Id: "801",
+      Active: true,
+      SyncToken: "5",
+      MetaData: { LastUpdatedTime: NOW.toISOString() },
+      DueDays: 30,
+    },
+  };
   readonly requests: RecordedRequest[] = [];
   readonly resolverPayloads: Array<Record<string, unknown>> = [];
 
@@ -329,6 +407,25 @@ class Integrations {
       url.hostname === "sandbox-quickbooks.api.intuit.com" &&
       method === "GET"
     ) {
+      const mappingEntity = url.pathname.match(
+        /\/(account|customer|item|taxcode|taxrate|term)\/([^/]+)$/u,
+      );
+      if (mappingEntity) {
+        if (this.mappingReadMode === "throw")
+          throw new Error("synthetic mapping read unavailable");
+        const entityName = {
+          account: "Account",
+          customer: "Customer",
+          item: "Item",
+          taxcode: "TaxCode",
+          taxrate: "TaxRate",
+          term: "Term",
+        }[mappingEntity[1]!]!;
+        const entity = this.mappingEntities[entityName];
+        return entity
+          ? Response.json({ [entityName]: entity })
+          : Response.json({ Fault: { Error: [{ code: "610" }] } }, { status: 404 });
+      }
       return Response.json(
         { Invoice: this.readback },
         { headers: { intuit_tid: "tid-read-0001" } },
@@ -362,7 +459,6 @@ function env(db: SqliteD1, overrides: Record<string, unknown> = {}): AppEnv {
     APP_PUBLIC_ORIGIN: PUBLIC_ORIGIN,
     APP_ALLOWED_ORIGINS: PUBLIC_ORIGIN,
     APP_ALLOW_INSECURE_LOCAL: "false",
-    ERPNEXT_BASE_URL: "https://frappe.example.invalid",
     QB_OAUTH_ENABLED: "true",
     QB_FINAL_INVOICE_ENABLED: "true",
     QB_API_ENVIRONMENT: "sandbox",
@@ -372,8 +468,6 @@ function env(db: SqliteD1, overrides: Record<string, unknown> = {}): AppEnv {
     QB_CLIENT_SECRET: "synthetic-client-secret",
     QB_TOKEN_ENCRYPTION_KEY: ENCRYPTION_KEY,
     QB_TOKEN_ENCRYPTION_KEY_VERSION: "test-v1",
-    QB_FINAL_INVOICE_FRAPPE_API_KEY: "synthetic-frappe-key",
-    QB_FINAL_INVOICE_FRAPPE_API_SECRET: "synthetic-frappe-secret",
     ...overrides,
   } as AppEnv;
 }
@@ -422,13 +516,13 @@ function candidate(): QuickBooksCandidate {
       changes_sha256: "d".repeat(64),
       evidence: [
         {
-          source: "Frappe",
+          source: "IronWrap",
           doctype: "Completion Packet",
           name: "completion-0001",
           sha256: "b".repeat(64),
         },
         {
-          source: "Frappe",
+          source: "IronWrap",
           doctype: "Customer Quote",
           name: "quote-0001",
           sha256: "c".repeat(64),
@@ -436,6 +530,128 @@ function candidate(): QuickBooksCandidate {
       ],
     },
   };
+}
+
+function nativeBasis(): NativeFinalInvoiceBasisV1 {
+  const value = candidate();
+  return {
+    schema_version: 1,
+    purpose: "quickbooks_final_invoice",
+    shop_order_id: value.shop_order_id,
+    completion: {
+      id: value.basis.completion_packet_id,
+      version: Number(value.basis.completion_version),
+      sha256: value.basis.completion_sha256,
+    },
+    accepted_quote: {
+      id: value.basis.customer_quote_id,
+      version: value.basis.quote_version,
+      sha256: value.basis.quote_sha256,
+    },
+    accepted_changes_sha256: value.basis.changes_sha256,
+    qbo: {
+      customer_id: value.qbo.customer_id,
+      item_id: value.qbo.item_id,
+      tax_code_id: value.qbo.tax_code_id,
+      terms_id: value.qbo.terms_id,
+    },
+    commercial: value.commercial,
+    evidence: value.basis.evidence,
+  };
+}
+
+function nativeBasisWithChangeOrder(): NativeFinalInvoiceBasisV1 {
+  const basis = nativeBasis();
+  basis.commercial.lines = [
+    { ...basis.commercial.lines[0]!, amount: "900.00" },
+    {
+      source_type: "Change Order",
+      source_id: "change-0001",
+      source_version: 2,
+      description_code: "RESIDENTIAL_ACCEPTED_CHANGE",
+      amount: "100.00",
+    },
+  ];
+  basis.evidence.push({
+    source: "IronWrap",
+    doctype: "Change Order",
+    name: "change-0001",
+    sha256: "e".repeat(64),
+  });
+  return basis;
+}
+
+async function seedNativeFinalInvoice(
+  testEnv: AppEnv,
+  basis: NativeFinalInvoiceBasisV1 = nativeBasis(),
+  options: {
+    intentId?: string;
+    realmId?: string;
+    roofJobId?: string;
+    sourceDocuments?: Array<{ id: string; version: number }>;
+  } = {},
+): Promise<void> {
+  const intentId = options.intentId ?? INTENT;
+  const realmId = options.realmId ?? REALM;
+  const roofJobId = options.roofJobId ?? "job-0001";
+  const providerPayload = nativeFinalInvoiceProviderPayload(basis);
+  const providerPayloadSha256 = await sha256Hex(canonicalJson(providerPayload));
+  const providerRequestId = await nativeFinalInvoiceProviderRequestId({
+    tenantId: TENANT,
+    realmId,
+    intentId,
+    providerPayloadSha256,
+  });
+  const snapshot = await recordTaxPolicySnapshot(testEnv, {
+    tenantId: TENANT,
+    jurisdiction: "CA-AB",
+    taxCode: "GST",
+    providerTaxCodeId: "10",
+    ratePercent: "5.0000",
+    effectiveFrom: "2026-01-01",
+    sourceRef: "IronWrap:commercial-policy:gst",
+  }, NOW);
+  const taxPolicySnapshotSha256 = await taxBindingSetSha256([snapshot.snapshot_sha256]);
+  await deriveAccountingIntent(testEnv, {
+    tenantId: TENANT,
+    intentId,
+    kind: "progress_invoice",
+    roofJobId,
+    basis,
+    sourceDocuments: options.sourceDocuments ?? [...new Map([
+      { id: basis.completion.id, version: basis.completion.version },
+      { id: basis.accepted_quote.id, version: basis.accepted_quote.version },
+      ...basis.commercial.lines.map((line) => ({
+        id: line.source_id,
+        version: line.source_version,
+      })),
+    ].map((source) => [`${source.id}\n${source.version}`, source])).values()],
+    expected: nativeFinalInvoiceExpectedReadback({ realmId, basis }),
+    taxPolicySnapshotSha256,
+    realmId,
+    providerPayload,
+    providerRequestId,
+    subtotal: basis.commercial.subtotal,
+    taxAmount: basis.commercial.tax_amount,
+    totalAmount: basis.commercial.total_amount,
+    authority: {
+      permitRef: "permit:quickbooks:final-invoice",
+      policyRef: "policy:quickbooks:final-invoice",
+      policyVersion: "v1",
+      maxAmount: basis.commercial.total_amount,
+    },
+    effectIdempotencyKey: nativeFinalInvoiceEffectIdempotencyKey({
+      providerRequestId,
+      providerPayloadSha256,
+    }),
+    derivedBy: { actorKind: "agent" },
+    finalInvoiceIntentId: intentId,
+  }, NOW);
+  await bindAccountingIntentTaxSnapshots(testEnv, {
+    tenantId: TENANT,
+    intentId,
+    snapshots: [snapshot],
+  }, NOW);
 }
 
 function quickBooksInvoice(
@@ -527,6 +743,7 @@ async function connect(
   testEnv: AppEnv,
   fake: Integrations,
   key = "connect-quickbooks-0001",
+  seedFinalInvoice = true,
 ): Promise<void> {
   const handoff = await requestQuickBooksConnect(testEnv, {
     tenantId: TENANT,
@@ -553,6 +770,7 @@ async function connect(
     response.headers.get("location"),
     `${PUBLIC_ORIGIN}/accounting/quickbooks?quickbooks=connected`,
   );
+  if (seedFinalInvoice) await seedNativeFinalInvoice(testEnv);
 }
 
 async function prepareApprovedInvoice(
@@ -706,6 +924,357 @@ test("QuickBooks APIs preserve connection uncertainty and block competing OAuth 
   };
   assert.equal(detail.connection.state, "reconciliation_required");
   assert.deepEqual(detail.allowed_actions, ["refresh"]);
+});
+
+async function prepareNativeMappingRoute(): Promise<{
+  db: SqliteD1;
+  fake: Integrations;
+  testEnv: AppEnv;
+}> {
+  const db = new SqliteD1();
+  db.raw.exec(`
+    CREATE TABLE operating_customers (
+      customer_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      contact_email TEXT,
+      contact_phone TEXT,
+      lifecycle_status TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (customer_id, tenant_id)
+    );
+    CREATE TABLE operating_roof_jobs (
+      roof_job_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      customer_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      job_status TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (roof_job_id, tenant_id)
+    );
+  `);
+  db.raw.exec(
+    readFileSync(
+      new URL("../migrations/0100_native_final_invoice_derivation.sql", import.meta.url),
+      "utf8",
+    ),
+  );
+  db.raw.exec(
+    readFileSync(
+      new URL("../migrations/0102_native_final_invoice_provider_binding_authority.sql", import.meta.url),
+      "utf8",
+    ),
+  );
+  db.raw
+    .prepare(
+      `INSERT INTO operating_customers
+       (customer_id, tenant_id, contact_email, contact_phone, lifecycle_status, version, updated_at)
+       VALUES (?, ?, ?, NULL, 'active', 1, ?)`,
+    )
+    .run("customer-0001", TENANT, "customer@example.invalid", NOW.toISOString());
+  db.raw
+    .prepare(
+      `INSERT INTO operating_roof_jobs
+       (roof_job_id, tenant_id, customer_id, version, job_status, updated_at)
+       VALUES (?, ?, ?, 1, 'in_progress', ?)`,
+    )
+    .run("JOB-0001", TENANT, "customer-0001", NOW.toISOString());
+  seedAcceptedCommercialTerms(db.raw, 30);
+  const fake = new Integrations();
+  const testEnv = env(db);
+  await connect(testEnv, fake, "connect-for-mapping-0001", false);
+  await recordTaxPolicySnapshot(testEnv, {
+    tenantId: TENANT,
+    jurisdiction: "CA-AB",
+    taxCode: "GST",
+    providerTaxCodeId: "701",
+    ratePercent: "5.0000",
+    effectiveFrom: "2026-01-01",
+    sourceRef: "IronWrap:commercial-policy:gst",
+  }, NOW);
+  return { db, fake, testEnv };
+}
+
+function seedAcceptedCommercialTerms(db: DatabaseSync, paymentTermsDays: number): void {
+  db.exec(`
+    CREATE TABLE commercial_quote_revisions (
+      quote_revision_id TEXT, tenant_id TEXT, customer_quote_id TEXT, revision_number INTEGER,
+      roof_job_id TEXT, customer_id TEXT, status TEXT, currency TEXT, subtotal_cents INTEGER,
+      tax_cents INTEGER, total_cents INTEGER, terms_json TEXT, terms_hash TEXT
+    );
+    CREATE TABLE commercial_quote_lines (
+      quote_revision_id TEXT, line_id TEXT, sequence INTEGER, subtotal_cents INTEGER,
+      tax_code TEXT, tax_cents INTEGER, total_cents INTEGER
+    );
+    CREATE TABLE commercial_proposal_revisions (
+      proposal_revision_id TEXT, tenant_id TEXT, proposal_pack_id TEXT, revision_number INTEGER,
+      quote_revision_id TEXT, roof_job_id TEXT, customer_id TEXT, terms_hash TEXT
+    );
+    CREATE TABLE commercial_proposal_publication_events (
+      publication_event_id TEXT, tenant_id TEXT, proposal_revision_id TEXT,
+      proposal_pack_id TEXT, publication_version INTEGER, state TEXT, occurred_at TEXT
+    );
+    CREATE TABLE commercial_acceptance_bindings (
+      acceptance_binding_id TEXT, acceptance_id TEXT, tenant_id TEXT, quote_revision_id TEXT,
+      proposal_revision_id TEXT, roof_job_id TEXT, customer_id TEXT, terms_hash TEXT,
+      receipt_hash TEXT, accepted_at TEXT, bound_at TEXT
+    );
+  `);
+  const termsJson = canonicalJson({
+    deposit_percent: 25,
+    payment_schedule: ["deposit", "completion"],
+    payment_terms_days: paymentTermsDays,
+    warranty_years: 10,
+  });
+  const termsHash = createHash("sha256").update(termsJson).digest("hex");
+  db.prepare(
+    `INSERT INTO commercial_quote_revisions VALUES
+       (?, ?, ?, 1, ?, ?, 'approved', 'CAD', 100000, 5000, 105000, ?, ?)`,
+  ).run("quote-revision:mapping:0001", TENANT, "customer-quote:mapping:0001", "JOB-0001",
+    "customer-0001", termsJson, termsHash);
+  db.prepare(
+    `INSERT INTO commercial_quote_lines VALUES (?, 'line:mapping:0001', 1, 100000, 'GST', 5000, 105000)`,
+  ).run("quote-revision:mapping:0001");
+  db.prepare(
+    `INSERT INTO commercial_proposal_revisions VALUES
+       (?, ?, ?, 1, ?, ?, ?, ?)`,
+  ).run("proposal-revision:mapping:0001", TENANT, "proposal-pack:mapping:0001",
+    "quote-revision:mapping:0001", "JOB-0001", "customer-0001", termsHash);
+  db.prepare(
+    `INSERT INTO commercial_proposal_publication_events VALUES
+       (?, ?, ?, ?, 1, 'published', ?)`,
+  ).run("publication:mapping:0001", TENANT, "proposal-revision:mapping:0001",
+    "proposal-pack:mapping:0001", "2026-08-13T11:00:00.000Z");
+  db.prepare(
+    `INSERT INTO commercial_acceptance_bindings VALUES
+       (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run("acceptance-binding:mapping:0001", "acceptance:mapping:0001", TENANT,
+    "quote-revision:mapping:0001", "proposal-revision:mapping:0001", "JOB-0001",
+    "customer-0001", termsHash, "a".repeat(64), "2026-08-13T11:30:00.000Z",
+    "2026-08-13T11:31:00.000Z");
+}
+
+function replaceAcceptedCommercialTerms(db: DatabaseSync, paymentTermsDays: number): void {
+  const termsJson = canonicalJson({
+    deposit_percent: 25,
+    payment_schedule: ["deposit", "completion"],
+    payment_terms_days: paymentTermsDays,
+    warranty_years: 10,
+  });
+  const termsHash = createHash("sha256").update(termsJson).digest("hex");
+  db.prepare("UPDATE commercial_quote_revisions SET terms_json = ?, terms_hash = ?")
+    .run(termsJson, termsHash);
+  db.prepare("UPDATE commercial_proposal_revisions SET terms_hash = ?").run(termsHash);
+  db.prepare("UPDATE commercial_acceptance_bindings SET terms_hash = ?").run(termsHash);
+}
+
+function nativeMappingRequest(): Record<string, unknown> {
+  return {
+    roof_job_id: "JOB-0001",
+    qbo_customer_id: "501",
+    qbo_item_id: "601",
+    qbo_tax_code_id: "701",
+    qbo_terms_id: "801",
+    jurisdiction: "CA-AB",
+    tax_code: "GST",
+    payment_terms_days: 30,
+    correction_reason: null,
+  };
+}
+
+test("owner can record a provider-verified native final-invoice mapping", async () => {
+  const { db, fake, testEnv } = await prepareNativeMappingRoute();
+
+  const response = await handleAuthenticatedRoute(
+    commandRequest(
+      "/api/v1/quickbooks/final-invoice-mappings",
+      nativeMappingRequest(),
+      "mapping-owner-0001",
+    ),
+    testEnv,
+    auth("owner"),
+    { quickBooksFetcher: fake.fetcher },
+  );
+  assert.equal(response.status, 200);
+  assert.equal((await response.json() as { state: string }).state, "connected");
+  const quote = db.raw
+    .prepare("SELECT * FROM commercial_quote_revisions WHERE quote_revision_id = ?")
+    .get("quote-revision:mapping:0001") as Record<string, unknown>;
+  const lines = db.raw
+    .prepare("SELECT * FROM commercial_quote_lines WHERE quote_revision_id = ? ORDER BY sequence, line_id")
+    .all("quote-revision:mapping:0001") as Array<Record<string, unknown>>;
+  const proposal = db.raw
+    .prepare("SELECT * FROM commercial_proposal_revisions WHERE proposal_revision_id = ?")
+    .get("proposal-revision:mapping:0001") as Record<string, unknown>;
+  const publication = db.raw
+    .prepare("SELECT * FROM commercial_proposal_publication_events WHERE publication_event_id = ?")
+    .get("publication:mapping:0001") as Record<string, unknown>;
+  const acceptance = db.raw
+    .prepare("SELECT * FROM commercial_acceptance_bindings WHERE acceptance_binding_id = ?")
+    .get("acceptance-binding:mapping:0001") as Record<string, unknown>;
+  const expectedCommercialHeadSha256 = createHash("sha256").update(canonicalJson({
+    quote_sha256: createHash("sha256").update(canonicalJson({ quote, lines })).digest("hex"),
+    proposal_sha256: createHash("sha256").update(canonicalJson(proposal)).digest("hex"),
+    publication_sha256: createHash("sha256").update(canonicalJson(publication)).digest("hex"),
+    acceptance_sha256: createHash("sha256").update(canonicalJson(acceptance)).digest("hex"),
+  })).digest("hex");
+  assert.deepEqual(
+    {
+      ...(db.raw
+      .prepare(
+        `SELECT realm_id, roof_job_id, qbo_customer_id, qbo_item_id, qbo_tax_code_id, qbo_terms_id,
+                jurisdiction, tax_code, payment_terms_days, commercial_terms_hash,
+                commercial_head_sha256
+           FROM native_final_invoice_provider_bindings`,
+      )
+      .get() as Record<string, unknown>),
+    },
+    {
+      realm_id: REALM,
+      roof_job_id: "JOB-0001",
+      qbo_customer_id: "501",
+      qbo_item_id: "601",
+      qbo_tax_code_id: "701",
+      qbo_terms_id: "801",
+      jurisdiction: "CA-AB",
+      tax_code: "GST",
+      payment_terms_days: 30,
+      commercial_terms_hash: createHash("sha256").update(canonicalJson({
+        deposit_percent: 25,
+        payment_schedule: ["deposit", "completion"],
+        payment_terms_days: 30,
+        warranty_years: 10,
+      })).digest("hex"),
+      commercial_head_sha256: expectedCommercialHeadSha256,
+    },
+  );
+});
+
+test("mapping authoring rejects unverified provider identity before D1", async () => {
+  for (const [expectedStatus, mutate] of [
+    [409, (fake: Integrations) => { fake.mappingEntities.Customer.Id = "999"; }],
+    [409, (fake: Integrations) => { fake.mappingEntities.Customer.Active = false; }],
+    [409, (fake: Integrations) => {
+      fake.mappingEntities.Customer.PrimaryEmailAddr = { Address: "other@example.invalid" };
+    }],
+    [409, (fake: Integrations) => { fake.mappingEntities.Item.Active = false; }],
+    [409, (fake: Integrations) => { fake.mappingEntities.Item.IncomeAccountRef = null; }],
+    [409, (fake: Integrations) => { fake.mappingEntities.Account.Active = false; }],
+    [409, (fake: Integrations) => { fake.mappingEntities.Account.AccountType = "Expense"; }],
+    [409, (fake: Integrations) => { fake.mappingEntities.Account.Classification = "Expense"; }],
+    [409, (fake: Integrations) => { fake.mappingEntities.TaxCode.Name = "PST"; }],
+    [409, (fake: Integrations) => { fake.mappingEntities.TaxRate.RateValue = 7; }],
+    [409, (fake: Integrations) => { fake.mappingEntities.Term.DueDays = 15; }],
+    [409, (fake: Integrations) => { delete fake.mappingEntities.TaxCode; }],
+    [502, (fake: Integrations) => { fake.mappingReadMode = "throw"; }],
+  ] as const) {
+    const { db, fake, testEnv } = await prepareNativeMappingRoute();
+    mutate(fake);
+    const response = await handleAuthenticatedRoute(
+      commandRequest(
+        "/api/v1/quickbooks/final-invoice-mappings",
+        nativeMappingRequest(),
+        `mapping-rejected-${fake.requests.length}`,
+      ),
+      testEnv,
+      auth("owner"),
+      { quickBooksFetcher: fake.fetcher },
+    );
+    assert.equal(response.status, expectedStatus);
+    assert.equal(count(db, "native_final_invoice_provider_bindings"), 0);
+  }
+});
+
+test("mapping authoring enforces the idempotency key across the immutable binding chain", async () => {
+  const { db, fake, testEnv } = await prepareNativeMappingRoute();
+  const key = "mapping-owner-idempotent-0001";
+  const first = await handleAuthenticatedRoute(
+    commandRequest("/api/v1/quickbooks/final-invoice-mappings", nativeMappingRequest(), key),
+    testEnv,
+    auth("owner"),
+    { quickBooksFetcher: fake.fetcher },
+  );
+  assert.equal(first.status, 200);
+  const replay = await handleAuthenticatedRoute(
+    commandRequest("/api/v1/quickbooks/final-invoice-mappings", nativeMappingRequest(), key),
+    testEnv,
+    auth("owner"),
+    { quickBooksFetcher: fake.fetcher },
+  );
+  assert.equal(replay.status, 200);
+  assert.equal(count(db, "native_final_invoice_provider_bindings"), 1);
+
+  fake.mappingEntities.Item.Id = "602";
+  const conflict = await handleAuthenticatedRoute(
+    commandRequest(
+      "/api/v1/quickbooks/final-invoice-mappings",
+      {
+        ...nativeMappingRequest(),
+        qbo_item_id: "602",
+        correction_reason: "Use the corrected roofing service item.",
+      },
+      key,
+    ),
+    testEnv,
+    auth("owner"),
+    { quickBooksFetcher: fake.fetcher },
+  );
+  assert.equal(conflict.status, 409);
+  assert.deepEqual(await conflict.json(), {
+    error: "native_final_invoice_provider_binding_idempotency_conflict",
+  });
+  assert.equal(count(db, "native_final_invoice_provider_bindings"), 1);
+});
+
+test("mapping authoring rejects QuickBooks terms that differ from the accepted contract", async () => {
+  const { db, fake, testEnv } = await prepareNativeMappingRoute();
+  replaceAcceptedCommercialTerms(db.raw, 15);
+  const response = await handleAuthenticatedRoute(
+    commandRequest(
+      "/api/v1/quickbooks/final-invoice-mappings",
+      nativeMappingRequest(),
+      "mapping-commercial-terms-mismatch",
+    ),
+    testEnv,
+    auth("owner"),
+    { quickBooksFetcher: fake.fetcher },
+  );
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), {
+    error: "quickbooks_mapping_commercial_terms_mismatch",
+  });
+  assert.equal(count(db, "native_final_invoice_provider_bindings"), 0);
+  assert.equal(fake.requests.filter((request) => request.url.hostname.includes("quickbooks")).length, 0);
+});
+
+test("mapping authoring fails closed when accepted contract terms lack due days", async () => {
+  const { db, fake, testEnv } = await prepareNativeMappingRoute();
+  const legacyTermsJson = canonicalJson({
+    deposit_percent: 25,
+    payment_schedule: ["deposit", "completion"],
+    warranty_years: 10,
+  });
+  const legacyTermsHash = createHash("sha256").update(legacyTermsJson).digest("hex");
+  db.raw.prepare("UPDATE commercial_quote_revisions SET terms_json = ?, terms_hash = ?")
+    .run(legacyTermsJson, legacyTermsHash);
+  db.raw.prepare("UPDATE commercial_proposal_revisions SET terms_hash = ?").run(legacyTermsHash);
+  db.raw.prepare("UPDATE commercial_acceptance_bindings SET terms_hash = ?").run(legacyTermsHash);
+  const response = await handleAuthenticatedRoute(
+    commandRequest(
+      "/api/v1/quickbooks/final-invoice-mappings",
+      nativeMappingRequest(),
+      "mapping-commercial-terms-missing-due-days",
+    ),
+    testEnv,
+    auth("owner"),
+    { quickBooksFetcher: fake.fetcher },
+  );
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), {
+    error: "quickbooks_mapping_commercial_terms_unavailable",
+  });
+  assert.equal(count(db, "native_final_invoice_provider_bindings"), 0);
+  assert.equal(fake.requests.filter((request) => request.url.hostname.includes("quickbooks")).length, 0);
 });
 
 test("OAuth state is hashed, expiring, one-shot, uncertainty-terminal, and token ciphertext stays private", async () => {
@@ -878,27 +1447,9 @@ test("OAuth state is hashed, expiring, one-shot, uncertainty-terminal, and token
   );
 });
 
-test("candidate discovery persists holds, replays exactly, resolves observed holds, and rejects invalid money", async () => {
+test("candidate discovery is native, replay-safe, and records a missing Job Packet basis as a hold", async () => {
   const db = new SqliteD1();
   const fake = new Integrations();
-  fake.listing = {
-    candidates: [candidate()],
-    blockers: [
-      {
-        roof_job_id: "job-hold-0001",
-        code: "customer_mapping_missing",
-        message: "synthetic free text must not persist",
-        citations: [
-          {
-            source: "Frappe",
-            doctype: "Roof Job",
-            name: "job-hold-0001",
-            sha256: "e".repeat(64),
-          },
-        ],
-      },
-    ],
-  };
   const testEnv = env(db);
   assert.deepEqual(
     await discoverQuickBooksFinalInvoiceCandidates(testEnv, {
@@ -907,82 +1458,319 @@ test("candidate discovery persists holds, replays exactly, resolves observed hol
     }),
     { discovered: 0, replayed: 0, blocked: 0 },
   );
-  assert.equal(
-    fake.requests.filter((request) =>
-      request.url.pathname.endsWith(".list_candidates"),
-    ).length,
-    0,
-  );
   await connect(testEnv, fake);
+
   assert.deepEqual(
     await discoverQuickBooksFinalInvoiceCandidates(testEnv, {
       fetcher: fake.fetcher,
       now: NOW,
     }),
-    { discovered: 1, replayed: 0, blocked: 1 },
+    { discovered: 1, replayed: 0, blocked: 0 },
   );
   assert.equal(
     (await getQuickBooksFinalInvoice(testEnv, TENANT, INTENT))?.state,
     "pending_review",
   );
-  assert.equal(count(db, "quickbooks_final_invoice_candidate_holds"), 1);
-  assert.doesNotMatch(
-    JSON.stringify(
-      db.raw
-        .prepare("SELECT * FROM quickbooks_final_invoice_candidate_holds")
-        .all(),
-    ),
-    /synthetic free text/,
-  );
-  assert.deepEqual(
-    (await listQuickBooksCandidateHolds(testEnv, TENANT))[0]?.blocker_code,
-    "customer_mapping_missing",
-  );
-
   assert.deepEqual(
     await discoverQuickBooksFinalInvoiceCandidates(testEnv, {
       fetcher: fake.fetcher,
       now: new Date(NOW.getTime() + 1000),
     }),
-    { discovered: 0, replayed: 1, blocked: 1 },
+    { discovered: 0, replayed: 1, blocked: 0 },
   );
   assert.equal(count(db, "quickbooks_final_invoice_intents"), 1);
-  assert.equal(count(db, "quickbooks_final_invoice_events"), 1);
 
   assert.deepEqual(
     await discoverQuickBooksFinalInvoiceCandidates(testEnv, {
+      roofJobId: "job-missing-packet-0001",
       fetcher: fake.fetcher,
       now: new Date(NOW.getTime() + 2000),
     }),
-    { discovered: 0, replayed: 1, blocked: 1 },
+    { discovered: 0, replayed: 0, blocked: 1 },
   );
   assert.equal(
-    (await getQuickBooksFinalInvoice(testEnv, TENANT, INTENT))?.state,
-    "pending_review",
+    (await listQuickBooksCandidateHolds(testEnv, TENANT))[0]?.blocker_code,
+    "native_final_invoice_basis_missing",
   );
-  assert.equal(count(db, "quickbooks_final_invoice_events"), 1);
-
-  fake.listing = { candidates: [], blockers: [] };
-  await discoverQuickBooksFinalInvoiceCandidates(testEnv, {
-    roofJobId: "job-hold-0001",
-    fetcher: fake.fetcher,
-    now: new Date(NOW.getTime() + 3000),
-  });
-  assert.deepEqual(await listQuickBooksCandidateHolds(testEnv, TENANT), []);
   assert.equal(count(db, "quickbooks_final_invoice_candidate_holds"), 1);
-
-  const invalid = candidate();
-  invalid.commercial.total_amount = "1050.01";
-  invalid.commercial.final_balance = "1050.01";
-  fake.listing = { candidates: [invalid], blockers: [] };
-  await assert.rejects(
-    discoverQuickBooksFinalInvoiceCandidates(testEnv, {
-      fetcher: fake.fetcher,
-      now: new Date(NOW.getTime() + 4000),
-    }),
-    /quickbooks_candidate_invalid/,
+  assert.equal(
+    fake.requests.some((request) =>
+      request.url.hostname === "frappe.example.invalid"
+    ),
+    false,
   );
-  assert.equal(count(db, "quickbooks_final_invoice_intents"), 1);
+});
+
+test("native candidate admission rejects impossible dates and tax bindings that disagree with the basis", async (t) => {
+  await t.test("impossible calendar date", async () => {
+    const db = new SqliteD1();
+    const fake = new Integrations();
+    const testEnv = env(db);
+    await connect(testEnv, fake, "connect-invalid-date-0001", false);
+    const basis = nativeBasis();
+    basis.commercial.invoice_date = "2026-02-30";
+    await seedNativeFinalInvoice(testEnv, basis);
+
+    assert.deepEqual(
+      await discoverQuickBooksFinalInvoiceCandidates(testEnv, {
+        fetcher: fake.fetcher,
+        now: NOW,
+      }),
+      { discovered: 0, replayed: 0, blocked: 1 },
+    );
+    assert.equal(
+      (await listQuickBooksCandidateHolds(testEnv, TENANT))[0]?.blocker_code,
+      "native_final_invoice_basis_invalid",
+    );
+  });
+
+  await t.test("provider tax mapping mismatch", async () => {
+    const db = new SqliteD1();
+    const fake = new Integrations();
+    const testEnv = env(db);
+    await connect(testEnv, fake, "connect-tax-mismatch-0001", false);
+    const basis = nativeBasis();
+    basis.qbo.tax_code_id = "11";
+    await seedNativeFinalInvoice(testEnv, basis);
+
+    assert.deepEqual(
+      await discoverQuickBooksFinalInvoiceCandidates(testEnv, {
+        fetcher: fake.fetcher,
+        now: NOW,
+      }),
+      { discovered: 0, replayed: 0, blocked: 1 },
+    );
+    assert.equal(
+      (await listQuickBooksCandidateHolds(testEnv, TENANT))[0]?.blocker_code,
+      "native_final_invoice_basis_invalid",
+    );
+  });
+
+  await t.test("every billed change order is present in the immutable source-document set", async () => {
+    const db = new SqliteD1();
+    const fake = new Integrations();
+    const testEnv = env(db);
+    await connect(testEnv, fake, "connect-change-source-0001", false);
+    const basis = nativeBasisWithChangeOrder();
+    await seedNativeFinalInvoice(testEnv, basis, {
+      sourceDocuments: [basis.completion, basis.accepted_quote],
+    });
+
+    assert.deepEqual(
+      await discoverQuickBooksFinalInvoiceCandidates(testEnv, {
+        fetcher: fake.fetcher,
+        now: NOW,
+      }),
+      { discovered: 0, replayed: 0, blocked: 1 },
+    );
+    assert.equal(
+      (await listQuickBooksCandidateHolds(testEnv, TENANT))[0]?.blocker_code,
+      "native_final_invoice_basis_invalid",
+    );
+  });
+
+  await t.test("accepted quote identity and change-order evidence are bound to invoice lines", async () => {
+    const mismatchedDb = new SqliteD1();
+    const mismatchedFake = new Integrations();
+    const mismatchedEnv = env(mismatchedDb);
+    await connect(mismatchedEnv, mismatchedFake, "connect-line-binding-0001", false);
+    const mismatched = nativeBasisWithChangeOrder();
+    mismatched.commercial.lines[0]!.source_id = "quote-other";
+    await seedNativeFinalInvoice(mismatchedEnv, mismatched);
+    assert.deepEqual(
+      await discoverQuickBooksFinalInvoiceCandidates(mismatchedEnv, {
+        fetcher: mismatchedFake.fetcher,
+        now: NOW,
+      }),
+      { discovered: 0, replayed: 0, blocked: 1 },
+    );
+
+    const validDb = new SqliteD1();
+    const validFake = new Integrations();
+    const validEnv = env(validDb);
+    await connect(validEnv, validFake, "connect-line-binding-0002", false);
+    await seedNativeFinalInvoice(validEnv, nativeBasisWithChangeOrder());
+    assert.deepEqual(
+      await discoverQuickBooksFinalInvoiceCandidates(validEnv, {
+        fetcher: validFake.fetcher,
+        now: NOW,
+      }),
+      { discovered: 1, replayed: 0, blocked: 0 },
+    );
+  });
+
+  await t.test("one accepted quote can contribute several invoice lines", async () => {
+    const db = new SqliteD1();
+    const fake = new Integrations();
+    const testEnv = env(db);
+    await connect(testEnv, fake, "connect-multi-line-quote-0001", false);
+    const basis = nativeBasis();
+    basis.commercial.lines = [
+      { ...basis.commercial.lines[0]!, amount: "600.00" },
+      { ...basis.commercial.lines[0]!, amount: "400.00" },
+    ];
+    await seedNativeFinalInvoice(testEnv, basis);
+
+    assert.deepEqual(
+      await discoverQuickBooksFinalInvoiceCandidates(testEnv, {
+        fetcher: fake.fetcher,
+        now: NOW,
+      }),
+      { discovered: 1, replayed: 0, blocked: 0 },
+    );
+  });
+});
+
+test("native discovery applies realm scope before its result limit", async () => {
+  const db = new SqliteD1();
+  const testEnv = env(db);
+  const foreignBasis = nativeBasis();
+  foreignBasis.accepted_changes_sha256 = "f".repeat(64);
+  await seedNativeFinalInvoice(testEnv, foreignBasis, {
+    intentId: "qbo-final-invoice:foreign-job",
+    realmId: "9876543210",
+    roofJobId: "foreign-job",
+  });
+  await seedNativeFinalInvoice(testEnv);
+
+  const listing = await listNativeFinalInvoiceCandidates(testEnv, {
+    tenantId: TENANT,
+    realmId: REALM,
+    limit: 1,
+  });
+  assert.deepEqual(listing.blockers, []);
+  assert.deepEqual(listing.candidates.map((value) => value.basis.intent_id), [INTENT]);
+});
+
+test("rejecting the compatibility row rejects the native accounting intent exactly once", async () => {
+  const db = new SqliteD1();
+  const fake = new Integrations();
+  const testEnv = env(db);
+  await connect(testEnv, fake);
+  await discoverQuickBooksFinalInvoiceCandidates(testEnv, { now: NOW });
+
+  const first = await rejectQuickBooksFinalInvoice(testEnv, {
+    tenantId: TENANT,
+    intentId: INTENT,
+    actorUserId: "appu_accounting_0001",
+    actorRole: "accounting",
+    expectedVersion: 1,
+    reasonCode: "commercial_values_disputed",
+    idempotencyKey: "reject-final-invoice-0001",
+    now: NOW,
+  });
+  assert.equal(first.kind, "updated");
+  assert.deepEqual(
+    { ...db.raw.prepare(
+      `SELECT state, reason_code, rejected_by_user_id
+         FROM accounting_intents WHERE intent_id = ?`,
+    ).get(INTENT) },
+    {
+      state: "rejected",
+      reason_code: "commercial_values_disputed",
+      rejected_by_user_id: "appu_accounting_0001",
+    },
+  );
+
+  const replay = await rejectQuickBooksFinalInvoice(testEnv, {
+    tenantId: TENANT,
+    intentId: INTENT,
+    actorUserId: "appu_accounting_0001",
+    actorRole: "accounting",
+    expectedVersion: 1,
+    reasonCode: "commercial_values_disputed",
+    idempotencyKey: "reject-final-invoice-0001",
+    now: NOW,
+  });
+  assert.equal(replay.kind, "replayed");
+  assert.equal(count(db, "accounting_intent_command_receipts"), 1);
+  assert.equal(count(db, "quickbooks_final_invoice_outbox"), 0);
+});
+
+test("native webhook projection retries incomplete payment reads and unbound provider identities", async () => {
+  const { db, testEnv, fake } = await prepareApprovedInvoice();
+  await recoverQuickBooksFinalInvoices(testEnv, fake.fetcher, NOW);
+  assert.deepEqual(
+    { ...db.raw.prepare(
+      "SELECT state, provider_entity_id FROM accounting_intents WHERE intent_id = ?",
+    ).get(INTENT) },
+    { state: "submitted", provider_entity_id: "9001" },
+  );
+
+  let invoiceAvailable = false;
+  const webhookFetcher: typeof fetch = async (input, init) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+    if (url.pathname.endsWith("/payment/7001")) {
+      return Response.json({
+        Payment: {
+          Id: "7001",
+          TxnDate: "2026-08-13",
+          CurrencyRef: { value: "CAD" },
+          CustomerRef: { value: "7" },
+          Line: [{
+            Amount: 1050,
+            LinkedTxn: [{ TxnId: "9001", TxnType: "Invoice" }],
+          }],
+          TotalAmt: 1050,
+          UnappliedAmt: 0,
+        },
+      });
+    }
+    if (url.pathname.endsWith("/invoice/9001")) {
+      if (!invoiceAvailable) throw new Error("synthetic invoice read outage");
+      return Response.json({
+        Invoice: quickBooksInvoice({
+          Balance: 0,
+          LinkedTxn: [{ TxnId: "7001", TxnType: "Payment" }],
+        }),
+      });
+    }
+    return await fake.fetcher(input, init);
+  };
+  const port = nativeQuickBooksWebhookProjectionPort(testEnv, webhookFetcher);
+  const paymentEvent = {
+    realmId: REALM,
+    type: "Payment",
+    id: "7001",
+    operation: "Create",
+  };
+
+  await assert.rejects(
+    port.project(paymentEvent),
+    (error: unknown) =>
+      error instanceof QuickBooksNativeWebhookError &&
+      error.code === "provider_unreachable",
+  );
+  assert.equal(
+    Number(db.raw.prepare(
+      "SELECT COUNT(*) AS count FROM accounting_observations WHERE entity_type = 'Payment'",
+    ).get()?.count ?? 0),
+    1,
+  );
+
+  invoiceAvailable = true;
+  const projected = await port.project(paymentEvent);
+  assert.deepEqual(projected.intentIds, [INTENT]);
+  assert.equal(projected.unresolved, false);
+  assert.deepEqual(projected.verdicts, ["reconciled"]);
+
+  await assert.rejects(
+    port.project({
+      realmId: REALM,
+      type: "Invoice",
+      id: "9999",
+      operation: "Create",
+    }),
+    (error: unknown) =>
+      error instanceof QuickBooksNativeWebhookError &&
+      error.code === "quickbooks_native_provider_identity_unbound",
+  );
 });
 
 test("accounting can approve through the API; ops, missing CSRF, and accounting OAuth connect are denied", async (t) => {
@@ -1040,6 +1828,14 @@ test("accounting can approve through the API; ops, missing CSRF, and accounting 
     auth("accounting"),
   );
   assert.equal(replay.status, 202);
+  assert.deepEqual(
+    await discoverQuickBooksFinalInvoiceCandidates(testEnv, {
+      roofJobId: "job-0001",
+      fetcher: fake.fetcher,
+      now: new Date(NOW.getTime() + 1000),
+    }),
+    { discovered: 0, replayed: 0, blocked: 0 },
+  );
   assert.equal(count(db, "quickbooks_final_invoice_outbox"), 1);
   assert.deepEqual(
     {
@@ -1153,70 +1949,49 @@ test("QuickBooks invoice submission records a universal effect and proves the pr
   );
 });
 
-test("QuickBooks to Frappe exact replay is provider-backed and rejects material drift", async (t) => {
-  for (const scenario of [
-    { name: "exact durable projection", driftField: null },
+test("lost compatibility receipt replays against the native provider binding without a second invoice", async () => {
+  const { db, testEnv, fake } = await prepareApprovedInvoice();
+  await recoverQuickBooksFinalInvoices(testEnv, fake.fetcher, NOW);
+  db.failNextBatch = true;
+  await recoverQuickBooksFinalInvoices(testEnv, fake.fetcher, NOW);
+  assert.equal(
+    (db.raw.prepare(
+      "SELECT state FROM quickbooks_final_invoice_outbox WHERE operation = 'bind'",
+    ).get() as { state: string }).state,
+    "pending",
+  );
+  const native = db.raw.prepare(
+    `SELECT state, provider_entity_type, provider_entity_id,
+            effect_id, final_invoice_intent_id
+       FROM accounting_intents WHERE intent_id = ?`,
+  ).get(INTENT) as Record<string, unknown>;
+  assert.deepEqual(
+    { ...native, effect_id: typeof native.effect_id },
     {
-      name: "wrong provider request hash",
-      driftField: "provider_request_sha256",
+      state: "submitted",
+      provider_entity_type: "Invoice",
+      provider_entity_id: "9001",
+      effect_id: "string",
+      final_invoice_intent_id: INTENT,
     },
-  ]) {
-    await t.test(scenario.name, async () => {
-      const { db, testEnv, fake } = await prepareApprovedInvoice();
-      await recoverQuickBooksFinalInvoices(testEnv, fake.fetcher, NOW);
-      db.failNextBatch = true;
-      await recoverQuickBooksFinalInvoices(testEnv, fake.fetcher, NOW);
-      assert.equal(
-        (
-          db.raw
-            .prepare(
-              "SELECT state FROM quickbooks_final_invoice_outbox WHERE operation = 'bind'",
-            )
-            .get() as { state: string }
-        ).state,
-        "pending",
-      );
-      const bindCalls = () =>
-        fake.requests.filter(
-          (request) =>
-            request.method === "POST" &&
-            request.url.pathname.endsWith(".bind_provider_invoice"),
-        ).length;
-      assert.equal(bindCalls(), 1);
-      fake.projectionDriftField = scenario.driftField;
+  );
 
-      await recoverQuickBooksFinalInvoices(
-        testEnv,
-        fake.fetcher,
-        new Date(NOW.getTime() + 10 * 60_000),
-      );
-      assert.equal(
-        bindCalls(),
-        1,
-        "exact replay must not repeat the Frappe mutation",
-      );
-      const bind = db.raw
-        .prepare(
-          "SELECT state, attempt_count, detail_code FROM quickbooks_final_invoice_outbox WHERE operation = 'bind'",
-        )
-        .get() as {
-        state: string;
-        attempt_count: number;
-        detail_code: string | null;
-      };
-      if (scenario.driftField === null) {
-        assert.equal(bind.state, "succeeded");
-        assert.equal(bind.attempt_count, 2);
-      } else {
-        assert.equal(bind.state, "pending");
-        assert.equal(bind.detail_code, "quickbooks_frappe_bind_pending");
-        assert.equal(
-          (await getQuickBooksFinalInvoice(testEnv, TENANT, INTENT))?.state,
-          "reconciliation_required",
-        );
-      }
-    });
-  }
+  await recoverQuickBooksFinalInvoices(
+    testEnv,
+    fake.fetcher,
+    new Date(NOW.getTime() + 10 * 60_000),
+  );
+  assert.equal(
+    fake.createCalls.length,
+    1,
+    "recovery must reuse the native provider identity, never create a second invoice",
+  );
+  assert.deepEqual(
+    { ...(db.raw.prepare(
+      "SELECT state, attempt_count, detail_code FROM quickbooks_final_invoice_outbox WHERE operation = 'bind'",
+    ).get() as Record<string, unknown>) },
+    { state: "succeeded", attempt_count: 2, detail_code: null },
+  );
 });
 
 test("official subtotal lines and explicit settlement states reconcile; unknown status and one-cent drift do not", async (t) => {
@@ -1225,22 +2000,34 @@ test("official subtotal lines and explicit settlement states reconcile; unknown 
       name: "missing status is Unverified when the full balance remains",
       invoice: quickBooksInvoice(),
       status: "Unverified",
+      finalState: "matched",
+      nativeState: "partially_settled",
+      nativeVerdict: "partially_settled",
+      nativeReason: null,
     },
     {
-      name: "paid",
+      name: "paid without an authenticated Payment observation",
       invoice: quickBooksInvoice({
         Balance: 0,
         invoiceStatus: "PAID_NOT_DEPOSITED",
       }),
       status: "Paid",
+      finalState: "reconciliation_required",
+      nativeState: "mismatch",
+      nativeVerdict: "mismatch",
+      nativeReason: "settlement_invariant_violated",
     },
     {
-      name: "partially paid",
+      name: "partially paid without an authenticated Payment observation",
       invoice: quickBooksInvoice({
         Balance: 500,
         invoiceStatus: "PARTIALLY_PAID",
       }),
       status: "Partially Paid",
+      finalState: "reconciliation_required",
+      nativeState: "mismatch",
+      nativeVerdict: "mismatch",
+      nativeReason: "settlement_invariant_violated",
     },
   ]) {
     await t.test(scenario.name, async () => {
@@ -1251,12 +2038,9 @@ test("official subtotal lines and explicit settlement states reconcile; unknown 
         await recoverQuickBooksFinalInvoices(testEnv, fake.fetcher, NOW);
       assert.equal(
         (await getQuickBooksFinalInvoice(testEnv, TENANT, INTENT))?.state,
-        "matched",
+        scenario.finalState,
       );
-      assert.equal(fake.resolverPayloads.length, 1);
-      assert.equal(fake.resolverPayloads[0]?.payment_status, scenario.status);
-      assert.equal(fake.resolverPayloads[0]?.invoice_date, "2026-08-13");
-      assert.equal(fake.resolverPayloads[0]?.subtotal, "1000.00");
+      assert.equal(fake.resolverPayloads.length, 0);
       assert.deepEqual(
         {
           ...(db.raw
@@ -1269,6 +2053,22 @@ test("official subtotal lines and explicit settlement states reconcile; unknown 
         {
           outcome_code: "exact_match",
           payment_status: scenario.status,
+        },
+      );
+      assert.deepEqual(
+        {
+          ...(db.raw.prepare(
+            "SELECT state FROM accounting_intents WHERE intent_id = ?",
+          ).get(INTENT) as Record<string, unknown>),
+          ...(db.raw.prepare(
+            `SELECT verdict, reason_code FROM accounting_reconciliations
+              WHERE intent_id = ? ORDER BY decided_at DESC LIMIT 1`,
+          ).get(INTENT) as Record<string, unknown>),
+        },
+        {
+          state: scenario.nativeState,
+          verdict: scenario.nativeVerdict,
+          reason_code: scenario.nativeReason,
         },
       );
     });

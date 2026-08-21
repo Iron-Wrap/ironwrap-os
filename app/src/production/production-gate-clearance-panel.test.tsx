@@ -53,6 +53,7 @@ function job(blocked: readonly string[] = ["Deposit", "Weather"]): ProductionRun
     brand: "IronWrap Exteriors",
     service_type: "Roofing",
     status: "Won",
+    version: 1,
     assignment: null,
     scheduling_preparation_allowed: false,
     lane: "blocked",

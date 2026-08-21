@@ -4,7 +4,7 @@ const nullableText = z.string().nullable();
 const workPackageSchema = z.object({
   id: z.string().min(1),
   version: z.number().int().positive(),
-  status: z.enum(["Released", "Acknowledged", "In Progress"]),
+  status: z.enum(["Released", "Acknowledged", "In Progress", "Blocked"]),
   title: z.string().min(1),
   objective: z.string().min(1),
   boundaries: z.string().min(1),
@@ -106,6 +106,7 @@ export const assignmentSchema = z.object({
   scheduled_start: nullableText,
   scheduled_end: nullableText,
   blocker_reason: nullableText,
+  modified: nullableText.optional(),
 });
 
 export const proofStreamItemSchema = z.object({

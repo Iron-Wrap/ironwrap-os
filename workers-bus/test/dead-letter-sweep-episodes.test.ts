@@ -98,6 +98,19 @@ class BusTestD1 {
   prepare(sql: string): SqliteStatement {
     return new SqliteStatement(this.raw.prepare(sql), this.raw);
   }
+
+  async batch(statements: Array<{ run(): Promise<unknown> }>) {
+    this.raw.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.raw.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.raw.exec("ROLLBACK");
+      throw error;
+    }
+  }
 }
 
 interface SweepOverrides {
@@ -111,6 +124,7 @@ function sweepEnv(overrides: SweepOverrides = {}) {
   const env = {
     ADMIN_TOKEN,
     INGEST_TOKEN: "ingest-secret",
+    APP_TENANT_ID: "ironwrap",
     OWNER_ALERT_EMAIL: "owner@example.invalid",
     // JobNimbus off is the environment the ELEC-55 e2e ran in and the one defect 3 breaks; Frappe
     // off keeps the whole suite inside the no-live-provider rule with no fetch double at all
@@ -378,7 +392,7 @@ test("defect 3: the missing-credential skip also closes its dead-letter rows", a
   await worker.queue(batch as never, env as never, ctx);
 
   assert.equal(acked(), 1);
-  assert.equal(envelopeStatus(db), "erpnext_no_token");
+  assert.equal(envelopeStatus(db), "jn_skipped");
   assert.equal(openDeadLetterCount(db), 0);
 });
 

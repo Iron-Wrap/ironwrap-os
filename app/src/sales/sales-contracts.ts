@@ -15,10 +15,22 @@ const salesEnvelopeSchema = z
   .strict();
 
 const salesAttentionSchema = z.enum([
+  "source_partial",
   "triage_unresolved",
   "estimate_needs_review",
   "quote_needs_review",
   "quote_expired",
+]);
+
+const salesPartialFieldSchema = z.enum([
+  "job",
+  "triage_decision",
+  "estimate",
+  "quote",
+  "proposal",
+  "proposal_publication",
+  "quote_acceptance",
+  "proposal_acceptance",
 ]);
 
 const consentRecordSchema = z
@@ -55,6 +67,7 @@ const salesLeadSchema = z
       .object({
         status: nullableText,
         summary: nullableText,
+        version: z.number().int().positive(),
       })
       .strict(),
     job: z
@@ -118,6 +131,7 @@ const salesLeadSchema = z
         records: z.array(consentRecordSchema),
       })
       .strict(),
+    partial_fields: z.array(salesPartialFieldSchema),
     attention: z.array(salesAttentionSchema),
   })
   .strict();
@@ -141,3 +155,42 @@ export const salesResponseSchema = salesEnvelopeSchema
 
 export type SalesLead = z.infer<typeof salesLeadSchema>;
 export type SalesResponse = z.infer<typeof salesResponseSchema>;
+
+export const commercialLeadTriageDecisionResponseSchema = z
+  .object({
+    decision: z
+      .object({
+        triage_decision_id: z.string().min(1),
+        lead_id: z.string().min(1),
+        lead_version: z.number().int().positive(),
+        lifecycle_status: z.enum(["triaged", "qualified", "disqualified"]),
+        priority: z.enum(["low", "normal", "high", "urgent"]),
+        category: z.string().min(2),
+        summary: z.string().min(1),
+        next_action: z.string().min(1),
+        decided_at: z.string().min(1),
+      })
+      .strict(),
+    replayed: z.boolean(),
+    permit: z
+      .object({
+        permit_id: z.string().min(1),
+        replayed: z.boolean(),
+      })
+      .strict(),
+  })
+  .strict();
+
+export interface CommercialLeadTriageInput {
+  leadId: string;
+  expectedLeadVersion: number;
+  lifecycleStatus: "triaged" | "qualified" | "disqualified";
+  priority: "low" | "normal" | "high" | "urgent";
+  category: string;
+  summary: string;
+  nextAction: string;
+}
+
+export type CommercialLeadTriageDecisionResponse = z.infer<
+  typeof commercialLeadTriageDecisionResponseSchema
+>;

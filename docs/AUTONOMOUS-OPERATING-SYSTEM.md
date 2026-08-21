@@ -2,7 +2,7 @@
 
 Status: canonical target
 Owner: IronWrap OS product owner
-Last verified: 2026-07-30
+Last verified: 2026-08-20
 Review trigger: service, geography, physical workflow, authority, or business-model change
 
 ## Mission
@@ -30,6 +30,20 @@ This is the company target. Implementation status is exclusively maintained in
 AI agents are assumed to be 100% reliable under
 [`AUTHORITY-AND-EVIDENCE-CONTRACT.md`](./AUTHORITY-AND-EVIDENCE-CONTRACT.md). External data and the
 physical world remain fallible. Unknown or conflicting facts stop the affected transition.
+
+## Owned operating authority
+
+D1 plus the IronWrap Worker is the sole owned authority for normalized operational aggregates,
+versions, transitions, policies, audit events, and reconciliation state. R2 retains raw immutable
+evidence and large evidence objects. A projection may make that state easier to search or operate,
+but it cannot originate, approve, or silently correct operating truth.
+
+Frappe is a temporary compatibility projection while existing office, customer, field, Facet, and
+accounting consumers move to D1-native contracts. No new workflow may make Frappe authoritative.
+The compatibility projection is retired only after each consumer has replacement, reconciliation,
+export, rollback, and acceptance proof. QuickBooks remains authoritative only for posted accounting
+facts, and genuine external actors remain authoritative only for their legal, professional,
+customer, physical, or issuer scopes.
 
 ## Business scope
 
@@ -569,7 +583,7 @@ Control:
 - domain, email, phone, website, cloud, provider, accounting, and automation continuity;
 - versioned agents, prompts, tools, policy, models, evaluations, and rollback.
 
-Customer/job evidence belongs in approved D1/R2/Frappe/Drive/accounting/provider systems, not the
+Customer/job evidence belongs in approved D1/R2/Drive/accounting/provider systems, not the
 source repository.
 
 ### 25. Insurance, legal claims, and continuity
@@ -724,8 +738,9 @@ retention class.
 
 External services are bounded authorities or side-effect providers, not universal truth:
 
-- D1/R2: owned intake/event/evidence persistence.
-- Frappe: owned operating records and workflow.
+- D1/Worker/R2: owned operating authority, transition/event persistence, and raw evidence.
+- Frappe: temporary read-only compatibility projection scheduled for evidence-backed retirement;
+  it is not an operating authority.
 - Google Shared Drive: human-readable controlled job archive.
 - QuickBooks: posted accounting truth.
 - Email/SMS/voice providers: delivery/interaction evidence.
@@ -744,7 +759,9 @@ Critical human work remains safe when cloud systems fail:
 - field evidence queues locally with identity, order, and duplicate-safe replay;
 - emergency stabilization follows a bounded offline plan;
 - accounting, provider, inventory, and job state reconcile after recovery;
-- the business can restore D1, Frappe, evidence, configuration, and identity to an isolated target.
+- the business can restore D1, evidence, configuration, and identity to an isolated target;
+- until Frappe is retired, its compatibility projection can be rebuilt from D1 or restored from a
+  cutover export without treating the projection as authority.
 
 ## End-to-end autonomous acceptance
 

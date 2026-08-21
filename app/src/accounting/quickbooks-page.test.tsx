@@ -16,6 +16,7 @@ import {
   reconcileQuickBooksFinalInvoice,
   rejectQuickBooksFinalInvoice,
   removeQuickBooksFromIronWrap,
+  saveQuickBooksFinalInvoiceMapping,
 } from "./quickbooks-api";
 import { loadAccountingSummary } from "./money-api";
 import { summaryResponse } from "./money-fixtures";
@@ -51,6 +52,7 @@ vi.mock("./quickbooks-api", () => ({
   rejectQuickBooksFinalInvoice: vi.fn(),
   reconcileQuickBooksFinalInvoice: vi.fn(),
   removeQuickBooksFromIronWrap: vi.fn(),
+  saveQuickBooksFinalInvoiceMapping: vi.fn(),
   newQuickBooksActionKey: vi.fn(),
 }));
 
@@ -177,13 +179,13 @@ describe("QuickBooks final-invoice page", () => {
       expect(await screen.findByRole("heading", { name: "CAD 1050.00" })).toBeVisible();
       expect(screen.getByText("JOB-0001", { exact: false })).toBeVisible();
       expect(screen.getByText("Residential roofing contract")).toBeVisible();
-      expect(screen.getByText("Aug 13, 2026")).toBeVisible();
-      expect(screen.getByText("Sep 12, 2026")).toBeVisible();
-      expect(screen.getByText(/Approving sends one invoice/i)).toBeVisible();
-      expect(screen.getByRole("button", { name: "Approve invoice" })).toBeVisible();
-      expect(screen.getByRole("button", { name: "Do not approve" })).toBeVisible();
-      expect(screen.getByText("System check codes")).toBeVisible();
-      expect(screen.getByRole("heading", { name: "Source records" })).toBeVisible();
+      expect(screen.getByText("2026-08-13")).toBeVisible();
+      expect(screen.getByText("2026-09-12")).toBeVisible();
+      expect(screen.getByText(/Approval authorizes submission/i)).toBeVisible();
+      expect(screen.getByRole("button", { name: "Approve external invoice" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "Reject" })).toBeVisible();
+      expect(screen.getByRole("heading", { name: "Why this review is required" })).toBeVisible();
+      expect(screen.getByRole("heading", { name: "Evidence citations" })).toBeVisible();
       expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
       expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
       expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
@@ -212,7 +214,7 @@ describe("QuickBooks final-invoice page", () => {
 
     expect((await screen.findAllByText("Reconnect before deciding")).length).toBeGreaterThan(0);
     expect(screen.getByRole("heading", { name: "CAD 1050.00" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Approve invoice" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve external invoice" })).toBeNull();
     expect(approveQuickBooksFinalInvoice).not.toHaveBeenCalled();
   });
 
@@ -220,12 +222,12 @@ describe("QuickBooks final-invoice page", () => {
     const user = userEvent.setup();
     renderPage("detail", accountingSession);
 
-    await user.click(await screen.findByRole("button", { name: "Do not approve" }));
+    await user.click(await screen.findByRole("button", { name: "Reject" }));
     await user.selectOptions(
-      screen.getByLabelText("Reason for not approving"),
+      screen.getByLabelText("Rejection reason"),
       "duplicate_or_already_billed",
     );
-    await user.click(screen.getByRole("button", { name: "Do not approve" }));
+    await user.click(screen.getByRole("button", { name: "Reject candidate" }));
 
     await waitFor(() =>
       expect(rejectQuickBooksFinalInvoice).toHaveBeenCalledWith(
@@ -247,12 +249,12 @@ describe("QuickBooks final-invoice page", () => {
       .mockResolvedValueOnce(stateFixture("submission_pending"));
     renderPage("detail", ownerSession);
 
-    await user.click(await screen.findByRole("button", { name: "Approve invoice" }));
+    await user.click(await screen.findByRole("button", { name: "Approve external invoice" }));
     await waitFor(() => expect(approveQuickBooksFinalInvoice).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Approve invoice" })).toBeEnabled(),
+      expect(screen.getByRole("button", { name: "Approve external invoice" })).toBeEnabled(),
     );
-    await user.click(screen.getByRole("button", { name: "Approve invoice" }));
+    await user.click(screen.getByRole("button", { name: "Approve external invoice" }));
 
     await waitFor(() => expect(approveQuickBooksFinalInvoice).toHaveBeenCalledTimes(2));
     expect(vi.mocked(approveQuickBooksFinalInvoice).mock.calls.map((call) => call[3])).toEqual([
@@ -276,33 +278,33 @@ describe("QuickBooks final-invoice page", () => {
       .mockRejectedValueOnce(new ApiError({ status: 0, code: "network_error", message: "down" }));
     renderPage("detail", ownerSession);
 
-    await user.click(await screen.findByRole("button", { name: "Approve invoice" }));
+    await user.click(await screen.findByRole("button", { name: "Approve external invoice" }));
 
-    expect(await screen.findByText(/changed while you were reading/i)).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Approve invoice" })).toBeNull();
+    expect(await screen.findByText(/changed while you were reviewing/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Approve external invoice" })).toBeNull();
   });
 
   it.each([
-    ["connection_required", "Connect QuickBooks"],
-    ["blocked", "Not ready to review"],
-    ["pending_review", "Ready to review"],
+    ["connection_required", "QuickBooks connection required"],
+    ["blocked", "Blocked before review"],
+    ["pending_review", "Needs finance review"],
     ["rejected", "Not approved"],
-    ["submission_pending", "Waiting to send"],
-    ["submitted", "QuickBooks got it"],
-    ["matched", "QuickBooks record matches"],
-    ["failed", "Send failed"],
-    ["reconciliation_required", "Needs a QuickBooks check"],
+    ["submission_pending", "Submission pending"],
+    ["submitted", "Accepted by QuickBooks"],
+    ["matched", "Matched by authenticated readback"],
+    ["failed", "Submission failed"],
+    ["reconciliation_required", "Reconciliation required"],
   ] as const)("renders bounded %s state copy", async (state, heading) => {
     vi.mocked(loadQuickBooksFinalInvoice).mockResolvedValue(stateFixture(state));
     renderPage("detail", accountingSession);
 
     expect(await screen.findByRole("heading", { name: heading })).toBeVisible();
     if (state === "submitted") {
-      expect(screen.getByText(/still needs to check the saved copy/i)).toBeVisible();
+      expect(screen.getByText(/awaiting authenticated readback/i)).toBeVisible();
     }
-    if (state === "matched") expect(screen.getByText(/may still owe money/i)).toBeVisible();
+    if (state === "matched") expect(screen.getByText(/Payment is not implied/i)).toBeVisible();
     if (state === "reconciliation_required") {
-      expect(screen.getByRole("button", { name: "Check this invoice again" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "Reconcile exact invoice" })).toBeVisible();
     }
   });
 
@@ -319,7 +321,8 @@ describe("QuickBooks final-invoice page", () => {
     renderPage("detail", accountingSession);
 
     expect(
-      (await screen.findAllByText(/Ask the owner to connect QuickBooks/i)).length,
+      (await screen.findAllByText(/Ask the owner to connect the intended QuickBooks company/i))
+        .length,
     ).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Connect QuickBooks" })).toBeNull();
   });
@@ -346,11 +349,11 @@ describe("QuickBooks connection settings", () => {
   it("extends the connection page with reconciliation health from the money desk", async () => {
     renderPage("settings", ownerSession);
 
-    expect(await screen.findByRole("heading", { name: "QuickBooks checks" })).toBeVisible();
-    expect(await screen.findByText("Open issues")).toBeVisible();
-    expect(screen.getByText("Not checked lately")).toBeVisible();
-    expect(screen.getByText("Never checked")).toBeVisible();
-    expect(screen.getByText(/Oldest unfinished item/u)).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Reconciliation health" })).toBeVisible();
+    expect(await screen.findByText("Open exceptions")).toBeVisible();
+    expect(screen.getByText("Not re-read recently")).toBeVisible();
+    expect(screen.getByText("Never read back")).toBeVisible();
+    expect(screen.getByText(/Oldest unfinished money movement/u)).toBeVisible();
     expect(screen.getByRole("link", { name: "Open the money desk" })).toHaveAttribute(
       "href",
       "/accounting",
@@ -363,7 +366,7 @@ describe("QuickBooks connection settings", () => {
 
     expect(
       await screen.findByText(
-        /IronWrap could not open the money desk, so these checks are unknown/u,
+        /The money desk could not be read, so reconciliation health is unknown/u,
       ),
     ).toBeVisible();
     // The connection state is a separate fact and must still render.
@@ -382,7 +385,7 @@ describe("QuickBooks connection settings", () => {
     renderPage("settings", accountingSession);
 
     expect(
-      await screen.findByRole("heading", { name: "Only the owner can change this link" }),
+      await screen.findByRole("heading", { name: "Connection changes belong to the owner" }),
     ).toBeVisible();
     expect(screen.queryByRole("button", { name: "Connect QuickBooks" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Review removal" })).toBeNull();
@@ -414,7 +417,7 @@ describe("QuickBooks connection settings", () => {
       stale_fields: ["session.offline_snapshot"],
     });
 
-    expect(await screen.findByText("Reconnect before you make a change")).toBeVisible();
+    expect(await screen.findByText("Reconnect before changing QuickBooks")).toBeVisible();
     const reviewRemoval = screen.getByRole("button", { name: "Review removal" });
     expect(reviewRemoval).toBeDisabled();
     await user.click(reviewRemoval);
@@ -447,8 +450,10 @@ describe("QuickBooks connection settings", () => {
     });
     renderPage("settings", ownerSession);
 
-    expect(await screen.findByRole("heading", { name: "Connection needs a check" })).toBeVisible();
-    expect(screen.getAllByText("Connection needs a check").length).toBeGreaterThan(0);
+    expect(
+      await screen.findByRole("heading", { name: "Connection needs reconciliation" }),
+    ).toBeVisible();
+    expect(screen.getAllByText("Connection needs reconciliation").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Connect QuickBooks" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Review removal" })).toBeNull();
   });
@@ -465,7 +470,7 @@ describe("QuickBooks connection settings", () => {
     });
     renderPage("settings", ownerSession);
 
-    expect(await screen.findByText("QuickBooks link is not ready")).toBeVisible();
+    expect(await screen.findByText("QuickBooks return is not yet confirmed")).toBeVisible();
     expect(screen.queryByText(/server accepted the OAuth callback/i)).toBeNull();
   });
 
@@ -483,7 +488,7 @@ describe("QuickBooks connection settings", () => {
 
     await user.click(await screen.findByRole("button", { name: "Review removal" }));
     expect(removeQuickBooksFromIronWrap).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Remove link" }));
+    await user.click(screen.getByRole("button", { name: "Remove from IronWrap" }));
 
     await waitFor(() =>
       expect(removeQuickBooksFromIronWrap).toHaveBeenCalledWith(
@@ -495,5 +500,49 @@ describe("QuickBooks connection settings", () => {
     expect(await screen.findByRole("heading", { name: "Removed from IronWrap" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Connect QuickBooks" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Review removal" })).toBeNull();
+  });
+
+  it("records a native final-invoice mapping from the settings page", async () => {
+    const user = userEvent.setup();
+    vi.mocked(saveQuickBooksFinalInvoiceMapping).mockResolvedValue({
+      version: 1,
+      state: "connected",
+      connection_version: 4,
+      realm_id: "123456789",
+      last_connected_at: "2026-08-13T11:00:00.000Z",
+      allowed_actions: ["remove_from_ironwrap", "refresh"],
+    });
+    renderPage("settings", ownerSession);
+
+    await user.type(await screen.findByLabelText("Roof job ID"), "JOB-0001");
+    await user.type(screen.getByLabelText("QuickBooks customer ID"), "501");
+    await user.type(screen.getByLabelText("QuickBooks item ID"), "601");
+    await user.type(screen.getByLabelText("QuickBooks tax code ID"), "701");
+    await user.type(screen.getByLabelText("QuickBooks terms ID"), "801");
+    await user.type(screen.getByLabelText("Jurisdiction"), "CA-AB");
+    await user.type(screen.getByLabelText("Tax code"), "GST");
+    await user.type(screen.getByLabelText("Payment terms days"), "30");
+    await user.click(screen.getByRole("button", { name: "Save native mapping" }));
+
+    await waitFor(() =>
+      expect(saveQuickBooksFinalInvoiceMapping).toHaveBeenCalledWith(
+        ownerSession,
+        {
+          roof_job_id: "JOB-0001",
+          qbo_customer_id: "501",
+          qbo_item_id: "601",
+          qbo_tax_code_id: "701",
+          qbo_terms_id: "801",
+          jurisdiction: "CA-AB",
+          tax_code: "GST",
+          payment_terms_days: 30,
+          correction_reason: null,
+        },
+        "quickbooks:settings:stable-key",
+      ),
+    );
+    expect(
+      await screen.findByText(/Native final-invoice mapping saved for JOB-0001/u),
+    ).toBeVisible();
   });
 });

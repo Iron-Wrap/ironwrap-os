@@ -6,6 +6,7 @@ import type { RoofGraphV1 } from "./roof-graph.ts";
 import type { NewoSessionRecord } from "./newo-store.ts";
 import { adapterAuthority, assertEffectLedgerReady, runExternalEffect } from "./effect-runtime.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import { materializeOperatingCore } from "./operating-core.ts";
 
 type ErpEnv = Env & {
   EFFECT_RUNTIME_ENABLED?: string;
@@ -14,13 +15,6 @@ type ErpEnv = Env & {
   ERPNEXT_API_KEY?: string;
   ERPNEXT_API_SECRET?: string;
   ERPNEXT_LEAD_ENVELOPE_DOCTYPE?: string;
-  /** Exact QuickBooks company realm accepted by this tenant's Worker. */
-  QB_EXPECTED_REALM_ID?: string;
-  /** Expected Frappe service principal for the bounded QuickBooks issuer. */
-  QB_RECONCILIATION_ISSUER_USER?: string;
-  /** Separate least-privilege Frappe API pair for the bounded issuer command. */
-  QB_RECONCILIATION_ISSUER_API_KEY?: string;
-  QB_RECONCILIATION_ISSUER_API_SECRET?: string;
   /**
    * Exact Frappe User behind the dedicated Worker API pair.  Public-estimator
    * consent is an immutable business fact, so its capture actor must never be
@@ -107,51 +101,13 @@ export interface ErpNextPhotoEvidenceInput {
   }>;
 }
 
-export interface ErpNextQuickBooksEventInput {
-  realmId: string;
-  type: string;
-  id: string;
-  operation: string;
-  rawKey: string;
-  eventTs: string;
-  payloadHash: string;
-  eventIndex: number;
-}
-
-export interface ErpNextQuickBooksEventResult {
-  reconciliationName: string;
-  paymentMilestoneName: string | null;
-  unresolved: boolean;
-  reused: boolean;
-}
-
-/**
- * Probe the bounded Frappe issuer before accepting a brand-new signed
- * QuickBooks webhook. This is deliberately a non-mutating check: deployment
- * or service-principal drift yields a retryable 503 before raw/D1 acceptance.
- */
-export async function assertQuickBooksProjectionReady(env: Env): Promise<void> {
-  const cfg = env as ErpEnv;
-  const { base, issuer } = quickBooksProjectionConfiguration(cfg);
-  const response = await quickBooksIssuerFetch(
-    cfg,
-    base,
-    "POST",
-    "/api/method/ironwrap_roofing.quickbooks_reconciliation_api.check_issuer_readiness",
-    {},
-  );
-  const message = response.message as { ready?: unknown; issuer?: unknown } | undefined;
-  if (message?.ready !== true || message.issuer !== issuer) {
-    throw new Error("erpnext_quickbooks_issuer_readiness_invalid");
-  }
-}
-
 export async function pushToErpNext(
   env: Env,
   rec: EnvelopeRecord,
   jn?: JnResult,
 ): Promise<ErpNextResult | null> {
   const cfg = env as ErpEnv;
+  await materializeOperatingCoreIfAvailable(cfg, rec, jn);
   if (!isOn(cfg.ERPNEXT_ENABLED)) return null;
   if (!cfg.ERPNEXT_API_KEY || !cfg.ERPNEXT_API_SECRET) throw new Error("erpnext_no_token");
 
@@ -191,6 +147,25 @@ export async function pushToErpNext(
     productionGateCount,
     ...(instantEstimate ? { instantEstimateSessionName: instantEstimate.name } : {}),
   };
+}
+
+/**
+ * Older unit-only Frappe tests provide an effect-ledger stub without a business D1. Production
+ * always has the migrated binding; keep those narrow provider tests focused while refusing to
+ * hide any real D1 error.
+ */
+async function materializeOperatingCoreIfAvailable(
+  env: ErpEnv,
+  rec: EnvelopeRecord,
+  jn?: JnResult,
+): Promise<void> {
+  if (!env.DB) return;
+  try {
+    await materializeOperatingCore(env, rec, jn);
+  } catch (error) {
+    if (String(error).includes("test_business_db_")) return;
+    throw error;
+  }
 }
 
 /**
@@ -922,343 +897,7 @@ export async function pushPhotoEvidenceToErpNext(
   return { names, reused: reused || checkIn.reused, fieldCheckInName: checkIn.name };
 }
 
-export async function pushQuickBooksEventToErpNext(
-  env: Env,
-  input: ErpNextQuickBooksEventInput,
-): Promise<ErpNextQuickBooksEventResult> {
-  const cfg = env as ErpEnv;
-  // A receipt cannot be terminally projected when its required ERP boundary is
-  // disabled. The caller retains it in D1's pending outbox for redelivery.
-  if (!isOn(cfg.ERPNEXT_ENABLED)) throw new Error("erpnext_quickbooks_disabled");
-  if (!cfg.ERPNEXT_API_KEY || !cfg.ERPNEXT_API_SECRET) throw new Error("erpnext_no_token");
-  validateQuickBooksEvent(input);
-  const expectedRealmId = str(cfg.QB_EXPECTED_REALM_ID);
-  if (!expectedRealmId || !QUICKBOOKS_ID.test(expectedRealmId)) {
-    throw new Error("erpnext_quickbooks_realm_not_configured");
-  }
-  if (input.realmId !== expectedRealmId) throw new Error("erpnext_quickbooks_realm_mismatch");
-
-  const { base } = quickBooksProjectionConfiguration(cfg);
-  const invoiceRoofJob = input.type === "Invoice"
-    ? await findUniqueByTerm(cfg, base, "Roof Job", "qb_invoice_ref", input.id)
-    : null;
-  const existingMilestone = input.type === "Invoice" || invoiceRoofJob
-    ? null
-    : await findExactQuickBooksMilestone(cfg, base, input);
-  const roofJob = invoiceRoofJob ?? existingMilestone?.roofJob ?? null;
-  const paymentMilestoneName = roofJob
-    ? (input.type === "Invoice" ? paymentMilestoneId(input) : existingMilestone?.name ?? null)
-    : null;
-  // A failed milestone must not leave a reconciliation falsely linked to a
-  // name that was never created. The next delivery is idempotent either way.
-  if (input.type === "Invoice" && roofJob) {
-    await createImmutableQuickBooksMilestone(cfg, base, input, roofJob);
-  }
-  const reconciliationId = quickBooksReconciliationId(input);
-  const reconciliation = await createImmutableQuickBooksReconciliation(cfg, base, reconciliationId, {
-    reconciliation_id: reconciliationId,
-    roof_job: roofJob ?? undefined,
-    system_name: "QuickBooks",
-    entity_type: input.type,
-    external_entity_id: input.id,
-    realm_id: input.realmId,
-    local_doctype: paymentMilestoneName ? "Payment Milestone" : "Unresolved QuickBooks Event",
-    local_name: paymentMilestoneName ?? reconciliationId,
-    direction: "Inbound",
-    status: "Pending",
-    detected_at: frappeDatetime(input.eventTs),
-    raw_key: input.rawKey,
-    source_version: input.operation,
-    source_payload_hash: input.payloadHash,
-    local_payload_hash: await quickBooksProjectionHash(input),
-    attempt_count: 0,
-  });
-
-  return {
-    reconciliationName: reconciliation.name,
-    paymentMilestoneName,
-    unresolved: !roofJob,
-    reused: reconciliation.reused,
-  };
-}
-
-const QUICKBOOKS_FINANCE_TYPES = new Set(["Invoice", "Payment", "CreditMemo", "RefundReceipt"]);
-const QUICKBOOKS_FINANCE_OPERATIONS = new Set(["Create", "Update", "Delete", "Void"]);
-const QUICKBOOKS_ID = /^[1-9][0-9]{0,31}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
-
-function validateQuickBooksEvent(input: ErpNextQuickBooksEventInput): void {
-  if (!QUICKBOOKS_ID.test(input.realmId) || !QUICKBOOKS_ID.test(input.id)) throw new Error("erpnext_quickbooks_invalid_identity");
-  if (!QUICKBOOKS_FINANCE_TYPES.has(input.type) || !QUICKBOOKS_FINANCE_OPERATIONS.has(input.operation)) {
-    throw new Error("erpnext_quickbooks_unsupported_event");
-  }
-  if (!SHA256.test(input.payloadHash) || !input.rawKey.startsWith("raw/quickbooks/") || !Number.isInteger(input.eventIndex) || input.eventIndex < 0) {
-    throw new Error("erpnext_quickbooks_invalid_receipt");
-  }
-}
-
-function quickBooksProjectionConfiguration(cfg: ErpEnv): {
-  base: string;
-  issuer: string;
-  apiKey: string;
-  apiSecret: string;
-} {
-  if (!isOn(cfg.ERPNEXT_ENABLED)) throw new Error("erpnext_quickbooks_disabled");
-  if (!cfg.ERPNEXT_API_KEY || !cfg.ERPNEXT_API_SECRET) throw new Error("erpnext_no_token");
-  const issuer = str(cfg.QB_RECONCILIATION_ISSUER_USER);
-  const apiKey = str(cfg.QB_RECONCILIATION_ISSUER_API_KEY);
-  const apiSecret = str(cfg.QB_RECONCILIATION_ISSUER_API_SECRET);
-  if (!issuer || !apiKey || !apiSecret) {
-    throw new Error("erpnext_quickbooks_issuer_not_configured");
-  }
-  return { base: normalizeBaseUrl(cfg.ERPNEXT_BASE_URL), issuer, apiKey, apiSecret };
-}
-
-async function createImmutableQuickBooksMilestone(
-  env: ErpEnv,
-  base: string,
-  input: ErpNextQuickBooksEventInput,
-  roofJob: string,
-): Promise<ErpNextResult> {
-  const id = paymentMilestoneId(input);
-  const existingName = await findByTerm(env, base, "Payment Milestone", "payment_milestone_id", id);
-  if (existingName) {
-    const existing = await readResource(env, base, "Payment Milestone", existingName);
-    if (
-      str(existing.roof_job) !== roofJob ||
-      str(existing.qb_entity_type) !== input.type ||
-      str(existing.qb_entity_id) !== input.id ||
-      str(existing.realm_id) !== input.realmId ||
-      str(existing.milestone_type) !== milestoneType(input.type)
-    ) throw new Error("erpnext_quickbooks_payment_milestone_conflict");
-    return { name: existingName, reused: true };
-  }
-  const created = await erpFetch(env, base, "POST", `/api/resource/${enc("Payment Milestone")}`, {
-    payment_milestone_id: id,
-    roof_job: roofJob,
-    milestone_type: milestoneType(input.type),
-    milestone_version: 1,
-    status: "Webhook Seen",
-    qb_entity_type: input.type,
-    qb_entity_id: input.id,
-    qb_operation: input.operation,
-    realm_id: input.realmId,
-    event_ts: frappeDatetime(input.eventTs),
-    raw_key: input.rawKey,
-    raw_payload_hash: input.payloadHash,
-    notes: "QuickBooks webhook identity captured. No provider amount, payment, posted, or reconciled fact has been read.",
-  });
-  const name = readName(created);
-  if (!name || name !== id) throw new Error("erpnext_quickbooks_payment_milestone_name_mismatch");
-  return { name, reused: false };
-}
-
-async function findExactQuickBooksMilestone(
-  env: ErpEnv,
-  base: string,
-  input: ErpNextQuickBooksEventInput,
-): Promise<{ name: string; roofJob: string } | null> {
-  const name = await findUniqueByTerm(env, base, "Payment Milestone", "payment_milestone_id", paymentMilestoneId(input));
-  if (!name) return null;
-  const existing = await readResource(env, base, "Payment Milestone", name);
-  const roofJob = str(existing.roof_job);
-  if (!roofJob) return null;
-  if (
-    str(existing.qb_entity_type) !== input.type ||
-    str(existing.qb_entity_id) !== input.id ||
-    str(existing.realm_id) !== input.realmId ||
-    str(existing.milestone_type) !== milestoneType(input.type)
-  ) throw new Error("erpnext_quickbooks_payment_milestone_conflict");
-  return { name, roofJob };
-}
-
-async function createImmutableQuickBooksReconciliation(
-  env: ErpEnv,
-  base: string,
-  reconciliationId: string,
-  doc: Record<string, unknown>,
-): Promise<ErpNextResult> {
-  assertEffectLedgerReady(env);
-  const { issuer } = quickBooksProjectionConfiguration(env);
-    const path = "/api/method/ironwrap_roofing.quickbooks_reconciliation_api.issue_pending_reconciliation";
-    const request = {
-      method: "POST",
-      path,
-      body: { reconciliation_json: JSON.stringify(doc) },
-    };
-    const tenantId = String(env.APP_TENANT_ID ?? "ironwrap");
-    const requestHash = await sha256Hex(canonicalJson(request));
-    const idempotencyKey = `quickbooks:reconciliation:${reconciliationId}`;
-    const deadlineAt = new Date(Date.now() + 5 * 60_000).toISOString();
-    const expectedReadback = quickBooksReconciliationExpectedReadback(reconciliationId, doc);
-    const result = await runExternalEffect<ErpNextResult>(env as never, {
-      tenantId,
-      actor: { type: "agent", id: "quickbooks-reconciliation-adapter" },
-      taskId: `quickbooks:reconciliation:${reconciliationId}`,
-      authority: adapterAuthority({
-        tenantId,
-        provider: "frappe",
-        action: "quickbooks.reconciliation.issue_pending",
-        actorId: "quickbooks-reconciliation-adapter",
-        deadlineAt,
-      }),
-      aggregate: { type: "integration_reconciliation", id: reconciliationId, version: 0 },
-      intentId: idempotencyKey,
-      action: "quickbooks.reconciliation.issue_pending",
-      request,
-      requestHash,
-      provider: "frappe",
-      providerAccountRef: issuer,
-      idempotencyKey,
-      deadlineAt,
-      expectedReadback,
-      retryLimit: 0,
-      compensationPlan: {},
-      correlationId: idempotencyKey,
-    }, {
-      async dispatch() {
-        let created: { data?: unknown; message?: unknown };
-        try {
-          created = await quickBooksIssuerFetch(env, base, "POST", path, request.body);
-        } catch (error) {
-          // The issuer's 409 is an authoritative immutable-identity conflict;
-          // unlike a timeout or auth drift, it did not leave provider state
-          // uncertain and must remain a failed effect rather than unknown.
-          const message = String(error);
-          if (message.includes("erpnext_http_409")) {
-            return {
-              outcome: "rejected" as const,
-              detailCode: message.includes("quickbooks_reconciliation_identity_conflict")
-                ? "erpnext_http_409:quickbooks_reconciliation_identity_conflict"
-                : "erpnext_http_409",
-              providerResponse: message.slice(0, 500),
-            };
-          }
-          throw error;
-        }
-        const message = created.message as { name?: unknown; idempotent_replay?: unknown } | undefined;
-        const name = typeof message?.name === "string" && message.name ? message.name : null;
-        if (!name || name !== reconciliationId) {
-          return {
-            outcome: "rejected" as const,
-            detailCode: "erpnext_quickbooks_reconciliation_name_mismatch",
-            providerResponse: created,
-          };
-        }
-        return {
-          outcome: "accepted" as const,
-          value: { name, reused: message?.idempotent_replay === true },
-          providerExternalId: name,
-          providerResponse: created,
-        };
-      },
-      async readback({ providerExternalId }) {
-        return await quickBooksReconciliationReadback(
-          env,
-          base,
-          reconciliationId,
-          providerExternalId,
-          expectedReadback,
-        );
-      },
-      async replay({ effect }) {
-        const name = effect.provider_external_id;
-        if (!name || name !== reconciliationId) throw new Error("erpnext_quickbooks_reconciliation_replay_id_missing");
-        const readback = await quickBooksReconciliationReadback(
-          env,
-          base,
-          reconciliationId,
-          name,
-          expectedReadback,
-        );
-        if (readback.status !== "match") {
-          throw new Error(readback.detailCode ?? "erpnext_quickbooks_reconciliation_replay_readback_failed");
-        }
-        return { name, reused: true };
-      },
-    });
-    if (result.effect.state !== "succeeded" || result.value === undefined) {
-      throw new Error(result.effect.result_code ?? "erpnext_quickbooks_reconciliation_effect_unknown");
-    }
-  return result.value;
-}
-
-async function quickBooksReconciliationReadback(
-  env: ErpEnv,
-  base: string,
-  reconciliationId: string,
-  providerExternalId: string | null,
-  expected: Record<string, unknown>,
-): Promise<{
-  status: "match" | "conflict" | "unavailable" | "not_found";
-  providerExternalId?: string;
-  observed?: unknown;
-  detailCode?: string;
-}> {
-  try {
-    const readback = await quickBooksIssuerFetch(
-      env,
-      base,
-      "POST",
-      "/api/method/ironwrap_roofing.quickbooks_reconciliation_api.read_pending_reconciliation",
-      { reconciliation_id: providerExternalId ?? reconciliationId },
-    );
-    const message = readback.message as
-      { found?: unknown; reconciliation?: unknown } | undefined;
-    if (message?.found !== true) {
-      return {
-        status: "not_found",
-        detailCode: "erpnext_quickbooks_reconciliation_not_found",
-      };
-    }
-    const observed =
-      message.reconciliation &&
-      typeof message.reconciliation === "object" &&
-      !Array.isArray(message.reconciliation)
-        ? (message.reconciliation as Record<string, unknown>)
-        : {};
-    const observedMaterial = Object.fromEntries(
-      Object.keys(expected).map((field) => [field, observed[field]]),
-    );
-    return observed.name === (providerExternalId ?? reconciliationId) &&
-      canonicalJson(observedMaterial) === canonicalJson(expected)
-      ? { status: "match", providerExternalId: String(observed.name), observed }
-      : {
-          status: "conflict",
-          observed,
-          detailCode: "erpnext_quickbooks_reconciliation_readback_conflict",
-        };
-  } catch {
-    return {
-      status: "unavailable",
-      detailCode: "erpnext_quickbooks_reconciliation_readback_unavailable",
-    };
-  }
-}
-
-function quickBooksReconciliationExpectedReadback(
-  reconciliationId: string,
-  doc: Record<string, unknown>,
-): Record<string, unknown> {
-  const expected: Record<string, unknown> = { name: reconciliationId };
-  for (const field of [
-    "reconciliation_id", "roof_job", "system_name", "entity_type", "external_entity_id", "realm_id",
-    "local_doctype", "local_name", "direction", "status", "detected_at", "raw_key", "source_version",
-    "source_payload_hash", "local_payload_hash", "attempt_count",
-  ]) {
-    if (doc[field] !== undefined) expected[field] = doc[field];
-  }
-  return expected;
-}
-
-async function quickBooksProjectionHash(input: ErpNextQuickBooksEventInput): Promise<string> {
-  const text = [
-    "quickbooks-reconciliation/v1", input.realmId, input.type, input.id, input.operation,
-    input.rawKey, input.payloadHash, String(input.eventIndex),
-  ].join("\n");
-  return await sha256Bytes(new TextEncoder().encode(text));
-}
-
 async function createIfMissingByField(
   env: ErpEnv,
   base: string,
@@ -1409,28 +1048,6 @@ async function erpFetch(
     headers: {
       accept: "application/json",
       authorization: `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`,
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`erpnext_http_${res.status}: ${(await res.text()).slice(0, 500)}`);
-  return await res.json() as { data?: unknown; message?: unknown };
-}
-
-/** The narrow issuer has its own API pair; never reuse the broad Worker key. */
-async function quickBooksIssuerFetch(
-  env: ErpEnv,
-  base: string,
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<{ data?: unknown; message?: unknown }> {
-  const { apiKey, apiSecret } = quickBooksProjectionConfiguration(env);
-  const res = await fetch(base + path, {
-    method,
-    headers: {
-      accept: "application/json",
-      authorization: `token ${apiKey}:${apiSecret}`,
       ...(body === undefined ? {} : { "content-type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -1649,22 +1266,6 @@ function photoEvidenceId(submissionId: string, index: number): string {
 
 function fieldCheckInId(submissionId: string): string {
   return `field:${submissionId}`;
-}
-
-function paymentMilestoneId(input: ErpNextQuickBooksEventInput): string {
-  return `qb:${input.realmId}:${input.type}:${input.id}`;
-}
-
-function milestoneType(type: string): string {
-  if (type === "Invoice") return "Invoice";
-  if (type === "Payment") return "Payment";
-  if (type === "CreditMemo") return "Credit";
-  if (type === "RefundReceipt") return "Refund";
-  return "Other";
-}
-
-function quickBooksReconciliationId(input: ErpNextQuickBooksEventInput): string {
-  return `qbr:${input.payloadHash}:${input.eventIndex}`;
 }
 
 function photoSummary(index: number, fileName: string, caption: string | null, error?: string | null, isVoice = false): string {

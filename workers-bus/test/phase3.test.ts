@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { deriveMeasurementIntakeIdentity, parseMeasurementSubmission, reportExt } from "../src/measurements.ts";
-import { pushMeasurementToErpNext, pushQuickBooksEventToErpNext } from "../src/erpnext.ts";
+import { pushMeasurementToErpNext } from "../src/erpnext.ts";
 import { ROOF_GRAPH_SCHEMA_VERSION, type RoofGraphV1 } from "../src/roof-graph.ts";
 import {
   handleQuickbooksWebhook,
@@ -11,10 +11,10 @@ import {
   recoverDueQuickBooksProjections,
   verifyIntuitSignature,
 } from "../src/quickbooks.ts";
+import type { QuickBooksWebhookProjectionPort } from "../src/quickbooks-native-webhook.ts";
 import * as store from "../src/store.ts";
 import {
   withErpReadback,
-  withQuickBooksReconciliationReadback,
   withTestEffectRuntime,
 } from "./effect-runtime-fixture.ts";
 
@@ -381,28 +381,27 @@ test("QuickBooks projection claim repeats the due-time predicate for stale concu
   assert.equal(outbox.get(`${payloadHash}:0`)?.attempt_count, 1);
 });
 
-test("handleQuickbooksWebhook: raw finance identities open Pending reconciliation work without provider-truth claims", async (t) => {
-  const fetches: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", withErpReadback(withQuickBooksReconciliationReadback(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    fetches.push({ url, init: init ?? {} });
-    if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.check_issuer_readiness")) {
-      return json({ message: { ready: true, issuer: "quickbooks-issuer@ironwrapexteriors.com" } });
-    }
-    if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0001" }] });
-    if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.issue_pending_reconciliation")) {
-      const request = JSON.parse(String(init?.body));
-      const body = JSON.parse(request.reconciliation_json);
-      return json({ message: { name: body.reconciliation_id, idempotent_replay: false } });
-    }
-    if (url.includes("/api/resource/Payment%20Milestone?")) return json({ data: [] });
-    if (url.endsWith("/api/resource/Payment%20Milestone")) {
-      const body = JSON.parse(String(init?.body));
-      return json({ data: { name: body.payment_milestone_id } });
-    }
-    throw new Error(`unexpected fetch ${url}`);
-  })));
+function projectionError(code: string): Error & { code: string } {
+  return Object.assign(new Error(code), { code });
+}
 
+test("handleQuickbooksWebhook: signed identities trigger native authenticated observations without trusting webhook money", async () => {
+  const calls: Array<{ realmId: string; type: string; id: string; operation: string }> = [];
+  let readinessCalls = 0;
+  const port: QuickBooksWebhookProjectionPort = {
+    async assertReady(realmId) {
+      readinessCalls += 1;
+      assert.equal(realmId, "1234567890");
+    },
+    async project(event) {
+      calls.push(event);
+      if (event.type === "Invoice")
+        return { intentIds: ["intent-invoice-42"], unresolved: false, verdicts: ["partially_settled"] };
+      if (event.type === "Payment")
+        return { intentIds: ["intent-invoice-42"], unresolved: false, verdicts: ["reconciled"] };
+      return { intentIds: [], unresolved: true, verdicts: [] };
+    },
+  };
   const { env, writes, rawWrites } = makeQuickBooksWebhookEnv();
   const bodyText = JSON.stringify({
     eventNotifications: [{
@@ -415,104 +414,58 @@ test("handleQuickbooksWebhook: raw finance identities open Pending reconciliatio
       ] },
     }],
   });
-  const sig = crypto.createHmac("sha256", env.QB_WEBHOOK_TOKEN).update(bodyText).digest("base64");
+  const signature = crypto.createHmac("sha256", env.QB_WEBHOOK_TOKEN).update(bodyText).digest("base64");
 
-  const res = await handleQuickbooksWebhook(env as never, bodyText, sig);
-  const result = await res.json() as {
-    events?: number;
-    erpnext_payment_milestone_ids?: string[];
-    erpnext_reconciliation_ids?: string[];
-    unresolved_reconciliation_ids?: string[];
-    provider_truth_reconciled?: boolean;
-    erpnext_error?: string | null;
-  };
-
-  assert.equal(res.status, 200);
-  assert.equal(result.events, 4);
-  assert.deepEqual(result.erpnext_payment_milestone_ids, ["qb:1234567890:Invoice:42"]);
-  assert.equal(result.erpnext_reconciliation_ids?.length, 4);
-  assert.equal(result.unresolved_reconciliation_ids?.length, 3);
-  assert.equal(result.provider_truth_reconciled, false);
-  assert.equal(result.erpnext_error, null);
+  const response = await handleQuickbooksWebhook(env as never, bodyText, signature, port);
+  assert.equal(response.status, 200);
+  const result = await response.json() as Record<string, unknown>;
+  assert.match(String(result.envelope_id), /^ow_/);
+  assert.deepEqual({ ...result, envelope_id: typeof result.envelope_id }, {
+    ok: true,
+    replay: false,
+    envelope_id: "string",
+    events: 4,
+    provider_truth_reconciled: false,
+    native_accounting_intent_ids: ["intent-invoice-42", "intent-invoice-42"],
+    unresolved_provider_identity_ids: ["CreditMemo:8", "RefundReceipt:9"],
+    rejected_projection_count: 0,
+    native_accounting_error: null,
+  });
+  assert.equal(readinessCalls, 1);
+  assert.deepEqual(calls, [
+    { realmId: "1234567890", type: "Invoice", id: "42", operation: "Update" },
+    { realmId: "1234567890", type: "Payment", id: "7", operation: "Create" },
+    { realmId: "1234567890", type: "CreditMemo", id: "8", operation: "Delete" },
+    { realmId: "1234567890", type: "RefundReceipt", id: "9", operation: "Void" },
+  ]);
   assert.equal(rawWrites.length, 1);
-  assert.match(rawWrites[0].key, /^raw\/quickbooks\/\d{4}-\d{2}-\d{2}\/ow_/);
+  assert.ok(writes.some((write) => write.sql.includes("INSERT INTO audit_log") &&
+    write.args.includes("quickbooks_accounting")));
 
-  const posted = fetches
-    .filter((f) => f.url.endsWith("/api/resource/Payment%20Milestone"))
-    .map((f) => JSON.parse(String(f.init.body)));
-  assert.equal(posted.length, 1);
-  assert.deepEqual(posted.map((p) => p.payment_milestone_id), ["qb:1234567890:Invoice:42"]);
-  assert.equal(posted[0].roof_job, "RJ-0001");
-  assert.equal(posted[0].milestone_type, "Invoice");
-  assert.equal(posted[0].status, "Webhook Seen");
-  assert.equal(posted[0].raw_key, rawWrites[0].key);
-  assert.match(posted[0].raw_payload_hash, /^[a-f0-9]{64}$/);
-  for (const field of ["payment_status", "truth_source", "truth_at", "subtotal", "tax_amount", "total_amount", "amount_due", "amount_paid", "balance_due"]) {
-    assert.equal(field in posted[0], false, `${field} must not be inferred from a webhook`);
-  }
-
-  const reconciliations = fetches
-    .filter((f) => f.url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.issue_pending_reconciliation"))
-    .map((f) => JSON.parse(JSON.parse(String(f.init.body)).reconciliation_json));
-  assert.equal(reconciliations.length, 4);
-  assert.deepEqual(reconciliations.map((row) => row.entity_type), ["Invoice", "Payment", "CreditMemo", "RefundReceipt"]);
-  assert.ok(reconciliations.every((row) => row.status === "Pending"));
-  assert.ok(reconciliations.every((row) => /^[a-f0-9]{64}$/.test(row.source_payload_hash)));
-  assert.ok(reconciliations.every((row) => /^[a-f0-9]{64}$/.test(row.local_payload_hash) && row.source_payload_hash !== row.local_payload_hash));
-  assert.equal(reconciliations[0].roof_job, "RJ-0001");
-  assert.equal(reconciliations[0].local_doctype, "Payment Milestone");
-  assert.equal(reconciliations[0].local_name, "qb:1234567890:Invoice:42");
-  assert.equal(reconciliations[0].raw_key, rawWrites[0].key);
-  for (const row of reconciliations.slice(1)) {
-    assert.equal("roof_job" in row, false);
-    assert.equal(row.local_doctype, "Unresolved QuickBooks Event");
-  }
-  assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") &&
-    w.args.includes("erpnext_quickbooks") && w.args.some((arg) => String(arg).startsWith("integration_reconciliation:qbr:"))));
-  const readiness = fetches.find((request) => request.url.endsWith("check_issuer_readiness"));
-  assert.equal(readiness?.init.headers instanceof Headers ? readiness.init.headers.get("authorization") :
-    (readiness?.init.headers as Record<string, string> | undefined)?.authorization,
-  "token qb-issuer-key:qb-issuer-secret");
-  const issuerCommand = fetches.find((request) => request.url.endsWith("issue_pending_reconciliation"));
-  assert.equal(issuerCommand?.init.headers instanceof Headers ? issuerCommand.init.headers.get("authorization") :
-    (issuerCommand?.init.headers as Record<string, string> | undefined)?.authorization,
-  "token qb-issuer-key:qb-issuer-secret");
-
-  const replay = await handleQuickbooksWebhook(env as never, bodyText, sig);
-  const replayBody = await replay.json() as { replay?: boolean; envelope_id?: string; events?: number; provider_truth_reconciled?: boolean };
-
+  const replay = await handleQuickbooksWebhook(env as never, bodyText, signature, port);
   assert.equal(replay.status, 200);
-  assert.equal(replayBody.replay, true);
-  assert.equal(replayBody.events, 4);
-  assert.equal(replayBody.provider_truth_reconciled, false);
+  assert.equal((await replay.json() as { replay?: boolean }).replay, true);
+  assert.equal(readinessCalls, 1);
+  assert.equal(calls.length, 4, "durably projected events are never re-read on receipt replay");
   assert.equal(rawWrites.length, 1);
-  assert.equal(fetches.filter((f) => f.url.endsWith("/api/resource/Payment%20Milestone")).length, 1);
-  assert.equal(fetches.filter((f) => f.url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.issue_pending_reconciliation")).length, 4);
-  assert.ok(writes.some((w) => w.sql.includes("UPDATE quickbooks_webhook_receipts")));
-  assert.ok(writes.some((w) => w.sql.includes("INSERT INTO audit_log") && w.args.includes("webhook_replay")));
 });
 
-test("handleQuickbooksWebhook: an uncertain ERP write stays pending and redelivery never blindly reissues it", async (t) => {
-  const reconciliationPosts: Array<Record<string, unknown>> = [];
-  let failCreditMemoOnce = true;
-  t.mock.method(globalThis, "fetch", withQuickBooksReconciliationReadback(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.check_issuer_readiness")) {
-      return json({ message: { ready: true, issuer: "quickbooks-issuer@ironwrapexteriors.com" } });
-    }
-    if (url.includes("/api/resource/Payment%20Milestone?")) return json({ data: [] });
-    if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.issue_pending_reconciliation")) {
-      const request = JSON.parse(String(init?.body));
-      const body = JSON.parse(request.reconciliation_json) as Record<string, unknown>;
-      reconciliationPosts.push(body);
-      if (body.entity_type === "CreditMemo" && failCreditMemoOnce) {
-        failCreditMemoOnce = false;
-        return new Response("temporary Frappe outage", { status: 503 });
-      }
-      return json({ message: { name: body.reconciliation_id, idempotent_replay: false } });
-    }
-    throw new Error(`unexpected fetch ${url}`);
-  }));
+test("handleQuickbooksWebhook: transient native read failure stays pending and only retries the missing identity", async () => {
+  const calls: string[] = [];
+  let repaired = false;
+  const port: QuickBooksWebhookProjectionPort = {
+    async assertReady() {},
+    async project(event) {
+      calls.push(`${event.type}:${event.id}`);
+      if (event.type === "CreditMemo" && !repaired)
+        throw projectionError("quickbooks_native_provider_read_unavailable");
+      return {
+        intentIds: event.type === "Payment" ? ["intent-invoice-42"] : [],
+        unresolved: event.type !== "Payment",
+        verdicts: event.type === "Payment" ? ["reconciled"] : [],
+      };
+    },
+  };
   const { env, rawWrites, outbox } = makeQuickBooksWebhookEnv();
   const bodyText = JSON.stringify({
     eventNotifications: [{
@@ -525,51 +478,32 @@ test("handleQuickbooksWebhook: an uncertain ERP write stays pending and redelive
   });
   const signature = crypto.createHmac("sha256", env.QB_WEBHOOK_TOKEN).update(bodyText).digest("base64");
 
-  const first = await handleQuickbooksWebhook(env as never, bodyText, signature);
-  assert.equal(first.status, 503);
-  const firstBody = await first.json() as {
-    error?: string; replay?: boolean; envelope_id?: string; events?: number; provider_truth_reconciled?: boolean;
-  };
-  assert.equal(firstBody.error, "quickbooks_projection_pending");
-  assert.equal(firstBody.replay, false);
-  assert.match(firstBody.envelope_id ?? "", /^ow_/);
-  assert.equal(firstBody.events, 2);
-  assert.equal(firstBody.provider_truth_reconciled, false);
-  // `first.json()` consumes the body, so assert the durable state rather than
-  // accepting a response-only signal.
+  assert.equal((await handleQuickbooksWebhook(env as never, bodyText, signature, port)).status, 503);
   assert.deepEqual([...outbox.values()].map((row) => row.projection_status), ["projected", "pending"]);
   assert.deepEqual([...outbox.values()].map((row) => row.attempt_count), [1, 1]);
   assert.equal(rawWrites.length, 1);
 
-  // A replay honors bounded backoff but cannot prove whether the first provider
-  // write committed. Making it due must not cause a second write.
+  repaired = true;
   const pending = [...outbox.values()].find((row) => row.projection_status === "pending");
   assert.ok(pending);
   pending.next_attempt_at = "1970-01-01T00:00:00.000Z";
-  const replay = await handleQuickbooksWebhook(env as never, bodyText, signature);
-  assert.equal(replay.status, 503);
+  const replay = await handleQuickbooksWebhook(env as never, bodyText, signature, port);
+  assert.equal(replay.status, 200);
   assert.equal((await replay.json() as { replay?: boolean }).replay, true);
-  assert.deepEqual([...outbox.values()].map((row) => row.projection_status), ["projected", "pending"]);
-  assert.deepEqual([...outbox.values()].map((row) => row.attempt_count), [1, 2]);
+  assert.deepEqual([...outbox.values()].map((row) => row.projection_status), ["projected", "projected"]);
+  assert.deepEqual(calls, ["Payment:7", "CreditMemo:8", "CreditMemo:8"]);
   assert.equal(rawWrites.length, 1);
-  assert.equal(reconciliationPosts.filter((body) => body.entity_type === "Payment").length, 1);
-  assert.equal(reconciliationPosts.filter((body) => body.entity_type === "CreditMemo").length, 1);
 });
 
-test("handleQuickbooksWebhook: only the issuer's explicit stable 409 conflict is durably rejected", async (t) => {
-  let reconciliationPosts = 0;
-  t.mock.method(globalThis, "fetch", withQuickBooksReconciliationReadback(async (input: string | URL | Request) => {
-    const url = String(input);
-    if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.check_issuer_readiness")) {
-      return json({ message: { ready: true, issuer: "quickbooks-issuer@ironwrapexteriors.com" } });
-    }
-    if (url.includes("/api/resource/Payment%20Milestone?")) return json({ data: [] });
-    if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.issue_pending_reconciliation")) {
-      reconciliationPosts += 1;
-      return new Response("quickbooks_reconciliation_identity_conflict", { status: 409 });
-    }
-    throw new Error(`unexpected fetch ${url}`);
-  }));
+test("handleQuickbooksWebhook: only a native provider identity conflict is durably rejected", async () => {
+  let calls = 0;
+  const port: QuickBooksWebhookProjectionPort = {
+    async assertReady() {},
+    async project() {
+      calls += 1;
+      throw projectionError("quickbooks_native_provider_identity_conflict");
+    },
+  };
   const { env, outbox } = makeQuickBooksWebhookEnv();
   const bodyText = JSON.stringify({
     eventNotifications: [{
@@ -579,79 +513,21 @@ test("handleQuickbooksWebhook: only the issuer's explicit stable 409 conflict is
   });
   const signature = crypto.createHmac("sha256", env.QB_WEBHOOK_TOKEN).update(bodyText).digest("base64");
 
-  const first = await handleQuickbooksWebhook(env as never, bodyText, signature);
+  const first = await handleQuickbooksWebhook(env as never, bodyText, signature, port);
   assert.equal(first.status, 200);
   assert.equal((await first.json() as { rejected_projection_count?: number }).rejected_projection_count, 1);
   assert.deepEqual([...outbox.values()].map((row) => row.projection_status), ["rejected"]);
-
-  const replay = await handleQuickbooksWebhook(env as never, bodyText, signature);
-  assert.equal(replay.status, 200);
-  assert.equal(reconciliationPosts, 1);
+  assert.equal((await handleQuickbooksWebhook(env as never, bodyText, signature, port)).status, 200);
+  assert.equal(calls, 1);
 });
 
-test("handleQuickbooksWebhook: 401, 403, and 404 issuer uncertainty requires reconciliation before reissue", async (t) => {
-  let failureStatus = 403;
-  let repaired = false;
-  let issuerPosts = 0;
-  t.mock.method(globalThis, "fetch", withQuickBooksReconciliationReadback(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.check_issuer_readiness")) {
-      return json({ message: { ready: true, issuer: "quickbooks-issuer@ironwrapexteriors.com" } });
-    }
-    if (url.includes("/api/resource/Payment%20Milestone?")) return json({ data: [] });
-    if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.issue_pending_reconciliation")) {
-      issuerPosts += 1;
-      if (!repaired) return new Response("deployment_or_auth_drift", { status: failureStatus });
-      const request = JSON.parse(String(init?.body));
-      const body = JSON.parse(request.reconciliation_json) as { reconciliation_id: string };
-      return json({ message: { name: body.reconciliation_id, idempotent_replay: false } });
-    }
-    throw new Error(`unexpected fetch ${url}`);
-  }));
-
-  for (const status of [401, 403, 404]) {
-    failureStatus = status;
-    repaired = false;
-    const { env, outbox } = makeQuickBooksWebhookEnv();
-    const bodyText = JSON.stringify({
-      eventNotifications: [{
-        realmId: "1234567890",
-        dataChangeEvent: { entities: [{ name: "Payment", id: String(status), operation: "Create" }] },
-      }],
-    });
-    const signature = crypto.createHmac("sha256", env.QB_WEBHOOK_TOKEN).update(bodyText).digest("base64");
-
-    const first = await handleQuickbooksWebhook(env as never, bodyText, signature);
-    assert.equal(first.status, 503, `status ${status} remains retryable`);
-    const row = [...outbox.values()][0];
-    assert.equal(row.projection_status, "pending");
-    assert.equal(row.attempt_count, 1);
-    assert.ok(Date.parse(String(row.next_attempt_at)) > Date.parse(String(row.last_attempt_at)));
-
-    const immediatelyDue = await recoverDueQuickBooksProjections(env as never);
-    assert.equal(immediatelyDue.due, 0, `backoff prevents an immediate ${status} retry`);
-    repaired = true;
-    row.next_attempt_at = "1970-01-01T00:00:00.000Z";
-    const recovered = await recoverDueQuickBooksProjections(env as never);
-    assert.deepEqual(recovered, { due: 1, projected: 0, rejected: 0, pending: 1, escalated: 0 });
-    assert.equal(row.projection_status, "pending");
-    assert.match(String(row.last_error), /effect_unknown_requires_reconciliation/);
-  }
-  assert.equal(issuerPosts, 3, "neither cron nor webhook replay may blindly repeat an uncertain issuer write");
-});
-
-test("recoverDueQuickBooksProjections: uses capped exponential backoff and emits a one-time escalation", async (t) => {
-  t.mock.method(globalThis, "fetch", withQuickBooksReconciliationReadback(async (input: string | URL | Request) => {
-    const url = String(input);
-    if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.check_issuer_readiness")) {
-      return json({ message: { ready: true, issuer: "quickbooks-issuer@ironwrapexteriors.com" } });
-    }
-    if (url.includes("/api/resource/Payment%20Milestone?")) return json({ data: [] });
-    if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.issue_pending_reconciliation")) {
-      return new Response("temporary Frappe outage", { status: 503 });
-    }
-    throw new Error(`unexpected fetch ${url}`);
-  }));
+test("recoverDueQuickBooksProjections: native reads use capped backoff and one-time escalation", async () => {
+  const port: QuickBooksWebhookProjectionPort = {
+    async assertReady() {},
+    async project() {
+      throw projectionError("quickbooks_native_provider_read_unavailable");
+    },
+  };
   const { env, writes, outbox } = makeQuickBooksWebhookEnv();
   const bodyText = JSON.stringify({
     eventNotifications: [{
@@ -660,33 +536,33 @@ test("recoverDueQuickBooksProjections: uses capped exponential backoff and emits
     }],
   });
   const signature = crypto.createHmac("sha256", env.QB_WEBHOOK_TOKEN).update(bodyText).digest("base64");
-  assert.equal((await handleQuickbooksWebhook(env as never, bodyText, signature)).status, 503);
+  assert.equal((await handleQuickbooksWebhook(env as never, bodyText, signature, port)).status, 503);
   const row = [...outbox.values()][0];
+  assert.equal((await recoverDueQuickBooksProjections(env as never, port)).due, 0);
   row.attempt_count = 4;
   row.next_attempt_at = "1970-01-01T00:00:00.000Z";
 
-  const fifth = await recoverDueQuickBooksProjections(env as never);
+  const fifth = await recoverDueQuickBooksProjections(env as never, port);
   assert.deepEqual(fifth, { due: 1, projected: 0, rejected: 0, pending: 1, escalated: 1 });
   assert.equal(row.attempt_count, 5);
   assert.ok(row.escalated_at);
-  assert.ok(writes.some((write) => write.sql.includes("INSERT INTO audit_log") && write.args.includes("projection_escalated")));
+  assert.ok(writes.some((write) => write.sql.includes("INSERT INTO audit_log") &&
+    write.args.includes("projection_escalated")));
 
   row.attempt_count = 20;
   row.next_attempt_at = "1970-01-01T00:00:00.000Z";
-  const capped = await recoverDueQuickBooksProjections(env as never);
+  const capped = await recoverDueQuickBooksProjections(env as never, port);
   assert.equal(capped.escalated, 0, "the existing escalation is not duplicated");
   const cappedDelay = Date.parse(String(row.next_attempt_at)) - Date.parse(String(row.last_attempt_at));
-  // The retry clock starts after the leased call returns; allow the tiny elapsed
-  // execution interval between claim and release without allowing a larger backoff.
   assert.ok(cappedDelay >= 3_600_000 && cappedDelay < 3_600_100, "backoff is capped at one hour");
 });
 
-test("handleQuickbooksWebhook: a valid signature from a different realm is durably rejected without ERP linkage", async (t) => {
-  let fetchCalls = 0;
-  t.mock.method(globalThis, "fetch", async () => {
-    fetchCalls += 1;
-    throw new Error("wrong realm must never reach Frappe");
-  });
+test("handleQuickbooksWebhook: different-realm events are rejected without native projection", async () => {
+  let calls = 0;
+  const port: QuickBooksWebhookProjectionPort = {
+    async assertReady() { calls += 1; },
+    async project() { calls += 1; throw new Error("unreachable"); },
+  };
   const { env, rawWrites, outbox } = makeQuickBooksWebhookEnv();
   const bodyText = JSON.stringify({
     eventNotifications: [{
@@ -695,11 +571,10 @@ test("handleQuickbooksWebhook: a valid signature from a different realm is durab
     }],
   });
   const signature = crypto.createHmac("sha256", env.QB_WEBHOOK_TOKEN).update(bodyText).digest("base64");
-  const response = await handleQuickbooksWebhook(env as never, bodyText, signature);
+  const response = await handleQuickbooksWebhook(env as never, bodyText, signature, port);
 
   assert.equal(response.status, 200);
-  assert.equal((await response.json() as { provider_truth_reconciled?: boolean }).provider_truth_reconciled, false);
-  assert.equal(fetchCalls, 0);
+  assert.equal(calls, 0);
   assert.equal(rawWrites.length, 1);
   assert.deepEqual([...outbox.values()].map((row) => row.projection_status), ["rejected"]);
 });
@@ -708,7 +583,11 @@ test("handleQuickbooksWebhook: expected realm configuration fails closed before 
   const { env, rawWrites, writes } = makeQuickBooksWebhookEnv({ expectedRealmId: "not-a-realm" });
   const bodyText = '{"eventNotifications":[]}';
   const signature = crypto.createHmac("sha256", env.QB_WEBHOOK_TOKEN).update(bodyText).digest("base64");
-  const response = await handleQuickbooksWebhook(env as never, bodyText, signature);
+  const port: QuickBooksWebhookProjectionPort = {
+    async assertReady() { throw new Error("unreachable"); },
+    async project() { throw new Error("unreachable"); },
+  };
+  const response = await handleQuickbooksWebhook(env as never, bodyText, signature, port);
 
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { error: "quickbooks_realm_not_configured" });
@@ -716,16 +595,15 @@ test("handleQuickbooksWebhook: expected realm configuration fails closed before 
   assert.equal(writes.length, 0);
 });
 
-test("handleQuickbooksWebhook: dedicated issuer readiness fails closed before accepting a new matching receipt", async (t) => {
+test("handleQuickbooksWebhook: native readiness fails closed before accepting a new receipt", async () => {
   let readinessCalls = 0;
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
-    const url = String(input);
-    if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.check_issuer_readiness")) {
+  const port: QuickBooksWebhookProjectionPort = {
+    async assertReady() {
       readinessCalls += 1;
-      return json({ message: { ready: false, issuer: "quickbooks-issuer@ironwrapexteriors.com" } });
-    }
-    throw new Error(`new receipt must not reach ${url}`);
-  });
+      throw projectionError("quickbooks_native_observation_not_ready");
+    },
+    async project() { throw new Error("unreachable"); },
+  };
   const { env, rawWrites, writes } = makeQuickBooksWebhookEnv();
   const bodyText = JSON.stringify({
     eventNotifications: [{
@@ -734,92 +612,11 @@ test("handleQuickbooksWebhook: dedicated issuer readiness fails closed before ac
     }],
   });
   const signature = crypto.createHmac("sha256", env.QB_WEBHOOK_TOKEN).update(bodyText).digest("base64");
-  const response = await handleQuickbooksWebhook(env as never, bodyText, signature);
+  const response = await handleQuickbooksWebhook(env as never, bodyText, signature, port);
 
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { error: "quickbooks_projection_not_ready" });
   assert.equal(readinessCalls, 1);
   assert.equal(rawWrites.length, 0);
   assert.equal(writes.length, 0);
-});
-
-test("pushQuickBooksEventToErpNext: issuer conflict never falls back to generic reconciliation mutation", async (t) => {
-  const fetches: Array<{ url: string; init: RequestInit }> = [];
-  const payloadHash = "a".repeat(64);
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    fetches.push({ url, init: init ?? {} });
-    if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [] });
-    if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.issue_pending_reconciliation")) {
-      return new Response("quickbooks_reconciliation_identity_conflict", { status: 409 });
-    }
-    throw new Error(`unexpected fetch ${url}`);
-  });
-
-  await assert.rejects(
-    pushQuickBooksEventToErpNext(effectEnv({
-      ERPNEXT_ENABLED: "true", ERPNEXT_BASE_URL: "https://erp.example.com", ERPNEXT_API_KEY: "erp-key", ERPNEXT_API_SECRET: "erp-secret",
-      QB_EXPECTED_REALM_ID: "1234567890",
-      QB_RECONCILIATION_ISSUER_USER: "quickbooks-issuer@ironwrapexteriors.com",
-      QB_RECONCILIATION_ISSUER_API_KEY: "qb-issuer-key",
-      QB_RECONCILIATION_ISSUER_API_SECRET: "qb-issuer-secret",
-    }), {
-      realmId: "1234567890", type: "Invoice", id: "42", operation: "Update",
-      rawKey: "raw/quickbooks/2026-07-31/ow_test.json", eventTs: "2026-07-31T12:00:00.000Z", payloadHash, eventIndex: 0,
-    }),
-    /erpnext_http_409/,
-  );
-  assert.equal(fetches.some((request) => request.url.includes("/api/resource/Integration%20Reconciliation")), false);
-  assert.equal(fetches.filter((request) => request.url.includes("quickbooks_reconciliation_api")).length, 1);
-});
-
-test("pushQuickBooksEventToErpNext: rejects a cross-realm direct call before any Frappe request", async (t) => {
-  const fetches: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
-    fetches.push({ url: String(input), init: init ?? {} });
-    throw new Error("realm mismatch must not reach Frappe");
-  });
-
-  await assert.rejects(
-    pushQuickBooksEventToErpNext(effectEnv({
-      ERPNEXT_ENABLED: "true", ERPNEXT_BASE_URL: "https://erp.example.com", ERPNEXT_API_KEY: "erp-key", ERPNEXT_API_SECRET: "erp-secret",
-      QB_EXPECTED_REALM_ID: "1234567890",
-      QB_RECONCILIATION_ISSUER_USER: "quickbooks-issuer@ironwrapexteriors.com",
-      QB_RECONCILIATION_ISSUER_API_KEY: "qb-issuer-key",
-      QB_RECONCILIATION_ISSUER_API_SECRET: "qb-issuer-secret",
-    }), {
-      realmId: "9876543210", type: "Invoice", id: "42", operation: "Update",
-      rawKey: "raw/quickbooks/2026-07-31/ow_test.json", eventTs: "2026-07-31T12:00:00.000Z", payloadHash: "a".repeat(64), eventIndex: 0,
-    }),
-    /erpnext_quickbooks_realm_mismatch/,
-  );
-  assert.equal(fetches.length, 0);
-});
-
-test("pushQuickBooksEventToErpNext: failed invoice milestone never creates an orphan reconciliation", async (t) => {
-  const fetches: Array<{ url: string; init: RequestInit }> = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    fetches.push({ url, init: init ?? {} });
-    if (url.includes("/api/resource/Roof%20Job?")) return json({ data: [{ name: "RJ-0001" }] });
-    if (url.includes("/api/resource/Payment%20Milestone?")) return json({ data: [] });
-    if (url.endsWith("/api/resource/Payment%20Milestone")) return new Response("temporary Frappe outage", { status: 503 });
-    throw new Error(`unexpected fetch ${url}`);
-  });
-
-  await assert.rejects(
-    pushQuickBooksEventToErpNext(effectEnv({
-      ERPNEXT_ENABLED: "true", ERPNEXT_BASE_URL: "https://erp.example.com", ERPNEXT_API_KEY: "erp-key", ERPNEXT_API_SECRET: "erp-secret",
-      QB_EXPECTED_REALM_ID: "1234567890",
-      QB_RECONCILIATION_ISSUER_USER: "quickbooks-issuer@ironwrapexteriors.com",
-      QB_RECONCILIATION_ISSUER_API_KEY: "qb-issuer-key",
-      QB_RECONCILIATION_ISSUER_API_SECRET: "qb-issuer-secret",
-    }), {
-      realmId: "1234567890", type: "Invoice", id: "42", operation: "Update",
-      rawKey: "raw/quickbooks/2026-07-31/ow_test.json", eventTs: "2026-07-31T12:00:00.000Z", payloadHash: "a".repeat(64), eventIndex: 0,
-    }),
-    /erpnext_http_503/,
-  );
-  assert.equal(fetches.some((request) =>
-    request.url.includes("Integration%20Reconciliation") || request.url.includes("quickbooks_reconciliation_api")), false);
 });

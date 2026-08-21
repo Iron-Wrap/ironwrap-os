@@ -1,18 +1,23 @@
 import {
   classifyIntent,
   dedupKey,
-  isOn,
   newEnvelopeId,
   normalizeEnvelope,
   parseBody,
   validateInbound,
   type EnvelopeRecord,
 } from "./core.ts";
-import { pushToErpNext } from "./erpnext.ts";
-import { materializeOperatingCore } from "./operating-core.ts";
+import { materializeOperatingCore, type OperatingCoreResult } from "./operating-core.ts";
 import * as store from "./store.ts";
 
-const ESTIMATE_ERP_RETRY_BATCH_SIZE = 25;
+const ESTIMATE_OPERATING_RETRY_BATCH_SIZE = 25;
+const OPERATING_RETRY_PREFIX = "native_operating_core:retry:";
+const OPERATING_TERMINAL_PREFIX = "native_operating_core:terminal:";
+
+type OperatingTrigger = "estimator" | "idempotent_replay" | "scheduled_retry";
+type OperatingAttempt =
+  | { ok: true; value: OperatingCoreResult }
+  | { ok: false; retryable: boolean };
 
 export async function handleEstimateIngest(
   env: Env,
@@ -79,74 +84,28 @@ export async function handleEstimateIngest(
 
   if (!valid.ok) return json({ envelope_id: id, error: valid.reason }, 400);
 
-  try {
-    const operating = await materializeOperatingCore(env, rec);
-    await store.recordAudit(env, {
-      automation: "estimate_operating_core",
-      trigger: "estimator",
-      envelope_id: id,
-      target_ids: [
-        `lead:${operating.leadId}`,
-        `customer:${operating.customerId}`,
-        `roof_job:${operating.roofJobId}`,
-      ].join(","),
-      action: operating.reused ? "readback" : "materialize",
-      result: "ok",
-    });
-  } catch (err) {
-    await store.recordAudit(env, {
-      automation: "estimate_operating_core",
-      trigger: "estimator",
-      envelope_id: id,
-      action: "materialize",
-      result: "error",
-      error: String(err),
-    }).catch(() => {});
-  }
-
-  try {
-    const erp = await pushToErpNext(env, rec);
-    if (erp) {
-      await recordEstimateErpNextSync(env, rec, erp, "estimator");
-    }
-    return json({
-      ok: true,
-      envelope_id: id,
-      erpnext_lead_envelope_id: erp?.name ?? null,
-      erpnext_roof_job_id: erp?.roofJobName ?? null,
-      erpnext_instant_estimate_id: erp?.instantEstimateSessionName ?? null,
-    });
-  } catch (err) {
-    const error = `erpnext_estimate: ${String(err)}`;
-    await recordEstimateErpNextFailure(env, rec, "estimator", error);
-    return retryPendingResponse(id);
-  }
+  const operating = await tryMaterializeEstimate(env, rec, "estimator");
+  return operating.ok
+    ? operatingResponse(id, operating.value)
+    : operating.retryable
+      ? retryPendingResponse(id)
+      : rejectedResponse(id);
 }
 
 /**
- * Re-drive durably accepted estimator submissions whose Frappe mirror is unavailable.
+ * Re-drive durably accepted estimator submissions whose native operating graph is incomplete.
  * Unlike lead intake, estimator submissions have no JobNimbus queue to trigger a later retry.
  */
-export async function retryEstimateErpNextSyncs(env: Env): Promise<void> {
-  if (!isOn(env.ERPNEXT_ENABLED)) return;
+export async function retryEstimateOperatingCoreMaterializations(env: Env): Promise<void> {
   const thresholdMin = retryThresholdMinutes(env);
-  const candidates = await store.listRetryableEstimateErpNextSyncs(
+  const candidates = await store.listRetryableEstimateOperatingCoreMaterializations(
     env,
     thresholdMin,
-    ESTIMATE_ERP_RETRY_BATCH_SIZE,
+    ESTIMATE_OPERATING_RETRY_BATCH_SIZE,
   );
 
   for (const rec of candidates) {
-    try {
-      const erp = await pushToErpNext(env, rec);
-      // The feature flag is checked above, but preserving this branch makes the helper safe
-      // should the flag be changed between the sweep query and an individual attempt.
-      if (!erp) continue;
-      await recordEstimateErpNextSync(env, rec, erp, "scheduled_retry");
-    } catch (err) {
-      const error = `erpnext_estimate: ${String(err)}`;
-      await recordEstimateErpNextFailure(env, rec, "scheduled_retry", error);
-    }
+    await tryMaterializeEstimate(env, rec, "scheduled_retry");
   }
 }
 
@@ -179,77 +138,105 @@ function cleanKey(raw: unknown): string | null {
 }
 
 async function idempotentEstimateResponse(env: Env, rec: EnvelopeRecord): Promise<Response> {
-  const mirrorPending = Boolean(rec.erpnext_error?.trim());
-  await store.recordAudit(env, {
-    automation: "estimate",
-    trigger: "estimator",
-    envelope_id: rec.envelope_id,
-    action: "idempotent_replay",
-    result: mirrorPending ? "error" : "ok",
-    error: mirrorPending ? rec.erpnext_error : null,
-  });
-  if (rec.last_error) {
+  if (rec.last_error && !isOperatingError(rec.last_error)) {
+    await store.recordAudit(env, {
+      automation: "estimate",
+      trigger: "estimator",
+      envelope_id: rec.envelope_id,
+      action: "idempotent_replay",
+      result: "error",
+      error: rec.last_error,
+    });
     return json({
       envelope_id: rec.envelope_id,
       idempotent_replay: true,
       error: rec.last_error,
     }, 400);
   }
-  if (mirrorPending) return retryPendingResponse(rec.envelope_id, true);
-  return json({
-    ok: true,
-    envelope_id: rec.envelope_id,
-    idempotent_replay: true,
-    erpnext_lead_envelope_id: rec.erpnext_lead_envelope_id ?? null,
-    erpnext_roof_job_id: rec.erpnext_roof_job_id ?? null,
-    erpnext_instant_estimate_id: rec.erpnext_instant_estimate_session_id ?? null,
-  });
+  const operating = await tryMaterializeEstimate(env, rec, "idempotent_replay");
+  return operating.ok
+    ? operatingResponse(rec.envelope_id, operating.value, true)
+    : operating.retryable
+      ? retryPendingResponse(rec.envelope_id, true)
+      : rejectedResponse(rec.envelope_id, true);
 }
 
-async function recordEstimateErpNextSync(
+async function tryMaterializeEstimate(
   env: Env,
   rec: EnvelopeRecord,
-  erp: NonNullable<Awaited<ReturnType<typeof pushToErpNext>>>,
-  trigger: "estimator" | "scheduled_retry",
+  trigger: OperatingTrigger,
+): Promise<OperatingAttempt> {
+  try {
+    const operating = await materializeOperatingCore(env, rec);
+    await recordEstimateOperatingCoreSuccess(env, rec, operating, trigger);
+    return { ok: true, value: operating };
+  } catch (error) {
+    const retryable = !terminalOperatingError(error);
+    const prefix = retryable ? OPERATING_RETRY_PREFIX : OPERATING_TERMINAL_PREFIX;
+    await recordEstimateOperatingCoreFailure(env, rec, trigger, `${prefix} ${String(error)}`);
+    return { ok: false, retryable };
+  }
+}
+
+async function recordEstimateOperatingCoreSuccess(
+  env: Env,
+  rec: EnvelopeRecord,
+  operating: OperatingCoreResult,
+  trigger: OperatingTrigger,
 ): Promise<void> {
-  await store.setErpNextSync(env, rec.envelope_id, {
-    leadEnvelopeId: erp.name,
-    roofingPropertyId: erp.roofingPropertyName ?? null,
-    roofJobId: erp.roofJobName ?? null,
-    instantEstimateSessionId: erp.instantEstimateSessionName ?? null,
-  });
+  await store.setStatus(env, rec.envelope_id, rec.status, { last_error: null });
   await store.recordAudit(env, {
-    automation: "erpnext_estimate",
+    automation: "estimate_operating_core",
     trigger,
     envelope_id: rec.envelope_id,
     target_ids: [
-      `lead_envelope:${erp.name}`,
-      erp.roofingPropertyName ? `roofing_property:${erp.roofingPropertyName}` : null,
-      erp.roofJobName ? `roof_job:${erp.roofJobName}` : null,
-      erp.instantEstimateSessionName ? `instant_estimate:${erp.instantEstimateSessionName}` : null,
+      `lead:${operating.leadId}`,
+      `customer:${operating.customerId}`,
+      operating.propertyId ? `property:${operating.propertyId}` : null,
+      `roof_job:${operating.roofJobId}`,
+      operating.instantEstimateId ? `instant_estimate:${operating.instantEstimateId}` : null,
     ].filter(Boolean).join(","),
-    action: trigger === "estimator"
-      ? (erp.reused ? "upsert_existing" : "create")
-      : (erp.reused ? "retry_upsert_existing" : "retry_create"),
+    action: trigger === "scheduled_retry"
+      ? (operating.reused ? "retry_readback" : "retry_materialize")
+      : trigger === "idempotent_replay"
+        ? "idempotent_readback"
+        : (operating.reused ? "readback" : "materialize"),
     result: "ok",
   });
 }
 
-async function recordEstimateErpNextFailure(
+async function recordEstimateOperatingCoreFailure(
   env: Env,
   rec: EnvelopeRecord,
-  trigger: "estimator" | "scheduled_retry",
+  trigger: OperatingTrigger,
   error: string,
 ): Promise<void> {
-  const attempt = await store.bumpErpNextMirrorAttempt(env, rec.envelope_id, error);
+  const attempt = await store.bumpAttempt(env, rec.envelope_id, error);
   await store.recordAudit(env, {
-    automation: "erpnext_estimate",
+    automation: "estimate_operating_core",
     trigger,
     envelope_id: rec.envelope_id,
-    action: trigger === "estimator" ? `push_attempt_${attempt}` : `retry_attempt_${attempt}`,
+    action: trigger === "scheduled_retry" ? `retry_attempt_${attempt}` : `materialize_attempt_${attempt}`,
     result: "error",
     error,
     recovery_owner: env.OWNER_ALERT_EMAIL,
+  });
+}
+
+function operatingResponse(
+  envelopeId: string,
+  operating: OperatingCoreResult,
+  idempotentReplay = false,
+): Response {
+  return json({
+    ok: true,
+    envelope_id: envelopeId,
+    ...(idempotentReplay ? { idempotent_replay: true } : {}),
+    operating_lead_id: operating.leadId,
+    operating_customer_id: operating.customerId,
+    operating_property_id: operating.propertyId,
+    operating_roof_job_id: operating.roofJobId,
+    operating_instant_estimate_id: operating.instantEstimateId,
   });
 }
 
@@ -259,8 +246,29 @@ function retryPendingResponse(envelopeId: string, idempotentReplay = false): Res
     completed: false,
     envelope_id: envelopeId,
     ...(idempotentReplay ? { idempotent_replay: true } : {}),
-    erpnext_mirror_status: "retry_pending",
+    operating_core_status: "retry_pending",
   }, 202);
+}
+
+function rejectedResponse(envelopeId: string, idempotentReplay = false): Response {
+  return json({
+    accepted: false,
+    completed: false,
+    envelope_id: envelopeId,
+    ...(idempotentReplay ? { idempotent_replay: true } : {}),
+    error: "native_operating_core_rejected",
+  }, 422);
+}
+
+function isOperatingError(error: string): boolean {
+  return error.startsWith(OPERATING_RETRY_PREFIX) || error.startsWith(OPERATING_TERMINAL_PREFIX);
+}
+
+function terminalOperatingError(error: unknown): boolean {
+  const detail = String(error);
+  return detail.includes("operating_core_") &&
+    !detail.includes("operating_core_db_missing") &&
+    !detail.includes("operating_core_tenant_invalid");
 }
 
 function retryThresholdMinutes(env: Env): number {

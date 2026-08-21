@@ -39,12 +39,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 67,
-      "latest": "0091_authority_readback_subject_scope.sql"
+      "count": 81,
+      "latest": "0105_facet_native_design_projection.sql"
     },
     "tests": {
-      "pwa": 554,
-      "worker": 1109
+      "pwa": 558,
+      "worker": 1170
     }
   },
   "proof_state_policy": {
@@ -65,6 +65,23 @@ implication.
 The expected counts change only with the same reviewed source change that adds or removes the
 underlying contract. A mismatch fails documentation validation. The generated receipt is an
 exact-source and tested-checkout repository/CI observation, not a release permit.
+
+## Canonical operating-authority migration
+
+Target: D1 plus the Worker is the sole owned authority for normalized operating state, transitions,
+policy, audit, and reconciliation. R2 retains raw evidence. QuickBooks and genuine external actors
+remain authoritative only for their exact posted-accounting, legal, professional, customer, or
+physical scopes.
+
+Current implementation: Frappe is still required by office read models, business writes, customer
+and field flows, Facet and QuickBooks projections, readiness, release, and rollback. The 79 current
+DocTypes are therefore implementation evidence, not the target architecture. Frappe is now a
+temporary compatibility projection: no new DocType or required Frappe dependency may be added, and
+each existing workflow must move to a D1-native contract before its projection is removed.
+
+The cutover is incomplete until required source has zero Frappe command paths, zero Frappe read
+dependencies, zero Frappe readiness checks, and no Frappe release or rollback artifact. Projection
+failure during migration creates reconciliation work; it cannot change authoritative D1 state.
 
 ### Machine release admission
 
@@ -372,11 +389,9 @@ ELEC-92 owner-facing proposal publication (2026-08-20):
 - **Four real-site defects were found on the way and fixed in a separate Frappe-side change**, not
   in this lane: a stored Frappe Datetime arrives as a `datetime` while the surrounding contract is
   text, so `!=`/`_text` comparisons rejected every real record while accepting every dict-built
-  fixture. Sites: the proposal measurement provenance check and the price-rule snapshot identity
-  check in `domain_policy`, the terms snapshot in `customer_contract_acceptance_api`, and that
-  module's claim timestamps, which MariaDB refuses outright in RFC 3339 form. Until those land, a
-  Proposal Evidence Pack cannot be created or published and a contract cannot be accepted against a
-  real site.
+  fixture. The remaining live sites are the proposal measurement provenance check and the price-rule
+  snapshot identity check in `domain_policy`; the former Frappe customer-acceptance command has
+  since been retired in favor of native D1 commercial acceptance.
 
 IRO-44 safety substrate (merged in #59; the "branch-local" qualifier this section carried was
 stale from before that merge):
@@ -459,7 +474,7 @@ Missing for autonomous target:
 - universal evidence freshness, revocation, conflict, and compensation semantics;
 - production proof across one real end-to-end job.
 
-### Frappe operating core
+### Frappe compatibility core (retirement in progress)
 
 Implemented model families:
 
@@ -475,7 +490,16 @@ Implemented model families:
 - controlled item, material lot, shop order, nonconformance;
 - reconciliation, automation incident, Hermes run, tenant export, white-label tenant, market watch.
 
-Material target gaps:
+Material cutover gaps:
+
+- move normalized operating aggregates and transition policy to D1 without losing stable IDs,
+  version history, evidence, authority, corrections, or reconciliation;
+- replace office, field, customer, Facet, QuickBooks, MCP, readiness, deployment, and recovery
+  consumers with D1-native contracts;
+- export and reconcile existing Frappe records, prove compatibility rollback, then remove the
+  projection and its release artifact;
+
+Remaining autonomous-company model gaps independent of Frappe retirement:
 
 - legal entity, owner/delegation, licence, permit application/inspection, policy version;
 - employee, applicant, apprenticeship, training, competency evidence, HR case, time/payroll;
@@ -498,7 +522,7 @@ Implemented:
 - role-filtered reads, dry-runs, reviewed writes, policy checks, signed receipts, and audit.
 - owner, lead, estimator, production, field, finance-reconciliation, closeout, and support roles.
 - no direct accounting mutation.
-- Frappe, bus, and Newo boundaries.
+- D1/Worker, temporary Frappe compatibility, and Newo seams.
 - versioned deterministic lead-triage shadow evaluation with an adversarial corpus; it is
   informational only and cannot issue a receipt, activate policy, reach a route, or write a record.
 - default-off owner/ops desktop text pilot with separate one-time fragment pairing, a device-bound
@@ -572,7 +596,7 @@ Implemented or represented:
 - QuickBooks raw webhook receipts, immutable Webhook Seen projections for exact invoice-to-job links, and Pending reconciliation work;
 - Newo inbound/control/reconciliation;
 - Cloudflare D1/R2/Queue/Workers;
-- Frappe and Hermes;
+- temporary Frappe compatibility projection and Hermes;
 - temporary Make/Jotform/RoofRuler compatibility paths.
 
 Target gaps:
@@ -603,7 +627,7 @@ Target gaps:
 | Contract | Partial: email-bound, single-use click-to-accept evidence pinned to an approved quote, proposal pack, and canonical terms snapshot | correct agreement selection, cancellation, legal/commercial e-sign determination, authority, and live business proof | residential/commercial scenarios |
 | Preconstruction | seven gates plus current Crew/Safety/Access Authority Record links and owner-attributed waivers; legacy Crew Profile summaries remain projections only | complete multi-domain readiness and live issuer-backed freshness | stale permit/WCB/weather injection |
 | Procurement | Partial: supplier quote/order records plus signed internal transmission, evidence-backed acknowledgement, and receipt/shortage conservation facts; `Ordered` is internal only | vendor onboarding, direct supplier transmission/acknowledgement, substitution, three-way match, provider reconciliation | duplicate/short/backorder test |
-| Inventory | Partial: signed controlled-item approval plus a branch-local D1 item/lot/bin/position ledger with conserving receive/reserve/issue/return/transfer/yield/count movements, lot and FIFO valuation, and separation-of-duties approvals | HTTP routes, warehouse/receiving PWA capture, provider AP adapter, and live reconciliation | receive-reserve-use-yield-reconcile |
+| Inventory | Partial: signed controlled-item approval plus a D1 item/lot/bin/position ledger and authenticated HTTP routes with conserving receive/reserve/issue/return/transfer/yield/count movements, lot and FIFO valuation, and separation-of-duties approvals | transition-specific route authority, verified authority/policy binding, warehouse/receiving PWA capture, provider AP adapter, and live reconciliation | receive-reserve-use-yield-reconcile |
 | Shop | Partial: signed release, reservation, setup route, independent first-piece/final QC, yield, labeled bundles, custody handover, and provider-mirror billing-basis readiness | cutting/fabrication event capture, work-centre tooling/maintenance, physical dispatch proof, and live reconciliation | physical synthetic/real shop batch including handover and billing basis |
 | Scheduling | assignment and approval ledger | complete constraint solver and autonomous reschedule | conflict/weather/material test |
 | Human field work | assignment-scoped Work Package with exact Authority Record requirements, offline cached instructions, protected acknowledgement/stop intents, online start after every independently verified hold release | multi-worker acknowledgement, full physical evidence-slot enforcement, and real-device acceptance | full offline job/day |
@@ -726,3 +750,5 @@ The repository supports the complete reliable-agent/human-physical model only wh
   [`AUTONOMOUS-OPERATING-SYSTEM.md`](./AUTONOMOUS-OPERATING-SYSTEM.md);
 - no current operation depends on a hidden spreadsheet, private chat, untracked checklist, or
   historical document.
+- no required operation, read model, readiness verdict, release artifact, or rollback path depends
+  on Frappe.

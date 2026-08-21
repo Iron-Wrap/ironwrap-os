@@ -184,6 +184,11 @@ function field(record: JsonRecord, name: string): unknown {
   return record[name] ?? "";
 }
 
+function optionalField(record: JsonRecord, name: string): string | null {
+  const value = field(record, name);
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 async function authorityStateDigestAsync(record: JsonRecord): Promise<string> {
   const payload = Object.fromEntries(MATERIAL_FIELDS
     .filter((name) => name !== "issuer_readback_json")
@@ -413,6 +418,16 @@ export async function handleAuthorityRecordExecutorRoute(
       tenantId,
       authorityRecordId: action.authority_record_id,
       authorityVersion: Number(material.version),
+      subjectType: String(field(material, "subject_type")),
+      subjectRole: String(field(material, "subject_role")),
+      personUser: optionalField(material, "person_user"),
+      organization: optionalField(material, "organization"),
+      authorityKind: String(field(material, "authority_kind")),
+      authorityScope: String(field(material, "authority_scope")),
+      scopeType: String(field(material, "scope_type")),
+      scopeRef: String(field(material, "scope_ref")),
+      roofJob: optionalField(material, "roof_job"),
+      scopeJson: String(field(material, "scope_json")),
       issuerName: String(material.issuer_name),
       issuerJurisdiction: String(material.issuer_jurisdiction),
       issuerReference: String(material.issuer_reference),

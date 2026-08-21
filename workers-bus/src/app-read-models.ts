@@ -1,21 +1,13 @@
-import type { AppEnv, AuthContext, WorkObjectScope } from "./app-types.ts";
 import {
-  approvalBrokerConfig,
-  approvalDecisionConfig,
-} from "./approval-broker-client.ts";
+  appUserIdentities,
+  type AppEnv,
+  type AppRole,
+  type AuthContext,
+  type WorkObjectScope,
+} from "./app-types.ts";
+import { approvalDecisionConfig } from "./approval-broker-client.ts";
 import { quoteRevisionApprovalBrokerConfig } from "./quote-revision-approval-broker-client.ts";
-import { productionScheduleApprovalBrokerConfig } from "./production-schedule-approval-broker-client.ts";
-import { productionScheduleApprovalDecisionConfig } from "./production-schedule-approval-authority.ts";
 import {
-  listFleetCustodyFrappeResource,
-  listFrappeResource,
-  listFrappeResourcePage,
-  listOfficeEstimatorFrappeResource,
-  listOfficeProductionFrappeResource,
-  listOfficeSalesFrappeResource,
-  publicFrappeRow,
-  readOfficeEstimatorFrappeResource,
-  type FrappeFilter,
   type FrappeRow,
 } from "./frappe-read.ts";
 import { parseBody } from "./core.ts";
@@ -35,22 +27,75 @@ import {
 } from "./job-economics.ts";
 import { listLeadMctbEvidence, type LeadAckReceipt } from "./store.ts";
 import {
+  listFieldWorkPackageEvidenceFromD1,
+  type FieldWorkPackageEvidenceD1Row,
+} from "./field-actions.ts";
+import {
   fieldWorkPackageForAssignment,
   fieldWorkPackageProjection,
   hasWorkPackageCompletionAuthority,
+  nativeFieldWorkPackageForAssignment,
+  type FieldWorkPackage,
 } from "./work-package.ts";
+import { nativeAssignments } from "./work-package-store.ts";
+import {
+  listCurrentOperatingJobAssignments,
+  type OperatingJobAssignmentRecord,
+} from "./operating-job-assignment-store.ts";
+import {
+  listCurrentOperatingWorkObjectAssignments,
+  type OperatingWorkObjectAssignmentRecord,
+} from "./operating-work-object-assignment-store.ts";
 import { safetyReadinessForScope } from "./safety-release-gate.ts";
 import { facetLaunchConfigured } from "./facet-launch.ts";
+import { commercialActionConfigured } from "./commercial-authority.ts";
+import {
+  readCommercialSalesSources,
+  type CommercialSalesSources,
+  type OperatingSalesLeadRecord,
+  type OperatingSalesConsentRecord,
+  type OperatingSalesEstimateRecord,
+} from "./commercial-sales-read.ts";
+import type { CommercialQuoteRecord } from "./commercial-store.ts";
+import {
+  readNativeCommercialJobPacket,
+  readNativeJobCore,
+  type NativeCommercialJobPacket,
+  type NativeCustomerRecord,
+  type NativeJobCoreRecord,
+  type NativePropertyRecord,
+} from "./native-job-packet-read.ts";
+import { readNativeEstimatorSources } from "./estimator-native.ts";
 
 const ACTIVE_JOB_STATUSES = ["Won", "In Production"] as const;
-export const ACTIVE_ASSIGNMENT_STATUSES = [
-  "Assigned",
-  "Accepted",
-  "In Progress",
-  "Blocked",
-] as const;
 const FIELD_PACKET_PROOF_PAGE_SIZE = 100;
 const OWNER_NOW_SOURCE_LIMIT = 50;
+const OWNER_ECONOMICS_NATIVE_UNAVAILABLE = [
+  "change_order",
+  "supplier_quote",
+  "supplier_order",
+  "material_lot",
+  "shop_order",
+  "field_checkin.cost_basis",
+  "job_cost_event.tax_basis",
+] as const;
+const OWNER_FINANCE_ATTENTION_STATES = new Set([
+  "blocked",
+  "pending_review",
+  "uncertain",
+  "partially_settled",
+  "mismatch",
+  "reconciliation_required",
+  "failed",
+]);
+const OWNER_ACCOUNTING_PROVIDER_ENTITY = {
+  deposit_invoice: "Invoice",
+  progress_invoice: "Invoice",
+  final_invoice: "Invoice",
+  payment: "Payment",
+  credit_memo: "CreditMemo",
+  refund: "RefundReceipt",
+} as const;
 const SALES_SOURCE_LIMIT = 100;
 const ESTIMATOR_SOURCE_LIMIT = 100;
 const PRODUCTION_SOURCE_LIMIT = 100;
@@ -88,7 +133,102 @@ const SCHEDULING_PRODUCTION_GATES = [
 const SCHEDULING_PRODUCTION_GATE_NAMES = new Set<string>(
   SCHEDULING_PRODUCTION_GATES,
 );
-const NON_BLOCKING_GATE_STATES = new Set(["Ready", "Waived", "Done"]);
+const NON_BLOCKING_GATE_STATES = new Set(["ready", "waived", "complete"]);
+
+type NativeProductionJobRow = NativeJobCoreRecord;
+
+interface NativeProductionGateRow {
+  gate_id: string;
+  roof_job_id: string;
+  gate: string;
+  state: string;
+  blocker_reason: string;
+  owner_user: string;
+  assigned_at: string;
+  due_at: string;
+  updated_at: string;
+}
+
+interface NativeProductionCrewRow {
+  crew_id: string;
+  display_name: string;
+  version: number;
+  updated_at: string;
+}
+
+interface NativeMaterialExceptionRow {
+  exception_id: string;
+  aggregate_id: string;
+  exception_type: string;
+  status: string;
+  reason_code: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface NativeOwnerFieldBlockerRow {
+  work_package_id: string;
+  version: number;
+  job_id: string;
+  stop_event_id: string | null;
+  blocker_reason: string | null;
+  occurred_at: string | null;
+  manifest_key: string | null;
+  updated_at: string;
+}
+
+interface NativeOwnerEffectExceptionRow {
+  exception_id: string;
+  effect_id: string;
+  reason_code: string;
+  action: string;
+  provider: string;
+  aggregate_type: string;
+  aggregate_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface NativeOwnerAccountingIntentRow {
+  intent_id: string;
+  roof_job_id: string;
+  kind: string;
+  state: string;
+  currency: string;
+  subtotal: string;
+  total_amount: string;
+  expected_sha256: string;
+  provider_entity_type: string | null;
+  provider_entity_id: string | null;
+  blocker_code: string | null;
+  blocker_next_step: string | null;
+  reason_code: string | null;
+  error_code: string | null;
+  provider_submitted_at: string | null;
+  provider_reconciled_at: string | null;
+  updated_at: string;
+}
+
+interface NativeOwnerAccountingReconciliationRow {
+  reconciliation_id: string;
+  intent_id: string;
+  expected_sha256: string;
+  observed_sha256: string | null;
+  verdict: string;
+  reason_code: string | null;
+  decided_at: string;
+}
+
+interface NativeOwnerAccountingExceptionRow {
+  exception_id: string;
+  subject_ref: string;
+  intent_id: string | null;
+  reason_code: string;
+  status: string;
+  roof_job_id: string | null;
+  opened_at: string;
+  updated_at: string;
+}
 
 interface ReadModelEnvelope {
   version: number;
@@ -108,6 +248,7 @@ export interface AssignmentReadModel {
   scheduled_start: string | null;
   scheduled_end: string | null;
   blocker_reason: string | null;
+  modified: string | null;
 }
 
 export interface ProofStreamItem {
@@ -178,10 +319,15 @@ export interface ProductionRunwayReadModel extends ReadModelEnvelope {
     brand: string | null;
     service_type: string | null;
     status: string | null;
+    version: number;
     assignment: {
       id: string;
       type: string | null;
       status: string | null;
+      assignment_version: number;
+      roof_job_version: number;
+      crew_id: string;
+      crew_version: number;
       scheduled_start: string | null;
       scheduled_end: string | null;
     } | null;
@@ -210,6 +356,7 @@ export interface ProductionRunwayReadModel extends ReadModelEnvelope {
   crews: Array<{
     id: string;
     name: string;
+    version: number;
   }>;
 }
 
@@ -282,7 +429,7 @@ export interface JobReadModel extends ReadModelEnvelope {
     work_package: {
       id: string;
       version: number;
-      status: "Released" | "Acknowledged" | "In Progress";
+      status: "Released" | "Acknowledged" | "In Progress" | "Blocked";
       title: string;
       objective: string;
       boundaries: string;
@@ -368,10 +515,21 @@ export interface OwnerNowReadModel extends ReadModelEnvelope {
 }
 
 export type SalesAttentionReason =
+  | "source_partial"
   | "triage_unresolved"
   | "estimate_needs_review"
   | "quote_needs_review"
   | "quote_expired";
+
+export type SalesPartialField =
+  | "job"
+  | "triage_decision"
+  | "estimate"
+  | "quote"
+  | "proposal"
+  | "proposal_publication"
+  | "quote_acceptance"
+  | "proposal_acceptance";
 
 export interface SalesReadModel extends ReadModelEnvelope {
   /** Sources that reached the bounded query limit; displayed totals are lower bounds. */
@@ -399,6 +557,7 @@ export interface SalesReadModel extends ReadModelEnvelope {
     triage: {
       status: string | null;
       summary: string | null;
+      version: number;
     };
     job: {
       id: string;
@@ -459,6 +618,8 @@ export interface SalesReadModel extends ReadModelEnvelope {
         revoked_at: string | null;
       }>;
     };
+    /** Null child values for these fields are unknown because a bounded source omitted rows. */
+    partial_fields: SalesPartialField[];
     attention: SalesAttentionReason[];
   }>;
 }
@@ -793,21 +954,38 @@ export async function activeAssignmentForJob(
   jobName: string,
 ): Promise<FrappeRow | null> {
   if (!validJobName(jobName)) return null;
-  const assignments = await authorizedAssignments(env, auth, jobName);
-  return preferredAssignment(assignments);
+  const tenantId = (env.APP_TENANT_ID ?? "ironwrap").trim();
+  if (
+    tenantId !== auth.session.tenant_id ||
+    typeof env.DB?.prepare !== "function"
+  )
+    return null;
+  return await activeNativeAssignmentForJob(env, auth, jobName);
 }
 
-/**
- * A Cargo Load still binds an asset to a job in every one of these states, so a
- * driver on one of them is a real relationship to the asset. It mirrors
- * `CARGO_LOAD_RELEASE_FENCE_STATUSES` on the Frappe side.
- */
-const FLEET_CAPTURE_OPEN_LOAD_STATUSES = [
-  "Draft",
-  "Loaded",
-  "In Transit",
-  "Delivered",
-] as const;
+async function activeNativeAssignmentForJob(
+  env: AppEnv,
+  auth: AuthContext,
+  jobName: string,
+): Promise<FrappeRow | null> {
+  if (!validJobName(jobName) || typeof env.DB?.prepare !== "function")
+    return null;
+  const actorUsers =
+    jobReadMode(auth) === "assigned"
+      ? appUserIdentities(auth.session)
+      : undefined;
+  const assignments = await listCurrentOperatingJobAssignments(
+    env,
+    auth.session.tenant_id,
+    {
+      roofJobId: jobName,
+      ...(actorUsers ? { actorUsers } : {}),
+    },
+  );
+  return assignments.length === 1
+    ? nativeOperatingAssignmentRow(assignments[0]!)
+    : null;
+}
 
 /**
  * Resolve the Fleet Asset an authenticated field user may capture against.
@@ -816,109 +994,68 @@ const FLEET_CAPTURE_OPEN_LOAD_STATUSES = [
  * would let any paired field session post an out-of-service defect against any
  * vehicle in the fleet — grounding it immediately and irreversibly — or
  * fabricate a passing pre-trip for an asset it never touched. The relationship
- * the release fence already reads is the one that authorizes the capture:
- * custody of the asset, or driving it on an open Cargo Load.
+ * native authority reads is the one that authorizes the capture: custody of
+ * the asset, active crew membership, or driving it on an open Cargo Load.
  *
  * Returns null for both "no such asset" and "not yours", so the rail cannot be
- * used to enumerate the fleet. The Frappe command repeats this scope check
- * under its own asset lock.
+ * used to enumerate the fleet. The D1 insert trigger repeats this scope check.
  */
 export async function fleetAssetForFieldActor(
   env: AppEnv,
   auth: AuthContext,
   assetId: string,
-): Promise<FrappeRow | null> {
-  const userId = auth.session.frappe_user_id;
-  if (auth.session.role !== "field" || !userId?.trim()) return null;
-  const asset = await resolveFleetAssetForCapture(env, assetId);
-  if (!asset) return null;
-  const holderType = text(asset.custody_holder_type);
-  if (holderType === "User" && sameUser(asset.custody_user, userId)) return asset;
-  if (holderType === "Crew") {
-    const crewProfile = text(asset.custody_crew_profile);
-    if (crewProfile && (await activeCrewProfilesForUser(env, userId)).has(crewProfile)) {
-      return asset;
-    }
-  }
-  const assetName = text(asset.name);
-  if (!assetName) return null;
-  return (await drivesFleetAsset(env, userId, assetName)) ? asset : null;
-}
-
-/**
- * The rail addresses an asset by its business id or its Frappe name, exactly as
- * the Frappe command's own lock does. An ambiguous match resolves to nothing.
- */
-async function resolveFleetAssetForCapture(
-  env: AppEnv,
-  assetId: string,
-): Promise<FrappeRow | null> {
-  const byBusinessId = await listFleetCustodyFrappeResource(
-    env,
-    "Fleet Asset",
-    [["Fleet Asset", "fleet_asset_id", "=", assetId]],
-    2,
-  );
-  const rows =
-    byBusinessId.length > 0
-      ? byBusinessId
-      : await listFleetCustodyFrappeResource(
-          env,
-          "Fleet Asset",
-          [["Fleet Asset", "name", "=", assetId]],
-          2,
-        );
-  if (rows.length !== 1) return null;
-  return text(rows[0]!.name) ? rows[0]! : null;
-}
-
-async function drivesFleetAsset(
-  env: AppEnv,
-  userId: string,
-  assetName: string,
-): Promise<boolean> {
-  const openStatuses = [...FLEET_CAPTURE_OPEN_LOAD_STATUSES];
-  const [byDriverUser, authorities] = await Promise.all([
-    listFleetCustodyFrappeResource(
-      env,
-      "Cargo Load",
-      [
-        ["Cargo Load", "driver_user", "=", userId],
-        ["Cargo Load", "status", "in", openStatuses],
-      ],
-      100,
-    ),
-    listFleetCustodyFrappeResource(
-      env,
-      "Driver Authority",
-      [["Driver Authority", "driver_user", "=", userId]],
-      20,
-    ),
-  ]);
-  if (byDriverUser.some((row) => loadCarriesAsset(row, assetName))) return true;
-  // A planned load may name the authority before the driver user is recorded,
-  // so the authority this user holds is the second, equivalent binding.
-  const authorityNames = authorities
-    .filter((row) => sameUser(row.driver_user, userId))
-    .map((row) => text(row.name))
-    .filter(notNull);
-  if (authorityNames.length === 0) return false;
-  const byAuthority = await listFleetCustodyFrappeResource(
-    env,
-    "Cargo Load",
-    [
-      ["Cargo Load", "driver_authority", "in", authorityNames],
-      ["Cargo Load", "status", "in", openStatuses],
-    ],
-    100,
-  );
-  return byAuthority.some((row) => loadCarriesAsset(row, assetName));
-}
-
-function loadCarriesAsset(row: FrappeRow, assetName: string): boolean {
-  return (
-    text(row.fleet_asset) === assetName || text(row.trailer_asset) === assetName
-  );
+): Promise<{ fleet_asset_id: string; tenant_id: string } | null> {
+  if (auth.session.role !== "field") return null;
+  return await env.DB.prepare(
+    `SELECT asset.fleet_asset_id, asset.tenant_id
+       FROM fleet_assets asset
+      WHERE asset.tenant_id = ? AND asset.fleet_asset_id = ?
+        AND asset.status != 'Retired'
+        AND (
+          (asset.custody_holder_type = 'User' AND asset.custody_user_id = ?)
+          OR (asset.custody_holder_type = 'Crew' AND EXISTS (
+            SELECT 1 FROM fleet_crew_members member
+            JOIN fleet_crews crew
+              ON crew.tenant_id = member.tenant_id
+             AND crew.crew_id = member.crew_id
+             WHERE member.tenant_id = asset.tenant_id
+               AND member.crew_id = asset.custody_crew_id
+               AND member.user_id = ? AND member.active = 1
+               AND crew.status = 'Active'
+          ))
+          OR EXISTS (
+            SELECT 1 FROM fleet_cargo_loads load
+            JOIN fleet_driver_authorities authority
+              ON authority.tenant_id = load.tenant_id
+             AND authority.driver_authority_id = load.driver_authority_id
+            JOIN app_users driver
+              ON driver.tenant_id = load.tenant_id
+             AND driver.user_id = load.driver_user_id
+            WHERE load.tenant_id = asset.tenant_id
+              AND (load.fleet_asset_id = asset.fleet_asset_id
+                   OR load.trailer_asset_id = asset.fleet_asset_id)
+              AND asset.status = 'Active'
+              AND load.status IN ('Loaded', 'In Transit', 'Delivered')
+              AND load.driver_user_id = ?
+              AND authority.user_id = load.driver_user_id
+              AND authority.user_id = ?
+              AND authority.status = 'Active'
+              AND authority.authority_source = 'Physical Document'
+              AND driver.active = 1
+              AND COALESCE(driver.access_role, driver.role) = 'field'
+          )
+        )
+      LIMIT 1`,
+  )
+    .bind(
+      auth.session.tenant_id,
+      assetId,
+      auth.session.user_id,
+      auth.session.user_id,
+      auth.session.user_id,
+      auth.session.user_id,
+    )
+    .first<{ fleet_asset_id: string; tenant_id: string }>();
 }
 
 /**
@@ -940,71 +1077,25 @@ export async function activeAssignmentForWorkObject(
   ];
   if (
     values.some((value) => !validJobName(value)) ||
-    scope.workObjectType === "Roof Job"
+    scope.workObjectType === "Roof Job" ||
+    (env.APP_TENANT_ID ?? "ironwrap").trim() !== auth.session.tenant_id ||
+    typeof env.DB?.prepare !== "function"
   ) {
     return null;
   }
-  const filters: FrappeFilter[] = [
-    ["Job Assignment", "work_object_type", "=", scope.workObjectType],
-    ["Job Assignment", "work_object_id", "=", scope.workObjectId],
-    [
-      "Job Assignment",
-      "physical_context_type",
-      "=",
-      scope.physicalContextType,
-    ],
-    ["Job Assignment", "physical_context_id", "=", scope.physicalContextId],
-    ["Job Assignment", "status", "in", [...ACTIVE_ASSIGNMENT_STATUSES]],
-  ];
-  const candidates = await listFrappeResource(
+  const candidates = await listCurrentOperatingWorkObjectAssignments(
     env,
-    "Job Assignment",
-    filters,
-    100,
+    auth.session.tenant_id,
+    {
+      scope,
+      ...(jobReadMode(auth) === "assigned"
+        ? { actorUsers: appUserIdentities(auth.session) }
+        : {}),
+    },
   );
-  if (jobReadMode(auth) === "any")
-    return candidates.length === 1 ? candidates[0] ?? null : null;
-  const userId = auth.session.frappe_user_id;
-  if (!userId) return null;
-  const direct = candidates.filter((row) => sameUser(row.assigned_user, userId));
-  const candidateNames = candidates
-    .map((row) => text(row.name))
-    .filter(notNull);
-  const workerRows =
-    candidateNames.length > 0
-      ? await listFrappeResource(
-          env,
-          "Work Package Worker",
-          [["Work Package Worker", "worker_user", "=", userId]],
-          100,
-          "Job Assignment",
-        )
-      : [];
-  const workerAssignmentNames = new Set(
-    workerRows
-      .filter(
-        (row) =>
-          row.parenttype === "Job Assignment" &&
-          row.parentfield === "assigned_workers" &&
-          sameUser(row.worker_user, userId),
-      )
-      .map((row) => text(row.parent))
-      .filter((parent): parent is string =>
-        Boolean(parent && candidateNames.includes(parent)),
-      ),
-  );
-  const authorized = candidates.filter(
-    (row) =>
-      sameUser(row.assigned_user, userId) ||
-      workerAssignmentNames.has(text(row.name) ?? ""),
-  );
-  const unique = new Map(
-    authorized.flatMap((row) => {
-      const name = text(row.name);
-      return name ? [[name, row] as const] : [];
-    }),
-  );
-  return unique.size === 1 ? [...unique.values()][0] ?? null : null;
+  return candidates.length === 1
+    ? nativeOperatingWorkObjectAssignmentRow(candidates[0]!)
+    : null;
 }
 
 /** Build the universal work-object packet used by discovery and action clients. */
@@ -1020,40 +1111,49 @@ export async function buildUniversalWorkPackageReadModel(
     env,
     scope.workObjectId,
     assignmentId,
+    auth.session.tenant_id,
   );
+  const officeRole = ["owner", "ops", "production"].includes(auth.session.role);
   if (
-    !workPackage ||
-    workPackage.workObjectType !== scope.workObjectType ||
-    workPackage.workObjectId !== scope.workObjectId ||
-    workPackage.physicalContextType !== scope.physicalContextType ||
-    workPackage.physicalContextId !== scope.physicalContextId
+    (!workPackage && !officeRole) ||
+    (workPackage &&
+      (workPackage.workObjectType !== scope.workObjectType ||
+        workPackage.workObjectId !== scope.workObjectId ||
+        workPackage.physicalContextType !== scope.physicalContextType ||
+        workPackage.physicalContextId !== scope.physicalContextId))
   ) {
     return null;
   }
   const projection = fieldWorkPackageProjection(
     workPackage,
-    auth.session.frappe_user_id,
+    jobReadMode(auth) === "assigned" ? appUserIdentities(auth.session) : null,
     {
       completionAuthority: hasWorkPackageCompletionAuthority(
         workPackage,
         assignment,
-        auth.session.frappe_user_id,
+        appUserIdentities(auth.session),
         auth.session.role,
       ),
+      completionActorUser: appUserIdentities(auth.session),
       // The device must see the same verdict the action endpoint will apply, so
       // a blocked crew is told why instead of being refused after tapping.
-      safetyBlockers: (
-        await safetyReadinessForScope(env, {
-          tenantId: auth.session.tenant_id,
-          scope: { type: "work_package", id: workPackage.id },
-          jobId: scope.workObjectId,
-          subjectUserIds: [auth.session.user_id],
-          now: new Date().toISOString(),
-        })
-      ).blockers,
+      safetyBlockers: workPackage
+        ? (
+            await safetyReadinessForScope(env, {
+              tenantId: auth.session.tenant_id,
+              scope: { type: "work_package", id: workPackage.id },
+              jobId: scope.workObjectId,
+              subjectUserIds: [auth.session.user_id],
+              now: new Date().toISOString(),
+            })
+          ).blockers
+        : [],
     },
   );
   const allowedActions = [...projection.allowedActions];
+  allowedActions.push(
+    ...officeWorkPackageActions(auth.session.role, assignment, workPackage),
+  );
   if (
     auth.session.role === "field" &&
     !allowedActions.includes("field.checkin.create")
@@ -1065,7 +1165,7 @@ export async function buildUniversalWorkPackageReadModel(
     work_object: scope,
     assignment: assignmentModel(assignment),
     work_package: projection.work_package,
-    allowed_actions: allowedActions,
+    allowed_actions: [...new Set(allowedActions)],
   };
 }
 
@@ -1074,7 +1174,7 @@ export async function buildTodayReadModel(
   auth: AuthContext,
 ): Promise<TodayReadModel> {
   const readMode = jobReadMode(auth);
-  const assignments = await authorizedAssignments(env, auth);
+  const assignments = await nativeTodayAssignments(env, auth);
   const preferredByJob = preferredAssignmentsByJob(assignments);
   const assignedJobIds = [...preferredByJob.keys()];
   const typedAssignments = preferredAssignmentsByWorkObject(assignments);
@@ -1084,50 +1184,24 @@ export async function buildTodayReadModel(
     typedAssignments.length === 0
   )
     return emptyToday(env, auth, assignments);
-  const jobs =
-    readMode === "assigned"
-      ? assignedJobIds.length > 0
-        ? await listFrappeResource(
-          env,
-          "Roof Job",
-          [
-            ["Roof Job", "name", "in", assignedJobIds],
-            ["Roof Job", "job_status", "in", [...ACTIVE_JOB_STATUSES]],
-          ],
-          100,
-        )
-        : []
-      : await listFrappeResource(
-          env,
-          "Roof Job",
-          [["Roof Job", "job_status", "in", [...ACTIVE_JOB_STATUSES]]],
-          100,
-        );
+  const jobSource = await nativeActiveJobs(
+    env,
+    auth.session.tenant_id,
+    readMode === "assigned" ? assignedJobIds : undefined,
+  );
+  const jobs = jobSource.rows.map(nativeOperatingJobRow);
   const jobIds = jobs.map((row) => text(row.name)).filter(notNull);
   const propertyIds = jobs
     .map((row) => text(row.roofing_property))
     .filter(notNull);
-  const [blockedGates, properties] = await Promise.all([
-    jobIds.length > 0
-      ? listFrappeResource(
-          env,
-          "Production Gate State",
-          [
-            ["Production Gate State", "roof_job", "in", jobIds],
-            ["Production Gate State", "state", "=", "Blocked"],
-          ],
-          100,
-        )
-      : Promise.resolve([]),
-    propertyIds.length > 0
-      ? listFrappeResource(
-          env,
-          "Roofing Property",
-          [["Roofing Property", "name", "in", propertyIds]],
-          100,
-        )
-      : Promise.resolve([]),
+  const [gateSource, propertySource] = await Promise.all([
+    nativeProductionGates(env, auth.session.tenant_id, jobIds, "blocked"),
+    nativeProperties(env, auth.session.tenant_id, propertyIds),
   ]);
+  const blockedGates = gateSource.rows.map(nativeProductionGateFrappeRow);
+  const properties = propertySource.rows
+    .map(nativePropertyFrappeRow)
+    .filter((row): row is FrappeRow => row !== null);
   const propertyById = new Map(properties.map((row) => [text(row.name), row]));
   const blockedByJob = groupBy(blockedGates, "roof_job");
   const shaped = jobs
@@ -1163,14 +1237,16 @@ export async function buildTodayReadModel(
       const scope = assignmentWorkObjectScope(assignmentRow);
       if (!scope) return [];
       const assignment = assignmentModel(assignmentRow);
-      return [{
-        ...scope,
-        scheduled_start: assignment.scheduled_start,
-        scheduled_end: assignment.scheduled_end,
-        next_action:
-          assignment.blocker_reason ?? "Open the typed physical work package",
-        assignment,
-      }];
+      return [
+        {
+          ...scope,
+          scheduled_start: assignment.scheduled_start,
+          scheduled_end: assignment.scheduled_end,
+          next_action:
+            assignment.blocker_reason ?? "Open the typed physical work package",
+          assignment,
+        },
+      ];
     })
     .sort(
       (left, right) =>
@@ -1180,6 +1256,9 @@ export async function buildTodayReadModel(
         left.physical_context_id.localeCompare(right.physical_context_id),
     );
   const stale: string[] = [];
+  if (jobSource.partial) stale.push("jobs.partial_source");
+  if (gateSource.partial) stale.push("jobs.blocked_gates_partial");
+  if (propertySource.partial) stale.push("jobs.address_partial");
   if (properties.length < new Set(propertyIds).size) stale.push("jobs.address");
   return {
     ...envelope(
@@ -1200,75 +1279,36 @@ export async function buildProductionRunwayReadModel(
   if (!auth.permissions.includes("production:read"))
     throw new Error("production_scope_required");
 
-  const schedulePreparationConfigured =
-    auth.session.role === "owner" &&
-    Boolean(auth.session.frappe_user_id?.trim()) &&
-    productionScheduleApprovalBrokerConfig(env) !== null &&
-    productionScheduleApprovalDecisionConfig(env) !== null;
+  const schedulePreparationConfigured = ["owner", "ops", "production"].includes(
+    auth.session.role,
+  );
   const gateClearanceAllowed =
     auth.permissions.includes("production:clear_gate") &&
     Boolean(auth.session.frappe_user_id?.trim());
-  const [jobs, assignments, crewProfiles] = await Promise.all([
-    listOfficeProductionFrappeResource(
-      env,
-      "Roof Job",
-      [["Roof Job", "job_status", "in", [...ACTIVE_JOB_STATUSES]]],
-      PRODUCTION_SOURCE_LIMIT,
-    ),
-    listOfficeProductionFrappeResource(
-      env,
-      "Job Assignment",
-      [
-        ["Job Assignment", "status", "in", [...ACTIVE_ASSIGNMENT_STATUSES]],
-        ["Job Assignment", "assignment_type", "=", "Production"],
-      ],
-      PRODUCTION_SOURCE_LIMIT,
-    ),
-    // The roster is a bounded input list for schedule preparation, not a
-    // dispatch authority. Avoid requesting it for Ops or disabled rails.
-    schedulePreparationConfigured
-      ? listOfficeProductionFrappeResource(
-          env,
-          "Crew Profile",
-          [["Crew Profile", "status", "=", "Active"]],
-          PRODUCTION_SOURCE_LIMIT,
-        )
-      : Promise.resolve([]),
+  const [jobSource, nativeAssignmentsSource, crewSource] = await Promise.all([
+    nativeActiveJobs(env, auth.session.tenant_id),
+    listCurrentOperatingJobAssignments(env, auth.session.tenant_id),
+    nativeProductionCrews(env, auth.session.tenant_id),
   ]);
+  const jobs = jobSource.rows.map(nativeOperatingJobRow);
+  const assignments = nativeAssignmentsSource.map(nativeOperatingAssignmentRow);
   const jobIds = jobs.map((row) => text(row.name)).filter(notNull);
-  const [gates, materialExceptions] = await Promise.all([
-    jobIds.length > 0
-      ? listOfficeProductionFrappeResource(
-          env,
-          "Production Gate State",
-          [["Production Gate State", "roof_job", "in", jobIds]],
-          PRODUCTION_SOURCE_LIMIT,
-        )
-      : Promise.resolve([]),
-    jobIds.length > 0
-      ? listOfficeProductionFrappeResource(
-          env,
-          "Supplier Order",
-          [
-            ["Supplier Order", "roof_job", "in", jobIds],
-            ["Supplier Order", "status", "in", ["Needs Review", "Shortage"]],
-          ],
-          PRODUCTION_SOURCE_LIMIT,
-        )
-      : Promise.resolve([]),
+  const [gateSource, materialSource] = await Promise.all([
+    nativeProductionGates(env, auth.session.tenant_id, jobIds),
+    nativeMaterialExceptions(env, auth.session.tenant_id, jobIds),
   ]);
+  const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
+  const materialExceptions = materialSource.rows.map(
+    nativeMaterialExceptionFrappeRow,
+  );
 
   const partialSources: string[] = [];
-  if (jobs.length === PRODUCTION_SOURCE_LIMIT)
-    partialSources.push("active_jobs");
+  if (jobSource.partial) partialSources.push("active_jobs");
   if (assignments.length === PRODUCTION_SOURCE_LIMIT)
     partialSources.push("active_assignments");
-  if (gates.length === PRODUCTION_SOURCE_LIMIT)
-    partialSources.push("gate_states");
-  if (materialExceptions.length === PRODUCTION_SOURCE_LIMIT)
-    partialSources.push("material_exceptions");
-  if (crewProfiles.length === PRODUCTION_SOURCE_LIMIT)
-    partialSources.push("crew_profiles");
+  if (gateSource.partial) partialSources.push("gate_states");
+  if (materialSource.partial) partialSources.push("material_exceptions");
+  if (crewSource.partial) partialSources.push("crew_profiles");
 
   const gateRowsByJob = groupBy(gates, "roof_job");
   const materialRowsByJob = groupBy(materialExceptions, "roof_job");
@@ -1279,12 +1319,12 @@ export async function buildProductionRunwayReadModel(
     "material_exceptions",
   );
   const crewProfilesComplete = !partialSources.includes("crew_profiles");
-  const crews = crewProfiles
-    .flatMap((row) => {
-      const id = text(row.name) ?? text(row.crew_profile_id);
-      const name = text(row.crew_name);
-      return id && name ? [{ id, name }] : [];
-    })
+  const crews = crewSource.rows
+    .map((row) => ({
+      id: row.crew_id,
+      name: row.display_name,
+      version: row.version,
+    }))
     .sort(
       (left, right) =>
         left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
@@ -1318,7 +1358,7 @@ export async function buildProductionRunwayReadModel(
       const schedulingGateProjection = SCHEDULING_PRODUCTION_GATES.map(
         (name) => ({
           name,
-          state: text(latestGatesByName.get(name)?.state),
+          state: nativeGateStateLabel(text(latestGatesByName.get(name)?.state)),
         }),
       );
       const gateCoverage: ProductionRunwayReadModel["jobs"][number]["gate_coverage"] =
@@ -1333,13 +1373,13 @@ export async function buildProductionRunwayReadModel(
       const gateSummary = {
         expected: SCHEDULING_PRODUCTION_GATES.length,
         blocked: schedulingGates.filter(
-          (gate) => text(gate.state) === "Blocked",
+          (gate) => text(gate.state) === "blocked",
         ).length,
-        ready: schedulingGates.filter((gate) => text(gate.state) === "Ready")
+        ready: schedulingGates.filter((gate) => text(gate.state) === "ready")
           .length,
-        waived: schedulingGates.filter((gate) => text(gate.state) === "Waived")
+        waived: schedulingGates.filter((gate) => text(gate.state) === "waived")
           .length,
-        done: schedulingGates.filter((gate) => text(gate.state) === "Done")
+        done: schedulingGates.filter((gate) => text(gate.state) === "complete")
           .length,
       };
       const materialAttention = (materialRowsByJob.get(id) ?? []).flatMap(
@@ -1348,8 +1388,8 @@ export async function buildProductionRunwayReadModel(
           return status
             ? [
                 {
-                  status,
-                  requested_delivery_date: text(row.requested_delivery_date),
+                  status: text(row.exception_type) ?? status,
+                  requested_delivery_date: null,
                 },
               ]
             : [];
@@ -1368,14 +1408,16 @@ export async function buildProductionRunwayReadModel(
         materialAttention.length > 0;
       const lane: ProductionRunwayLane = blocked
         ? "blocked"
-        : assignment?.scheduled_start
-          ? "scheduled"
-          : !assignment && assignmentRowsComplete
-            ? "needs_assignment"
-            : !assignment
-              ? "needs_verification"
-              : allReturnedGatesNonBlocking
-                ? "ready_for_review"
+        : !assignmentRowsComplete ||
+            !gateRowsComplete ||
+            !materialExceptionRowsComplete
+          ? "needs_verification"
+          : assignment?.scheduled_start
+            ? "scheduled"
+            : allReturnedGatesNonBlocking && crews.length > 0
+              ? "ready_for_review"
+              : gateCoverage === "complete"
+                ? "needs_assignment"
                 : "needs_verification";
       const nextAction =
         lane === "blocked"
@@ -1383,9 +1425,9 @@ export async function buildProductionRunwayReadModel(
           : lane === "scheduled"
             ? "Confirm the schedule against current gate coverage"
             : lane === "needs_assignment"
-              ? "Assign a crew and review gates before scheduling"
+              ? "Create an active native crew before scheduling"
               : lane === "ready_for_review"
-                ? "Review for scheduling; this view does not dispatch work"
+                ? "Choose a crew and schedule this job"
                 : "Verify the production-gate records before scheduling";
       const schedulingPreparationAllowed =
         schedulePreparationConfigured &&
@@ -1402,6 +1444,7 @@ export async function buildProductionRunwayReadModel(
           brand: text(job.brand),
           service_type: text(job.service_type),
           status: text(job.job_status),
+          version: Number(job.version),
           assignment,
           scheduling_preparation_allowed: schedulingPreparationAllowed,
           lane,
@@ -1436,22 +1479,18 @@ export async function buildProductionRunwayReadModel(
         ...assignments,
         ...gates,
         ...materialExceptions,
-        ...crewProfiles,
+        ...crewSource.rows.map(nativeProductionCrewFrappeRow),
       ],
       stale,
     ),
     allowed_actions: [
       "job.read",
       "production.read",
-      // The clearing surface reads its affordance from here rather than from the
-      // role name, for the same reason schedule preparation does: a session whose
-      // app user carries no Frappe identity has nobody to attribute a clearance
-      // to, and the route refuses it.
       ...(gateClearanceAllowed ? ["production_gate.clear"] : []),
       ...(schedulePreparationConfigured &&
       crewProfilesComplete &&
       crews.length > 0
-        ? ["production_schedule_approval.prepare"]
+        ? ["operating_job_assignment.create"]
         : []),
     ],
     partial_sources: partialSources,
@@ -1479,145 +1518,63 @@ export async function buildJobReadModel(
 ): Promise<JobReadModel | null> {
   if (!validJobName(jobName)) return null;
   const readMode = jobReadMode(auth);
-  const assignmentRow = await activeAssignmentForJob(env, auth, jobName);
+  const assignmentRow = await activeNativeAssignmentForJob(env, auth, jobName);
   if (readMode === "assigned" && !assignmentRow) return null;
-  const jobs = await listFrappeResource(
+  const nativeJobCore = await readNativeJobCore(
     env,
-    "Roof Job",
-    [["Roof Job", "name", "=", jobName]],
-    1,
+    auth.session.tenant_id,
+    jobName,
   );
-  const job = jobs[0];
-  if (!job || !ACTIVE_JOB_STATUSES.includes(text(job.job_status) as never))
-    return null;
+  if (!nativeJobCore) return null;
+  const job = nativeOperatingJobRow(nativeJobCore.job);
+  if (!ACTIVE_JOB_STATUSES.includes(text(job.job_status) as never)) return null;
 
   const propertyId = text(job.roofing_property);
-  const customerId = text(job.customer);
-  const [
-    gates,
-    evidence,
-    checkIns,
-    propertyRows,
-    scopeClauses,
-    measurements,
-    takeoffs,
-    supplierOrders,
-    changeOrders,
-    safetyPlans,
-    customerRows,
-    workPackage,
-  ] = await Promise.all([
-    listFrappeResource(
-      env,
-      "Production Gate State",
-      [["Production Gate State", "roof_job", "=", jobName]],
-      50,
-    ),
-    listFrappeResourcePage(
-      env,
-      "Evidence Item",
-      [["Evidence Item", "roof_job", "=", jobName]],
-      FIELD_PACKET_PROOF_PAGE_SIZE,
-      0,
-    ),
-    listFrappeResource(
-      env,
-      "Field Check-in",
-      [["Field Check-in", "roof_job", "=", jobName]],
-      50,
-    ),
-    propertyId
-      ? listFrappeResource(
+  const [gateSource, workPackage] = await Promise.all([
+    nativeProductionGates(env, auth.session.tenant_id, [jobName]),
+    assignmentRow
+      ? nativeFieldWorkPackageForAssignment(
           env,
-          "Roofing Property",
-          [["Roofing Property", "name", "=", propertyId]],
-          1,
+          auth.session.tenant_id,
+          jobName,
+          text(assignmentRow.name)!,
         )
-      : Promise.resolve([]),
-    listFrappeResource(
-      env,
-      "Scope Clause",
-      [
-        ["Scope Clause", "roof_job", "=", jobName],
-        ["Scope Clause", "status", "=", "Approved"],
-      ],
-      100,
-    ),
-    listFrappeResource(
-      env,
-      "Measurement Report",
-      [
-        ["Measurement Report", "roof_job", "=", jobName],
-        ["Measurement Report", "review_status", "=", "Approved"],
-      ],
-      50,
-    ),
-    listFrappeResource(
-      env,
-      "Material Takeoff",
-      [
-        ["Material Takeoff", "roof_job", "=", jobName],
-        ["Material Takeoff", "status", "=", "Approved"],
-      ],
-      50,
-    ),
-    listFrappeResource(
-      env,
-      "Supplier Order",
-      [["Supplier Order", "roof_job", "=", jobName]],
-      50,
-    ),
-    listFrappeResource(
-      env,
-      "Change Order",
-      [
-        ["Change Order", "roof_job", "=", jobName],
-        ["Change Order", "status", "in", ["Approved", "Presented", "Accepted"]],
-      ],
-      50,
-    ),
-    listFrappeResource(
-      env,
-      "Safety Plan",
-      [
-        ["Safety Plan", "roof_job", "=", jobName],
-        ["Safety Plan", "status", "in", ["Ready", "Acknowledged"]],
-      ],
-      20,
-    ),
-    customerId
-      ? listFrappeResource(
-          env,
-          "Roofing Customer",
-          [["Roofing Customer", "name", "=", customerId]],
-          1,
-        )
-      : Promise.resolve([]),
-    readMode === "assigned" && assignmentRow
-      ? fieldWorkPackageForAssignment(env, jobName, text(assignmentRow.name)!)
       : Promise.resolve(null),
   ]);
-  const property = propertyRows[0];
-  const customer = customerRows[0];
-  const proofStream = [
-    ...evidence.map(evidenceProofItem),
-    ...checkIns.map(checkInProofItem),
-  ]
+  const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
+  const property = nativePropertyFrappeRow(nativeJobCore.property);
+  const customer = nativeCustomerFrappeRow(nativeJobCore.customer);
+  const nativeWorkPackageEvidence =
+    assignmentRow && workPackage
+      ? await nativeWorkPackageProofRows(
+          env,
+          auth.session.tenant_id,
+          jobName,
+          text(assignmentRow.name)!,
+          workPackage,
+        )
+      : [];
+  if (nativeWorkPackageEvidence === null)
+    throw new Error("native_job_proof_unavailable");
+  const proofEvidenceRows = nativeWorkPackageEvidence.slice(
+    0,
+    FIELD_PACKET_PROOF_PAGE_SIZE,
+  );
+  const proofStream = proofEvidenceRows
+    .map(evidenceProofItem)
     .filter(notNull)
     .sort(compareProofItems);
-  const safety = safetyPlans.sort(
-    (a, b) => numberValue(b.version) - numberValue(a.version),
-  )[0];
   const workPackagePacket = fieldWorkPackageProjection(
     workPackage,
-    readMode === "assigned" ? auth.session.frappe_user_id : null,
+    readMode === "assigned" ? appUserIdentities(auth.session) : null,
     {
       completionAuthority: hasWorkPackageCompletionAuthority(
         workPackage,
         assignmentRow ?? null,
-        auth.session.frappe_user_id,
+        appUserIdentities(auth.session),
         auth.session.role,
       ),
+      completionActorUser: appUserIdentities(auth.session),
       safetyBlockers: workPackage
         ? (
             await safetyReadinessForScope(env, {
@@ -1631,42 +1588,57 @@ export async function buildJobReadModel(
         : [],
     },
   );
-  const stale: string[] = [];
+  const stale = [
+    "packet.contact.access_instructions",
+    "packet.scope_clauses.native_unavailable",
+    "packet.measurements.native_unavailable",
+    "packet.materials.takeoffs.native_unavailable",
+    "packet.materials.supplier_orders.native_unavailable",
+    "packet.change_orders.native_unavailable",
+    "packet.safety_plan.native_unavailable",
+  ];
+  if (gateSource.partial) stale.push("gates.partial_source");
   if (
-    readMode === "any" &&
-    gates.some((row) => !text(row.owner_user))
+    new Set(gates.map((row) => text(row.gate)).filter(notNull)).size <
+    SCHEDULING_PRODUCTION_GATES.length
   )
-    stale.push("gates.owner");
+    stale.push("gates.native_incomplete");
   if (propertyId && !property) stale.push("job.address");
   if (!customer || !text(customer.display_name))
     stale.push("packet.contact.display_name");
   if (!customer || !text(customer.phone)) stale.push("packet.contact.phone");
-  stale.push("packet.contact.access_instructions");
+  if (assignmentRow && !workPackage)
+    stale.push("packet.work_package.native_unavailable");
+  if (!assignmentRow || !workPackage)
+    stale.push("proof_stream.native_scope_unavailable");
   const readEnvelope = envelope(
     auth,
     [
-      publicFrappeRow(job),
+      job,
       ...(assignmentRow ? [assignmentRow] : []),
       ...gates,
-      ...evidence,
-      ...checkIns,
-      ...propertyRows,
-      ...customerRows,
-      ...scopeClauses,
-      ...measurements,
-      ...takeoffs,
-      ...supplierOrders,
-      ...changeOrders,
-      ...safetyPlans,
+      ...proofEvidenceRows,
+      ...(property ? [property] : []),
+      ...(customer ? [customer] : []),
       ...(workPackage ? [{ modified: workPackage.modified }] : []),
     ],
     stale,
   );
   return {
     ...readEnvelope,
-    allowed_actions: auth.session.role === "production"
-      ? ["job.read"]
-      : [...readEnvelope.allowed_actions, ...workPackagePacket.allowedActions],
+    allowed_actions: [
+      ...new Set([
+        ...(auth.session.role === "production"
+          ? ["job.read"]
+          : readEnvelope.allowed_actions),
+        ...(readMode === "assigned" ? workPackagePacket.allowedActions : []),
+        ...officeWorkPackageActions(
+          auth.session.role,
+          assignmentRow,
+          workPackage,
+        ),
+      ]),
+    ],
     job: {
       id: text(job.name)!,
       roof_job_id: text(job.roof_job_id),
@@ -1674,96 +1646,20 @@ export async function buildJobReadModel(
       brand: text(job.brand),
       service_type: text(job.service_type),
       status: text(job.job_status),
-      address: address(property),
+      address: address(property ?? undefined),
       current_gate_state: text(job.current_gate_state),
     },
     assignment: assignmentRow ? assignmentModel(assignmentRow) : null,
-    gates: gates.flatMap((row) =>
-      gateModel(row, readMode === "assigned"),
-    ),
+    gates: gates.flatMap((row) => gateModel(row, readMode === "assigned")),
     packet: {
-      scope_clauses: scopeClauses.flatMap((row) => {
-        const id = text(row.scope_clause_id) ?? text(row.name);
-        return id
-          ? [
-              {
-                id,
-                type: text(row.clause_type),
-                title: text(row.title),
-                text: text(row.clause_text),
-                version: text(row.version),
-              },
-            ]
-          : [];
-      }),
-      measurements: measurements.flatMap((row) => {
-        const id = text(row.measurement_id) ?? text(row.name);
-        return id
-          ? [
-              {
-                id,
-                provider: text(row.provider),
-                review_status: text(row.review_status),
-                parsed_at: text(row.parsed_at),
-              },
-            ]
-          : [];
-      }),
+      scope_clauses: [],
+      measurements: [],
       materials: {
-        takeoffs: takeoffs.flatMap((row) => {
-          const id = text(row.takeoff_id) ?? text(row.name);
-          return id
-            ? [
-                {
-                  id,
-                  status: text(row.status),
-                  prepared_at: text(row.prepared_at),
-                },
-              ]
-            : [];
-        }),
-        supplier_orders: supplierOrders.flatMap((row) => {
-          const id = text(row.supplier_order_id) ?? text(row.name);
-          return id
-            ? [
-                {
-                  id,
-                  status: text(row.status),
-                  requested_delivery_date: text(row.requested_delivery_date),
-                  delivery_notes: text(row.delivery_notes),
-                },
-              ]
-            : [];
-        }),
+        takeoffs: [],
+        supplier_orders: [],
       },
-      change_orders: changeOrders.flatMap((row) => {
-        const id = text(row.change_order_id) ?? text(row.name);
-        return id
-          ? [
-              {
-                id,
-                number: text(row.change_number),
-                version: optionalNumber(row.version),
-                status: text(row.status),
-                title: text(row.title),
-                scope_delta: text(row.scope_delta),
-              },
-            ]
-          : [];
-      }),
-      safety_plan: safety
-        ? {
-            id: text(safety.safety_plan_id) ?? text(safety.name)!,
-            version: optionalNumber(safety.version),
-            status: text(safety.status),
-            effective_date: text(safety.effective_date),
-            hazard_summary: text(safety.hazard_summary),
-            controls: text(safety.controls),
-            emergency_plan: text(safety.emergency_plan),
-            ppe_requirements: text(safety.ppe_requirements),
-            weather_limits: text(safety.weather_limits),
-          }
-        : null,
+      change_orders: [],
+      safety_plan: null,
       work_package: workPackagePacket.work_package,
       contact: customer
         ? {
@@ -1776,7 +1672,7 @@ export async function buildJobReadModel(
     proof_stream: proofStream,
     proof_page: {
       next_cursor:
-        evidence.length === FIELD_PACKET_PROOF_PAGE_SIZE
+        nativeWorkPackageEvidence.length > FIELD_PACKET_PROOF_PAGE_SIZE
           ? String(FIELD_PACKET_PROOF_PAGE_SIZE)
           : null,
       page_size: FIELD_PACKET_PROOF_PAGE_SIZE,
@@ -1804,26 +1700,65 @@ export async function buildJobProofReadModel(
   jobName: string,
   cursor: string | null,
 ): Promise<ProofPageReadModel | null> {
+  if (!validJobName(jobName)) return null;
   const readMode = jobReadMode(auth);
-  const assignment = await activeAssignmentForJob(env, auth, jobName);
+  const assignment = await activeNativeAssignmentForJob(env, auth, jobName);
   if (readMode === "assigned" && !assignment) return null;
   const offset = parseProofCursor(cursor);
   if (offset === null) return null;
-  const evidence = await listFrappeResourcePage(
+  const nativeJobCore = await readNativeJobCore(
     env,
-    "Evidence Item",
-    [["Evidence Item", "roof_job", "=", jobName]],
-    FIELD_PACKET_PROOF_PAGE_SIZE,
+    auth.session.tenant_id,
+    jobName,
+  );
+  if (
+    !nativeJobCore ||
+    !ACTIVE_JOB_STATUSES.includes(
+      nativeJobStatusLabel(nativeJobCore.job.job_status) as never,
+    )
+  )
+    return null;
+  const workPackage = assignment
+    ? await nativeFieldWorkPackageForAssignment(
+        env,
+        auth.session.tenant_id,
+        jobName,
+        text(assignment.name)!,
+      )
+    : null;
+  const nativeEvidence =
+    assignment && workPackage
+      ? await nativeWorkPackageProofRows(
+          env,
+          auth.session.tenant_id,
+          jobName,
+          text(assignment.name)!,
+          workPackage,
+        )
+      : [];
+  if (nativeEvidence === null) throw new Error("native_job_proof_unavailable");
+  const pageRows = nativeEvidence.slice(
     offset,
+    offset + FIELD_PACKET_PROOF_PAGE_SIZE,
   );
   return {
-    ...envelope(auth, [...(assignment ? [assignment] : []), ...evidence], []),
-    items: evidence
+    ...envelope(
+      auth,
+      [
+        nativeOperatingJobRow(nativeJobCore.job),
+        ...(assignment ? [assignment] : []),
+        ...pageRows,
+      ],
+      !assignment || !workPackage
+        ? ["proof_stream.native_scope_unavailable"]
+        : [],
+    ),
+    items: pageRows
       .map(evidenceProofItem)
       .filter(notNull)
       .sort(compareProofItems),
     next_cursor:
-      evidence.length === FIELD_PACKET_PROOF_PAGE_SIZE
+      nativeEvidence.length > offset + FIELD_PACKET_PROOF_PAGE_SIZE
         ? String(offset + FIELD_PACKET_PROOF_PAGE_SIZE)
         : null,
   };
@@ -1836,185 +1771,323 @@ export async function buildOwnerNowReadModel(
 ): Promise<OwnerNowReadModel> {
   if (auth.session.role !== "owner" && auth.session.role !== "ops")
     throw new Error("owner_scope_required");
-  const [
-    jobs,
-    fieldBlockers,
-    gates,
-    incidents,
-    payments,
-    untriagedLeads,
-    unknownTriageLeads,
-    supplierOrders,
-  ] = await Promise.all([
-    listFrappeResource(
-      env,
-      "Roof Job",
-      [["Roof Job", "job_status", "in", [...ACTIVE_JOB_STATUSES]]],
-      OWNER_NOW_SOURCE_LIMIT,
-    ),
-    listFrappeResource(
-      env,
-      "Field Check-in",
-      [
-        ["Field Check-in", "blocker_flag", "=", 1],
-        ["Field Check-in", "status", "in", ["Received", "Needs Review"]],
-        ["Field Check-in", "sync_state", "=", "Verified"],
-      ],
-      OWNER_NOW_SOURCE_LIMIT,
-    ),
-    listFrappeResource(
-      env,
-      "Production Gate State",
-      [["Production Gate State", "state", "=", "Blocked"]],
-      OWNER_NOW_SOURCE_LIMIT,
-    ),
-    listFrappeResource(
-      env,
-      "Automation Incident",
-      [["Automation Incident", "status", "in", ["Open", "Acknowledged"]]],
-      OWNER_NOW_SOURCE_LIMIT,
-    ),
-    listFrappeResource(
-      env,
-      "Payment Milestone",
-      [["Payment Milestone", "status", "in", ["Webhook Seen", "Needs Review"]]],
-      OWNER_NOW_SOURCE_LIMIT,
-    ),
-    listFrappeResource(
-      env,
-      "Lead Envelope",
-      [["Lead Envelope", "triage_status", "=", "Untriaged"]],
-      OWNER_NOW_SOURCE_LIMIT,
-    ),
-    listFrappeResource(
-      env,
-      "Lead Envelope",
-      [["Lead Envelope", "triage_status", "=", "Unknown"]],
-      OWNER_NOW_SOURCE_LIMIT,
-    ),
-    listFrappeResource(
-      env,
-      "Supplier Order",
-      [["Supplier Order", "status", "in", ["Needs Review", "Shortage"]]],
-      OWNER_NOW_SOURCE_LIMIT,
-    ),
-  ]);
-  const economicsJobIds = jobs.map((row) => text(row.name)).filter(notNull).sort();
-  const [
-    economicsQuotes,
-    economicsChangeOrders,
-    economicsSupplierQuotes,
-    economicsSupplierOrders,
-    economicsMaterialLots,
-    economicsShopOrders,
-    economicsFieldCheckins,
-    economicsPayments,
-    economicsCostEvents,
-    economicsReconciliations,
-  ] = economicsJobIds.length
-    ? await Promise.all([
-        listOfficeEstimatorFrappeResource(
-          env,
-          "Customer Quote",
-          [["Customer Quote", "roof_job", "in", economicsJobIds]],
-          OWNER_NOW_SOURCE_LIMIT,
-        ),
-        listOfficeEstimatorFrappeResource(
-          env,
-          "Change Order",
-          [["Change Order", "roof_job", "in", economicsJobIds]],
-          OWNER_NOW_SOURCE_LIMIT,
-        ),
-        listOfficeEstimatorFrappeResource(
-          env,
-          "Supplier Quote",
-          [["Supplier Quote", "roof_job", "in", economicsJobIds]],
-          OWNER_NOW_SOURCE_LIMIT,
-        ),
-        listOfficeEstimatorFrappeResource(
-          env,
-          "Supplier Order",
-          [["Supplier Order", "roof_job", "in", economicsJobIds]],
-          OWNER_NOW_SOURCE_LIMIT,
-        ),
-        listOfficeEstimatorFrappeResource(
-          env,
-          "Material Lot",
-          [["Material Lot", "roof_job", "in", economicsJobIds]],
-          OWNER_NOW_SOURCE_LIMIT,
-        ),
-        listOfficeEstimatorFrappeResource(
-          env,
-          "Shop Order",
-          [["Shop Order", "roof_job", "in", economicsJobIds]],
-          OWNER_NOW_SOURCE_LIMIT,
-        ),
-        listOfficeEstimatorFrappeResource(
-          env,
-          "Field Check-in",
-          [["Field Check-in", "roof_job", "in", economicsJobIds]],
-          OWNER_NOW_SOURCE_LIMIT,
-        ),
-        listOfficeEstimatorFrappeResource(
-          env,
-          "Payment Milestone",
-          [["Payment Milestone", "roof_job", "in", economicsJobIds]],
-          OWNER_NOW_SOURCE_LIMIT,
-        ),
-        listOfficeEstimatorFrappeResource(
-          env,
-          "Job Cost Event",
-          [
-            ["Job Cost Event", "tenant", "=", auth.session.tenant_id],
-            ["Job Cost Event", "roof_job", "in", economicsJobIds],
-          ],
-          OWNER_NOW_SOURCE_LIMIT,
-        ),
-        listOfficeEstimatorFrappeResource(
-          env,
-          "Integration Reconciliation",
-          [["Integration Reconciliation", "roof_job", "in", economicsJobIds]],
-          OWNER_NOW_SOURCE_LIMIT,
-        ),
-      ])
-    : [[], [], [], [], [], [], [], [], [], []];
-  const ownerEconomicsSources: Array<readonly [string, FrappeRow[]]> = [
-    ["economics.customer_quotes", economicsQuotes],
-    ["economics.change_orders", economicsChangeOrders],
-    ["economics.supplier_quotes", economicsSupplierQuotes],
-    ["economics.supplier_orders", economicsSupplierOrders],
-    ["economics.material_lots", economicsMaterialLots],
-    ["economics.shop_orders", economicsShopOrders],
-    ["economics.field_checkins", economicsFieldCheckins],
-    ["economics.payment_milestones", economicsPayments],
-    ["economics.job_cost_events", economicsCostEvents],
-    ["economics.integration_reconciliations", economicsReconciliations],
-  ];
-  const ownerEconomicsPartialSources = ownerEconomicsSources.flatMap(
-    ([name, rows]) => (rows.length === OWNER_NOW_SOURCE_LIMIT ? [name] : []),
+
+  const jobSource = await nativeActiveJobs(
+    env,
+    auth.session.tenant_id,
+    undefined,
+    OWNER_NOW_SOURCE_LIMIT,
   );
+  const jobs = jobSource.rows.map(nativeOperatingJobRow);
+  const jobIds = jobSource.rows.map((row) => row.roof_job_id).sort();
+  const [
+    fieldBlockerSource,
+    gateSource,
+    incidentSource,
+    accountingIntentSource,
+    accountingReconciliationSource,
+    accountingExceptionSource,
+    untriagedLeadSource,
+    materialExceptionSource,
+    quoteSource,
+  ] = await Promise.all([
+    nativeOwnerFieldBlockers(env, auth.session.tenant_id, jobIds),
+    nativeProductionGates(
+      env,
+      auth.session.tenant_id,
+      jobIds,
+      "blocked",
+      OWNER_NOW_SOURCE_LIMIT,
+    ),
+    nativeOwnerEffectExceptions(env, auth.session.tenant_id),
+    nativeOwnerAccountingIntents(env, auth.session.tenant_id, jobIds),
+    nativeOwnerAccountingReconciliations(env, auth.session.tenant_id, jobIds),
+    nativeOwnerAccountingExceptions(env, auth.session.tenant_id),
+    nativeOwnerUntriagedLeads(env, auth.session.tenant_id),
+    nativeMaterialExceptions(
+      env,
+      auth.session.tenant_id,
+      jobIds,
+      OWNER_NOW_SOURCE_LIMIT,
+    ),
+    nativeOwnerCommercialQuotes(env, auth.session.tenant_id, jobIds),
+  ]);
+
+  const fieldBlockers = fieldBlockerSource.rows.map(
+    nativeOwnerFieldBlockerFrappeRow,
+  );
+  const gates = gateSource.rows.map(nativeProductionGateFrappeRow);
+  const incidents = incidentSource.rows.map(
+    nativeOwnerEffectExceptionFrappeRow,
+  );
+  const materialExceptions = materialExceptionSource.rows.map(
+    nativeMaterialExceptionFrappeRow,
+  );
+  const untriagedLeads = untriagedLeadSource.rows.map(nativeOwnerLeadFrappeRow);
+  const unknownTriageLeads: FrappeRow[] = [];
+
+  const reconciliationByIntent = new Map<
+    string,
+    NativeOwnerAccountingReconciliationRow
+  >();
+  const ambiguousReconciliationIntents = new Set<string>();
+  for (const [intentId, rows] of groupedRows(
+    accountingReconciliationSource.rows,
+    (row) => row.intent_id,
+  )) {
+    const ordered = [...rows].sort(
+      (left, right) =>
+        right.decided_at.localeCompare(left.decided_at) ||
+        left.reconciliation_id.localeCompare(right.reconciliation_id),
+    );
+    const latest = ordered[0];
+    const latestRows = latest
+      ? ordered.filter((row) => row.decided_at === latest.decided_at)
+      : [];
+    if (latestRows.length === 1) reconciliationByIntent.set(intentId, latest!);
+    else if (latestRows.length > 1)
+      ambiguousReconciliationIntents.add(intentId);
+  }
+  const matchedReconciliation = (
+    intent: NativeOwnerAccountingIntentRow,
+  ): NativeOwnerAccountingReconciliationRow | null => {
+    if (accountingReconciliationSource.partial) return null;
+    const reconciliation = reconciliationByIntent.get(intent.intent_id);
+    const expectedProviderEntity =
+      OWNER_ACCOUNTING_PROVIDER_ENTITY[
+        intent.kind as keyof typeof OWNER_ACCOUNTING_PROVIDER_ENTITY
+      ];
+    if (
+      !reconciliation ||
+      ambiguousReconciliationIntents.has(intent.intent_id) ||
+      !expectedProviderEntity ||
+      intent.provider_entity_type !== expectedProviderEntity ||
+      !nativeOwnerAccountingMoney(intent) ||
+      intent.state !== "reconciled" ||
+      reconciliation.verdict !== "reconciled" ||
+      reconciliation.expected_sha256 !== intent.expected_sha256 ||
+      reconciliation.observed_sha256 !== intent.expected_sha256 ||
+      !intent.provider_entity_type ||
+      !intent.provider_entity_id ||
+      !intent.provider_submitted_at ||
+      !intent.provider_reconciled_at
+    )
+      return null;
+    const submittedAt = Date.parse(intent.provider_submitted_at);
+    const decidedAt = Date.parse(reconciliation.decided_at);
+    const reconciledAt = Date.parse(intent.provider_reconciled_at);
+    return Number.isFinite(submittedAt) &&
+      Number.isFinite(decidedAt) &&
+      Number.isFinite(reconciledAt) &&
+      submittedAt <= decidedAt &&
+      decidedAt <= reconciledAt
+      ? reconciliation
+      : null;
+  };
+  const milestoneType = (kind: string): string | null =>
+    kind === "deposit_invoice" ||
+    kind === "progress_invoice" ||
+    kind === "final_invoice"
+      ? "Invoice"
+      : kind === "credit_memo"
+        ? "Credit"
+        : kind === "payment"
+          ? "Payment"
+          : kind === "refund"
+            ? "Refund"
+            : null;
+  const accountingRows = accountingIntentSource.rows.flatMap((intent) => {
+    const type = milestoneType(intent.kind);
+    if (!type) return [];
+    const money = nativeOwnerAccountingMoney(intent);
+    const reconciliation = matchedReconciliation(intent);
+    return [
+      {
+        name: intent.intent_id,
+        payment_milestone_id: intent.intent_id,
+        roof_job: intent.roof_job_id,
+        milestone_type: type,
+        status: reconciliation ? "Matched" : "Needs Review",
+        subtotal: money?.subtotal ?? intent.subtotal,
+        total_amount: money?.totalAmount ?? intent.total_amount,
+        currency: intent.currency,
+        qb_entity_type: intent.provider_entity_type,
+        qb_entity_id: intent.provider_entity_id,
+        recognition_posted_at: intent.provider_submitted_at,
+        truth_at: intent.provider_reconciled_at,
+        truth_source: reconciliation ? "QuickBooks" : null,
+        recognition_digest: reconciliation ? intent.expected_sha256 : null,
+        recognition_reconciliation: reconciliation?.reconciliation_id ?? null,
+        notes:
+          intent.reason_code ??
+          intent.blocker_code ??
+          intent.error_code ??
+          (money ? null : "accounting_money_sign_invalid"),
+        modified: intent.updated_at,
+      } satisfies FrappeRow,
+    ];
+  });
+  const economicsReconciliations = accountingIntentSource.rows.flatMap(
+    (intent) => {
+      const reconciliation = matchedReconciliation(intent);
+      return reconciliation
+        ? [
+            {
+              name: reconciliation.reconciliation_id,
+              reconciliation_id: reconciliation.reconciliation_id,
+              roof_job: intent.roof_job_id,
+              status: "Matched",
+              system_name: "QuickBooks",
+              entity_type: intent.provider_entity_type,
+              external_entity_id: intent.provider_entity_id,
+              local_doctype: "Payment Milestone",
+              local_name: intent.intent_id,
+              currency: intent.currency,
+              source_payload_hash: reconciliation.observed_sha256,
+              detected_at: reconciliation.decided_at,
+              modified: reconciliation.decided_at,
+            } satisfies FrappeRow,
+          ]
+        : [];
+    },
+  );
+
+  const explicitFinanceIntentIds = new Set(
+    accountingExceptionSource.rows.map((row) => row.intent_id).filter(notNull),
+  );
+  const payments: FrappeRow[] = [
+    ...accountingExceptionSource.rows.map((row): FrappeRow => ({
+      name: row.exception_id,
+      payment_milestone_id: row.exception_id,
+      roof_job: row.roof_job_id,
+      milestone_type: "Accounting exception",
+      status: salesStatus(row.status),
+      notes: row.reason_code,
+      event_ts: row.opened_at,
+      modified: row.updated_at,
+    })),
+    ...accountingIntentSource.rows
+      .filter(
+        (row) =>
+          !explicitFinanceIntentIds.has(row.intent_id) &&
+          (OWNER_FINANCE_ATTENTION_STATES.has(row.state) ||
+            (row.state === "reconciled" && !matchedReconciliation(row))),
+      )
+      .map((row): FrappeRow => ({
+        name: row.intent_id,
+        payment_milestone_id: row.intent_id,
+        roof_job: row.roof_job_id,
+        milestone_type: salesStatus(row.kind),
+        status: salesStatus(row.state),
+        notes:
+          row.reason_code ??
+          row.blocker_code ??
+          row.error_code ??
+          (row.state === "reconciled"
+            ? "reconciliation_evidence_incomplete"
+            : null),
+        event_ts: row.updated_at,
+        modified: row.updated_at,
+      })),
+  ];
+
+  const currentQuotesByJob = new Map<string, CommercialQuoteRecord[]>();
+  for (const [jobId, rows] of groupedRows(
+    quoteSource.rows,
+    (row) => row.roof_job_id,
+  )) {
+    const superseded = new Set(
+      rows.map((row) => row.supersedes_quote_revision_id).filter(notNull),
+    );
+    currentQuotesByJob.set(
+      jobId,
+      rows.filter(
+        (row) =>
+          row.status === "approved" && !superseded.has(row.quote_revision_id),
+      ),
+    );
+  }
+  const ownerEconomicsPartialSources = [
+    ...(quoteSource.partial ? ["economics.customer_quotes"] : []),
+    ...(accountingIntentSource.partial ? ["economics.payment_milestones"] : []),
+    ...(accountingReconciliationSource.partial
+      ? ["economics.accounting_reconciliations"]
+      : []),
+  ];
   const rowsForEconomicsJob = (rows: FrappeRow[], jobId: string) =>
     rows.filter((row) => text(row.roof_job) === jobId);
-  const economics = [...economicsJobIds].sort().map((jobId) =>
-    buildJobEconomicsProjection({
+  const economics = jobIds.map((jobId) => {
+    const quoteCandidates = currentQuotesByJob.get(jobId) ?? [];
+    const selectedQuotes =
+      !quoteSource.partial && quoteCandidates.length === 1
+        ? quoteCandidates.map(nativeOwnerQuoteFrappeRow)
+        : [];
+    const projection = buildJobEconomicsProjection({
       tenantId: auth.session.tenant_id,
       jobId,
-      customerQuotes: rowsForEconomicsJob(economicsQuotes, jobId),
-      changeOrders: rowsForEconomicsJob(economicsChangeOrders, jobId),
-      supplierQuotes: rowsForEconomicsJob(economicsSupplierQuotes, jobId),
-      supplierOrders: rowsForEconomicsJob(economicsSupplierOrders, jobId),
-      materialLots: rowsForEconomicsJob(economicsMaterialLots, jobId),
-      shopOrders: rowsForEconomicsJob(economicsShopOrders, jobId),
-      fieldCheckins: rowsForEconomicsJob(economicsFieldCheckins, jobId),
-      paymentMilestones: rowsForEconomicsJob(economicsPayments, jobId),
-      costEvents: rowsForEconomicsJob(economicsCostEvents, jobId),
+      customerQuotes: selectedQuotes,
+      changeOrders: [],
+      supplierQuotes: [],
+      supplierOrders: [],
+      materialLots: [],
+      shopOrders: [],
+      fieldCheckins: [],
+      paymentMilestones: rowsForEconomicsJob(accountingRows, jobId),
+      costEvents: [],
       accountingReconciliations: rowsForEconomicsJob(
         economicsReconciliations,
         jobId,
       ),
       partialSources: ownerEconomicsPartialSources,
-    }),
-  );
+    });
+    for (const metric of [
+      "forecast_cost",
+      "committed_cost",
+      "accrued_actual_cost",
+      "posted_actual_cost",
+    ] as const) {
+      projection.metrics[metric] = {
+        known_cents: null,
+        complete: false,
+        source_count: 0,
+      };
+    }
+    projection.source_coverage.customer_quotes = quoteCandidates.length;
+    if (quoteSource.partial || quoteCandidates.length !== 1) {
+      projection.metrics.forecast_revenue = {
+        known_cents: null,
+        complete: false,
+        source_count: quoteCandidates.length,
+      };
+    }
+    const gaps = new Set([
+      ...projection.reconciliation_gaps,
+      ...OWNER_ECONOMICS_NATIVE_UNAVAILABLE.map(
+        (source) => `${source}.native_unavailable`,
+      ),
+    ]);
+    if (quoteCandidates.length > 1)
+      gaps.add("customer_quote.selection_ambiguous");
+    for (const intent of accountingIntentSource.rows) {
+      if (
+        intent.roof_job_id === jobId &&
+        ambiguousReconciliationIntents.has(intent.intent_id)
+      )
+        gaps.add(
+          `accounting_reconciliation.selection_ambiguous:${intent.intent_id}`,
+        );
+    }
+    projection.reconciliation_gaps = [...gaps].sort();
+    projection.state = Object.values(projection.metrics).some(
+      (metric) => "known_cents" in metric && metric.known_cents === null,
+    )
+      ? "incomplete"
+      : projection.reconciliation_gaps.length > 0
+        ? "needs_review"
+        : "complete";
+    return projection;
+  });
+
   const leadRows = [...untriagedLeads, ...unknownTriageLeads];
   const leadIds = leadRows
     .map((row) => text(row.envelope_id) ?? text(row.name))
@@ -2073,7 +2146,7 @@ export async function buildOwnerNowReadModel(
         id: text(row.checkin_id) ?? text(row.name),
         kind: "field_blocker",
         severity: null,
-        title: `${text(row.blocker_category) ?? "Field"} work-stop reported`,
+        title: "Field work stopped",
         why: text(row.blocker_summary),
         jobId: text(row.roof_job),
         occurredAt: text(row.submitted_at),
@@ -2095,23 +2168,25 @@ export async function buildOwnerNowReadModel(
       exceptionRow(row, {
         id: text(row.incident_id) ?? text(row.name),
         kind: "automation_incident",
-        severity: text(row.severity),
-        title: text(row.summary) ?? "Automation incident",
-        why: text(row.category),
+        severity: null,
+        title: `${salesStatus(text(row.action)) ?? "Automation"} needs reconciliation`,
+        why:
+          [text(row.provider), text(row.reason_code)]
+            .filter(notNull)
+            .join(" · ") || null,
         jobId: text(row.roof_job),
         occurredAt: text(row.detected_at),
       }),
     ),
-    ...supplierOrders.flatMap((row) =>
+    ...materialExceptions.flatMap((row) =>
       exceptionRow(row, {
-        id: text(row.supplier_order_id) ?? text(row.name),
+        id: text(row.name),
         kind: "material_exception",
         severity: null,
-        title: `Supplier order ${text(row.status) ?? "needs review"}`,
-        why: text(row.delivery_notes),
+        title: `${salesStatus(text(row.exception_type)) ?? "Material"} exception`,
+        why: text(row.reason_code) ?? text(row.status),
         jobId: text(row.roof_job),
-        occurredAt: text(row.prepared_at),
-        dueAt: text(row.requested_delivery_date),
+        occurredAt: text(row.created_at),
       }),
     ),
     ...payments.flatMap((row) =>
@@ -2129,23 +2204,33 @@ export async function buildOwnerNowReadModel(
     ...untriagedExceptions,
     ...unknownTriageExceptions,
   ];
-  const ownerSources: Array<readonly [string, FrappeRow[]]> = [
-    ["active_jobs", jobs],
-    ["field_blockers", fieldBlockers],
-    ["blocked_gates", gates],
-    ["automation_incidents", incidents],
-    ["finance_exceptions", payments],
-    ["untriaged_leads", untriagedLeads],
-    ["lead_triage_unknown", unknownTriageLeads],
-    ["material_exceptions", supplierOrders],
-    ...ownerEconomicsSources,
+  const partialSources = [
+    ...(jobSource.partial ? ["active_jobs"] : []),
+    ...(fieldBlockerSource.partial ? ["field_blockers"] : []),
+    ...(gateSource.partial ? ["blocked_gates"] : []),
+    ...(incidentSource.partial ? ["automation_incidents"] : []),
+    ...(accountingIntentSource.partial ||
+    accountingReconciliationSource.partial ||
+    accountingExceptionSource.partial
+      ? ["finance_exceptions"]
+      : []),
+    ...(untriagedLeadSource.partial ? ["untriaged_leads"] : []),
+    ...(materialExceptionSource.partial ? ["material_exceptions"] : []),
+    ...ownerEconomicsPartialSources,
   ];
-  const partialSources = ownerSources.flatMap(([name, rows]) =>
-    rows.length === OWNER_NOW_SOURCE_LIMIT ? [name] : [],
-  );
-  const stale = ["exceptions.next_action"];
+  const stale = [
+    "exceptions.next_action",
+    ...OWNER_ECONOMICS_NATIVE_UNAVAILABLE.map(
+      (source) => `economics.${source}.native_unavailable`,
+    ),
+  ];
   if (exceptions.some((row) => row.due_at === null))
     stale.push("exceptions.due_at");
+  if (exceptions.some((row) => row.why === null)) stale.push("exceptions.why");
+  if (exceptions.some((row) => row.occurred_at === null))
+    stale.push("exceptions.occurred_at");
+  if (fieldBlockerSource.rows.some((row) => row.manifest_key === null))
+    stale.push("field_blockers.evidence");
   if (partialSources.length > 0) stale.push("exceptions.partial_sources");
   return {
     ...envelope(
@@ -2157,16 +2242,9 @@ export async function buildOwnerNowReadModel(
         ...incidents,
         ...payments,
         ...leadRows,
-        ...supplierOrders,
-        ...economicsQuotes,
-        ...economicsChangeOrders,
-        ...economicsSupplierQuotes,
-        ...economicsSupplierOrders,
-        ...economicsMaterialLots,
-        ...economicsShopOrders,
-        ...economicsFieldCheckins,
-        ...economicsPayments,
-        ...economicsCostEvents,
+        ...materialExceptions,
+        ...quoteSource.rows.map(nativeOwnerQuoteFrappeRow),
+        ...accountingRows,
         ...economicsReconciliations,
       ],
       stale,
@@ -2185,7 +2263,7 @@ export async function buildOwnerNowReadModel(
       mctb_unproven_due: untriagedExceptions.filter((row) =>
         mctbMissedSla(row.mctb),
       ).length,
-      material_exceptions: supplierOrders.length,
+      material_exceptions: materialExceptions.length,
       economics_needs_review: economics.filter(
         (projection) => projection.state !== "complete",
       ).length,
@@ -2205,242 +2283,186 @@ export async function buildSalesReadModel(
   if (!auth.permissions.includes("sales:read"))
     throw new Error("office_scope_required");
 
-  const leads = await listOfficeSalesFrappeResource(
+  const sources = await readCommercialSalesSources(
     env,
-    "Lead Envelope",
-    [],
+    auth.session.tenant_id,
     SALES_SOURCE_LIMIT,
   );
-  const leadIds = leads.map((row) => text(row.name)).filter(notNull);
-  const leadJobRefs = leads.map((row) => text(row.job_ref)).filter(notNull);
-  const [jobsLinkedByLead, jobsByReference, estimates, leadConsents] =
-    await Promise.all([
-      leadIds.length > 0
-        ? listOfficeSalesFrappeResource(
-            env,
-            "Roof Job",
-            [["Roof Job", "lead_envelope", "in", leadIds]],
-            SALES_SOURCE_LIMIT,
-          )
-        : Promise.resolve([]),
-      leadJobRefs.length > 0
-        ? listOfficeSalesFrappeResource(
-            env,
-            "Roof Job",
-            [["Roof Job", "name", "in", leadJobRefs]],
-            SALES_SOURCE_LIMIT,
-          )
-        : Promise.resolve([]),
-      leadIds.length > 0
-        ? listOfficeSalesFrappeResource(
-            env,
-            "Instant Estimate Session",
-            [["Instant Estimate Session", "lead_envelope", "in", leadIds]],
-            SALES_SOURCE_LIMIT,
-          )
-        : Promise.resolve([]),
-      leadIds.length > 0
-        ? listOfficeSalesFrappeResource(
-            env,
-            "Communication Consent",
-            [["Communication Consent", "lead_envelope", "in", leadIds]],
-            SALES_SOURCE_LIMIT,
-          )
-        : Promise.resolve([]),
-    ]);
-
-  const jobs = uniqueRows([...jobsLinkedByLead, ...jobsByReference]);
-
-  const jobIds = jobs.map((row) => text(row.name)).filter(notNull);
-  const customerIds = jobs.map((row) => text(row.customer)).filter(notNull);
-  const [quotes, jobConsents, customerConsents] = await Promise.all([
-    jobIds.length > 0
-      ? listOfficeSalesFrappeResource(
-          env,
-          "Customer Quote",
-          [["Customer Quote", "roof_job", "in", jobIds]],
-          SALES_SOURCE_LIMIT,
-        )
-      : Promise.resolve([]),
-    jobIds.length > 0
-      ? listOfficeSalesFrappeResource(
-          env,
-          "Communication Consent",
-          [["Communication Consent", "roof_job", "in", jobIds]],
-          SALES_SOURCE_LIMIT,
-        )
-      : Promise.resolve([]),
-    customerIds.length > 0
-      ? listOfficeSalesFrappeResource(
-          env,
-          "Communication Consent",
-          [["Communication Consent", "customer", "in", customerIds]],
-          SALES_SOURCE_LIMIT,
-        )
-      : Promise.resolve([]),
-  ]);
-  const quoteNames = quotes.map((row) => text(row.name)).filter(notNull);
-  const proposals =
-    quoteNames.length > 0
-      ? await listOfficeSalesFrappeResource(
-          env,
-          "Proposal Evidence Pack",
-          [["Proposal Evidence Pack", "quotation", "in", quoteNames]],
-          SALES_SOURCE_LIMIT,
-        )
-      : [];
-  const proposalSourcePartial = proposals.length === SALES_SOURCE_LIMIT;
-
-  const jobById = mapRowsByReference(jobs, "name");
-  const latestJobsByLead = latestRowsByReference(jobs, "lead_envelope");
-  const estimatesByLead = latestRowsByReference(estimates, "lead_envelope");
-  const quotesByJob = latestRowsByReference(
-    quotes,
-    "roof_job",
-    "quote_version",
+  const jobsByLead = firstRowsBy(sources.jobs, (row) => row.lead_id);
+  const estimatesByLead = firstRowsBy(sources.estimates, (row) => row.lead_id);
+  const triageByLead = firstRowsBy(
+    sources.triageDecisions,
+    (row) => row.lead_id,
   );
-  const proposalsByQuote = latestRowsByReference(proposals, "quotation");
-  const publishedProposalsByQuote = latestRowsByReference(
-    proposals.filter((row) => proposalStatusIsPublished(text(row.status))),
-    "quotation",
+  const quotesByJob = firstRowsBy(sources.quotes, (row) => row.roof_job_id);
+  const proposalsByQuote = firstRowsBy(
+    sources.proposals,
+    (row) => row.quote_revision_id,
   );
-  const consentRows = uniqueRows([
-    ...leadConsents,
-    ...jobConsents,
-    ...customerConsents,
-  ]);
-  const directConsentsByLead = groupBy(consentRows, "lead_envelope");
-  const consentsByJob = groupBy(consentRows, "roof_job");
-  const consentsByCustomer = groupBy(consentRows, "customer");
-  const consentSourcesPartial = [
-    leadConsents,
-    jobConsents,
-    customerConsents,
-  ].some((rows) => rows.length === SALES_SOURCE_LIMIT);
+  const publicationsByPack = firstRowsBy(
+    sources.publications,
+    (row) => row.proposal_pack_id,
+  );
+  const acceptancesByQuote = firstRowsBy(
+    sources.acceptances,
+    (row) => row.quote_revision_id,
+  );
+  const acceptancesByProposal = firstRowsBy(
+    sources.acceptances,
+    (row) => row.proposal_revision_id,
+  );
+  const consentsByLead = groupedRows(sources.consents, (row) => row.lead_id);
+  const partialSourceSet = new Set(sources.partialSources);
+  const consentSourcePartial = partialSourceSet.has("operating_consents");
 
-  const shaped: SalesReadModel["leads"] = leads
-    .flatMap((lead) => {
-      const leadId = text(lead.name);
-      if (!leadId) return [];
-      const linkedJob =
-        latestJobsByLead.get(leadId) ??
-        jobById.get(text(lead.job_ref) ?? "") ??
-        null;
-      const jobId = linkedJob ? text(linkedJob.name) : null;
-      const customerId = linkedJob ? text(linkedJob.customer) : null;
-      const linkedConsents = uniqueRows([
-        ...(directConsentsByLead.get(leadId) ?? []),
-        ...(jobId ? (consentsByJob.get(jobId) ?? []) : []),
-        ...(customerId ? (consentsByCustomer.get(customerId) ?? []) : []),
-      ]);
-      const supersededConsentIds = new Set(
-        linkedConsents.map((row) => text(row.supersedes)).filter(notNull),
-      );
-      const consentRecords = linkedConsents
-        .filter((row) =>
-          ![text(row.name), text(row.consent_id)]
-            .filter(notNull)
-            .some((id) => supersededConsentIds.has(id))
-        )
-        .map(salesConsentRecord)
-        .filter(notNull);
-      const estimate = salesEstimateModel(estimatesByLead.get(leadId));
-      const quoteRow = jobId ? quotesByJob.get(jobId) : undefined;
-      const quote = salesQuoteModel(quoteRow);
-      const quoteName = quoteRow ? text(quoteRow.name) : null;
-      const proposal = quoteName
-        ? salesProposalModel(
-            proposalsByQuote.get(quoteName),
-            publishedProposalsByQuote.get(quoteName),
-            proposalSourcePartial,
-          )
-        : null;
-      const attention = salesAttention(lead, estimate, quote);
-      const consentContext: SalesReadModel["leads"][number]["consent"]["context"] =
-        consentSourcesPartial
-          ? "partial"
-          : consentRecords.length > 0
-            ? "recorded"
-            : "no_linked_record";
-      return [
-        {
-          id: leadId,
-          envelope_id: text(lead.envelope_id) ?? leadId,
-          source: text(lead.source),
-          received_at: text(lead.event_ts),
-          transport_status: text(lead.status),
-          intent_queue: text(lead.intent_queue),
-          contact: {
-            display_name: text(lead.contact_name),
-            phone: text(lead.contact_phone),
-            email: text(lead.contact_email),
-          },
-          triage: {
-            status: text(lead.triage_status),
-            summary: text(lead.triage_summary),
-          },
-          job:
-            linkedJob && jobId
-              ? {
-                  id: jobId,
-                  job_number: text(linkedJob.job_number),
-                  status: text(linkedJob.job_status),
-                  service_type: text(linkedJob.service_type),
-                  workflow_profile: text(linkedJob.workflow_profile),
-                }
-              : null,
-          estimate,
-          quote,
-          proposal,
-          consent: {
-            context: consentContext,
-            records: consentRecords,
-          },
-          attention,
-        },
+  const shaped: SalesReadModel["leads"] = sources.leads
+    .map((lead) => {
+      const linkedJob = jobsByLead.get(lead.lead_id) ?? null;
+      const estimateRow = estimatesByLead.get(lead.lead_id);
+      const estimate = nativeSalesEstimate(estimateRow);
+      const quoteRow = linkedJob
+        ? quotesByJob.get(linkedJob.roof_job_id)
+        : undefined;
+      const quoteAcceptance = quoteRow
+        ? acceptancesByQuote.get(quoteRow.quote_revision_id)
+        : undefined;
+      const quote = nativeSalesQuote(quoteRow, quoteAcceptance);
+      const proposalRow = quoteRow
+        ? proposalsByQuote.get(quoteRow.quote_revision_id)
+        : undefined;
+      const publication = proposalRow
+        ? publicationsByPack.get(proposalRow.proposal_pack_id)
+        : undefined;
+      const proposalAcceptance = proposalRow
+        ? acceptancesByProposal.get(proposalRow.proposal_revision_id)
+        : undefined;
+      const triage = triageByLead.get(lead.lead_id);
+      const jobPartial =
+        !linkedJob && partialSourceSet.has("operating_roof_jobs");
+      const estimatePartial =
+        !estimateRow && partialSourceSet.has("operating_instant_estimates");
+      const triagePartial =
+        !triage && partialSourceSet.has("commercial_lead_triage_decisions");
+      const quotePartial =
+        jobPartial ||
+        Boolean(
+          linkedJob &&
+          !quoteRow &&
+          partialSourceSet.has("commercial_quote_revisions"),
+        );
+      const proposalPartial =
+        quotePartial ||
+        Boolean(
+          quoteRow &&
+          !proposalRow &&
+          partialSourceSet.has("commercial_proposal_revisions"),
+        );
+      const publicationPartial =
+        proposalPartial ||
+        Boolean(
+          proposalRow &&
+          !publication &&
+          partialSourceSet.has("commercial_proposal_publication_events"),
+        );
+      const quoteAcceptancePartial =
+        quotePartial ||
+        Boolean(
+          quoteRow &&
+          !quoteAcceptance &&
+          partialSourceSet.has("commercial_acceptance_bindings"),
+        );
+      const proposalAcceptancePartial =
+        proposalPartial ||
+        Boolean(
+          proposalRow &&
+          !proposalAcceptance &&
+          partialSourceSet.has("commercial_acceptance_bindings"),
+        );
+      const partialFields: SalesPartialField[] = [
+        ...(jobPartial ? ["job" as const] : []),
+        ...(triagePartial ? ["triage_decision" as const] : []),
+        ...(estimatePartial ? ["estimate" as const] : []),
+        ...(quotePartial ? ["quote" as const] : []),
+        ...(proposalPartial ? ["proposal" as const] : []),
+        ...(publicationPartial ? ["proposal_publication" as const] : []),
+        ...(quoteAcceptancePartial ? ["quote_acceptance" as const] : []),
+        ...(proposalAcceptancePartial ? ["proposal_acceptance" as const] : []),
       ];
+      const proposal = nativeSalesProposal(
+        proposalRow,
+        publication,
+        proposalAcceptance,
+        publicationPartial,
+      );
+      const triageStatus = salesStatus(lead.lifecycle_status);
+      const consentRecords = (consentsByLead.get(lead.lead_id) ?? []).map(
+        nativeSalesConsent,
+      );
+      return {
+        id: lead.lead_id,
+        envelope_id: lead.source_envelope_id,
+        source: lead.source,
+        received_at: lead.created_at,
+        transport_status: null,
+        intent_queue: null,
+        contact: {
+          display_name: lead.contact_name,
+          phone: lead.contact_phone,
+          email: lead.contact_email,
+        },
+        triage: {
+          status: triageStatus,
+          summary: triage?.summary ?? null,
+          version: lead.version,
+        },
+        job: linkedJob
+          ? {
+              id: linkedJob.roof_job_id,
+              job_number: linkedJob.job_number,
+              status: salesStatus(linkedJob.job_status),
+              service_type: linkedJob.service_type,
+              workflow_profile: null,
+            }
+          : null,
+        estimate,
+        quote,
+        proposal,
+        consent: {
+          context: consentSourcePartial
+            ? ("partial" as const)
+            : consentRecords.length > 0
+              ? ("recorded" as const)
+              : ("no_linked_record" as const),
+          records: consentRecords,
+        },
+        partial_fields: partialFields,
+        attention: salesAttention(triageStatus, estimate, quote, partialFields),
+      };
     })
     .sort(compareSalesLead);
 
-  const sourceRows: Array<readonly [string, FrappeRow[]]> = [
-    ["leads", leads],
-    ["roof_jobs_by_lead", jobsLinkedByLead],
-    ["roof_jobs_by_reference", jobsByReference],
-    ["instant_estimates", estimates],
-    ["customer_quotes", quotes],
-    ["proposal_evidence_packs", proposals],
-    ["lead_consents", leadConsents],
-    ["job_consents", jobConsents],
-    ["customer_consents", customerConsents],
-  ];
-  const partialSources = sourceRows.flatMap(([name, rows]) =>
-    rows.length === SALES_SOURCE_LIMIT ? [name] : [],
-  );
+  const partialSources = sources.partialSources;
   const base = envelope(
     auth,
-    [
-      ...leads,
-      ...jobs,
-      ...estimates,
-      ...quotes,
-      ...proposals,
-      ...leadConsents,
-      ...jobConsents,
-      ...customerConsents,
-    ],
+    nativeSalesEnvelopeRows(sources),
     partialSources.length > 0 ? ["sales.partial_sources"] : [],
   );
-  const leadTriagePreparationAvailable = Boolean(
+  const actorType = auth.session.role === "owner" ? "owner" : "worker";
+  const leadTriageAvailable = Boolean(
     auth.permissions.includes("approvals:prepare") &&
-      approvalBrokerConfig(env) &&
-      auth.session.frappe_user_id?.trim(),
+    commercialActionConfigured(
+      env,
+      auth.session.tenant_id,
+      "lead.triage.record",
+      actorType,
+    ),
   );
   return {
     ...base,
     allowed_actions: [
       ...base.allowed_actions,
       ...(auth.permissions.includes("approvals:read") ? ["approval.read"] : []),
-      ...(leadTriagePreparationAvailable ? ["approval.prepare"] : []),
+      ...(leadTriageAvailable ? ["commercial.lead_triage.record"] : []),
       ...(auth.permissions.includes("estimator:read")
         ? ["estimator.read"]
         : []),
@@ -2485,169 +2507,52 @@ export async function buildEstimatorWorkbenchReadModel(
   if (!validJobName(jobName)) return null;
   const readModelGeneratedAt = asOf.toISOString();
   const configuredPriceList = estimatorPriceList(env, readModelGeneratedAt);
-
-  const [job] = await listOfficeEstimatorFrappeResource(
-    env,
-    "Roof Job",
-    [["Roof Job", "name", "=", jobName]],
-    1,
-  );
-  const jobId = job ? text(job.name) : null;
-  if (!job || !jobId) return null;
-  const insuranceAccessGranted = hasRestrictedInsuranceAccess(env, auth);
-
-  const [
-    measurementRows,
-    visualModelRows,
-    roofAreaRows,
-    takeoffRows,
-    quoteRows,
-    proposalRows,
-    changeOrderRows,
-    supplierQuoteRows,
-    supplierOrderRows,
-    materialLotRows,
-    shopOrderRows,
-    fieldCheckinRows,
-    paymentMilestoneRows,
-    jobCostEventRows,
-    accountingReconciliationRows,
-    insuranceSupplementRows,
-    scopeRows,
-    pricingAuthorityRows,
-  ] = await Promise.all([
-    listOfficeEstimatorFrappeResource(
+  const [nativeSources, nativeCommercial] = await Promise.all([
+    readNativeEstimatorSources(env, auth.session.tenant_id, jobName),
+    readNativeCommercialJobPacket(
       env,
-      "Measurement Report",
-      [["Measurement Report", "roof_job", "=", jobId]],
+      auth.session.tenant_id,
+      jobName,
       ESTIMATOR_SOURCE_LIMIT,
     ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Visual Property Model",
-      [["Visual Property Model", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Roof Area",
-      [["Roof Area", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Material Takeoff",
-      [["Material Takeoff", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Customer Quote",
-      [["Customer Quote", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Proposal Evidence Pack",
-      [["Proposal Evidence Pack", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Change Order",
-      [["Change Order", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Supplier Quote",
-      [["Supplier Quote", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Supplier Order",
-      [["Supplier Order", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Material Lot",
-      [["Material Lot", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Shop Order",
-      [["Shop Order", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Field Check-in",
-      [["Field Check-in", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Payment Milestone",
-      [["Payment Milestone", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Job Cost Event",
-      [
-        ["Job Cost Event", "tenant", "=", auth.session.tenant_id],
-        ["Job Cost Event", "roof_job", "=", jobId],
-      ],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Integration Reconciliation",
-      [["Integration Reconciliation", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    insuranceAccessGranted
-      ? listOfficeEstimatorFrappeResource(
-          env,
-          "Insurance Supplement",
-          [["Insurance Supplement", "roof_job", "=", jobId]],
-          ESTIMATOR_SOURCE_LIMIT,
-        )
-      : Promise.resolve([]),
-    listOfficeEstimatorFrappeResource(
-      env,
-      "Scope Clause",
-      [["Scope Clause", "roof_job", "=", jobId]],
-      ESTIMATOR_SOURCE_LIMIT,
-    ),
-    configuredPriceList.identity &&
-      configuredPriceList.identity.tenantId === auth.session.tenant_id
-      ? listOfficeEstimatorFrappeResource(
-          env,
-          "Price Book Rule",
-          [
-            ["Price Book Rule", "status", "=", "Approved"],
-            ["Price Book Rule", "rule_type", "=", "Pricing Policy"],
-            [
-              "Price Book Rule",
-              "pricing_policy_id",
-              "=",
-              configuredPriceList.identity.policyId,
-            ],
-            [
-              "Price Book Rule",
-              "pricing_policy_revision",
-              "=",
-              configuredPriceList.identity.policyRevision,
-            ],
-          ],
-          ESTIMATOR_PRICING_AUTHORITY_LIMIT,
-        ).catch(() => [])
-      : Promise.resolve([]),
   ]);
+  if (!nativeSources) return null;
+  const job = nativeSources.job;
+  const jobId = text(job.name);
+  if (!jobId) return null;
+  const insuranceAccessGranted = hasRestrictedInsuranceAccess(auth);
+  const measurementRows = nativeSources.measurementRows;
+  const visualModelRows = nativeSources.visualModelRows;
+  const roofAreaRows = nativeSources.roofAreaRows;
+  const takeoffRows = nativeSources.takeoffRows;
+  const commercialSelection = nativeCommercial
+    ? nativeEstimatorCommercialSelection(nativeCommercial, asOf)
+    : { quoteRows: [], proposalRows: [], staleFields: [] };
+  const quoteRows = nativeSources.staleFields.includes(
+    "estimator_evidence.commercial_quote_drift",
+  )
+    ? []
+    : commercialSelection.quoteRows;
+  const proposalRows = nativeSources.staleFields.includes(
+    "estimator_evidence.commercial_quote_drift",
+  )
+    ? []
+    : commercialSelection.proposalRows;
+  const changeOrderRows = nativeSources.changeOrderRows;
+  const supplierQuoteRows = nativeSources.supplierQuoteRows;
+  const supplierOrderRows = nativeSources.supplierOrderRows;
+  const materialLotRows = nativeSources.materialLotRows;
+  const shopOrderRows = nativeSources.shopOrderRows;
+  const fieldCheckinRows = nativeSources.fieldCheckinRows;
+  const paymentMilestoneRows = nativeSources.paymentMilestoneRows;
+  const jobCostEventRows = nativeSources.jobCostEventRows;
+  const accountingReconciliationRows =
+    nativeSources.accountingReconciliationRows;
+  const insuranceSupplementRows = insuranceAccessGranted
+    ? nativeSources.insuranceSupplementRows
+    : [];
+  const scopeRows = nativeSources.scopeRows;
+  const pricingAuthorityRows = nativeSources.pricingAuthorityRows;
 
   const selectedMeasurementRow = latestRecord(measurementRows);
   const selectedMeasurementName = selectedMeasurementRow
@@ -2684,44 +2589,19 @@ export async function buildEstimatorWorkbenchReadModel(
   const scopeChanges = newestFirst(changeOrderRows).flatMap((row) =>
     estimatorScopeChange(row, selectedQuoteName, quoteRows),
   );
-  const [
-    measurementRead,
-    visualModelRead,
-    takeoffRead,
-    insuranceSupplementReads,
-  ] = await Promise.all([
-    selectedMeasurementName
-      ? safeEstimatorDetailRead(
-          env,
-          "Measurement Report",
-          selectedMeasurementName,
-        )
-      : Promise.resolve({ row: null, unavailable_reason: null }),
-    selectedVisualModelName && visualModelSourceComplete
-      ? safeEstimatorDetailRead(
-          env,
-          "Visual Property Model",
-          selectedVisualModelName,
-        )
-      : Promise.resolve({ row: null, unavailable_reason: null }),
-    selectedTakeoffName
-      ? safeEstimatorDetailRead(env, "Material Takeoff", selectedTakeoffName)
-      : Promise.resolve({ row: null, unavailable_reason: null }),
-    Promise.all(
-      insuranceSupplementRows.map(async (row) => {
-        const name = text(row.name);
-        return {
-          name,
-          read: name
-            ? await safeEstimatorDetailRead(env, "Insurance Supplement", name)
-            : {
-                row: null,
-                unavailable_reason: "insurance_supplement_detail_unavailable",
-              },
-        };
-      }),
-    ),
-  ]);
+  const measurementRead = {
+    row: selectedMeasurementRow,
+    unavailable_reason: null,
+  };
+  const visualModelRead = {
+    row: selectedVisualModelRow,
+    unavailable_reason: null,
+  };
+  const takeoffRead = { row: selectedTakeoffRow, unavailable_reason: null };
+  const insuranceSupplementReads = insuranceSupplementRows.map((row) => ({
+    name: text(row.name),
+    read: { row, unavailable_reason: null },
+  }));
   const measurementDetail = matchesMeasurementDetail(
     measurementRead.row,
     selectedMeasurementName,
@@ -2757,7 +2637,11 @@ export async function buildEstimatorWorkbenchReadModel(
 
   const geometryCapture: { model?: GeometryModel } = {};
   const geometry = measurementDetail
-    ? await estimatorGeometryFromRaw(env, text(measurementDetail.raw_key), geometryCapture)
+    ? await estimatorGeometryFromRaw(
+        env,
+        text(measurementDetail.raw_key),
+        geometryCapture,
+      )
     : unavailableEstimatorGeometry(
         selectedMeasurementRow
           ? (measurementDetailIssue ?? "measurement_detail_unavailable")
@@ -2766,28 +2650,43 @@ export async function buildEstimatorWorkbenchReadModel(
   const roofGraph = estimatorRoofGraphProjection(measurementDetail);
   // Measurement-to-money projection: recomputed takeoff over the same verified
   // model, priced only when the tenant supplies a price list.
-  const computedTakeoff = estimatorComputedTakeoff(geometryCapture.model ?? null);
-  const pricingAuthority = configuredPriceList.identity && configuredPriceList.list
-    ? await verifyPricingAuthority(
-        configuredPriceList.list,
-        pricingAuthorityRows,
-        {
-          pricedAt: readModelGeneratedAt,
-          tenantId: auth.session.tenant_id,
-        },
-      )
-    : undefined;
+  const computedTakeoff = estimatorComputedTakeoff(
+    geometryCapture.model ?? null,
+  );
+  const pricingAuthority =
+    configuredPriceList.identity && configuredPriceList.list
+      ? await verifyPricingAuthority(
+          configuredPriceList.list,
+          pricingAuthorityRows,
+          {
+            pricedAt: readModelGeneratedAt,
+            tenantId: auth.session.tenant_id,
+          },
+        )
+      : undefined;
   const computedEstimate = estimatorComputedEstimate(
     configuredPriceList,
     computedTakeoff.takeoff,
     readModelGeneratedAt,
     pricingAuthority ?? undefined,
   );
-  const staleFields: string[] = [];
+  const staleFields: string[] = [
+    ...nativeSources.staleFields,
+    ...commercialSelection.staleFields,
+  ];
   if (selectedMeasurementRow && !measurementDetail)
     staleFields.push("measurements.selected_detail");
   if (selectedTakeoffRow && !takeoffDetail)
     staleFields.push("takeoffs.selected_detail");
+  if (quoteRows.length > 0) {
+    staleFields.push("quote_revision.scope_summary.native_unavailable");
+    staleFields.push("quote_revision.assumptions.native_unavailable");
+    staleFields.push("quote_revision.exclusions.native_unavailable");
+  }
+  if (proposalRows.length > 0) {
+    staleFields.push("proposal.assumptions.native_unavailable");
+    staleFields.push("proposal.exclusions.native_unavailable");
+  }
   const insuranceSupplementDetails = new Map<string, FrappeRow | null>();
   for (const { name, read } of insuranceSupplementReads) {
     if (!name) continue;
@@ -2820,12 +2719,42 @@ export async function buildEstimatorWorkbenchReadModel(
     ["insurance_supplements", insuranceSupplementRows],
     ["scope_clauses", scopeRows],
   ];
-  const partialSources = sourceRows.flatMap(([name, rows]) =>
-    rows.length === ESTIMATOR_SOURCE_LIMIT ? [name] : [],
-  );
+  const partialSources = [
+    ...nativeSources.partialSources,
+    ...sourceRows.flatMap(([name, rows]) =>
+      rows.length === ESTIMATOR_SOURCE_LIMIT ? [name] : [],
+    ),
+  ];
+  if (nativeCommercial) {
+    if (
+      nativeCommercial.partial_sources.includes("commercial_quote_revisions")
+    ) {
+      partialSources.push("customer_quotes");
+    }
+    if (
+      nativeCommercial.partial_sources.includes("commercial_proposal_revisions")
+    ) {
+      partialSources.push("proposal_evidence_packs");
+    }
+    if (
+      nativeCommercial.partial_sources.includes(
+        "commercial_proposal_publication_events",
+      )
+    ) {
+      partialSources.push("proposal_evidence_packs");
+    }
+    if (
+      nativeCommercial.partial_sources.includes(
+        "commercial_acceptance_bindings",
+      )
+    ) {
+      partialSources.push("customer_quotes", "proposal_evidence_packs");
+    }
+  }
   if (pricingAuthorityRows.length === ESTIMATOR_PRICING_AUTHORITY_LIMIT) {
     partialSources.push("pricing_authority");
   }
+  const uniquePartialSources = [...new Set(partialSources)];
   const economics = buildJobEconomicsProjection({
     tenantId: auth.session.tenant_id,
     jobId,
@@ -2839,7 +2768,7 @@ export async function buildEstimatorWorkbenchReadModel(
     paymentMilestones: paymentMilestoneRows,
     costEvents: jobCostEventRows,
     accountingReconciliations: accountingReconciliationRows,
-    partialSources,
+    partialSources: uniquePartialSources,
   });
   const base = envelope(
     auth,
@@ -2874,26 +2803,33 @@ export async function buildEstimatorWorkbenchReadModel(
     quote.version > 0 &&
     quote.status !== "Accepted" &&
     quoteRevisionApprovalBrokerConfig(env) &&
-    approvalDecisionConfig(env) &&
-    auth.session.frappe_user_id?.trim(),
+    approvalDecisionConfig(env),
   );
   const facetLaunchAvailable = Boolean(
-    auth.permissions.includes("facet:launch") && quote &&
-    selectedQuoteName === text(job.quotation) && quote.version !== null && quote.version > 0 &&
-    quote.status === "Approved" && quote.approved_at && !quote.accepted_at &&
-    facetLaunchConfigured(env, auth.session.tenant_id)
+    auth.permissions.includes("facet:launch") &&
+    quote &&
+    selectedQuoteName === text(job.quotation) &&
+    quote.version !== null &&
+    quote.version > 0 &&
+    quote.status === "Approved" &&
+    quote.approved_at &&
+    !quote.accepted_at &&
+    facetLaunchConfigured(env, auth.session.tenant_id),
   );
   return {
     ...base,
     allowed_actions: [
       ...base.allowed_actions,
       "estimator.read",
+      ...(auth.session.role === "owner" && env.DB && env.RAW
+        ? ["estimator.import"]
+        : []),
       ...(quoteRevisionPreparationAvailable
         ? ["quote_revision_approval.prepare"]
         : []),
       ...(facetLaunchAvailable ? ["facet_launch.create"] : []),
     ],
-    partial_sources: partialSources,
+    partial_sources: uniquePartialSources,
     job: {
       id: jobId,
       roof_job_id: text(job.roof_job_id),
@@ -2992,119 +2928,546 @@ function emptyToday(
   };
 }
 
-/**
- * The Crew Profiles this user is an active member of. Membership is re-derived
- * from the child rows rather than trusted from the filter, so a widened Frappe
- * response can never enlarge the caller's authority.
- */
-async function activeCrewProfilesForUser(
+async function boundedNativeRows<T>(
   env: AppEnv,
-  userId: string,
-): Promise<Set<string>> {
-  const memberRows = await listFrappeResource(
+  sql: string,
+  bindings: readonly unknown[],
+  limit: number,
+): Promise<{ rows: T[]; partial: boolean }> {
+  const result = await env.DB.prepare(`${sql} LIMIT ?`)
+    .bind(...bindings, limit + 1)
+    .all<T>();
+  const rows = result.results ?? [];
+  return { rows: rows.slice(0, limit), partial: rows.length > limit };
+}
+
+async function nativeActiveJobs(
+  env: AppEnv,
+  tenantId: string,
+  jobIds?: readonly string[],
+  limit = PRODUCTION_SOURCE_LIMIT,
+): Promise<{ rows: NativeProductionJobRow[]; partial: boolean }> {
+  if (jobIds?.length === 0) return { rows: [], partial: false };
+  const selected = [...new Set(jobIds ?? [])].slice(0, PRODUCTION_SOURCE_LIMIT);
+  return await boundedNativeRows<NativeProductionJobRow>(
     env,
-    "Crew Member",
-    [
-      ["Crew Member", "crew_user", "=", userId],
-      ["Crew Member", "active", "=", 1],
-    ],
-    100,
-    "Crew Profile",
-  );
-  return new Set(
-    memberRows.flatMap((row) => {
-      const parent = text(row.parent);
-      const valid =
-        row.parenttype === "Crew Profile" &&
-        row.parentfield === "members" &&
-        booleanValue(row.active) === true;
-      return parent && valid && sameUser(row.crew_user, userId) ? [parent] : [];
-    }),
+    `SELECT roof_job_id, customer_id, property_id, brand, job_number, service_type,
+            job_status, current_gate_state, version, updated_at
+       FROM operating_roof_jobs
+      WHERE tenant_id = ?
+        AND job_status IN ('qualified', 'in_progress')
+        ${jobIds ? `AND roof_job_id IN (${selected.map(() => "?").join(", ")})` : ""}
+      ORDER BY updated_at DESC, roof_job_id ASC`,
+    [tenantId, ...selected],
+    limit,
   );
 }
 
-async function authorizedAssignments(
+async function nativeProductionGates(
+  env: AppEnv,
+  tenantId: string,
+  jobIds: readonly string[],
+  state?: string,
+  limit = PRODUCTION_SOURCE_LIMIT * SCHEDULING_PRODUCTION_GATES.length,
+): Promise<{ rows: NativeProductionGateRow[]; partial: boolean }> {
+  const selected = [...new Set(jobIds)].slice(0, PRODUCTION_SOURCE_LIMIT);
+  if (selected.length === 0) return { rows: [], partial: false };
+  return await boundedNativeRows<NativeProductionGateRow>(
+    env,
+    `SELECT gate_id, roof_job_id, gate, state, blocker_reason, owner_user,
+            assigned_at, due_at, updated_at
+       FROM operating_production_gates
+      WHERE tenant_id = ?
+        AND roof_job_id IN (${selected.map(() => "?").join(", ")})
+        ${state ? "AND state = ?" : ""}
+      ORDER BY roof_job_id ASC, gate ASC, updated_at DESC, gate_id ASC`,
+    [tenantId, ...selected, ...(state ? [state] : [])],
+    limit,
+  );
+}
+
+async function nativeProperties(
+  env: AppEnv,
+  tenantId: string,
+  propertyIds: readonly string[],
+): Promise<{ rows: NativePropertyRecord[]; partial: boolean }> {
+  const selected = [...new Set(propertyIds)].slice(0, PRODUCTION_SOURCE_LIMIT);
+  if (selected.length === 0) return { rows: [], partial: false };
+  return await boundedNativeRows<NativePropertyRecord>(
+    env,
+    `SELECT property_id, address_line1, city, province, postal_code, country, updated_at
+       FROM operating_properties
+      WHERE tenant_id = ?
+        AND property_id IN (${selected.map(() => "?").join(", ")})
+      ORDER BY property_id ASC`,
+    [tenantId, ...selected],
+    PRODUCTION_SOURCE_LIMIT,
+  );
+}
+
+async function nativeProductionCrews(
+  env: AppEnv,
+  tenantId: string,
+): Promise<{ rows: NativeProductionCrewRow[]; partial: boolean }> {
+  return await boundedNativeRows<NativeProductionCrewRow>(
+    env,
+    `SELECT crew_id, display_name, version, updated_at
+       FROM fleet_crews
+      WHERE tenant_id = ? AND status = 'Active'
+      ORDER BY display_name ASC, crew_id ASC`,
+    [tenantId],
+    PRODUCTION_SOURCE_LIMIT,
+  );
+}
+
+async function nativeMaterialExceptions(
+  env: AppEnv,
+  tenantId: string,
+  jobIds: readonly string[],
+  limit = PRODUCTION_SOURCE_LIMIT,
+): Promise<{ rows: NativeMaterialExceptionRow[]; partial: boolean }> {
+  const selected = [...new Set(jobIds)].slice(0, PRODUCTION_SOURCE_LIMIT);
+  if (selected.length === 0) return { rows: [], partial: false };
+  return await boundedNativeRows<NativeMaterialExceptionRow>(
+    env,
+    `SELECT exception_id, aggregate_id, exception_type, status, reason_code,
+            created_at, updated_at
+       FROM inventory_exceptions
+      WHERE tenant_id = ?
+        AND aggregate_type = 'roof_job'
+        AND aggregate_id IN (${selected.map(() => "?").join(", ")})
+        AND status IN ('open', 'contained')
+      ORDER BY updated_at DESC, exception_id ASC`,
+    [tenantId, ...selected],
+    limit,
+  );
+}
+
+async function nativeOwnerFieldBlockers(
+  env: AppEnv,
+  tenantId: string,
+  jobIds: readonly string[],
+): Promise<{ rows: NativeOwnerFieldBlockerRow[]; partial: boolean }> {
+  const selected = [...new Set(jobIds)].slice(0, OWNER_NOW_SOURCE_LIMIT);
+  if (selected.length === 0) return { rows: [], partial: false };
+  return await boundedNativeRows<NativeOwnerFieldBlockerRow>(
+    env,
+    `SELECT package.work_package_id, package.version, package.job_id,
+            stopped.event_id AS stop_event_id,
+            json_extract(stopped.payload_json, '$.blocker_reason') AS blocker_reason,
+            stopped.occurred_at, stopped.manifest_key, package.updated_at
+       FROM work_packages AS package
+       LEFT JOIN work_package_events AS stopped
+         ON stopped.tenant_id = package.tenant_id
+        AND stopped.work_package_id = package.work_package_id
+        AND stopped.work_package_version = package.version
+        AND stopped.event_kind = 'stop_work'
+        AND NOT EXISTS (
+          SELECT 1 FROM work_package_events AS later
+           WHERE later.tenant_id = stopped.tenant_id
+             AND later.work_package_id = stopped.work_package_id
+             AND later.work_package_version = stopped.work_package_version
+             AND later.event_kind = 'stop_work'
+             AND (later.occurred_at > stopped.occurred_at
+               OR (later.occurred_at = stopped.occurred_at
+                 AND later.event_id > stopped.event_id))
+        )
+      WHERE package.tenant_id = ? AND package.status = 'Blocked'
+        AND package.job_id IN (${selected.map(() => "?").join(", ")})
+      ORDER BY package.updated_at DESC, package.work_package_id ASC`,
+    [tenantId, ...selected],
+    OWNER_NOW_SOURCE_LIMIT,
+  );
+}
+
+async function nativeOwnerEffectExceptions(
+  env: AppEnv,
+  tenantId: string,
+): Promise<{ rows: NativeOwnerEffectExceptionRow[]; partial: boolean }> {
+  return await boundedNativeRows<NativeOwnerEffectExceptionRow>(
+    env,
+    `SELECT exception.exception_id, exception.effect_id, exception.reason_code,
+            effect.action, effect.provider, effect.aggregate_type,
+            effect.aggregate_id, exception.created_at, effect.updated_at
+       FROM external_effect_exceptions AS exception
+       JOIN external_effects AS effect
+         ON effect.effect_id = exception.effect_id
+        AND effect.tenant_id = exception.tenant_id
+      WHERE exception.tenant_id = ? AND exception.status = 'open'
+      ORDER BY exception.created_at ASC, exception.exception_id ASC`,
+    [tenantId],
+    OWNER_NOW_SOURCE_LIMIT,
+  );
+}
+
+async function nativeOwnerUntriagedLeads(
+  env: AppEnv,
+  tenantId: string,
+): Promise<{ rows: OperatingSalesLeadRecord[]; partial: boolean }> {
+  return await boundedNativeRows<OperatingSalesLeadRecord>(
+    env,
+    `SELECT lead_id, tenant_id, source_envelope_id, source_raw_key, source,
+            contact_name, contact_phone, contact_email, job_ref,
+            lifecycle_status, version, created_at, updated_at
+       FROM operating_leads
+      WHERE tenant_id = ? AND lifecycle_status = 'untriaged'
+      ORDER BY updated_at DESC, version DESC, lead_id ASC`,
+    [tenantId],
+    OWNER_NOW_SOURCE_LIMIT,
+  );
+}
+
+async function nativeOwnerCommercialQuotes(
+  env: AppEnv,
+  tenantId: string,
+  jobIds: readonly string[],
+): Promise<{ rows: CommercialQuoteRecord[]; partial: boolean }> {
+  const selected = [...new Set(jobIds)].slice(0, OWNER_NOW_SOURCE_LIMIT);
+  if (selected.length === 0) return { rows: [], partial: false };
+  return await boundedNativeRows<CommercialQuoteRecord>(
+    env,
+    `SELECT * FROM commercial_quote_revisions
+      WHERE tenant_id = ?
+        AND roof_job_id IN (${selected.map(() => "?").join(", ")})
+      ORDER BY created_at DESC, revision_number DESC, quote_revision_id ASC`,
+    [tenantId, ...selected],
+    OWNER_NOW_SOURCE_LIMIT,
+  );
+}
+
+async function nativeOwnerAccountingIntents(
+  env: AppEnv,
+  tenantId: string,
+  jobIds: readonly string[],
+): Promise<{ rows: NativeOwnerAccountingIntentRow[]; partial: boolean }> {
+  const selected = [...new Set(jobIds)].slice(0, OWNER_NOW_SOURCE_LIMIT);
+  if (selected.length === 0) return { rows: [], partial: false };
+  return await boundedNativeRows<NativeOwnerAccountingIntentRow>(
+    env,
+    `SELECT intent_id, roof_job_id, kind, state, currency, subtotal,
+            total_amount, expected_sha256, provider_entity_type,
+            provider_entity_id, blocker_code, blocker_next_step, reason_code,
+            error_code, provider_submitted_at, provider_reconciled_at, updated_at
+       FROM accounting_intents
+      WHERE tenant_id = ?
+        AND roof_job_id IN (${selected.map(() => "?").join(", ")})
+        AND kind IN ('deposit_invoice', 'progress_invoice', 'final_invoice',
+          'payment', 'credit_memo', 'refund')
+      ORDER BY updated_at DESC, intent_id ASC`,
+    [tenantId, ...selected],
+    OWNER_NOW_SOURCE_LIMIT,
+  );
+}
+
+async function nativeOwnerAccountingReconciliations(
+  env: AppEnv,
+  tenantId: string,
+  jobIds: readonly string[],
+): Promise<{
+  rows: NativeOwnerAccountingReconciliationRow[];
+  partial: boolean;
+}> {
+  const selected = [...new Set(jobIds)].slice(0, OWNER_NOW_SOURCE_LIMIT);
+  if (selected.length === 0) return { rows: [], partial: false };
+  return await boundedNativeRows<NativeOwnerAccountingReconciliationRow>(
+    env,
+    `SELECT reconciliation.reconciliation_id, reconciliation.intent_id,
+            reconciliation.expected_sha256, reconciliation.observed_sha256,
+            reconciliation.verdict, reconciliation.reason_code,
+            reconciliation.decided_at
+       FROM accounting_reconciliations AS reconciliation
+       JOIN accounting_intents AS intent
+         ON intent.intent_id = reconciliation.intent_id
+        AND intent.tenant_id = reconciliation.tenant_id
+      WHERE reconciliation.tenant_id = ? AND intent.tenant_id = ?
+        AND intent.roof_job_id IN (${selected.map(() => "?").join(", ")})
+      ORDER BY reconciliation.decided_at DESC,
+               reconciliation.reconciliation_id ASC`,
+    [tenantId, tenantId, ...selected],
+    OWNER_NOW_SOURCE_LIMIT,
+  );
+}
+
+async function nativeOwnerAccountingExceptions(
+  env: AppEnv,
+  tenantId: string,
+): Promise<{ rows: NativeOwnerAccountingExceptionRow[]; partial: boolean }> {
+  return await boundedNativeRows<NativeOwnerAccountingExceptionRow>(
+    env,
+    `SELECT exception.exception_id, exception.subject_ref,
+            exception.intent_id, exception.reason_code, exception.status,
+            intent.roof_job_id, exception.opened_at, exception.updated_at
+       FROM accounting_exceptions AS exception
+       LEFT JOIN accounting_intents AS intent
+         ON intent.intent_id = exception.intent_id
+        AND intent.tenant_id = exception.tenant_id
+      WHERE exception.tenant_id = ?
+        AND exception.status IN ('open', 'acknowledged')
+      ORDER BY exception.opened_at ASC, exception.exception_id ASC`,
+    [tenantId],
+    OWNER_NOW_SOURCE_LIMIT,
+  );
+}
+
+function nativeOperatingJobRow(row: NativeProductionJobRow): FrappeRow {
+  return {
+    name: row.roof_job_id,
+    roof_job_id: row.roof_job_id,
+    roofing_property: row.property_id,
+    customer: row.customer_id,
+    brand: row.brand,
+    job_number: row.job_number,
+    service_type: row.service_type,
+    job_status: nativeJobStatusLabel(row.job_status),
+    current_gate_state: nativeGateStateLabel(row.current_gate_state),
+    version: row.version,
+    modified: row.updated_at,
+  };
+}
+
+function nativeOperatingAssignmentRow(
+  row: OperatingJobAssignmentRecord,
+): FrappeRow {
+  return {
+    name: row.assignment_id,
+    assignment_id: row.assignment_id,
+    roof_job: row.roof_job_id,
+    assignment_type: "Production",
+    status: "Assigned",
+    crew_profile: row.crew_id,
+    crew_id: row.crew_id,
+    crew_version: row.crew_version,
+    assignment_version: row.assignment_version,
+    roof_job_version: row.roof_job_version,
+    assigned_user: row.assigned_users[0] ?? null,
+    assigned_workers: row.assigned_users.map((workerUser, index) => ({
+      sequence: index + 1,
+      worker_user: workerUser,
+      worker_role: "Field Worker",
+      required: 1,
+    })),
+    scheduled_start: row.scheduled_start,
+    scheduled_end: row.scheduled_end,
+    blocker_reason: null,
+    source_system: "ironwrap-d1",
+    modified: row.created_at,
+  };
+}
+
+async function nativeTodayAssignments(
   env: AppEnv,
   auth: AuthContext,
-  jobName?: string,
 ): Promise<FrappeRow[]> {
-  const baseFilters: FrappeFilter[] = [
-    ["Job Assignment", "status", "in", [...ACTIVE_ASSIGNMENT_STATUSES]],
-  ];
-  if (jobName)
-    baseFilters.unshift(["Job Assignment", "roof_job", "=", jobName]);
-  if (jobReadMode(auth) === "any") {
-    return await listFrappeResource(env, "Job Assignment", baseFilters, 100);
-  }
-  const userId = auth.session.frappe_user_id;
-  if (!userId) return [];
-  const [direct, crewProfiles, workerRows] = await Promise.all([
-    listFrappeResource(
-      env,
-      "Job Assignment",
-      [...baseFilters, ["Job Assignment", "assigned_user", "=", userId]],
-      100,
-    ),
-    activeCrewProfilesForUser(env, userId),
-    !jobName
-      ? listFrappeResource(
-          env,
-          "Work Package Worker",
-          [["Work Package Worker", "worker_user", "=", userId]],
-          100,
-          "Job Assignment",
-        )
-      : Promise.resolve([]),
+  const actorUsers =
+    jobReadMode(auth) === "assigned"
+      ? appUserIdentities(auth.session)
+      : undefined;
+  const [scheduled, typed, packages] = await Promise.all([
+    listCurrentOperatingJobAssignments(env, auth.session.tenant_id, {
+      ...(actorUsers ? { actorUsers } : {}),
+    }),
+    listCurrentOperatingWorkObjectAssignments(env, auth.session.tenant_id, {
+      ...(actorUsers ? { actorUsers } : {}),
+    }),
+    nativeAssignments(env, auth.session.tenant_id, {
+      ...(actorUsers ? { actorUsers } : {}),
+    }),
   ]);
-  const crew =
-    crewProfiles.size > 0
-      ? await listFrappeResource(
-          env,
-          "Job Assignment",
-          [
-            ...baseFilters,
-            ["Job Assignment", "crew_profile", "in", [...crewProfiles]],
-          ],
-          100,
-        )
-      : [];
-  const workerAssignmentNames = new Set(
-    workerRows
-      .filter(
-        (row) =>
-          row.parenttype === "Job Assignment" &&
-          row.parentfield === "assigned_workers" &&
-          sameUser(row.worker_user, userId),
-      )
-      .map((row) => text(row.parent))
-      .filter((value): value is string => Boolean(value)),
-  );
-  const workerAssignments =
-    workerAssignmentNames.size > 0
-      ? await listFrappeResource(
-          env,
-          "Job Assignment",
-          [
-            ...baseFilters,
-            ["Job Assignment", "name", "in", [...workerAssignmentNames]],
-          ],
-          100,
-        )
-      : [];
-  const deduplicated = new Map<string, FrappeRow>();
-  for (const row of [...direct, ...crew, ...workerAssignments]) {
+  const assignments = new Map<string, FrappeRow>();
+  for (const row of scheduled.map(nativeOperatingAssignmentRow)) {
     const id = text(row.name);
-    const active = ACTIVE_ASSIGNMENT_STATUSES.includes(
-      text(row.status) as never,
-    );
-    const correctJob = !jobName || text(row.roof_job) === jobName;
-    const allowed =
-      sameUser(row.assigned_user, userId) ||
-      crewProfiles.has(text(row.crew_profile) ?? "") ||
-      workerAssignmentNames.has(id ?? "");
-    if (id && active && correctJob && allowed) deduplicated.set(id, row);
+    if (id) assignments.set(id, row);
   }
-  return [...deduplicated.values()];
+  for (const row of typed.map(nativeOperatingWorkObjectAssignmentRow)) {
+    const id = text(row.name);
+    if (id) assignments.set(id, row);
+  }
+  for (const row of packages) {
+    const id = text(row.name);
+    const assignment = id ? assignments.get(id) : null;
+    if (id && assignment) assignments.set(id, { ...assignment, ...row });
+  }
+  return [...assignments.values()];
+}
+
+function nativeOperatingWorkObjectAssignmentRow(
+  row: OperatingWorkObjectAssignmentRecord,
+): FrappeRow {
+  return {
+    name: row.assignment_id,
+    assignment_id: row.assignment_id,
+    assignment_type: "Production",
+    status: "Assigned",
+    assigned_user: row.assigned_users[0] ?? null,
+    assigned_workers: row.assigned_users.map((workerUser, index) => ({
+      sequence: index + 1,
+      worker_user: workerUser,
+      worker_role: "Field Worker",
+      required: 1,
+    })),
+    work_object_type: row.work_object_type,
+    work_object_id: row.work_object_id,
+    physical_context_type: row.physical_context_type,
+    physical_context_id: row.physical_context_id,
+    authority_user: row.authority_user_id,
+    authority_role:
+      row.authority_role === "owner" ? "IronWrap Owner" : "IronWrap Production",
+    assignment_version: row.assignment_version,
+    scheduled_start: row.scheduled_start,
+    scheduled_end: row.scheduled_end,
+    blocker_reason: null,
+    source_system: "ironwrap-d1",
+    modified: row.created_at,
+  };
+}
+
+function nativeProductionGateFrappeRow(
+  row: NativeProductionGateRow,
+): FrappeRow {
+  return {
+    name: row.gate_id,
+    gate_id: row.gate_id,
+    roof_job: row.roof_job_id,
+    gate: row.gate,
+    state: row.state,
+    blocker_reason: row.blocker_reason,
+    owner_user: row.owner_user,
+    assigned_at: row.assigned_at,
+    due_at: row.due_at,
+    modified: row.updated_at,
+  };
+}
+
+function nativeMaterialExceptionFrappeRow(
+  row: NativeMaterialExceptionRow,
+): FrappeRow {
+  return {
+    name: row.exception_id,
+    roof_job: row.aggregate_id,
+    exception_type: row.exception_type,
+    status: row.status,
+    reason_code: row.reason_code,
+    created_at: row.created_at,
+    modified: row.updated_at,
+  };
+}
+
+function nativeOwnerFieldBlockerFrappeRow(
+  row: NativeOwnerFieldBlockerRow,
+): FrappeRow {
+  return {
+    name: row.stop_event_id ?? row.work_package_id,
+    checkin_id: row.stop_event_id ?? row.work_package_id,
+    roof_job: row.job_id,
+    blocker_summary: row.blocker_reason,
+    submitted_at: row.occurred_at,
+    manifest_key: row.manifest_key,
+    modified: row.occurred_at ?? row.updated_at,
+  };
+}
+
+function nativeOwnerEffectExceptionFrappeRow(
+  row: NativeOwnerEffectExceptionRow,
+): FrappeRow {
+  return {
+    name: row.exception_id,
+    incident_id: row.exception_id,
+    action: row.action,
+    provider: row.provider,
+    reason_code: row.reason_code,
+    roof_job: row.aggregate_type === "roof_job" ? row.aggregate_id : null,
+    detected_at: row.created_at,
+    modified: row.updated_at,
+  };
+}
+
+function nativeOwnerLeadFrappeRow(row: OperatingSalesLeadRecord): FrappeRow {
+  return {
+    name: row.lead_id,
+    envelope_id: row.source_envelope_id,
+    source: row.source,
+    contact_name: row.contact_name,
+    job_ref: row.job_ref,
+    triage_status: "Untriaged",
+    event_ts: row.created_at,
+    modified: row.updated_at,
+  };
+}
+
+function nativeOwnerQuoteFrappeRow(row: CommercialQuoteRecord): FrappeRow {
+  return {
+    name: row.quote_revision_id,
+    customer_quote_id: row.customer_quote_id,
+    quote_version: row.revision_number,
+    roof_job: row.roof_job_id,
+    status: salesStatus(row.status),
+    subtotal: moneyFromCents(row.subtotal_cents),
+    tax_amount: moneyFromCents(row.tax_cents),
+    quote_total: moneyFromCents(row.total_cents),
+    currency: row.currency,
+    valid_until: row.valid_until,
+    supersedes: row.supersedes_quote_revision_id,
+    modified: row.created_at,
+  };
+}
+
+function nativeOwnerAccountingMoney(
+  row: NativeOwnerAccountingIntentRow,
+): { subtotal: string; totalAmount: string } | null {
+  const subtotal = nativeOwnerAccountingMagnitude(
+    row.subtotal,
+    row.kind === "credit_memo",
+  );
+  const totalAmount = nativeOwnerAccountingMagnitude(
+    row.total_amount,
+    row.kind === "credit_memo" || row.kind === "refund",
+  );
+  return subtotal !== null && totalAmount !== null
+    ? { subtotal, totalAmount }
+    : null;
+}
+
+function nativeOwnerAccountingMagnitude(
+  value: string,
+  expectNegative: boolean,
+): string | null {
+  const negative = value.startsWith("-");
+  const magnitude = negative ? value.slice(1) : value;
+  if (
+    negative !== expectNegative ||
+    !/^(?:0|[1-9]\d*)\.\d{2}$/.test(magnitude) ||
+    (expectNegative && magnitude === "0.00")
+  )
+    return null;
+  return magnitude;
+}
+
+function nativeProductionCrewFrappeRow(
+  row: NativeProductionCrewRow,
+): FrappeRow {
+  return {
+    name: row.crew_id,
+    crew_name: row.display_name,
+    version: row.version,
+    modified: row.updated_at,
+  };
+}
+
+function nativeJobStatusLabel(value: string | null): string | null {
+  if (value === "qualified") return "Won";
+  if (value === "in_progress") return "In Production";
+  if (value === "complete") return "Complete";
+  if (value === "cancelled") return "Cancelled";
+  return value;
+}
+
+function nativeGateStateLabel(value: string | null): string | null {
+  if (value === "blocked") return "Blocked";
+  if (value === "ready") return "Ready";
+  if (value === "in_progress") return "In Progress";
+  if (value === "complete") return "Done";
+  if (value === "waived") return "Waived";
+  return value;
 }
 
 function jobReadMode(auth: AuthContext): "any" | "assigned" {
@@ -3123,7 +3486,22 @@ function assignmentModel(row: FrappeRow): AssignmentReadModel {
     scheduled_start: text(row.scheduled_start),
     scheduled_end: text(row.scheduled_end),
     blocker_reason: text(row.blocker_reason),
+    modified: text(row.modified),
   };
+}
+
+function officeWorkPackageActions(
+  role: AppRole,
+  assignment: FrappeRow | null,
+  workPackage: FieldWorkPackage | null,
+): string[] {
+  if (!assignment || !["owner", "ops", "production"].includes(role)) return [];
+  return [
+    "work_package.issue",
+    ...(workPackage
+      ? ["work_package.hold.release", "work_package.evidence.review"]
+      : []),
+  ];
 }
 
 function productionAssignmentModel(
@@ -3133,6 +3511,10 @@ function productionAssignmentModel(
     id: text(row.name)!,
     type: text(row.assignment_type),
     status: text(row.status),
+    assignment_version: Number(row.assignment_version),
+    roof_job_version: Number(row.roof_job_version),
+    crew_id: text(row.crew_id)!,
+    crew_version: Number(row.crew_version),
     scheduled_start: text(row.scheduled_start),
     scheduled_end: text(row.scheduled_end),
   };
@@ -3178,9 +3560,7 @@ function assignmentWorkObjectScope(
   };
 }
 
-function preferredAssignmentsByWorkObject(
-  rows: FrappeRow[],
-): FrappeRow[] {
+function preferredAssignmentsByWorkObject(rows: FrappeRow[]): FrappeRow[] {
   const grouped = new Map<string, FrappeRow[]>();
   for (const row of rows) {
     const scope = assignmentWorkObjectScope(row);
@@ -3195,11 +3575,15 @@ function preferredAssignmentsByWorkObject(
     current.push(row);
     grouped.set(key, current);
   }
-  return [...grouped.values()]
-    // A typed Today row is an actionable route, so an ambiguous active
-    // assignment must be withheld rather than choosing a browser write target.
-    .map((candidates) => (candidates.length === 1 ? candidates[0] ?? null : null))
-    .filter((row): row is FrappeRow => row !== null);
+  return (
+    [...grouped.values()]
+      // A typed Today row is an actionable route, so an ambiguous active
+      // assignment must be withheld rather than choosing a browser write target.
+      .map((candidates) =>
+        candidates.length === 1 ? (candidates[0] ?? null) : null,
+      )
+      .filter((row): row is FrappeRow => row !== null)
+  );
 }
 
 function preferredAssignment(rows: FrappeRow[]): FrappeRow | null {
@@ -3228,7 +3612,7 @@ function gateModel(
         {
           id: gateId,
           name: text(row.gate),
-          state: text(row.state),
+          state: nativeGateStateLabel(text(row.state)),
           blocker_reason: text(row.blocker_reason),
           owner: redactOwner ? null : text(row.owner_user),
           due_at: text(row.due_at),
@@ -3279,6 +3663,89 @@ function compareProofItems(
     dateValue(right.occurred_at) - dateValue(left.occurred_at) ||
     right.id.localeCompare(left.id)
   );
+}
+
+async function nativeWorkPackageProofRows(
+  env: AppEnv,
+  tenantId: string,
+  jobId: string,
+  assignmentId: string,
+  workPackage: FieldWorkPackage,
+): Promise<FrappeRow[] | null> {
+  if (!workPackage.releaseAttemptId) return [];
+  const evidence = await listFieldWorkPackageEvidenceFromD1(env, {
+    tenantId,
+    jobId,
+    assignmentId,
+    workPackageId: workPackage.id,
+    version: workPackage.version,
+    releaseAttemptId: workPackage.releaseAttemptId,
+    scope: {
+      workObjectType: workPackage.workObjectType ?? "Roof Job",
+      workObjectId: workPackage.workObjectId ?? jobId,
+      physicalContextType: workPackage.physicalContextType ?? "Roof Site",
+      physicalContextId: workPackage.physicalContextId ?? jobId,
+    },
+  });
+  return (
+    (evidence?.map(nativeWorkPackageEvidenceRow) ?? null)?.sort(
+      compareEvidenceRowsByProofOrder,
+    ) ?? null
+  );
+}
+
+function nativeWorkPackageEvidenceRow(
+  row: FieldWorkPackageEvidenceD1Row,
+): FrappeRow {
+  return {
+    name: row.eventId,
+    evidence_id: row.evidenceItem,
+    evidence_type: "Work Package Evidence",
+    proof_slot: row.slotId,
+    captured_at: row.capturedAt,
+    summary: row.requirement,
+    customer_safe: 0,
+    source_system: row.source,
+    sync_state: row.verification,
+    modified: row.occurredAt,
+  };
+}
+
+function nativeCustomerFrappeRow(
+  row: NativeCustomerRecord | null | undefined,
+): FrappeRow | null {
+  if (!row) return null;
+  return {
+    name: row.customer_id,
+    display_name: row.display_name,
+    phone: row.contact_phone,
+    modified: row.updated_at,
+  };
+}
+
+function nativePropertyFrappeRow(
+  row: NativePropertyRecord | null | undefined,
+): FrappeRow | null {
+  if (!row) return null;
+  return {
+    name: row.property_id,
+    address_line1: row.address_line1,
+    city: row.city,
+    province: row.province,
+    postal_code: row.postal_code,
+    country: row.country,
+    modified: row.updated_at,
+  };
+}
+
+function compareEvidenceRowsByProofOrder(
+  left: FrappeRow,
+  right: FrappeRow,
+): number {
+  const leftItem = evidenceProofItem(left);
+  const rightItem = evidenceProofItem(right);
+  if (!leftItem || !rightItem) return 0;
+  return compareProofItems(leftItem, rightItem);
 }
 
 function parseProofCursor(value: string | null): number | null {
@@ -3520,101 +3987,324 @@ function recordIsNewer(
   );
 }
 
-function salesEstimateModel(
-  row: FrappeRow | undefined,
+function firstRowsBy<T>(
+  rows: readonly T[],
+  key: (row: T) => string,
+): Map<string, T> {
+  const indexed = new Map<string, T>();
+  for (const row of rows) {
+    const value = key(row);
+    if (!indexed.has(value)) indexed.set(value, row);
+  }
+  return indexed;
+}
+
+function groupedRows<T>(
+  rows: readonly T[],
+  key: (row: T) => string,
+): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const row of rows) {
+    const value = key(row);
+    grouped.set(value, [...(grouped.get(value) ?? []), row]);
+  }
+  return grouped;
+}
+
+function nativeSalesEstimate(
+  row: OperatingSalesEstimateRecord | undefined,
 ): SalesReadModel["leads"][number]["estimate"] {
-  const id = row ? (text(row.estimate_session_id) ?? text(row.name)) : null;
-  if (!row || !id) return null;
+  if (!row) return null;
   return {
-    id,
-    status: text(row.status),
-    service_type: text(row.service_type),
-    range_low: optionalNumber(row.range_low),
-    range_high: optionalNumber(row.range_high),
-    estimate_total: optionalNumber(row.estimate_total),
-    confidence: text(row.confidence),
-    review_required: booleanValue(row.review_required) === true,
-    reviewed_at: text(row.reviewed_at),
-    approved_at: text(row.approved_at),
-    assumptions: text(row.assumptions),
-    exclusions: text(row.exclusions),
+    id: row.estimate_session_id,
+    status: salesStatus(row.status),
+    service_type: row.service_type,
+    range_low: moneyFromCents(row.range_low_cents),
+    range_high: moneyFromCents(row.range_high_cents),
+    estimate_total: moneyFromCents(row.estimate_total_cents),
+    confidence: row.confidence,
+    review_required: row.review_required === 1,
+    reviewed_at: null,
+    approved_at: null,
+    assumptions: row.assumptions,
+    exclusions: row.exclusions,
   };
 }
 
-function salesQuoteModel(
-  row: FrappeRow | undefined,
+function nativeSalesQuote(
+  row: CommercialSalesSources["quotes"][number] | undefined,
+  acceptance: CommercialSalesSources["acceptances"][number] | undefined,
 ): SalesReadModel["leads"][number]["quote"] {
-  const id = row ? (text(row.customer_quote_id) ?? text(row.name)) : null;
-  if (!row || !id) return null;
+  if (!row) return null;
   return {
-    id,
-    version: optionalNumber(row.quote_version),
-    status: text(row.status),
-    quote_total: optionalNumber(row.quote_total),
-    currency: text(row.currency),
-    valid_until: text(row.valid_until),
-    payment_status: text(row.payment_status),
-    prepared_at: text(row.prepared_at),
-    approved_at: text(row.approved_at),
-    accepted_at: text(row.accepted_at),
-    scope_summary: text(row.scope_summary),
+    id: row.customer_quote_id,
+    version: row.revision_number,
+    status: acceptance ? "Accepted" : salesStatus(row.status),
+    quote_total: moneyFromCents(row.total_cents),
+    currency: row.currency,
+    valid_until: row.valid_until,
+    payment_status: null,
+    prepared_at: row.created_at,
+    approved_at: row.status === "approved" ? row.created_at : null,
+    accepted_at: acceptance?.accepted_at ?? null,
+    scope_summary: null,
   };
 }
 
-function salesProposalModel(
-  row: FrappeRow | undefined,
-  publishedRow: FrappeRow | undefined,
+function nativeCommercialQuoteRows(
+  packet: NativeCommercialJobPacket,
+): FrappeRow[] {
+  const acceptancesByQuote = firstRowsBy(
+    packet.acceptances,
+    (row) => row.quote_revision_id,
+  );
+  return packet.quotes.map((row) => ({
+    name: row.quote_revision_id,
+    customer_quote_id: row.customer_quote_id,
+    quote_version: row.revision_number,
+    status: acceptancesByQuote.get(row.quote_revision_id)
+      ? "Accepted"
+      : salesStatus(row.status),
+    price_book_version: null,
+    pricing_effective_at: null,
+    subtotal: moneyFromCents(row.subtotal_cents),
+    tax_amount: moneyFromCents(row.tax_cents),
+    tax_code: null,
+    tax_rate: null,
+    quote_total: moneyFromCents(row.total_cents),
+    currency: row.currency,
+    deposit_amount: null,
+    amount_due: null,
+    amount_paid: null,
+    balance_due: null,
+    payment_status: null,
+    payment_due_date: null,
+    valid_until: row.valid_until,
+    prepared_at: row.created_at,
+    approved_at: row.status === "approved" ? row.created_at : null,
+    accepted_at:
+      acceptancesByQuote.get(row.quote_revision_id)?.accepted_at ?? null,
+    scope_summary: null,
+    assumptions: null,
+    exclusions: null,
+    supersedes: row.supersedes_quote_revision_id,
+    correction_reason: row.correction_reason,
+    modified:
+      acceptancesByQuote.get(row.quote_revision_id)?.accepted_at ??
+      row.created_at,
+  }));
+}
+
+function nativeEstimatorCommercialSelection(
+  packet: NativeCommercialJobPacket,
+  asOf: Date,
+): {
+  quoteRows: FrappeRow[];
+  proposalRows: FrappeRow[];
+  staleFields: string[];
+} {
+  if (
+    packet.partial_sources.includes("commercial_quote_revisions") ||
+    packet.partial_sources.includes("commercial_proposal_revisions")
+  ) {
+    return {
+      quoteRows: [],
+      proposalRows: [],
+      staleFields: ["commercial_quote.source_window_partial"],
+    };
+  }
+  const superseded = new Set(
+    packet.quotes
+      .map((row) => row.supersedes_quote_revision_id)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const currentDate = asOf.toISOString().slice(0, 10);
+  const heads = packet.quotes.filter(
+    (row) =>
+      row.status === "approved" &&
+      row.valid_until >= currentDate &&
+      !superseded.has(row.quote_revision_id),
+  );
+  if (heads.length !== 1) {
+    return {
+      quoteRows: [],
+      proposalRows: [],
+      staleFields:
+        heads.length > 1
+          ? ["commercial_quote.authority_ambiguous"]
+          : packet.quotes.length > 0
+            ? ["commercial_quote.current_missing"]
+            : [],
+    };
+  }
+  const quotesById = new Map(
+    packet.quotes.map((row) => [row.quote_revision_id, row] as const),
+  );
+  const lineage = new Set<string>();
+  let cursor: (typeof packet.quotes)[number] | undefined = heads[0];
+  while (cursor && !lineage.has(cursor.quote_revision_id)) {
+    lineage.add(cursor.quote_revision_id);
+    cursor = cursor.supersedes_quote_revision_id
+      ? quotesById.get(cursor.supersedes_quote_revision_id)
+      : undefined;
+  }
+  const selectedPacket: NativeCommercialJobPacket = {
+    ...packet,
+    quotes: packet.quotes.filter((row) => lineage.has(row.quote_revision_id)),
+    proposals: packet.proposals.filter((row) =>
+      lineage.has(row.quote_revision_id),
+    ),
+  };
+  return {
+    quoteRows: nativeCommercialQuoteRows(selectedPacket),
+    proposalRows: nativeCommercialProposalRows(selectedPacket),
+    staleFields: [],
+  };
+}
+
+function nativeSalesProposal(
+  row: CommercialSalesSources["proposals"][number] | undefined,
+  publication: CommercialSalesSources["publications"][number] | undefined,
+  acceptance: CommercialSalesSources["acceptances"][number] | undefined,
   sourcePartial: boolean,
 ): SalesReadModel["leads"][number]["proposal"] {
-  const id = row ? (text(row.pack_id) ?? text(row.name)) : null;
-  if (!row || !id) return null;
+  if (!row) return null;
   return {
-    id,
-    status: text(row.status),
-    prepared_at: text(row.prepared_at),
-    approved_at: text(row.approved_at),
-    signed_at: text(row.signed_at),
-    has_published_pack: sourcePartial ? null : Boolean(publishedRow),
-    published_status: sourcePartial ? null : text(publishedRow?.status),
+    id: row.proposal_pack_id,
+    status: acceptance ? "Signed" : salesStatus(publication?.state ?? "draft"),
+    prepared_at: row.created_at,
+    approved_at: null,
+    signed_at: acceptance?.accepted_at ?? null,
+    has_published_pack: sourcePartial
+      ? null
+      : publication?.state === "published",
+    published_status: sourcePartial
+      ? null
+      : salesStatus(publication?.state ?? null),
   };
 }
 
-function proposalStatusIsPublished(status: string | null): boolean {
-  return status === "Approved" || status === "Sent" || status === "Signed";
+function nativeCommercialProposalRows(
+  packet: NativeCommercialJobPacket,
+): FrappeRow[] {
+  const publicationsByPack = firstRowsBy(
+    packet.publications,
+    (row) => row.proposal_pack_id,
+  );
+  const acceptancesByProposal = firstRowsBy(
+    packet.acceptances,
+    (row) => row.proposal_revision_id,
+  );
+  return packet.proposals.map((row) => {
+    const publication = publicationsByPack.get(row.proposal_pack_id);
+    const acceptance = acceptancesByProposal.get(row.proposal_revision_id);
+    return {
+      name: row.proposal_revision_id,
+      pack_id: row.proposal_pack_id,
+      quotation: row.quote_revision_id,
+      status: acceptance
+        ? "Signed"
+        : publication?.state === "published"
+          ? "Sent"
+          : publication?.state === "withdrawn"
+            ? "Withdrawn"
+            : "Draft",
+      prepared_at: row.created_at,
+      approved_at: null,
+      signed_at: acceptance?.accepted_at ?? null,
+      assumptions: null,
+      exclusions: null,
+      modified:
+        acceptance?.accepted_at ?? publication?.occurred_at ?? row.created_at,
+    };
+  });
 }
 
-function salesConsentRecord(
-  row: FrappeRow,
-): SalesReadModel["leads"][number]["consent"]["records"][number] | null {
-  const id = text(row.consent_id) ?? text(row.name);
-  if (!id) return null;
+function nativeSalesConsent(
+  row: OperatingSalesConsentRecord,
+): SalesReadModel["leads"][number]["consent"]["records"][number] {
   return {
-    id,
-    channel: text(row.channel),
-    purpose: text(row.purpose),
-    status: text(row.status),
-    jurisdiction: text(row.jurisdiction),
-    basis: text(row.consent_basis),
-    captured_at: text(row.captured_at),
-    effective_from: text(row.effective_from),
-    expires_at: text(row.expires_at),
-    revoked_at: text(row.revoked_at),
+    id: row.consent_id,
+    channel: salesStatus(row.channel),
+    purpose: salesStatus(row.purpose),
+    status: salesStatus(row.status),
+    jurisdiction: row.jurisdiction,
+    basis: salesStatus(row.consent_basis),
+    captured_at: row.recorded_at,
+    effective_from: null,
+    expires_at: null,
+    revoked_at: row.status === "revoked" ? row.recorded_at : null,
   };
 }
 
 function salesAttention(
-  lead: FrappeRow,
+  triageStatus: string | null,
   estimate: SalesReadModel["leads"][number]["estimate"],
   quote: SalesReadModel["leads"][number]["quote"],
+  partialFields: SalesPartialField[],
 ): SalesAttentionReason[] {
   const attention: SalesAttentionReason[] = [];
-  const triage = text(lead.triage_status);
-  if (triage !== "Triaged") attention.push("triage_unresolved");
+  if (partialFields.length > 0) attention.push("source_partial");
+  if (!["Triaged", "Qualified", "Disqualified"].includes(triageStatus ?? ""))
+    attention.push("triage_unresolved");
   if (estimate?.status === "Captured" || estimate?.status === "Needs Review")
     attention.push("estimate_needs_review");
   if (quote?.status === "Needs Review") attention.push("quote_needs_review");
   if (quote?.status === "Expired") attention.push("quote_expired");
   return attention;
+}
+
+function salesStatus(value: string | null): string | null {
+  if (!value) return null;
+  return value
+    .split("_")
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function moneyFromCents(value: number | null): number | null {
+  return value === null ? null : value / 100;
+}
+
+function nativeSalesEnvelopeRows(sources: CommercialSalesSources): FrappeRow[] {
+  return [
+    ...sources.leads.map((row) => ({
+      name: row.lead_id,
+      modified: row.updated_at,
+    })),
+    ...sources.jobs.map((row) => ({
+      name: row.roof_job_id,
+      modified: row.updated_at,
+    })),
+    ...sources.estimates.map((row) => ({
+      name: row.estimate_session_id,
+      modified: row.updated_at,
+    })),
+    ...sources.consents.map((row) => ({
+      name: row.consent_id,
+      modified: row.recorded_at,
+    })),
+    ...sources.triageDecisions.map((row) => ({
+      name: row.triage_decision_id,
+      modified: row.decided_at,
+    })),
+    ...sources.quotes.map((row) => ({
+      name: row.quote_revision_id,
+      modified: row.created_at,
+    })),
+    ...sources.proposals.map((row) => ({
+      name: row.proposal_revision_id,
+      modified: row.created_at,
+    })),
+    ...sources.publications.map((row) => ({
+      name: row.publication_event_id,
+      modified: row.occurred_at,
+    })),
+    ...sources.acceptances.map((row) => ({
+      name: row.acceptance_binding_id,
+      modified: row.bound_at,
+    })),
+  ];
 }
 
 function compareSalesLead(
@@ -3650,41 +4340,6 @@ function estimatorMeasurementSummary(
         },
       ]
     : [];
-}
-
-async function safeEstimatorDetailRead(
-  env: AppEnv,
-  doctype:
-    | "Measurement Report"
-    | "Visual Property Model"
-    | "Material Takeoff"
-    | "Insurance Supplement",
-  name: string,
-): Promise<{ row: FrappeRow | null; unavailable_reason: string | null }> {
-  try {
-    return {
-      row: await readOfficeEstimatorFrappeResource(env, doctype, name),
-      unavailable_reason: null,
-    };
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message === "frappe_read_response_too_large"
-    ) {
-      return {
-        row: null,
-        unavailable_reason:
-          doctype === "Measurement Report"
-            ? "measurement_detail_too_large"
-            : doctype === "Visual Property Model"
-              ? "visual_model_detail_too_large"
-              : doctype === "Material Takeoff"
-                ? "takeoff_detail_too_large"
-                : "insurance_supplement_detail_too_large",
-      };
-    }
-    throw error;
-  }
 }
 
 function matchesMeasurementDetail(
@@ -4004,7 +4659,13 @@ export interface EstimatorComputedTakeoffProjection {
   roof_area_computed_sqft: number | null;
   overage: number | null;
   skipped_facets: number | null;
-  nest: { mode: string; stock_ft: number; cut_ft: number; waste_pct: number; reused_cuts: number } | null;
+  nest: {
+    mode: string;
+    stock_ft: number;
+    cut_ft: number;
+    waste_pct: number;
+    reused_cuts: number;
+  } | null;
   trims: Array<{ profile: string; total_ft: number; sticks: number }>;
   trims_truncated: boolean;
   fasteners: { clips: number; clip_screws: number; trim_screws: number } | null;
@@ -4022,7 +4683,15 @@ export interface EstimatorComputedEstimateProjection {
   policy_revision: number | null;
   policy_snapshot_sha256: string | null;
   currency: string | null;
-  lines: Array<{ kind: string; sku: string; description: string; qty: number; unit: string; rate: number; amount: number }>;
+  lines: Array<{
+    kind: string;
+    sku: string;
+    description: string;
+    qty: number;
+    unit: string;
+    rate: number;
+    amount: number;
+  }>;
   lines_truncated: boolean;
   subtotal: number | null;
   markup: number | null;
@@ -4032,23 +4701,40 @@ export interface EstimatorComputedEstimateProjection {
   needs_review: boolean | null;
 }
 
-function unavailableComputedTakeoff(reason: string): EstimatorComputedTakeoffProjection {
+function unavailableComputedTakeoff(
+  reason: string,
+): EstimatorComputedTakeoffProjection {
   return {
     state: "unavailable",
     authority: NON_OPERATIONAL_PREVIEW_AUTHORITY,
     calculation_schema: LEGACY_PREVIEW_CALCULATION_SCHEMA,
     policy_bound: false,
     approval_eligible: false,
-    reason, needs_review: null, panel_count: null, panel_ft: null,
-    panel_area_sqft: null, roof_area_computed_sqft: null, overage: null, skipped_facets: null,
-    nest: null, trims: [], trims_truncated: false, fasteners: null, failed_check_count: null,
+    reason,
+    needs_review: null,
+    panel_count: null,
+    panel_ft: null,
+    panel_area_sqft: null,
+    roof_area_computed_sqft: null,
+    overage: null,
+    skipped_facets: null,
+    nest: null,
+    trims: [],
+    trims_truncated: false,
+    fasteners: null,
+    failed_check_count: null,
   };
 }
 
-function estimatorComputedTakeoff(
-  model: GeometryModel | null,
-): { projection: EstimatorComputedTakeoffProjection; takeoff: TakeoffModel | null } {
-  if (!model) return { projection: unavailableComputedTakeoff("geometry_unavailable"), takeoff: null };
+function estimatorComputedTakeoff(model: GeometryModel | null): {
+  projection: EstimatorComputedTakeoffProjection;
+  takeoff: TakeoffModel | null;
+} {
+  if (!model)
+    return {
+      projection: unavailableComputedTakeoff("geometry_unavailable"),
+      takeoff: null,
+    };
   try {
     const takeoff = takeoffFromGeometry(model);
     return {
@@ -4074,11 +4760,16 @@ function estimatorComputedTakeoff(
           waste_pct: takeoff.panelNest.wastePct,
           reused_cuts: takeoff.panelNest.reusedCuts,
         },
-        trims: takeoff.trims.slice(0, MAX_ESTIMATOR_COMPUTED_TRIMS).map((trim) => ({
-          profile: boundedGeometryText(trim.profile, MAX_ESTIMATOR_GEOMETRY_LABEL),
-          total_ft: trim.totalFt,
-          sticks: trim.sticks,
-        })),
+        trims: takeoff.trims
+          .slice(0, MAX_ESTIMATOR_COMPUTED_TRIMS)
+          .map((trim) => ({
+            profile: boundedGeometryText(
+              trim.profile,
+              MAX_ESTIMATOR_GEOMETRY_LABEL,
+            ),
+            total_ft: trim.totalFt,
+            sticks: trim.sticks,
+          })),
         trims_truncated: takeoff.trims.length > MAX_ESTIMATOR_COMPUTED_TRIMS,
         fasteners: {
           clips: takeoff.fasteners.clips,
@@ -4089,7 +4780,10 @@ function estimatorComputedTakeoff(
       },
     };
   } catch {
-    return { projection: unavailableComputedTakeoff("takeoff_failed"), takeoff: null };
+    return {
+      projection: unavailableComputedTakeoff("takeoff_failed"),
+      takeoff: null,
+    };
   }
 }
 
@@ -4100,7 +4794,8 @@ type EstimatorPriceList = {
 };
 
 function estimatorPriceList(env: AppEnv, pricedAt: string): EstimatorPriceList {
-  const raw = (env as { ESTIMATOR_PRICE_LIST_JSON?: string }).ESTIMATOR_PRICE_LIST_JSON;
+  const raw = (env as { ESTIMATOR_PRICE_LIST_JSON?: string })
+    .ESTIMATOR_PRICE_LIST_JSON;
   if (!raw || !raw.trim()) return { state: "unconfigured" };
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -4131,10 +4826,19 @@ function emptyComputedEstimate(
     calculation_schema: LEGACY_PREVIEW_CALCULATION_SCHEMA,
     policy_bound: false,
     approval_eligible: false,
-    mode: null, policy_id: null, policy_revision: null,
-    policy_snapshot_sha256: null, currency: null, lines: [], lines_truncated: false,
-    subtotal: null, markup: null, tax: null, total: null,
-    unpriced_profiles: [], needs_review: null,
+    mode: null,
+    policy_id: null,
+    policy_revision: null,
+    policy_snapshot_sha256: null,
+    currency: null,
+    lines: [],
+    lines_truncated: false,
+    subtotal: null,
+    markup: null,
+    tax: null,
+    total: null,
+    unpriced_profiles: [],
+    needs_review: null,
   };
 }
 
@@ -4145,10 +4849,15 @@ function estimatorComputedEstimate(
   authority?: VerifiedPricingAuthority,
 ): EstimatorComputedEstimateProjection {
   if (!takeoff) return emptyComputedEstimate("unavailable");
-  if (priceList.state === "unconfigured") return emptyComputedEstimate("unconfigured");
-  if (priceList.state === "invalid") return emptyComputedEstimate("invalid_price_list");
+  if (priceList.state === "unconfigured")
+    return emptyComputedEstimate("unconfigured");
+  if (priceList.state === "invalid")
+    return emptyComputedEstimate("invalid_price_list");
   try {
-    const estimate = priceTakeoff(takeoff, priceList.list!, { pricedAt, authority });
+    const estimate = priceTakeoff(takeoff, priceList.list!, {
+      pricedAt,
+      authority,
+    });
     return {
       state: "priced",
       authority: NON_OPERATIONAL_PREVIEW_AUTHORITY,
@@ -4160,15 +4869,20 @@ function estimatorComputedEstimate(
       policy_revision: estimate.commercial.policyRevision,
       policy_snapshot_sha256: estimate.commercial.policySnapshotSha256,
       currency: estimate.currency,
-      lines: estimate.lines.slice(0, MAX_ESTIMATOR_ESTIMATE_LINES).map((line) => ({
-        kind: line.kind,
-        sku: boundedGeometryText(line.sku, MAX_ESTIMATOR_GEOMETRY_LABEL),
-        description: boundedGeometryText(line.description, MAX_ESTIMATOR_GEOMETRY_LABEL),
-        qty: line.qty,
-        unit: line.unit,
-        rate: line.rate,
-        amount: line.amount,
-      })),
+      lines: estimate.lines
+        .slice(0, MAX_ESTIMATOR_ESTIMATE_LINES)
+        .map((line) => ({
+          kind: line.kind,
+          sku: boundedGeometryText(line.sku, MAX_ESTIMATOR_GEOMETRY_LABEL),
+          description: boundedGeometryText(
+            line.description,
+            MAX_ESTIMATOR_GEOMETRY_LABEL,
+          ),
+          qty: line.qty,
+          unit: line.unit,
+          rate: line.rate,
+          amount: line.amount,
+        })),
       lines_truncated: estimate.lines.length > MAX_ESTIMATOR_ESTIMATE_LINES,
       subtotal: estimate.subtotal,
       markup: estimate.markup,
@@ -5065,8 +5779,11 @@ function unavailableEstimatorGeometry(
 }
 
 function validMeasurementRawKey(value: string): boolean {
-  return /^raw\/measurements\/\d{4}-\d{2}-\d{2}\/ow_[0-9a-f-]{36}\.json$/.test(
-    value,
+  return (
+    /^raw\/measurements\/[0-9a-f]{64}\.json$/.test(value) ||
+    /^raw\/measurements\/\d{4}-\d{2}-\d{2}\/ow_[0-9a-f-]{36}\.json$/.test(
+      value,
+    )
   );
 }
 
@@ -5142,21 +5859,8 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function hasRestrictedInsuranceAccess(env: AppEnv, auth: AuthContext): boolean {
-  if (auth.session.role === "owner") return true;
-  if (auth.session.role !== "ops") return false;
-  const frappeUser = text(auth.session.frappe_user_id)?.toLowerCase();
-  if (!frappeUser) return false;
-  return (env.APP_INSURANCE_ESTIMATOR_FRAPPE_USERS ?? "")
-    .split(",")
-    .map((candidate) => candidate.trim().toLowerCase())
-    .filter((candidate) => candidate.length > 0 && candidate.length <= 254)
-    .slice(0, 32)
-    .includes(frappeUser);
-}
-
-function sameUser(value: unknown, expected: string): boolean {
-  return text(value)?.toLowerCase() === expected.trim().toLowerCase();
+function hasRestrictedInsuranceAccess(auth: AuthContext): boolean {
+  return auth.session.role === "owner" || auth.session.role === "ops";
 }
 
 function booleanValue(value: unknown): boolean | null {

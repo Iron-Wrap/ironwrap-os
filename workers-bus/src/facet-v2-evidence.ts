@@ -10,10 +10,9 @@ export interface FacetV2IntakeException {
 }
 
 type FacetV2ProjectionOutcome =
-  | "projected_blank_draft"
-  | "projected_terminal_hold"
-  | "reconciled"
-  | "rejected_frappe"
+  | "projected_native_design"
+  | "reconciled_native_design"
+  | "rejected"
   | "uncertain"
   | "held_withdrawn"
   | "held_superseded";
@@ -40,10 +39,16 @@ export interface FacetV2WorkflowEvidence {
   status_code: string;
   projection: {
     outcome: FacetV2ProjectionOutcome;
-    evidence_id: string | null;
-    reconciliation_id: string | null;
-    draft_customer_quote_id: string | null;
-    draft_quote_version: number | null;
+    projection_id: string | null;
+    projection_sha256: string | null;
+    source_quote_revision_id: string | null;
+    source_quote_version: number | null;
+    source_proposal_revision_id: string | null;
+    source_publication_event_id: string | null;
+    source_acceptance_binding_id: string | null;
+    launch_intent_sha256: string | null;
+    design_sequence: number | null;
+    design_state: "active" | "withdrawn" | "superseded" | null;
     error_code: string | null;
     attempted_at: string;
   } | null;
@@ -83,10 +88,16 @@ interface StoredFacetV2WorkflowEvidence {
   external_customer_identity_link_id: string;
   revoked_link_count: number;
   projection_outcome: FacetV2ProjectionOutcome | null;
-  evidence_id: string | null;
-  reconciliation_id: string | null;
-  draft_customer_quote_id: string | null;
-  draft_quote_version: number | null;
+  projection_id: string | null;
+  projection_sha256: string | null;
+  source_quote_revision_id: string | null;
+  source_quote_version: number | null;
+  source_proposal_revision_id: string | null;
+  source_publication_event_id: string | null;
+  source_acceptance_binding_id: string | null;
+  launch_intent_sha256: string | null;
+  design_sequence: number | null;
+  design_state: "active" | "withdrawn" | "superseded" | null;
   projection_error_code: string | null;
   attempted_at: string | null;
 }
@@ -136,22 +147,34 @@ export async function listFacetV2WorkflowEvidence(
                  OR (revoked.link_kind = 'customer_identity'
                      AND revoked.link_id = decision.external_customer_identity_link_id))
               AS revoked_link_count,
-            attempt.outcome AS projection_outcome, attempt.evidence_id,
-            attempt.reconciliation_id, attempt.draft_customer_quote_id,
-            attempt.draft_quote_version, attempt.error_code AS projection_error_code,
-            attempt.attempted_at
+            attempt.outcome AS projection_outcome, attempt.projection_id,
+            attempt.projection_sha256,
+            native_projection.source_quote_revision_id,
+            native_projection.source_quote_version,
+            native_projection.source_proposal_revision_id,
+            native_projection.source_publication_event_id,
+            native_projection.source_acceptance_binding_id,
+            native_projection.launch_intent_sha256,
+            native_projection.design_sequence, native_projection.design_state,
+            attempt.error_code AS projection_error_code, attempt.attempted_at
        FROM facet_v2_customer_decisions AS decision
        LEFT JOIN facet_v2_project_links AS project
          ON project.external_project_link_id = decision.external_project_link_id
-       LEFT JOIN facet_v2_projection_attempts AS attempt
+       LEFT JOIN facet_v2_native_projection_attempts AS attempt
          ON attempt.event_id = decision.event_id
         AND NOT EXISTS (
-          SELECT 1 FROM facet_v2_projection_attempts AS later
+          SELECT 1 FROM facet_v2_native_projection_attempts AS later
           WHERE later.event_id = attempt.event_id
-            AND (later.attempted_at > attempt.attempted_at
+            AND ((attempt.outcome = 'uncertain' AND later.outcome <> 'uncertain')
+                 OR (later.outcome = attempt.outcome
+                     AND (later.attempted_at > attempt.attempted_at
                  OR (later.attempted_at = attempt.attempted_at
-                     AND later.attempt_id > attempt.attempt_id))
+                         AND later.attempt_id > attempt.attempt_id))))
         )
+       LEFT JOIN facet_v2_native_design_projections AS native_projection
+         ON native_projection.projection_id = attempt.projection_id
+        AND native_projection.event_id = attempt.event_id
+        AND native_projection.projection_sha256 = attempt.projection_sha256
        WHERE decision.destination_tenant_id = ?
          AND NOT EXISTS (
            SELECT 1 FROM facet_v2_customer_decisions AS child
@@ -243,13 +266,20 @@ function workflowProjection(
     row.projection_outcome && row.attempted_at
       ? {
           outcome: row.projection_outcome,
-          evidence_id: row.evidence_id,
-          reconciliation_id: row.reconciliation_id,
-          draft_customer_quote_id: row.draft_customer_quote_id,
-          draft_quote_version:
-            row.draft_quote_version === null
+          projection_id: row.projection_id,
+          projection_sha256: row.projection_sha256,
+          source_quote_revision_id: row.source_quote_revision_id,
+          source_quote_version:
+            row.source_quote_version === null
               ? null
-              : Number(row.draft_quote_version),
+              : Number(row.source_quote_version),
+          source_proposal_revision_id: row.source_proposal_revision_id,
+          source_publication_event_id: row.source_publication_event_id,
+          source_acceptance_binding_id: row.source_acceptance_binding_id,
+          launch_intent_sha256: row.launch_intent_sha256,
+          design_sequence:
+            row.design_sequence === null ? null : Number(row.design_sequence),
+          design_state: row.design_state,
           error_code: row.projection_error_code,
           attempted_at: row.attempted_at,
         }
@@ -291,14 +321,26 @@ function evidenceState(
   if (!authorityMatches)
     return ["attention_required", "facet_v2_authority_drift"];
   if (!projection)
-    return ["awaiting_projection", "awaiting_blank_draft_projection"];
+    return ["awaiting_projection", "awaiting_native_design_projection"];
+  const completeNativeProjection =
+    projection.projection_id !== null &&
+    projection.projection_sha256 !== null &&
+    projection.source_quote_revision_id !== null &&
+    Number.isSafeInteger(projection.source_quote_version) &&
+    Number(projection.source_quote_version) > 0 &&
+    projection.source_proposal_revision_id !== null &&
+    projection.source_publication_event_id !== null &&
+    projection.source_acceptance_binding_id !== null &&
+    projection.launch_intent_sha256 !== null &&
+    Number.isSafeInteger(projection.design_sequence) &&
+    Number(projection.design_sequence) > 0;
   if (
-    projection.outcome === "projected_terminal_hold" &&
-    projection.evidence_id &&
-    projection.reconciliation_id &&
-    projection.draft_customer_quote_id &&
-    Number.isSafeInteger(projection.draft_quote_version) &&
-    Number(projection.draft_quote_version) > 0
+    ((projection.outcome === "held_withdrawn" &&
+      row.decision_kind === "withdrawn") ||
+      (projection.outcome === "held_superseded" &&
+        row.decision_kind === "superseded")) &&
+    completeNativeProjection &&
+    projection.design_state === row.decision_kind
   ) {
     return [
       "held",
@@ -308,21 +350,23 @@ function evidenceState(
     ];
   }
   if (
-    (projection.outcome === "projected_blank_draft" ||
-      projection.outcome === "reconciled") &&
-    projection.evidence_id &&
-    projection.reconciliation_id &&
-    projection.draft_customer_quote_id &&
-    Number.isSafeInteger(projection.draft_quote_version) &&
-    Number(projection.draft_quote_version) > 0
+    (projection.outcome === "projected_native_design" ||
+      projection.outcome === "reconciled_native_design") &&
+    completeNativeProjection &&
+    projection.design_state === "active"
   )
-    return ["projected", "blank_draft_projected"];
+    return [
+      "projected",
+      projection.outcome === "reconciled_native_design"
+        ? "native_design_reconciled"
+        : "native_design_projected",
+    ];
   if (projection.outcome === "uncertain")
     return [
       "attention_required",
       projection.error_code ?? "projection_uncertain",
     ];
-  if (projection.outcome === "rejected_frappe")
+  if (projection.outcome === "rejected")
     return [
       "attention_required",
       projection.error_code ?? "projection_rejected",

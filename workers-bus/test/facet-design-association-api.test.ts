@@ -21,7 +21,11 @@ class SqliteD1 {
 
   constructor() {
     this.raw.exec("PRAGMA foreign_keys = ON");
-    for (const migration of ["0011_app_bff_auth.sql", "0043_facet_v2_signed_identity.sql"])
+    for (const migration of [
+      "0011_app_bff_auth.sql",
+      "0043_facet_v2_signed_identity.sql",
+      "0105_facet_native_design_projection.sql",
+    ])
       this.raw.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     this.raw.prepare(
       `INSERT INTO app_users
@@ -256,7 +260,7 @@ function request(path: string, method = "GET"): Request {
   });
 }
 
-test("office read returns only the signed-v2 chain head and complete blank Draft receipt", async () => {
+test("office read quarantines legacy projection history behind the signed-v2 chain head", async () => {
   const db = new SqliteD1();
   seedDecision(db, { eventId: "facet-approved-1", decisionKind: "approved", ordinal: 3 });
   seedDecision(db, {
@@ -304,16 +308,9 @@ test("office read returns only the signed-v2 chain head and complete blank Draft
   assert.equal(body.evidence.length, 1);
   assert.equal(body.evidence[0]?.event_id, "facet-corrected-2");
   assert.equal(body.evidence[0]?.identity_assurance, "oidc");
-  assert.equal(body.evidence[0]?.projection_state, "projected");
-  assert.deepEqual(body.evidence[0]?.projection, {
-    outcome: "projected_blank_draft",
-    evidence_id: "facet-evidence-1",
-    reconciliation_id: "facet-reconciliation-1",
-    draft_customer_quote_id: "facet-draft-quote-1",
-    draft_quote_version: 4,
-    error_code: null,
-    attempted_at: "2026-08-16T09:05:00.000Z",
-  });
+  assert.equal(body.evidence[0]?.projection_state, "awaiting_projection");
+  assert.equal(body.evidence[0]?.status_code, "awaiting_native_design_projection");
+  assert.equal(body.evidence[0]?.projection, null);
   assert.deepEqual(body.intake_exceptions, [
     {
       event_id: "facet-rejected-4",
@@ -339,6 +336,8 @@ test("office read returns only the signed-v2 chain head and complete blank Draft
     "raw_sha256",
     "nonce_sha256",
     "bearer_capability_only",
+    "facet-draft-quote-1",
+    "facet-evidence-1",
   ]) assert.equal(serialized.includes(forbidden), false, `must not expose ${forbidden}`);
 });
 
@@ -392,7 +391,8 @@ test("legacy association and quote-preparation routes stay 404 even when old fla
 
 test("live Facet ingress and the scheduled recovery loop run only signed-v2 reconciliation", () => {
   const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
-  assert.equal(source.match(/reconcileFacetV2ThenFrappe\(env\)/g)?.length, 2);
+  assert.equal(source.match(/reconcileFacetV2ThenNativeDesign\(env\)/g)?.length, 2);
+  assert.doesNotMatch(source, /reconcileFacetDesignFrappeProjections/);
   assert.doesNotMatch(source, /createPostizDraftFromFacetApproval/);
   assert.doesNotMatch(source, /recoverPostizFacetDrafts/);
 });

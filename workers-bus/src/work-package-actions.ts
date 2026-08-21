@@ -1,26 +1,26 @@
-import type { AppEnv, AuthContext, WorkObjectScope } from "./app-types.ts";
+import {
+  appUserIdentities,
+  type AppEnv,
+  type AppRole,
+  type AuthContext,
+  type WorkObjectScope,
+} from "./app-types.ts";
 import {
   FieldActionError,
   r2ObjectStore,
   type ImmutableObjectStore,
 } from "./field-actions.ts";
-import { adapterAuthority, assertEffectLedgerReady, runExternalEffect } from "./effect-runtime.ts";
-import {
-  frappeBaseUrl,
-  frappeRequestTimeout,
-  type FrappeRow,
-} from "./frappe-read.ts";
-import { canonicalJson, sha256Hex } from "./newo-hash.ts";
-import {
-  railAuthorizationHeader,
-  requireRailFrappeCredential,
-} from "./rail-frappe-credentials.ts";
+import type { FrappeRow } from "./frappe-read.ts";
 import { safetyReleaseGate } from "./safety-release-gate.ts";
 import {
   fieldWorkPackageForAssignment,
   fieldWorkPackageProjection,
   hasWorkPackageCompletionAuthority,
 } from "./work-package.ts";
+import {
+  nativeWorkPackageAction,
+  reconcileNativeWorkPackageActions,
+} from "./work-package-store.ts";
 
 const MAX_WORK_PACKAGE_ACTION_BYTES = 16 * 1024;
 const MAX_BLOCKER_REASON_LENGTH = 1_200;
@@ -123,6 +123,7 @@ export interface PersistWorkPackageActionInput {
   jobId: string;
   assignmentId: string;
   actorUser: string;
+  actorRole?: AppRole | string;
   deviceActionId: string;
   blockerReason: string | null;
   releaseAttemptId: string | null;
@@ -130,9 +131,10 @@ export interface PersistWorkPackageActionInput {
   workObjectId: string | null;
   physicalContextType: string | null;
   physicalContextId: string | null;
+  manifestKey?: string | null;
 }
 
-export interface WorkPackageFrappeWriter {
+export interface WorkPackageCommandWriter {
   persistAction(
     input: PersistWorkPackageActionInput,
   ): Promise<{ workPackageName: string; eventName: string }>;
@@ -141,7 +143,7 @@ export interface WorkPackageFrappeWriter {
 export interface ProcessWorkPackageActionDependencies {
   store: WorkPackageActionStore;
   objects: ImmutableObjectStore;
-  frappe: WorkPackageFrappeWriter;
+  native: WorkPackageCommandWriter;
   now?: () => Date;
   randomId?: () => string;
 }
@@ -162,6 +164,13 @@ export async function handleWorkPackageAction(
   scope?: WorkObjectScope,
 ): Promise<Response> {
   try {
+    if ((env.APP_TENANT_ID ?? "ironwrap").trim() !== auth.session.tenant_id) {
+      throw new FieldActionError(
+        "not_found",
+        404,
+        "No current work package is available for this tenant.",
+      );
+    }
     const assignmentId = text(assignment.name);
     if (!assignmentId) {
       throw new FieldActionError(
@@ -182,34 +191,73 @@ export async function handleWorkPackageAction(
     if (existing?.state === "verified")
       return workPackageJson(existing.response);
     // A first submission must be a currently allowed action. Once the same
-    // scoped device action is durable, a lost response can safely replay its
-    // idempotent Frappe command even after that command changed the package to
-    // Blocked or In Progress. Frappe still locks and rechecks the transition.
+    // scoped device action is durable, a lost response can safely replay the
+    // exact native event after that event changed the package state.
     if (existing?.state !== "matching")
       await assertCurrentActionAllowed(env, auth, submission, assignment);
     const response = await processWorkPackageAction(submission, auth, {
       store,
       objects: r2ObjectStore(env.RAW),
-      frappe: frappeWorkPackageWriter(env),
+      native: nativeWorkPackageWriter(env),
     });
     return workPackageJson(response);
   } catch (error) {
-    const failure =
-      error instanceof FieldActionError
-        ? error
-        : new FieldActionError(
-            "work_package_action_failed",
-            502,
-            "The work-package action could not be verified yet.",
-            5,
-          );
-    const response = workPackageJson(
-      { error: failure.code, message: failure.message },
-      failure.status,
+    return workPackageFailureResponse(error);
+  }
+}
+
+/**
+ * Return an exact durable response before looking up a now-terminal assignment.
+ * This closes the lost-response window where the native event committed but its
+ * stop/complete transition made the package disappear from the current view.
+ */
+export async function replayVerifiedWorkPackageAction(
+  req: Request,
+  env: AppEnv,
+  auth: AuthContext,
+  jobId: string,
+  kind: WorkPackageActionKind,
+  scope?: WorkObjectScope,
+): Promise<Response | null> {
+  if (env.APP_TENANT_ID?.trim() !== auth.session.tenant_id) return null;
+  const headerActionId = req.headers.get("x-device-action-id");
+  if (!headerActionId) return null;
+  try {
+    const deviceActionId = boundedId(headerActionId, 8, 80);
+    let row = await workPackageActionRow(env, deviceActionId);
+    if (!row) return null;
+    const submission = await parseWorkPackageActionRequest(
+      req.clone(),
+      jobId,
+      row.assignment_id,
+      kind,
+      scope,
     );
-    if (failure.retryAfterSeconds)
-      response.headers.set("retry-after", String(failure.retryAfterSeconds));
-    return response;
+    const identity = await actionIdentity(submission, auth);
+    if (!matchesIdentity(row, identity)) {
+      throw new FieldActionError(
+        "idempotency_conflict",
+        409,
+        "This device action id is already bound to a different work-package action.",
+      );
+    }
+    if (row.status !== "verified") {
+      await reconcileNativeWorkPackageActions(
+        env,
+        auth.session.tenant_id,
+        new Date().toISOString(),
+        1,
+        deviceActionId,
+      );
+      row = await workPackageActionRow(env, deviceActionId);
+    }
+    if (row?.status !== "verified") return null;
+    const response = parseStoredResponse(row.response_json);
+    if (!response)
+      throw new Error("work_package_action_verified_response_invalid");
+    return workPackageJson(response);
+  } catch (error) {
+    return workPackageFailureResponse(error);
   }
 }
 
@@ -391,7 +439,7 @@ export async function processWorkPackageAction(
       version: 1,
       tenant_id: auth.session.tenant_id,
       user_id: auth.session.user_id,
-      actor_user: auth.session.frappe_user_id,
+      actor_user: auth.session.user_id,
       job_id: submission.jobId,
       assignment_id: submission.assignmentId,
       work_package_id: submission.payload.work_package_id,
@@ -418,13 +466,14 @@ export async function processWorkPackageAction(
     );
 
     await renewLease(dependencies.store, submission.deviceActionId, token, now);
-    const persisted = await dependencies.frappe.persistAction({
+    const persisted = await dependencies.native.persistAction({
       kind: submission.kind,
       workPackageId: submission.payload.work_package_id,
       workPackageVersion: submission.payload.work_package_version,
       jobId: submission.jobId,
       assignmentId: submission.assignmentId,
-      actorUser: auth.session.frappe_user_id!,
+      actorUser: auth.session.user_id,
+      actorRole: auth.session.role,
       deviceActionId: submission.deviceActionId,
       blockerReason: submission.payload.blocker_reason ?? null,
       releaseAttemptId: submission.payload.release_attempt_id ?? null,
@@ -432,6 +481,7 @@ export async function processWorkPackageAction(
       workObjectId: submission.payload.work_object_id ?? null,
       physicalContextType: submission.payload.physical_context_type ?? null,
       physicalContextId: submission.payload.physical_context_id ?? null,
+      manifestKey,
     });
     const response: VerifiedWorkPackageActionResponse = {
       device_action_id: submission.deviceActionId,
@@ -458,204 +508,25 @@ export async function processWorkPackageAction(
       : new FieldActionError(
           code,
           502,
-          "The work-package action remains unverified until its evidence and Frappe command both succeed.",
+          "The work-package action remains unverified until its owned event and evidence binding both succeed.",
           5,
         );
   }
 }
 
-export function frappeWorkPackageWriter(env: AppEnv): WorkPackageFrappeWriter {
+/** Native D1 command writer. Frappe is not consulted on this path. */
+export function nativeWorkPackageWriter(env: AppEnv): WorkPackageCommandWriter {
   return {
     async persistAction(input) {
-      // Fail before the effect ledger books anything: an unissued or shared rail credential is
-      // a configuration fault, not a provider outage, and must not consume a retry budget.
-      requireRailFrappeCredential(env, "work_package");
-      const method = {
-        acknowledge: "acknowledge_work_package",
-        stop_work: "stop_work",
-        start_work: "start_work",
-        complete_work: "complete_work_package",
-      } satisfies Record<WorkPackageActionKind, string>;
-      const path = `/api/method/ironwrap_roofing.work_package_api.${method[input.kind]}`;
-      const body = {
-        work_package_id: input.workPackageId,
-        ...(input.workObjectType
-          ? input.workObjectType === "Roof Job"
-            ? { roof_job_id: input.jobId }
-            : {}
-          : { roof_job_id: input.jobId }),
-        job_assignment_id: input.assignmentId,
-        actor_user: input.actorUser,
-        device_action_id: input.deviceActionId,
-        work_package_version: input.workPackageVersion,
-        ...(input.releaseAttemptId
-          ? { release_attempt_id: input.releaseAttemptId }
-          : {}),
-        ...(input.kind === "stop_work" ? { blocker_reason: input.blockerReason } : {}),
-        ...(input.workObjectType
-          ? {
-              work_object_type: input.workObjectType,
-              work_object_id: input.workObjectId,
-              physical_context_type: input.physicalContextType,
-              physical_context_id: input.physicalContextId,
-            }
-          : {}),
-      };
-      const request = { path, body };
-      const requestHash = await sha256Hex(canonicalJson(request));
-      const eventName = `wpe_${(await sha256Hex(input.deviceActionId)).slice(0, 32)}`;
-      assertEffectLedgerReady(env);
-      const tenantId = env.APP_TENANT_ID ?? "ironwrap";
-        const idempotencyKey = `work-package:${input.deviceActionId}`;
-        const deadlineAt = new Date(Date.now() + 5 * 60_000).toISOString();
-        const result = await runExternalEffect(env, {
-          tenantId,
-          actor: { type: "agent", id: "work-package-adapter" },
-          taskId: `work-package:${input.deviceActionId}`,
-          authority: adapterAuthority({
-            tenantId,
-            provider: "frappe",
-            action: "work_package.mutation",
-            actorId: "work-package-adapter",
-            deadlineAt,
-            retryLimit: 1,
-          }),
-          aggregate: {
-            type: "work_package",
-            id: input.workPackageId,
-            version: input.workPackageVersion,
-          },
-          intentId: idempotencyKey,
-          action: "work_package.mutation",
-          request,
-          requestHash,
-          provider: "frappe",
-          idempotencyKey,
-          deadlineAt,
-          expectedReadback: { event_name: eventName },
-          retryLimit: 1,
-          compensationPlan: {},
-          correlationId: idempotencyKey,
-        }, {
-          async dispatch() {
-            const value = await persistWorkPackageActionDirect(env, path, body);
-            return {
-              outcome: "accepted" as const,
-              value,
-              providerExternalId: value.eventName,
-              providerResponse: value,
-            };
-          },
-          async readback({ providerExternalId }) {
-            return await workPackageActionReadback(env, providerExternalId);
-          },
-          async replay({ effect }) {
-            const providerExternalId = effect.provider_external_id;
-            if (!providerExternalId) throw new Error("work_package_replay_id_missing");
-            const readback = await workPackageActionReadback(env, providerExternalId);
-            if (readback.status !== "match" || !readback.observed || typeof readback.observed !== "object") {
-              throw new Error(readback.detailCode ?? "work_package_replay_readback_failed");
-            }
-            const observed = readback.observed as { event_name?: unknown; work_package_name?: unknown };
-            if (typeof observed.event_name !== "string" || typeof observed.work_package_name !== "string") {
-              throw new Error("work_package_replay_shape_invalid");
-            }
-            return { workPackageName: observed.work_package_name, eventName: observed.event_name };
-          },
-        });
-        if (result.effect.state !== "succeeded" || result.value === undefined) {
-          throw new Error(result.effect.result_code ?? "work_package_frappe_effect_unknown");
-        }
-      return result.value;
+      if (!input.actorRole) throw new Error("work_package_actor_role_missing");
+      if (!input.manifestKey) throw new Error("work_package_manifest_missing");
+      return await nativeWorkPackageAction(env, {
+        ...input,
+        actorRole: input.actorRole,
+        manifestKey: input.manifestKey,
+      });
     },
   };
-}
-
-async function persistWorkPackageActionDirect(
-  env: AppEnv,
-  path: string,
-  body: Record<string, unknown>,
-): Promise<{ workPackageName: string; eventName: string }> {
-      const authorization = railAuthorizationHeader(env, "work_package");
-      const controller = new AbortController();
-      const timer = setTimeout(
-        () => controller.abort(),
-        frappeRequestTimeout(env.APP_FRAPPE_REQUEST_TIMEOUT_MS),
-      );
-      try {
-        const response = await fetch(
-          `${frappeBaseUrl(env)}${path}`,
-          {
-            method: "POST",
-            redirect: "manual",
-            signal: controller.signal,
-            headers: {
-              accept: "application/json",
-              authorization,
-              "content-type": "application/json",
-              "user-agent": "ironwrap-bff/1.0",
-            },
-            body: JSON.stringify(body),
-          },
-        );
-        if (!response.ok)
-          throw new Error(`work_package_frappe_http_${response.status}`);
-        const decoded = (await response.json()) as {
-          message?: {
-            work_package?: { name?: unknown };
-            event?: { name?: unknown };
-          };
-        };
-        const workPackageName = text(decoded.message?.work_package?.name);
-        const eventName = text(decoded.message?.event?.name);
-        if (!workPackageName || !eventName)
-          throw new Error("work_package_frappe_invalid_shape");
-        return { workPackageName, eventName };
-      } catch (error) {
-        if (error instanceof Error && error.name === "AbortError")
-          throw new Error("work_package_frappe_timeout");
-        if (
-          error instanceof Error &&
-          error.message.startsWith("work_package_frappe_")
-        )
-          throw error;
-        throw new Error("work_package_frappe_network_error");
-      } finally {
-        clearTimeout(timer);
-      }
-}
-
-async function workPackageActionReadback(
-  env: AppEnv,
-  providerExternalId: string | null,
-): Promise<{ status: "match" | "conflict" | "unavailable" | "not_found"; providerExternalId?: string; observed?: unknown; detailCode?: string }> {
-  if (!providerExternalId) return { status: "unavailable", detailCode: "work_package_readback_id_missing" };
-  try {
-    const response = await fetch(
-      `${frappeBaseUrl(env)}/api/resource/Work%20Package%20Event/${encodeURIComponent(providerExternalId)}`,
-      {
-        method: "GET",
-        redirect: "manual",
-        headers: {
-          accept: "application/json",
-          authorization: railAuthorizationHeader(env, "work_package"),
-        },
-      },
-    );
-    if (response.status === 404) return { status: "not_found", detailCode: "work_package_readback_not_found" };
-    if (!response.ok) return { status: "unavailable", detailCode: `work_package_readback_${response.status}` };
-    const payload = await response.json() as { data?: Record<string, unknown> };
-    const data = payload.data ?? {};
-    const eventName = typeof data.name === "string" ? data.name : typeof data.work_package_event_id === "string" ? data.work_package_event_id : null;
-    const workPackageName = typeof data.work_package === "string" ? data.work_package : null;
-    const observed = { event_name: eventName, work_package_name: workPackageName };
-    if (eventName !== providerExternalId || !workPackageName) {
-      return { status: "conflict", providerExternalId, observed, detailCode: "work_package_readback_conflict" };
-    }
-    return { status: "match", providerExternalId, observed };
-  } catch {
-    return { status: "unavailable", detailCode: "work_package_readback_unavailable" };
-  }
 }
 
 async function assertCurrentActionAllowed(
@@ -668,6 +539,7 @@ async function assertCurrentActionAllowed(
     env,
     submission.jobId,
     submission.assignmentId,
+    auth.session.tenant_id,
   );
   if (
     !workPackage ||
@@ -707,15 +579,16 @@ async function assertCurrentActionAllowed(
             now: new Date().toISOString(),
           })
         ).readiness.blockers;
+  const actorUsers = appUserIdentities(auth.session);
   if (
     !fieldWorkPackageProjection(
       workPackage,
-      auth.session.frappe_user_id,
+      actorUsers,
       {
         completionAuthority: hasWorkPackageCompletionAuthority(
           workPackage,
           assignment,
-          auth.session.frappe_user_id,
+          actorUsers,
           auth.session.role,
         ),
         safetyBlockers,
@@ -977,13 +850,6 @@ function validateSubmission(
       "A field role is required for worker actions; completion requires production authority.",
     );
   }
-  if (!auth.session.frappe_user_id?.trim()) {
-    throw new FieldActionError(
-      "field_identity_missing",
-      403,
-      "This field account is not linked to a Frappe user.",
-    );
-  }
   if (submission.kind === "stop_work") {
     boundedText(
       submission.payload.blocker_reason,
@@ -1137,4 +1003,23 @@ function workPackageJson(value: unknown, status = 200): Response {
       "cache-control": "private, no-store",
     },
   });
+}
+
+function workPackageFailureResponse(error: unknown): Response {
+  const failure =
+    error instanceof FieldActionError
+      ? error
+      : new FieldActionError(
+          "work_package_action_failed",
+          502,
+          "The work-package action could not be verified yet.",
+          5,
+        );
+  const response = workPackageJson(
+    { error: failure.code, message: failure.message },
+    failure.status,
+  );
+  if (failure.retryAfterSeconds)
+    response.headers.set("retry-after", String(failure.retryAfterSeconds));
+  return response;
 }

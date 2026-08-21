@@ -612,32 +612,25 @@ Before enabling it in the intended Cloudflare account:
 Do not enable `APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED=true` merely because the portal is live.
 Before this separate capability is enabled in a named environment:
 
-1. Provision a dedicated Frappe API user with only the `IronWrap Customer Acceptance Service`
-   role, pin its email in `ironwrap_customer_acceptance_service_user`, and use its API key/secret
-   only for the two customer-acceptance methods. Do not reuse the broad Worker BFF identity.
-2. Set a distinct `APP_CUSTOMER_ACCEPTANCE_HMAC_KEY` in the Worker and the matching
-   `ironwrap_customer_acceptance_hmac_key` Frappe site config. Set the dedicated
-   `APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY` and
-   `APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET` as Worker secrets. The HMAC timestamp/nonce window,
-   service user, and service role must all fail closed.
-   The acceptance CTA belongs only to this dedicated backend path: keep it absent until the
-   customer portal resolves `contract_acceptance_available=true` from live configuration, not from
-   a mock proposal state or static frontend assumption.
-3. Configure the approved Gmail sender and exact HTTPS `APP_PUBLIC_ORIGIN`. The email must use
+1. Prove the linked native `operating_customers` and Roof Job resolve exactly one current,
+   approved, unexpired commercial quote -> proposal -> latest published proposal chain. Missing or
+   ambiguous chains must fail closed, and the acceptance CTA must remain absent until the customer
+   portal resolves `contract_acceptance_available=true` from live configuration.
+2. Configure the approved Gmail sender and exact HTTPS `APP_PUBLIC_ORIGIN`. The email must use
    `https://<origin>/contract-accept#token=...`; do not log, screen-capture, or place that token in
    a query string, path, ticket, or browser recording. Provider message acceptance is not delivery
    evidence.
-4. With a disposable linked Roof Job, approved Customer Quote, and approved Proposal Evidence
+3. With a disposable linked Roof Job, approved Customer Quote, and approved Proposal Evidence
    Pack, prove the email challenge stores only hashes in D1, rejects cookie-only and wrong-origin
    requests, and exposes no raw email or token in the ledger or response. Change the quote terms,
    proposal state, or customer email after challenge issuance and prove confirmation is rejected.
-5. Confirm once through the email fragment, then prove same-token and conflicting-idempotency
-   retries cannot create another acceptance. Verify R2 receipt storage precedes the one Frappe
-   transaction that creates the verified Evidence Item and Contract Acceptance and changes the
-   quote from `Approved` to `Accepted` with the exact locked anchors. Force an ambiguous Frappe
-   transport result and prove it ends `uncertain` without replaying the customer write.
+4. Confirm once through the email fragment, then prove same-token and conflicting-idempotency
+   retries cannot create another acceptance. Verify R2 receipt storage precedes the atomic D1
+   transaction that makes the intent terminal and inserts the exact immutable
+   `commercial_acceptance_bindings` row. Simulate a committed-but-lost D1 response and prove the
+   immutable intent plus binding readback returns the original accepted result without duplication.
 
-This proof is still open until it runs in the named Cloudflare, Frappe, R2, and Gmail environment.
+This proof is still open until it runs in the named Cloudflare D1, R2, and Gmail environment.
 Do not call the repository slice a legal signature determination, a received-email proof, a paid
 deposit, or a preconstruction release.
 

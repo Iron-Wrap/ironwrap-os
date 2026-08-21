@@ -142,34 +142,6 @@ export function withErpReadback(
   };
 }
 
-export function withQuickBooksReconciliationReadback(
-  handler: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
-) {
-  const reconciliations = new Map<string, Record<string, unknown>>();
-  return async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const url = String(input);
-    if (url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.read_pending_reconciliation")) {
-      const request = JSON.parse(String(init?.body)) as { reconciliation_id?: unknown };
-      const id = typeof request.reconciliation_id === "string" ? request.reconciliation_id : "";
-      const reconciliation = reconciliations.get(id);
-      return testJson({ message: reconciliation ? { found: true, reconciliation } : { found: false } });
-    }
-
-    const response = await handler(input, init);
-    if (response.ok && url.endsWith("/api/method/ironwrap_roofing.quickbooks_reconciliation_api.issue_pending_reconciliation")) {
-      const request = JSON.parse(String(init?.body)) as { reconciliation_json?: unknown };
-      const doc = typeof request.reconciliation_json === "string"
-        ? JSON.parse(request.reconciliation_json) as Record<string, unknown>
-        : {};
-      const result = await response.clone().json() as { message?: { name?: unknown } };
-      if (typeof result.message?.name === "string") {
-        reconciliations.set(result.message.name, { ...doc, name: result.message.name });
-      }
-    }
-    return response;
-  };
-}
-
 function testJson(body: unknown): Response {
   return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 }

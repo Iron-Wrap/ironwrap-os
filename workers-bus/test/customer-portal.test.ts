@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { after, mock, test } from "node:test";
@@ -8,6 +9,15 @@ import { handleCustomerPortalLinks } from "../src/customer-portal.ts";
 import type { AppEnv, AuthContext } from "../src/app-types.ts";
 
 const NOW = "2026-07-16T10:00:00.000Z";
+const NATIVE_TERMS_JSON = JSON.stringify({
+  deposit_percent: 25,
+  payment_schedule: ["deposit", "completion"],
+  payment_terms_days: 30,
+  warranty_years: 10,
+});
+const NATIVE_TERMS_HASH = createHash("sha256")
+  .update(NATIVE_TERMS_JSON)
+  .digest("hex");
 
 mock.timers.enable({ apis: ["Date"], now: new Date(NOW) });
 after(() => mock.timers.reset());
@@ -15,7 +25,7 @@ after(() => mock.timers.reset());
 class SqliteD1 {
   readonly raw = new DatabaseSync(":memory:");
 
-  constructor() {
+  constructor(nativeChains: 0 | 1 | 2 = 1) {
     this.raw.exec("PRAGMA foreign_keys = ON");
     this.raw.exec(
       readFileSync(
@@ -32,6 +42,16 @@ class SqliteD1 {
         "utf8",
       ),
     );
+    installNativePortalSchema(this.raw);
+    seedNativePortal(this.raw);
+    if (nativeChains === 0) {
+      this.raw.exec(`
+        DELETE FROM commercial_proposal_publication_events;
+        DELETE FROM commercial_proposal_revisions;
+        DELETE FROM commercial_quote_revisions;
+      `);
+    }
+    if (nativeChains === 2) seedNativeAcceptanceChain(this.raw, "alternate");
     this.raw
       .prepare(
         `INSERT INTO app_users (
@@ -101,6 +121,14 @@ class SqliteStatement {
 function env(db: SqliteD1): AppEnv {
   return {
     DB: db as never,
+    RAW: {
+      async head() {
+        return null;
+      },
+      async put() {
+        return {};
+      },
+    } as never,
     APP_BFF_ENABLED: "true",
     APP_CUSTOMER_PORTAL_ENABLED: "true",
     APP_TENANT_ID: "ironwrap",
@@ -115,14 +143,56 @@ function env(db: SqliteD1): AppEnv {
       "customer-portal-test-pepper-longer-than-thirty-two-characters",
     GOOGLE_SERVICE_ACCOUNT_JSON: "{}",
     FROM_EMAIL: "portal@example.com",
-    ERPNEXT_BASE_URL: "https://frappe.example.com",
-    ERPNEXT_API_KEY: "frappe-read-key",
-    ERPNEXT_API_SECRET: "frappe-read-secret",
     APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED: "true",
-    APP_CUSTOMER_ACCEPTANCE_HMAC_KEY: "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
-    APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY: "acceptance-frappe-key",
-    APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_SECRET: "acceptance-frappe-secret",
   } as AppEnv;
+}
+
+function seedNativeAcceptanceChain(db: DatabaseSync, suffix: string): void {
+  const quoteRevisionId = `quote-revision:${suffix}:1`;
+  const quoteId = `customer-quote:${suffix}`;
+  const proposalRevisionId = `proposal-revision:${suffix}:1`;
+  const proposalPackId = `proposal-pack:${suffix}`;
+  const createdAt = "2026-07-16T09:00:00.000Z";
+  db.prepare(
+    `INSERT INTO commercial_quote_revisions
+       (quote_revision_id, tenant_id, customer_quote_id, revision_number,
+        roof_job_id, customer_id, status, currency, valid_until, total_cents,
+        terms_json, terms_hash, created_at)
+     VALUES (?, 'ironwrap', ?, 1, 'JOB-A', 'CUSTOMER-A', 'approved',
+             'CAD', '2099-12-31', 1000000, ?, ?, ?)`,
+  ).run(
+    quoteRevisionId,
+    quoteId,
+    NATIVE_TERMS_JSON,
+    NATIVE_TERMS_HASH,
+    createdAt,
+  );
+  db.prepare(
+    `INSERT INTO commercial_proposal_revisions
+       (proposal_revision_id, tenant_id, proposal_pack_id, revision_number,
+        quote_revision_id, roof_job_id, customer_id, title, summary, terms_json,
+        terms_hash, created_at)
+     VALUES (?, 'ironwrap', ?, 1, ?, 'JOB-A', 'CUSTOMER-A',
+             'Alternate roof', 'Alternate published proposal', ?, ?, ?)`,
+  ).run(
+    proposalRevisionId,
+    proposalPackId,
+    quoteRevisionId,
+    NATIVE_TERMS_JSON,
+    NATIVE_TERMS_HASH,
+    createdAt,
+  );
+  db.prepare(
+    `INSERT INTO commercial_proposal_publication_events
+       (publication_event_id, tenant_id, proposal_revision_id,
+        proposal_pack_id, publication_version, state, occurred_at)
+     VALUES (?, 'ironwrap', ?, ?, 1, 'published', ?)`,
+  ).run(
+    `publication-event:${suffix}:1`,
+    proposalRevisionId,
+    proposalPackId,
+    createdAt,
+  );
 }
 
 function owner(): AuthContext {
@@ -154,9 +224,7 @@ const ISSUE_EXPIRES_AT = new Date(
   new Date(NOW).getTime() + ISSUE_TTL_MS,
 ).toISOString();
 
-function issueRequest(
-  expiresAt = ISSUE_EXPIRES_AT,
-): Request {
+function issueRequest(expiresAt = ISSUE_EXPIRES_AT): Request {
   return new Request("https://app.example.com/api/v1/customer-portal/links", {
     method: "POST",
     headers: {
@@ -179,282 +247,116 @@ function resolveRequest(
   });
 }
 
-function installFrappeMock() {
-  const requests: Array<{
-    doctype: string;
-    fields: string[];
-    filters: unknown[];
-  }> = [];
-  const rows: Record<string, Array<Record<string, unknown>>> = {
-    "Roof Job": [
-      {
-        name: "JOB-A",
-        roof_job_id: "job:lead-a",
-        job_number: "IW-2026-100",
-        brand: "ironwrap",
-        service_type: "Roofing",
-        job_status: "In Production",
-        customer: "CUSTOMER-A",
-        quotation: "QUOTE-A",
-        modified: NOW,
-        qb_invoice_ref: "never-customer-visible",
-      },
-    ],
-    "Customer Quote": [
-      {
-        name: "QUOTE-A",
-        customer_quote_id: "quote-a",
-        roof_job: "JOB-A",
-        customer: "CUSTOMER-A",
-        quote_version: 2,
-        status: "Approved",
-        quote_total: 14_750,
-        currency: "CAD",
-        deposit_amount: 2_000,
-        amount_due: 14_750,
-        amount_paid: 0,
-        balance_due: 14_750,
-        payment_status: "Deposit Due",
-        payment_due_date: "2026-07-20",
-        valid_until: "2026-07-31",
-        approved_at: NOW,
-        accepted_at: null,
-        scope_summary: "Install the approved roofing system.",
-        assumptions: "Access remains clear.",
-        exclusions: "Hidden substrate repairs need approval.",
-        price_rule_snapshot_json: "internal-price-rule",
-        notes: "internal-sales-note",
-        modified: NOW,
-      },
-      {
-        name: "QUOTE-DRAFT",
-        customer_quote_id: "quote-draft",
-        roof_job: "JOB-A",
-        customer: "CUSTOMER-A",
-        quote_version: 3,
-        status: "Draft",
-        quote_total: 999_999,
-        currency: "CAD",
-        modified: NOW,
-      },
-    ],
-    "Proposal Evidence Pack": [
-      {
-        name: "PACK-A",
-        pack_id: "pack-a",
-        roof_job: "JOB-A",
-        quotation: "QUOTE-A",
-        status: "Sent",
-        prepared_at: NOW,
-        approved_at: NOW,
-        signed_at: null,
-        customer_message: "<script>private</script>",
-        modified: NOW,
-      },
-    ],
-    "Scope Clause": [
-      {
-        name: "SCOPE-A",
-        scope_clause_id: "scope-a",
-        roof_job: "JOB-A",
-        customer_quote: "QUOTE-A",
-        clause_type: "Included",
-        title: "Approved roofing scope",
-        clause_text: "Install approved roofing system.",
-        version: "2",
-        status: "Approved",
-        customer_visible: 1,
-        source_ref: "internal-source",
-        modified: NOW,
-      },
-      {
-        name: "SCOPE-HIDDEN",
-        scope_clause_id: "scope-hidden",
-        roof_job: "JOB-A",
-        clause_type: "Internal",
-        title: "Internal note",
-        clause_text: "Never send this.",
-        version: "1",
-        status: "Approved",
-        customer_visible: 0,
-        modified: NOW,
-      },
-    ],
-    "Evidence Item": [
-      {
-        name: "EVID-SAFE",
-        evidence_id: "evidence-safe",
-        roof_job: "JOB-A",
-        evidence_type: "Photo",
-        proof_slot: "Production",
-        captured_at: NOW,
-        customer_safe: 1,
-        summary: "Roofing installation progress verified.",
-        sync_state: "Verified",
-        r2_key: "raw/private-photo",
-        source_uri: "private://source",
-        capture_actor: "crew@example.com",
-        modified: NOW,
-      },
-      {
-        name: "EVID-UNSAFE",
-        evidence_id: "evidence-unsafe",
-        roof_job: "JOB-A",
-        evidence_type: "Photo",
-        proof_slot: "Safety",
-        captured_at: NOW,
-        customer_safe: 0,
-        summary: "Internal safety record.",
-        sync_state: "Verified",
-        modified: NOW,
-      },
-      {
-        name: "EVID-UNVERIFIED",
-        evidence_id: "evidence-unverified",
-        roof_job: "JOB-A",
-        evidence_type: "Photo",
-        proof_slot: "Production",
-        captured_at: NOW,
-        customer_safe: 1,
-        summary: "Not verified yet.",
-        sync_state: "Queued",
-        modified: NOW,
-      },
-    ],
-    "Completion Packet": [
-      {
-        name: "COMPLETE-A",
-        completion_packet_id: "completion-a",
-        roof_job: "JOB-A",
-        status: "Approved",
-        approved_at: NOW,
-        warranty_ready: 1,
-        deficiency_list: "internal",
-        modified: NOW,
-      },
-    ],
-    "Warranty Packet": [
-      {
-        name: "WARRANTY-A",
-        warranty_packet_id: "warranty-a",
-        roof_job: "JOB-A",
-        status: "Issued",
-        material_system: "IronWrap Metal",
-        warranty_terms: "Manufacturer and workmanship coverage.",
-        coverage_start: "2026-07-16",
-        coverage_years: 25,
-        exclusions: "As stated in the approved warranty.",
-        issued_at: NOW,
-        notes: "internal closeout note",
-        modified: NOW,
-      },
-    ],
-    "Option Package": [
-      {
-        name: "OPT-BETTER",
-        option_package_id: "opt-better",
-        roof_job: "JOB-A",
-        package_name: "Charcoal standing seam",
-        tier: "Better",
-        status: "Approved",
-        material_system: "26ga standing seam steel",
-        price_delta: 2_400,
-        currency: "CAD",
-        options_json: '{"colour":"Charcoal","panel_profile":"1.5in nail strip"}',
-        warranty_summary: "40-year finish warranty",
-        payment_assumptions: "internal payment assumption",
-        approval_note: "internal approval note",
-        scope_clause_ids_json: '["internal"]',
-        notes: "internal estimator note",
-        modified: NOW,
-      },
-      {
-        name: "OPT-GOOD",
-        option_package_id: "opt-good",
-        roof_job: "JOB-A",
-        package_name: "Weathered slate asphalt",
-        tier: "Good",
-        status: "Approved",
-        material_system: "Architectural asphalt",
-        price_delta: 0,
-        currency: "CAD",
-        options_json: "not json at all",
-        warranty_summary: null,
-        modified: NOW,
-      },
-      {
-        name: "OPT-DRAFT",
-        option_package_id: "opt-draft",
-        roof_job: "JOB-A",
-        package_name: "Copper accent (in progress)",
-        tier: "Custom",
-        status: "Draft",
-        material_system: "Copper",
-        price_delta: 41_000,
-        currency: "CAD",
-        options_json: "{}",
-        modified: NOW,
-      },
-      {
-        name: "OPT-OTHER-JOB",
-        option_package_id: "opt-other-job",
-        roof_job: "JOB-B",
-        package_name: "Another customer's option",
-        tier: "Best",
-        status: "Approved",
-        material_system: "Not this job",
-        price_delta: 9_999,
-        currency: "CAD",
-        options_json: "{}",
-        modified: NOW,
-      },
-    ],
-  };
+function installNetworkGuard() {
+  let requests = 0;
   const original = globalThis.fetch;
-  globalThis.fetch = async (input) => {
-    const url = new URL(
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.href
-          : input.url,
-    );
-    const doctype = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
-    const fields = JSON.parse(
-      url.searchParams.get("fields") ?? "[]",
-    ) as string[];
-    const filters = JSON.parse(
-      url.searchParams.get("filters") ?? "[]",
-    ) as unknown[];
-    requests.push({ doctype, fields, filters });
-    const data = (rows[doctype] ?? [])
-      .filter((row) => filters.every((filter) => matchesFilter(row, filter)))
-      .map((row) =>
-        Object.fromEntries(fields.map((field) => [field, row[field]])),
-      );
-    return Response.json({ data });
+  globalThis.fetch = async () => {
+    requests += 1;
+    throw new Error("customer_portal_network_read_forbidden");
   };
   return {
-    rows,
-    requests,
+    requests: () => requests,
     restore: () => {
       globalThis.fetch = original;
     },
   };
 }
 
-function matchesFilter(row: Record<string, unknown>, filter: unknown): boolean {
-  if (!Array.isArray(filter)) return false;
-  const [, field, operator, value] = filter;
-  return (
-    operator === "=" && String(row[String(field)] ?? "") === String(value ?? "")
+function installNativePortalSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE operating_roof_jobs (
+      roof_job_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, customer_id TEXT NOT NULL,
+      property_id TEXT, brand TEXT, job_number TEXT, service_type TEXT NOT NULL,
+      job_status TEXT, current_gate_state TEXT NOT NULL, version INTEGER NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE operating_customers (
+      customer_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, display_name TEXT,
+      contact_email TEXT, contact_phone TEXT, lifecycle_status TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE operating_properties (
+      property_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, address_line1 TEXT,
+      city TEXT, province TEXT, postal_code TEXT, country TEXT, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE commercial_quote_revisions (
+      quote_revision_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, customer_quote_id TEXT NOT NULL,
+      revision_number INTEGER NOT NULL, roof_job_id TEXT NOT NULL, customer_id TEXT NOT NULL,
+      status TEXT NOT NULL, currency TEXT NOT NULL, valid_until TEXT NOT NULL,
+      total_cents INTEGER NOT NULL, terms_json TEXT NOT NULL, terms_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE commercial_proposal_revisions (
+      proposal_revision_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, proposal_pack_id TEXT NOT NULL,
+      revision_number INTEGER NOT NULL, quote_revision_id TEXT NOT NULL, roof_job_id TEXT NOT NULL,
+      customer_id TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL,
+      terms_json TEXT NOT NULL, terms_hash TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    CREATE TABLE commercial_proposal_publication_events (
+      publication_event_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
+      proposal_revision_id TEXT NOT NULL, proposal_pack_id TEXT NOT NULL,
+      publication_version INTEGER NOT NULL, state TEXT NOT NULL, occurred_at TEXT NOT NULL
+    );
+    CREATE TABLE commercial_acceptance_bindings (
+      acceptance_binding_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
+      quote_revision_id TEXT NOT NULL, proposal_revision_id TEXT NOT NULL,
+      roof_job_id TEXT NOT NULL, customer_id TEXT NOT NULL, terms_hash TEXT NOT NULL,
+      accepted_at TEXT NOT NULL
+    );
+  `);
+}
+
+function seedNativePortal(db: DatabaseSync): void {
+  db.prepare(
+    `INSERT INTO operating_customers
+       (customer_id, tenant_id, display_name, contact_email, contact_phone,
+        lifecycle_status, updated_at)
+     VALUES ('CUSTOMER-A', 'ironwrap', 'Customer A', 'customer@example.com',
+             '4035550100', 'active', ?)`,
+  ).run(NOW);
+  db.prepare(
+    `INSERT INTO operating_roof_jobs
+       (roof_job_id, tenant_id, customer_id, property_id, brand, job_number,
+        service_type, job_status, current_gate_state, version, updated_at)
+     VALUES ('JOB-A', 'ironwrap', 'CUSTOMER-A', NULL, 'ironwrap', 'IW-2026-100',
+             'Roofing', 'in_progress', 'materials_ready', 1, ?)`,
+  ).run(NOW);
+  db.prepare(
+    `INSERT INTO commercial_quote_revisions
+       (quote_revision_id, tenant_id, customer_quote_id, revision_number, roof_job_id,
+        customer_id, status, currency, valid_until, total_cents, terms_json, terms_hash, created_at)
+     VALUES ('QUOTE-REV-A-1', 'ironwrap', 'QUOTE-A', 2, 'JOB-A', 'CUSTOMER-A',
+             'approved', 'CAD', '2026-07-31', 1475000, ?, ?, ?)`,
+  ).run(
+    NATIVE_TERMS_JSON,
+    NATIVE_TERMS_HASH,
+    NOW,
   );
+  db.prepare(
+    `INSERT INTO commercial_proposal_revisions
+       (proposal_revision_id, tenant_id, proposal_pack_id, revision_number,
+        quote_revision_id, roof_job_id, customer_id, title, summary, terms_json,
+        terms_hash, created_at)
+     VALUES ('PROPOSAL-REV-A', 'ironwrap', 'PACK-A', 1, 'QUOTE-REV-A-1', 'JOB-A',
+             'CUSTOMER-A', 'Roof replacement', 'Published customer proposal', ?, ?, ?)`,
+  ).run(
+    NATIVE_TERMS_JSON,
+    NATIVE_TERMS_HASH,
+    NOW,
+  );
+  db.prepare(
+    `INSERT INTO commercial_proposal_publication_events
+       (publication_event_id, tenant_id, proposal_revision_id, proposal_pack_id,
+        publication_version, state, occurred_at)
+     VALUES ('PUBLICATION-EVENT-A-0001', 'ironwrap', 'PROPOSAL-REV-A', 'PACK-A',
+             1, 'published', ?)`,
+  ).run(NOW);
 }
 
 test("customer portal is fragment-only, revocable, and projects no internal fields", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);
-  const frappe = installFrappeMock();
+  const network = installNetworkGuard();
   try {
     const issued = await handleCustomerPortalLinks(
       issueRequest(),
@@ -501,35 +403,24 @@ test("customer portal is fragment-only, revocable, and projects no internal fiel
     assert.equal(resolved.headers.get("cache-control"), "private, no-store");
     assert.equal(resolved.headers.get("referrer-policy"), "no-referrer");
     const model = (await resolved.json()) as Record<string, unknown>;
-    assert.deepEqual(
-      (model.scope as Array<{ id: string }>).map((row) => row.id),
-      ["scope-a"],
-    );
-    assert.deepEqual(
-      (model.progress as Array<{ id: string }>).map((row) => row.id),
-      ["evidence-safe"],
-    );
+    assert.deepEqual(model.scope, []);
+    assert.deepEqual(model.progress, []);
     assert.equal(
       (model.job as { job_number: string }).job_number,
       "IW-2026-100",
     );
     assert.equal(
-      (model.warranty as { coverage_years: number }).coverage_years,
-      25,
+      (model.proposal as { quote: { total: number } }).quote.total,
+      14_750,
     );
+    assert.equal(model.closeout, null);
+    assert.equal(model.warranty, null);
     assert.equal(model.brand, "IronWrap Exteriors");
     assert.equal(model.contract_acceptance_available, true);
     const serialised = JSON.stringify(model);
     for (const forbidden of [
-      "raw/private-photo",
-      "private://source",
-      "crew@example.com",
-      "internal-price-rule",
-      "internal-sales-note",
-      "<script>",
-      "Never send this.",
-      "internal closeout note",
-      "999999",
+      "never-customer-visible",
+      "private://proposal-source",
     ]) {
       assert.equal(
         serialised.includes(forbidden),
@@ -537,21 +428,7 @@ test("customer portal is fragment-only, revocable, and projects no internal fiel
         `leaked ${forbidden}`,
       );
     }
-    const allFields = frappe.requests.flatMap((request) => request.fields);
-    for (const forbiddenField of [
-      "r2_key",
-      "source_uri",
-      "capture_actor",
-      "price_rule_snapshot_json",
-      "notes",
-      "customer_message",
-    ]) {
-      assert.equal(
-        allFields.includes(forbiddenField),
-        false,
-        `requested ${forbiddenField}`,
-      );
-    }
+    assert.equal(network.requests(), 0);
 
     const revoked = await handleCustomerPortalLinks(
       new Request(
@@ -575,19 +452,86 @@ test("customer portal is fragment-only, revocable, and projects no internal fiel
     );
     assert.equal(afterRevoke.status, 404);
   } finally {
-    frappe.restore();
+    network.restore();
   }
 });
 
-test("customer portal never projects quote terms before matching proposal publication", async () => {
+test("customer portal offers contract acceptance only for one exact native chain", async () => {
+  for (const nativeChains of [0, 1, 2] as const) {
+    const db = new SqliteD1(nativeChains);
+    const appEnv = env(db);
+    const network = installNetworkGuard();
+    try {
+      const issued = await handleCustomerPortalLinks(
+        issueRequest(),
+        appEnv,
+        owner(),
+      );
+      const { portal_url: portalUrl } = (await issued.json()) as {
+        portal_url: string;
+      };
+      const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get(
+        "token",
+      )!;
+
+      const resolved = await worker.fetch(
+        resolveRequest(token),
+        appEnv as never,
+        {} as never,
+      );
+      assert.equal(resolved.status, 200, `nativeChains=${nativeChains}`);
+      const model = (await resolved.json()) as Record<string, unknown>;
+      assert.equal(
+        model.contract_acceptance_available,
+        nativeChains === 1,
+        `nativeChains=${nativeChains}`,
+      );
+    } finally {
+      network.restore();
+    }
+  }
+});
+
+test("customer portal reveals only the exact currently published native proposal", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);
-  const frappe = installFrappeMock();
+  const network = installNetworkGuard();
   try {
-    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
-    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
-    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
+    const issued = await handleCustomerPortalLinks(
+      issueRequest(),
+      appEnv,
+      owner(),
+    );
+    const { portal_url: portalUrl } = (await issued.json()) as {
+      portal_url: string;
+    };
+    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get(
+      "token",
+    )!;
 
+    db.raw.exec("DELETE FROM commercial_proposal_publication_events");
+    const unpublished = await worker.fetch(
+      resolveRequest(token),
+      appEnv as never,
+      {} as never,
+    );
+    const unpublishedModel = (await unpublished.json()) as Record<
+      string,
+      unknown
+    >;
+    assert.equal(unpublished.status, 200);
+    assert.equal(unpublishedModel.proposal, null);
+    assert.equal(JSON.stringify(unpublishedModel).includes("14750"), false);
+
+    db.raw
+      .prepare(
+        `INSERT INTO commercial_proposal_publication_events
+         (publication_event_id, tenant_id, proposal_revision_id, proposal_pack_id,
+          publication_version, state, occurred_at)
+       VALUES ('PUBLICATION-EVENT-A-0001', 'ironwrap', 'PROPOSAL-REV-A', 'PACK-A',
+               1, 'published', ?)`,
+      )
+      .run(NOW);
     const published = await worker.fetch(
       resolveRequest(token),
       appEnv as never,
@@ -599,74 +543,97 @@ test("customer portal never projects quote terms before matching proposal public
     };
     assert.equal(published.status, 200);
     assert.equal(publishedModel.proposal?.quote?.total, 14_750);
-    assert.deepEqual(
-      publishedModel.scope.map((row) => row.id),
-      ["scope-a"],
-    );
+    assert.deepEqual(publishedModel.scope, []);
 
-    frappe.rows["Proposal Evidence Pack"][0].status = "Signed";
-    const signed = await worker.fetch(
+    db.raw
+      .prepare(
+        `INSERT INTO commercial_proposal_publication_events
+         (publication_event_id, tenant_id, proposal_revision_id, proposal_pack_id,
+          publication_version, state, occurred_at)
+       VALUES ('PUBLICATION-EVENT-A-0002', 'ironwrap', 'PROPOSAL-REV-A', 'PACK-A',
+               2, 'withdrawn', '2026-07-16T10:01:00.000Z')`,
+      )
+      .run();
+    const withdrawn = await worker.fetch(
       resolveRequest(token),
       appEnv as never,
       {} as never,
     );
-    const signedModel = (await signed.json()) as {
-      proposal: { quote: { total: number } | null } | null;
-      scope: Array<{ id: string }>;
-    };
-    assert.equal(signedModel.proposal?.quote?.total, 14_750);
-    assert.deepEqual(signedModel.scope.map((row) => row.id), ["scope-a"]);
-
-    frappe.rows["Proposal Evidence Pack"][0].status = "Approved";
-    frappe.rows["Scope Clause"][0].customer_quote = "QUOTE-OTHER";
-    const wrongScopeQuote = await worker.fetch(
-      resolveRequest(token),
-      appEnv as never,
-      {} as never,
-    );
-    const wrongScopeQuoteModel = (await wrongScopeQuote.json()) as {
-      proposal: { quote: { total: number } | null } | null;
-      scope: unknown[];
-    };
-    assert.equal(wrongScopeQuoteModel.proposal?.quote?.total, 14_750);
-    assert.deepEqual(wrongScopeQuoteModel.scope, []);
-
-    frappe.rows["Scope Clause"][0].customer_quote = "QUOTE-A";
-    frappe.rows["Proposal Evidence Pack"][0].status = "Draft";
-    const unpublished = await worker.fetch(
-      resolveRequest(token),
-      appEnv as never,
-      {} as never,
-    );
-    const unpublishedModel = (await unpublished.json()) as Record<string, unknown>;
-    assert.equal(unpublished.status, 200);
-    assert.equal(unpublishedModel.proposal, null);
-    assert.deepEqual(unpublishedModel.scope, []);
-    assert.equal(JSON.stringify(unpublishedModel).includes("14750"), false);
-    assert.equal(
-      JSON.stringify(unpublishedModel).includes("Install the approved roofing system."),
-      false,
-    );
-
-    frappe.rows["Proposal Evidence Pack"][0].status = "Approved";
-    frappe.rows["Proposal Evidence Pack"][0].quotation = "QUOTE-OTHER";
-    const wrongQuote = await worker.fetch(
-      resolveRequest(token),
-      appEnv as never,
-      {} as never,
-    );
-    const wrongQuoteModel = (await wrongQuote.json()) as Record<string, unknown>;
-    assert.equal(wrongQuoteModel.proposal, null);
-    assert.deepEqual(wrongQuoteModel.scope, []);
+    const withdrawnModel = (await withdrawn.json()) as Record<string, unknown>;
+    assert.equal(withdrawnModel.proposal, null);
+    assert.equal(JSON.stringify(withdrawnModel).includes("14750"), false);
+    assert.equal(network.requests(), 0);
   } finally {
-    frappe.restore();
+    network.restore();
+  }
+});
+
+test("customer portal withholds ambiguous simultaneously published proposal packs", async () => {
+  const db = new SqliteD1();
+  const appEnv = env(db);
+  const network = installNetworkGuard();
+  try {
+    db.raw
+      .prepare(
+        `INSERT INTO commercial_quote_revisions
+         (quote_revision_id, tenant_id, customer_quote_id, revision_number, roof_job_id,
+          customer_id, status, currency, valid_until, total_cents, terms_json, terms_hash, created_at)
+       VALUES ('QUOTE-REV-B', 'ironwrap', 'QUOTE-B', 1, 'JOB-A', 'CUSTOMER-A',
+               'approved', 'CAD', '2026-08-31', 2000000, ?, ?, '2026-07-16T10:02:00.000Z')`,
+      )
+      .run(JSON.stringify({ version: "b" }), "b".repeat(64));
+    db.raw
+      .prepare(
+        `INSERT INTO commercial_proposal_revisions
+         (proposal_revision_id, tenant_id, proposal_pack_id, revision_number,
+          quote_revision_id, roof_job_id, customer_id, title, summary, terms_json,
+          terms_hash, created_at)
+       VALUES ('PROPOSAL-REV-B', 'ironwrap', 'PACK-B', 1, 'QUOTE-REV-B', 'JOB-A',
+               'CUSTOMER-A', 'Alternate roof', 'Second published proposal', ?, ?,
+               '2026-07-16T10:03:00.000Z')`,
+      )
+      .run(JSON.stringify({ version: "b" }), "b".repeat(64));
+    db.raw
+      .prepare(
+        `INSERT INTO commercial_proposal_publication_events
+         (publication_event_id, tenant_id, proposal_revision_id, proposal_pack_id,
+          publication_version, state, occurred_at)
+       VALUES ('PUBLICATION-EVENT-B-0001', 'ironwrap', 'PROPOSAL-REV-B', 'PACK-B',
+               1, 'published', '2026-07-16T10:04:00.000Z')`,
+      )
+      .run();
+
+    const issued = await handleCustomerPortalLinks(
+      issueRequest(),
+      appEnv,
+      owner(),
+    );
+    const { portal_url: portalUrl } = (await issued.json()) as {
+      portal_url: string;
+    };
+    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get(
+      "token",
+    )!;
+    const resolved = await worker.fetch(
+      resolveRequest(token),
+      appEnv as never,
+      {} as never,
+    );
+    assert.equal(resolved.status, 200);
+    assert.equal(
+      ((await resolved.json()) as { proposal: unknown }).proposal,
+      null,
+    );
+    assert.equal(network.requests(), 0);
+  } finally {
+    network.restore();
   }
 });
 
 test("customer portal fails closed for an untrusted origin, customer reassignment, and a saturated IP window", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);
-  const frappe = installFrappeMock();
+  const network = installNetworkGuard();
   try {
     const issued = await handleCustomerPortalLinks(
       issueRequest(),
@@ -687,7 +654,9 @@ test("customer portal fails closed for an untrusted origin, customer reassignmen
     );
     assert.equal(untrusted.status, 404);
 
-    frappe.rows["Roof Job"][0].customer = "CUSTOMER-B";
+    db.raw
+      .prepare("UPDATE operating_roof_jobs SET customer_id = 'CUSTOMER-B'")
+      .run();
     const reassigned = await worker.fetch(
       resolveRequest(token),
       appEnv as never,
@@ -695,7 +664,9 @@ test("customer portal fails closed for an untrusted origin, customer reassignmen
     );
     assert.equal(reassigned.status, 404);
 
-    frappe.rows["Roof Job"][0].customer = "CUSTOMER-A";
+    db.raw
+      .prepare("UPDATE operating_roof_jobs SET customer_id = 'CUSTOMER-A'")
+      .run();
     const ipHash = (
       db.raw
         .prepare("SELECT issued_ip_hash FROM customer_portal_links")
@@ -722,14 +693,14 @@ test("customer portal fails closed for an untrusted origin, customer reassignmen
     );
     assert.equal(throttled.status, 404);
   } finally {
-    frappe.restore();
+    network.restore();
   }
 });
 
 test("customer portal fails closed when its revocation control plane is unavailable", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);
-  const frappe = installFrappeMock();
+  const network = installNetworkGuard();
   try {
     const issued = await handleCustomerPortalLinks(
       issueRequest(),
@@ -760,31 +731,42 @@ test("customer portal fails closed when its revocation control plane is unavaila
     );
     assert.equal(misconfigured.status, 503);
   } finally {
-    frappe.restore();
+    network.restore();
   }
 });
-
 
 test("customer portal projects iRoof branding from the job record", async () => {
   const db = new SqliteD1();
   const appEnv = env(db);
-  const frappe = installFrappeMock();
-  frappe.rows["Roof Job"][0] = {
-    ...frappe.rows["Roof Job"][0],
-    brand: "iroof",
-    job_number: "IR-2026-100",
-  };
+  const network = installNetworkGuard();
+  db.raw
+    .prepare(
+      "UPDATE operating_roof_jobs SET brand = 'iroof', job_number = 'IR-2026-100'",
+    )
+    .run();
   try {
-    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
-    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
-    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
+    const issued = await handleCustomerPortalLinks(
+      issueRequest(),
+      appEnv,
+      owner(),
+    );
+    const { portal_url: portalUrl } = (await issued.json()) as {
+      portal_url: string;
+    };
+    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get(
+      "token",
+    )!;
 
-    const resolved = await worker.fetch(resolveRequest(token), appEnv as never, {} as never);
+    const resolved = await worker.fetch(
+      resolveRequest(token),
+      appEnv as never,
+      {} as never,
+    );
     assert.equal(resolved.status, 200);
     const model = (await resolved.json()) as Record<string, unknown>;
     assert.equal(model.brand, "iRoof Alberta");
   } finally {
-    frappe.restore();
+    network.restore();
   }
 });
 
@@ -794,146 +776,95 @@ test("customer portal withholds contract acceptance when the backend flow is dis
     ...env(db),
     APP_CUSTOMER_CONTRACT_ACCEPTANCE_ENABLED: "false",
   } as AppEnv;
-  const frappe = installFrappeMock();
+  const network = installNetworkGuard();
   try {
-    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
-    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
-    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
+    const issued = await handleCustomerPortalLinks(
+      issueRequest(),
+      appEnv,
+      owner(),
+    );
+    const { portal_url: portalUrl } = (await issued.json()) as {
+      portal_url: string;
+    };
+    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get(
+      "token",
+    )!;
 
-    const resolved = await worker.fetch(resolveRequest(token), appEnv as never, {} as never);
+    const resolved = await worker.fetch(
+      resolveRequest(token),
+      appEnv as never,
+      {} as never,
+    );
     assert.equal(resolved.status, 200);
     const model = (await resolved.json()) as Record<string, unknown>;
     assert.equal(model.contract_acceptance_available, false);
   } finally {
-    frappe.restore();
+    network.restore();
   }
 });
 
-
-test("customer portal withholds contract acceptance when the backend flow is misconfigured", async () => {
+test("customer portal ignores retired dedicated Frappe acceptance credentials", async () => {
   const db = new SqliteD1();
   const appEnv = {
     ...env(db),
     APP_CUSTOMER_ACCEPTANCE_FRAPPE_API_KEY: "",
   } as AppEnv;
-  const frappe = installFrappeMock();
+  const network = installNetworkGuard();
   try {
-    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
-    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
-    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
+    const issued = await handleCustomerPortalLinks(
+      issueRequest(),
+      appEnv,
+      owner(),
+    );
+    const { portal_url: portalUrl } = (await issued.json()) as {
+      portal_url: string;
+    };
+    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get(
+      "token",
+    )!;
 
-    const resolved = await worker.fetch(resolveRequest(token), appEnv as never, {} as never);
+    const resolved = await worker.fetch(
+      resolveRequest(token),
+      appEnv as never,
+      {} as never,
+    );
     assert.equal(resolved.status, 200);
     const model = (await resolved.json()) as Record<string, unknown>;
-    assert.equal(model.contract_acceptance_available, false);
+    assert.equal(model.contract_acceptance_available, true);
   } finally {
-    frappe.restore();
+    network.restore();
   }
 });
 
-
-test("customer portal withholds contract acceptance when the HMAC secret is too short", async () => {
+test("customer portal ignores the retired acceptance HMAC secret", async () => {
   const db = new SqliteD1();
   const appEnv = {
     ...env(db),
     APP_CUSTOMER_ACCEPTANCE_HMAC_KEY: "short-hmac-secret",
   } as AppEnv;
-  const frappe = installFrappeMock();
+  const network = installNetworkGuard();
   try {
-    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
-    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
-    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
-
-    const resolved = await worker.fetch(resolveRequest(token), appEnv as never, {} as never);
-    assert.equal(resolved.status, 200);
-    const model = (await resolved.json()) as Record<string, unknown>;
-    assert.equal(model.contract_acceptance_available, false);
-  } finally {
-    frappe.restore();
-  }
-});
-
-
-test("customer portal projects only approved option packages for this job, with internals stripped", async () => {
-  const db = new SqliteD1();
-  const appEnv = env(db);
-  const frappe = installFrappeMock();
-  try {
-    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
-    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
-    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
-
-    const resolved = await worker.fetch(resolveRequest(token), appEnv as never, {} as never);
-    assert.equal(resolved.status, 200);
-    const model = (await resolved.json()) as {
-      option_packages: Array<Record<string, unknown>>;
+    const issued = await handleCustomerPortalLinks(
+      issueRequest(),
+      appEnv,
+      owner(),
+    );
+    const { portal_url: portalUrl } = (await issued.json()) as {
+      portal_url: string;
     };
+    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get(
+      "token",
+    )!;
 
-    // Good sorts before Better by the DocType's own tier order, not alphabetically.
-    assert.deepEqual(
-      model.option_packages.map((option) => option.id),
-      ["opt-good", "opt-better"],
+    const resolved = await worker.fetch(
+      resolveRequest(token),
+      appEnv as never,
+      {} as never,
     );
-    assert.deepEqual(model.option_packages[1], {
-      id: "opt-better",
-      package_name: "Charcoal standing seam",
-      tier: "Better",
-      material_system: "26ga standing seam steel",
-      price_delta: 2_400,
-      currency: "CAD",
-      options: { colour: "Charcoal", panel_profile: "1.5in nail strip" },
-      warranty_summary: "40-year finish warranty",
-    });
-    // Unparseable office JSON degrades to no detail list rather than failing the whole read.
-    assert.equal(model.option_packages[0]!.options, null);
-
-    const projected = JSON.stringify(model.option_packages);
-    for (const internal of [
-      "internal payment assumption",
-      "internal approval note",
-      "internal estimator note",
-      "Copper accent (in progress)",
-      "Another customer's option",
-    ]) {
-      assert.equal(projected.includes(internal), false, `leaked: ${internal}`);
-    }
-
-    // The customer read contract asked Frappe for the Approved filter too: a Draft package is
-    // never fetched, not merely dropped after the fact.
-    const optionRequest = frappe.requests.find(
-      (request) => request.doctype === "Option Package",
-    );
-    assert.ok(optionRequest);
-    assert.deepEqual(optionRequest.filters, [
-      ["Option Package", "roof_job", "=", "JOB-A"],
-      ["Option Package", "status", "=", "Approved"],
-    ]);
-    for (const field of ["approval_note", "payment_assumptions", "notes", "scope_clause_ids_json"]) {
-      assert.equal(optionRequest.fields.includes(field), false, `requested: ${field}`);
-    }
-  } finally {
-    frappe.restore();
-  }
-});
-
-
-test("customer portal stays silent about materials when no option package is approved", async () => {
-  const db = new SqliteD1();
-  const appEnv = env(db);
-  const frappe = installFrappeMock();
-  frappe.rows["Option Package"] = [];
-  try {
-    const issued = await handleCustomerPortalLinks(issueRequest(), appEnv, owner());
-    const { portal_url: portalUrl } = (await issued.json()) as { portal_url: string };
-    const token = new URLSearchParams(new URL(portalUrl).hash.slice(1)).get("token")!;
-
-    const resolved = await worker.fetch(resolveRequest(token), appEnv as never, {} as never);
     assert.equal(resolved.status, 200);
     const model = (await resolved.json()) as Record<string, unknown>;
-    assert.deepEqual(model.option_packages, []);
-    // No decision credentials in this env, so the write half must advertise itself as unavailable.
-    assert.equal(model.material_decision_available, false);
+    assert.equal(model.contract_acceptance_available, true);
   } finally {
-    frappe.restore();
+    network.restore();
   }
 });

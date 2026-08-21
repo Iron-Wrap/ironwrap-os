@@ -701,6 +701,15 @@ const CREW_PROFILE_FIELDS = [
   "modified",
 ];
 
+// The three Crew Member columns an assignment's authority requirements are compiled
+// from, and deliberately nothing else. `get_crew_profile` drops the `members` child
+// table wholesale because most of it - `mobile_phone`, `certification_summary`,
+// `notes` - is personal data no agent needs; the compiler needs to know who is on
+// the crew and whether they are still on it, so it gets exactly that and reads it
+// through its own tool rather than by widening the general one.
+const CREW_ROSTER_MEMBER_FIELDS = ["crew_user", "crew_role", "active"];
+const CREW_ROSTER_PROFILE_FIELDS = ["name", "crew_profile_id", "status"];
+
 const JOB_ASSIGNMENT_FIELDS = [
   "name",
   "assignment_id",
@@ -5880,6 +5889,23 @@ export function buildServer(config) {
     },
     async ({ crew_profile_id }) => text({
       data: sanitizeResource(await readResource(config, "Crew Profile", crew_profile_id), CREW_PROFILE_FIELDS),
+    }),
+  );
+
+  server.registerTool(
+    "get_crew_authority_roster",
+    {
+      title: "Get Crew Authority Roster",
+      description:
+        "Read one Crew Profile's roster as the authority compiler sees it: crew user, crew role and active flag per member, and the profile's own lifecycle status. Phone, certification-summary and note fields are not exposed.",
+      inputSchema: z.object({ crew_profile_id: IdSchema }).strict(),
+    },
+    async ({ crew_profile_id }) => text({
+      data: sanitizeResource(
+        await readResource(config, "Crew Profile", crew_profile_id),
+        CREW_ROSTER_PROFILE_FIELDS,
+        { members: CREW_ROSTER_MEMBER_FIELDS },
+      ),
     }),
   );
 

@@ -18,6 +18,7 @@ Manages gates, assignments, safety plans, compliance records, and supplier order
 - get_measurement_report
 - get_crew_profile
 - list_crew_profiles
+- get_crew_authority_roster
 - get_job_assignment
 - list_job_assignments_for_job
 - get_work_package

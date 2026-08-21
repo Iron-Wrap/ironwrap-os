@@ -158,7 +158,7 @@
         "get_supplier_quote", "list_supplier_quotes_for_job",
         "get_field_check_in", "list_field_check_ins_for_job",
         "get_measurement_report",
-        "get_crew_profile", "list_crew_profiles",
+        "get_crew_profile", "list_crew_profiles", "get_crew_authority_roster",
         "get_job_assignment", "list_job_assignments_for_job",
         "get_work_package", "list_work_packages_for_job", "get_work_package_event", "list_work_package_events_for_job",
         "get_change_order", "list_change_orders_for_job",

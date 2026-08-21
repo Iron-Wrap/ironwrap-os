@@ -44,6 +44,7 @@ export const PRODUCTION_SCHEDULE_PREVIEW_PATH = "/v1/production-schedule/preview
 export const PRODUCTION_SCHEDULE_EXECUTE_PATH = "/v1/production-schedule/execute";
 export const PRODUCTION_SCHEDULE_WRITE_TOOL = "request_create_job_assignment";
 export const PRODUCTION_SCHEDULE_DRY_RUN_TOOL = "dry_run_job_assignment";
+export const PRODUCTION_SCHEDULE_CREW_ROSTER_TOOL = "get_crew_authority_roster";
 const PRODUCTION_SCHEDULE_AGENT_ROLE = "production-controller";
 const PRODUCTION_SCHEDULING_GATES = ["Deposit", "Materials", "Safety", "Access", "Weather", "Crew"];
 const SCHEDULABLE_GATE_STATES = ["Ready", "Done", "Waived"];
@@ -198,7 +199,11 @@ export function createStdioMcpInvoker(config) {
 }
 
 async function previewProductionSchedule(body, config, invokeMcp, now) {
-  const input = parsePreviewInput(body, config);
+  const parsed = parsePreviewInput(body, config);
+  const input = {
+    ...parsed,
+    authorityRequirements: await loadCrewAuthorityRequirements(parsed, config, invokeMcp),
+  };
   const current = await loadProductionSchedulePreview(input, config, invokeMcp, now);
   const writeArgs = writeArgsFromInput(input, config);
   const writeArgsJson = canonicalJson(writeArgs);
@@ -263,7 +268,7 @@ async function previewProductionSchedule(body, config, invokeMcp, now) {
 }
 
 async function executeProductionSchedule(body, config, invokeMcp, now) {
-  const record = parseExecutionInput(body, config, now);
+  const record = await parseExecutionInput(body, config, now, invokeMcp);
   // A fresh dry run is the source, append-only target, and current-gate fence.
   // The protected stored receipt still binds the actual write.
   let current;
@@ -395,7 +400,7 @@ function parsePreviewInput(body, config) {
   });
 }
 
-function parseExecutionInput(body, config, now) {
+async function parseExecutionInput(body, config, now, invokeMcp) {
   assertOnlyKeys(body, ["approval_request"]);
   const record = requiredObject(body.approval_request, "broker_production_schedule_execution_record_invalid");
   assertOnlyKeys(record, [
@@ -413,7 +418,7 @@ function parseExecutionInput(body, config, now) {
   assertExact(record.actor_user, config.actorUser, "broker_production_schedule_execution_actor_mismatch");
   assertExact(record.site_id, config.siteId, "broker_production_schedule_execution_site_mismatch");
   assertExact(record.target_doctype, "Job Assignment", "broker_production_schedule_execution_target_mismatch");
-  const input = parseAssignmentInput(record, "broker_production_schedule_execution", {
+  const parsed = parseAssignmentInput(record, "broker_production_schedule_execution", {
     approvalRequestId: idText(
       record.approval_request_id,
       "broker_production_schedule_execution_request_id_invalid",
@@ -423,6 +428,13 @@ function parseExecutionInput(body, config, now) {
     requestedByUserId: "approved",
     requestedByFrappeUser: "approved",
   });
+  // Compiled from the roster as it is NOW, not as the approval remembers it. The
+  // byte-for-byte comparison below is what turns a roster change since approval into
+  // a refusal.
+  const input = {
+    ...parsed,
+    authorityRequirements: await loadCrewAuthorityRequirements(parsed, config, invokeMcp),
+  };
   const targetName = idText(record.target_name, "broker_production_schedule_execution_target_name_invalid");
   const expiresAt = requiredFutureIso(record.expires_at, now, "broker_production_schedule_execution_expired");
   assertExact(
@@ -514,6 +526,91 @@ function parseAssignmentInput(value, namespace, identity) {
   };
 }
 
+/**
+ * Compile the exact authority requirements this Job Assignment declares (IRO-43 x
+ * IRO-50, ruled on ELEC-124).
+ *
+ * Nothing here decides a new authority rule.  `domain_policy._require_canonical_
+ * authorities` has always demanded that a Production assignment with a crew name
+ * which Authority Records must resolve as current, and the crew roster is already
+ * trusted input at this exact point - it is the same Crew Profile the dry run reads
+ * to refuse a non-Active crew.  What was missing was anyone to state the demand in
+ * the individually-versioned form IRO-43 introduced, so the schedule rail refused
+ * every Won job with `missing_authority_requirements`.  This states it.
+ *
+ * One row per ACTIVE member, `Worker Competency`, scoped to the ROOF JOB rather
+ * than the assignment: a competency record is a fact about a worker on a job, so
+ * one record covers every assignment and work package on it - the shape Work
+ * Package's own call site (`domain_policy.py:2597`) needs too.  Assignment scope
+ * would force re-issuing the same competency per assignment, which is not what a
+ * versioned worker competency is for.
+ *
+ * Deliberately NOT compiled: WCB Clearance, Trade Licence, Permit, Inspection.
+ * Those are already enforced independently by `_require_current_compliance_
+ * authority` off Job Compliance Records, and there is no data on the crew to
+ * resolve an Organization-subject requirement from anyway - inventing a
+ * `subject_ref` for them would be guessing.
+ *
+ * Deterministic in roster order and stable under duplicates: the same roster always
+ * compiles to the same bytes, which is what lets the preview/execute digest guard
+ * below treat any change as roster drift rather than noise.
+ */
+export function compileCrewAuthorityRequirements(roster, roofJobId) {
+  const members = Array.isArray(roster?.members) ? roster.members : [];
+  const seen = new Set();
+  const requirements = [];
+  for (const member of members) {
+    if (!isRecord(member)) continue;
+    // Frappe Check fields arrive as 1/0, but a JSON caller may send true/false.
+    const active = member.active === 1 || member.active === true;
+    if (!active) continue;
+    const subjectRef = typeof member.crew_user === "string" ? member.crew_user.trim() : "";
+    if (!subjectRef || seen.has(subjectRef)) continue;
+    seen.add(subjectRef);
+    requirements.push({
+      subject_type: "Person",
+      subject_role: "Worker",
+      subject_ref: subjectRef,
+      authority_kind: "Worker Competency",
+      scope_type: "Roof Job",
+      scope_ref: roofJobId,
+    });
+  }
+  return requirements;
+}
+
+/**
+ * Read the roster and compile it, once per preview and once again per execute.
+ *
+ * The second read is the point.  `writeArgsFromInput` is recomputed at execution and
+ * compared byte-for-byte against what the approver approved, so a roster that
+ * changed in between - a member deactivated, a new installer added - compiles to a
+ * different list and the write refuses with
+ * `broker_production_schedule_execution_args_mismatch`.  That guard already existed;
+ * putting the compiled list inside the args is what brings roster drift under it,
+ * with no second mechanism to keep in step.
+ */
+async function loadCrewAuthorityRequirements(input, config, invokeMcp) {
+  let payload;
+  try {
+    payload = parseToolPayload(await invokeMcp(PRODUCTION_SCHEDULE_CREW_ROSTER_TOOL, {
+      crew_profile_id: input.crewProfileId,
+    }));
+  } catch {
+    throw new Error("broker_production_schedule_crew_roster_unavailable");
+  }
+  const roster = requiredObject(payload?.data, "broker_production_schedule_crew_roster_invalid");
+  if (!Array.isArray(roster.members)) {
+    throw new Error("broker_production_schedule_crew_roster_invalid");
+  }
+  // An empty active roster is NOT refused here. It compiles to no requirements, the
+  // field is omitted, and Frappe answers `missing_authority_requirements` from
+  // `_requirement_rows` - the authority for that refusal belongs to the domain
+  // policy, not to this broker, and duplicating it here would give the same fact two
+  // owners that could drift apart.
+  return compileCrewAuthorityRequirements(roster, input.roofJobId);
+}
+
 function dryRunArgsFromInput(input, config) {
   return {
     roof_job_id: input.roofJobId,
@@ -524,6 +621,9 @@ function dryRunArgsFromInput(input, config) {
     assigned_by: config.actorUser,
     notes: "",
     ...(input.scheduledEnd ? { scheduled_end: input.scheduledEnd } : {}),
+    ...(input.authorityRequirements?.length
+      ? { authority_requirements: input.authorityRequirements }
+      : {}),
     ...(input.supersedesAssignmentId
       ? { supersedes: input.supersedesAssignmentId, correction_reason: input.correctionReason }
       : {}),
@@ -566,6 +666,10 @@ function assertFullDraft(value, input, config, targetName) {
     "assignment_id", "roof_job", "assignment_type", "status", "crew_profile", "scheduled_start", "assigned_by",
     "assigned_at", "notes",
     ...(input.scheduledEnd ? ["scheduled_end"] : []),
+    // Present exactly when the compiler produced rows. An empty active roster omits
+    // it here and is refused by Frappe's `missing_authority_requirements` at the
+    // write, which is where that authority lives.
+    ...(input.authorityRequirements?.length ? ["authority_requirements_json"] : []),
     ...(input.supersedesAssignmentId ? ["supersedes", "correction_reason"] : []),
   ], "broker_production_schedule_preview_draft_invalid");
   assertExact(draft.assignment_id, targetName, "broker_production_schedule_preview_target_mismatch");
@@ -577,6 +681,16 @@ function assertFullDraft(value, input, config, targetName) {
   assertExact(draft.assigned_by, config.actorUser, "broker_production_schedule_preview_draft_actor_mismatch");
   assertExact(draft.notes, "", "broker_production_schedule_preview_draft_notes_invalid");
   requiredIso(draft.assigned_at, "broker_production_schedule_preview_draft_assigned_at_invalid");
+  if (input.authorityRequirements?.length) {
+    // The server serialises the array it was handed; asserting the exact string is
+    // how the broker proves the draft it is about to have approved declares the
+    // authority IT compiled, not one the tool substituted.
+    assertExact(
+      draft.authority_requirements_json,
+      JSON.stringify(input.authorityRequirements),
+      "broker_production_schedule_preview_draft_authority_mismatch",
+    );
+  }
   if (input.scheduledEnd) {
     assertExact(draft.scheduled_end, input.scheduledEnd, "broker_production_schedule_preview_draft_end_mismatch");
   }

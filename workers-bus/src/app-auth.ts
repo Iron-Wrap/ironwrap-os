@@ -841,6 +841,11 @@ function sessionAllowedActions(role: AppUserRecord["role"]): string[] {
     ];
   }
   if (role === "production") {
+    // `production_gate.clear` is deliberately absent here and lives on the
+    // production runway read model instead. This list is role-derived, and the
+    // clearance also needs a Frappe identity to attribute the decision to; a
+    // session-level advertisement would offer a button the route refuses.
+    // `production_schedule_approval.prepare` is absent for the same reason.
     return ["session.logout", "now.read", "production.read", "job.read", "authority.read"];
   }
   if (role === "accounting") {

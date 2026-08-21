@@ -688,8 +688,15 @@ test("production sessions can read jobs and runway without commercial or owner a
     "now:read",
     "jobs:read:any",
     "production:read",
+    // ELEC-122: clearing a scheduling gate is the one write this role has, and it
+    // matches the gate authority `access_control` already grants IronWrap
+    // Production in Frappe. Everything commercial below is still refused.
+    "production:clear_gate",
     "authority:read",
   ]);
+  // `production_gate.clear` is not advertised here: it needs a Frappe identity
+  // this session may not carry, so the runway read model is where the surface
+  // learns whether it may offer it.
   assert.deepEqual(body.allowed_actions, [
     "session.logout",
     "now.read",

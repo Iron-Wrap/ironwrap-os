@@ -43,8 +43,8 @@ implication.
       "latest": "0069_customer_portal_decision_intents.sql"
     },
     "tests": {
-      "pwa": 507,
-      "worker": 1002
+      "pwa": 519,
+      "worker": 1020
     }
   },
   "proof_state_policy": {

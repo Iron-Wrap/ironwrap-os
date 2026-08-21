@@ -41,9 +41,10 @@ loud() {
 # it, and the pins are re-applied on every start so a volume provisioned before
 # a rail shipped heals itself instead of staying dead until it is destroyed.
 #
-# The field-evidence, fleet-capture and work-package rails are all issued by the
-# Worker BFF, which authenticates with the single ERPNEXT_API_KEY/SECRET pair, so
-# all three pin the same integration user created in step 8.  The customer
+# The field-evidence, fleet-capture, work-package and production-gate-clearance
+# rails are all issued by the Worker BFF, which authenticates with the single
+# ERPNEXT_API_KEY/SECRET pair, so all four pin the same integration user created
+# in step 8.  The customer
 # acceptance, QuickBooks and Facet-design-projection rails hold their own
 # least-privilege identities and their own key pairs.
 pin_service_identities() {
@@ -51,6 +52,7 @@ pin_service_identities() {
   bench --site "$SITE" set-config ironwrap_field_evidence_issuer_user ironwrap-bus@ironwrap.local
   bench --site "$SITE" set-config ironwrap_fleet_capture_issuer_user ironwrap-bus@ironwrap.local
   bench --site "$SITE" set-config ironwrap_work_package_issuer_user ironwrap-bus@ironwrap.local
+  bench --site "$SITE" set-config ironwrap_production_gate_issuer_user ironwrap-bus@ironwrap.local
   bench --site "$SITE" set-config ironwrap_customer_acceptance_service_user ironwrap-customer-acceptance@ironwrap.local
   bench --site "$SITE" set-config ironwrap_customer_decision_service_user ironwrap-customer-decision@ironwrap.local
   bench --site "$SITE" set-config ironwrap_quickbooks_reconciliation_issuer_user ironwrap-quickbooks-issuer@ironwrap.local
@@ -146,21 +148,33 @@ PYEOF
 # The approver the brokers name in every receipt (HERMES_APPROVER_ID) and the
 # crew login the field surfaces use.  Neither holds broker credentials; they only
 # have to exist as real users for the approval and BFF paths to resolve them.
+#
+# They also need their IronWrap *business* roles, not just System Manager.  A
+# bounded office command checks the domain role `access_control` grants the
+# authority to - `work_package_api` release wants IronWrap Owner or Production,
+# and so does the ELEC-122 production-gate clearance - and System Manager is a
+# platform role, not a business one.  Without this the documented local owner
+# login cannot clear a scheduling gate on a fresh site: the rail ships dead, the
+# same failure shape IRO-54 hit with an unpinned issuer.  Runs on every start so
+# a volume provisioned before this line heals itself.
 provision_operator_users() {
-  local marker="$BENCH_DIR/sites/$SITE/.operator_users_provisioned"
-  [ -f "$marker" ] && return 0
-  log "creating owner-approver and crew operator users"
+  log "ensuring owner-approver and crew operator users and their IronWrap roles"
   bench --site "$SITE" console >/dev/null <<'PYEOF'
 import frappe
-for email, first_name in [("owner@ironwrap.local", "Owner Approver"),
-                          ("crew@ironwrap.local", "Field Crew")]:
+for email, first_name, ironwrap_role in [
+    ("owner@ironwrap.local", "Owner Approver", "IronWrap Owner"),
+    ("crew@ironwrap.local", "Field Crew", "IronWrap Field"),
+]:
     if not frappe.db.exists("User", email):
         frappe.get_doc({"doctype": "User", "email": email, "first_name": first_name,
                         "send_welcome_email": 0,
                         "roles": [{"role": "System Manager"}]}).insert(ignore_permissions=True)
+    if ironwrap_role not in set(frappe.get_roles(email)):
+        user = frappe.get_doc("User", email)
+        user.append("roles", {"role": ironwrap_role})
+        user.save(ignore_permissions=True)
 frappe.db.commit()
 PYEOF
-  touch "$marker"
 }
 
 provision_broker_identities() {

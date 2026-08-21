@@ -63,6 +63,8 @@ export const API_PATHS = {
   quickBooksFinalInvoiceReconcile: (intentId: string) =>
     `/api/v1/quickbooks/final-invoices/${encodeURIComponent(intentId)}/reconcile`,
   production: "/api/v1/production",
+  productionGateClearance: (jobId: string, gate: string) =>
+    `/api/v1/production/jobs/${encodeURIComponent(jobId)}/gates/${encodeURIComponent(gate)}/clearance`,
   productionScheduleApprovals: "/api/v1/production-schedule-approvals",
   productionScheduleApproval: (approvalId: string) =>
     `/api/v1/production-schedule-approvals/${encodeURIComponent(approvalId)}`,

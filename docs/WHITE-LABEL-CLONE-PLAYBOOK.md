@@ -109,17 +109,21 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    key the app reads is missing from this list.
 
    The Worker BFF authenticates every one of its rails with the single bus API pair from
-   step 4, so all three of its issuer keys name that same bus user:
+   step 4, so all four of its issuer keys name that same bus user:
 
    ```
-   bench --site <tenant-site> set-config ironwrap_field_evidence_issuer_user '<worker-api-user-email>'
-   bench --site <tenant-site> set-config ironwrap_fleet_capture_issuer_user  '<worker-api-user-email>'
-   bench --site <tenant-site> set-config ironwrap_work_package_issuer_user   '<worker-api-user-email>'
+   bench --site <tenant-site> set-config ironwrap_field_evidence_issuer_user  '<worker-api-user-email>'
+   bench --site <tenant-site> set-config ironwrap_fleet_capture_issuer_user   '<worker-api-user-email>'
+   bench --site <tenant-site> set-config ironwrap_work_package_issuer_user    '<worker-api-user-email>'
+   bench --site <tenant-site> set-config ironwrap_production_gate_issuer_user '<worker-api-user-email>'
    ```
 
    The Frappe app rejects `Verified` evidence, submitted pre/post-trip inspections and
    field-issued Work Package events through ordinary Desk/REST writes, so these
    site-local pins are required before any of those can become gate-eligible.
+   `ironwrap_production_gate_issuer_user` is the same shape for the six scheduling
+   gates: without it the office has no way to clear Deposit, Materials, Safety,
+   Access, Weather or Crew, and every Won job stays unschedulable on this site.
 
    The remaining identities are deliberately NOT the bus user — each holds its own
    least-privilege role and its own API key/secret pair:
@@ -227,8 +231,9 @@ recovery boundaries.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
 - [ ] All 31 D1 migrations through `0031_quickbooks_projection_outbox.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
-  `ironwrap_field_evidence_issuer_user`, `ironwrap_fleet_capture_issuer_user` and
-  `ironwrap_work_package_issuer_user` all bound to that dedicated Worker user, and a separate
+  `ironwrap_field_evidence_issuer_user`, `ironwrap_fleet_capture_issuer_user`,
+  `ironwrap_work_package_issuer_user` and `ironwrap_production_gate_issuer_user` all bound
+  to that dedicated Worker user, and a separate
   QuickBooks issuer user/role/key pair bound through `ironwrap_quickbooks_reconciliation_issuer_user`.
   Every key in the step 3.6 table is either set or consciously deferred; `node
   tools/validate-site-config-pins.mjs` passes.

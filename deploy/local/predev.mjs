@@ -5,10 +5,12 @@
  * `npm run dev` in workers-bus runs this before `wrangler dev --env local`. It guarantees:
  *   1. ../app/dist exists (builds the PWA once when missing)
  *   2. the deploy/local Frappe stack (mariadb, redis, frappe) is up and answering
- *   3. .dev.vars carries the Frappe integration, customer-acceptance and Facet
- *      design-projection API key/secret pairs, the throwaway Facet chain keys, and
- *      every host-port-bearing local value (Frappe base URL, Worker origin, broker
- *      URLs) so a second isolated stack never inherits the first one's ports
+ *   3. .dev.vars exists at all - scaffolded from .dev.vars.example on a fresh checkout,
+ *      so ADMIN_TOKEN/INGEST_TOKEN/APP_AUTH_PEPPER are never a hand-added step - and then
+ *      carries the Frappe integration, customer-acceptance and Facet design-projection API
+ *      key/secret pairs, the throwaway Facet chain keys, and every host-port-bearing local
+ *      value (Frappe base URL, Worker origin, broker URLs) so a second isolated stack never
+ *      inherits the first one's ports
  *   4. every D1 migration is applied to the local (Miniflare) database
  *
  * It never touches production: the Frappe stack is the throwaway deploy/local one and
@@ -19,6 +21,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { applyVars, brokerPorts, portBearingVars, scaffoldDevVars } from "./dev-vars.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
@@ -39,17 +42,14 @@ const frappeUrl = `http://localhost:${frappePort}`;
 const workerPort = process.env.IRONWRAP_LOCAL_WORKER_PORT ?? "7100";
 const workerOrigin = `http://localhost:${workerPort}`;
 // One base for the four approval brokers, keeping their existing 9101-9104 layout.
-const brokerPortBase = Number(process.env.IRONWRAP_LOCAL_BROKER_PORT_BASE ?? "9100");
-if (!Number.isInteger(brokerPortBase) || brokerPortBase < 1024 || brokerPortBase > 65_000) {
-  console.error("[predev] ERROR: IRONWRAP_LOCAL_BROKER_PORT_BASE must be an integer in 1024-65000");
+const brokerPortBase = process.env.IRONWRAP_LOCAL_BROKER_PORT_BASE ?? "9100";
+let brokerPort;
+try {
+  brokerPort = brokerPorts(brokerPortBase);
+} catch (error) {
+  console.error(`[predev] ERROR: ${error.message}`);
   process.exit(1);
 }
-const brokerPort = {
-  approval: brokerPortBase + 1,
-  quoteRevision: brokerPortBase + 2,
-  productionSchedule: brokerPortBase + 3,
-  proposalPublication: brokerPortBase + 4,
-};
 
 const log = (msg) => console.log(`[predev] ${msg}`);
 const fail = (msg) => {
@@ -369,25 +369,31 @@ const productionScheduleActorCreds = containerCredentials(
   "production-schedule broker actor",
 );
 
-const vars = existsSync(devVarsPath) ? readFileSync(devVarsPath, "utf8") : "";
-const setVar = (src, key, value) => {
-  const line = `${key}=${value}`;
-  return src.match(new RegExp(`^${key}=`, "m"))
-    ? src.replace(new RegExp(`^${key}=.*$`, "m"), line)
-    : `${src.trimEnd()}\n${line}\n`;
-};
-let next = vars;
-for (const [key, value] of [
+// A fresh checkout has no .dev.vars at all, so ADMIN_TOKEN, INGEST_TOKEN, APP_AUTH_PEPPER and
+// the rest of the documented local shape used to be a hand-add step every tester rediscovered
+// (ELEC-112 finding 6, reproduced again in ELEC-120). Seed the file from the example first;
+// the generated values below then overwrite the placeholders that have real local answers.
+// An existing .dev.vars is never rewritten - whatever the operator put there stays.
+const devVarsExamplePath = path.join(workersBus, ".dev.vars.example");
+if (!existsSync(devVarsExamplePath)) fail("workers-bus/.dev.vars.example is missing");
+let vars;
+try {
+  const seeded = scaffoldDevVars({
+    existing: existsSync(devVarsPath) ? readFileSync(devVarsPath, "utf8") : "",
+    example: readFileSync(devVarsExamplePath, "utf8"),
+  });
+  vars = seeded.text;
+  if (seeded.scaffolded) {
+    log("no .dev.vars - scaffolding it from .dev.vars.example (throwaway local placeholders)");
+  }
+} catch (error) {
+  fail(error.message);
+}
+const next = applyVars(vars, [
   // Every value below that carries a host port overrides the port wrangler.jsonc's `local` env
   // hard-codes, so one exported IRONWRAP_LOCAL_* variable is enough to move a whole stack.
-  ["ERPNEXT_BASE_URL", frappeUrl],
-  ["APP_PUBLIC_ORIGIN", workerOrigin],
-  ["APP_ALLOWED_ORIGINS", workerOrigin],
-  ["PUBLIC_ESTIMATE_ALLOWED_ORIGINS", workerOrigin],
-  ["APP_APPROVAL_BROKER_URL", `http://127.0.0.1:${brokerPort.approval}`],
-  ["APP_QUOTE_REVISION_BROKER_URL", `http://127.0.0.1:${brokerPort.quoteRevision}`],
-  ["APP_PRODUCTION_SCHEDULE_BROKER_URL", `http://127.0.0.1:${brokerPort.productionSchedule}`],
-  ["APP_PROPOSAL_PUBLICATION_BROKER_URL", `http://127.0.0.1:${brokerPort.proposalPublication}`],
+  // dev-vars.mjs owns that list; its test asserts it covers every loopback var in wrangler.jsonc.
+  ...portBearingVars({ frappePort, workerPort, brokerPortBase }),
   ["ERPNEXT_API_KEY", creds.api_key],
   ["ERPNEXT_API_SECRET", creds.api_secret],
   ["QB_RECONCILIATION_ISSUER_API_KEY", quickBooksIssuerCreds.api_key],
@@ -415,9 +421,7 @@ for (const [key, value] of [
     not_before_ms: 0,
     not_after_ms: 4102444800000,
   }])],
-]) {
-  next = setVar(next, key, value);
-}
+]);
 if (next !== vars) {
   writeFileSync(devVarsPath, next);
   log(".dev.vars updated with local Frappe integration credentials");

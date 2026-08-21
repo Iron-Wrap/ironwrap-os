@@ -6,9 +6,13 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from ironwrap_roofing.domain_policy import (
+    WRITE_ONCE_FIELDS,
+    WRITE_ONCE_ZERO_IS_UNSET,
     PolicyViolation,
+    enforce_write_once,
     evaluate_price_rule,
     parse_json_field,
+    require_fields,
     validate_record,
 )
 from ironwrap_roofing.authority_policy import authority_state_digest
@@ -977,6 +981,75 @@ class DomainPolicyTests(unittest.TestCase):
             "evidence_item",
             {"evidence_id": "ev-1", "r2_key": "raw/new"},
             previous={"evidence_id": "ev-1", "r2_key": "raw/original"},
+        )
+
+    def test_int_write_once_field_frappe_left_at_zero_is_still_unwritten(self) -> None:
+        """ELEC-120 finding 2: Frappe stores an unset Int as 0, not NULL.
+
+        Customer Quote `qb_terms_due_days` is only writable after the Draft insert, so its
+        first legitimate write always sees a stored 0 as `previous`.  Reading that as "already
+        set" refused the write outright, and disagreed with `quickbooks_mapping_frozen`, which
+        compares `str(value or "")` and so reads 0 as absent for the very same field.
+        """
+
+        drafted = {"customer_quote_id": "cq-terms", "qb_terms_due_days": 0}
+        # The write the trap refused: a stored zero nobody ever wrote, then the real value.
+        validate_record(
+            "customer_quote",
+            {**drafted, "qb_terms_due_days": 30},
+            previous=drafted,
+        )
+        # Once a real value is there it is still write-once.
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "customer_quote",
+            {"customer_quote_id": "cq-terms", "qb_terms_due_days": 45},
+            previous={"customer_quote_id": "cq-terms", "qb_terms_due_days": 30},
+        )
+        # And zero is not blanket-unset: a numeric write-once field that is NOT named in
+        # WRITE_ONCE_ZERO_IS_UNSET keeps the strict reading, because 0.0 is a real latitude
+        # and 0 is a real cost.
+        self.assertNotIn(
+            "latitude", WRITE_ONCE_ZERO_IS_UNSET.get("evidence_item", frozenset())
+        )
+        self.assert_policy(
+            "write_once_field",
+            validate_record,
+            "evidence_item",
+            {"evidence_id": "ev-1", "latitude": 53.5},
+            previous={"evidence_id": "ev-1", "latitude": 0.0},
+        )
+        self.assert_policy(
+            "write_once_field",
+            enforce_write_once,
+            {"amount_cents": 500},
+            {"amount_cents": 0},
+            "amount_cents",
+        )
+        # Only fields that are actually write-once for that kind can opt in at all.
+        for kind, fields in WRITE_ONCE_ZERO_IS_UNSET.items():
+            self.assertTrue(
+                fields <= set(WRITE_ONCE_FIELDS.get(kind, ())),
+                f"{kind}: zero-is-unset names a field that is not write-once",
+            )
+
+    def test_blank_still_means_absent_not_zero(self) -> None:
+        """A required Int of zero is present; only None and empty text are missing."""
+
+        require_fields({"count": 0, "amount": 0.0, "flag": False}, "count", "amount", "flag")
+        self.assert_policy(
+            "required_fields", require_fields, {"count": None}, "count"
+        )
+        self.assert_policy("required_fields", require_fields, {"count": "  "}, "count")
+        # A boolean False is not a numeric zero for the opt-in either.
+        self.assert_policy(
+            "write_once_field",
+            enforce_write_once,
+            {"flag": True},
+            {"flag": False},
+            "flag",
+            zero_is_unset=frozenset({"flag"}),
         )
 
     def test_jobnimbus_ids_are_late_bound_once_then_immutable(self) -> None:

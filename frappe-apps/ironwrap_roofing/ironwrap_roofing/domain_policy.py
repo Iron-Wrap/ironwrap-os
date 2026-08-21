@@ -12,7 +12,7 @@ import json
 import re
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from typing import Any, Mapping, Sequence
+from typing import Any, Collection, Mapping, Sequence
 
 
 MAX_JSON_BYTES = 1_000_000
@@ -289,6 +289,15 @@ def _get(record: Any, field: str, default: Any = None) -> Any:
 
 
 def _blank(value: Any) -> bool:
+    """Blank means "nothing was written here".
+
+    Deliberately narrow: `0`, `0.0` and `False` are values, not absences, so a required Int of
+    zero satisfies `require_fields` and a Currency of zero is a real amount.  Frappe's storage
+    cannot express an unset Int - the column is `NOT NULL DEFAULT 0` - which is why the one
+    guard that genuinely needs "never written" for an Int, `enforce_write_once`, takes an
+    explicit per-field opt-in (`WRITE_ONCE_ZERO_IS_UNSET`) instead of widening this.
+    """
+
     return value is None or (isinstance(value, str) and not value.strip())
 
 
@@ -473,12 +482,23 @@ def enforce_immutable(record: Any, previous: Any, *fields: str) -> None:
             )
 
 
-def enforce_write_once(record: Any, previous: Any, *fields: str) -> None:
+def enforce_write_once(
+    record: Any,
+    previous: Any,
+    *fields: str,
+    zero_is_unset: Collection[str] = (),
+) -> None:
     if previous is None:
         return
     for field in fields:
         before = _get(previous, field)
         after = _get(record, field)
+        # An Int column Frappe has never been asked to write reads back as 0, so for the
+        # fields named in `zero_is_unset` a stored zero means "no value yet", not "already
+        # set" (ELEC-120 finding 2: the FIRST legitimate write of Customer Quote
+        # qb_terms_due_days was refused as a change).
+        if field in zero_is_unset and isinstance(before, (int, float)) and not isinstance(before, bool) and before == 0:
+            continue
         # Compare normalized text: MariaDB returns datetimes as datetime objects
         # while writers re-send the same fact as a string. Representation must
         # not matter; only a real value change or clear is a violation.
@@ -582,6 +602,24 @@ QUICKBOOKS_MILESTONE_TYPES = {
     "RefundReceipt": "Refund",
 }
 QUICKBOOKS_FINANCE_OPERATIONS = frozenset({"Create", "Update", "Delete", "Void"})
+
+
+# Write-once fields whose stored zero means "never written".
+#
+# Frappe declares Int columns `NOT NULL DEFAULT 0`, so a record that has never carried a value
+# for one is indistinguishable from a record that carries zero.  For most numeric write-once
+# fields the strict reading is the right one - Evidence Item `latitude`/`longitude` 0.0 is a
+# real coordinate, Job Cost Event `amount_cents` 0 is a real amount, and letting either change
+# later would drop a guarantee.  Name a field here only when zero cannot be a real value for
+# it, or when another guard already freezes it and treats zero as absent.
+WRITE_ONCE_ZERO_IS_UNSET: dict[str, frozenset[str]] = {
+    # A quote's QuickBooks mappings are frozen from approval onward by the
+    # `quickbooks_mapping_frozen` check in `_validate_customer_quote`, which compares
+    # `str(value or "")` and so already reads 0 and None alike as "not set".  Without this the
+    # write-once guard disagreed with that check and refused the field's first legitimate
+    # write, which is only reachable after the Draft insert (ELEC-120 finding 2).
+    "customer_quote": frozenset({"qb_terms_due_days"}),
+}
 
 
 WRITE_ONCE_FIELDS: dict[str, tuple[str, ...]] = {
@@ -9422,7 +9460,12 @@ def validate_record(
                     "provider_read_at",
                 }
             )
-    enforce_write_once(record, previous, *write_once_fields)
+    enforce_write_once(
+        record,
+        previous,
+        *write_once_fields,
+        zero_is_unset=WRITE_ONCE_ZERO_IS_UNSET.get(kind, frozenset()),
+    )
     enforce_truthy_once(record, previous, *TRUTHY_ONCE_FIELDS.get(kind, ()))
     for field in JSON_FIELDS.get(kind, ()):
         parse_json_field(record, field)

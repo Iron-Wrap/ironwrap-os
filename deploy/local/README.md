@@ -14,9 +14,12 @@ cd workers-bus && npm run dev
 3. the docker-compose Frappe v15 + MariaDB + Redis stack is up and answering on
    `http://localhost:8000` (or `IRONWRAP_LOCAL_FRAPPE_PORT`; the committed DocType contract
    is provisioned by `frappe-init.sh`)
-4. `workers-bus/.dev.vars` carries the local Frappe integration API key/secret, and the
-   host-port-bearing values (`ERPNEXT_BASE_URL`, `APP_PUBLIC_ORIGIN` and its allowlist, the
-   broker URLs) that override `wrangler.jsonc`'s single-stack defaults
+4. `workers-bus/.dev.vars` exists - on a fresh checkout it is scaffolded from
+   `.dev.vars.example`, so `ADMIN_TOKEN`, `INGEST_TOKEN` and `APP_AUTH_PEPPER` are already
+   there rather than a hand-add step - and carries the local Frappe integration API
+   key/secret plus the host-port-bearing values (`ERPNEXT_BASE_URL`, `APP_PUBLIC_ORIGIN` and
+   its allowlist, the broker URLs) that override `wrangler.jsonc`'s single-stack defaults.
+   An existing `.dev.vars` is never rewritten; only the generated values are refreshed
 5. every D1 migration is applied to the local Miniflare database
 6. the bench copy of `ironwrap_roofing` matches the repo (a stale volume is resynced
    and the container restarted; see "App source edits vs the bench copy" below)
@@ -123,6 +126,44 @@ with HTTP 422, other verified `4xx` codes surface with 502, and only a network f
 or a `5xx` reads `*_broker_unavailable`. Before this, every non-2xx collapsed into
 `*_broker_unavailable`, and finding the real reason meant instrumenting broker source
 (ELEC-95).
+
+## Fixtures a traverse needs but no product surface builds yet
+
+Nothing in the product prices a quote or approves it - that is an office estimator's job today
+(`CAPABILITY-MATRIX.md`). Every end-to-end run that needs a signable, approved quote therefore
+had to build one by hand, and ELEC-95, ELEC-112 and ELEC-120 each rebuilt the same fixture and
+rediscovered the same wrinkles. That construction is now one tool:
+
+```bash
+# a real Roof Job first, through the owned intake spine
+curl -sS -X POST http://localhost:7100/ingest/estimate \
+  -H "authorization: Bearer $INGEST_TOKEN" -H 'content-type: application/json' \
+  -d '{"project_id":"DEMO-01","customer":"Dana Demo","email":"demo@example.invalid", ...}'
+
+# then the Approved Customer Quote (credentials read from workers-bus/.dev.vars)
+node tools/local-approved-quote-fixture.mjs --roof-job job:DEMO-01 --prefix demo
+node tools/local-approved-quote-fixture.mjs --roof-job job:DEMO-01 --json   # machine-readable
+```
+
+It writes a Price Book Rule (Draft -> Approved) and a Customer Quote
+(Draft -> Needs Review -> Approved) over REST, through `domain_policy`'s full validation chain
+- no raw SQL, no `frappe.db.set_value`, no bypass. It is still a **fixture**: the act of pricing
+and approving stands in for a surface that does not exist yet, and it says so in its own header.
+
+Two wrinkles it exists to stop rediscovering, both worth knowing if you write a quote-lifecycle
+path by hand:
+
+- **A price-rule snapshot can only be bound while the quote is Draft or Needs Review**, and every
+  frozen field in it must match its live source exactly as *Frappe* reads that source back - a
+  Currency of `0` reads as blank, and an integral Currency stringifies Python-side as `"1250.0"`.
+  Build the snapshot from a read-back of the rule, never from the values you sent.
+- **`qb_terms_due_days` is an `Int`, and Frappe stores an unset `Int` as `0`, not `NULL`.** That
+  used to make `enforce_write_once` refuse the field's first legitimate write, because a stored
+  zero nobody wrote looked like a value already set (ELEC-120 finding 2). `domain_policy`'s
+  `WRITE_ONCE_ZERO_IS_UNSET` now names that field, so the write is accepted while a real value
+  stays write-once. If you add another write-once `Int` whose zero means "never written", name it
+  there too - and do not widen the rule to every numeric: `Evidence Item.latitude` `0.0` is a real
+  coordinate and `Job Cost Event.amount_cents` `0` is a real amount.
 
 ## App source edits vs the bench copy (stale volumes)
 

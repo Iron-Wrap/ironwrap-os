@@ -675,6 +675,90 @@ class DocumentValidationAdapterTests(unittest.TestCase):
                 "production_gate_state",
             )
 
+    # ELEC-122 / ELEC-115 Path A: the bounded gate-clearing command re-attributes a
+    # waiver from the bus principal to the human who made it; these three cases keep
+    # that re-attribution to the one gate it named.  RETIREMENT (IRO-195): delete with
+    # `production_gate_clearance_context` when IRO-195's D1-native production-gate
+    # state replaces the command - a Worker-written clearance already holds the
+    # session, so there is nothing left to re-attribute.  The underlying waiver rule
+    # (owner-level actor, checked on the way in) is not part of that retirement.
+    def test_a_bounded_gate_waiver_is_attributed_to_its_actor_not_the_bus(self) -> None:
+        """The shipped waiver rule reads `frappe.session.user`.
+
+        For a Worker-issued command that principal is the integration bus, not the
+        person who decided, so the bounded clearance names its actor and the rule
+        holds that actor to the same owner-level bar it always has.
+        """
+
+        gate = FakeDocument(
+            {
+                "name": "gate:job-1:Weather",
+                "gate_id": "gate:job-1:Weather",
+                "roof_job": "job-1",
+                "gate": "Weather",
+                "state": "Waived",
+                "owner_user": "ironwrap-bus@example.com",
+                "assigned_at": "2026-08-20 10:00:00",
+                "waived_by": "owner@example.com",
+                "waived_at": "2026-08-21 00:05:00",
+                "waiver_reason": "Dry three-day window confirmed for Monday.",
+            }
+        )
+        bus, _ = self.load_adapter(
+            session_user="ironwrap-bus@example.com", roles=["IronWrap Owner"]
+        )
+        with self.assertRaisesRegex(FakePermissionError, "current owner-level actor"):
+            bus.validate_business_document(gate, "production_gate_state")
+        with bus.production_gate_clearance_context(gate, None, "owner@example.com"):
+            bus.validate_business_document(gate, "production_gate_state")
+
+    def test_a_named_waiver_actor_still_has_to_hold_owner_authority(self) -> None:
+        gate = FakeDocument(
+            {
+                "name": "gate:job-1:Weather",
+                "gate_id": "gate:job-1:Weather",
+                "roof_job": "job-1",
+                "gate": "Weather",
+                "state": "Waived",
+                "owner_user": "ironwrap-bus@example.com",
+                "assigned_at": "2026-08-20 10:00:00",
+                "waived_by": "production@example.com",
+                "waived_at": "2026-08-21 00:05:00",
+                "waiver_reason": "Dry three-day window confirmed for Monday.",
+            }
+        )
+        bus, _ = self.load_adapter(
+            session_user="ironwrap-bus@example.com", roles=["IronWrap Production"]
+        )
+        with self.assertRaisesRegex(FakePermissionError, "Owner or System Manager"):
+            with bus.production_gate_clearance_context(
+                gate, None, "production@example.com"
+            ):
+                bus.validate_business_document(gate, "production_gate_state")
+
+    def test_a_waiver_context_authorizes_only_the_gate_it_named(self) -> None:
+        gate = FakeDocument(
+            {
+                "name": "gate:job-1:Weather",
+                "gate_id": "gate:job-1:Weather",
+                "roof_job": "job-1",
+                "gate": "Weather",
+                "state": "Waived",
+                "owner_user": "ironwrap-bus@example.com",
+                "assigned_at": "2026-08-20 10:00:00",
+                "waived_by": "owner@example.com",
+                "waived_at": "2026-08-21 00:05:00",
+                "waiver_reason": "Dry three-day window confirmed for Monday.",
+            }
+        )
+        other = FakeDocument({**gate, "name": "gate:job-1:Access", "gate": "Access"})
+        bus, _ = self.load_adapter(
+            session_user="ironwrap-bus@example.com", roles=["IronWrap Owner"]
+        )
+        with bus.production_gate_clearance_context(gate, None, "owner@example.com"):
+            with self.assertRaisesRegex(FakePermissionError, "current owner-level actor"):
+                bus.validate_business_document(other, "production_gate_state")
+
     def test_takeoff_policy_approval_requires_current_existing_owner_identity(
         self,
     ) -> None:
@@ -869,6 +953,92 @@ class DocumentValidationAdapterTests(unittest.TestCase):
 
         controller = EVIDENCE_ITEM_CONTROLLER_PATH.read_text(encoding="utf-8")
         self.assertIn("validate_evidence_verification_mutation(self)", controller)
+
+    # ELEC-122: the production-gate clearing rail. A verified clearance mints one
+    # Evidence Item from the receipt the Worker stored first, so the receipt has to
+    # get past the same verification guard every other capture does - and only
+    # while bound to the gate it was read for.
+    #
+    # RETIREMENT (IRO-195 / ELEC-115 Path A): delete these fixtures and the three
+    # cases below with `production_gate_clearance_context`.  The R2 receipt they are
+    # about is minted and stored Worker-side and outlives the cutover; only its
+    # Evidence Item projection retires with the Frappe gate rows.
+    @staticmethod
+    def gate_clearance_receipt(**overrides) -> "FakeDocument":
+        return FakeDocument(
+            {
+                "evidence_id": "gate-clearance:decision-1",
+                "device_action_id": "decision-1",
+                "roof_job": "job-1",
+                "evidence_type": "Other",
+                "proof_owner": "production@example.com",
+                "proof_slot": "Deposit",
+                "source_system": "ironwrap-production-gate-clearance",
+                "r2_key": "production-gate-clearance/v1/decision-1.json",
+                "content_checksum": "b" * 64,
+                "checksum_algorithm": "SHA-256",
+                "content_type": "application/json",
+                "content_length": 412,
+                "capture_actor": "production@example.com",
+                "captured_at": "2026-08-21 00:00:00",
+                "sync_state": "Verified",
+                "verified_at": "2026-08-21 00:05:00",
+                "verification_source": "ironwrap-worker-r2-production-gate-clearance",
+                "customer_safe": 0,
+                "summary": "Deposit settlement observed on money intent acct-1",
+                **overrides,
+            }
+        )
+
+    @staticmethod
+    def clearing_gate(**overrides) -> "FakeDocument":
+        return FakeDocument(
+            {
+                "name": "gate:job-1:Deposit",
+                "roof_job": "job-1",
+                "gate": "Deposit",
+                "state": "Ready",
+                **overrides,
+            }
+        )
+
+    def test_a_gate_clearance_receipt_is_verified_only_inside_its_own_context(self) -> None:
+        adapter, _ = self.load_adapter()
+        receipt = self.gate_clearance_receipt()
+        with self.assertRaisesRegex(FakeValidationError, "dedicated Worker"):
+            adapter.validate_evidence_verification_mutation(receipt)
+        with adapter.production_gate_clearance_context(self.clearing_gate(), receipt):
+            adapter.validate_evidence_verification_mutation(receipt)
+        # A second receipt smuggled into the same context is still refused.
+        with adapter.production_gate_clearance_context(self.clearing_gate(), receipt):
+            with self.assertRaisesRegex(FakeValidationError, "dedicated Worker"):
+                adapter.validate_evidence_verification_mutation(
+                    self.gate_clearance_receipt(evidence_id="gate-clearance:decision-2")
+                )
+        # And the context is gone once the command returns.
+        with self.assertRaisesRegex(FakeValidationError, "dedicated Worker"):
+            adapter.validate_evidence_verification_mutation(receipt)
+
+    def test_a_waiver_authorizes_no_receipt_at_all(self) -> None:
+        adapter, _ = self.load_adapter()
+        with adapter.production_gate_clearance_context(self.clearing_gate(state="Waived")):
+            with self.assertRaisesRegex(FakeValidationError, "dedicated Worker"):
+                adapter.validate_evidence_verification_mutation(
+                    self.gate_clearance_receipt()
+                )
+
+    def test_a_clearance_receipt_must_belong_to_its_own_job_and_gate(self) -> None:
+        adapter, _ = self.load_adapter()
+        with self.assertRaisesRegex(FakeValidationError, "own Roof Job"):
+            with adapter.production_gate_clearance_context(
+                self.clearing_gate(roof_job="job-2"), self.gate_clearance_receipt()
+            ):
+                pass
+        with self.assertRaisesRegex(FakeValidationError, "own gate's proof slot"):
+            with adapter.production_gate_clearance_context(
+                self.clearing_gate(gate="Weather"), self.gate_clearance_receipt()
+            ):
+                pass
 
     def test_facet_design_projection_records_require_private_context_and_are_immutable(self) -> None:
         adapter, _ = self.load_adapter(

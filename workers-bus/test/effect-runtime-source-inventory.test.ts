@@ -66,6 +66,11 @@ const OUTBOUND_FETCH_INVENTORY: Record<string, InventoryEntry> = {
   },
   "operations.ts": { kind: "read-only" },
   "photos.ts": { kind: "read-only" },
+  "production-gate-clearance.ts": {
+    kind: "governed-unrouted",
+    discipline:
+      "caller idempotency key plus an immutable, canonical-JSON, checksummed R2 receipt written before the single Frappe clearance attempt; the command converges on replay and refuses a differing clearance of an already-cleared gate",
+  },
   "solar.ts": { kind: "read-only" },
   "work-package-actions.ts": { kind: "runtime-routed" },
 };
@@ -185,7 +190,19 @@ test("governed-unrouted mutation adapters are exactly the recorded debt, each wi
   // runtime means moving it to runtime-routed, not editing its discipline.
   assert.deepEqual(
     unrouted.map(([file]) => file).sort(),
-    ["customer-portal-decision.ts", "fleet-actions.ts", "measurements.ts"],
+    // ELEC-122/ELEC-125: `production-gate-clearance.ts` joins the recorded debt as a
+    // reviewed IRO-38 decision, not a default. It is the same shape as the two Frappe
+    // command adapters already here - evidence minted and stored immutably BEFORE the
+    // single provider attempt, replay convergence on the Frappe side - and re-seating
+    // all three onto the canonical runtime is one piece of work, not three. It leaves
+    // this list entirely at the IRO-195 cutover, when the clearance becomes a D1 write
+    // with no outbound call at all.
+    [
+      "customer-portal-decision.ts",
+      "fleet-actions.ts",
+      "measurements.ts",
+      "production-gate-clearance.ts",
+    ],
     "the governed-unrouted set changed: shrinking it means reclassifying to runtime-routed; growing it is a reviewed IRO-38 decision, not a default",
   );
   for (const [file, entry] of unrouted) {

@@ -238,6 +238,31 @@ describe("ProductionRunwayPage", () => {
     expect(screen.getByText(/does not infer missing gates/i)).toBeVisible();
   });
 
+  it("only offers to clear a lock when the read model says this session may", async () => {
+    const readOnly = renderRunway();
+
+    await screen.findByRole("heading", { name: "Production runway" });
+    // The default model does not grant `production_gate.clear`, so a blocked job
+    // shows its locks and no way to touch them.
+    expect(screen.getByLabelText("Materials: Blocked")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Clear Materials" })).not.toBeInTheDocument();
+
+    readOnly.unmount();
+    vi.mocked(loadProductionRunway).mockResolvedValue(
+      model({
+        allowed_actions: [
+          "job.read",
+          "production.read",
+          "production_gate.clear",
+          "production_schedule_approval.prepare",
+        ],
+      }),
+    );
+    renderRunway();
+
+    expect(await screen.findByRole("button", { name: "Clear Materials" })).toBeVisible();
+  });
+
   it("keeps a returned requested-delivery date visible without shifting the calendar day", async () => {
     vi.mocked(loadProductionRunway).mockResolvedValue(
       model({

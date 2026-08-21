@@ -418,6 +418,21 @@ _TRUSTED_CUSTOMER_DECISION: ContextVar[Any | None] = ContextVar(
     "ironwrap_trusted_customer_decision",
     default=None,
 )
+# RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era, superseded by
+# IRO-195's D1-native production-gate state; delete this ContextVar,
+# `PRODUCTION_GATE_CLEARANCE_EVIDENCE_FIELDS`,
+# `_production_gate_clearance_evidence_snapshot`, `production_gate_clearance_context`,
+# `_production_gate_clearance_waiver_actor` and their two call sites below together
+# with `production_gate_api`, when the runway's gate rows stop living in Frappe.
+#
+# What one bounded production-gate clearance is allowed to do: `(gate_name,
+# waiver_actor, evidence_snapshot)`.  It never widens gate authority - that already
+# belongs to IronWrap Owner and IronWrap Production in `access_control` - it only
+# names the one gate, the one Evidence Item minted from the Worker's stored receipt,
+# and the one human a waiver is attributed to.
+_TRUSTED_PRODUCTION_GATE_CLEARANCE: ContextVar[
+    tuple[str, str | None, tuple[tuple[str, str], ...] | None] | None
+] = ContextVar("ironwrap_trusted_production_gate_clearance", default=None)
 _TRUSTED_WORK_PACKAGE_TRANSITION: ContextVar[
     tuple[str, tuple[tuple[str, str], ...]] | None
 ] = ContextVar(
@@ -656,6 +671,36 @@ CUSTOMER_CONTRACT_JOB_TENTATIVE_STATUSES = frozenset(
 # as its own tuple rather than shared with the acceptance lane: the two identities are
 # deliberately separate, and a field one lane later adds must not silently widen the other.
 CUSTOMER_DECISION_EVIDENCE_FIELDS = (
+    "evidence_id",
+    "device_action_id",
+    "roof_job",
+    "evidence_type",
+    "proof_owner",
+    "proof_slot",
+    "source_system",
+    "r2_key",
+    "content_checksum",
+    "checksum_algorithm",
+    "content_type",
+    "content_length",
+    "capture_actor",
+    "captured_at",
+    "sync_state",
+    "verified_at",
+    "verification_source",
+    "customer_safe",
+    "summary",
+)
+# The four Select fields Frappe fills from their own defaults during `insert()` -
+# `evidence_freshness`, `evidence_conflict_state`, `evidence_verification` and
+# `evidence_disposition` - are deliberately absent, exactly as they are from the
+# contract-acceptance and portal-decision receipt tuples above: the snapshot is
+# taken before the insert, so including a field the framework is about to fill
+# would make every legitimate issuance look like drift (ELEC-117 finding 1).
+# RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era.  The receipt
+# this tuple describes is minted Worker-side and stored in R2 before Frappe is called;
+# only the Evidence Item projection of it retires with the gate rows.
+PRODUCTION_GATE_CLEARANCE_EVIDENCE_FIELDS = (
     "evidence_id",
     "device_action_id",
     "roof_job",
@@ -1100,6 +1145,14 @@ def _customer_decision_evidence_snapshot(document: Any) -> tuple[tuple[str, str]
     return _runtime_snapshot(document, CUSTOMER_DECISION_EVIDENCE_FIELDS)
 
 
+def _production_gate_clearance_evidence_snapshot(
+    document: Any,
+) -> tuple[tuple[str, str], ...]:
+    # RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era, superseded
+    # by IRO-195's D1-native production-gate state.
+    return _runtime_snapshot(document, PRODUCTION_GATE_CLEARANCE_EVIDENCE_FIELDS)
+
+
 def _facet_design_projection_evidence_snapshot(
     document: Any,
 ) -> tuple[tuple[str, str], ...]:
@@ -1464,6 +1517,74 @@ def customer_contract_job_transition_context(job: Any):
 
 
 @contextmanager
+def production_gate_clearance_context(
+    gate: Any, evidence: Any = None, waiver_actor: Any = None
+):
+    """Authorize exactly one bounded production-gate clearance.
+
+    RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era, superseded
+    by IRO-195's D1-native production-gate state; delete with `production_gate_api`.
+    Both bindings below exist only because a Frappe write arrives carrying the bus
+    principal rather than the person: a D1-native clearance is written by the Worker
+    route that already holds the session, so there is nothing left to re-attribute.
+
+    Two things need naming, and each is scoped to this one gate row.
+
+    A **verified** clearance mints exactly one Evidence Item, and it must be bound
+    to the same Roof Job and filed in the same gate's proof slot as the row being
+    cleared - otherwise this command would be a way to attach any receipt to any
+    gate.
+
+    A **waiver** mints nothing but has to name the human who made it.  The waiver
+    rule in `validate_business_document` predates every bounded command and reads
+    the attribution off `frappe.session.user`, which for a Worker-issued command is
+    the integration principal rather than the person who decided.  Naming the actor
+    here keeps that rule's meaning exactly - a waiver is attributed to a real
+    owner-level human, and that human's roles are what the rule checks - instead of
+    either attributing the decision to the bus or dropping the check.
+    """
+
+    if evidence is not None:
+        if str(evidence.get("roof_job") or "") != str(gate.get("roof_job") or ""):
+            frappe.throw(
+                "A production-gate clearance receipt must belong to the gate's own Roof Job.",
+                exc=frappe.ValidationError,
+            )
+        if str(evidence.get("proof_slot") or "") != str(gate.get("gate") or ""):
+            frappe.throw(
+                "A production-gate clearance receipt must be filed in its own gate's proof slot.",
+                exc=frappe.ValidationError,
+            )
+    token = _TRUSTED_PRODUCTION_GATE_CLEARANCE.set(
+        (
+            str(gate.get("name") or ""),
+            None if waiver_actor is None else str(waiver_actor),
+            None
+            if evidence is None
+            else _production_gate_clearance_evidence_snapshot(evidence),
+        )
+    )
+    try:
+        yield
+    finally:
+        _TRUSTED_PRODUCTION_GATE_CLEARANCE.reset(token)
+
+
+def _production_gate_clearance_waiver_actor(document: Any) -> str | None:
+    """The human this bounded command attributed a waiver of THIS gate to.
+
+    RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era, superseded
+    by IRO-195's D1-native production-gate state; delete with
+    `production_gate_clearance_context`.
+    """
+
+    context = _TRUSTED_PRODUCTION_GATE_CLEARANCE.get()
+    if context is None or context[1] is None:
+        return None
+    return context[1] if context[0] == str(document.get("name") or "") else None
+
+
+@contextmanager
 def customer_decision_issuance_context(evidence: Any):
     """Authorize one exact portal-decision receipt Evidence Item.
 
@@ -1679,6 +1800,15 @@ def validate_evidence_verification_mutation(document: Any) -> None:
     if (
         customer_contract_context is not None
         and customer_contract_context[0] == _customer_contract_evidence_snapshot(document)
+    ):
+        return
+    # RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era; this
+    # branch goes with `production_gate_api` and its context manager.
+    production_gate_context = _TRUSTED_PRODUCTION_GATE_CLEARANCE.get()
+    if (
+        production_gate_context is not None
+        and production_gate_context[2]
+        == _production_gate_clearance_evidence_snapshot(document)
     ):
         return
     frappe.throw(
@@ -3764,7 +3894,19 @@ def validate_business_document(document: Any, kind: str) -> None:
     if kind in {"job_compliance_record", "production_gate_state"} and document.get(
         "status" if kind == "job_compliance_record" else "state"
     ) == "Waived":
-        actor = getattr(getattr(frappe, "session", None), "user", None)
+        # RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era - the
+        # `_production_gate_clearance_waiver_actor(document) or` prefix below, not the
+        # rule.  The rule itself is the business bar and survives the cutover; only
+        # the bounded command's re-attribution retires with `production_gate_api`.
+        #
+        # A Desk waiver is made by whoever is signed in.  A waiver made through the
+        # bounded production-gate clearance command is made by the actor that command
+        # authorized and the Worker integration principal only carries it, so the
+        # attribution and the role bar below both apply to that actor.  Either way the
+        # rule is unchanged: a waiver names one owner-level human who made it.
+        actor = _production_gate_clearance_waiver_actor(document) or getattr(
+            getattr(frappe, "session", None), "user", None
+        )
         if not actor or actor == "Guest" or document.get("waived_by") != actor:
             frappe.throw(
                 "a waiver must be attributed to the current owner-level actor",

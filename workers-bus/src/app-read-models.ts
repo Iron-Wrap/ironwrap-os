@@ -1205,6 +1205,9 @@ export async function buildProductionRunwayReadModel(
     Boolean(auth.session.frappe_user_id?.trim()) &&
     productionScheduleApprovalBrokerConfig(env) !== null &&
     productionScheduleApprovalDecisionConfig(env) !== null;
+  const gateClearanceAllowed =
+    auth.permissions.includes("production:clear_gate") &&
+    Boolean(auth.session.frappe_user_id?.trim());
   const [jobs, assignments, crewProfiles] = await Promise.all([
     listOfficeProductionFrappeResource(
       env,
@@ -1440,6 +1443,11 @@ export async function buildProductionRunwayReadModel(
     allowed_actions: [
       "job.read",
       "production.read",
+      // The clearing surface reads its affordance from here rather than from the
+      // role name, for the same reason schedule preparation does: a session whose
+      // app user carries no Frappe identity has nobody to attribute a clearance
+      // to, and the route refuses it.
+      ...(gateClearanceAllowed ? ["production_gate.clear"] : []),
       ...(schedulePreparationConfigured &&
       crewProfilesComplete &&
       crews.length > 0

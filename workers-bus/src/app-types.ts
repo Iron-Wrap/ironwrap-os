@@ -243,6 +243,12 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
     "sales:read",
     "estimator:read",
     "production:read",
+    // Clearing a scheduling gate is a write on the production runway, and it is
+    // granted exactly where `access_control.DOCTYPE_ROLE_MATRIX` already grants
+    // gate authority in Frappe: IronWrap Owner and IronWrap Production. `ops`
+    // reads the runway and changes nothing on it, the same way it reads the money
+    // desk and changes nothing there.
+    "production:clear_gate",
     "approvals:read",
     "approvals:prepare",
     "approvals:decide",
@@ -280,7 +286,14 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly string[]>> = {
     "approvals:read",
     "approvals:prepare",
   ],
-  production: ["session:read", "now:read", "jobs:read:any", "production:read", "authority:read"],
+  production: [
+    "session:read",
+    "now:read",
+    "jobs:read:any",
+    "production:read",
+    "production:clear_gate",
+    "authority:read",
+  ],
   accounting: [
     "session:read",
     "now:read",

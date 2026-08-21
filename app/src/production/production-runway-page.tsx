@@ -20,6 +20,7 @@ import { ErrorState } from "../components/ui/state-panel";
 import { cn } from "../lib/cn";
 import { roleCanAccess, type AppRole } from "../lib/roles";
 import { loadProductionRunway } from "./production-api";
+import { GateClearancePanel } from "./production-gate-clearance-panel";
 import type {
   ProductionRunwayJob,
   ProductionRunwayLane,
@@ -136,6 +137,10 @@ function ProductionRunwayScreen({
   const canPrepareSchedule =
     roleCanAccess(role, "owner") &&
     model.allowed_actions.includes("production_schedule_approval.prepare");
+  // Server-derived, not role-derived: the read model already knows whether this
+  // session's app user carries the Frappe identity a clearance is attributed to,
+  // so a button that would only ever 403 is never drawn.
+  const canClearGates = model.allowed_actions.includes("production_gate.clear");
 
   return (
     <section className="mx-auto max-w-7xl space-y-6 pb-4">
@@ -178,6 +183,7 @@ function ProductionRunwayScreen({
             timeZone={timeZone}
             canOpenJob={canOpenJob}
             canPrepareSchedule={canPrepareSchedule}
+            canClearGates={canClearGates}
           />
         ))}
       </div>
@@ -270,6 +276,7 @@ function RunwayLane({
   timeZone,
   canOpenJob,
   canPrepareSchedule,
+  canClearGates,
 }: {
   lane: ProductionRunwayLane;
   jobs: readonly ProductionRunwayJob[];
@@ -277,6 +284,7 @@ function RunwayLane({
   timeZone: string;
   canOpenJob: boolean;
   canPrepareSchedule: boolean;
+  canClearGates: boolean;
 }) {
   const copy = laneCopy[lane];
   const Icon = copy.icon;
@@ -310,6 +318,7 @@ function RunwayLane({
                 tone={copy.tone}
                 canOpenJob={canOpenJob}
                 canPrepareSchedule={canPrepareSchedule}
+                canClearGates={canClearGates}
               />
             </li>
           ))}
@@ -330,6 +339,7 @@ function RunwayJobCard({
   tone,
   canOpenJob,
   canPrepareSchedule,
+  canClearGates,
 }: {
   job: ProductionRunwayJob;
   locale: string;
@@ -337,6 +347,7 @@ function RunwayJobCard({
   tone: string;
   canOpenJob: boolean;
   canPrepareSchedule: boolean;
+  canClearGates: boolean;
 }) {
   const schedule = formatDateTime(job.assignment?.scheduled_start ?? null, locale, timeZone);
   const gateCoverage =
@@ -427,6 +438,7 @@ function RunwayJobCard({
         <p className="mt-2 text-xs leading-5 text-muted">
           Completion is reviewed at closeout, not before scheduling.
         </p>
+        {canClearGates ? <GateClearancePanel job={job} /> : null}
       </div>
 
       {job.material_attention.length > 0 ? (

@@ -1189,11 +1189,11 @@ export const REPLAY_NOOP_ERRORS = [
 
 export interface AutoReplayCandidate {
   envelope_id: string;
-  /** Sweep replays already booked for this envelope; the attempt cap counts these. */
+  /** Sweep replays booked for the CURRENT outage episode; the attempt cap counts these. */
   attempts: number;
-  /** Most recent sweep replay, or null when the sweep has never touched this envelope. */
+  /** Most recent sweep replay of the current episode, or null when it has not been touched yet. */
   last_attempt_at: string | null;
-  /** Oldest open dead-letter row, which is the backoff clock before the first attempt. */
+  /** Oldest open dead-letter row, which opens the episode and is the pre-first-attempt clock. */
   dead_since: string;
 }
 
@@ -1203,25 +1203,48 @@ export interface AutoReplayCandidate {
  * Deliberately a separate query rather than a filter on `listReplayableDeadEnvelopeIds`: that one
  * also backs the admin replay endpoint, so narrowing it would make manual replay impossible for
  * exactly the envelopes that exhausted their automatic attempts and need a human most.
+ *
+ * ## Why `dead_letter` is collapsed before the ledger is joined (ELEC-137 defect 1)
+ *
+ * `dead_letter` holds one row per dead-letter EVENT, so one envelope in one outage accumulates a
+ * fresh open row every time a replay re-dies. Joining `replay_requests` straight onto that table
+ * multiplies rows: two open dead-letter rows against one real attempt reported `attempts = 2`, and
+ * the cap fired at roughly half its configured budget. The `ep` sub-select reduces the envelope to
+ * exactly one row first, so `COUNT(r.run_id)` counts ledger rows and nothing else.
+ *
+ * ## Why the ledger join is bounded by `dead_since` (ELEC-137 defect 2)
+ *
+ * The cap is per outage episode, not per lifetime. An episode opens with the envelope's oldest
+ * OPEN dead-letter row and closes when `markDeadLettersRecovered` closes every row it owns — which
+ * is why the boundary is `MIN(ts)` over open rows and not the newest row: a re-death mid-outage
+ * belongs to the episode already running. Without `r.created_at >= ep.dead_since` an envelope that
+ * ever exhausted its attempts inherited that spent count forever, and a later unrelated death was
+ * given up with zero automatic attempts — permanently manual from then on.
  */
 export async function listAutoReplayCandidates(
   env: Env,
   limit: number,
 ): Promise<AutoReplayCandidate[]> {
   const res = await env.DB.prepare(
-    `SELECT d.envelope_id AS envelope_id,
+    `SELECT ep.envelope_id AS envelope_id,
             COUNT(r.run_id) AS attempts,
             MAX(r.created_at) AS last_attempt_at,
-            MIN(d.ts) AS dead_since
-     FROM dead_letter d
-     INNER JOIN envelopes e ON e.envelope_id = d.envelope_id
+            ep.dead_since AS dead_since
+     FROM (
+       SELECT d.envelope_id AS envelope_id, MIN(d.ts) AS dead_since
+       FROM dead_letter d
+       WHERE d.recovered = 0 AND d.envelope_id IS NOT NULL
+       GROUP BY d.envelope_id
+     ) ep
+     INNER JOIN envelopes e ON e.envelope_id = ep.envelope_id
      LEFT JOIN replay_requests r
-            ON r.envelope_id = d.envelope_id
+            ON r.envelope_id = ep.envelope_id
            AND r.approved_by = ?
+           AND r.created_at >= ep.dead_since
            AND (r.last_error IS NULL OR r.last_error NOT IN (?, ?))
-     WHERE d.recovered = 0 AND e.status = 'dead' AND d.envelope_id IS NOT NULL
-     GROUP BY d.envelope_id
-     ORDER BY MIN(d.ts) ASC
+     WHERE e.status = 'dead'
+     GROUP BY ep.envelope_id, ep.dead_since
+     ORDER BY ep.dead_since ASC
      LIMIT ?`,
   ).bind(
     DEAD_LETTER_SWEEP_APPROVER,

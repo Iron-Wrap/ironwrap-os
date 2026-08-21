@@ -161,6 +161,11 @@ function fakeEnv(options: FakeOptions = {}) {
       const rows = [...deadSince].map(([envelope_id, dead_since]) => {
         const booked = [...replayRequests.values()].filter((row) =>
           row.envelope_id === envelope_id && row.approved_by === approver &&
+          // The episode bound the real query carries (`r.created_at >= ep.dead_since`). Without it
+          // an envelope inherited every attempt it had ever spent, so one exhausted outage made it
+          // manual-only for life -- ELEC-137 defect 2. The real SQL is exercised against real
+          // SQLite in dead-letter-sweep-episodes.test.ts; this double only has to agree with it.
+          row.created_at >= dead_since &&
           (row.last_error === null || !noop.has(row.last_error))
         );
         const stamps = booked.map((row) => row.created_at).sort();
@@ -1154,15 +1159,59 @@ function ageDeadLetters(
   }
 }
 
-/** Book a completed sweep replay for `envelopeId`, the way a previous tick would have left it. */
+type FakeDeadLetter = { envelope_id: string; recovered: number; ts: string };
+
+/** The envelope's open outage episode: `MIN(ts)` over its open rows, exactly as the query reads it. */
+function deadSince(deadLetters: FakeDeadLetter[], envelopeId: string): string {
+  return deadLetters
+    .filter((row) => row.envelope_id === envelopeId && row.recovered === 0)
+    .map((row) => row.ts)
+    .sort()[0]!;
+}
+
+/**
+ * The run id the sweep books, mirroring `deadLetterSweepRunId`.
+ *
+ * Attempt numbers restart at 1 every episode, so the id carries the episode stamp too: without it
+ * a second outage's first attempt reused the first outage's run id and read back its cached
+ * outcome, queueing nothing (ELEC-137 defect 4).
+ */
+function sweepRunId(deadLetters: FakeDeadLetter[], envelopeId: string, attempt: number): string {
+  const episode = deadSince(deadLetters, envelopeId).replace(/[^0-9]/g, "").slice(0, 17);
+  return `dls-${envelopeId}-${episode}-${attempt}`;
+}
+
+/**
+ * A re-death inside the SAME outage: one more open row, and the envelope back to `dead`.
+ *
+ * Adding a row rather than re-stamping the existing one is the point. The episode is anchored at
+ * its FIRST open row, so a re-death must not move `dead_since` -- and the fan-out this creates
+ * (two open rows against one real attempt) is exactly what the shipped query miscounted.
+ */
+function redeath(
+  deadLetters: FakeDeadLetter[],
+  statuses: Map<string, string>,
+  envelopeId: string,
+): void {
+  deadLetters.push({ envelope_id: envelopeId, recovered: 0, ts: new Date().toISOString() });
+  statuses.set(envelopeId, "dead");
+}
+
+/**
+ * Book a completed sweep replay for `envelopeId`, the way a previous tick would have left it.
+ *
+ * `minutesAgo` must be inside the envelope's open episode (fewer minutes than its dead-letter age),
+ * or the attempt belongs to a resolved outage and the cap correctly ignores it.
+ */
 function seedSweepAttempts(
   replayRequests: Map<string, Record<string, unknown>>,
+  deadLetters: FakeDeadLetter[],
   envelopeId: string,
   attempts: number,
-  minutesAgo = 600,
+  minutesAgo = 300,
 ): void {
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    const runId = `dls-${envelopeId}-${attempt}`;
+    const runId = sweepRunId(deadLetters, envelopeId, attempt);
     const at = new Date(Date.now() - minutesAgo * MINUTE).toISOString();
     replayRequests.set(runId, {
       run_id: runId,
@@ -1209,7 +1258,7 @@ test("the sweep auto-replays due dead-letter envelopes and books each under the 
     assert.equal(row.selection, "targeted");
     assert.ok(row.envelope_id === A || row.envelope_id === B);
     assert.equal(row.status, "completed");
-    assert.equal(row.run_id, `dls-${row.envelope_id}-1`);
+    assert.equal(row.run_id, sweepRunId(deadLetters, row.envelope_id!, 1));
     // Trap 2: migration 0010 CHECKs length(reason) BETWEEN 10 AND 500 and approved_by 3..128.
     assert.ok(row.reason.length >= 10 && row.reason.length <= 500);
     assert.ok(row.approved_by.length >= 3 && row.approved_by.length <= 128);
@@ -1247,8 +1296,8 @@ test("an envelope inside its backoff window is skipped, and replayed once the wi
   const { env, deadLetters, queue, replayRequests } = fakeEnv();
   ageDeadLetters(deadLetters, 600);
   // One booked attempt => the next is due 10 minutes after it, not 5.
-  seedSweepAttempts(replayRequests, A, 1, 6);
-  seedSweepAttempts(replayRequests, B, 1, 11);
+  seedSweepAttempts(replayRequests, deadLetters, A, 1, 6);
+  seedSweepAttempts(replayRequests, deadLetters, B, 1, 11);
 
   const result = await sweepDeadLetterAutoReplay(env as never);
 
@@ -1256,14 +1305,14 @@ test("an envelope inside its backoff window is skipped, and replayed once the wi
   assert.equal(result.due, 1);
   assert.equal(result.replayed, 1);
   assert.deepEqual(queue, [B]);
-  assert.equal(replayRequests.get(`dls-${B}-2`)?.status, "completed");
-  assert.equal(replayRequests.has(`dls-${A}-2`), false);
+  assert.equal(replayRequests.get(sweepRunId(deadLetters, B, 2))?.status, "completed");
+  assert.equal(replayRequests.has(sweepRunId(deadLetters, A, 2)), false);
 });
 
 test("the sweep gives up at the attempt cap and leaves the envelope for manual replay", async () => {
   const { env, statuses, deadLetters, queue, replayRequests } = fakeEnv();
   ageDeadLetters(deadLetters, 600);
-  seedSweepAttempts(replayRequests, A, 5);
+  seedSweepAttempts(replayRequests, deadLetters, A, 5);
 
   const result = await sweepDeadLetterAutoReplay(env as never);
 
@@ -1274,7 +1323,7 @@ test("the sweep gives up at the attempt cap and leaves the envelope for manual r
   // Terminal for the SWEEP only: the envelope stays dead with its dead letter open, which is what
   // keeps the admin path below possible.
   assert.equal(statuses.get(A), "dead");
-  assert.equal(replayRequests.has(`dls-${A}-6`), false);
+  assert.equal(replayRequests.has(sweepRunId(deadLetters, A, 6)), false);
 
   // AC #1: manual replay still works after the cap.
   const response = await worker.fetch(new Request("https://bus.example/admin/replay", {
@@ -1303,9 +1352,8 @@ test("each attempt takes a fresh run id, so a repeat sweep re-queues instead of 
 
   // The replay did not stick: the envelope died again and its dead letter is still open. Backdate
   // the booked attempt so the second tick is past the 10-minute window one attempt earns.
-  statuses.set(A, "dead");
-  ageDeadLetters(deadLetters, 600, A);
-  const booked = replayRequests.get(`dls-${A}-1`)!;
+  redeath(deadLetters, statuses, A);
+  const booked = replayRequests.get(sweepRunId(deadLetters, A, 1))!;
   booked.created_at = new Date(Date.now() - 30 * MINUTE).toISOString();
 
   const second = await sweepDeadLetterAutoReplay(env as never);
@@ -1313,7 +1361,7 @@ test("each attempt takes a fresh run id, so a repeat sweep re-queues instead of 
   assert.equal(second.replayed, 1);
   // Trap 1: claimReplayRequest keys on run_id. Reusing `dls-<A>-1` would return the cached
   // completed outcome and queue nothing at all.
-  assert.equal(replayRequests.get(`dls-${A}-2`)?.status, "completed");
+  assert.equal(replayRequests.get(sweepRunId(deadLetters, A, 2))?.status, "completed");
   assert.equal(queue.filter((id) => id === A).length, 2);
 });
 
@@ -1328,7 +1376,7 @@ test("losing a race to an admin replay does not burn one of the envelope's autom
   assert.equal(raced.conflicted, 1); // A was already claimed elsewhere
   assert.equal(raced.failed, 0);
   assert.deepEqual(queue, [B]);
-  assert.equal(replayRequests.get(`dls-${A}-1`)?.last_error, "dead_letter_replay_conflict");
+  assert.equal(replayRequests.get(sweepRunId(deadLetters, A, 1))?.last_error, "dead_letter_replay_conflict");
 
   // Trap 4: that ledger row records "nothing left to replay", not a failed delivery attempt, so it
   // is excluded from the attempt count -- the exact retry reclaims the same run id and re-queues.
@@ -1338,15 +1386,15 @@ test("losing a race to an admin replay does not burn one of the envelope's autom
 
   assert.equal(retry.replayed, 1);
   assert.equal(retry.conflicted, 0);
-  assert.equal(replayRequests.get(`dls-${A}-1`)?.status, "completed");
-  assert.equal(replayRequests.has(`dls-${A}-2`), false);
+  assert.equal(replayRequests.get(sweepRunId(deadLetters, A, 1))?.status, "completed");
+  assert.equal(replayRequests.has(sweepRunId(deadLetters, A, 2)), false);
   assert.ok(queue.includes(A));
 });
 
 test("the sweep counts envelopes it replayed that have since settled, and reports a truncated scan", async () => {
   const { env, statuses, deadLetters, replayRequests } = fakeEnv();
   ageDeadLetters(deadLetters, 600);
-  seedSweepAttempts(replayRequests, C, 1); // C's envelope is 'pushed': a completed recovery
+  seedSweepAttempts(replayRequests, deadLetters, C, 1); // C's envelope is 'pushed': a completed recovery
 
   const result = await sweepDeadLetterAutoReplay(
     Object.assign(env, { DEAD_LETTER_AUTO_REPLAY_SCAN_LIMIT: "1" }) as never,

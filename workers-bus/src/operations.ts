@@ -926,6 +926,12 @@ export function deadLetterReplayDueAt(
  * already owned by `bumpAttempt` (intake/bridge) and `bumpErpNextMirrorAttempt` (mirror), so
  * reusing it would conflate three retry semantics and let unrelated traffic reset the cap.
  *
+ * The cap is per outage EPISODE, not per envelope lifetime: `listAutoReplayCandidates` counts only
+ * the ledger rows booked since the envelope's currently open dead-letter run began. An envelope
+ * that exhausted its budget in one outage, was recovered, and dies again months later for an
+ * unrelated reason gets the full budget again — otherwise one bad day would make an envelope
+ * manual-only forever, which is the opposite of "the outage heals itself".
+ *
  * Reaching the cap ends AUTOMATIC recovery only. The envelope stays `dead` with its dead-letter row
  * open, so `POST /admin/replay` can still replay it — which is the whole point of the cap.
  */
@@ -995,7 +1001,7 @@ export async function sweepDeadLetterAutoReplay(env: Env): Promise<DeadLetterSwe
         // CHECK), which would erase the per-envelope attribution the attempt cap is counted from.
         { envelopeId: candidate.envelope_id, all: false },
         {
-          run_id: deadLetterSweepRunId(candidate.envelope_id, attempt),
+          run_id: deadLetterSweepRunId(candidate.envelope_id, candidate.dead_since, attempt),
           approved_by: store.DEAD_LETTER_SWEEP_APPROVER,
           reason: deadLetterSweepReason(candidate.envelope_id, attempt, maxAttempts),
         },
@@ -1024,15 +1030,26 @@ export async function sweepDeadLetterAutoReplay(env: Env): Promise<DeadLetterSwe
 }
 
 /**
- * A run id unique per (envelope, attempt).
+ * A run id unique per (envelope, episode, attempt).
  *
  * `claimReplayRequest` keys on `run_id`, so a reused id would return the CACHED outcome and queue
  * nothing at all -- a sweep that silently no-ops. Deriving the id from the attempt count rather
  * than from the wall clock also makes overlapping ticks safe: the loser sees `in_progress` instead
  * of publishing the envelope to the queue a second time.
+ *
+ * The episode stamp is what keeps both of those true at once (ELEC-137). Attempt numbers restart
+ * at 1 for each new outage episode, so `(envelope, attempt)` alone collided across episodes: the
+ * first attempt of a second outage reused the first outage's run id, read back its cached
+ * `completed` outcome, and was booked as a conflict that queued nothing -- for every remaining
+ * attempt, forever. That was latent only while the attempt cap still leaked across episodes and
+ * never let a second episode start; scoping the cap to one episode is exactly what would have made
+ * it live. `dead_since` is the episode's identity and is stable inside it (it is `MIN(ts)` over
+ * open dead-letter rows, and an episode only ever gains rows until recovery closes all of them),
+ * so it separates episodes without reintroducing a wall clock that would break overlapping ticks.
  */
-function deadLetterSweepRunId(envelopeId: string, attempt: number): string {
-  const suffix = `-${attempt}`;
+function deadLetterSweepRunId(envelopeId: string, deadSince: string, attempt: number): string {
+  const episode = deadSince.replace(/[^0-9]/g, "").slice(0, 17);
+  const suffix = `-${episode}-${attempt}`;
   const head = `dls-${envelopeId}`.slice(0, 128 - suffix.length);
   return `${head}${suffix}`;
 }

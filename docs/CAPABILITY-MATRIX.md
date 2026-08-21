@@ -39,12 +39,12 @@ implication.
       "child": 19
     },
     "d1_migrations": {
-      "count": 63,
-      "latest": "0080_replay_requests_envelope_idx.sql"
+      "count": 64,
+      "latest": "0081_dead_letter_terminal_recovery_backfill.sql"
     },
     "tests": {
       "pwa": 520,
-      "worker": 1049
+      "worker": 1053
     }
   },
   "proof_state_policy": {
@@ -208,9 +208,14 @@ Implemented:
 - Queue/retry/reconciliation behavior, including an automated dead-letter reconciliation sweep on
   the five-minute cron: dead envelopes are re-driven with exponential backoff and a bounded attempt
   cap, both counted from the `replay_requests` ledger rather than `envelopes.attempts`, which two
-  unrelated intake/mirror retry paths already own. Reaching the cap ends automatic recovery only —
-  the envelope stays `dead` with its dead-letter row open, so `POST /admin/replay` still works.
-  Migration `0080_replay_requests_envelope_idx.sql` adds the per-envelope index that read needs.
+  unrelated intake/mirror retry paths already own. The cap is scoped to one outage episode — the
+  ledger rows booked since the envelope's currently open dead-letter run began — so an envelope that
+  exhausted its budget once and recovered is not manual-only for life. Reaching the cap ends
+  automatic recovery only: the envelope stays `dead` with its dead-letter row open, so
+  `POST /admin/replay` still works. Migration `0080_replay_requests_envelope_idx.sql` adds the
+  per-envelope index that read needs; `0081_dead_letter_terminal_recovery_backfill.sql` closes the
+  dead-letter rows the terminal `jn_skipped` and `erpnext_no_token` skips stranded open before
+  ELEC-137 made both close them, which is what keeps `/admin/status` healing when the system does.
 - Idempotency and approval ledgers.
 - Backup/restore contracts with fail-closed target selection and immutable completion markers.
 

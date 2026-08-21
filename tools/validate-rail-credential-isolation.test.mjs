@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { dirname, resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { railAuthorizationHeader } from "../workers-bus/src/rail-frappe-credentials.ts";
 import {
+  assertEveryRailIssuerIsDeclared,
   IDENTITY_DOMAIN_DECLARATION,
+  ISOLATED_RAILS,
   validateRailCredentialIsolation,
+  verifyRailCredentialRouting,
+  verifySharedWriterRouting,
 } from "./validate-rail-credential-isolation.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -31,6 +37,12 @@ const SHARED_WRITER = {
   sharedWith: "field_evidence",
   authorizingFunction: "frappeFieldAuthorization",
   railDiscriminator: "work_package_api",
+  authorizingExport: "frappeFieldAuthorization",
+  railPaths: ["/api/method/ironwrap_roofing.work_package_api.capture_work_package_evidence"],
+  sharedPaths: [
+    "/api/method/ironwrap_roofing.field_evidence_api.record_verified_field_evidence",
+    "/api/resource/Field%20Check-in",
+  ],
 };
 
 const SHARED_WRITER_RAIL = {
@@ -327,5 +339,200 @@ test("a declared rail source whose text nobody read is rejected", () => {
         files: healthyFiles({ railSources: { [RAIL.rail]: {} } }),
       }),
     /is declared a fleet_capture source but its text was never read/,
+  );
+});
+
+// ---------------------------------------------------------------------------------------------
+// ELEC-143: the behavioural half. Every writer below is a REAL function, not a source string, and
+// every one of them satisfies the textual checks above — the reviewer's `false &&` bypass reads
+// correctly by construction. What separates them is what they return when called, which is the
+// only thing a credential-isolation control can honestly assert.
+// ---------------------------------------------------------------------------------------------
+
+/** The shared-rail half of the shipped writer, reproduced exactly. */
+function sharedFallback(env) {
+  if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET)
+    throw new Error("frappe_field_not_configured");
+  return `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`;
+}
+
+/** The real rail resolver, so a fake writer fails for its own reason and not for a fake one. */
+const railHeader = (env) => railAuthorizationHeader(env, "work_package");
+
+const WRITERS = {
+  healthy: (env, path) =>
+    path.includes("work_package_api") ? railHeader(env) : sharedFallback(env),
+
+  // The reviewer's exact bypass: an unreachable branch. Discriminator present, rail call present,
+  // both textually ahead of the shared fallback.
+  alwaysFalseGuard: (env, path) => {
+    if (false && path.includes("work_package_api")) return railHeader(env);
+    return sharedFallback(env);
+  },
+
+  negatedDiscriminator: (env, path) => {
+    if (!path.includes("work_package_api")) return railHeader(env);
+    return sharedFallback(env);
+  },
+
+  // Branch intact and first, but it hands the rail the shared pair.
+  hoistedSharedFallback: (env, path) => {
+    if (path.includes("work_package_api")) return sharedFallback(env);
+    return railHeader(env);
+  },
+
+  earlyReturn: (env, path) => {
+    return sharedFallback(env);
+    // eslint-disable-next-line no-unreachable
+    if (path.includes("work_package_api")) return railHeader(env);
+  },
+
+  deletedBranch: (env) => sharedFallback(env),
+
+  // Passes the "rail answers on its own pair" probe and leaks the moment a rotation leaves the
+  // binding unset for a minute: the shape a `??` fallback produces.
+  degradesWhenUnset: (env, path) => {
+    if (path.includes("work_package_api") && env.WORK_PACKAGE_FRAPPE_API_KEY) return railHeader(env);
+    return sharedFallback(env);
+  },
+
+  // The opposite failure: the discriminator swallows the still-shared rail, which now issues as
+  // an identity holding none of its grants.
+  overBroadDiscriminator: (env, path) =>
+    path.includes("api") ? railHeader(env) : sharedFallback(env),
+
+  // Builds the rail header itself instead of going through the rail resolver, so the bus pair
+  // pasted into the rail binding is accepted here even though `resolveRailFrappeCredential`
+  // refuses it everywhere else.
+  acceptsImpostorPair: (env, path) => {
+    if (path.includes("work_package_api")) {
+      if (!env.WORK_PACKAGE_FRAPPE_API_KEY || !env.WORK_PACKAGE_FRAPPE_API_SECRET)
+        throw new Error("work_package_frappe_not_configured");
+      return `token ${env.WORK_PACKAGE_FRAPPE_API_KEY}:${env.WORK_PACKAGE_FRAPPE_API_SECRET}`;
+    }
+    return sharedFallback(env);
+  },
+};
+
+const loading = (writer) => async () => ({ frappeFieldAuthorization: writer });
+
+function routeWriter(writer) {
+  return verifySharedWriterRouting(SHARED_WRITER_RAIL, SHARED_WRITER, loading(writer));
+}
+
+test("the shipped writer routes each rail to its own identity when executed", async () => {
+  // Guards every negative below: they must fail on their own defect, not on a broken harness.
+  assert.equal(await routeWriter(WRITERS.healthy), 3);
+});
+
+test("an unreachable rail branch is rejected even though it reads correctly", async () => {
+  // ELEC-143 finding 3, verbatim. This is the case the textual checks accept and CI shipped green.
+  await assert.rejects(
+    routeWriter(WRITERS.alwaysFalseGuard),
+    /answered .*work_package_api.* with the shared bus pair instead of the work_package rail's own pair/,
+  );
+});
+
+test("a negated discriminator is rejected", async () => {
+  await assert.rejects(
+    routeWriter(WRITERS.negatedDiscriminator),
+    /answered .*work_package_api.* with the shared bus pair/,
+  );
+});
+
+test("a rail branch that returns the shared pair is rejected", async () => {
+  await assert.rejects(
+    routeWriter(WRITERS.hoistedSharedFallback),
+    /answered .*work_package_api.* with the shared bus pair/,
+  );
+});
+
+test("an unconditional early return of the shared header is rejected", async () => {
+  await assert.rejects(
+    routeWriter(WRITERS.earlyReturn),
+    /answered .*work_package_api.* with the shared bus pair/,
+  );
+});
+
+test("a writer with no rail branch at all is rejected", async () => {
+  await assert.rejects(
+    routeWriter(WRITERS.deletedBranch),
+    /answered .*work_package_api.* with the shared bus pair/,
+  );
+});
+
+test("a rail that degrades to the shared pair when its binding is unset is rejected", async () => {
+  // Not reachable by reading either: this one genuinely routes correctly while configured.
+  await assert.rejects(
+    routeWriter(WRITERS.degradesWhenUnset),
+    /degrades to the shared identity instead of failing closed/,
+  );
+});
+
+test("a discriminator that swallows the still-shared rail is rejected", async () => {
+  await assert.rejects(
+    routeWriter(WRITERS.overBroadDiscriminator),
+    /instead of the shared bus pair: the discriminator now catches the field_evidence rail too/,
+  );
+});
+
+test("a writer that accepts the bus pair inside the rail binding is rejected", async () => {
+  await assert.rejects(
+    routeWriter(WRITERS.acceptsImpostorPair),
+    /bypasses resolveRailFrappeCredential\(\)'s shared-credential refusal/,
+  );
+});
+
+test("a writer that stopped exporting its authorizer is rejected", async () => {
+  // Un-exporting is the cheapest way to make the behavioural check unable to run; it must fail
+  // loudly rather than degrade to the textual checks it was built to replace.
+  await assert.rejects(
+    verifySharedWriterRouting(SHARED_WRITER_RAIL, SHARED_WRITER, async () => ({})),
+    /no longer exports frappeFieldAuthorization\(\)/,
+  );
+});
+
+test("a shared writer declared without an executable contract is rejected", async () => {
+  const { authorizingExport, railPaths, sharedPaths, ...textOnly } = SHARED_WRITER;
+  await assert.rejects(
+    verifySharedWriterRouting(SHARED_WRITER_RAIL, textOnly, loading(WRITERS.healthy)),
+    /without an executable contract/,
+  );
+});
+
+test("a rail set that declares no shared writer at all is rejected", async () => {
+  // De-listing the writer would otherwise delete the behavioural check with a one-line edit.
+  await assert.rejects(
+    verifyRailCredentialRouting({ rails: [RAIL], load: loading(WRITERS.healthy) }),
+    /no shared writer is declared on any rail/,
+  );
+});
+
+test("a Worker module that issues a rail without being declared a source is rejected", () => {
+  // The de-listing hole from the other side: the checks only see the sources a rail claims.
+  assert.throws(
+    () =>
+      assertEveryRailIssuerIsDeclared({
+        rails: [SHARED_WRITER_RAIL],
+        workerSources: {
+          "workers-bus/src/frappe-field.ts": "declared",
+          "workers-bus/src/some-new-writer.ts": 'railAuthorizationHeader(env, "work_package")',
+        },
+      }),
+    /some-new-writer\.ts calls railAuthorizationHeader\(env, "work_package"\) but is not declared a work_package source/,
+  );
+});
+
+test("the shipped Worker tree declares every module that reaches for a rail credential", () => {
+  const sources = Object.fromEntries(
+    readdirSync(join(root, "workers-bus/src"))
+      .filter((entry) => entry.endsWith(".ts"))
+      .map((entry) => [
+        `workers-bus/src/${entry}`,
+        readFileSync(join(root, "workers-bus/src", entry), "utf8"),
+      ]),
+  );
+  assert.doesNotThrow(() =>
+    assertEveryRailIssuerIsDeclared({ rails: ISOLATED_RAILS, workerSources: sources }),
   );
 });

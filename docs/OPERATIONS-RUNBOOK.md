@@ -493,8 +493,13 @@ Substitute `fleet_capture` / `ironwrap_fleet_capture_issuer_user` / `IronWrap Fl
    pair now fails: a capture issued with it must return `fleet_issuer_auth_mismatch`, not a write.
 
 `node tools/validate-rail-credential-isolation.mjs` asserts the repo-side half of this contract
-(role, user, provisioner, Worker binding, config surface) but it cannot see a live site; steps 4
-and 5 are the only proof that a rotation actually landed.
+(role, user, provisioner, Worker binding, config surface). For the one module that issues two
+rails it also EXECUTES the shipped authorizer — `frappe-field.ts` is imported and called with a
+real `work_package_api` path and a real `field_evidence_api` path under three credential
+configurations, and the identity each hands back is asserted, including that the work-package
+rail refuses rather than degrades to the bus pair when its binding is unset. Reading the routing
+as text accepted an unreachable branch (ELEC-143); calling it does not. The validator still
+cannot see a live site, so steps 4 and 5 remain the only proof that a rotation actually landed.
 
 ## Severity And Escalation
 

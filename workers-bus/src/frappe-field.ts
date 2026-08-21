@@ -519,8 +519,14 @@ async function postFrappeJson(
  * Frappe issuer identity; `field_evidence_api` and the Field Check-in resource remain the field-
  * evidence rail on the shared bus pair. Routing on the method path keeps the credential bound to
  * the rail actually being issued rather than to whichever module happens to hold the fetch.
+ *
+ * Exported for execution, not for reuse: `tools/validate-rail-credential-isolation.mjs` and
+ * `test/frappe-field.test.ts` call this with representative paths under
+ * several credential configurations and assert which identity comes back. Reading the routing
+ * as text cannot tell a live branch from a dead one (ELEC-143), so the isolation contract is
+ * pinned to what this function RETURNS. Callers inside the Worker stay in this module.
  */
-function frappeFieldAuthorization(env: AppEnv, path: string): string {
+export function frappeFieldAuthorization(env: AppEnv, path: string): string {
   if (path.includes("work_package_api"))
     return railAuthorizationHeader(env, "work_package");
   if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET)

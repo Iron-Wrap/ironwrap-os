@@ -827,6 +827,10 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     await store.setStatus(env, envelopeId, "erpnext_no_token", {
       last_error: "erpnext_no_token",
     });
+    // Terminal, and the sweep only reconsiders envelopes still `dead`, so nothing else will ever
+    // close this envelope's dead-letter rows. Leaving them open would hold /admin/status degraded
+    // forever after a replay that actually settled (ELEC-137 defect 3, same shape as jn_skipped).
+    await store.markDeadLettersRecovered(env, envelopeId);
     return;
   }
   // The owned operating record must exist before the temporary JobNimbus bridge. A bridge outage
@@ -890,6 +894,14 @@ async function handlePush(env: Env, envelopeId: string): Promise<void> {
     await store.setStatus(env, envelopeId, "jn_skipped", {
       last_error: "jobnimbus_disabled",
     });
+    // The skip IS the terminal outcome here, so a replayed dead envelope has recovered the moment
+    // it lands: close its dead-letter rows exactly as the `pushed` path does. Before ELEC-137 this
+    // branch was the one terminal success that never closed them, which left every
+    // JOBNIMBUS_ENABLED=false environment permanently `degraded` with an inflated
+    // `open_dead_letters` after a sweep or admin replay had already healed the envelope. Marked
+    // ahead of the Desk sync below on purpose: that sync is best-effort and never un-terminals the
+    // skip, so the recovery must not depend on it.
+    await store.markDeadLettersRecovered(env, envelopeId);
     const skippedRec: EnvelopeRecord = {
       ...rec,
       status: "jn_skipped",

@@ -1990,12 +1990,16 @@ test("the complete D1 migration chain applies cleanly and carries every schedule
     // heads #92-#97 hold every number from 0069 to 0078, so 0070..0078 were never free. 0080 is
     // the per-envelope replay_requests index the ELEC-52 dead-letter sweep reads its attempt cap
     // and backoff clock from: 0079 is `main`'s highest and #92-#97 stop at 0078, so 0080 was the
-    // first number free of both.
-    assert.equal(migrations.length, 63);
+    // first number free of both. 0081 is data-only — it defines no table, index or trigger, so it
+    // moves no schema-inventory count; it closes the dead-letter rows the two terminal skip paths
+    // stranded open before ELEC-137 fixed them forward, which is what keeps a stale row from a
+    // resolved outage out of the episode boundary the sweep's attempt cap is now scoped to. It
+    // took 0081 because `main` had just landed 0080 and open heads #92-#97 still stop at 0078.
+    assert.equal(migrations.length, 64);
     assert.equal(migrations[0], "0001_init.sql");
     assert.equal(
       migrations.at(-1),
-      "0080_replay_requests_envelope_idx.sql",
+      "0081_dead_letter_terminal_recovery_backfill.sql",
     );
     for (const migration of migrations) {
       if (migration === "0038_app_access_roles.sql") {

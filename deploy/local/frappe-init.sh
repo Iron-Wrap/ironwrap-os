@@ -55,6 +55,26 @@ pin_service_identities() {
   bench --site "$SITE" set-config ironwrap_customer_decision_service_user ironwrap-customer-decision@ironwrap.local
   bench --site "$SITE" set-config ironwrap_quickbooks_reconciliation_issuer_user ironwrap-quickbooks-issuer@ironwrap.local
   bench --site "$SITE" set-config ironwrap_facet_design_projection_service_user ironwrap-facet-projection@ironwrap.local
+  pin_tenant_constants
+}
+
+# RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era, superseded by
+# IRO-195's D1-native acceptance transition; delete with the producer that reads these.
+#
+# A Roof Job may not reach `Won` without a workflow profile and the locale-policy pair
+# (`domain_policy._validate_roof_job`), and nothing in the product produced any of the
+# three, so step 6 of the core workflow was structurally unreachable (ELEC-112).  They
+# are tenant reference constants rather than per-job facts, so they are pinned here
+# exactly like the service identities above; a real tenant pins its own blessed values
+# per docs/WHITE-LABEL-CLONE-PLAYBOOK.md, and an unpinned site fails its acceptance
+# closed rather than stamping a jurisdiction fact nobody blessed.  These values are the
+# LOCAL DEVELOPMENT stand-ins for Edmonton/Alberta, not legal advice.
+pin_tenant_constants() {
+  log "pinning tenant workflow-profile and locale-policy constants"
+  bench --site "$SITE" set-config ironwrap_default_workflow_profile "Residential Retail"
+  bench --site "$SITE" set-config ironwrap_locale_policy_version "ca-ab-local-dev"
+  bench --site "$SITE" set-config ironwrap_locale_policy_snapshot_json \
+    '{"country":"CA","province":"AB","source":"local-development-stand-in"}'
 }
 
 # The bench runs a COPY of the app (pip editable install of the copy), not the

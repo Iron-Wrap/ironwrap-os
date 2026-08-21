@@ -286,7 +286,12 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Finance": READ,
         "IronWrap Closeout": WRITE,
         "IronWrap Support": READ,
-        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: READ,
+        # RETIREMENT (IRO-195 / ELEC-115 Path A): compatibility-projection era.  The
+        # acceptance service may update an existing job and never create one; what it
+        # may change on that job is narrowed to one governed tentative-to-Won
+        # transition by `validate_customer_contract_job_transition_mutation`.  Restore
+        # this to READ when the D1-native acceptance transition ships.
+        CUSTOMER_ACCEPTANCE_SERVICE_ROLE: WRITE_EXISTING,
         CUSTOMER_DECISION_SERVICE_ROLE: READ,
         FACET_DESIGN_PROJECTION_SERVICE_ROLE: READ,
     },

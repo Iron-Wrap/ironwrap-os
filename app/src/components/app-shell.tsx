@@ -16,9 +16,9 @@ import { Button } from "./ui/button";
 import { SystemStatus } from "./system-status";
 
 const desktopActiveClassName =
-  "border-chrome-border bg-chrome-raised !text-chrome-foreground shadow-[inset_3px_0_0_var(--accent)]";
+  "border-chrome-border bg-chrome-raised !text-chrome-foreground shadow-[inset_0_-2px_0_var(--accent)]";
 const mobileActiveClassName =
-  "bg-surface-muted !text-foreground shadow-[inset_0_3px_0_var(--accent)]";
+  "bg-surface-muted !text-foreground shadow-[inset_0_2px_0_var(--accent)]";
 
 export function AppShell() {
   const session = useSession();
@@ -54,7 +54,7 @@ export function AppShell() {
       >
         Skip to main content
       </a>
-      <header className="safe-top sticky top-0 z-40 border-b bg-surface/92 shadow-[0_1px_0_color-mix(in_oklch,var(--foreground)_5%,transparent)] backdrop-blur-xl">
+      <header className="safe-top sticky top-0 z-40 border-b border-border bg-surface">
         <div className="mx-auto grid min-h-14 max-w-[100rem] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 px-4 sm:min-h-16 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:gap-x-3 sm:px-6">
           <Link
             to="/now"
@@ -108,9 +108,7 @@ export function AppShell() {
           aria-label="Main navigation"
         >
           <nav className="sticky top-20 space-y-1.5">
-            <p className="px-3 pb-2 text-[0.6875rem] font-extrabold uppercase tracking-[0.14em] text-chrome-muted">
-              Workspace
-            </p>
+            <p className="px-3 pb-2 text-xs font-semibold text-chrome-muted">Navigate</p>
             {items.map((item) => (
               <DesktopNavItem
                 key={item.to}

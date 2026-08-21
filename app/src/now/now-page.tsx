@@ -19,17 +19,17 @@ const FieldTodayPage = lazy(async () => ({
 }));
 
 const cardTone = {
-  critical: "border-danger/35 border-l-danger bg-danger-soft",
-  warning: "border-warning/35 border-l-warning bg-warning-soft",
-  neutral: "border-border border-l-border bg-surface-raised",
-  positive: "border-ok/35 border-l-ok bg-ok-soft",
+  critical: "border-danger/35 bg-danger-soft",
+  warning: "border-warning/35 bg-warning-soft",
+  neutral: "border-border bg-surface-raised",
+  positive: "border-ok/35 bg-ok-soft",
 } as const;
 
 const quickBooksCardTone: Record<QuickBooksNowCard["tone"], string> = {
-  attention: "border-warning/35 border-l-warning bg-warning-soft",
-  blocked: "border-warning/35 border-l-warning bg-surface-muted",
-  critical: "border-danger/35 border-l-danger bg-danger-soft",
-  muted: "border-border border-l-border bg-surface-muted",
+  attention: "border-warning/35 bg-warning-soft",
+  blocked: "border-warning/35 bg-surface-muted",
+  critical: "border-danger/35 bg-danger-soft",
+  muted: "border-border bg-surface-muted",
 };
 
 const sourceLabel: Record<NowResponse["sources"][number]["id"], string> = {
@@ -132,10 +132,7 @@ function NowScreen({
                 <CircleGauge className="size-6 text-accent" aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-muted">
-                  Work list
-                </p>
-                <h1 className="mt-1 text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
+                <h1 className="text-3xl font-black tracking-[-0.035em] text-balance sm:text-4xl">
                   {model.ui.title}
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-muted sm:text-base">
@@ -146,9 +143,6 @@ function NowScreen({
           </div>
           {model.ui.primary_action ? (
             <aside className="border-t border-border bg-surface-muted/45 p-5 sm:p-7 lg:border-t-0 lg:border-l lg:p-8">
-              <p className="mb-3 text-xs font-extrabold tracking-[0.14em] text-muted uppercase">
-                Next step
-              </p>
               <ActionWithContext
                 action={model.ui.primary_action}
                 citations={primaryCitations}
@@ -185,7 +179,7 @@ function NowScreen({
         <div className="space-y-8 lg:col-start-1 lg:row-start-1">
           {model.ui.sections.map((section, sectionIndex) => (
             <section key={section.id} aria-labelledby={`now-section-${sectionIndex}`}>
-              <header className="mb-4 border-l-4 border-accent pl-4 sm:pl-5">
+              <header className="mb-4 border-accent pl-4 sm:pl-5">
                 <h2
                   id={`now-section-${sectionIndex}`}
                   className="text-xl font-black tracking-[-0.025em] sm:text-2xl"
@@ -278,8 +272,8 @@ function NowCardView({
   const contextId = useId();
   if ("kind" in card) return <QuickBooksNowCardView card={card} />;
   return (
-    <Card className={cn("flex flex-col border-l-4 p-5 sm:p-6", cardTone[card.tone])}>
-      <p className="text-xs font-bold tracking-[0.12em] text-muted uppercase">{card.eyebrow}</p>
+    <Card className={cn("flex flex-col p-5 sm:p-6", cardTone[card.tone])}>
+      <p className="text-xs font-semibold text-muted">{card.eyebrow}</p>
       <h3 className="mt-2 text-xl font-black tracking-[-0.025em]">{card.title}</h3>
       <p className="mt-2 text-sm leading-6 text-muted">{card.detail}</p>
 
@@ -307,8 +301,8 @@ function QuickBooksNowCardView({ card }: { card: QuickBooksNowCard }) {
       ? humanizeBoundedCode(card.rejection_reason)
       : "This invoice needs a money check.";
   return (
-    <Card className={cn("flex flex-col border-l-4 p-5 sm:p-6", quickBooksCardTone[card.tone])}>
-      <p className="text-xs font-bold tracking-[0.12em] text-muted uppercase">{card.eyebrow}</p>
+    <Card className={cn("flex flex-col p-5 sm:p-6", quickBooksCardTone[card.tone])}>
+      <p className="text-xs font-semibold text-muted">{card.eyebrow}</p>
       <h3 className="mt-2 text-xl font-black tracking-[-0.025em]">{card.title}</h3>
       <p className="mt-3 text-2xl font-black tracking-[-0.03em]">{card.detail}</p>
       <dl className="mt-4 space-y-3 border-t border-current/15 pt-4 text-sm">

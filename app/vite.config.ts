@@ -107,8 +107,8 @@ export default defineConfig({
         scope: "/",
         display: "standalone",
         orientation: "portrait-primary",
-        background_color: "#f5f6f4",
-        theme_color: "#121611",
+        background_color: "#e6e8eb",
+        theme_color: "#161b21",
         icons: [
           {
             src: "/icon-192.png",

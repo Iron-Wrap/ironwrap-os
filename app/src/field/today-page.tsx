@@ -398,7 +398,7 @@ function TodayJobRow({
   return (
     <li>
       <article
-        className={`grid overflow-hidden border bg-surface-raised lg:grid-cols-[10rem_minmax(0,1fr)_13rem] ${blocked ? "border-danger/35 shadow-[inset_3px_0_0_var(--danger)]" : "border-border"}`}
+        className={`grid overflow-hidden border bg-surface-raised lg:grid-cols-[10rem_minmax(0,1fr)_13rem] ${blocked ? "border-danger/35 shadow-[inset_0_2px_0_var(--danger)]" : "border-border"}`}
       >
         <div className="border-b border-border bg-surface-muted/55 p-4 lg:border-b-0 lg:border-r">
           <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">Scheduled</p>

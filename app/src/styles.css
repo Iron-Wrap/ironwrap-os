@@ -66,6 +66,9 @@
   --danger-soft: color-mix(in srgb, var(--danger) 9%, var(--surface-raised));
   --info: #1f4e66;
   --info-soft: color-mix(in srgb, var(--info) 9%, var(--surface-raised));
+  --motion-fast: 140ms;
+  --motion-standard: 220ms;
+  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -184,7 +187,7 @@ select {
 }
 
 .app-main > * {
-  animation: page-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: page-enter var(--motion-standard) var(--motion-ease) both;
 }
 
 .ui-skeleton {
@@ -208,6 +211,11 @@ select {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-standard: 0ms;
+  }
+
   *,
   *::before,
   *::after {

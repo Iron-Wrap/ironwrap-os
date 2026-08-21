@@ -457,6 +457,7 @@ const BASE_REQUIRED_D1_INDEX_BINDINGS = [
   ["idx_quote_revision_approvals_pending_expiry", "quote_revision_approval_requests"],
   ["idx_quote_revision_approvals_state_lease", "quote_revision_approval_requests"],
   ["idx_quote_revision_approvals_tenant_state_updated", "quote_revision_approval_requests"],
+  ["idx_replay_requests_envelope_approver_created", "replay_requests"],
   ["idx_replay_requests_status_updated", "replay_requests"],
   ["idx_app_users_tenant_access_role_active", "app_users"],
   ["idx_authority_record_actions_pending", "authority_record_actions"],

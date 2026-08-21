@@ -27,6 +27,7 @@ import {
   getNewoOpenIncidentCount,
   getReadiness,
   runOwnerWatchdog,
+  sweepDeadLetterAutoReplay,
   validateReplayApprovalContext,
 } from "./operations.ts";
 import { pushToJobNimbus } from "./jobnimbus.ts";
@@ -312,6 +313,13 @@ export default {
             if (result.due > 0) log({ at: "quickbooks_projection_recovery", ...result });
           }).catch((error) =>
             log({ at: "quickbooks_projection_recovery", error: String(error) }),
+          ),
+          // ELEC-52 / IRO-194: the dual-surface pipeline heals itself instead of waiting for an
+          // admin to notice a dead letter. Silent when there is no dead-letter backlog at all.
+          sweepDeadLetterAutoReplay(env).then((result) => {
+            if (result.scanned > 0) log({ at: "dead_letter_auto_replay", ...result });
+          }).catch((error) =>
+            log({ at: "dead_letter_auto_replay", error: String(error) }),
           ),
           recoverQuickBooksFinalInvoices(
             env as import("./app-types.ts").AppEnv,

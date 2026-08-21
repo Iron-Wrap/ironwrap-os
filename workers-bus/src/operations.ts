@@ -855,6 +855,183 @@ export async function executeReplayRequest(
   return { kind: "outcome", replayed: false, ...outcome };
 }
 
+/**
+ * Non-secret runtime overrides for the automated dead-letter sweep.
+ *
+ * Read off `Env` by cast rather than declared in `wrangler.jsonc`: every value below has a working
+ * default, so the sweep needs no production configuration change to ship, and the five-minute cron
+ * it hangs off is already registered (`wrangler.jsonc` `triggers.crons`).
+ */
+type DeadLetterSweepEnv = Env & {
+  DEAD_LETTER_AUTO_REPLAY_ENABLED?: string;
+  DEAD_LETTER_AUTO_REPLAY_BACKOFF_MIN?: string;
+  DEAD_LETTER_AUTO_REPLAY_MAX_ATTEMPTS?: string;
+  DEAD_LETTER_AUTO_REPLAY_SCAN_LIMIT?: string;
+};
+
+export interface DeadLetterSweepResult {
+  /** Open dead-letter envelopes examined this tick. */
+  scanned: number;
+  /** Of those, the ones whose backoff had elapsed and whose attempt cap was not yet reached. */
+  due: number;
+  /** Envelopes actually re-queued this tick. */
+  replayed: number;
+  /** Due envelopes another replay (admin or a concurrent tick) had already claimed. */
+  conflicted: number;
+  /** Due envelopes whose replay threw; the ledger row is left failed and retried next tick. */
+  failed: number;
+  /** Envelopes at or over the attempt cap: automatic recovery is done, manual replay still works. */
+  given_up: number;
+  /** Envelopes the sweep replayed that have since reached a settled, non-dead status. */
+  recovered: number;
+  /** True when the scan window filled, so `scanned`/`given_up` undercount a larger backlog. */
+  truncated: boolean;
+}
+
+const DEAD_LETTER_SWEEP_BACKOFF_MIN = 5;
+const DEAD_LETTER_SWEEP_MAX_ATTEMPTS = 5;
+const DEAD_LETTER_SWEEP_SCAN_LIMIT = 100;
+/** Caps the doubling so a long-dead envelope cannot overflow the due-time arithmetic. */
+const DEAD_LETTER_SWEEP_MAX_BACKOFF_SHIFT = 10;
+
+/** When an envelope with `attempts` sweep replays behind it may be replayed again. */
+export function deadLetterReplayDueAt(
+  clockIso: string,
+  attempts: number,
+  backoffMin: number,
+): number | null {
+  const clock = Date.parse(clockIso);
+  if (Number.isNaN(clock)) return null;
+  const shift = Math.min(Math.max(attempts, 0), DEAD_LETTER_SWEEP_MAX_BACKOFF_SHIFT);
+  return clock + backoffMin * 60_000 * 2 ** shift;
+}
+
+/**
+ * Automated dual-surface reconciliation: re-drive dead-letter envelopes on the five-minute cron
+ * with exponential backoff and a bounded attempt cap, so a Frappe/JobNimbus outage heals itself
+ * instead of waiting for an admin to notice and hit `POST /admin/replay` by hand.
+ *
+ * Attempts are counted from the `replay_requests` ledger, not `envelopes.attempts`: that column is
+ * already owned by `bumpAttempt` (intake/bridge) and `bumpErpNextMirrorAttempt` (mirror), so
+ * reusing it would conflate three retry semantics and let unrelated traffic reset the cap.
+ *
+ * Reaching the cap ends AUTOMATIC recovery only. The envelope stays `dead` with its dead-letter row
+ * open, so `POST /admin/replay` can still replay it — which is the whole point of the cap.
+ */
+export async function sweepDeadLetterAutoReplay(env: Env): Promise<DeadLetterSweepResult> {
+  const runtime = env as DeadLetterSweepEnv;
+  const empty: DeadLetterSweepResult = {
+    scanned: 0,
+    due: 0,
+    replayed: 0,
+    conflicted: 0,
+    failed: 0,
+    given_up: 0,
+    recovered: 0,
+    truncated: false,
+  };
+  if (String(runtime.DEAD_LETTER_AUTO_REPLAY_ENABLED ?? "true") === "false") return empty;
+
+  const backoffMin = boundedPositiveNumber(
+    runtime.DEAD_LETTER_AUTO_REPLAY_BACKOFF_MIN,
+    DEAD_LETTER_SWEEP_BACKOFF_MIN,
+    1,
+    24 * 60,
+  );
+  const maxAttempts = boundedPositiveNumber(
+    runtime.DEAD_LETTER_AUTO_REPLAY_MAX_ATTEMPTS,
+    DEAD_LETTER_SWEEP_MAX_ATTEMPTS,
+    1,
+    50,
+  );
+  const scanLimit = boundedPositiveNumber(
+    runtime.DEAD_LETTER_AUTO_REPLAY_SCAN_LIMIT,
+    DEAD_LETTER_SWEEP_SCAN_LIMIT,
+    1,
+    1_000,
+  );
+
+  const candidates = await store.listAutoReplayCandidates(env, scanLimit);
+  if (candidates.length === 0) return empty;
+
+  const nowMs = Date.now();
+  const result: DeadLetterSweepResult = {
+    ...empty,
+    scanned: candidates.length,
+    truncated: candidates.length >= scanLimit,
+  };
+
+  for (const candidate of candidates) {
+    if (candidate.attempts >= maxAttempts) {
+      result.given_up++;
+      continue;
+    }
+    // Before the first automatic attempt the envelope's own death is the clock, so a fresh
+    // dead-letter waits out one backoff window rather than being replayed into a live outage.
+    const dueAt = deadLetterReplayDueAt(
+      candidate.last_attempt_at ?? candidate.dead_since,
+      candidate.attempts,
+      backoffMin,
+    );
+    if (dueAt !== null && nowMs < dueAt) continue;
+    result.due++;
+
+    const attempt = candidate.attempts + 1;
+    try {
+      const execution = await executeReplayRequest(
+        env,
+        // Targeted, never bulk: `selection = 'bulk'` forces `envelope_id IS NULL` (migration 0010
+        // CHECK), which would erase the per-envelope attribution the attempt cap is counted from.
+        { envelopeId: candidate.envelope_id, all: false },
+        {
+          run_id: deadLetterSweepRunId(candidate.envelope_id, attempt),
+          approved_by: store.DEAD_LETTER_SWEEP_APPROVER,
+          reason: deadLetterSweepReason(candidate.envelope_id, attempt, maxAttempts),
+        },
+      );
+      if (execution.kind === "outcome" && !execution.replayed && execution.requeued > 0) {
+        result.replayed++;
+      } else {
+        // `run_id_conflict`, `in_progress`, a cached completed outcome, or requeued === 0: another
+        // replay owns this envelope. Not a failure, and the ledger row it booked is excluded from
+        // the attempt count, so the race costs the envelope nothing.
+        result.conflicted++;
+      }
+    } catch (error) {
+      result.failed++;
+      opsLog({
+        at: "dead_letter_auto_replay_error",
+        envelope_id: candidate.envelope_id,
+        attempt,
+        error: String(error).slice(0, 500),
+      });
+    }
+  }
+
+  result.recovered = await store.countRecoveredAutoReplays(env).catch(() => 0);
+  return result;
+}
+
+/**
+ * A run id unique per (envelope, attempt).
+ *
+ * `claimReplayRequest` keys on `run_id`, so a reused id would return the CACHED outcome and queue
+ * nothing at all -- a sweep that silently no-ops. Deriving the id from the attempt count rather
+ * than from the wall clock also makes overlapping ticks safe: the loser sees `in_progress` instead
+ * of publishing the envelope to the queue a second time.
+ */
+function deadLetterSweepRunId(envelopeId: string, attempt: number): string {
+  const suffix = `-${attempt}`;
+  const head = `dls-${envelopeId}`.slice(0, 128 - suffix.length);
+  return `${head}${suffix}`;
+}
+
+/** Migration 0010 CHECKs `length(reason) BETWEEN 10 AND 500`; a short reason would throw inside `waitUntil`. */
+function deadLetterSweepReason(envelopeId: string, attempt: number, maxAttempts: number): string {
+  return `Automated dead-letter reconciliation sweep: attempt ${attempt} of ${maxAttempts} for envelope ${envelopeId}.`
+    .slice(0, 500);
+}
+
 export async function replayDeadLetters(
   env: Env,
   selection: { envelopeId?: string; all: boolean },

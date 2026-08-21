@@ -22,6 +22,7 @@ import {
   messageFor,
   type FieldDateOptions,
 } from "./field-formatting";
+import { OperatingIntakePanel } from "../operating-intake/operating-intake-panel";
 import { SavedWorkRecoveryPanel } from "./saved-work-recovery-panel";
 
 type PacketAvailability = "checking" | "saving" | "saved" | "not_saved" | "unavailable";
@@ -215,6 +216,7 @@ export function TodayPage() {
           ) : null}
         </section>
       )}
+      <OperatingIntakePanel />
     </section>
   );
 }

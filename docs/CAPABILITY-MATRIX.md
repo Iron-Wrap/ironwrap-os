@@ -43,8 +43,8 @@ implication.
       "latest": "0082_envelope_operating_tenant.sql"
     },
     "tests": {
-      "pwa": 532,
-      "worker": 1066
+      "pwa": 542,
+      "worker": 1070
     }
   },
   "proof_state_policy": {

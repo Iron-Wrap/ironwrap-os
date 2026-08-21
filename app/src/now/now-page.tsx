@@ -8,6 +8,7 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { ErrorState, LoadingState } from "../components/ui/state-panel";
 import { cn } from "../lib/cn";
+import { OperatingIntakePanel } from "../operating-intake/operating-intake-panel";
 import { loadNow } from "./now-api";
 import type { NowAction, NowCard, NowResponse, QuickBooksNowCard } from "./now-contracts";
 
@@ -159,6 +160,8 @@ function NowScreen({
           ) : null}
         </header>
       </Card>
+
+      <OperatingIntakePanel />
 
       {refreshFailed ? (
         <Card

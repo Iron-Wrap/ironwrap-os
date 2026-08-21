@@ -3,6 +3,7 @@ export const API_PATHS = {
   publicInstantEstimate: "/public/instant-estimate",
   session: "/api/v1/session",
   now: "/api/v1/now",
+  operatingIntake: "/api/v1/operating-intake",
   fieldBootstrap: "/api/v1/field/bootstrap",
   magicLinkRequest: "/api/v1/auth/magic-link/request",
   magicLinkConsume: "/api/v1/auth/magic-link/consume",

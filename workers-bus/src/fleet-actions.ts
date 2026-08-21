@@ -5,6 +5,7 @@ import {
   type ImmutableObjectStore,
 } from "./field-actions.ts";
 import { frappeBaseUrl, frappeRequestTimeout } from "./frappe-read.ts";
+import { railAuthorizationHeader } from "./rail-frappe-credentials.ts";
 
 const MAX_FLEET_ACTION_BYTES = 32 * 1024;
 const MAX_FLEET_TEXT_LENGTH = 1_200;
@@ -360,7 +361,7 @@ export async function processFleetAction(
 export function frappeFleetWriter(env: AppEnv): FleetFrappeWriter {
   return {
     async persistAction(input) {
-      if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET) throw new Error("fleet_frappe_not_configured");
+      const authorization = railAuthorizationHeader(env, "fleet_capture");
       const method = {
         pre_trip_inspection: "record_asset_inspection",
         post_trip_inspection: "record_asset_inspection",
@@ -377,7 +378,7 @@ export function frappeFleetWriter(env: AppEnv): FleetFrappeWriter {
             signal: controller.signal,
             headers: {
               accept: "application/json",
-              authorization: `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`,
+              authorization,
               "content-type": "application/json",
               "user-agent": "ironwrap-bff/1.0",
             },

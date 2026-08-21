@@ -6,6 +6,10 @@ import {
 } from "./frappe-read.ts";
 import { adapterAuthority, assertEffectLedgerReady, runExternalEffect } from "./effect-runtime.ts";
 import { canonicalJson, sha256Hex } from "./newo-hash.ts";
+import {
+  railAuthorizationHeader,
+  requireRailFrappeCredential,
+} from "./rail-frappe-credentials.ts";
 
 export interface PersistFieldMediaInput {
   evidenceId: string;
@@ -217,6 +221,11 @@ export function frappeFieldWriter(env: AppEnv): FieldFrappeWriter {
       );
     },
     async persistWorkPackageEvidence(input) {
+      // Assert the rail credential before the effect ledger books anything. Left to the
+      // dispatch callback, a shared or unissued pair surfaces as the runtime's generic
+      // readback failure and the real cause - a configuration fault - never reaches the
+      // operator, while a retry budget is spent on something no retry can fix.
+      requireRailFrappeCredential(env, "work_package");
       const decoded = (await postFrappeJson(
         env,
         "/api/method/ironwrap_roofing.work_package_api.capture_work_package_evidence",
@@ -505,13 +514,26 @@ async function postFrappeJson(
   return result.value;
 }
 
+/**
+ * One writer serves two rails. `work_package_api` is the work-package rail and carries its own
+ * Frappe issuer identity; `field_evidence_api` and the Field Check-in resource remain the field-
+ * evidence rail on the shared bus pair. Routing on the method path keeps the credential bound to
+ * the rail actually being issued rather than to whichever module happens to hold the fetch.
+ */
+function frappeFieldAuthorization(env: AppEnv, path: string): string {
+  if (path.includes("work_package_api"))
+    return railAuthorizationHeader(env, "work_package");
+  if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET)
+    throw new Error("frappe_field_not_configured");
+  return `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`;
+}
+
 async function postFrappeJsonDirect(
   env: AppEnv,
   path: string,
   body: Record<string, unknown>,
 ): Promise<unknown> {
-  if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET)
-    throw new Error("frappe_field_not_configured");
+  const authorization = frappeFieldAuthorization(env, path);
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),
@@ -524,7 +546,7 @@ async function postFrappeJsonDirect(
       signal: controller.signal,
       headers: {
         accept: "application/json",
-        authorization: `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`,
+        authorization,
         "content-type": "application/json",
         "user-agent": "ironwrap-bff/1.0",
       },
@@ -559,7 +581,7 @@ async function fieldMutationReadback(
       `${frappeBaseUrl(env)}/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(providerExternalId)}`,
       { method: "GET", redirect: "manual", headers: {
         accept: "application/json",
-        authorization: `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`,
+        authorization: frappeFieldAuthorization(env, path),
       } },
     );
     if (response.status === 404) return { status: "not_found", detailCode: "frappe_field_readback_not_found" };

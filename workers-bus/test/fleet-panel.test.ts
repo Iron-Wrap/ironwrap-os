@@ -79,7 +79,12 @@ function panelEnv(
   const calls: Array<{ url: string; body: unknown }> = [];
   const env = {
     ERPNEXT_BASE_URL: "https://frappe.example.invalid",
-    ...(options.configured === false ? {} : { ERPNEXT_API_KEY: "key", ERPNEXT_API_SECRET: "secret" }),
+    ERPNEXT_API_KEY: "bus-key",
+    ERPNEXT_API_SECRET: "bus-secret",
+    // The panel rides the fleet-capture rail's own issuer, never the bus pair above.
+    ...(options.configured === false
+      ? {}
+      : { FLEET_CAPTURE_FRAPPE_API_KEY: "fleet-key", FLEET_CAPTURE_FRAPPE_API_SECRET: "fleet-secret" }),
   } as unknown as AppEnv;
   const original = globalThis.fetch;
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -14,6 +14,7 @@ import { listMeasurementIntakeExceptions } from "./measurement-intake-store.ts";
 import { countFailedDeltasSince } from "./measurement-deltas-store.ts";
 import { gmailConfigured, sendGmail } from "./google.ts";
 import { measurementPdfOcrConfigured } from "./measurements.ts";
+import { railCredentialIsolationConfigured } from "./rail-frappe-credentials.ts";
 
 export const BULK_REPLAY_CONFIRMATION = "REPLAY_ALL_OPEN_DEAD_LETTERS";
 const HEARTBEAT_FRESHNESS_HOURS = 36;
@@ -83,6 +84,8 @@ export interface ReadinessReport {
     app_bff_configuration: boolean;
     customer_portal_configuration: boolean;
     production_schedule_configuration: boolean;
+    /** Fleet-capture and work-package rails each hold their OWN Frappe issuer pair. */
+    rail_credential_isolation: boolean;
     public_estimate_configuration: boolean;
     measurement_ocr_configuration: boolean;
     newo_enabled: boolean;
@@ -244,6 +247,10 @@ export async function getReadiness(env: Env): Promise<ReadinessReport> {
     app_bff_configuration: appBffConfigured(extended),
     customer_portal_configuration: customerPortalConfigured(extended),
     production_schedule_configuration: productionScheduleConfigured(extended),
+    // A rail whose dedicated credential was never issued answers a driver's pre-trip
+    // inspection with a 502 while every other check stays green - the ELEC-40 dead-rail
+    // class one level down. Surface it here instead.
+    rail_credential_isolation: railCredentialIsolationConfigured(extended),
     public_estimate_configuration: publicEstimateConfigured(extended),
     measurement_ocr_configuration: measurementPdfOcrConfigured(env),
     newo_enabled: true,
@@ -405,8 +412,12 @@ export async function buildOwnerRuntimeReadModel(
         readiness.checks.measurement_ocr_configuration,
     },
     {
+      // Both field-capture rails are BFF surfaces, so their credential isolation belongs to
+      // this bucket rather than a new public check id: an owner reading "office BFF: ok"
+      // must not be told that while a driver's fleet capture is refusing every request.
       id: "office_bff",
-      ok: readiness.checks.frappe_configuration && readiness.checks.app_bff_configuration,
+      ok: readiness.checks.frappe_configuration && readiness.checks.app_bff_configuration &&
+        readiness.checks.rail_credential_isolation,
     },
     { id: "customer_portal", ok: readiness.checks.customer_portal_configuration },
     { id: "production_schedule", ok: readiness.checks.production_schedule_configuration },

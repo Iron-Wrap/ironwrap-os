@@ -412,12 +412,66 @@ device.
 | `QB_WEBHOOK_TOKEN` | Change Worker binding and Intuit verifier token together; prove one expected-realm signed event after cutover |
 | `QB_EXPECTED_REALM_ID` | Recheck against the intended company before cutover; a change is an owner-approved company-boundary migration, never generic configuration churn |
 | `QB_RECONCILIATION_ISSUER_USER` and issuer API pair | Provision a replacement Frappe user with only IronWrap QuickBooks Reconciliation Issuer, match Worker vars/secrets and site config, prove one live Pending reconciliation, then revoke the old pair |
+| `FLEET_CAPTURE_FRAPPE_API_KEY` / `_SECRET` | Dedicated `IronWrap Fleet Capture Issuer` user; never the bus pair. See "Per-rail Frappe issuer rotation" below. |
+| `WORK_PACKAGE_FRAPPE_API_KEY` / `_SECRET` | Dedicated `IronWrap Work Package Issuer` user; never the bus pair. See "Per-rail Frappe issuer rotation" below. |
 | `D1_BACKUP_API_TOKEN` | Persist only the exact production D1 read/export scope in `backup.env`; never reuse restore or R2 credentials; run a backup after rotation |
 | `D1_RESTORE_API_TOKEN` | Separate drill/write scope injected only for one approved remote drill; unset immediately afterward and keep unset for local verification |
 | R2 backup key pair | Backup-bucket-only credentials; rotate and immediately run backup plus isolated decrypt check |
 
 Never reuse Frappe, bus admin, ingest, approval, or backup credentials. Never commit filled env
 files. After rotation, verify `/ready`, relevant runtime action, and audit evidence.
+
+### Per-rail Frappe issuer rotation (fleet capture, work package)
+
+These two rails hold their own Frappe identities rather than the broad bus pair, so one leaked
+key reaches one rail's narrow grant instead of a System Manager (ELEC-48 audit section 3). The
+Frappe app compares `frappe.session.user` against the site-config pin, so the pin — not the key
+— is what grants and revokes access. Rotate one rail at a time.
+
+Substitute `fleet_capture` / `ironwrap_fleet_capture_issuer_user` / `IronWrap Fleet Capture Issuer`
+/ `FLEET_CAPTURE_FRAPPE_API_*` with the work-package equivalents for that rail.
+
+1. **Mint the replacement identity.** On the site, create (or reuse) a non-interactive user
+   holding ONLY the rail's role, then issue its API pair:
+
+   ```
+   bench --site <site> console
+   >>> from frappe.core.doctype.user.user import generate_keys
+   >>> generate_keys("<new-fleet-capture-issuer-email>")
+   ```
+
+   Grant no other role. `IronWrap Fleet Capture Issuer` is create-only on Asset Inspection and
+   Asset Defect plus read on Fleet Asset; `IronWrap Work Package Issuer` is read on Work Package
+   plus create on Work Package Event. Anything wider defeats the split.
+
+2. **Load the Worker secrets first, while the old pin is still live.** The rail keeps working on
+   the old identity until step 3, so this step is not a cutover:
+
+   ```
+   npx wrangler secret put FLEET_CAPTURE_FRAPPE_API_KEY --env=""
+   npx wrangler secret put FLEET_CAPTURE_FRAPPE_API_SECRET --env=""
+   ```
+
+   Never paste `ERPNEXT_API_KEY`/`ERPNEXT_API_SECRET` here. The Worker rejects that outright with
+   `fleet_frappe_shared_credential_rejected` and `/ready` turns `rail_credential_isolation` red.
+
+3. **Move the pin — this is the cutover, and it is also the revocation.** Until this runs, the
+   new key gets `fleet_issuer_auth_mismatch`; after it, the old key does:
+
+   ```
+   bench --site <site> set-config ironwrap_fleet_capture_issuer_user '<new-fleet-capture-issuer-email>'
+   ```
+
+4. **Prove the rail.** `GET /ready` (admin bearer) must show `rail_credential_isolation: true`,
+   then issue one real capture from a paired device and confirm the resulting Asset Inspection /
+   Asset Defect (or Work Package Event) exists with the new issuer as its creator.
+
+5. **Retire the old identity.** Delete its API keys and disable the user. Confirm the retired
+   pair now fails: a capture issued with it must return `fleet_issuer_auth_mismatch`, not a write.
+
+`node tools/validate-rail-credential-isolation.mjs` asserts the repo-side half of this contract
+(role, user, provisioner, Worker binding, config surface) but it cannot see a live site; steps 4
+and 5 are the only proof that a rotation actually landed.
 
 ## Severity And Escalation
 

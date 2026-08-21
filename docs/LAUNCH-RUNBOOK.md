@@ -505,6 +505,16 @@ Before enabling the BFF in the intended Cloudflare account:
 3. Store a new high-entropy `APP_AUTH_PEPPER` only with `wrangler secret put`; it is a Worker
    secret, never a `vars` value or a browser value. Configure the dedicated Gmail sender and any
    Frappe read credentials separately. Keep Hermes write flags false for this gate.
+
+   The enabled BFF carries the two bounded field-capture rails, and each issues Frappe with its
+   OWN identity rather than the broad `ERPNEXT_API_KEY` pair. Create one non-interactive Frappe
+   user holding only `IronWrap Fleet Capture Issuer` and one holding only
+   `IronWrap Work Package Issuer`, pin `ironwrap_fleet_capture_issuer_user` and
+   `ironwrap_work_package_issuer_user` to those exact emails, and store their pairs as
+   `FLEET_CAPTURE_FRAPPE_API_KEY`/`_SECRET` and `WORK_PACKAGE_FRAPPE_API_KEY`/`_SECRET` with
+   `wrangler secret put`. Do not reuse the bus pair for either: the Worker refuses a repeated
+   value outright and `/ready` reports `rail_credential_isolation: false`, so this gate cannot be
+   closed by copying a credential. Rotation is in `OPERATIONS-RUNBOOK.md`.
 4. If the tenant has zero `app_users`, use the one-time bootstrap ceremony first: keep
    `APP_FIRST_OWNER_BOOTSTRAP_ENABLED=false` by default, enable it only long enough for one
    `POST /admin/app-users/bootstrap` request, and prove the route accepts only an owner body,

@@ -109,15 +109,36 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    real site broken (IRO-54). `node tools/validate-site-config-pins.mjs` fails when a
    key the app reads is missing from this list.
 
-   The Worker BFF authenticates every one of its rails with the single bus API pair from
-   step 4, so all four of its issuer keys name that same bus user:
+   The Worker BFF authenticates its field-evidence and production-gate rails with the
+   single bus API pair from step 4, so those two issuer keys name that same bus user:
 
    ```
    bench --site <tenant-site> set-config ironwrap_field_evidence_issuer_user  '<worker-api-user-email>'
-   bench --site <tenant-site> set-config ironwrap_fleet_capture_issuer_user   '<worker-api-user-email>'
-   bench --site <tenant-site> set-config ironwrap_work_package_issuer_user    '<worker-api-user-email>'
    bench --site <tenant-site> set-config ironwrap_production_gate_issuer_user '<worker-api-user-email>'
    ```
+
+   Fleet capture and work package do NOT. The bus pair is a System Manager, so issuing
+   those two rails with it meant one leaked key reached the whole site instead of one
+   rail's narrow grant (ELEC-48 audit section 3). Each holds its own non-interactive user,
+   its own least-privilege role, and its own API key/secret pair — and re-pinning the site
+   config to that user is also what revokes the bus pair's access, because the app compares
+   the session user against the pin and fails closed with `*_issuer_auth_mismatch`:
+
+   ```
+   bench --site <tenant-site> set-config ironwrap_fleet_capture_issuer_user '<fleet-capture-issuer-email>'
+   bench --site <tenant-site> set-config ironwrap_work_package_issuer_user  '<work-package-issuer-email>'
+   ```
+
+   | rail | user role | Worker secrets |
+   |---|---|---|
+   | fleet capture | `IronWrap Fleet Capture Issuer` (create Asset Inspection + Asset Defect, read Fleet Asset) | `FLEET_CAPTURE_FRAPPE_API_KEY` / `FLEET_CAPTURE_FRAPPE_API_SECRET` |
+   | work package | `IronWrap Work Package Issuer` (read Work Package, create Work Package Event) | `WORK_PACKAGE_FRAPPE_API_KEY` / `WORK_PACKAGE_FRAPPE_API_SECRET` |
+
+   Neither pair may hold the bus key/secret values. The Worker rejects that arrangement
+   outright (`*_frappe_shared_credential_rejected`) rather than accepting a binding name
+   that carries a shared identity, and `/ready`'s `rail_credential_isolation` check goes
+   red for it. `node tools/validate-rail-credential-isolation.mjs` proves the whole chain
+   — role, user, provisioner, Worker binding, config surface — is present in the repo.
 
    The Frappe app rejects `Verified` evidence, submitted pre/post-trip inspections and
    field-issued Work Package events through ordinary Desk/REST writes, so these
@@ -133,6 +154,8 @@ Wrangler environment) and re-point every binding at NEW tenant-owned resources:
    |---|---|---|
    | `ironwrap_customer_acceptance_service_user` | IronWrap Customer Acceptance Service | step 3.4 pair, dedicated user |
    | `ironwrap_customer_decision_service_user` | IronWrap Customer Decision Service | step 3.4 pair, dedicated user |
+   | `ironwrap_fleet_capture_issuer_user` | IronWrap Fleet Capture Issuer | dedicated user, own key pair (this step) |
+   | `ironwrap_work_package_issuer_user` | IronWrap Work Package Issuer | dedicated user, own key pair (this step) |
    | `ironwrap_quickbooks_reconciliation_issuer_user` | IronWrap QuickBooks Reconciliation Issuer | step 3.5 |
    | `ironwrap_facet_design_projection_service_user` | IronWrap Facet Design Projection Service | set with `FACET_DESIGN_FRAPPE_PROJECTION_*` in step 2.7 |
    | `ironwrap_launch_proof_reader_user` | IronWrap Launch Proof Reader | release-time only, for `tools/launch-proof.mjs` |
@@ -232,9 +255,10 @@ recovery boundaries.
 - [ ] Tenant Worker deployed with its own D1, R2, queues, crons, and secrets; `GET /health` returns ok.
 - [ ] All 63 D1 migrations through `0080_replay_requests_envelope_idx.sql` applied to the tenant database.
 - [ ] Tenant Frappe site up (no erpnext app) with `ironwrap_roofing` installed, its own API key pair,
-  `ironwrap_field_evidence_issuer_user`, `ironwrap_fleet_capture_issuer_user`,
-  `ironwrap_work_package_issuer_user` and `ironwrap_production_gate_issuer_user` all bound
-  to that dedicated Worker user, and a separate
+  `ironwrap_field_evidence_issuer_user` and `ironwrap_production_gate_issuer_user` bound
+  to that dedicated Worker user; `ironwrap_fleet_capture_issuer_user` and
+  `ironwrap_work_package_issuer_user` bound to their OWN least-privilege users with their own
+  key pairs in `FLEET_CAPTURE_FRAPPE_API_*` / `WORK_PACKAGE_FRAPPE_API_*`; and a separate
   QuickBooks issuer user/role/key pair bound through `ironwrap_quickbooks_reconciliation_issuer_user`.
   Every key in the step 3.6 table is either set or consciously deferred; `node
   tools/validate-site-config-pins.mjs` passes.

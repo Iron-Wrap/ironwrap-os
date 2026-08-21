@@ -130,6 +130,10 @@ npx wrangler secret put QB_RECONCILIATION_ISSUER_API_KEY --env=""
 npx wrangler secret put QB_RECONCILIATION_ISSUER_API_SECRET --env=""
 npx wrangler secret put ERPNEXT_API_KEY --env=""  # when the Frappe bridge is enabled
 npx wrangler secret put ERPNEXT_API_SECRET --env=""
+npx wrangler secret put FLEET_CAPTURE_FRAPPE_API_KEY --env=""     # dedicated fleet-capture issuer
+npx wrangler secret put FLEET_CAPTURE_FRAPPE_API_SECRET --env=""
+npx wrangler secret put WORK_PACKAGE_FRAPPE_API_KEY --env=""      # dedicated work-package issuer
+npx wrangler secret put WORK_PACKAGE_FRAPPE_API_SECRET --env=""
 npx wrangler secret put PUBLIC_ESTIMATE_TURNSTILE_SECRET --env=""
 npx wrangler secret put PUBLIC_ESTIMATE_RATE_LIMIT_PEPPER --env=""  # 32+ random characters
 npx wrangler secret put APP_AUTH_PEPPER --env=""  # 32+ random characters; required before APP_BFF_ENABLED=true
@@ -144,6 +148,15 @@ npm run typecheck            # tsc --noEmit
 (cd ../app && npm ci && npm run build)  # creates the static-assets directory
 npx wrangler deploy --env=""
 ```
+
+The two `FLEET_CAPTURE_*` / `WORK_PACKAGE_*` pairs are NOT copies of `ERPNEXT_API_KEY`. Each
+belongs to its own non-interactive Frappe user holding only the `IronWrap Fleet Capture Issuer`
+or `IronWrap Work Package Issuer` role, and the site config must pin
+`ironwrap_fleet_capture_issuer_user` / `ironwrap_work_package_issuer_user` to those users. The
+Worker refuses a pair whose value matches the bus pair (`*_frappe_shared_credential_rejected`)
+and `/ready` reports `rail_credential_isolation: false` for it, so the shared arrangement cannot
+be reintroduced by copying a value. Rotation steps are in
+`docs/OPERATIONS-RUNBOOK.md`.
 
 QuickBooks projection also needs the non-secret Worker vars `QB_EXPECTED_REALM_ID` and
 `QB_RECONCILIATION_ISSUER_USER`. The user must be a separate Frappe service principal with only

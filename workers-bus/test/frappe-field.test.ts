@@ -49,8 +49,12 @@ function testEnv(): AppEnv {
     DB: new SqliteD1() as never,
     EFFECT_RUNTIME_ENABLED: "true",
     ERPNEXT_BASE_URL: "https://frappe.example.com",
-    ERPNEXT_API_KEY: "key",
-    ERPNEXT_API_SECRET: "secret",
+    ERPNEXT_API_KEY: "bus-key",
+    ERPNEXT_API_SECRET: "bus-secret",
+    // Only the work_package_api half of this writer uses the dedicated pair; the
+    // field-evidence half deliberately stays on the bus credential above.
+    WORK_PACKAGE_FRAPPE_API_KEY: "work-package-key",
+    WORK_PACKAGE_FRAPPE_API_SECRET: "work-package-secret",
     APP_FRAPPE_REQUEST_TIMEOUT_MS: "8000",
   } as AppEnv;
 }
@@ -288,6 +292,64 @@ test("typed Shop Order evidence keeps the parent/context envelope and omits Roof
     },
   );
   assert.equal(requests.length, 5);
+  // One writer, two rails. The work-package half carries the work-package issuer; the
+  // field-evidence half stays on the bus pair, which is the rail it belongs to.
+  const authorizationFor = (fragment: string) =>
+    requests
+      .filter((request) => request.url.includes(fragment))
+      .map((request) => String((request.init?.headers as Record<string, string> | undefined)?.authorization ?? ""));
+  // The work-package mutation AND its readback of the event it just wrote.
+  assert.deepEqual(authorizationFor("work_package_api"), ["token work-package-key:work-package-secret"]);
+  assert.deepEqual(authorizationFor("Work%20Package%20Event"), ["token work-package-key:work-package-secret"]);
+  // The field-evidence rail is out of this split's scope and stays on the bus pair.
+  assert.deepEqual(authorizationFor("field_evidence_api"), ["token bus-key:bus-secret"]);
+  // The dedup list read and the readback of the item just written; both field-evidence.
+  assert.deepEqual(authorizationFor("Evidence%20Item"), [
+    "token bus-key:bus-secret",
+    "token bus-key:bus-secret",
+  ]);
+});
+
+test("the work-package half of the field writer refuses a shared bus credential", async () => {
+  const env = { ...testEnv() } as Record<string, unknown>;
+  env.WORK_PACKAGE_FRAPPE_API_KEY = "bus-key";
+  env.WORK_PACKAGE_FRAPPE_API_SECRET = "bus-secret";
+  let called = false;
+  await withFetch(
+    async () => {
+      called = true;
+      return Response.json({});
+    },
+    async () => {
+      const event: PersistWorkPackageEvidenceInput = {
+        workPackageId: "WORK-PACKAGE-SHOP-1",
+        workPackageVersion: 4,
+        jobId: "SHOP-001",
+        assignmentId: "ASSIGN-SHOP-1",
+        actorUser: "crew@example.com",
+        deviceActionId: "wpe_shared-credential",
+        evidenceSlotId: "step:1",
+        evidenceRequirement: "Anchor inspection photo",
+        evidenceSource: "field-companion",
+        evidenceItemId: "EVIDENCE-SHOP-1",
+        evidenceDeviceId: "paired-device-1",
+        evidenceCapturedAt: "2026-07-10T10:05:00.000Z",
+        evidenceFreshness: "Current",
+        evidenceConflictState: "None",
+        evidenceCorrectionOf: null,
+        evidenceItemCorrectionOf: null,
+        workPackageReleaseAttemptId: "attempt-shop-1",
+        correctionReason: null,
+        evidenceVerification: "Verified",
+        evidenceDisposition: "Open",
+      };
+      await assert.rejects(
+        frappeFieldWriter(env as never).persistWorkPackageEvidence!(event),
+        /work_package_frappe_shared_credential_rejected/,
+      );
+    },
+  );
+  assert.equal(called, false);
 });
 
 test("an exact existing Field Check-in replay is accepted without a second write", async () => {

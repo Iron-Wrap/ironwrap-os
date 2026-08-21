@@ -41,17 +41,22 @@ loud() {
 # it, and the pins are re-applied on every start so a volume provisioned before
 # a rail shipped heals itself instead of staying dead until it is destroyed.
 #
-# The field-evidence, fleet-capture, work-package and production-gate-clearance
-# rails are all issued by the Worker BFF, which authenticates with the single
-# ERPNEXT_API_KEY/SECRET pair, so all four pin the same integration user created
-# in step 8.  The customer
-# acceptance, QuickBooks and Facet-design-projection rails hold their own
-# least-privilege identities and their own key pairs.
+# The field-evidence and production-gate-clearance rails are issued by the Worker
+# BFF with the single ERPNEXT_API_KEY/SECRET pair, so both pin the integration user
+# created in step 8.  Every other rail - customer acceptance, customer decision,
+# QuickBooks, Facet design projection, and (since ELEC-56) fleet capture and work
+# package - holds its own least-privilege identity and its own key pair.
+#
+# Fleet capture and work package moved off the shared bus user because that pair is
+# a System Manager: one leaked key reached both rails and the whole site rather than
+# one rail's narrow grant (ELEC-48 audit section 3).  Re-pinning them here is also
+# what REVOKES the old access - the app compares the session user against the pin,
+# so the bus pair now fails these two rails closed with `*_issuer_auth_mismatch`.
 pin_service_identities() {
   log "pinning Worker BFF and service issuer site config"
   bench --site "$SITE" set-config ironwrap_field_evidence_issuer_user ironwrap-bus@ironwrap.local
-  bench --site "$SITE" set-config ironwrap_fleet_capture_issuer_user ironwrap-bus@ironwrap.local
-  bench --site "$SITE" set-config ironwrap_work_package_issuer_user ironwrap-bus@ironwrap.local
+  bench --site "$SITE" set-config ironwrap_fleet_capture_issuer_user ironwrap-fleet-capture@ironwrap.local
+  bench --site "$SITE" set-config ironwrap_work_package_issuer_user ironwrap-work-package@ironwrap.local
   bench --site "$SITE" set-config ironwrap_production_gate_issuer_user ironwrap-bus@ironwrap.local
   bench --site "$SITE" set-config ironwrap_customer_acceptance_service_user ironwrap-customer-acceptance@ironwrap.local
   bench --site "$SITE" set-config ironwrap_customer_decision_service_user ironwrap-customer-decision@ironwrap.local
@@ -191,6 +196,59 @@ frappe.db.commit()
 PYEOF
 }
 
+# One dedicated, least-privilege Frappe issuer for a bounded capture rail.  Same file and
+# console pattern as `provision_broker_identity` above, but the role is a parameter and is
+# never System Manager: that is the whole point of the split.
+provision_rail_issuer() {
+  local email="$1" first_name="$2" role="$3" creds_file="$4"
+  local target="$BENCH_DIR/sites/$SITE/$creds_file"
+  if [ -s "$target" ] && grep -q '^{' "$target" 2>/dev/null; then return 0; fi
+  log "creating least-privilege rail issuer $email ($role) with API keys"
+  bench --site "$SITE" console > "/tmp/${creds_file#.}_raw.json" <<PYEOF
+import frappe, json
+from frappe.core.doctype.user.user import generate_keys
+from ironwrap_roofing.install import ensure_roles
+email = "$email"
+role = "$role"
+# A volume provisioned before this role shipped does not have it yet, and on the stale-volume
+# path the bench migrate that would create it runs AFTER this.  ensure_roles is the app's own
+# idempotent reconciliation, so calling it here makes provisioning independent of that ordering
+# instead of leaving the user role-less and the rail dead.
+ensure_roles()
+if not frappe.db.exists("User", email):
+    u = frappe.get_doc({"doctype": "User", "email": email, "first_name": "$first_name",
+                        "send_welcome_email": 0, "roles": [{"role": role}]})
+    u.insert(ignore_permissions=True)
+else:
+    u = frappe.get_doc("User", email)
+    if role not in {entry.role for entry in u.roles}:
+        u.append("roles", {"role": role})
+        u.save(ignore_permissions=True)
+generate_keys(email)
+u = frappe.get_doc("User", email)
+frappe.db.commit()
+print("CREDS:" + json.dumps({"api_key": u.api_key or "", "api_secret": u.get_password("api_secret") or ""}))
+PYEOF
+  grep -o 'CREDS:{.*}' "/tmp/${creds_file#.}_raw.json" | sed 's/^CREDS://' > "$target"
+}
+
+# The two rails Frappe already scopes per issuer but the Worker used to authenticate with the
+# broad bus pair (ELEC-48 audit section 3).  Each identity holds only the grants its own
+# `_assert_worker_issuer` checks: fleet capture may create Asset Inspection and Asset Defect
+# and read Fleet Asset; work package may read Work Package and create Work Package Event.
+# Neither can reach the other's DocTypes, and neither is a System Manager.
+#
+# Called from the already-provisioned fast path as well as the fresh path, and always BEFORE
+# `pin_service_identities`: those pins name these users on every start, so a volume built
+# before this shipped would otherwise be pinned to identities that do not exist - a dead rail
+# wearing a green pin, the exact ELEC-40 shape this split exists to close.
+provision_rail_issuer_identities() {
+  provision_rail_issuer ironwrap-fleet-capture@ironwrap.local \
+    "Fleet Capture Issuer" "IronWrap Fleet Capture Issuer" .fleet_capture_issuer_credentials
+  provision_rail_issuer ironwrap-work-package@ironwrap.local \
+    "Work Package Issuer" "IronWrap Work Package Issuer" .work_package_issuer_credentials
+}
+
 provision_broker_identities() {
   provision_operator_users
   # The owner needs API keys, not just a login. Seeding a Verified Authority Record -
@@ -213,6 +271,7 @@ if [ -f "$STAMP" ]; then
   log "already provisioned ($STAMP present) - re-applying service identity pins"
   # A pin failure here must not take down a bench that was already serving:
   # report it loudly and leave the stack up.
+  provision_rail_issuer_identities || log "WARNING - could not provision rail issuer identities"
   pin_service_identities || log "WARNING - could not re-apply service identity pins"
   provision_broker_identities || log "WARNING - could not provision broker actor identities"
 
@@ -241,6 +300,11 @@ if [ -f "$STAMP" ]; then
   sync_app_source
   log "bench migrate (applies DocType, Role and permission changes the resync brought in)"
   bench --site "$SITE" migrate
+  # Only now can a rail issuer be given a role the resync just brought in: the pre-resync
+  # attempt above runs against the STALE app copy, whose ensure_roles has never heard of the
+  # new role. Without this second call a stale volume needs a second start before its rails
+  # work, and "heals on the next boot" is indistinguishable from "dead" to whoever boots it once.
+  provision_rail_issuer_identities || log "WARNING - could not provision rail issuer identities after resync"
   pin_service_identities || log "WARNING - could not re-apply service identity pins after resync"
   touch "$RESYNC_MARKER"
   resynced_hash="$(app_tree_hash "$APP_DEST")"
@@ -464,6 +528,9 @@ fi
 
 # 10c. broker actor identities --------------------------------------------------
 provision_broker_identities
+
+# 10d. dedicated fleet-capture and work-package issuers --------------------------
+provision_rail_issuer_identities
 
 # 11. pinned service identities -------------------------------------------------
 pin_service_identities

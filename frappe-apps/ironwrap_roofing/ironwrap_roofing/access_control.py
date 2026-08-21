@@ -12,6 +12,13 @@ FACET_DESIGN_PROJECTION_SERVICE_ROLE = "IronWrap Facet Design Projection Service
 # customer preference and its receipt evidence, and can never sign a contract or touch a quote.
 CUSTOMER_DECISION_SERVICE_ROLE = "IronWrap Customer Decision Service"
 LAUNCH_PROOF_READER_ROLE = "IronWrap Launch Proof Reader"
+# The Worker BFF issued the fleet-capture and work-package rails with the same broad
+# ERPNEXT_API_KEY pair it uses for every other read, so one leaked key reached both rails
+# and the whole System Manager surface behind them (ELEC-48 audit section 3).  These two
+# identities hold exactly the grants `fleet_operations_api._assert_worker_issuer` and
+# `work_package_api._assert_worker_issuer` demand of their session user, and nothing else.
+FLEET_CAPTURE_ISSUER_SERVICE_ROLE = "IronWrap Fleet Capture Issuer"
+WORK_PACKAGE_ISSUER_SERVICE_ROLE = "IronWrap Work Package Issuer"
 
 IRONWRAP_ROLES = (
     "IronWrap Owner",
@@ -29,6 +36,8 @@ IRONWRAP_SERVICE_ROLES = (
     QUICKBOOKS_RECONCILIATION_ISSUER_SERVICE_ROLE,
     FACET_DESIGN_PROJECTION_SERVICE_ROLE,
     LAUNCH_PROOF_READER_ROLE,
+    FLEET_CAPTURE_ISSUER_SERVICE_ROLE,
+    WORK_PACKAGE_ISSUER_SERVICE_ROLE,
 )
 ALL_IRONWRAP_ROLES = IRONWRAP_ROLES + IRONWRAP_SERVICE_ROLES
 
@@ -55,12 +64,17 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Field": CREATE_OWN,
         "IronWrap Closeout": READ,
         "IronWrap Support": READ,
+        # The capture itself inserts with ignore_permissions inside a locked
+        # transaction, so this create grant is only what the issuer assertion checks
+        # before it will accept the request at all.
+        FLEET_CAPTURE_ISSUER_SERVICE_ROLE: CREATE,
     },
     "Asset Inspection": {
         "IronWrap Production": WRITE,
         "IronWrap Field": CREATE_OWN,
         "IronWrap Closeout": READ,
         "IronWrap Support": READ,
+        FLEET_CAPTURE_ISSUER_SERVICE_ROLE: CREATE,
     },
     "Asset Usage Log": {
         "IronWrap Production": WRITE,
@@ -162,6 +176,9 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Field": READ,
         "IronWrap Finance": READ,
         "IronWrap Support": READ,
+        # `read_driver_fleet_panel` answers a driver's own assets and refuses any session
+        # user without this read.
+        FLEET_CAPTURE_ISSUER_SERVICE_ROLE: READ,
     },
     "Hermes Run": {"IronWrap Support": WRITE},
     "Instant Estimate Session": {
@@ -374,11 +391,18 @@ DOCTYPE_ROLE_MATRIX: dict[str, dict[str, str]] = {
         "IronWrap Production": WRITE,
         "IronWrap Field": READ,
         "IronWrap Closeout": READ,
+        # Read only: every lifecycle transition is saved server-side under
+        # `work_package_transition_context`, never by this identity's own write grant.
+        WORK_PACKAGE_ISSUER_SERVICE_ROLE: READ,
     },
     "Work Package Event": {
         "IronWrap Production": WRITE,
         "IronWrap Field": READ,
         "IronWrap Closeout": READ,
+        # `_insert_event` inserts WITHOUT ignore_permissions inside
+        # `work_package_event_issuance_context`, so this create grant is load-bearing
+        # rather than merely asserted.
+        WORK_PACKAGE_ISSUER_SERVICE_ROLE: CREATE,
     },
 }
 

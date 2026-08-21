@@ -1,5 +1,6 @@
 import type { AppEnv, AuthContext } from "./app-types.ts";
 import { frappeBaseUrl, frappeRequestTimeout } from "./frappe-read.ts";
+import { railAuthorizationHeader } from "./rail-frappe-credentials.ts";
 
 /**
  * Read side of the fleet capture rail.
@@ -84,7 +85,7 @@ async function readFleetPanel(
   env: AppEnv,
   actorUser: string,
 ): Promise<{ referenceDate: string | null; assets: FleetPanelAsset[] }> {
-  if (!env.ERPNEXT_API_KEY || !env.ERPNEXT_API_SECRET) throw new Error("fleet_frappe_not_configured");
+  const authorization = railAuthorizationHeader(env, "fleet_capture");
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),
@@ -97,7 +98,7 @@ async function readFleetPanel(
       signal: controller.signal,
       headers: {
         accept: "application/json",
-        authorization: `token ${env.ERPNEXT_API_KEY}:${env.ERPNEXT_API_SECRET}`,
+        authorization,
         "content-type": "application/json",
         "user-agent": "ironwrap-bff/1.0",
       },
